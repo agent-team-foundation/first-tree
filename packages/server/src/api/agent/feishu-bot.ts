@@ -2,8 +2,11 @@ import { selfServiceFeishuBotSchema } from "@agent-team-foundation/first-tree-hu
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../../errors.js";
 import { requireAgent } from "../../middleware/require-identity.js";
+import { createLogger } from "../../observability/index.js";
 import * as adapterService from "../../services/adapter.js";
 import * as agentService from "../../services/agent.js";
+
+const log = createLogger("AgentFeishuBot");
 
 export async function agentFeishuBotRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -46,7 +49,7 @@ export async function agentFeishuBotRoutes(app: FastifyInstance): Promise<void> 
     }
 
     // Trigger adapter reload
-    app.adapterManager.reload().catch((err) => app.log.error(err, "Adapter reload failed after self-service bind"));
+    app.adapterManager.reload().catch((err) => log.error({ err }, "adapter reload failed after self-service bind"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
 
     return reply.status(current ? 200 : 201).send({
@@ -71,7 +74,7 @@ export async function agentFeishuBotRoutes(app: FastifyInstance): Promise<void> 
     }
 
     await adapterService.deleteAdapterConfig(app.db, current.id);
-    app.adapterManager.reload().catch((err) => app.log.error(err, "Adapter reload failed after self-service unbind"));
+    app.adapterManager.reload().catch((err) => log.error({ err }, "adapter reload failed after self-service unbind"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
 
     return reply.status(204).send();

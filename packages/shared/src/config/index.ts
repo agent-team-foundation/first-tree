@@ -3,10 +3,14 @@
 export type { AgentConfig } from "./agent-config.js";
 export { agentConfigSchema } from "./agent-config.js";
 export type { ClientConfig } from "./client-config.js";
-export { clientConfigSchema, getClientConfig } from "./client-config.js";
-
+export { clientConfigSchema, getClientConfig, updatePolicySchema } from "./client-config.js";
 // Agent loader
 export { loadAgents } from "./loader.js";
+// Legacy home auto-migration (pre-v0.9 `~/.first-tree-hub` → `~/.first-tree/hub`)
+export type { HomeMigrationResult } from "./migrate-home.js";
+export { LEGACY_HOME_DIR, migrateLegacyHome } from "./migrate-home.js";
+export type { UpdatePolicy } from "./phase.js";
+export { UPDATE_POLICY_DEFAULT } from "./phase.js";
 export type { ConfigMeta } from "./resolver.js";
 // Config initialization and access
 export {

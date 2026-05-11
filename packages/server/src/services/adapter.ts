@@ -4,6 +4,7 @@ import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agents } from "../db/schema/agents.js";
 import { AppError, BadRequestError, ConflictError, NotFoundError } from "../errors.js";
+import type { OrgScope } from "../scope/types.js";
 import { encryptCredentials } from "./crypto.js";
 
 /** Server misconfiguration — not a client error. */
@@ -49,6 +50,39 @@ function toResponse(row: typeof adapterConfigs.$inferSelect) {
 
 export async function listAdapterConfigs(db: Database) {
   const rows = await db.select().from(adapterConfigs).orderBy(desc(adapterConfigs.createdAt));
+  return rows.map(toResponse);
+}
+
+/**
+ * Scoped variant used by the member-facing admin route.
+ *
+ *   - admin: every adapter config whose agent belongs to the caller's org.
+ *   - non-admin: only adapter configs bound to agents the caller manages
+ *     (Rule: bindings follow manageability).
+ *
+ * Kept as a separate function so internal self-service callers
+ * (`agent/feishu-bot.ts`) that only need a raw read don't accidentally pay
+ * for the join.
+ */
+export async function listAdapterConfigsForMember(db: Database, scope: OrgScope) {
+  const conditions = [eq(agents.organizationId, scope.organizationId), ne(agents.status, "deleted")];
+  if (scope.role !== "admin") {
+    conditions.push(eq(agents.managerId, scope.memberId));
+  }
+  const rows = await db
+    .select({
+      id: adapterConfigs.id,
+      platform: adapterConfigs.platform,
+      agentId: adapterConfigs.agentId,
+      credentials: adapterConfigs.credentials,
+      status: adapterConfigs.status,
+      createdAt: adapterConfigs.createdAt,
+      updatedAt: adapterConfigs.updatedAt,
+    })
+    .from(adapterConfigs)
+    .innerJoin(agents, eq(agents.uuid, adapterConfigs.agentId))
+    .where(and(...conditions))
+    .orderBy(desc(adapterConfigs.createdAt));
   return rows.map(toResponse);
 }
 

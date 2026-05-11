@@ -1,0 +1,1 @@
+ALTER TABLE "session_outputs" ADD CONSTRAINT "uq_session_outputs_agent_chat" UNIQUE("agent_id","chat_id");

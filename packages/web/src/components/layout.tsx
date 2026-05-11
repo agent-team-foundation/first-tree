@@ -1,67 +1,158 @@
-import { Activity, Bot, Cable, LayoutDashboard, LogOut, MessageSquare, Settings, Shield } from "lucide-react";
-import { NavLink, Outlet } from "react-router";
-import { useAuth } from "../auth/auth-context.js";
+import { Search } from "lucide-react";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useLocation } from "react-router";
 import { cn } from "../lib/utils.js";
+import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
+import { DisconnectChip } from "./disconnect-chip.js";
+import { FirstTreeLogo } from "./first-tree-logo.js";
+import { NotificationBell } from "./notification-bell.js";
+import { ThemeToggle } from "./ui/theme-toggle.js";
+import { UserMenu } from "./user-menu.js";
 
-const navItems = [
-  { to: "/", icon: LayoutDashboard, label: "Overview" },
-  { to: "/agents", icon: Bot, label: "Agents" },
-  { to: "/activity", icon: Activity, label: "Activity" },
-  { to: "/bindings", icon: Cable, label: "Bindings" },
-  { to: "/chats", icon: MessageSquare, label: "Chats" },
-  { to: "/admin-users", icon: Shield, label: "Admin Users" },
-  { to: "/settings", icon: Settings, label: "Settings" },
+const navTabs = [
+  { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
+  { to: "/context", label: "Context", end: false, kbd: "⌘2" },
+  { to: "/team", label: "Team", end: false, kbd: "⌘3" },
+  { to: "/settings", label: "Settings", end: false, kbd: "⌘4" },
 ];
 
 export function Layout() {
-  const { logout } = useAuth();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const location = useLocation();
+  const isWorkspace = location.pathname === "/" || location.search.includes("a=");
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
-    <div className="flex h-screen bg-background">
-      {/* Sidebar */}
-      <aside className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
-        <div className="p-4 border-b border-border">
-          <h1 className="text-lg font-semibold tracking-tight">First Tree</h1>
-          <p className="text-xs text-muted-foreground">Admin Console</p>
+    <div className="flex flex-col overflow-hidden" style={{ height: "100vh", background: "var(--bg)" }}>
+      {/* Top bar */}
+      <header
+        className="relative shrink-0 grid items-center"
+        style={{
+          height: 48,
+          // 1fr auto 1fr keeps the centre column (tabs) anchored to the
+          // page midpoint regardless of how the brand cluster grows. The
+          // disconnect chip can appear/disappear without shifting tabs.
+          gridTemplateColumns: "1fr auto 1fr",
+          gap: "var(--sp-3)",
+          padding: "0 var(--sp-3)",
+          borderBottom: "var(--hairline) solid var(--border)",
+          background: "var(--bg-raised)",
+        }}
+      >
+        {/* Brand cluster: logo + name welded together, then the optional chip. */}
+        <div className="flex items-center" style={{ gap: "var(--sp-3_5)", justifySelf: "start", minWidth: 0 }}>
+          <span className="flex items-center" style={{ gap: 10, flexShrink: 0 }}>
+            <FirstTreeLogo width={16} height={18} style={{ color: "var(--fg)" }} />
+            {/* Brand uses the `text-title` token (16 / 600 / -0.2 letter-spacing). */}
+            <span className="text-title" style={{ color: "var(--fg)" }}>
+              First Tree
+            </span>
+          </span>
+          <DisconnectChip />
         </div>
-        <nav className="flex-1 p-2 space-y-1">
-          {navItems.map((item) => (
+
+        {/* Tabs */}
+        <nav className="flex" style={{ gap: 2, pointerEvents: "none", justifySelf: "center" }}>
+          {navTabs.map((tab) => (
             <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === "/"}
+              key={tab.to}
+              to={tab.to}
+              end={tab.end}
+              style={{ pointerEvents: "auto" }}
               className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                )
+                cn("inline-flex items-center transition-colors", isActive ? "" : "hover:text-[var(--fg)]")
               }
             >
-              <item.icon className="h-4 w-4" />
-              {item.label}
+              {({ isActive }) => (
+                <span
+                  className="inline-flex items-center text-subtitle font-medium"
+                  style={{
+                    padding: "var(--sp-1_5) var(--sp-3)",
+                    gap: 6,
+                    borderRadius: 5,
+                    color: isActive ? "var(--fg)" : "var(--fg-3)",
+                    background: isActive ? "var(--bg-hover)" : "transparent",
+                  }}
+                >
+                  {tab.label}
+                  {isActive && <span className="kbd">{tab.kbd}</span>}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
-        <div className="p-2 border-t border-border">
+
+        {/* Right controls */}
+        <div className="flex items-center" style={{ gap: 6, justifySelf: "end" }}>
           <button
             type="button"
-            onClick={logout}
-            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            onClick={() => setPaletteOpen(true)}
+            aria-label="Open command palette"
+            className="inline-flex items-center transition-colors text-body"
+            style={{
+              gap: 8,
+              padding: "var(--sp-1) var(--sp-2)",
+              color: "var(--fg-3)",
+              border: "var(--hairline) solid var(--border)",
+              borderRadius: "var(--radius-input)",
+              background: "var(--bg-sunken)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--fg)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--fg-3)";
+            }}
           >
-            <LogOut className="h-4 w-4" />
-            Logout
+            <Search className="h-4 w-4" />
+            <span>Jump to…</span>
+            <span className="kbd">⌘K</span>
           </button>
+          <span
+            style={{
+              width: 1,
+              height: 18,
+              background: "var(--border)",
+              margin: "0 var(--sp-1)",
+            }}
+          />
+          <NotificationBell />
+          <ThemeToggle />
+          <span
+            style={{
+              width: 1,
+              height: 18,
+              background: "var(--border)",
+              margin: "0 var(--sp-1)",
+            }}
+          />
+          <UserMenu />
         </div>
-      </aside>
+      </header>
+
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        <div className="p-6 max-w-5xl">
-          <Outlet />
-        </div>
-      </main>
+      {isWorkspace ? (
+        <Outlet />
+      ) : (
+        <main className="flex-1 overflow-auto">
+          <div className="p-6 mx-auto" style={{ maxWidth: 1280 }}>
+            <Outlet />
+          </div>
+        </main>
+      )}
     </div>
   );
 }

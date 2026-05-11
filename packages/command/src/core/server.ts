@@ -6,11 +6,11 @@ import { fileURLToPath } from "node:url";
 import { initConfig, serverConfigSchema } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { buildApp } from "@first-tree-hub/server";
 import type { Config } from "@first-tree-hub/server/config";
-import { createAdminUser, hasAdminUser } from "./admin.js";
 import { ensurePostgres, isDockerAvailable } from "./docker-postgres.js";
 import { runMigrations } from "./migrate.js";
-import { blank, status } from "./output.js";
+import { blank, print, status } from "./output.js";
 import { promptMissingFields } from "./prompt.js";
+import { COMMAND_VERSION } from "./version.js";
 
 export type StartOptions = {
   port?: number;
@@ -30,7 +30,7 @@ export type StartOptions = {
  * 7. Start Fastify server
  */
 export async function startServer(options: StartOptions): Promise<void> {
-  process.stderr.write("\n  First Tree Hub v0.1.0\n\n");
+  print.line(`\n  First Tree Hub v${COMMAND_VERSION}\n\n`);
 
   // 1. Build CLI args
   const cliArgs: Record<string, unknown> = {};
@@ -88,25 +88,7 @@ export async function startServer(options: StartOptions): Promise<void> {
   const tableCount = await runMigrations(serverConfig.database.url);
   status("Database", `initialized (${tableCount} tables)`);
 
-  // 5. Check/create admin
-  const hasAdmin = await hasAdminUser(serverConfig.database.url);
-  if (!hasAdmin) {
-    const envPassword = process.env.FIRST_TREE_HUB_ADMIN_PASSWORD;
-    const admin = await createAdminUser(serverConfig.database.url, "admin", envPassword || undefined);
-    status("Admin", "created");
-    blank();
-    status("  Username:", admin.username);
-    if (envPassword) {
-      status("  Password:", "(set via FIRST_TREE_HUB_ADMIN_PASSWORD)");
-    } else {
-      status("  Password:", `${admin.password}  (save this — shown only once)`);
-    }
-    blank();
-  } else {
-    status("Admin", "exists");
-  }
-
-  // 6. Resolve web dist (build if needed)
+  // 5. Resolve web dist (build if needed)
   const webDistPath = resolveWebDist();
   if (webDistPath) {
     status("Web", `serving from ${webDistPath}`);
@@ -119,27 +101,70 @@ export async function startServer(options: StartOptions): Promise<void> {
     ...serverConfig,
     webDistPath: webDistPath ?? undefined,
     instanceId: `srv_${randomUUID().slice(0, 8)}`,
-    logger: true,
+    commandVersion: COMMAND_VERSION,
   };
+
+  // Initialize telemetry from resolved config before server bootstrap, so that
+  // spans emitted during migrations / hot-reload are captured. instanceId is
+  // passed as service.instance.id so replicas of the same service are
+  // distinguishable in the trace backend.
+  const { initTelemetry, shutdownTelemetry } = await import("@first-tree-hub/server/observability");
+  await initTelemetry(serverConfig.observability.tracing, config.instanceId);
 
   const app = await buildApp(config);
 
-  // Graceful shutdown
-  const shutdown = async () => {
-    process.stderr.write("\n  Shutting down...\n");
-    await app.close();
+  // Graceful shutdown — bounded to keep Docker / k8s from having to SIGKILL.
+  //
+  // Default Docker `--time` is 10s and the typical k8s `terminationGracePeriodSeconds`
+  // is 30s; if `app.close()` (waiting on in-flight HTTP / WS / PG queries) or
+  // `shutdownTelemetry()` (flushing OTel spans over HTTP to the logfire
+  // endpoint) hangs, the orchestrator escalates to SIGKILL — losing in-flight
+  // HTTP/WS frames, leaving PG transactions un-rolled-back, dropping the
+  // span buffer. The hard ceiling below force-exits the process before that
+  // happens, so even a network-stalled telemetry flush can't run past Docker's
+  // grace window.
+  //
+  // Re-entry guard: SIGINT/SIGTERM may fire repeatedly during shutdown
+  // (e.g. user mashes ctrl+c). Without the guard, the second invocation
+  // races with the first and process.exit(0) lands non-deterministically.
+  // The guard makes the second signal a no-op: we are already trying to
+  // exit cleanly, and the force-timer covers the worst case.
+  const SHUTDOWN_FORCE_EXIT_MS = 8_000;
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    print.line(`\n  Shutting down (${signal})...\n`);
+
+    const forceTimer = setTimeout(() => {
+      print.line(`\n  Shutdown exceeded ${SHUTDOWN_FORCE_EXIT_MS}ms — forcing exit.\n`);
+      process.exit(1);
+    }, SHUTDOWN_FORCE_EXIT_MS);
+    forceTimer.unref();
+
+    try {
+      await app.close();
+    } catch (err) {
+      print.line(`  app.close() failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    try {
+      await shutdownTelemetry();
+    } catch {
+      // shutdownTelemetry already swallows exporter errors internally; nothing more to do.
+    }
+    clearTimeout(forceTimer);
     process.exit(0);
   };
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   await app.listen({ host: config.server.host, port: config.server.port });
 
   blank();
   status("Server", `running at http://${config.server.host}:${config.server.port}`);
   blank();
-  process.stderr.write("  Open the URL above in your browser to get started.\n");
-  process.stderr.write("  Press Ctrl+C to stop.\n\n");
+  print.line("  Open the URL above in your browser to get started.\n");
+  print.line("  Press Ctrl+C to stop.\n\n");
 }
 
 /**

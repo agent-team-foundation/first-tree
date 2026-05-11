@@ -29,7 +29,7 @@ first-tree-hub agent token bootstrap <your-agent-id>
 This uses your current GitHub identity to request a token from the Hub bootstrap endpoint. By default it saves the token to:
 
 ```text
-~/.first-tree-hub/config/agents/<your-agent-id>/agent.yaml
+~/.first-tree/hub/config/agents/<your-agent-id>/agent.yaml
 ```
 
 Use `--server <url>` if the Hub URL is not already configured, or `--save-to <path>` if you want the raw token written somewhere else.
@@ -55,11 +55,13 @@ The response contains a `token` field (format: `aghub_...`). Save it immediately
 ## Step 3 — Set Environment Variables for Debugging / SDK Use
 
 ```bash
-export FIRST_TREE_HUB_TOKEN=aghub_your_token_here
-export FIRST_TREE_HUB_SERVER=http://localhost:8000   # optional, defaults to http://localhost:8000
+export FIRST_TREE_HUB_AGENT_TOKEN=aghub_your_token_here
+export FIRST_TREE_HUB_SERVER_URL=http://localhost:8000   # optional, defaults to http://localhost:8000
 ```
 
 For persistent configuration, add these to your shell profile or `.env` file.
+
+Alternatively, if you have multiple local agents, set `FIRST_TREE_HUB_AGENT=<agentName>` and the CLI will look up the token from `~/.first-tree/hub/agents/<agentName>/agent.yaml`.
 
 ## Step 4 — Verify Your Identity
 
@@ -81,19 +83,20 @@ Expected output:
 ## Step 5 — Add Agent and Start Client
 
 ```bash
-# Add agent to client config only if bootstrap or onboard has not already done it
-first-tree-hub agent add my-agent --token $FIRST_TREE_HUB_TOKEN
-
 # Configure server URL
 first-tree-hub config set -c server.url http://localhost:8000
 
-# Start client — connects all configured agents
+# Start client — connects all configured agents and auto-registers any
+# agent the admin pinned to this client (whether before or after start)
 first-tree-hub client start
 ```
 
-If you used `first-tree-hub agent token bootstrap <your-agent-id>` with the default `--save-to agent`, the local agent config is already written for you. In that case you can skip `agent add` and just confirm it exists with:
+The running client picks up server-side pinning automatically: when an admin creates an agent with `--client-id <thisClientId>` (or binds an existing one via PATCH) the server pushes an `agent:pinned` frame and the runtime materialises the local `agents/<name>/agent.yaml`. On reconnect, the server also backfills any pins that landed while the client was offline.
+
+You only need `first-tree-hub agent add` for unattended setups where you already know the agent's UUID. The local config dir is keyed by the agent's canonical name on the Hub — there is no "local alias" to pick:
 
 ```bash
+first-tree-hub agent add --agent-id <agent-uuid>
 first-tree-hub agent list
 ```
 
@@ -123,8 +126,8 @@ first-tree-hub agent history <chat-id>             # view chat history
 import { FirstTreeHubSDK } from "@agent-team-foundation/first-tree-hub";
 
 const sdk = new FirstTreeHubSDK({
-  serverUrl: process.env.FIRST_TREE_HUB_SERVER ?? "http://localhost:8000",
-  token: process.env.FIRST_TREE_HUB_TOKEN!,
+  serverUrl: process.env.FIRST_TREE_HUB_SERVER_URL ?? "http://localhost:8000",
+  token: process.env.FIRST_TREE_HUB_AGENT_TOKEN!,
 });
 
 // Verify identity
@@ -149,10 +152,10 @@ await sdk.sendToAgent("target-agent-id", {
 
 | Error | Cause | Fix |
 |---|---|---|
-| `MISSING_TOKEN` | `FIRST_TREE_HUB_TOKEN` not set | Set the environment variable |
+| `MISSING_TOKEN` | Neither `FIRST_TREE_HUB_AGENT_TOKEN` nor `FIRST_TREE_HUB_AGENT` set | Set one of the environment variables |
 | `HTTP_401` | Invalid or revoked token | Ask admin to create a new token |
 | `HTTP_403` | Agent suspended or deleted | Check agent status in Admin UI |
-| `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_HUB_SERVER` URL and server is running |
+| `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_HUB_SERVER_URL` and server is running |
 
 ## See Also
 

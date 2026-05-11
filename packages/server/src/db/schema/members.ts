@@ -1,0 +1,39 @@
+import { index, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { agents } from "./agents.js";
+import { organizations } from "./organizations.js";
+import { users } from "./users.js";
+
+/** Organization membership. Links a user to an org with a role and a 1:1 human agent. */
+export const members = pgTable(
+  "members",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    /** 1:1 human agent for this member in this org */
+    agentId: text("agent_id")
+      .unique()
+      .notNull()
+      .references(() => agents.uuid),
+    /** "admin" | "member" */
+    role: text("role").notNull(),
+    /**
+     * "active" | "left". Soft-delete marker. Members who leave a team have
+     * their row flipped to "left" rather than deleted, so historical chats /
+     * agent ownership references stay intact. The auth middleware refuses
+     * tokens that resolve to a "left" member; the join-by-invite flow flips
+     * a previously-"left" row back to "active".
+     */
+    status: text("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("uq_members_user_org").on(table.userId, table.organizationId),
+    index("idx_members_user").on(table.userId),
+    index("idx_members_org").on(table.organizationId),
+  ],
+);

@@ -61,15 +61,19 @@ describe("Task ↔ Chat linking", () => {
       .insert(organizations)
       .values({ id: altOrgId, name: `alt-${Date.now()}`, displayName: "Alt" })
       .onConflictDoNothing();
+    // Use human type so createAgent doesn't require a client — this test is
+    // about cross-org chat linking, not R-RUN pinning.
     const foreignA = await createAgent(app.db, {
       name: "foreign-a",
-      type: "autonomous_agent",
+      type: "human",
       organizationId: altOrgId,
+      managerId: a.managerId ?? undefined,
     });
     const foreignB = await createAgent(app.db, {
       name: "foreign-b",
-      type: "autonomous_agent",
+      type: "human",
       organizationId: altOrgId,
+      managerId: a.managerId ?? undefined,
     });
     const foreignChat = await findOrCreateDirectChat(app.db, foreignA.uuid, foreignB.uuid);
 

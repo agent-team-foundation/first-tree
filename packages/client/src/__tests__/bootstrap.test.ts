@@ -1,7 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bootstrapWorkspace } from "../runtime/bootstrap.js";
+import {
+  bootstrapWorkspace,
+  type InstallFirstTreeIntegrationExec,
+  installFirstTreeIntegration,
+} from "../runtime/bootstrap.js";
 import type { AgentIdentity } from "../runtime/handler.js";
 
 // Use a real temp directory for file-based tests
@@ -23,10 +27,10 @@ afterEach(() => {
 function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
   return {
     agentId: "test-agent",
+    inboxId: "inbox-test-agent",
     displayName: "Test Agent",
     type: "autonomous_agent",
     delegateMention: null,
-    profile: null,
     metadata: {},
     ...overrides,
   };
@@ -73,28 +77,27 @@ describe("bootstrapWorkspace", () => {
 
     const content = readFileSync(toolsPath, "utf-8");
     expect(content).toContain("FIRST_TREE_HUB_SERVER_URL");
-    expect(content).toContain("FIRST_TREE_HUB_AGENT_TOKEN");
+    expect(content).toContain("FIRST_TREE_HUB_ACCESS_TOKEN");
     expect(content).toContain("How You Communicate");
     expect(content).toContain("Agent Hub");
     expect(content).toContain("[From: sender-id]");
     expect(content).toContain("Use your judgment about when to respond");
   });
 
-  it("writes self.md from identity.profile when available", () => {
-    const workspace = join(tmpBase, "ws-profile");
+  it("does not write self.md (per PRD D7 — prompt lives in agent_configs)", () => {
+    const workspace = join(tmpBase, "ws-no-self-md");
     mkdirSync(workspace, { recursive: true });
 
     bootstrapWorkspace({
       workspacePath: workspace,
-      identity: makeIdentity({ agentId: "my-agent", profile: "I am an agent with a profile." }),
+      identity: makeIdentity({ agentId: "my-agent" }),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
       chatId: "chat-1",
     });
 
     const selfPath = join(workspace, ".agent", "context", "self.md");
-    expect(existsSync(selfPath)).toBe(true);
-    expect(readFileSync(selfPath, "utf-8")).toContain("I am an agent with a profile.");
+    expect(existsSync(selfPath)).toBe(false);
   });
 
   it("skips context when contextTreePath is null", () => {
@@ -204,5 +207,139 @@ describe("bootstrapWorkspace", () => {
 
     const data = JSON.parse(readFileSync(join(workspace, ".agent", "identity.json"), "utf-8"));
     expect(data.agentId).toBe("new-agent");
+  });
+});
+
+type ExecCall = {
+  command: string;
+  args: string[];
+  options: { cwd: string; timeout: number };
+};
+
+function makeRecordingExec(impl: (call: ExecCall) => void = () => {}): {
+  exec: InstallFirstTreeIntegrationExec;
+  calls: ExecCall[];
+} {
+  const calls: ExecCall[] = [];
+  const exec: InstallFirstTreeIntegrationExec = (command, args, options) => {
+    const call: ExecCall = { command, args, options };
+    calls.push(call);
+    impl(call);
+  };
+  return { exec, calls };
+}
+
+describe("installFirstTreeIntegration", () => {
+  it("shells out to `first-tree tree integrate` with the expected arguments", () => {
+    const workspace = join(tmpBase, "integrate-happy");
+    const treePath = join(tmpBase, "ctx-tree");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec();
+    const logs: string[] = [];
+
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "chat-xyz",
+      treeRepoUrl: "https://github.com/org/tree",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("first-tree");
+    expect(calls[0]?.args).toEqual([
+      "tree",
+      "integrate",
+      "--source-path",
+      workspace,
+      "--tree-path",
+      treePath,
+      "--mode",
+      "workspace-root",
+      "--workspace-id",
+      "chat-xyz",
+      "--tree-url",
+      "https://github.com/org/tree",
+    ]);
+    expect(calls[0]?.options.cwd).toBe(workspace);
+    expect(logs.join("\n")).toContain("first-tree (PATH)");
+  });
+
+  it("falls back to `npx first-tree@latest` when the binary is missing from PATH", () => {
+    const workspace = join(tmpBase, "integrate-fallback");
+    const treePath = join(tmpBase, "ctx-fb");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    let call = 0;
+    const { exec, calls } = makeRecordingExec(() => {
+      call += 1;
+      if (call === 1) {
+        const err = new Error("spawn first-tree ENOENT") as Error & { code?: string };
+        err.code = "ENOENT";
+        throw err;
+      }
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "chat-fb",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.command).toBe("npx");
+    expect(calls[1]?.args.slice(0, 3)).toEqual(["-y", "first-tree@latest", "tree"]);
+    expect(logs.join("\n")).toContain("npx first-tree@latest");
+  });
+
+  it("returns false and logs without throwing when both attempts fail", () => {
+    const workspace = join(tmpBase, "integrate-fail");
+    const treePath = join(tmpBase, "ctx-fail");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    const { exec } = makeRecordingExec(() => {
+      throw new Error("spawn npx ENOENT");
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "chat-fail",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(false);
+    expect(logs.join("\n")).toContain("First-tree integration skipped");
+  });
+
+  it("omits --tree-url when no URL is provided", () => {
+    const workspace = join(tmpBase, "integrate-no-url");
+    const treePath = join(tmpBase, "ctx-no-url");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec();
+
+    installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "chat-no-url",
+      log: () => {},
+      exec,
+    });
+
+    expect(calls[0]?.args).not.toContain("--tree-url");
   });
 });

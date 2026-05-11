@@ -133,6 +133,44 @@ export function removeClientConnection(clientId: string, ws: WebSocket): string[
   return agentIds;
 }
 
+/**
+ * Was `ws` the socket currently registered as `clientId`'s active connection
+ * at the time of the call? Used by ws-client.ts's `socket.on("close")` to
+ * decide whether to write `clients.status='disconnected'` to the DB — when a
+ * fast reconnect happens, the new socket has already swapped itself in via
+ * `setClientConnection`, so the old socket's late-arriving onClose must NOT
+ * stamp the row back to disconnected.
+ *
+ * The check is "this socket equals the registered ws", not "this socket is
+ * still OPEN" — the close handler runs precisely when the socket is no
+ * longer OPEN, but the in-memory entry might still legitimately point at
+ * us if no new connection has taken over yet.
+ */
+export function isActiveClientConnection(clientId: string, ws: WebSocket): boolean {
+  const entry = clientConnections.get(clientId);
+  return entry?.ws === ws;
+}
+
+/** Send a message to a client's WebSocket. Returns true if delivered. */
+export function sendToClient(clientId: string, message: Record<string, unknown>): boolean {
+  const entry = clientConnections.get(clientId);
+  if (!entry || entry.ws.readyState !== 1) return false;
+  entry.ws.send(JSON.stringify(message));
+  return true;
+}
+
+/** Send a message to a specific agent via its client's WebSocket. Returns true if delivered. */
+export function sendToAgent(agentId: string, message: Record<string, unknown>): boolean {
+  const clientId = agentToClient.get(agentId);
+  if (!clientId) return false;
+
+  const entry = clientConnections.get(clientId);
+  if (!entry || entry.ws.readyState !== 1) return false;
+
+  entry.ws.send(JSON.stringify({ ...message, agentId }));
+  return true;
+}
+
 export function forceDisconnectClient(clientId: string): string[] {
   const entry = clientConnections.get(clientId);
   if (!entry) return [];

@@ -1,27 +1,20 @@
 # First Tree Hub Scenario Playbooks
 
-Use this file when the user describes a goal in natural language and you need to translate it into the right First Tree Hub CLI sequence.
+Use this file when the user describes a goal in natural language and you need to translate it into a First Tree Hub CLI sequence.
 
-## 0. "I do not have first-tree-hub installed yet"
+## 0. "I do not have `first-tree-hub` installed yet"
 
-Use this before any operational flow when the machine may not have the CLI.
+Run this before any operational flow when the machine may not have the CLI.
 
-### Recommended flow
-
-1. Verify Node.js is supported:
+### Flow
 
 ```bash
-node --version
-```
-
-2. Install and verify the CLI:
-
-```bash
+node --version                                        # must be >= 22.16
 npm install -g @agent-team-foundation/first-tree-hub
 first-tree-hub --version
 ```
 
-3. If the user will use `onboard` or `agent token bootstrap`, make sure GitHub CLI is authenticated:
+For any task that creates agents via GitHub identity, also check:
 
 ```bash
 gh auth status
@@ -30,31 +23,24 @@ gh auth status
 ### What to remember
 
 - First Tree Hub requires Node.js `>= 22.16`.
-- Do not jump straight to `server start`, `client start`, or `onboard` on a machine where installation is still unknown.
+- Do not jump to `server start`, `client start`, `client connect`, or `onboard` on a machine where installation state is unknown.
+- If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree-hub ...` so they do not have to fight PATH.
 
-## 1. "Help me get First Tree Hub running locally"
+## 1. "Get First Tree Hub running locally"
 
-Use this when the user is setting up a local Hub for the first time.
+For a first-time local Hub.
 
-### Recommended flow
-
-1. If installation is unknown, do scenario 0 first.
-
-2. Start with:
+### Flow
 
 ```bash
-first-tree-hub server start
-```
-
-3. If the user wants a non-interactive setup, switch to:
-
-```bash
+first-tree-hub server start                     # interactive; provisions Docker Postgres + admin + web UI
+# or for CI / Docker:
 first-tree-hub server start --no-interactive
+# using an existing Postgres:
+first-tree-hub server start --database-url postgresql://user:pass@host:5432/db
 ```
 
-and make sure the required environment variables or config already exist.
-
-4. If startup fails, move to:
+If startup fails:
 
 ```bash
 first-tree-hub server doctor
@@ -63,222 +49,263 @@ first-tree-hub status
 
 ### What to remember
 
-- `server start` is the happy-path bootstrap command.
-- It can provision Docker PostgreSQL, run migrations, create the first admin, and serve the web UI.
-- If the user already has PostgreSQL, prefer `--database-url` instead of forcing Docker.
-- If the CLI is not installed yet, installation is part of the correct flow rather than a side detail.
+- `server start` is the happy-path bootstrap. It can run migrations, seed the first admin, and build/serve the web dist.
+- Prefer `--database-url` over forcing Docker when the user already has a Postgres.
+- First-run prints a generated admin password — capture it; it is shown only once.
 
-## 2. "Connect my local agent machine to an existing Hub"
+## 2. "Connect this computer to an existing Hub server"
 
-Use this when the Hub server already exists and the user wants a local client runtime.
+Use this when the Hub is already up and the user wants this machine to run agents against it.
 
-### Recommended flow
-
-1. Ensure client config points at the server:
+### Flow
 
 ```bash
-first-tree-hub config setup -c
+# Interactive login (prompts for username/password):
+first-tree-hub client connect https://hub.example.com
+
+# Or with a one-time connect token from the web "Connect a machine" dialog:
+first-tree-hub client connect https://hub.example.com --token <connect-token>
+
+# Skip the background service install (useful in containers):
+first-tree-hub client connect https://hub.example.com --no-service
 ```
 
-or:
+After `connect` succeeds, the machine is signed in and (by default on macOS/Linux) running as a background service.
+
+To verify:
 
 ```bash
-first-tree-hub config set -c server.url http://host:8000
+first-tree-hub client status          # local: configured agents
+first-tree-hub client doctor          # readiness checks (includes background-service state)
+first-tree-hub client hub-list        # server-side: this client appears in the Hub
 ```
 
-2. Add the local agent config:
+If something breaks, `client doctor` usually points at the culprit (no credentials, wrong server URL, WebSocket blocked, etc.).
+
+### What to remember
+
+- `client connect` is the **only** supported way to sign in. There is no separate `login`, `token`, or manual credential setup.
+- It writes `~/.first-tree/hub/credentials.json` and a generated `client.id` in `client.yaml`.
+- Agents are not registered by this command. Admins pin agents to this machine's `client.id` from the Hub UI (or via `agent create --client-id ...`). A running client auto-picks them up.
+
+## 3. "Keep this machine online across reboots"
+
+Use this for a production desktop or a server that should run agents permanently.
+
+### Flow
+
+`client connect` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
 
 ```bash
-first-tree-hub agent add <name> --token <token>
+first-tree-hub client connect <server-url>     # auto-installs the service
+first-tree-hub client doctor                   # verify: shows running/inactive/not-installed
+tail -f ~/.first-tree/hub/logs/client.log      # tail logs (NDJSON)
 ```
 
-3. Start the runtime:
+To repair a broken unit (binary moved, Node upgraded), re-run `client connect <url>` — it rewrites the unit file. Re-authentication is required.
+
+To decommission a machine, remove the unit at the OS level and clear local state:
 
 ```bash
-first-tree-hub client start
+# macOS
+launchctl bootout gui/$UID/dev.first-tree-hub.client
+rm -f ~/Library/LaunchAgents/dev.first-tree-hub.client.plist
+
+# Linux
+systemctl --user disable --now first-tree-hub-client.service
+rm -f ~/.config/systemd/user/first-tree-hub-client.service
+
+# Both
+rm -rf ~/.first-tree/hub
 ```
 
-4. If something looks wrong, inspect:
+To force-disconnect from the server side: `first-tree-hub client hub-disconnect <clientId>`.
+
+### What to remember
+
+- Windows is unsupported. `client connect` falls back to inline mode there — tell the user to use `first-tree-hub client start` inside a user-managed supervisor.
+- The service runs `client start --no-interactive`, so the machine must already have valid `credentials.json` — `client connect` writes that for you in the same step.
+- Re-running `client connect` is safe and idempotent for the unit file, but always re-authenticates.
+
+## 4. "Onboard a new human member"
+
+Add a real person to the team through the supported identity flow.
+
+### Flow
 
 ```bash
-first-tree-hub client doctor
-first-tree-hub client status
+# 0. Prereq on this machine: CLI installed, logged in.
+first-tree-hub client connect <server-url>             # if credentials.json does not exist
+
+# 1. Dry-run to surface missing fields:
+first-tree-hub onboard --check \
+  --server <url> --id alice --type human \
+  --role "Engineer" --domains "backend,infrastructure"
+
+# 2. Create the member (and optionally a personal assistant):
+first-tree-hub onboard \
+  --server <url> --id alice --type human \
+  --role "Engineer" --domains "backend,infrastructure" \
+  --assistant alice-assistant
+```
+
+If the machine should also run this human's personal assistant, run `client start` (or rely on the already-installed background service).
+
+### What to remember
+
+- `onboard` creates the agent via Admin API and wires up the local alias + optional Feishu bot in one step.
+- It **does not** log you in. If `credentials.json` is missing, it exits with a pointer to `client connect`.
+- Pass the server URL explicitly (`--server`) whenever the user / automation supplied one — do not silently fall back to defaults.
+- Humans with a Feishu bot configured still need to send `/bind <id>` in Feishu afterwards to attach the human user to the assistant.
+
+## 5. "Onboard a standalone autonomous agent"
+
+A bot with no human owner (code reviewer, monitor, pipeline agent).
+
+### Flow
+
+```bash
+first-tree-hub onboard --check \
+  --server <url> --id code-reviewer --type autonomous_agent \
+  --role "Code Review" --domains "code-review"
+
+first-tree-hub onboard \
+  --server <url> --id code-reviewer --type autonomous_agent \
+  --role "Code Review" --domains "code-review"
 ```
 
 ### What to remember
 
-- `agent add` is local-only configuration.
-- `client start` runs all locally configured agents, not just one.
+- Do **not** pass `--assistant` for `autonomous_agent`.
+- Feishu bot binding is optional here (no `/bind` follow-up needed).
+- Thread through `--server <url>` whenever supplied.
 
-## 3. "Onboard a new human member"
+## 6. "Change an agent's model / prompt / MCP / env / repos"
 
-Use this when the user wants to add a real person to the team through the supported identity flow.
+Use this whenever the user wants the live agent to behave differently — *not* when they want to edit their local alias file.
 
-### Recommended flow
-
-1. If the task starts from an external agent prompt instead of a repo checkout:
-   - Install the CLI if needed.
-   - Read `references/onboarding-operator.md`.
-   - Fetch `docs/onboarding-guide.md` with `gh` if you need the canonical public doc text.
-
-2. Dry-run requirements first:
+### Flow
 
 ```bash
-first-tree-hub onboard --check --server <url> --id <id> --type human --role "<role>" --domains "<d1,d2>"
-```
-
-3. Create the agent:
-
-```bash
-first-tree-hub onboard --server <url> --id <id> --type human --role "<role>" --domains "<d1,d2>"
-```
-
-4. Start the local runtime if this machine should run the assistant:
-
-```bash
-first-tree-hub client start
+first-tree-hub agent config get alice                                      # read current config
+first-tree-hub agent config set-model alice claude-opus-4-7                # swap model
+cat ./house-prompt.md | first-tree-hub agent config append-prompt alice    # replace prompt append
+first-tree-hub agent config add-mcp alice --name gh --transport stdio --command gh --args mcp
+first-tree-hub agent config set-env alice OPENAI_API_KEY=sk-... --sensitive
+first-tree-hub agent config add-repo alice https://github.com/acme/monorepo --ref main
+first-tree-hub agent config dry-run alice -f ./patch.json                  # preview + validate
 ```
 
 ### What to remember
 
-- `onboard` creates the agent via Admin API and bootstraps the token in one step.
-- Admin credentials are required (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
-- For humans, a personal assistant is optional and may be created with `--assistant <id>`.
-- When a server URL is provided in the user prompt or automation payload, thread it through the onboarding commands instead of assuming local defaults.
-- If a Feishu bot is configured for the assistant path, the human usually still needs to send `/bind <id>` in Feishu afterwards.
+- This surface mutates server-side runtime config via `/api/v1/admin/agents/:id/config` and affects the running agent everywhere.
+- Requests carry an `expectedVersion` — concurrent edits get a conflict, not silent overwrite. On conflict, re-fetch with `agent config get` and retry.
+- `--sensitive` env values are encrypted at rest and always masked in subsequent `get`/`list`.
+- `dry-run` is the safe way to preview a big patch before committing it.
+- Do not confuse this with `first-tree-hub config -a <name> set ...`, which edits the local `agent.yaml` (alias → UUID mapping), not server state.
 
-## 4. "Onboard a standalone autonomous agent"
+## 7. "Why can't the client connect?" / "Why does startup fail?"
 
-Use this when the new member is a bot with no human owner.
+Diagnose before editing code or YAML.
 
-### Recommended flow
-
-1. If the task starts from an external agent prompt instead of a repo checkout:
-   - Install the CLI if needed.
-   - Read `references/onboarding-operator.md`.
-   - Fetch `docs/onboarding-guide.md` with `gh` if you need the canonical public doc text.
-
-2. Check:
+### Flow
 
 ```bash
-first-tree-hub onboard --check --server <url> --id <id> --type autonomous_agent --role "<role>" --domains "<d1,d2>"
-```
-
-3. Create the agent:
-
-```bash
-first-tree-hub onboard --server <url> --id <id> --type autonomous_agent --role "<role>" --domains "<d1,d2>"
-```
-
-4. Start:
-
-```bash
-first-tree-hub client start
+first-tree-hub status                 # overall state: server, db, client, agents
+first-tree-hub client doctor          # or `server doctor` for the server side (background-service state included)
+first-tree-hub config list -c         # effective client YAML
+first-tree-hub config list -s         # effective server YAML
+first-tree-hub server status          # health-probe an already-running server
 ```
 
 ### What to remember
 
-- Do not use `--assistant` for `autonomous_agent`.
-- When a server URL is provided in the user prompt or automation payload, thread it through the onboarding commands instead of assuming local defaults.
-- Feishu bot binding is optional here, unlike the human `/bind` flow.
+- If `client doctor` flags "no credentials", the fix is `client connect`, not a YAML edit.
+- If `hub-list` shows the client but `client status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
+- Server and client issues look similar from a distance. Make the user goal explicit before debugging.
 
-## 5. "Why can't the client connect?" or "Why does startup fail?"
+## 8. "Debug messaging between agents"
 
-Use this for diagnosis before editing code.
+Verify delivery, inspect chats, send test messages manually.
 
-### Recommended flow
-
-1. Check top-level state:
+### Flow
 
 ```bash
-first-tree-hub status
-```
+# Prereq: this machine must have credentials.json (client connect).
 
-2. Run the relevant doctor:
+first-tree-hub agent send <agentId> "hello"                    # send to an agent
+first-tree-hub agent send <chatId> "hello" --chat              # send to an existing chat
+echo "piped" | first-tree-hub agent send <agentId>             # stdin
+first-tree-hub agent send <agentId> "hi" --metadata '{"priority":"high"}'
+first-tree-hub agent send <agentId> "follow-up" --reply-to-inbox <inboxId> --reply-to-chat <chatId>
 
-```bash
-first-tree-hub client doctor
-```
-
-or:
-
-```bash
-first-tree-hub server doctor
-```
-
-3. Inspect effective config:
-
-```bash
-first-tree-hub config list -c
-first-tree-hub config list -s
-```
-
-4. If the server should already be running, probe health directly:
-
-```bash
-first-tree-hub server status
-```
-
-### What to remember
-
-- Prefer diagnosis commands before changing YAML files by hand.
-- Server issues and client issues often look similar; make the user goal explicit before debugging.
-
-## 6. "Help me debug messaging between agents"
-
-Use this when the user wants to verify delivery, inspect chats, or send test messages manually.
-
-### Recommended flow
-
-1. Make sure agent debug auth is available:
-
-```bash
-export FIRST_TREE_HUB_TOKEN=...
-```
-
-2. Send a message:
-
-```bash
-first-tree-hub agent send <agentId> "hello"
-```
-
-or to an existing chat:
-
-```bash
-first-tree-hub agent send <chatId> "hello" --chat
-```
-
-3. Inspect chats and history:
-
-```bash
 first-tree-hub agent chats
 first-tree-hub agent history <chatId>
+first-tree-hub agent pull --ack                                # low-level inbox polling
+first-tree-hub agent chat <agent-name>                         # interactive REPL
 ```
 
-4. Fall back to low-level inbox polling if needed:
+### What to remember
+
+- These are debugging / operator commands. For production, agents run under `client start` (or the service) and receive messages via WebSocket.
+- Use `--agent <name>` when multiple agent aliases are configured; with a single alias the flag is optional.
+
+## 9. "Inspect or recover session state"
+
+Use these when a user reports a stuck or misbehaving session.
+
+### Flow
 
 ```bash
-first-tree-hub agent pull
+first-tree-hub agent status                     # fleet-wide snapshot (runtime states, session counts)
+first-tree-hub agent status <name>              # single-agent detail
+first-tree-hub agent sessions <name>            # list sessions for one agent
+first-tree-hub agent sessions <name> --state suspended
+
+first-tree-hub agent session suspend <name> <chat-id>
+first-tree-hub agent session resume <name> <chat-id>
+first-tree-hub agent session terminate <name> <chat-id>
+
+first-tree-hub agent reset <name>               # move an error-state agent back to idle
+first-tree-hub agent workspace clean            # remove stale chat workspaces safely
 ```
 
 ### What to remember
 
-- These commands are for debugging and operator visibility, not the normal runtime path.
-- If a user only wants to run their agents normally, `client start` is the main flow.
+- `workspace clean` consults the session registry — it will not remove a chat that still has an active (non-evicted) session. Safe to run on a live machine.
+- `reset` only clears the error flag; it does not restart the agent.
 
-## 7. "Change how the CLI behaves"
+## 10. "Deploy First Tree Hub somewhere real"
 
-Use this when the user wants a code change rather than an operational action.
+Use this when the task goes beyond a local demo.
 
-### Recommended flow
+### Flow
 
-1. Find the matching command handler in `packages/command/src/commands/`.
-2. Move behavior into `packages/command/src/core/` if the logic is reusable.
-3. Update the corresponding docs in `docs/cli-reference.md` or `docs/onboarding-guide.md`.
-4. Validate with the smallest relevant command/package test set.
+1. Read `docs/deployment-guide.md` before proposing anything — it covers Docker, Railway, Render, Supabase, HTTPS, and multi-machine topology.
+2. Provision the backing Postgres externally and pass `--database-url` to `server start`; do not rely on the CLI's Docker-managed Postgres in production.
+3. Set secrets via env vars (`FIRST_TREE_HUB_JWT_SECRET`, `FIRST_TREE_HUB_ENCRYPTION_KEY`, `FIRST_TREE_HUB_GITHUB_TOKEN`, etc.) so they are not auto-generated on restart.
+4. On each client machine, run `client connect <server-url>` once — it signs the machine in and installs the background service in a single step so the runtime survives reboots.
 
 ### What to remember
 
-- Command handlers should stay thin.
-- Config changes usually require updates in `packages/shared/src/config/`.
-- Onboarding changes often touch both `commands/onboard.ts` and `core/onboard.ts`.
+- Production auto-generated secrets (JWT, encryption key) should be pinned in env so that restarts do not invalidate issued tokens or make encrypted adapter credentials unreadable.
+- `server stop` only stops the CLI-managed Docker Postgres container — it is not a generic "stop the running server" command.
+
+## 11. "Change how the CLI behaves" (code change)
+
+Use this when the task is a code change, not an operation.
+
+### Flow
+
+1. Find the matching command handler under `packages/command/src/commands/`.
+2. Move reusable logic into `packages/command/src/core/`.
+3. If flags / env vars / schema change, update `packages/shared/src/config/*.ts`.
+4. Register new top-level commands from `packages/command/src/cli/index.ts`.
+5. Update `docs/cli-reference.md` (and `docs/onboarding-guide.md` if onboarding flow changes).
+6. Run the smallest relevant validation first: `pnpm check`, `pnpm typecheck`, `pnpm --filter @agent-team-foundation/first-tree-hub test`.
+
+### What to remember
+
+- Command handlers stay thin; core modules carry the logic.
+- Onboarding changes usually touch both `commands/onboard.ts` (argument shape) and `core/onboard.ts` (actual behavior).
+- See `references/developer-map.md` for the full source layout.

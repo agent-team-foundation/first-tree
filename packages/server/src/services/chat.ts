@@ -1,10 +1,51 @@
 import { randomUUID } from "node:crypto";
 import type { AddParticipant, CreateChat } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { leaveAsParticipant, recomputeChatWatchers } from "./watcher.js";
+
+/** Structural DB type so both `Database` and transaction clients work. */
+type DbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update">;
+
+/**
+ * When a direct chat grows past 2 participants, upgrade it to `group` and
+ * flip every existing non-human agent participant to `mention_only` — see
+ * proposals/hub-agent-messaging-reply-and-mentions §3.3. The caller is
+ * expected to insert the new participant AFTER this runs, so the "existing"
+ * set excludes them.
+ *
+ * Idempotent: if the chat is already a group, no-op.
+ */
+async function maybeUpgradeDirectToGroup(
+  db: DbLike,
+  chatId: string,
+  existingParticipantIds: string[],
+  newParticipantCount: number,
+): Promise<void> {
+  if (existingParticipantIds.length + newParticipantCount < 3) return;
+
+  const [chat] = await db.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1);
+  if (!chat || chat.type !== "direct") return;
+
+  await db.update(chats).set({ type: "group", updatedAt: new Date() }).where(eq(chats.id, chatId));
+
+  if (existingParticipantIds.length === 0) return;
+  const nonHumans = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(inArray(agents.uuid, existingParticipantIds), ne(agents.type, "human")));
+  const ids = nonHumans.map((a) => a.uuid);
+  if (ids.length === 0) return;
+  await db
+    .update(chatParticipants)
+    .set({ mode: "mention_only" })
+    .where(and(eq(chatParticipants.chatId, chatId), inArray(chatParticipants.agentId, ids)));
+}
 
 export async function createChat(db: Database, creatorId: string, data: CreateChat) {
   const chatId = randomUUID();
@@ -14,7 +55,7 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
 
   // Verify all participants exist and belong to the same organization
   const existingAgents = await db
-    .select({ id: agents.uuid, organizationId: agents.organizationId })
+    .select({ id: agents.uuid, organizationId: agents.organizationId, type: agents.type })
     .from(agents)
     .where(inArray(agents.uuid, [...allParticipantIds]));
 
@@ -33,6 +74,13 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
   }
 
+  // Direct chat with no human participant: every message is implicitly
+  // addressed to the only other party, so `full` mode causes A↔B reply loops
+  // (each agent's reply wakes the other forever). Flip both to `mention_only`
+  // so engagement requires an explicit `@` — see also `findOrCreateDirectChat`
+  // and migration 0029.
+  const isDirectAgentOnly = data.type === "direct" && existingAgents.every((a) => a.type !== "human");
+
   return db.transaction(async (tx) => {
     const [chat] = await tx
       .insert(chats)
@@ -49,9 +97,17 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
       chatId,
       agentId,
       role: agentId === creatorId ? "owner" : "member",
+      ...(isDirectAgentOnly ? { mode: "mention_only" as const } : {}),
     }));
 
     await tx.insert(chatParticipants).values(participantRows);
+
+    // Watcher rows: every active manager whose managed non-human agent
+    // is now in the chat (and who isn't already a speaker) should see
+    // this chat under "Watching". Without this call, watchers were
+    // only created on the `/me/chats` path — agent-to-agent / webhook /
+    // adapter / admin chats silently broke design AC #8.
+    await recomputeChatWatchers(tx, chatId);
 
     const participants = await tx.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 
@@ -107,6 +163,28 @@ export async function listChats(db: Database, agentId: string, limit: number, cu
   return { items, nextCursor };
 }
 
+/**
+ * List participants of a chat with their agent names — used by the client
+ * runtime to resolve `@<name>` mentions against the authoritative participant
+ * set (see proposals/hub-agent-messaging-reply-and-mentions §4).
+ */
+export async function listChatParticipantsWithNames(db: Database, chatId: string) {
+  const rows = await db
+    .select({
+      agentId: chatParticipants.agentId,
+      role: chatParticipants.role,
+      mode: chatParticipants.mode,
+      joinedAt: chatParticipants.joinedAt,
+      name: agents.name,
+      displayName: agents.displayName,
+      type: agents.type,
+    })
+    .from(chatParticipants)
+    .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
+    .where(eq(chatParticipants.chatId, chatId));
+  return rows;
+}
+
 export async function assertParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
   const [row] = await db
     .select({ chatId: chatParticipants.chatId })
@@ -117,6 +195,54 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
   if (!row) {
     throw new ForbiddenError("Not a participant of this chat");
   }
+}
+
+/** Ensure an agent is a participant of a chat. Silently adds them if not already. */
+export async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
+  // Short-circuit if already a participant so we don't spuriously trigger the
+  // direct→group upgrade on every admin message in a chat the sender already
+  // belongs to. Read outside the transaction — if a race adds this agent
+  // concurrently, the onConflictDoNothing inside the transaction is the
+  // authoritative dedupe.
+  const [existing] = await db
+    .select({ agentId: chatParticipants.agentId })
+    .from(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+    .limit(1);
+  if (existing) return;
+
+  // This is a genuine join — apply the same upgrade rule as joinChat /
+  // addParticipant. Web-console "start typing in a chat" funnels through
+  // here, so missing this call left the proposal's no-echo invariant
+  // silently off for UI-initiated joins. Atomic: upgrade + insert must not
+  // interleave with sendMessage's participant read.
+  await db.transaction(async (tx) => {
+    const current = await tx
+      .select({ agentId: chatParticipants.agentId })
+      .from(chatParticipants)
+      .where(eq(chatParticipants.chatId, chatId));
+    await maybeUpgradeDirectToGroup(
+      tx,
+      chatId,
+      current.map((p) => p.agentId),
+      1,
+    );
+    // Defensive: drop any pre-existing watcher row for this agent so
+    // invariant 1 holds (chat_subscriptions and chat_participants are
+    // mutually exclusive on `(chat_id, agent_id)`). Migration 0030
+    // backfilled watcher rows for every (manager, chat) pair, so a
+    // human-bridge agent calling through here on day 1 could collide.
+    await tx
+      .delete(chatSubscriptions)
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, agentId)));
+    await tx
+      .insert(chatParticipants)
+      .values({ chatId, agentId, mode: "full" })
+      .onConflictDoNothing({ target: [chatParticipants.chatId, chatParticipants.agentId] });
+    // Reconcile watcher rows for managers of any non-human in chat.
+    await recomputeChatWatchers(tx, chatId);
+  });
+  invalidateChatAudience(chatId);
 }
 
 export async function addParticipant(db: Database, chatId: string, requesterId: string, data: AddParticipant) {
@@ -152,11 +278,33 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
     throw new ConflictError(`Agent "${data.agentId}" is already a participant`);
   }
 
-  await db.insert(chatParticipants).values({
-    chatId,
-    agentId: data.agentId,
-    mode: data.mode ?? "full",
+  // Direct chats become groups on the third participant. Flip existing
+  // non-human agents to mention_only so the group doesn't devolve into noise.
+  // Atomic: upgrade + insert must not interleave with sendMessage's participant
+  // read, or a concurrent send would see chats.type='group' with mode='full'.
+  await db.transaction(async (tx) => {
+    const currentParticipants = await tx
+      .select({ agentId: chatParticipants.agentId })
+      .from(chatParticipants)
+      .where(eq(chatParticipants.chatId, chatId));
+    await maybeUpgradeDirectToGroup(
+      tx,
+      chatId,
+      currentParticipants.map((p) => p.agentId),
+      1,
+    );
+    // Defensive: drop watcher row for this agent (invariant 1).
+    await tx
+      .delete(chatSubscriptions)
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, data.agentId)));
+    await tx.insert(chatParticipants).values({
+      chatId,
+      agentId: data.agentId,
+      mode: data.mode ?? "full",
+    });
+    await recomputeChatWatchers(tx, chatId);
   });
+  invalidateChatAudience(chatId);
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
@@ -178,7 +326,231 @@ export async function removeParticipant(db: Database, chatId: string, requesterI
   if (!removed) {
     throw new NotFoundError(`Agent "${targetAgentId}" is not a participant of this chat`);
   }
+  // Reconcile watchers: a manager who was previously anchored to the
+  // removed agent may need their watcher row dropped (if no other
+  // managed agent remains in chat) or re-created (if they had been a
+  // participant for a different reason — rare).
+  await recomputeChatWatchers(db, chatId);
+  invalidateChatAudience(chatId);
 
+  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+}
+
+/**
+ * List chats visible to a member, grouped by agent.
+ * A member sees chats where:
+ *   1. Their human agent is a participant, OR
+ *   2. Any agent they manage (managerId = memberId) is a participant (supervision)
+ */
+// TODO: consolidate the three sequential queries (managedAgents, participations, chatRows)
+// into a single JOIN query for better performance at scale
+export async function listChatsForMember(db: Database, memberId: string, humanAgentId: string) {
+  // Find all agent UUIDs this member can see chats for:
+  // their own human agent + all agents they manage
+  const managedAgents = await db
+    .select({ uuid: agents.uuid, name: agents.name, type: agents.type, displayName: agents.displayName })
+    .from(agents)
+    .where(eq(agents.managerId, memberId));
+
+  // Ensure human agent is included (it should be, but be safe)
+  // displayName is non-null post-Phase 2 (migration 0024 enforces it).
+  const agentMap = new Map<string, { uuid: string; name: string | null; type: string; displayName: string }>();
+  for (const a of managedAgents) {
+    agentMap.set(a.uuid, a);
+  }
+  if (!agentMap.has(humanAgentId)) {
+    const [ha] = await db
+      .select({ uuid: agents.uuid, name: agents.name, type: agents.type, displayName: agents.displayName })
+      .from(agents)
+      .where(eq(agents.uuid, humanAgentId))
+      .limit(1);
+    if (ha) agentMap.set(ha.uuid, ha);
+  }
+
+  const agentIds = [...agentMap.keys()];
+  if (agentIds.length === 0) return [];
+
+  // Find all chat participations for these agents
+  const participations = await db
+    .select({
+      chatId: chatParticipants.chatId,
+      agentId: chatParticipants.agentId,
+      role: chatParticipants.role,
+      mode: chatParticipants.mode,
+    })
+    .from(chatParticipants)
+    .where(inArray(chatParticipants.agentId, agentIds));
+
+  if (participations.length === 0) return [];
+
+  // Collect unique chat IDs and build agent → chatIds mapping
+  const chatIds = [...new Set(participations.map((p) => p.chatId))];
+  const agentChatMap = new Map<string, string[]>();
+  for (const p of participations) {
+    const list = agentChatMap.get(p.agentId) ?? [];
+    list.push(p.chatId);
+    agentChatMap.set(p.agentId, list);
+  }
+
+  // Fetch chat details
+  const chatRows = await db
+    .select({
+      id: chats.id,
+      type: chats.type,
+      topic: chats.topic,
+      metadata: chats.metadata,
+      createdAt: chats.createdAt,
+      updatedAt: chats.updatedAt,
+      participantCount: sql<number>`(SELECT count(*)::int FROM chat_participants WHERE chat_id = ${chats.id})`,
+    })
+    .from(chats)
+    .where(inArray(chats.id, chatIds))
+    .orderBy(desc(chats.updatedAt));
+
+  const chatMap = new Map(chatRows.map((c) => [c.id, c]));
+
+  // Determine which chats the member's human agent is actually a participant in (vs supervise-only)
+  const humanParticipantChatIds = new Set(
+    participations.filter((p) => p.agentId === humanAgentId).map((p) => p.chatId),
+  );
+
+  // Build grouped result: per agent, list of chats
+  const result: Array<{
+    agent: { uuid: string; name: string | null; type: string; displayName: string };
+    chats: Array<{
+      id: string;
+      type: string | null;
+      topic: string | null;
+      participantCount: number;
+      isSupervisionOnly: boolean;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+  }> = [];
+
+  for (const [agentId, agentChatIds] of agentChatMap) {
+    const agentInfo = agentMap.get(agentId);
+    if (!agentInfo) continue;
+
+    const agentChats = agentChatIds
+      .map((chatId) => {
+        const chat = chatMap.get(chatId);
+        if (!chat) return null;
+        // A chat is supervision-only if the member's human agent is NOT a participant
+        // AND the chat is visible only because a managed agent is in it
+        const isSupervisionOnly = agentId !== humanAgentId && !humanParticipantChatIds.has(chatId);
+        return {
+          id: chat.id,
+          type: chat.type,
+          topic: chat.topic,
+          participantCount: chat.participantCount,
+          isSupervisionOnly,
+          createdAt: chat.createdAt.toISOString(),
+          updatedAt: chat.updatedAt.toISOString(),
+        };
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+
+    if (agentChats.length > 0) {
+      result.push({ agent: agentInfo, chats: agentChats });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Manager joins a chat. Adds their human agent as a participant.
+ * Requires the member to have supervision rights (manages at least one existing participant).
+ */
+// TODO: getChat is called only for organizationId validation; could be merged
+// with the participants query to reduce one DB round-trip
+export async function joinChat(db: Database, chatId: string, memberId: string, humanAgentId: string) {
+  const chat = await getChat(db, chatId);
+
+  // Check supervision rights: member must manage at least one participant
+  const participants = await db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+
+  const participantAgentIds = participants.map((p) => p.agentId);
+  if (participantAgentIds.length === 0) {
+    throw new NotFoundError("Chat has no participants");
+  }
+
+  // Check if already a participant
+  if (participantAgentIds.includes(humanAgentId)) {
+    throw new ConflictError("Already a participant in this chat");
+  }
+
+  // Verify supervision: at least one participant is managed by this member
+  const managedParticipants = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(inArray(agents.uuid, participantAgentIds), eq(agents.managerId, memberId)));
+
+  if (managedParticipants.length === 0) {
+    throw new ForbiddenError("You can only join chats where you manage at least one participant");
+  }
+
+  // Verify human agent belongs to same org as chat
+  const [humanAgent] = await db
+    .select({ organizationId: agents.organizationId })
+    .from(agents)
+    .where(eq(agents.uuid, humanAgentId))
+    .limit(1);
+
+  if (!humanAgent || humanAgent.organizationId !== chat.organizationId) {
+    throw new BadRequestError("Agent does not belong to the same organization as the chat");
+  }
+
+  // Human joining a direct chat turns it into a group — existing agent
+  // participants (non-human) switch to mention_only so they only respond when
+  // explicitly addressed. Atomic: upgrade + insert must not interleave with
+  // sendMessage's participant read (mode is part of the mention-filter rule).
+  // State-carry from any pre-existing watcher row: a manager who joins
+  // here likely had a `chat_subscriptions` row from migration 0030's
+  // backfill (or a recompute pass). Without DELETE-RETURNING + INSERT-
+  // with-state, their `last_read_at` and `unread_mention_count` would
+  // silently reset to defaults — and worse, leaving the watcher row
+  // intact would violate invariant 1 (mutual exclusion of participant
+  // / subscription on `(chat, agent)`).
+  await db.transaction(async (tx) => {
+    const [carriedRow] = await tx
+      .delete(chatSubscriptions)
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, humanAgentId)))
+      .returning({
+        lastReadAt: chatSubscriptions.lastReadAt,
+        unreadMentionCount: chatSubscriptions.unreadMentionCount,
+      });
+    await maybeUpgradeDirectToGroup(tx, chatId, participantAgentIds, 1);
+    await tx.insert(chatParticipants).values({
+      chatId,
+      agentId: humanAgentId,
+      role: "member",
+      mode: "full",
+      lastReadAt: carriedRow?.lastReadAt ?? null,
+      unreadMentionCount: carriedRow?.unreadMentionCount ?? 0,
+    });
+    await recomputeChatWatchers(tx, chatId);
+  });
+  invalidateChatAudience(chatId);
+
+  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+}
+
+/**
+ * Manager leaves a chat. Removes their human agent from participants.
+ * Only allowed if the human agent is a participant.
+ *
+ * Delegates the participant→watcher transition to `leaveAsParticipant`
+ * so admin-side and `/me/chats/:id/leave` share one canonical path. The
+ * earlier "recompute then UPDATE-back state" variant violated the design
+ * rule that recompute is only for set rebuild — never on a transition
+ * path (review #228 issue #2). The returned participant list is fetched
+ * after the tx commits, matching the admin route's existing contract.
+ */
+export async function leaveChat(db: Database, chatId: string, humanAgentId: string) {
+  await leaveAsParticipant(db, chatId, humanAgentId);
+  invalidateChatAudience(chatId);
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
 
@@ -209,14 +581,22 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
     }
   }
 
-  // Create new direct chat
-  const [agentA] = await db
-    .select({ organizationId: agents.organizationId })
+  // Create new direct chat. Fetch both agents' types so we can apply the
+  // "agent-only direct → mention_only" rule (see also `createChat` and
+  // migration 0029): without it, A↔B replies loop forever because every
+  // message in a `full` direct chat wakes the other party unconditionally.
+  const ends = await db
+    .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
     .from(agents)
-    .where(eq(agents.uuid, agentAId))
-    .limit(1);
+    .where(inArray(agents.uuid, [agentAId, agentBId]));
 
+  const agentA = ends.find((a) => a.uuid === agentAId);
   if (!agentA) throw new NotFoundError(`Agent "${agentAId}" not found`);
+  const agentB = ends.find((a) => a.uuid === agentBId);
+  if (!agentB) throw new NotFoundError(`Agent "${agentBId}" not found`);
+
+  const isDirectAgentOnly = agentA.type !== "human" && agentB.type !== "human";
+  const mode = isDirectAgentOnly ? "mention_only" : "full";
 
   const chatId = randomUUID();
   return db.transaction(async (tx) => {
@@ -230,9 +610,15 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
       .returning();
 
     await tx.insert(chatParticipants).values([
-      { chatId, agentId: agentAId, role: "member" },
-      { chatId, agentId: agentBId, role: "member" },
+      { chatId, agentId: agentAId, role: "member", mode },
+      { chatId, agentId: agentBId, role: "member", mode },
     ]);
+
+    // Watcher rows: managers of either non-human end should immediately
+    // see this fresh chat under "Watching". Without this, agent-to-agent
+    // direct chats created via `sendToAgent` / webhooks / task assignment
+    // never surfaced for the manager — design AC #8 silently broke.
+    await recomputeChatWatchers(tx, chatId);
 
     if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
     return chat;

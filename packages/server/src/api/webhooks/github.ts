@@ -4,11 +4,14 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
+import { createLogger } from "../../observability/index.js";
 import { createAgent } from "../../services/agent.js";
 import { findOrCreateDirectChat } from "../../services/chat.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
-import { resolveDefaultOrgId } from "../../services/organization.js";
+import { getDecryptedGithubWebhookSecret } from "../../services/org-settings.js";
+
+const log = createLogger("GithubWebhook");
 
 // ── GitHub payload types ────────────────────────────────────────────
 
@@ -64,12 +67,11 @@ function verifySignature(secret: string, rawBody: Buffer, signatureHeader: strin
   }
 }
 
-async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
-  const defaultOrgId = await resolveDefaultOrgId(db);
+async function ensureGitHubAdapterAgent(db: Database, organizationId: string): Promise<string> {
   const [existing] = await db
     .select({ uuid: agents.uuid })
     .from(agents)
-    .where(and(eq(agents.organizationId, defaultOrgId), eq(agents.name, GITHUB_ADAPTER_ID)))
+    .where(and(eq(agents.organizationId, organizationId), eq(agents.name, GITHUB_ADAPTER_ID)))
     .limit(1);
 
   if (existing) {
@@ -81,7 +83,7 @@ async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
       name: GITHUB_ADAPTER_ID,
       type: "autonomous_agent",
       displayName: "GitHub Adapter",
-      organizationId: defaultOrgId,
+      organizationId,
       metadata: { source: "github", managed: true },
     });
     return agent.uuid;
@@ -91,7 +93,7 @@ async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
       const [created] = await db
         .select({ uuid: agents.uuid })
         .from(agents)
-        .where(and(eq(agents.organizationId, defaultOrgId), eq(agents.name, GITHUB_ADAPTER_ID)))
+        .where(and(eq(agents.organizationId, organizationId), eq(agents.name, GITHUB_ADAPTER_ID)))
         .limit(1);
       if (created) return created.uuid;
     }
@@ -99,12 +101,12 @@ async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
   }
 }
 
-async function findTargetAgent(db: Database, repoFullName: string): Promise<string | null> {
+async function findTargetAgent(db: Database, organizationId: string, repoFullName: string): Promise<string | null> {
   // First: look for an agent whose metadata has github.repos containing the repo full_name
   const allAgents = await db
     .select({ id: agents.uuid, name: agents.name, metadata: agents.metadata, type: agents.type })
     .from(agents)
-    .where(eq(agents.status, "active"));
+    .where(and(eq(agents.organizationId, organizationId), eq(agents.status, "active")));
 
   for (const agent of allAgents) {
     if (agent.name === GITHUB_ADAPTER_ID) continue;
@@ -158,6 +160,7 @@ type MentionContext = {
  */
 async function routeMentionDelegations(
   app: FastifyInstance,
+  organizationId: string,
   mentionedNames: string[],
   ctx: MentionContext,
 ): Promise<number> {
@@ -172,7 +175,13 @@ async function routeMentionDelegations(
       status: agents.status,
     })
     .from(agents)
-    .where(and(inArray(agents.name, mentionedNames), isNotNull(agents.delegateMention)));
+    .where(
+      and(
+        eq(agents.organizationId, organizationId),
+        inArray(agents.name, mentionedNames),
+        isNotNull(agents.delegateMention),
+      ),
+    );
 
   let routed = 0;
   for (const agent of delegates) {
@@ -186,7 +195,10 @@ async function routeMentionDelegations(
       .limit(1);
 
     if (!target || target.status !== "active") {
-      app.log.warn(`delegate_mention target "${agent.delegateMention}" for "${agent.name}" is not active, skipping`);
+      log.warn(
+        { targetAgent: agent.delegateMention, sourceAgent: agent.name },
+        "delegate_mention target not active, skipping",
+      );
       continue;
     }
 
@@ -213,7 +225,10 @@ async function routeMentionDelegations(
       notifyRecipients(app.notifier, recipients, msg.id);
       routed++;
     } catch (err) {
-      app.log.error(err, `Failed to route mention delegation from "${agent.name}" to "${agent.delegateMention}"`);
+      log.error(
+        { err, sourceAgent: agent.name, targetAgent: agent.delegateMention },
+        "failed to route mention delegation",
+      );
     }
   }
 
@@ -281,18 +296,24 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
     done(null, body);
   });
 
-  const webhookSecret = app.config.github.webhookSecret;
   const webhookMax = app.config.rateLimit?.webhookMax ?? 60;
 
-  app.post(
-    "/github",
+  app.post<{ Params: { orgId: string } }>(
+    "/github/:orgId",
     { config: { rateLimit: { max: webhookMax, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      // Webhook secret not configured — reject requests
+      const { orgId } = request.params;
+
+      // Resolve the per-org webhook secret. Missing org and "secret not
+      // configured" both fall through to the same 501 — the orgId is in
+      // the URL already and timing differentiation here wouldn't buy real
+      // defense (UUID v7 is not enumerable). (#5)
+      const webhookSecret = await getDecryptedGithubWebhookSecret(app.db, orgId, app.config.secrets.encryptionKey);
       if (!webhookSecret) {
-        return reply
-          .status(501)
-          .send({ error: "GitHub webhook is not configured. Set FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET to enable." });
+        return reply.status(501).send({
+          error:
+            "GitHub webhook is not configured for this organization. An admin must set the webhook secret in Team settings.",
+        });
       }
 
       const rawBody = request.body;
@@ -327,11 +348,11 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
 
       // --- Event-specific handlers (mention delegation runs inside, after action gating) ---
       if (eventType === "issues") {
-        return handleIssuesEvent(app, eventType, payload, reply);
+        return handleIssuesEvent(app, orgId, eventType, payload, reply);
       }
 
       if (eventType === "issue_comment") {
-        return handleIssueCommentEvent(app, eventType, payload, reply);
+        return handleIssueCommentEvent(app, orgId, eventType, payload, reply);
       }
 
       // Other event types with @mention support (PRs, discussions, reviews, etc.)
@@ -340,7 +361,7 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
       const allowedActions = MENTION_ACTIONS[eventType];
       const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
       if (allowedActions && action && allowedActions.includes(action)) {
-        mentionsRouted = await handleMentionDelegation(app, eventType, payload);
+        mentionsRouted = await handleMentionDelegation(app, orgId, eventType, payload);
       }
       return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
     },
@@ -499,12 +520,17 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
  * Run mention delegation for a given event type and payload.
  * Only called after action gating confirms this is a "new content" event.
  */
-async function handleMentionDelegation(app: FastifyInstance, eventType: string, payload: unknown): Promise<number> {
+async function handleMentionDelegation(
+  app: FastifyInstance,
+  organizationId: string,
+  eventType: string,
+  payload: unknown,
+): Promise<number> {
   const mentionText = extractEventText(eventType, payload);
   const mentions = extractMentions(mentionText);
   const mentionCtx = extractEventContext(eventType, payload);
   if (mentions.length > 0 && mentionCtx) {
-    return routeMentionDelegations(app, mentions, mentionCtx);
+    return routeMentionDelegations(app, organizationId, mentions, mentionCtx);
   }
   return 0;
 }
@@ -523,6 +549,7 @@ const MENTION_ACTIONS: Record<string, string[]> = {
 
 async function handleIssuesEvent(
   app: FastifyInstance,
+  organizationId: string,
   eventType: string,
   payload: unknown,
   reply: FastifyReply,
@@ -531,7 +558,7 @@ async function handleIssuesEvent(
 
   // Mention delegation — only on new/changed content
   if (MENTION_ACTIONS.issues?.includes(data.action)) {
-    await handleMentionDelegation(app, eventType, payload);
+    await handleMentionDelegation(app, organizationId, eventType, payload);
   }
 
   // Only handle specific actions for repo-targeted routing
@@ -541,12 +568,12 @@ async function handleIssuesEvent(
   }
 
   const [senderId, targetAgentId] = await Promise.all([
-    ensureGitHubAdapterAgent(app.db),
-    findTargetAgent(app.db, data.repository.full_name),
+    ensureGitHubAdapterAgent(app.db, organizationId),
+    findTargetAgent(app.db, organizationId, data.repository.full_name),
   ]);
 
   if (!targetAgentId) {
-    app.log.warn(`No target agent found for GitHub issue event on ${data.repository.full_name}`);
+    log.warn({ repo: data.repository.full_name, event: "issue" }, "no target agent found for GitHub event");
     return reply.status(200).send({ ok: true, event: "issues", action: data.action, routed: false });
   }
 
@@ -585,6 +612,7 @@ async function handleIssuesEvent(
 
 async function handleIssueCommentEvent(
   app: FastifyInstance,
+  organizationId: string,
   eventType: string,
   payload: unknown,
   reply: FastifyReply,
@@ -593,7 +621,7 @@ async function handleIssueCommentEvent(
 
   // Mention delegation — only on new comments
   if (MENTION_ACTIONS.issue_comment?.includes(data.action)) {
-    await handleMentionDelegation(app, eventType, payload);
+    await handleMentionDelegation(app, organizationId, eventType, payload);
   }
 
   // Only handle "created" action for repo-targeted routing
@@ -602,12 +630,12 @@ async function handleIssueCommentEvent(
   }
 
   const [senderId, targetAgentId] = await Promise.all([
-    ensureGitHubAdapterAgent(app.db),
-    findTargetAgent(app.db, data.repository.full_name),
+    ensureGitHubAdapterAgent(app.db, organizationId),
+    findTargetAgent(app.db, organizationId, data.repository.full_name),
   ]);
 
   if (!targetAgentId) {
-    app.log.warn(`No target agent found for GitHub issue_comment event on ${data.repository.full_name}`);
+    log.warn({ repo: data.repository.full_name, event: "issue_comment" }, "no target agent found for GitHub event");
     return reply.status(200).send({ ok: true, event: "issue_comment", action: data.action, routed: false });
   }
 

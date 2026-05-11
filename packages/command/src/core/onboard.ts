@@ -5,17 +5,19 @@ import {
   DEFAULT_HOME_DIR,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { bootstrapToken, getGitHubUsername, resolveServerUrl } from "./bootstrap.js";
+import { ensureFreshAccessToken, loadCredentials, resolveServerUrl, saveAgentConfig } from "./bootstrap.js";
+import { cliFetch } from "./cli-fetch.js";
+import { print } from "./output.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
 type OnboardArgs = {
   id: string;
   type: "human" | "personal_assistant" | "autonomous_agent";
+  clientId?: string;
   role?: string;
   domains?: string;
   displayName?: string;
-  profile?: string;
   assistant?: string;
   delegateMention?: string;
   server?: string;
@@ -54,56 +56,30 @@ export function loadOnboardState(): Record<string, unknown> | null {
 export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
   const items: CheckItem[] = [];
 
-  // GitHub CLI — check first, everything else depends on it
-  let ghUsername: string | null = null;
-  try {
-    ghUsername = getGitHubUsername();
-    items.push({ key: "github_cli", label: "GitHub CLI", status: "ok", value: `authenticated as ${ghUsername}` });
-  } catch {
+  const creds = loadCredentials();
+  if (creds) {
+    items.push({ key: "connect", label: "Signed in", status: "ok", value: creds.serverUrl });
+  } else {
     items.push({
-      key: "github_cli",
-      label: "GitHub CLI",
+      key: "connect",
+      label: "Signed in",
       status: "missing_required",
-      hint: "Install and authenticate: gh auth login",
+      hint: "Run `first-tree-hub client connect <server-url>` first",
     });
   }
 
-  // Server URL
   try {
     const serverUrl = resolveServerUrl(args.server);
     items.push({ key: "server", label: "Server URL", status: "ok", value: serverUrl });
 
-    // Check server reachable
     try {
-      const res = await fetch(`${serverUrl}/api/v1/health`);
+      const res = await cliFetch(`${serverUrl}/api/v1/health`);
       items.push({
         key: "server_reachable",
         label: "Server reachable",
         status: res.ok ? "ok" : "error",
         value: res.ok ? "healthy" : `HTTP ${res.status}`,
       });
-
-      // Check bootstrap config (allowedOrg)
-      if (res.ok) {
-        try {
-          const configRes = await fetch(`${serverUrl}/api/v1/bootstrap/config`);
-          if (configRes.ok) {
-            const config = (await configRes.json()) as { allowedOrg: string | null };
-            if (config.allowedOrg) {
-              items.push({ key: "allowed_org", label: "GitHub org", status: "ok", value: config.allowedOrg });
-            } else {
-              items.push({
-                key: "allowed_org",
-                label: "GitHub org",
-                status: "error",
-                hint: "FIRST_TREE_HUB_GITHUB_ALLOWED_ORG not configured on server",
-              });
-            }
-          }
-        } catch {
-          // Non-critical — older servers may not have this endpoint
-        }
-      }
     } catch {
       items.push({
         key: "server_reachable",
@@ -117,11 +93,10 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
       key: "server",
       label: "Server URL",
       status: "missing_required",
-      hint: "Provide via --server, FIRST_TREE_HUB_SERVER, or config",
+      hint: "Provide via --server, FIRST_TREE_HUB_SERVER_URL, or config",
     });
   }
 
-  // Required params
   if (args.id) {
     items.push({ key: "id", label: "Agent ID", status: "ok", value: args.id });
   } else {
@@ -132,6 +107,19 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
     items.push({ key: "type", label: "Agent type", status: "ok", value: args.type });
   } else {
     items.push({ key: "type", label: "Agent type", status: "missing_required", hint: "Provide via --type" });
+  }
+
+  if (args.type && args.type !== "human") {
+    if (args.clientId) {
+      items.push({ key: "client", label: "Target client", status: "ok", value: args.clientId });
+    } else {
+      items.push({
+        key: "client",
+        label: "Target client",
+        status: "ok",
+        value: "(unbound — claimed on first WS connect)",
+      });
+    }
   }
 
   return items;
@@ -157,77 +145,120 @@ export function formatCheckReport(items: CheckItem[]): string {
   return lines.join("\n");
 }
 
-// ── Create agent via bootstrap endpoint ─────────────────────────────
+// ── Create flow ──────────────────────────────────────────────────────
+
+async function resolveDefaultOrgId(serverUrl: string, accessToken: string): Promise<string> {
+  const res = await cliFetch(`${serverUrl}/api/v1/me`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`/me HTTP ${res.status}`);
+  const me = (await res.json()) as {
+    memberships: Array<{ organizationId: string; organizationName: string }>;
+    defaultOrganizationId?: string | null;
+  };
+  if (me.defaultOrganizationId && me.memberships.some((m) => m.organizationId === me.defaultOrganizationId)) {
+    return me.defaultOrganizationId;
+  }
+  if (me.memberships.length === 1 && me.memberships[0]) return me.memberships[0].organizationId;
+  if (me.memberships.length === 0) throw new Error("You don't belong to any organization");
+  throw new Error("Multiple organizations — pass --org explicitly to onboard");
+}
+
+async function createAgentViaAdmin(
+  serverUrl: string,
+  accessToken: string,
+  orgId: string,
+  body: Record<string, unknown>,
+): Promise<{ uuid: string; name: string | null }> {
+  const res = await cliFetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errBody.error ?? `Failed to create agent (HTTP ${res.status})`);
+  }
+  return (await res.json()) as { uuid: string; name: string | null };
+}
 
 export async function onboardCreate(args: OnboardArgs): Promise<void> {
   const serverUrl = resolveServerUrl(args.server).replace(/\/+$/, "");
-  getGitHubUsername(); // verify gh is authenticated (throws if not)
+  const accessToken = await ensureFreshAccessToken();
 
-  // 1. Bootstrap token for the main agent (auto-creates if not exists)
-  process.stderr.write(`Bootstrapping agent "${args.id}"...\n`);
-
-  // Build metadata from role/domains if provided
   const metadata: Record<string, unknown> = {};
   if (args.role) metadata.role = args.role;
   if (args.domains) metadata.domains = args.domains.split(",").map((d) => d.trim());
 
-  let token: string;
-  try {
-    const result = await bootstrapToken(serverUrl, args.id, {
-      saveTo: "agent",
-      type: args.type,
-      displayName: args.displayName ?? args.id,
-      profile: args.profile,
-      delegateMention: args.assistant ?? args.delegateMention,
-      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-    });
-    token = result.token;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("already has") || msg.includes("409")) {
-      throw new Error(
-        `Agent "${args.id}" already has an active token.\n` +
-          "Ask an admin to revoke the existing token in the Web UI, then re-run onboard.",
-      );
-    }
-    throw err;
-  }
-  process.stderr.write(`Agent "${args.id}" ready.\n`);
+  print.line(`Creating agent "${args.id}"...\n`);
+  const orgId = await resolveDefaultOrgId(serverUrl, accessToken);
+  const primary = await createAgentViaAdmin(serverUrl, accessToken, orgId, {
+    name: args.id,
+    type: args.type,
+    displayName: args.displayName ?? args.id,
+    delegateMention: args.assistant ?? args.delegateMention,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    clientId: args.type === "human" ? undefined : args.clientId,
+  });
+  // Phase 3: always prefer the server-returned `name` over the submitted
+  // `args.id`. The two usually agree, but the server may normalise or
+  // reject on collision and a subsequent rename would be needed on first
+  // start. Using `primary.name` here keeps the log message, local dir key,
+  // and the Hub's view aligned from the outset. The `?? args.id` fallback
+  // covers servers that (for some reason) return a null name — the
+  // idempotent migration on next start will reconcile.
+  const primaryLocalName = primary.name ?? args.id;
+  print.line(`Agent "${primaryLocalName}" created (uuid ${primary.uuid}).\n`);
 
-  // 2. Bootstrap assistant if requested (auto-creates if not exists)
+  if (args.type !== "human") {
+    saveAgentConfig(primaryLocalName, primary.uuid, "claude-code");
+  }
+
+  let assistantUuid: string | null = null;
   if (args.assistant) {
-    process.stderr.write(`Bootstrapping assistant "${args.assistant}"...\n`);
+    print.line(`Creating assistant "${args.assistant}"...\n`);
     try {
-      const assistantResult = await bootstrapToken(serverUrl, args.assistant, {
-        saveTo: "agent",
+      const assistant = await createAgentViaAdmin(serverUrl, accessToken, orgId, {
+        name: args.assistant,
         type: "personal_assistant",
         displayName: args.assistant,
         metadata: { role: `Personal Assistant to ${args.id}`, domains: ["message triage", "task coordination"] },
+        clientId: args.clientId,
       });
-      token = assistantResult.token; // use assistant token for Feishu binding
-      process.stderr.write(`Assistant "${args.assistant}" ready.\n`);
+      assistantUuid = assistant.uuid;
+      const assistantLocalName = assistant.name ?? args.assistant;
+      saveAgentConfig(assistantLocalName, assistant.uuid, "claude-code");
+      print.line(`Assistant "${assistantLocalName}" ready.\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`Warning: Failed to bootstrap assistant "${args.assistant}": ${msg}\n`);
+      print.line(`Warning: Failed to create assistant "${args.assistant}": ${msg}\n`);
     }
   }
 
-  const agentToBootstrap = args.assistant ?? args.id;
-  process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${agentToBootstrap}/agent.yaml\n`);
+  const runtimeAgent = args.type === "human" ? args.assistant : args.id;
 
-  // 3. Bind Feishu bot (if requested)
+  // Bind Feishu bot if requested — runs on the runtime agent (assistant for
+  // human, otherwise self).
   if (args.feishuBotAppId && args.feishuBotAppSecret) {
     const { bindFeishuBot } = await import("./feishu.js");
-    process.stderr.write("Binding Feishu bot...\n");
-    await bindFeishuBot(serverUrl, token, args.feishuBotAppId, args.feishuBotAppSecret);
-    process.stderr.write("Feishu bot bound.\n");
+    const targetAgentUuid = args.type === "human" ? assistantUuid : primary.uuid;
+    if (!targetAgentUuid) {
+      print.line(`Warning: Cannot bind Feishu bot — no runtime agent available for "${args.id}".\n`);
+    } else {
+      print.line("Binding Feishu bot...\n");
+      await bindFeishuBot(serverUrl, accessToken, targetAgentUuid, args.feishuBotAppId, args.feishuBotAppSecret);
+      print.line("Feishu bot bound.\n");
+    }
   }
 
-  // 4. Auto-configure client config
   const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
   setConfigValue(clientConfigPath, "server.url", serverUrl);
 
-  // Clean up state file
   try {
     const { unlinkSync } = await import("node:fs");
     unlinkSync(STATE_FILE);
@@ -235,27 +266,30 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     // Ignore
   }
 
-  // Summary
   const typeLabel = args.type === "human" ? "Human" : args.type === "autonomous_agent" ? "Agent" : "Assistant";
-  process.stderr.write("\n\u2705 Onboard complete!\n\n");
-  process.stderr.write(`  ${typeLabel}:${" ".repeat(Math.max(1, 10 - typeLabel.length))}${args.id}\n`);
+  print.line("\n\u2705 Onboard complete!\n\n");
+  print.line(`  ${typeLabel}:${" ".repeat(Math.max(1, 10 - typeLabel.length))}${args.id}\n`);
   if (args.assistant) {
-    process.stderr.write(`  Assistant: ${args.assistant}\n`);
+    print.line(`  Assistant: ${args.assistant}\n`);
   }
-  process.stderr.write(`  Token:     ${DEFAULT_HOME_DIR}/config/agents/${agentToBootstrap}/agent.yaml\n`);
+  if (runtimeAgent) {
+    print.line(`  Config:    ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
+  }
   if (args.feishuBotAppId) {
-    process.stderr.write(`  Feishu:    bot bound (${args.feishuBotAppId})\n`);
+    print.line(`  Feishu:    bot bound (${args.feishuBotAppId})\n`);
   }
 
   if (args.type === "human") {
-    process.stderr.write("\n  Next step \u2014 bind your Feishu account:\n");
-    process.stderr.write(`    Send this message to the bot in Feishu:  /bind ${args.id}\n`);
+    print.line("\n  Next step \u2014 bind your Feishu account:\n");
+    print.line(`    Send this message to the bot in Feishu:  /bind ${args.id}\n`);
     if (!args.feishuBotAppId) {
-      process.stderr.write("    (requires a Feishu bot to be configured in the system)\n");
+      print.line("    (requires a Feishu bot to be configured in the system)\n");
     }
   }
 
-  process.stderr.write("\n  Start the agent:\n");
-  process.stderr.write("    first-tree-hub client start\n");
-  process.stderr.write("\n");
+  if (runtimeAgent) {
+    print.line("\n  Start the agent:\n");
+    print.line("    first-tree-hub client start\n");
+  }
+  print.line("\n");
 }

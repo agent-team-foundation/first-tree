@@ -7,6 +7,8 @@ import {
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { input, password, select } from "@inquirer/prompts";
+import { ensureFreshAccessToken, loadCredentials, resolveServerUrl } from "./bootstrap.js";
+import { cliFetch } from "./cli-fetch.js";
 
 /**
  * Check if interactive mode is available.
@@ -71,18 +73,55 @@ export async function promptMissingFields(options: {
 }
 
 /**
- * Interactive add agent — simple two-field prompt.
+ * Interactive / scripted "add this agent to the local client".
+ *
+ * Phase 3 of the agent-naming refactor removed the free-form local
+ * alias — the local config dir is keyed by the server-authoritative
+ * `agent.name` slug. This helper only asks the user for the agent UUID
+ * (or takes it via `opts.agentId`), then fetches the canonical name
+ * from the Hub. A `name` comes back null only if the agent was
+ * tombstoned server-side, in which case the caller must refuse the
+ * add (there's nothing sensible to key the local dir on).
  */
-export async function promptAddAgent(): Promise<{ name: string; token: string }> {
-  const name = await input({
-    message: "Agent name:",
-    validate: (v) => (/^[a-z0-9][a-z0-9-]*$/.test(v) ? true : "Lowercase alphanumeric and hyphens only"),
+export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{ name: string; agentId: string }> {
+  // Phase 3 needs a live Hub to resolve the canonical agent name, which
+  // means the caller must have run `client connect` first. Detect the
+  // two common "not connected yet" states up front with a clear error
+  // instead of letting `ensureFreshAccessToken` or `resolveServerUrl`
+  // throw a cryptic message after the user already typed a UUID.
+  if (loadCredentials() === null) {
+    throw new Error("Not connected. Run `first-tree-hub client connect <server-url>` first.");
+  }
+  let serverUrl: string;
+  try {
+    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`${msg} Run \`first-tree-hub client connect\` or set FIRST_TREE_HUB_SERVER_URL.`);
+  }
+
+  const agentId =
+    opts.agentId ??
+    (await input({
+      message: "Agent UUID on the Hub:",
+      validate: (v) => (v.length > 0 ? true : "Agent UUID is required"),
+    }));
+
+  const token = await ensureFreshAccessToken();
+  const res = await cliFetch(`${serverUrl}/api/v1/agents/${encodeURIComponent(agentId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
   });
-  const token = await input({
-    message: "Agent token:",
-    validate: (v) => (v.length > 0 ? true : "Token is required"),
-  });
-  return { name, token };
+  if (!res.ok) {
+    throw new Error(`Failed to look up agent ${agentId}: HTTP ${res.status}`);
+  }
+  const body = (await res.json()) as { name: string | null };
+  if (!body.name) {
+    throw new Error(
+      `Agent ${agentId} has no hub name (tombstoned or never named). Cannot add a local config without a name.`,
+    );
+  }
+  return { name: body.name, agentId };
 }
 
 // ── Internal ─────────────────────────────────────────────────────────

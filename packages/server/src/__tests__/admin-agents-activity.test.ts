@@ -1,0 +1,126 @@
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
+import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
+import { createAgent } from "../services/agent.js";
+import { bindAgent } from "../services/presence.js";
+import { uuidv7 } from "../uuid.js";
+import { createAdminContext, useTestApp } from "./helpers.js";
+
+/**
+ * Follow-up to #220. The `GET /admin/agents/activity` route used to read
+ * `memberScope(request)` directly and ignore `?organizationId=`, which meant
+ * every consumer of the React Query `["activity"]` cache (Workspace roster
+ * + middle area, Agents tab RUNTIME column, Computers BOUND AGENTS, Cmd-K
+ * palette) silently rendered JWT-default-org runtime data even when the
+ * dropdown showed a different org. These tests pin the post-fix behaviour
+ * so the same regression cannot land again unnoticed.
+ */
+describe("GET /admin/agents/activity org scoping", () => {
+  const getApp = useTestApp();
+
+  /** Attach `userId` to a fresh org with the requested role + a self
+   * human agent, mirroring the helper in admin-realtime-role.test.ts. */
+  async function attachOrg(
+    app: FastifyInstance,
+    userId: string,
+    role: "admin" | "member",
+  ): Promise<{ orgId: string; memberId: string }> {
+    const orgId = `org-act-${crypto.randomUUID().slice(0, 8)}`;
+    const memberId = uuidv7();
+    await app.db.transaction(async (tx) => {
+      await tx
+        .insert(organizations)
+        .values({ id: orgId, name: `act-${crypto.randomUUID().slice(0, 6)}`, displayName: "Activity Side" });
+      const human = await createAgent(tx as unknown as typeof app.db, {
+        name: `act-h-${crypto.randomUUID().slice(0, 6)}`,
+        type: "human",
+        displayName: "Activity Human",
+        managerId: memberId,
+        organizationId: orgId,
+      });
+      await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
+    });
+    return { orgId, memberId };
+  }
+
+  async function setup() {
+    const app = getApp();
+    // Alice has org A (default, admin) plus a seeded client owned by her.
+    const alice = await createAdminContext(app);
+    // Alice is also admin in org B.
+    const orgB = await attachOrg(app, alice.userId, "admin");
+
+    // One non-human agent per org, pinned to Alice's client (a single
+    // user-owned client can host agents from multiple orgs, post-#214).
+    const agentA = await createAgent(app.db, {
+      name: `act-a-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Org A bot",
+      managerId: alice.memberId,
+      clientId: alice.clientId,
+    });
+    const agentB = await createAgent(app.db, {
+      name: `act-b-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Org B bot",
+      managerId: orgB.memberId,
+      clientId: alice.clientId,
+      organizationId: orgB.orgId,
+    });
+
+    // bindAgent inserts an agent_presence row with runtime_state='idle' so
+    // listAgentsWithRuntime's `IS NOT NULL` filter sees both agents.
+    const instance = `inst-${crypto.randomUUID().slice(0, 6)}`;
+    await bindAgent(app.db, agentA.uuid, {
+      clientId: alice.clientId,
+      instanceId: instance,
+      runtimeType: "claude-code",
+    });
+    await bindAgent(app.db, agentB.uuid, {
+      clientId: alice.clientId,
+      instanceId: instance,
+      runtimeType: "claude-code",
+    });
+
+    return { app, alice, orgB, agentA, agentB };
+  }
+
+  it("returns only the URL org's agents", async () => {
+    const { app, alice, agentA, agentB } = await setup();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/activity`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = res.json<{ agents: Array<{ agentId: string }> }>().agents.map((a) => a.agentId);
+    expect(ids).toContain(agentA.uuid);
+    expect(ids).not.toContain(agentB.uuid);
+  });
+
+  it("returns the target org's agents when the URL targets it directly", async () => {
+    const { app, alice, orgB, agentA, agentB } = await setup();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(orgB.orgId)}/activity`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = res.json<{ agents: Array<{ agentId: string }> }>().agents.map((a) => a.agentId);
+    expect(ids).toContain(agentB.uuid);
+    expect(ids).not.toContain(agentA.uuid);
+  });
+
+  it("rejects when the caller has no membership in the URL's org (403 via requireOrgMembership)", async () => {
+    const { app, alice } = await setup();
+    const outsider = `org-act-out-${crypto.randomUUID().slice(0, 8)}`;
+    await app.db.insert(organizations).values({ id: outsider, name: outsider.slice(0, 30), displayName: "Outside" });
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(outsider)}/activity`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});

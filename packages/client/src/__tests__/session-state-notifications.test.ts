@@ -1,40 +1,16 @@
-import type { InboxEntryWithMessage, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import { silentLogger } from "./_logger-helpers.js";
+import { mockEntry } from "./test-helpers.js";
 
 /**
  * Tests for per-session state notifications (onStateChange callback),
  * deduplication via lastReportedStates, getSessionStates(), and shutdown reporting.
  */
-
-function mockEntry(opts: { id?: number; chatId?: string; content?: string } = {}): InboxEntryWithMessage {
-  const chatId = opts.chatId ?? "chat-1";
-  return {
-    id: opts.id ?? 1,
-    inboxId: "inbox-test",
-    messageId: `msg-${opts.id ?? 1}`,
-    chatId,
-    status: "delivered",
-    retryCount: 0,
-    createdAt: new Date().toISOString(),
-    deliveredAt: new Date().toISOString(),
-    ackedAt: null,
-    message: {
-      id: `msg-${opts.id ?? 1}`,
-      chatId,
-      senderId: "sender-1",
-      format: "text",
-      content: opts.content ?? "hello",
-      metadata: {},
-      replyToInbox: null,
-      replyToChat: null,
-      inReplyTo: null,
-      createdAt: new Date().toISOString(),
-    },
-  };
-}
 
 function mockSdk(): FirstTreeHubSDK {
   return {
@@ -62,9 +38,9 @@ function createSessionManager(opts: {
   sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
   handlerFactory?: HandlerFactory;
-  session?: { idle_timeout: number; max_sessions: number };
+  session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
   concurrency?: number;
-  log?: (msg: string) => void;
+  log?: pino.Logger;
   onStateChange?: (chatId: string, state: SessionState) => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
@@ -72,20 +48,20 @@ function createSessionManager(opts: {
   const sdk = opts.sdk ?? mockSdk();
 
   return new SessionManager({
-    session: opts.session ?? { idle_timeout: 300, max_sessions: 10 },
+    session: opts.session ?? { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
     agentIdentity: {
       agentId: "agent-1",
+      inboxId: "inbox-agent-1",
       displayName: "Agent",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     },
     sdk,
-    log: opts.log ?? (() => {}),
+    log: opts.log ?? silentLogger(),
     onStateChange: opts.onStateChange,
   });
 }
@@ -128,11 +104,15 @@ describe("SessionManager: state notifications", () => {
     await sm.shutdown();
   });
 
-  it("fires onStateChange('evicted') when a session is evicted", async () => {
+  it("does NOT emit a state notification when a session is LRU-evicted", async () => {
+    // LRU eviction is local-only: emitting any wire state on eviction would
+    // either accumulate stale rows in agent_chat_sessions (for `suspended`)
+    // or conflict with the server-authoritative `evicted` terminal. The row
+    // stays as last reported; local `evictedMappings` handles resume.
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const handlers: AgentHandler[] = [];
     const sm = createSessionManager({
-      session: { idle_timeout: 300, max_sessions: 2 },
+      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
       handlerFactory: () => {
         const h = createMockHandler();
         handlers.push(h);
@@ -147,7 +127,8 @@ describe("SessionManager: state notifications", () => {
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-c" }));
 
     const chatAChanges = stateChanges.filter((c) => c.chatId === "chat-a");
-    expect(chatAChanges).toContainEqual({ chatId: "chat-a", state: "evicted" });
+    // Only the initial `active` for chat-a should appear — no wire event on LRU.
+    expect(chatAChanges).toEqual([{ chatId: "chat-a", state: "active" }]);
 
     await sm.shutdown();
   });
@@ -284,5 +265,69 @@ describe("SessionManager: shutdown state reporting", () => {
 
     const chatBChanges = stateChanges.filter((c) => c.chatId === "chat-b");
     expect(chatBChanges).toEqual([{ chatId: "chat-b", state: "suspended" }]);
+  });
+});
+
+describe("SessionManager: terminate + reconcile", () => {
+  it("handleCommand('session:terminate') deletes local state and does NOT emit any state notification", async () => {
+    const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
+    const sm = createSessionManager({
+      onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    stateChanges.length = 0;
+
+    await sm.handleCommand("chat-a", "session:terminate");
+
+    expect(stateChanges).toHaveLength(0); // server is authoritative
+    expect(sm.getSessionStates()).toEqual([]);
+    expect(sm.getHeldChatIds()).toEqual([]);
+
+    await sm.shutdown();
+  });
+
+  it("getHeldChatIds() unions active sessions and evicted mappings", async () => {
+    const sm = createSessionManager({
+      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
+    // LRU evicts chat-a into evictedMappings when chat-c enters
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-c" }));
+
+    const held = new Set(sm.getHeldChatIds());
+    expect(held.has("chat-a")).toBe(true); // evictedMappings
+    expect(held.has("chat-b") || held.has("chat-c")).toBe(true); // live sessions
+
+    await sm.shutdown();
+  });
+
+  it("applyStaleChatIds() cleans up both live sessions and evicted mappings", async () => {
+    const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
+    const sm = createSessionManager({
+      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
+      onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-c" })); // chat-a → evictedMappings
+
+    const held = sm.getHeldChatIds();
+    expect(held).toContain("chat-a");
+
+    stateChanges.length = 0;
+    sm.applyStaleChatIds(held);
+
+    // Wait a tick for the async handleCommand chain to drain
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(sm.getHeldChatIds()).toEqual([]);
+    // Terminate should not emit wire notifications; server is authoritative
+    expect(stateChanges).toHaveLength(0);
+
+    await sm.shutdown();
   });
 });

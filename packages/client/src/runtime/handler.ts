@@ -1,12 +1,24 @@
+import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import type { GitMirrorManager } from "./git-mirror-manager.js";
 
 /** Agent identity fields flowing from Server through the runtime pipeline. */
 export type AgentIdentity = {
   agentId: string;
-  displayName: string | null;
+  /**
+   * Agent's inbox ID. Threaded into the handler so child processes can build
+   * cross-chat `replyTo` envelopes without a per-call server round-trip.
+   */
+  inboxId: string;
+  /**
+   * Always populated post-Phase 2 of the agent-naming refactor — the server
+   * enforces `agents.display_name NOT NULL` (migration 0024) and the
+   * `agent:pinned` WebSocket frame it emits resolves the fallback before
+   * sending, so the client no longer has to second-guess the value.
+   */
+  displayName: string;
   type: string;
   delegateMention: string | null;
-  profile: string | null;
   metadata: Record<string, unknown>;
 };
 
@@ -25,6 +37,52 @@ export type SessionContext = HandlerContext & {
   chatId: string;
   /** Refresh `lastActivity` timestamp to prevent idle timeout. */
   touch: () => void;
+  /** Report per-session runtime state (working/idle/blocked/error). */
+  setRuntimeState: (state: "idle" | "working" | "blocked" | "error") => void;
+  /**
+   * Persist a structured session event (tool_call / error) to the server.
+   * Assistant text does NOT go through here — it flows via `forwardResult`.
+   */
+  emitEvent: (event: SessionEvent) => void;
+  /**
+   * Signal that a query completed end-to-end — fires the per-chat
+   * `session_completed` notification on the server (5-min cooldown).
+   */
+  reportSessionCompletion: () => void;
+
+  /**
+   * Forward the handler's final text to the chat. Runtime handles mention
+   * extraction, `inReplyTo`, participants lookup, and transport — handlers
+   * just pass the raw output text.
+   */
+  forwardResult: (text: string) => Promise<void>;
+
+  /**
+   * Build env for CLI sub-processes that shell out to the `first-tree-hub`
+   * CLI. Layers Agent-Hub envelope vars (server/agent/inbox/chat IDs) on
+   * top of the parent env. Handlers pass their own cleaned `process.env`.
+   */
+  buildAgentEnv: (parentEnv: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+
+  /**
+   * Format an inbound message's content for handoff to an LLM — prefixes a
+   * `[From: <name>]` attribution line when the sender is a participant of
+   * this chat. Handler implementations should wrap whatever LLM-specific
+   * message envelope they build around the string this returns.
+   *
+   * Async because resolving the name may require a one-time participant
+   * fetch; the runtime caches the result for the lifetime of the session.
+   */
+  formatInboundContent: (message: SessionMessage) => Promise<string>;
+
+  /**
+   * Resolve a senderId to its chat-local name (the `@<name>` mention token).
+   * Falls back to displayName, then to the raw senderId. Share the same
+   * participant cache as `formatInboundContent`. Handlers that synthesise
+   * content (e.g. the image path's "An image was shared" prompt) call this
+   * to keep `[From: ...]` attribution consistent with the text path.
+   */
+  resolveSenderLabel: (senderId: string) => Promise<string>;
 };
 
 /** Message content extracted from an inbox entry (no entry metadata). */
@@ -41,6 +99,23 @@ export type SessionMessage = {
   content: string | Record<string, unknown>;
   /** Optional metadata. */
   metadata: Record<string, unknown> | null;
+  /**
+   * Group-chat history the recipient missed (mention_only + not @mentioned)
+   * up to this triggering message. Sorted oldest-first. Server attaches and
+   * also acks these — the runtime only renders them as preceding context in
+   * the prompt; it must NOT try to ack them individually.
+   * See proposals/group-chat-ux-improvements §1 (silent inbox).
+   */
+  precedingMessages?: PrecedingMessage[];
+};
+
+export type PrecedingMessage = {
+  id: string;
+  senderId: string;
+  format: string;
+  content: unknown;
+  metadata: Record<string, unknown>;
+  createdAt: string;
 };
 
 /**
@@ -53,8 +128,9 @@ export type AgentHandler = {
   /** First message in a new chat. Spawn query, start consumer loop. Returns claudeSessionId. */
   start(message: SessionMessage, ctx: SessionContext): Promise<string>;
 
-  /** Message arrives for a suspended/evicted chat. Resume query from disk. Returns claudeSessionId. */
-  resume(message: SessionMessage, sessionId: string, ctx: SessionContext): Promise<string>;
+  /** Message arrives for a suspended/evicted chat. Resume query from disk. Returns claudeSessionId.
+   *  `message` is undefined for admin-triggered resume (no new user input). */
+  resume(message: SessionMessage | undefined, sessionId: string, ctx: SessionContext): Promise<string>;
 
   /** Message arrives while session is active. Push into InputController. Synchronous. */
   inject(message: SessionMessage): void;
@@ -76,6 +152,13 @@ export type HandlerFactory = (config: HandlerConfig) => AgentHandler;
 export type HandlerConfig = {
   /** Root directory for per-chat workspaces (`<dataDir>/workspaces/<agentName>`). */
   workspaceRoot: string;
+  /**
+   * Optional bare-mirror manager. When present, the handler materialises the
+   * runtime config's `gitRepos` into `<cwd>/<localPath>` worktrees on session
+   * start and removes them on shutdown (PRD §5.1.5 / §7.5). Absent in unit
+   * tests that don't need git materialisation.
+   */
+  gitMirrorManager?: GitMirrorManager;
   /** Additional handler-specific config. */
   [key: string]: unknown;
 };

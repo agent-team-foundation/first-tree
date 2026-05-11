@@ -53,7 +53,7 @@ Expected output:
 
   Human:     alice
   Assistant: alice-assistant
-  Token:     ~/.first-tree-hub/config/agents/alice-assistant/agent.yaml
+  Token:     ~/.first-tree/hub/config/agents/alice-assistant/agent.yaml
   Feishu:    bot bound (cli_abcdef)
 
   Next step — bind your Feishu account:
@@ -99,7 +99,7 @@ Expected output:
 ✅ Onboard complete!
 
   Agent:     code-reviewer
-  Token:     ~/.first-tree-hub/config/agents/code-reviewer/agent.yaml
+  Token:     ~/.first-tree/hub/config/agents/code-reviewer/agent.yaml
 
   Start the agent:
     first-tree-hub client start
@@ -127,12 +127,10 @@ When required parameters are missing, the same checklist is shown as an error.
 
 | Variable | Purpose |
 |----------|---------|
-| `FIRST_TREE_HUB_HOME` | Override config/data home directory (default: `~/.first-tree-hub`) |
-| `FIRST_TREE_HUB_SERVER` | Hub server URL (alternative to `--server`) |
+| `FIRST_TREE_HUB_HOME` | Override config/data home directory (default: `~/.first-tree/hub`) |
+| `FIRST_TREE_HUB_SERVER_URL` | Hub server URL (alternative to `--server`) |
 | `FEISHU_APP_ID` | Feishu bot App ID (alternative to `--feishu-bot-app-id`) |
 | `FEISHU_APP_SECRET` | Feishu bot App Secret (alternative to `--feishu-bot-app-secret`) |
-
-> **Access control:** If the server has `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` set, only members of that GitHub organization can register agents.
 
 ## Choosing the Right Type
 

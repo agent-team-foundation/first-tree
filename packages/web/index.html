@@ -4,10 +4,35 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>First Tree</title>
+    <meta name="description" content="First Tree Hub — infrastructure for agent teams: registration, authentication, messaging, and admin dashboard." />
+    <meta name="theme-color" content="#040404" />
+    <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <title>First Tree Hub</title>
+    <script>
+      (() => {
+        const t = localStorage.getItem("theme");
+        const m = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        if (t === "dark" || (!t && m)) document.documentElement.classList.add("dark");
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!--
+      hearback-widget 0.1.8 — self-disables when the server can't reach an LLM,
+      so it's safe to always include. data-accent matches --accent from index.css
+      (packages/web/src/index.css:59). The server mounts hearback-server at
+      /feedback; see packages/server/src/api/feedback.ts.
+    -->
+    <script
+      src="https://unpkg.com/hearback-widget@0.1.8/dist/widget.js"
+      integrity="sha384-Yz3Aozu+UsUY2wRs3Io/WzHToBQ6e8NJ5/y0cLmJmaVOUsgtn6Zbr3OYiDGjZtoX"
+      crossorigin="anonymous"
+      data-endpoint="/feedback"
+      data-accent="oklch(0.72 0.17 150)"
+      defer
+    ></script>
   </body>
 </html>

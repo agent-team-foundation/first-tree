@@ -36,10 +36,8 @@ These must be set for Docker / CI / `--no-interactive` deployments. Interactive 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | — | Context Tree repo URL (optional, for organizational context) |
-| `FIRST_TREE_HUB_GITHUB_TOKEN` | — | GitHub token (optional, for webhooks) |
-| `FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret (only needed if using github webhooks) |
-| `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` | — | GitHub org for agent registration access control (optional) |
+| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` | — | Optional deployment-level read token for private Context Tree repos configured in Team Settings |
+| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN_REPOS` | — | Comma-separated GitHub repo allowlist (`owner/repo`) that may use the Context Tree read token |
 | `FIRST_TREE_HUB_PORT` | `8000` | Server port |
 | `FIRST_TREE_HUB_JWT_SECRET` | auto-generated | JWT signing secret |
 | `FIRST_TREE_HUB_ENCRYPTION_KEY` | auto-generated | Adapter credential encryption key |
@@ -57,7 +55,7 @@ These must be set for Docker / CI / `--no-interactive` deployments. Interactive 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FIRST_TREE_HUB_LOG_LEVEL` | `info` | Log level (`debug` / `info` / `warn` / `error`) |
+| `FIRST_TREE_HUB_LOG_LEVEL` | `info` | Log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`) |
 
 ## Docker Compose (HTTP)
 
@@ -95,7 +93,7 @@ The default [Caddyfile](../deploy/Caddyfile) is minimal. To add custom headers, 
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template?referralCode=first-tree-hub)
 
-Railway auto-detects the Dockerfile, provisions PostgreSQL, and exposes the service with HTTPS. Optionally set `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` to restrict agent registration to a specific GitHub organization.
+Railway auto-detects the Dockerfile, provisions PostgreSQL, and exposes the service with HTTPS. Configure Context Tree and GitHub integration per organization from Team Settings after the server is running.
 
 ### Render
 
@@ -114,8 +112,8 @@ npm install -g @agent-team-foundation/first-tree-hub
 # Configure server URL
 first-tree-hub config set -c server.url https://hub.example.com
 
-# Add agents
-first-tree-hub agent add my-agent --token aghub_xxxxxxxxxxxx
+# Add an existing Hub agent to this client (dir keyed by its hub name).
+first-tree-hub agent add --agent-id <agent-uuid>
 
 # Start
 first-tree-hub client start
@@ -126,7 +124,7 @@ first-tree-hub client start
 ```bash
 docker build -f Dockerfile.client -t first-tree-hub-client .
 docker run -e FIRST_TREE_HUB_SERVER_URL=https://hub.example.com \
-           -v ~/.first-tree-hub/config/agents:/root/.first-tree-hub/config/agents \
+           -v ~/.first-tree/hub/config/agents:/root/.first-tree/hub/config/agents \
            first-tree-hub-client
 ```
 
@@ -143,7 +141,7 @@ jobs:
       - run: npm install -g @agent-team-foundation/first-tree-hub
       - run: |
           first-tree-hub config set -c server.url ${{ secrets.HUB_URL }}
-          first-tree-hub agent add ci-agent --token ${{ secrets.AGENT_TOKEN }}
+          first-tree-hub agent add --agent-id ${{ secrets.AGENT_UUID }}
           first-tree-hub client start
 ```
 

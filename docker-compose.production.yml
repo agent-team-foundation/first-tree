@@ -11,6 +11,16 @@ services:
       FIRST_TREE_HUB_ENCRYPTION_KEY: ${FIRST_TREE_HUB_ENCRYPTION_KEY}
       FIRST_TREE_HUB_CONTEXT_TREE_REPO: ${FIRST_TREE_HUB_CONTEXT_TREE_REPO}
       FIRST_TREE_HUB_GITHUB_TOKEN: ${FIRST_TREE_HUB_GITHUB_TOKEN}
+      FIRST_TREE_HUB_TRUST_PROXY: ${FIRST_TREE_HUB_TRUST_PROXY:-true}
+      # Feedback widget (hearback). Leave unset to disable.
+      HEARBACK_FEEDBACK_REPO: ${HEARBACK_FEEDBACK_REPO:-}
+      HEARBACK_GITHUB_TOKEN: ${HEARBACK_GITHUB_TOKEN:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      # Note: legacy var, only controls the /feedback endpoint's IP resolution
+      # (not the global rate-limit key — that's FIRST_TREE_HUB_TRUST_PROXY above).
+      HEARBACK_TRUST_PROXY_HEADERS: ${HEARBACK_TRUST_PROXY_HEADERS:-}
     depends_on:
       postgres:
         condition: service_healthy

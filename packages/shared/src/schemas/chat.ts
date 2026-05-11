@@ -25,6 +25,23 @@ export const chatParticipantSchema = z.object({
 });
 export type ChatParticipant = z.infer<typeof chatParticipantSchema>;
 
+/**
+ * Participant row with the agent's public-ish metadata resolved — used by the
+ * client runtime for `@<name>` mention extraction against the authoritative
+ * participant set (see proposals/hub-agent-messaging-reply-and-mentions §4).
+ */
+export const chatParticipantDetailSchema = chatParticipantSchema.extend({
+  name: z.string().nullable(),
+  /**
+   * Non-null after Phase 2 of the agent-naming refactor — migration 0024
+   * enforces `agents.display_name NOT NULL`, so every participant resolves
+   * to a real label the client can render.
+   */
+  displayName: z.string(),
+  type: z.string(),
+});
+export type ChatParticipantDetail = z.infer<typeof chatParticipantDetailSchema>;
+
 export const chatSchema = z.object({
   id: z.string(),
   organizationId: z.string(),
@@ -39,8 +56,22 @@ export type Chat = z.infer<typeof chatSchema>;
 
 export const chatDetailSchema = chatSchema.extend({
   participants: z.array(chatParticipantSchema),
+  /** Server-resolved display title. Priority: `topic` > first message
+   *  preview > participant join. Clients should render this directly
+   *  rather than re-implementing the fallback chain. */
+  title: z.string(),
+  /** First message body's text summary (≤ 50 code points), or null if
+   *  the chat has no messages yet (or the first message is a file/image
+   *  with no `text` field). Exposed alongside the resolved `title` so
+   *  callers can use it for tooltips / hover descriptions. */
+  firstMessagePreview: z.string().nullable(),
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
+
+export const updateChatSchema = z.object({
+  topic: z.string().trim().max(500).nullable(),
+});
+export type UpdateChat = z.infer<typeof updateChatSchema>;
 
 export const addParticipantSchema = z.object({
   agentId: z.string().min(1),

@@ -14,7 +14,7 @@ import type {
   ResolvedFieldInfo,
 } from "./types.js";
 
-export const DEFAULT_HOME_DIR = process.env.FIRST_TREE_HUB_HOME ?? join(homedir(), ".first-tree-hub");
+export const DEFAULT_HOME_DIR = process.env.FIRST_TREE_HUB_HOME ?? join(homedir(), ".first-tree", "hub");
 export const DEFAULT_CONFIG_DIR = join(DEFAULT_HOME_DIR, "config");
 export const DEFAULT_DATA_DIR = join(DEFAULT_HOME_DIR, "data");
 
@@ -91,6 +91,9 @@ function coerceEnvValue(value: string, schema: z.ZodType): unknown {
 // ── Auto-generation ──────────────────────────────────────────────────
 
 function builtinAutoGenerate(strategy: string): string {
+  if (strategy === "client-id") {
+    return `client_${randomBytes(4).toString("hex")}`;
+  }
   const match = /^random:(\w+):(\d+)$/.exec(strategy);
   if (!match) {
     throw new Error(`Unknown auto-generation strategy: ${strategy}`);

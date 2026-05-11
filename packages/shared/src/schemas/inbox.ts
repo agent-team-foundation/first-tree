@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { messageSchema } from "./message.js";
+import { clientMessageSchema } from "./message.js";
 
 export const INBOX_ENTRY_STATUSES = {
   PENDING: "pending",
@@ -25,7 +25,7 @@ export const inboxEntrySchema = z.object({
 export type InboxEntry = z.infer<typeof inboxEntrySchema>;
 
 export const inboxEntryWithMessageSchema = inboxEntrySchema.extend({
-  message: messageSchema,
+  message: clientMessageSchema,
 });
 export type InboxEntryWithMessage = z.infer<typeof inboxEntryWithMessageSchema>;
 

@@ -13,13 +13,14 @@ export type PresenceStatus = z.infer<typeof presenceStatusSchema>;
 export const RUNTIME_STATES = {
   IDLE: "idle",
   WORKING: "working",
+  BLOCKED: "blocked",
   ERROR: "error",
 } as const;
 
-export const runtimeStateSchema = z.enum(["idle", "working", "error"]);
+export const runtimeStateSchema = z.enum(["idle", "working", "blocked", "error"]);
 export type RuntimeState = z.infer<typeof runtimeStateSchema>;
 
-// -- Session State (client → server, per-session) --
+// -- Session State --
 
 export const SESSION_STATES = {
   ACTIVE: "active",
@@ -27,23 +28,58 @@ export const SESSION_STATES = {
   EVICTED: "evicted",
 } as const;
 
+/** DB + admin surface. `evicted` is server-only (admin Terminate); never carried on the wire. */
 export const sessionStateSchema = z.enum(["active", "suspended", "evicted"]);
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
+/** Wire-level states a client may report. `evicted` from a stale client is rejected. */
+export const clientSessionStateSchema = z.enum(["active", "suspended"]);
+export type ClientSessionState = z.infer<typeof clientSessionStateSchema>;
+
 export const sessionStateMessageSchema = z.object({
   chatId: z.string().min(1),
-  state: sessionStateSchema,
+  state: clientSessionStateSchema,
 });
 export type SessionStateMessage = z.infer<typeof sessionStateMessageSchema>;
 
-// -- Agent Bind Payload (client → server) --
+/** Client-reported runtime state override (client → server, per-agent). */
+export const runtimeStateMessageSchema = z.object({
+  runtimeState: runtimeStateSchema,
+});
+export type RuntimeStateMessage = z.infer<typeof runtimeStateMessageSchema>;
 
-export const agentBindSchema = z.object({
-  token: z.string().min(1),
+// -- Agent Bind Payload (client → server) --
+// v2: token removed; authorization derives from the WS-level JWT and the
+// client_id pinned to the agent (Rule R-RUN).
+
+export const agentBindRequestSchema = z.object({
+  agentId: z.string().min(1),
   runtimeType: z.string().max(50),
   runtimeVersion: z.string().max(50).optional(),
 });
-export type AgentBind = z.infer<typeof agentBindSchema>;
+export type AgentBindRequest = z.infer<typeof agentBindRequestSchema>;
+
+export const AGENT_BIND_REJECT_REASONS = {
+  WRONG_CLIENT: "wrong_client",
+  NOT_OWNED: "not_owned",
+  AGENT_SUSPENDED: "agent_suspended",
+  WRONG_ORG: "wrong_org",
+  UNKNOWN_AGENT: "unknown_agent",
+  RUNTIME_PROVIDER_MISMATCH: "runtime_provider_mismatch",
+} as const;
+
+export const agentBindRejectReasonSchema = z.enum([
+  "wrong_client",
+  "not_owned",
+  "agent_suspended",
+  "wrong_org",
+  "unknown_agent",
+  "runtime_provider_mismatch",
+]);
+export type AgentBindRejectReason = z.infer<typeof agentBindRejectReasonSchema>;
+
+/** Header used on agent-scoped HTTP calls to select which managed agent the JWT acts as. */
+export const AGENT_SELECTOR_HEADER = "x-agent-id";
 
 // -- Extended Agent Presence --
 
@@ -70,6 +106,7 @@ export const activityOverviewSchema = z.object({
   byState: z.object({
     idle: z.number().int(),
     working: z.number().int(),
+    blocked: z.number().int(),
     error: z.number().int(),
   }),
   clients: z.number().int(),

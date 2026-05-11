@@ -106,6 +106,146 @@
       "when": 1776470400000,
       "tag": "0014_drop_task_fks",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1776556800000,
+      "tag": "0015_member_system",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1776643200000,
+      "tag": "0016_strange_havok",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1776729600000,
+      "tag": "0017_session_outputs_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1776816000000,
+      "tag": "0018_agent_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1776902400000,
+      "tag": "0019_agent_configs",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1776988800000,
+      "tag": "0020_unified_user_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1777075200000,
+      "tag": "0021_drop_agents_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1777161600000,
+      "tag": "0022_session_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1777248000000,
+      "tag": "0023_clients_org_scoping",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1777334400000,
+      "tag": "0024_display_name_not_null",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1777420800000,
+      "tag": "0025_inbox_silent_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1777507200000,
+      "tag": "0026_saas_onboarding",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1777593600000,
+      "tag": "0027_runtime_provider",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1777680000000,
+      "tag": "0028_auth_identity_user_github_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1777766400000,
+      "tag": "0029_direct_agent_only_mention_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1777852800000,
+      "tag": "0030_chat_first_workspace",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1777939200000,
+      "tag": "0031_drop_system_configs",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1778198400000,
+      "tag": "0032_organization_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1778284800000,
+      "tag": "0033_onboarding_dismissed_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1778371200000,
+      "tag": "0034_pending_questions",
+      "breakpoints": true
     }
   ]
 }

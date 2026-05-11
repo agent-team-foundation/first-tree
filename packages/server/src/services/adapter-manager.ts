@@ -1,4 +1,6 @@
+import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
+import { trace } from "@opentelemetry/api";
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import type { Database } from "../db/connection.js";
@@ -6,6 +8,7 @@ import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agents } from "../db/schema/agents.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
+import { adapterAttrs, withSpan } from "../observability/index.js";
 import * as mappingService from "./adapter-mapping.js";
 import { decryptCredentials } from "./crypto.js";
 import type { FeishuBotCredentials, InboundEvent } from "./feishu/types.js";
@@ -122,7 +125,15 @@ export function createAdapterManager(
       if (!bot) return;
 
       try {
-        await processInboundMessage(db, event, bot, log, notifier);
+        await withSpan(
+          "adapter.inbound feishu",
+          adapterAttrs({
+            platform: "feishu",
+            externalChatId: event.externalChannelId,
+            agentId: bot.agentId,
+          }),
+          () => processInboundMessage(db, event, bot, log, notifier),
+        );
         bot.lastActiveAt = new Date();
       } catch (err) {
         // Unclaim the event so it can be retried on next delivery
@@ -545,9 +556,6 @@ async function processFeishuOutbound(
   findBotByAgentId: (agentId: string) => ManagedBot | undefined,
   log: FastifyBaseLogger,
 ): Promise<{ sent: number; errors: number }> {
-  let sent = 0;
-  let errorCount = 0;
-
   // Claim pending inbox entries for feishu-bound human agents
   const claimed = await db.execute<{
     id: number;
@@ -568,6 +576,31 @@ async function processFeishuOutbound(
     )
     RETURNING id, inbox_id, message_id, chat_id
   `);
+
+  // Empty tick — emit no span. Without this short-circuit the worker
+  // produces a steady ~17k spans/day per bot at the 5s scheduling cadence,
+  // overwhelmingly empty. See observability overhaul rationale.
+  if (claimed.length === 0) return { sent: 0, errors: 0 };
+
+  return withSpan(
+    "adapter.outbound feishu",
+    {
+      ...adapterAttrs({ platform: "feishu" }),
+      [FIRST_TREE_HUB_ATTR.BG_TASK_NAME]: "adapter.outbound.feishu",
+      [FIRST_TREE_HUB_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
+    },
+    () => processFeishuOutboundClaimed(db, findBotByAgentId, log, claimed),
+  );
+}
+
+async function processFeishuOutboundClaimed(
+  db: Database,
+  findBotByAgentId: (agentId: string) => ManagedBot | undefined,
+  log: FastifyBaseLogger,
+  claimed: ReadonlyArray<{ id: number; inbox_id: string; message_id: string; chat_id: string | null }>,
+): Promise<{ sent: number; errors: number }> {
+  let sent = 0;
+  let errorCount = 0;
 
   // Dedup: when a chat has multiple feishu-bound humans, the same message
   // produces multiple inbox entries. We only send once per (message, channel).
@@ -646,6 +679,14 @@ async function processFeishuOutbound(
       log.error({ entryId: entry.id, err }, "Failed to send outbound Feishu message");
       errorCount++;
     }
+  }
+
+  // Stamp final counts onto the active span so dashboards can see how many
+  // of the claimed entries actually shipped vs. errored without a join.
+  const span = trace.getActiveSpan();
+  if (span) {
+    span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_SENT_COUNT, sent);
+    span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_ERROR_COUNT, errorCount);
   }
 
   return { sent, errors: errorCount };

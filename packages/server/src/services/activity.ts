@@ -1,47 +1,95 @@
 import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
-import { eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
+import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
+import type { OrgScope } from "../scope/types.js";
+import { agentVisibilityCondition } from "./access-control.js";
+import type { Notifier } from "./notifier.js";
 
-/** Upsert a session state and update materialized aggregates on agent_presence. */
-export async function upsertSessionState(db: Database, agentId: string, chatId: string, state: SessionState) {
+/**
+ * Upsert session state + refresh presence aggregates + NOTIFY.
+ *
+ * `agent_chat_sessions.(agent_id, chat_id)` is a single-row "current session
+ * state" cache, not a session history log. A new runtime session starting on
+ * the same (agent, chat) pair MUST overwrite whatever ended before — including
+ * an `evicted` row left by a previous terminate. The previous "revival
+ * defense" conflated two concerns: "this runtime session ended" (which is
+ * what `evicted` actually means) and "this chat is permanently archived for
+ * this agent" (a chat-level decision that should live on `chats`, not here).
+ * See proposals/hub-agent-messaging-reply-and-mentions §M2-session-lifecycle.
+ *
+ * Presence row contract: this function tolerates a missing `agent_presence`
+ * row by using `INSERT ... ON CONFLICT DO UPDATE`. The predictive-write path
+ * (sendMessage on first message) may target an agent whose client has never
+ * bound, so a prior `update agent_presence ... where agentId` would silently
+ * drop the activeSessions/totalSessions refresh. See PR #198 review §2.
+ */
+export async function upsertSessionState(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  state: SessionState,
+  organizationId: string,
+  notifier?: Notifier,
+  options?: { touchPresenceLastSeen?: boolean },
+) {
   const now = new Date();
+  let wrote = false;
   await db.transaction(async (tx) => {
-    // 1. Upsert session row
+    // Short-circuit when the row is already at the target state: skip the
+    // updatedAt refresh so steady-state messaging doesn't churn the row.
+    // Insertions and any state transition (evicted → active, active →
+    // suspended, etc.) still take the UPDATE branch.
     await tx
       .insert(agentChatSessions)
       .values({ agentId, chatId, state, updatedAt: now })
       .onConflictDoUpdate({
         target: [agentChatSessions.agentId, agentChatSessions.chatId],
         set: { state, updatedAt: now },
+        setWhere: ne(agentChatSessions.state, state),
       });
 
-    // 2. Aggregate and update presence
+    // runtimeState is owned by the client's `runtime:state` frame — do not
+    // write it here to avoid dual-write conflicts.
     const [counts] = await tx
       .select({
         active: sql<number>`count(*) FILTER (WHERE ${agentChatSessions.state} = 'active')::int`,
-        total: sql<number>`count(*)::int`,
+        total: sql<number>`count(*) FILTER (WHERE ${agentChatSessions.state} != 'evicted')::int`,
       })
       .from(agentChatSessions)
       .where(eq(agentChatSessions.agentId, agentId));
 
     const activeSessions = counts?.active ?? 0;
     const totalSessions = counts?.total ?? 0;
-    const runtimeState = activeSessions > 0 ? "working" : "idle";
+
+    // `lastSeenAt` is owned by the client's bind/heartbeat. Skip it on
+    // server-predictive writes (e.g. sendMessage upserting active on first
+    // message); default-true preserves the WS `session:state` path's behavior.
+    // Note: when the row is being inserted (no prior presence), the schema's
+    // `lastSeenAt` default (now()) populates it regardless — touchLastSeen
+    // only governs subsequent UPDATE behavior.
+    const touchLastSeen = options?.touchPresenceLastSeen ?? true;
+    const presenceSet = touchLastSeen
+      ? { activeSessions, totalSessions, lastSeenAt: now }
+      : { activeSessions, totalSessions };
 
     await tx
-      .update(agentPresence)
-      .set({
-        runtimeState,
-        activeSessions,
-        totalSessions,
-        runtimeUpdatedAt: now,
-        lastSeenAt: now,
-      })
-      .where(eq(agentPresence.agentId, agentId));
+      .insert(agentPresence)
+      .values({ agentId, activeSessions, totalSessions })
+      .onConflictDoUpdate({
+        target: [agentPresence.agentId],
+        set: presenceSet,
+      });
+
+    wrote = true;
   });
+
+  if (wrote && notifier) {
+    notifier.notifySessionStateChange(agentId, chatId, state, organizationId).catch(() => {});
+  }
 }
 
 export async function resetActivity(db: Database, agentId: string) {
@@ -62,6 +110,7 @@ export async function getActivityOverview(db: Database) {
       running: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} IS NOT NULL)::int`,
       idle: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} = 'idle')::int`,
       working: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} = 'working')::int`,
+      blocked: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} = 'blocked')::int`,
       error: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} = 'error')::int`,
     })
     .from(agentPresence);
@@ -77,6 +126,7 @@ export async function getActivityOverview(db: Database) {
     byState: {
       idle: agentCounts?.idle ?? 0,
       working: agentCounts?.working ?? 0,
+      blocked: agentCounts?.blocked ?? 0,
       error: agentCounts?.error ?? 0,
     },
     clients: clientCounts?.count ?? 0,
@@ -88,6 +138,33 @@ export async function getAgentWithRuntime(db: Database, agentId: string) {
   return row ?? null;
 }
 
-export async function listAgentsWithRuntime(db: Database) {
-  return db.select().from(agentPresence).where(isNotNull(agentPresence.runtimeState));
+/**
+ * List agents with active runtime state.
+ * When scope is provided, filters to agents visible to the member.
+ */
+export async function listAgentsWithRuntime(db: Database, scope?: OrgScope) {
+  if (!scope) {
+    return db.select().from(agentPresence).where(isNotNull(agentPresence.runtimeState));
+  }
+
+  // JOIN with agents table to apply visibility filter
+  return db
+    .select({
+      agentId: agentPresence.agentId,
+      status: agentPresence.status,
+      instanceId: agentPresence.instanceId,
+      connectedAt: agentPresence.connectedAt,
+      lastSeenAt: agentPresence.lastSeenAt,
+      clientId: agentPresence.clientId,
+      runtimeType: agentPresence.runtimeType,
+      runtimeVersion: agentPresence.runtimeVersion,
+      runtimeState: agentPresence.runtimeState,
+      activeSessions: agentPresence.activeSessions,
+      totalSessions: agentPresence.totalSessions,
+      runtimeUpdatedAt: agentPresence.runtimeUpdatedAt,
+      type: agents.type,
+    })
+    .from(agentPresence)
+    .innerJoin(agents, eq(agentPresence.agentId, agents.uuid))
+    .where(and(isNotNull(agentPresence.runtimeState), agentVisibilityCondition(scope.organizationId, scope.memberId)));
 }

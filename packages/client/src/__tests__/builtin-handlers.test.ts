@@ -23,4 +23,25 @@ describe("Built-in Handlers", () => {
     expect(typeof handler.suspend).toBe("function");
     expect(typeof handler.shutdown).toBe("function");
   });
+
+  it("registers codex handler", () => {
+    registerBuiltinHandlers();
+
+    const factory = getHandlerFactory("codex");
+    expect(factory).toBeDefined();
+    expect(typeof factory).toBe("function");
+  });
+
+  it("codex factory returns a valid session-oriented handler", () => {
+    registerBuiltinHandlers();
+
+    const factory = getHandlerFactory("codex");
+    const handler = factory({ workspaceRoot: "/tmp/test" });
+    expect(handler).toBeDefined();
+    expect(typeof handler.start).toBe("function");
+    expect(typeof handler.resume).toBe("function");
+    expect(typeof handler.inject).toBe("function");
+    expect(typeof handler.suspend).toBe("function");
+    expect(typeof handler.shutdown).toBe("function");
+  });
 });

@@ -4,155 +4,210 @@
 
 | User intent | Preferred entry point | Non-obvious note |
 | --- | --- | --- |
-| Install or verify the CLI on a fresh machine | `npm install -g @agent-team-foundation/first-tree-hub` then `first-tree-hub --version` | Requires Node.js `>= 22.16`; use this before proposing runtime commands on a machine that may not have the CLI yet |
-| Bring up a full local Hub quickly | `first-tree-hub server start` | Interactive on first run; can auto-provision PostgreSQL with Docker, run migrations, create the default admin, and serve the embedded web UI |
-| Check whether a machine is ready for Hub | `first-tree-hub server doctor` or `first-tree-hub client doctor` | `doctor` is readiness-oriented; top-level `status` is a current-state summary |
+| Install or verify the CLI on a fresh machine | `npm install -g @agent-team-foundation/first-tree-hub` then `first-tree-hub --version` | Requires Node.js `>= 22.16` |
+| Bring up a full local Hub quickly | `first-tree-hub server start` | Interactive on first run; auto-provisions PostgreSQL with Docker, runs migrations, creates the default admin, and serves the web UI |
+| Check whether a machine is ready for Hub | `first-tree-hub server doctor` / `client doctor` | `doctor` = readiness; top-level `status` = current state summary |
 | See if the server is alive | `first-tree-hub server status` | Hits `/api/v1/health`; defaults to `http://localhost:8000` unless `FIRST_TREE_HUB_SERVER_URL` is set |
-| Start all configured agents | `first-tree-hub client start` | Loads every agent config under `~/.first-tree-hub/config/agents/` |
-| Manage local config files | `first-tree-hub config ...` | Scope defaults to server unless `-c` or `-a <name>` is passed |
-| Add or remove a local agent config | `first-tree-hub agent add/remove/list` | This is local configuration, not Context Tree identity management |
-| Bootstrap an agent token from GitHub identity | `first-tree-hub agent token bootstrap <agentId>` | Requires `gh` auth and a Hub server that already knows the agent |
-| Send or inspect debug messages as an agent | `first-tree-hub agent send/chats/history/pull/register` | Requires `FIRST_TREE_HUB_TOKEN`; these are low-level debugging utilities |
-| Clean old isolated chat workspaces | `first-tree-hub agent workspace clean` | Removes stale workspaces only when there is no active non-evicted session |
-| Onboard a new human or autonomous agent | `first-tree-hub onboard` | Creates a PR in the Context Tree repo, not in `first-tree-hub` itself |
+| Sign this computer into a Hub server | `first-tree-hub client connect <server-url> [--token <t>] [--no-service]` | Stores a member JWT at `~/.first-tree/hub/credentials.json`, writes `client.yaml`, and (by default) installs the background service |
+| Run the client inline instead of via service | `first-tree-hub client start` | Loads credentials written by `connect`; fails if there are none or if no agents are pinned to this client |
+| Keep the computer online across reboots | `first-tree-hub client connect <server-url>` (omit `--no-service`) | Auto-installs launchd on macOS or `systemd --user` on Linux; Windows unsupported (falls back to inline) |
+| List machines the Hub currently sees | `first-tree-hub client hub-list` | Server-side inventory of connected clients |
+| Forcibly drop a machine from the Hub | `first-tree-hub client hub-disconnect <clientId>` | Server-side admin action |
+| Register a local alias for a Hub agent on this machine | `first-tree-hub agent add [name] [--agent-id <uuid>]` | Local-only; a running client auto-registers any agent an admin pins to this `clientId`, so `agent add` is mostly for scripted or unattended setups |
+| Create a fresh agent from the CLI | `first-tree-hub agent create <name> --type <t> --client-id <id>` | Writes to the Hub via Admin API and saves the local alias in one step |
+| Take ownership of an existing agent | `first-tree-hub agent claim <agentName>` | Sets `managerId` to the signed-in member |
+| Change an agent's runtime config (model, prompt, MCP, env, repos) | `first-tree-hub agent config <sub>` | Server-side edit via `/api/v1/admin/agents/:id/config` — affects the running agent everywhere |
+| Debug messaging as an agent | `first-tree-hub agent send/chats/history/pull/register/chat` | Low-level; authenticates as the signed-in member (no agent-specific token) |
+| Inspect session runtime state | `first-tree-hub agent status [name]`, `agent sessions <name>`, `agent session <suspend\|resume\|terminate>` | Reads `/api/v1/admin/agents/activity`, `/admin/sessions/agents/...` |
+| Reset an agent stuck in `error` state | `first-tree-hub agent reset <name>` | POSTs `reset-activity` |
+| Clean old isolated chat workspaces | `first-tree-hub agent workspace clean` | Respects the session registry — only removes evicted or untracked chats |
+| Onboard a new human or autonomous agent | `first-tree-hub onboard` | Guided flow; requires prior `client connect` for credentials |
+
+## The Credential Model
+
+Every CLI command that talks to the Hub reaches for `~/.first-tree/hub/credentials.json`. The file is written by `client connect` and contains `{ accessToken, refreshToken, serverUrl }` (mode `0600`). `ensureFreshAccessToken()` auto-refreshes against `/api/v1/auth/refresh` when the token is within 30 seconds of expiry, silently re-persists the result, and then returns the fresh access token.
+
+There are no separate admin or agent tokens. The member's JWT is used for every authenticated call — admin endpoints, Feishu binding, agent creation, agent config, messaging, SDK debugging, everything. The old `FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` environment variables and the `agent token bootstrap` subcommand have been removed.
+
+If `credentials.json` is missing or refresh fails, the CLI exits with a message pointing at `first-tree-hub client connect <server-url>`. Do not paper over this with manual env vars — run `client connect`.
 
 ## Command Families
 
 ### `server`
 
-- `server start`
-  - Best default for first-run local usage.
-  - Prompts for missing required server config unless `--no-interactive` is used.
-  - If no database URL is provided, it can auto-start a managed PostgreSQL container via Docker.
-  - Runs migrations automatically.
-  - Creates the default `admin` user if the database has none.
-  - Resolves or builds the web dist so the server can host the admin UI.
-- `server stop`
-  - Only stops the managed PostgreSQL container used by the CLI workflow.
-  - It does not stop an already-running standalone Fastify process.
-- `server doctor`
-  - Checks Node version, Docker availability, server config, database connectivity, GitHub token, Context Tree access, and server health.
-- `server status`
-  - Performs a health request against `/api/v1/health`.
-  - Uses `FIRST_TREE_HUB_SERVER_URL` when set; otherwise defaults to `http://localhost:8000`.
-- `server db:migrate`
-  - Uses the configured database and applies migrations.
-- `server admin:create`
-  - Creates an admin user directly against the configured database.
+Lifecycle for the Hub server process and its PostgreSQL backing store.
+
+- `server start` — best default for first-run local usage. Prompts for missing config unless `--no-interactive` is set; can auto-start a Docker-managed PostgreSQL if no `--database-url` is provided; runs migrations; creates the default `admin` user on an empty database; resolves/builds the web dist so the admin UI is served.
+- `server stop` — stops the CLI-managed PostgreSQL container only. It does **not** stop a standalone Fastify process.
+- `server doctor` — Node version, Docker availability, server config, database connectivity, GitHub token, Context Tree access, server health.
+- `server status` — simple health probe against `/api/v1/health`; defaults to `http://localhost:8000` unless `FIRST_TREE_HUB_SERVER_URL` is set.
+- `server db:migrate` — applies migrations against the configured database.
+- `server admin:create` — creates a new owner/admin against the configured database (not via HTTP — direct DB access).
 
 ### `client`
 
-- `client start`
-  - Initializes client config, loads all configured agents, creates a `ClientRuntime`, and keeps it alive until interrupted.
-  - Fails if there are no configured agents.
-- `client doctor`
-  - Checks Node version, client config, server reachability, agent configs, token validity, and WebSocket reachability.
-- `client status`
-  - Lists configured local agents and masked tokens.
-- `client stop`
-  - Currently informational only; there is no daemon manager yet.
+Everything that is "this computer and its relationship to a Hub server".
+
+- `client connect <server-url>` — first-time setup. Writes `server.url` into `client.yaml`, exchanges a connect token (or interactive login) for a member JWT, persists `credentials.json`, generates a stable `client.id`, and by default installs the background service so the machine stays online. Options: `--token <connect-token>`, `--no-service`.
+- `client start` — foreground runtime loop. Loads credentials, initializes config, spins up `ClientRuntime`, watches the agents config directory for hot-add, and stays alive until SIGINT/SIGTERM.
+- `client stop` — currently informational; prints the right Ctrl+C / `kill` hint. No daemon PID management yet.
+- `client status` — lists locally configured agent aliases with their runtime and agent UUID.
+- `client doctor` — Node version, client config, server reachability, agent configs, credential validity, WebSocket reachability, **and the background-service state** (running/inactive/not-installed/unsupported, with unit + log paths).
+- `client hub-list [--server <url>]` — enumerates clients currently known to the Hub server (`GET /api/v1/clients`), with hostname, agent count, and last-seen timestamp.
+- `client hub-disconnect <clientId> [--server <url>]` — POSTs `/api/v1/clients/:id/disconnect` to force-drop a WebSocket connection on the server side.
 
 ### `agent`
 
-- `agent add [name]`
-  - Writes `~/.first-tree-hub/config/agents/<name>/agent.yaml`.
-  - Prompts interactively if name or token is missing.
-- `agent remove <name>`
-  - Deletes the agent config and also removes runtime workspaces and the saved session registry for that agent.
-- `agent list`
-  - Reads local configured agents and masks tokens in output.
-- `agent workspace clean [agent-name] [--ttl <days>]`
-  - Cleans stale workspace directories under `~/.first-tree-hub/data/workspaces/`.
-  - Skips chat workspaces that still have an active session in the session registry.
-- `agent token bootstrap <agentId>`
-  - Uses GitHub identity and the server's bootstrap endpoint to create or retrieve an agent token.
-  - `--save-to agent` stores the token in the local agent config by default.
-- `agent bind ...`
-  - Used for Feishu bindings. Read `docs/claim-agent-guide.md` when claim/bind flows matter.
-- `agent send/chats/history/register/pull`
-  - These are SDK-style debugging commands.
-  - They require `FIRST_TREE_HUB_TOKEN`.
-  - `send` supports direct target vs `--chat`, stdin piping, and reply metadata.
-  - `pull` is the low-level inbox polling path.
+Everything that is "about one or more agent records". Subcommands split into several groups.
+
+**Local aliases**
+
+- `agent add [name] [--agent-id <uuid>]` — writes `~/.first-tree/hub/config/agents/<name>/agent.yaml`. Prompts interactively when arguments are missing. Local-only; does not create an agent on the Hub.
+- `agent remove <name>` — deletes the local alias, its workspaces under `data/workspaces/<name>/`, and its session registry file.
+- `agent list` — prints every locally configured alias.
+
+**Hub-side creation / ownership**
+
+- `agent create <name> --type <human|personal_assistant|autonomous_agent> --client-id <id> [--runtime <r>] [--display-name <n>] [--server <url>]` — calls `POST /api/v1/admin/agents` then saves the local alias. Requires the target `client-id` to be a machine you own (run `client connect` on that machine first).
+- `agent claim <agentName>` — sets `managerId` to the signed-in member via `PATCH /api/v1/admin/agents/:id`. Admins can claim any agent; non-admins can only self-claim unmanaged ones.
+
+**Runtime configuration** (server-side — see also `agent-config.ts`)
+
+- `agent config get <agent>` — prints the current `AgentRuntimeConfig` (model, prompt.append, mcpServers, env, gitRepos) with secrets masked.
+- `agent config set-model <agent> <model>` — replaces the `model` field (e.g. `claude-opus-4-7`).
+- `agent config append-prompt <agent> [-f <file>]` — replaces the `prompt.append` text; reads stdin if `-f` is absent.
+- `agent config add-mcp <agent> --name <n> --transport <stdio|http|sse> [--command / --args] [--url]` — replace-by-name semantics; use `stdio` for `--command`/`--args`, or `http`/`sse` for `--url`.
+- `agent config set-env <agent> <KEY=VALUE> [--sensitive]` — replace-by-key semantics. `--sensitive` encrypts at rest and masks in echo.
+- `agent config add-repo <agent> <url> [--ref <r>] [--path <p>]` — adds (or replaces by URL) a Git repo for the agent's worktree set.
+- `agent config dry-run <agent> -f <patch.json>` — validates a partial payload against the current version and prints the diff without persisting.
+
+All `agent config` subcommands call `GET`/`PATCH`/`POST dry-run` on `/api/v1/admin/agents/:id/config`, enforce optimistic concurrency by sending `expectedVersion`, and require the signed-in member to have admin scope on the target.
+
+**Workspaces**
+
+- `agent workspace clean [agent-name] [--ttl <days>]` — removes workspace directories under `~/.first-tree/hub/data/workspaces/<name>/` that are older than TTL (default 7 days) and not currently referenced by an active session in the registry.
+
+**Bindings**
+
+- `agent bind client <agentName> --client-id <id>` — first-time bind of an agent to a client machine. The `clientId` field on the agent is immutable once set, so this is a one-shot operation; use it for seeding, scripting, or recovery.
+- `agent bind bot --platform feishu --app-id <id> --app-secret <s>` — binds a Feishu bot to this agent (self-service via the adapter API).
+- `agent bind user <humanAgentId> --platform feishu --feishu-id <ou_xxx>` — binds a Feishu user to a human agent for `delegate_mention` routing.
+
+**Messaging & sessions**
+
+- `agent send <target> [message]` — sends a message to an agent ID or (with `--chat`) a chat ID. Supports `-f <text|markdown|card>`, `-m '<json>'`, and reply routing via `--reply-to`, `--reply-to-inbox`, `--reply-to-chat`. Reads from stdin when `[message]` is omitted.
+- `agent chats` / `agent history <chatId>` — list chats / show history (cursor-paginated, 1–100 per page).
+- `agent status [name]` — reads `/api/v1/admin/agents/activity` for a live snapshot (running count, state breakdown, per-agent runtime + session count).
+- `agent reset <name>` — POSTs `reset-activity` to move an agent out of `error` state.
+- `agent sessions <agent-name> [--state <s>]` — lists sessions via `/api/v1/admin/sessions/agents/:id`.
+- `agent session suspend|resume|terminate <agent-name> <chat-id>` — POSTs the corresponding session lifecycle endpoint.
+- `agent chat <agent-name>` — opens an admin-scoped REPL against the agent: creates a DM chat, polls messages every 2s, writes to the chat, exits on Ctrl+C.
+
+**Low-level SDK debug**
+
+- `agent register` — proxies `sdk.register()` for identity confirmation.
+- `agent pull [-l] [--ack]` — low-level inbox polling; `--ack` acknowledges all returned entries.
+
+All messaging / session / chat commands accept `--agent <name>` (local alias) when multiple agents are configured; with a single configured agent the flag is optional.
 
 ### `config`
 
-- `config setup`
-  - Runs schema-driven interactive prompts for server or client config.
-- `config set/get/list`
-  - Supports `-s/--server`, `-c/--client`, and `-a <name>/--agent <name>`.
-  - Defaults to server scope if no scope flag is provided.
-  - `list` and `get` hide secret fields unless `--show-secrets` is passed.
+Scope-aware YAML editing. Scopes:
 
-### Top-Level `status`
+- `-s` / `--server` (default) → `$FIRST_TREE_HUB_HOME/config/server.yaml`
+- `-c` / `--client` → `$FIRST_TREE_HUB_HOME/config/client.yaml`
+- `-a <name>` / `--agent <name>` → `$FIRST_TREE_HUB_HOME/config/agents/<name>/agent.yaml`
 
-- Summarizes:
-  - Current server health
-  - Database config presence
-  - Number of local configured agents
-  - Whether client config exists and what server URL it points to
-- Use this when the user asks for a compact overall state, not a deep readiness diagnosis.
+Subcommands:
+
+- `config setup` — schema-driven interactive wizard for the server or client config.
+- `config set <key> <value>` — sets a dotted key. Values matching `^\d+$`, `true`, or `false` are auto-coerced.
+- `config get <key> [--show-secrets]` — reads a dotted key; secret fields are masked unless `--show-secrets` is passed.
+- `config list [--show-secrets]` — flat dump of the selected config file.
+
+`agent config ...` is a different surface — it mutates server-side runtime configuration, not a local YAML file.
+
+### `status` (top-level)
+
+One compact overview:
+
+- Server health (probes `/api/v1/health` on the configured port)
+- Database configuration presence and provider
+- Count of locally configured agents
+- Client config presence and the server URL it points to
+
+Use this for a fast "is my machine connected and does the server answer" check; use `doctor` when you need to see *which* component is broken.
 
 ### `onboard`
 
-- `onboard --check`
-  - Shows readiness and missing inputs without making changes.
-- `onboard`
-  - Auto-creates the agent and bootstraps a token using GitHub identity.
-  - Optionally binds a Feishu bot.
-  - Writes `client.yaml` so `client start` works without extra setup.
-  - Only requires `gh` authentication — no admin credentials needed.
+High-level guided onboarding flow. Composes agent creation, optional assistant creation, and optional Feishu bot binding into one command. Supports a `--check` dry-run that prints the readiness checklist, and persists partial state to `~/.first-tree/hub/.onboard-state.json` so interactive re-runs pick up where they left off.
+
+Important: `onboard` depends on a valid credential file. If `loadCredentials()` returns null, the command errors out and points at `first-tree-hub client connect <server-url>`. It does **not** try to log the user in itself.
 
 ## Config and Environment Model
 
-### Config priority
+### Priority
 
 1. CLI args
 2. Environment variables
 3. YAML config files
-4. Auto-generated values
+4. Auto-generated values (secrets, Docker PG URL, `client.id`)
 5. Built-in defaults
 
-### Default config paths
+### Paths
 
-- Home root defaults to `~/.first-tree-hub`, but `FIRST_TREE_HUB_HOME` overrides it.
-- `$FIRST_TREE_HUB_HOME/config/server.yaml`
-- `$FIRST_TREE_HUB_HOME/config/client.yaml`
-- `$FIRST_TREE_HUB_HOME/config/agents/<name>/agent.yaml`
+- Home: `~/.first-tree/hub` by default; override with `FIRST_TREE_HUB_HOME`.
+- `$HOME/credentials.json` — member JWT + refresh token.
+- `$HOME/config/server.yaml`
+- `$HOME/config/client.yaml`
+- `$HOME/config/agents/<name>/agent.yaml`
+- `$HOME/.onboard-state.json`
+- `$HOME/logs/` — background service stdout/stderr
+- `$HOME/context-tree/` — optional organizational clone
+- `$HOME/data/sessions/`, `$HOME/data/workspaces/<agent>/<chatId>/`, `$HOME/data/postgres/`
 
-### Default runtime paths
+### Environment variables
 
-- `$FIRST_TREE_HUB_HOME/.onboard-state.json`
-- `$FIRST_TREE_HUB_HOME/context-tree/`
-- `$FIRST_TREE_HUB_HOME/data/sessions/`
-- `$FIRST_TREE_HUB_HOME/data/workspaces/`
-- `$FIRST_TREE_HUB_HOME/data/postgres/`
+**Global**
+- `FIRST_TREE_HUB_HOME`
 
-### Important environment variables
+**Server**
+- `FIRST_TREE_HUB_DATABASE_URL`
+- `FIRST_TREE_HUB_PORT`
+- `FIRST_TREE_HUB_HOST`
+- `FIRST_TREE_HUB_JWT_SECRET`
+- `FIRST_TREE_HUB_ENCRYPTION_KEY`
+- `FIRST_TREE_HUB_CONTEXT_TREE_REPO`
+- `FIRST_TREE_HUB_GITHUB_TOKEN`
+- `FIRST_TREE_HUB_WEB_DIST_PATH`
 
-- Global:
-  - `FIRST_TREE_HUB_HOME`
-- Server:
-  - `FIRST_TREE_HUB_DATABASE_URL`
-  - `FIRST_TREE_HUB_PORT`
-  - `FIRST_TREE_HUB_HOST`
-  - `FIRST_TREE_HUB_JWT_SECRET`
-  - `FIRST_TREE_HUB_ENCRYPTION_KEY`
-  - `FIRST_TREE_HUB_CONTEXT_TREE_REPO`
-  - `FIRST_TREE_HUB_GITHUB_TOKEN`
-  - `FIRST_TREE_HUB_WEB_DIST_PATH`
-- Client:
-  - `FIRST_TREE_HUB_SERVER_URL`
-  - `FIRST_TREE_HUB_LOG_LEVEL`
-- Onboard and agent debugging:
-  - `FIRST_TREE_HUB_TOKEN`
-  - `FIRST_TREE_HUB_SERVER`
-  - `FEISHU_APP_ID`
-  - `FEISHU_APP_SECRET`
+**Client**
+- `FIRST_TREE_HUB_SERVER_URL` — overrides `client.yaml`'s `server.url` at call time.
+- `FIRST_TREE_HUB_LOG_LEVEL`
+
+**Onboard**
+- `FIRST_TREE_HUB_SERVER_URL`
+- `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
+
+No agent-specific token env vars exist anymore. If you see a guide or old script setting `FIRST_TREE_HUB_AGENT_TOKEN` or `FIRST_TREE_HUB_AGENT`, it's stale — the CLI ignores both.
+
+## Admin API Endpoints the CLI Calls
+
+Useful when debugging or when a user wants to script around the CLI. All calls authenticate with the member JWT.
+
+- Auth: `POST /api/v1/auth/connect-token`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`
+- Me: `GET /api/v1/me`
+- Clients: `GET /api/v1/clients`, `POST /api/v1/clients/:id/disconnect`
+- Agents (admin): `GET /api/v1/admin/agents`, `POST /api/v1/admin/agents`, `PATCH /api/v1/admin/agents/:id`
+- Agent config: `GET|PATCH /api/v1/admin/agents/:id/config`, `POST /api/v1/admin/agents/:id/config/dry-run`
+- Agent activity: `GET /api/v1/admin/agents/activity`, `POST /api/v1/admin/agents/activity/:name/reset-activity`
+- Sessions: `GET /api/v1/admin/sessions/agents/:id`, `POST /admin/sessions/agents/:id/:chatId/{suspend|resume|terminate}`
+- Admin chat: `POST /api/v1/admin/agents/:id/chats`, `GET|POST /api/v1/admin/chats/:id/messages`
+- Health: `GET /api/v1/health`
 
 ## When to Read Other Docs
 
-- Read `docs/cli-reference.md` for the full public command reference.
-- Read `docs/onboarding-guide.md` for onboarding examples and type-specific behavior.
-- Read `docs/claim-agent-guide.md` for claim-agent and Feishu user binding flows.
-- Read `docs/deployment-guide.md` when the request is about Docker, Railway, Render, Supabase, HTTPS, or multi-machine deployment.
+- `docs/cli-reference.md` — the canonical public flag/env reference.
+- `docs/onboarding-guide.md` — end-to-end onboarding walkthrough and type-specific notes.
+- `docs/claim-agent-guide.md` — claim + Feishu binding details.
+- `docs/deployment-guide.md` — Docker, Railway, Render, Supabase, HTTPS, multi-machine.

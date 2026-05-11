@@ -6,12 +6,14 @@ import {
   checkNodeVersion,
   checkServerConfig,
   checkServerHealth,
-  createAdminUser,
+  cliFetch,
+  createOwner,
   printResults,
   runMigrations,
   startServer,
   stopPostgres,
 } from "../core/index.js";
+import { print } from "../core/output.js";
 
 export function registerServerCommands(program: Command): void {
   const server = program.command("server").description("Manage First Tree Hub server");
@@ -28,7 +30,7 @@ export function registerServerCommands(program: Command): void {
         await startServer({ ...options, noInteractive: options.interactive === false });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`\n  Error: ${msg}\n\n`);
+        print.line(`\n  Error: ${msg}\n\n`);
         process.exit(1);
       }
     });
@@ -40,13 +42,13 @@ export function registerServerCommands(program: Command): void {
       try {
         const stopped = stopPostgres();
         if (stopped) {
-          process.stderr.write("  PostgreSQL container stopped.\n");
+          print.line("  PostgreSQL container stopped.\n");
         } else {
-          process.stderr.write("  No managed PostgreSQL container found.\n");
+          print.line("  No managed PostgreSQL container found.\n");
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error stopping PostgreSQL: ${msg}\n`);
+        print.line(`  Error stopping PostgreSQL: ${msg}\n`);
         process.exit(1);
       }
     });
@@ -55,7 +57,7 @@ export function registerServerCommands(program: Command): void {
     .command("doctor")
     .description("Check server environment readiness")
     .action(async () => {
-      process.stderr.write("\n  First Tree Hub Server Doctor\n\n");
+      print.line("\n  First Tree Hub Server Doctor\n\n");
       const results = [
         checkNodeVersion(),
         checkDocker(),
@@ -73,16 +75,20 @@ export function registerServerCommands(program: Command): void {
       // P0: simple health check against local server
       const url = process.env.FIRST_TREE_HUB_SERVER_URL ?? "http://localhost:8000";
       try {
-        const res = await fetch(`${url}/api/v1/health`);
+        const res = await cliFetch(`${url}/api/v1/health`);
         if (res.ok) {
           const data = await res.json();
-          console.log(JSON.stringify(data, null, 2));
+          // Emit the raw /api/v1/health payload — existing scripts consume
+          // `first-tree-hub server status | jq '.status'` and would break if
+          // we wrapped it in the `{ok, data}` envelope. The body is already
+          // JSON, so this is safe for both human and `--json` consumers.
+          process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
         } else {
-          process.stderr.write(`  Server returned ${res.status}\n`);
+          print.line(`  Server returned ${res.status}\n`);
           process.exit(1);
         }
       } catch {
-        process.stderr.write(`  Cannot connect to ${url}\n`);
+        print.line(`  Cannot connect to ${url}\n`);
         process.exit(1);
       }
     });
@@ -96,10 +102,10 @@ export function registerServerCommands(program: Command): void {
       try {
         const config = await initConfig({ schema: serverConfigSchema, role: "server" });
         const tableCount = await runMigrations(config.database.url);
-        process.stderr.write(`  Migrations complete (${tableCount} tables)\n`);
+        print.line(`  Migrations complete (${tableCount} tables)\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error: ${msg}\n`);
+        print.line(`  Error: ${msg}\n`);
         process.exit(1);
       }
     });
@@ -108,21 +114,29 @@ export function registerServerCommands(program: Command): void {
 
   server
     .command("admin:create")
-    .description("Create an admin user")
+    .description("Create an admin user with organization")
     .option("-u, --username <name>", "Admin username", "admin")
-    .option("-p, --password <pass>", "Admin password (auto-generated if omitted)")
-    .action(async (options: { username: string; password?: string }) => {
+    .option("-n, --name <name>", "Display name", "Admin")
+    .option("-o, --org <org>", "Organization slug", "default")
+    .option("-p, --password <pass>", "Password (auto-generated if omitted)")
+    .action(async (options: { username: string; name: string; org: string; password?: string }) => {
       try {
         const config = await initConfig({ schema: serverConfigSchema, role: "server" });
-        const result = await createAdminUser(config.database.url, options.username, options.password);
+        const result = await createOwner(
+          config.database.url,
+          options.username,
+          options.org,
+          options.name,
+          options.password,
+        );
 
-        process.stderr.write(`  Admin user "${result.username}" created.\n`);
+        print.line(`  Admin user "${result.username}" created.\n`);
         if (!options.password) {
-          process.stderr.write(`  Password: ${result.password}  (save this — shown only once)\n`);
+          print.line(`  Password: ${result.password}  (save this — shown only once)\n`);
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error: ${msg}\n`);
+        print.line(`  Error: ${msg}\n`);
         process.exit(1);
       }
     });

@@ -1,25 +1,65 @@
-import type {
-  Agent,
-  Chat,
-  InboxEntryWithMessage,
-  Message,
-  SendMessage,
-  SendToAgent,
+import {
+  AGENT_SELECTOR_HEADER,
+  type Agent,
+  type AgentRuntimeConfig,
+  type Chat,
+  type ChatParticipantDetail,
+  type ClientCapabilities,
+  type InboxEntryWithMessage,
+  type Message,
+  type RuntimeProvider,
+  type SendMessage,
+  type SendToAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
+
+/**
+ * Callback that returns the current member access JWT.
+ *
+ * `minValidityMs` lets the caller declare "I need a token still valid for at
+ * least N milliseconds." Implementations should refresh whenever the cached
+ * token has less than that much life remaining. Without this hint the WS
+ * proactive-refresh path would reuse a cached token that is about to expire
+ * and immediately get kicked off with `auth:expired`.
+ */
+export type AccessTokenProvider = (opts?: { minValidityMs?: number }) => string | Promise<string>;
 
 export type SdkConfig = {
   serverUrl: string;
-  token: string;
+  /**
+   * Returns the current member access JWT. Callers are expected to refresh
+   * the token transparently (e.g. via a background refresher in the command
+   * package). The SDK calls this on every request, so short-lived tokens
+   * don't need explicit invalidation here.
+   */
+  getAccessToken: AccessTokenProvider;
+  /**
+   * Agent UUID this SDK instance acts on. When set, every request carries
+   * `X-Agent-Id`; the server's agent-selector middleware translates that to
+   * `request.agent`. Omit for admin/member-only calls (/me, /auth/*).
+   */
+  agentId?: string;
+  /**
+   * Optional `User-Agent` header sent on every request. Without it Node's
+   * default `User-Agent: node` lands in trace backends — useless for forensics
+   * (issue #246). Construction lives in the caller (typically the `command`
+   * package's `CLI_USER_AGENT` constant) so the SDK has no compile-time
+   * dependency on a specific CLI version or platform discovery.
+   */
+  userAgent?: string;
 };
 
 export type RegisterResult = {
   agentId: string;
   inboxId: string;
   status: string;
-  displayName: string | null;
+  /**
+   * Always populated post-Phase 2 of the agent-naming refactor — the server
+   * guarantees `agents.display_name` is non-null (migration 0024 + service
+   * default) so the client doesn't need a fallback anymore.
+   */
+  displayName: string;
   type: string;
   delegateMention: string | null;
-  profile: string | null;
   metadata: Record<string, unknown>;
 };
 
@@ -41,12 +81,15 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
-  private readonly _token: string;
+  private readonly getAccessToken: AccessTokenProvider;
+  private readonly _agentId: string | undefined;
+  private readonly _userAgent: string | undefined;
 
   constructor(config: SdkConfig) {
-    // Strip trailing slash
     this._baseUrl = config.serverUrl.replace(/\/+$/, "");
-    this._token = config.token;
+    this.getAccessToken = config.getAccessToken;
+    this._agentId = config.agentId;
+    this._userAgent = config.userAgent;
   }
 
   /** Server base URL (without trailing slash). */
@@ -54,12 +97,12 @@ export class FirstTreeHubSDK {
     return this._baseUrl;
   }
 
-  /** Agent bearer token. */
-  get agentToken(): string {
-    return this._token;
+  /** The agent UUID this SDK is scoped to, if any. */
+  get agentId(): string | undefined {
+    return this._agentId;
   }
 
-  /** Validate token, return agent identity. */
+  /** Validate current JWT + X-Agent-Id, return agent identity. */
   async register(): Promise<RegisterResult> {
     const agent = await this.requestJson<Agent>("/api/v1/agent/me");
     return {
@@ -69,7 +112,6 @@ export class FirstTreeHubSDK {
       displayName: agent.displayName,
       type: agent.type,
       delegateMention: agent.delegateMention ?? null,
-      profile: agent.profile ?? null,
       metadata: (agent.metadata as Record<string, unknown>) ?? {},
     };
   }
@@ -79,23 +121,59 @@ export class FirstTreeHubSDK {
     return this.requestJson<ContextTreeConfig>("/api/v1/context-tree/info");
   }
 
-  /** Fetch pending inbox entries. */
+  async fetchAgentConfig(): Promise<AgentRuntimeConfig> {
+    return this.requestJson<AgentRuntimeConfig>("/api/v1/agent/config");
+  }
+
+  /**
+   * Member-scoped: report this client's runtime-provider capabilities. The
+   * server stores them under `clients.metadata.capabilities` after checking
+   * that the connected member owns the client.
+   */
+  async updateCapabilities(clientId: string, capabilities: ClientCapabilities): Promise<void> {
+    await this.requestVoid(`/api/v1/clients/${encodeURIComponent(clientId)}/capabilities`, {
+      method: "PATCH",
+      body: JSON.stringify({ capabilities }),
+    });
+  }
+
+  /**
+   * Member-scoped: every agent pinned to a client owned by the calling user.
+   * Used by client startup to reconcile the local `agent.yaml::runtime` with
+   * the authoritative `agents.runtime_provider` before spawning handlers.
+   */
+  async listMyAgents(): Promise<Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider }>> {
+    return this.requestJson("/api/v1/me/pinned-agents");
+  }
+
+  async isHubReachable(timeoutMs = 3_000): Promise<boolean> {
+    try {
+      const url = `${this._baseUrl}/api/v1/health`;
+      // Health is anonymous — can't go through `doFetch` (which calls
+      // `getAccessToken`). Stamp UA explicitly so this anonymous probe
+      // is grouped with the rest of the install's traffic in trace backends.
+      const headers: Record<string, string> = {};
+      if (this._userAgent) headers["User-Agent"] = this._userAgent;
+      const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async pull(limit = 10): Promise<PullResult> {
     const entries = await this.requestJson<InboxEntryWithMessage[]>(`/api/v1/agent/inbox?limit=${limit}`);
     return { entries };
   }
 
-  /** Acknowledge an inbox entry. */
   async ack(entryId: number): Promise<void> {
     await this.requestVoid(`/api/v1/agent/inbox/${entryId}/ack`, { method: "POST" });
   }
 
-  /** Renew lease on an inbox entry. */
   async renew(entryId: number): Promise<void> {
     await this.requestVoid(`/api/v1/agent/inbox/${entryId}/renew`, { method: "POST" });
   }
 
-  /** Send a message to a chat. */
   async sendMessage(chatId: string, data: SendMessage): Promise<Message> {
     return this.requestJson<Message>(`/api/v1/agent/chats/${chatId}/messages`, {
       method: "POST",
@@ -103,7 +181,6 @@ export class FirstTreeHubSDK {
     });
   }
 
-  /** Send a direct message to another agent. */
   async sendToAgent(agentName: string, data: SendToAgent): Promise<Message> {
     return this.requestJson<Message>(`/api/v1/agent/agents/${agentName}/messages`, {
       method: "POST",
@@ -111,14 +188,20 @@ export class FirstTreeHubSDK {
     });
   }
 
-  /** List chats the current agent participates in. */
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
   }
 
-  /** List messages in a chat. Requires caller to be a participant. */
   async listMessages(chatId: string, options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Message>> {
     return this.requestJson(`/api/v1/agent/chats/${chatId}/messages${this.queryString(options)}`);
+  }
+
+  /**
+   * List participants of a chat with agent names/displayNames — used by the
+   * runtime to resolve `@<name>` mentions against the authoritative set.
+   */
+  async listChatParticipants(chatId: string): Promise<ChatParticipantDetail[]> {
+    return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
   }
 
   private queryString(options?: { limit?: number; cursor?: string }): string {
@@ -146,10 +229,16 @@ export class FirstTreeHubSDK {
 
   private async doFetch(path: string, init?: RequestInit): Promise<Response> {
     const url = `${this._baseUrl}${path}`;
+    const token = await this.getAccessToken();
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this._token}`,
+      Authorization: `Bearer ${token}`,
     };
-    // Only set Content-Type for requests with a body — Fastify rejects empty JSON bodies
+    if (this._agentId) {
+      headers[AGENT_SELECTOR_HEADER] = this._agentId;
+    }
+    if (this._userAgent) {
+      headers["User-Agent"] = this._userAgent;
+    }
     if (init?.body) {
       headers["Content-Type"] = "application/json";
     }

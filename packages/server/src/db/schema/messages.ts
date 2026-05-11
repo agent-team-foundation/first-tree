@@ -21,6 +21,8 @@ export const messages = pgTable(
     replyToChat: text("reply_to_chat"),
     /** Original message ID; Delivery Engine uses this to trigger replyTo routing */
     inReplyTo: text("in_reply_to"),
+    /** Entry point that created this message: hub_ui / cli / feishu / github / api */
+    source: text("source"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

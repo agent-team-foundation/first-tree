@@ -4,26 +4,215 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ============================================================================
+   Self-hosted web fonts.
+   Inter and JetBrains Mono are shipped from /public/fonts as variable-font
+   woff2s (single file covers weights 400–700 via axis range). Keeping the
+   fonts in-repo removes the Google Fonts network dependency, eliminates the
+   first-paint FOUT flash, and lets the app render identically offline.
+   Latin + Latin-Extended subsets only; CJK characters fall through to the
+   system fonts declared in --font-sans-stack. Unicode-ranges are copied
+   verbatim from the Google Fonts CSS v2 output so the subset boundaries
+   match what Google served.
+   ============================================================================ */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/inter-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/inter-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF,
+    U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* FOUT stabiliser: "Inter Fallback" re-maps a local system font's metrics
+   onto Inter's so layout stays put while the web font is in flight. Values
+   come from Vercel's fontaine / next-font adjustments for Inter → Arial. */
+@font-face {
+  font-family: "Inter Fallback";
+  src: local("Arial");
+  size-adjust: 107.4%;
+  ascent-override: 90%;
+  descent-override: 22.5%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin.woff2") format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF,
+    U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ============================================================================
+   Design tokens — registered via Tailwind v4 @theme.
+   Every token below becomes a CSS variable and auto-generates utility
+   classes. This file is the single source of truth for typography,
+   spacing, radius, color, and dark-mode theming. Do NOT hardcode
+   font-size / padding / color in components — reference tokens instead.
+   ============================================================================ */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
+  /* ---- Typography scale (6 tiers, cross-platform safe) -------------------- */
+  /* Generates .text-eyebrow / .text-caption / .text-label / .text-body /
+     .text-subtitle / .text-title utilities with bundled line-height,
+     letter-spacing, and font-weight. */
+  --text-eyebrow: 10px;
+  --text-eyebrow--line-height: 1.3;
+  --text-eyebrow--letter-spacing: 0.1em;
+  --text-eyebrow--font-weight: 600;
+
+  --text-caption: 10px;
+  --text-caption--line-height: 1.4;
+  --text-caption--letter-spacing: 0.06em;
+  --text-caption--font-weight: 500;
+
+  --text-label: 11px;
+  --text-label--line-height: 1.4;
+  --text-label--letter-spacing: 0.02em;
+  --text-label--font-weight: 500;
+
+  --text-body: 12px;
+  --text-body--line-height: 1.5;
+  --text-body--font-weight: 400;
+
+  --text-subtitle: 13px;
+  --text-subtitle--line-height: 1.35;
+  --text-subtitle--letter-spacing: -0.1px;
+  --text-subtitle--font-weight: 600;
+
+  --text-title: 16px;
+  --text-title--line-height: 1.25;
+  --text-title--letter-spacing: -0.2px;
+  --text-title--font-weight: 600;
+
+  /* Marketing-tier typography — used by the public landing page only.
+     Dashboard surfaces should keep using the dense scale above (eyebrow → title);
+     these three tiers exist so the landing hero / section headings / lead
+     copy can breathe without falling back to raw Tailwind text-* classes
+     (which the design-token guardrail forbids). */
+  --text-lead: 18px;
+  --text-lead--line-height: 1.55;
+  --text-lead--font-weight: 400;
+
+  --text-headline: 24px;
+  --text-headline--line-height: 1.2;
+  --text-headline--letter-spacing: -0.01em;
+  --text-headline--font-weight: 600;
+
+  /* clamp() so the hero scales from ~40px on phones to ~60px on desktop
+     without media queries; the upper bound keeps it from going circus-large
+     on ultrawide monitors. */
+  --text-display: clamp(2.5rem, 6vw, 3.75rem);
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.02em;
+  --text-display--font-weight: 600;
+
+  /* ---- Radius scale -------------------------------------------------------- */
+  /* Semantic radii. Prefer these over --radius-sm/md/lg (shadcn legacy). */
+  --radius-chip: 3px;
+  --radius-input: 4px;
+  --radius-panel: 6px;
+  --radius-dialog: 8px;
+
+  /* ---- Font families ------------------------------------------------------- */
+  --font-sans: var(--font-sans-stack);
+  --font-mono: var(--font-mono-stack);
+
+  /* ---- Semantic color aliases --------------------------------------------- */
+  /* Preferred in new code. Raw --fg / --bg remain for back-compat but new
+     components should reference semantic names for readability. */
+  --color-text-primary: var(--fg);
+  --color-text-secondary: var(--fg-2);
+  --color-text-tertiary: var(--fg-3);
+  --color-text-disabled: var(--fg-4);
+  --color-surface: var(--bg);
+  --color-surface-raised: var(--bg-raised);
+  --color-surface-sunken: var(--bg-sunken);
+  --color-surface-hover: var(--bg-hover);
+  --color-surface-active: var(--bg-active);
+  --color-border-subtle: var(--border-faint);
+  --color-border-default: var(--border);
+  --color-border-emphasis: var(--border-strong);
+
+  /* ---- shadcn-compatible aliases (preserved) ------------------------------ */
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-card: var(--bg-raised);
+  --color-card-foreground: var(--fg);
+  --color-popover: var(--bg-raised);
+  --color-popover-foreground: var(--fg);
+  --color-primary: var(--accent);
+  --color-primary-foreground: oklch(0.14 0.01 150);
+  --color-secondary: var(--bg-hover);
+  --color-secondary-foreground: var(--fg);
+  --color-muted: var(--bg-sunken);
+  --color-muted-foreground: var(--fg-3);
+  --color-accent: var(--bg-hover);
+  --color-accent-foreground: var(--fg);
+  --color-destructive: var(--state-error);
+  --color-destructive-foreground: oklch(0.985 0 0);
   --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
+  --color-input: var(--border);
+  --color-ring: var(--accent-ring);
+
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-fg-4: var(--fg-4);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-sunken: var(--bg-sunken);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-active: var(--bg-active);
+  --color-border-strong: var(--border-strong);
+  --color-border-faint: var(--border-faint);
+
+  --color-state-idle: var(--state-idle);
+  --color-state-working: var(--state-working);
+  --color-state-blocked: var(--state-blocked);
+  --color-state-error: var(--state-error);
+  --color-state-offline: var(--state-offline);
+
+  /* ---- Semantic inline-callout tokens ------------------------------------- */
+  /* Each state exposes two Tailwind-addressable colors: the strong variant
+     (for text and border utilities) and the soft variant (for background
+     utilities). Replaces Tailwind palette classes like bg-red-50 and
+     text-red-900. Both modes share these aliases; raw values defined on
+     :root and .dark below. */
+  --color-error: var(--fg-error-strong);
+  --color-error-soft: var(--bg-error-soft);
+  --color-warn: var(--fg-warn-strong);
+  --color-warn-soft: var(--bg-warn-soft);
+  --color-success: var(--fg-success-strong);
+  --color-success-soft: var(--bg-success-soft);
+
+  /* Overlay scrim for dialogs / lightboxes — replaces hardcoded rgba(0,0,0,...). */
+  --color-overlay-scrim: var(--overlay-scrim);
+
+  /* shadcn radius aliases (legacy — prefer --radius-chip/input/panel/dialog) */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -31,36 +220,401 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --radius: 0.625rem;
+  /* Cross-platform font stacks.
+     Order matters — first match wins. Stack covers: Inter web font →
+     Inter Fallback (size-adjusted local fonts for FOUT stability, see
+     @font-face below, populated by self-host step) → Mac native → Win
+     native → Mac CJK → Win CJK → system fallbacks. */
+  --font-sans-stack:
+    "Inter", "Inter Fallback", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "\5FAE\8F6F\96C5\9ED1", system-ui, ui-sans-serif, sans-serif;
+  --font-mono-stack:
+    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Cascadia Code", "Liberation Mono", monospace;
+
+  --accent: oklch(0.72 0.17 150);
+  --accent-dim: oklch(0.62 0.14 150);
+  --accent-bg: oklch(0.72 0.17 150 / 0.12);
+  --accent-ring: oklch(0.72 0.17 150 / 0.3);
+
+  --state-idle: oklch(0.72 0.17 150);
+  --state-working: oklch(0.78 0.16 195);
+  --state-blocked: oklch(0.82 0.18 75);
+  --state-error: oklch(0.68 0.22 25);
+  --state-offline: oklch(0.5 0 0);
+
+  --ok: oklch(0.72 0.17 150);
+  --warn: oklch(0.82 0.18 75);
+  --danger: oklch(0.68 0.22 25);
+
+  --radius: 0.5rem;
+
+  /* Light theme (default when .dark class is absent) */
+  --bg: oklch(0.985 0.005 150);
+  --bg-raised: oklch(1 0 0);
+  --bg-sunken: oklch(0.965 0.006 150);
+  --bg-card: oklch(1 0 0);
+  --bg-hover: oklch(0.95 0.008 150);
+  --bg-active: oklch(0.92 0.01 150);
+
+  --fg: oklch(0.18 0.01 150);
+  --fg-2: oklch(0.36 0.01 150);
+  --fg-3: oklch(0.52 0.008 150);
+  --fg-4: oklch(0.68 0.005 150);
+
+  --border: oklch(0.9 0.006 150);
+  --border-strong: oklch(0.82 0.008 150);
+  --border-faint: oklch(0.94 0.005 150);
+
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.06);
+  --shadow-md: 0 4px 12px oklch(0 0 0 / 0.08);
+
+  /* State pairs for callouts / inline notices (light mode).
+     soft variants feed bg utilities; strong variants feed both text and
+     border utilities so the outline reads clearly on the soft fill. No
+     separate border color — one saturated tone covers both roles. */
+  --bg-error-soft: oklch(0.97 0.02 25);
+  --fg-error-strong: oklch(0.42 0.17 25);
+  --bg-warn-soft: oklch(0.97 0.04 75);
+  --fg-warn-strong: oklch(0.48 0.14 75);
+  --bg-success-soft: oklch(0.96 0.04 150);
+  --fg-success-strong: oklch(0.42 0.12 150);
+
+  /* Dialog / lightbox scrim (both modes — uniformly dark). */
+  --overlay-scrim: oklch(0 0 0 / 0.55);
+
+  /* Hairline widths. Exposing these as vars lets component inline styles
+     reference --hairline / --hairline-bold instead of writing "1px" /
+     "2px" literals — keeps the src/ tree free of raw px strings. */
+  --hairline: 1px;
+  --hairline-bold: 2px;
+
+  /* Spacing scale — mirror of Tailwind's default spacing ladder so component
+     inline styles (padding / margin / gap that aren't amenable to className
+     migration) can reference --sp-N instead of "Npx" literals. Same
+     multiplication rule as Tailwind: --sp-N ≈ N × 0.25rem, with the common
+     2/6/10/14 half-steps included. Prefer Tailwind utility classes first;
+     these vars are the escape hatch for compound `padding: ...` strings. */
+  --sp-0: 0;
+  --sp-px: 1px;
+  --sp-0_5: 0.125rem; /* 2px */
+  --sp-0_75: 0.1875rem; /* 3px */
+  --sp-1: 0.25rem; /* 4px */
+  --sp-1_25: 0.3125rem; /* 5px */
+  --sp-1_5: 0.375rem; /* 6px */
+  --sp-1_75: 0.4375rem; /* 7px */
+  --sp-2: 0.5rem; /* 8px */
+  --sp-2_25: 0.5625rem; /* 9px */
+  --sp-2_5: 0.625rem; /* 10px */
+  --sp-2_75: 0.6875rem; /* 11px */
+  --sp-3: 0.75rem; /* 12px */
+  --sp-3_25: 0.8125rem; /* 13px */
+  --sp-3_5: 0.875rem; /* 14px */
+  --sp-3_75: 0.9375rem; /* 15px */
+  --sp-4: 1rem; /* 16px */
+  --sp-4_5: 1.125rem; /* 18px */
+  --sp-5: 1.25rem; /* 20px */
+  --sp-6: 1.5rem; /* 24px */
+  --sp-6_5: 1.625rem; /* 26px */
+  --sp-7: 1.75rem; /* 28px */
+  --sp-7_5: 1.875rem; /* 30px */
+  --sp-8: 2rem; /* 32px */
+  --sp-8_5: 2.125rem; /* 34px */
+  --sp-10: 2.5rem; /* 40px */
+  --sp-11: 2.75rem; /* 44px */
+  --sp-12: 3rem; /* 48px */
+  --sp-15: 3.75rem; /* 60px */
+  --sp-16: 4rem; /* 64px */
+  --sp-20: 5rem; /* 80px */
+  --sp-45: 11.25rem; /* 180px */
+  --sp-60: 15rem; /* 240px */
+  --sp-75: 18.75rem; /* 300px */
+  --sp-80: 20rem; /* 320px */
+  --sp-90: 22.5rem; /* 360px */
+  --sp-240: 60rem; /* 960px */
+
+  /* Firefox / Windows scrollbar hint — keeps widths visually close to
+     macOS overlay scrollbars so layout doesn't jump between platforms. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* ============================================================================
+   Marketing surface — pins the public landing page to the first-tree.ai
+   palette regardless of the dashboard's light/dark toggle. First Tree Hub
+   is a sub-product of first-tree, so the marketing entry point should
+   always read as the parent brand: near-black canvas + cool-light text +
+   the shared green accent. Scoped to `.landing-marketing` so the dashboard
+   chrome (when an authenticated user happens to land on a marketing-styled
+   route) is untouched. Same `--bg` / `--fg` variable names — every
+   component utility (bg-background, text-foreground, etc.) inherits.
+   ============================================================================ */
+.landing-marketing {
+  /* Surface — hex equivalents shown as comments for first-tree.ai parity. */
+  --bg: oklch(0.04 0 0); /* #040404 — first-tree.ai body bg */
+  --bg-raised: oklch(0.1 0 0);
+  --bg-sunken: oklch(0.02 0 0);
+  --bg-card: oklch(0.07 0 0);
+  --bg-hover: oklch(0.13 0 0);
+  --bg-active: oklch(0.16 0 0);
+
+  /* Foreground — cool-tinted neutrals to match first-tree.ai's #e8ecf4. */
+  --fg: oklch(0.95 0.01 240);
+  --fg-2: oklch(0.78 0.01 240);
+  --fg-3: oklch(0.55 0.01 240);
+  --fg-4: oklch(0.4 0.01 240);
+
+  --border: oklch(0.2 0.005 240);
+  --border-strong: oklch(0.3 0.005 240);
+  --border-faint: oklch(0.13 0.005 240);
+
+  /* Accent green stays identical — it's the cross-product brand color. */
+
+  color-scheme: dark;
+}
+
+.dark {
+  --bg: oklch(0.145 0.005 150);
+  --bg-raised: oklch(0.175 0.005 150);
+  --bg-sunken: oklch(0.115 0.005 150);
+  --bg-card: oklch(0.175 0.005 150);
+  --bg-hover: oklch(0.22 0.008 150);
+  --bg-active: oklch(0.26 0.012 150);
+
+  --fg: oklch(0.96 0.005 150);
+  --fg-2: oklch(0.78 0.006 150);
+  --fg-3: oklch(0.58 0.006 150);
+  --fg-4: oklch(0.42 0.005 150);
+
+  --border: oklch(0.26 0.008 150);
+  --border-strong: oklch(0.34 0.01 150);
+  --border-faint: oklch(0.2 0.006 150);
+
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-md: 0 4px 12px oklch(0 0 0 / 0.4);
+
+  /* State pairs — dark-mode variants (softer bg, higher-L fg for contrast). */
+  --bg-error-soft: oklch(0.28 0.06 25);
+  --fg-error-strong: oklch(0.82 0.14 25);
+  --bg-warn-soft: oklch(0.3 0.06 75);
+  --fg-warn-strong: oklch(0.86 0.14 75);
+  --bg-success-soft: oklch(0.28 0.05 150);
+  --fg-success-strong: oklch(0.82 0.14 150);
 }
 
 @layer base {
   * {
     @apply border-border;
+    box-sizing: border-box;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overscroll-behavior: none;
   }
   body {
     @apply bg-background text-foreground;
-    font-family:
-      ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-      sans-serif;
+    font-family: var(--font-sans-stack);
+    font-size: var(--text-subtitle);
+    line-height: 1.45;
+    font-feature-settings: "cv11", "ss01", "ss03";
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-synthesis: none;
   }
+  ::selection {
+    background: var(--accent-bg);
+    color: var(--fg);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 5px;
+    border: 2px solid var(--bg);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong);
+  }
+}
+
+@layer utilities {
+  .font-mono,
+  .mono {
+    font-family: var(--font-mono-stack);
+    font-feature-settings: "ss01", "ss02";
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  .kbd {
+    font-family: var(--font-mono-stack);
+    font-size: var(--text-eyebrow);
+    padding: 1px 5px;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: var(--radius-chip);
+    background: var(--bg-sunken);
+    color: var(--fg-2);
+    line-height: 1;
+    display: inline-block;
+  }
+
+  /* Surface utilities — consolidate Panel / PageHeader / Tab containers.
+     Prefer these over hand-rolled background/border/radius combinations. */
+  .surface-base {
+    background: var(--bg);
+  }
+  .surface-raised {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-panel);
+  }
+  .surface-sunken {
+    background: var(--bg-sunken);
+  }
+  .surface-overlay {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-dialog);
+    box-shadow: var(--shadow-md);
+  }
+}
+
+@keyframes heartbeat-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.6);
+    opacity: 0.15;
+  }
+}
+@keyframes ring-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@keyframes dash-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes subtle-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes onboarding-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(0) scale(1.015);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes onboarding-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes thinking-bar {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes toast-slide-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: subtle-fade 180ms ease-out;
+}
+
+/*
+ * Settings → Save affordance. Hairline-bordered ✓ button that sits flush
+ * next to its input. Rest state is just the outline so the row stays
+ * light; hover lifts ink + fills with the sunken bg so the active state
+ * reads as clearly clickable. Focus-visible swaps the border for the
+ * accent ring (subtle but unmistakable for keyboard users).
+ */
+.settings-save-button:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--bg-sunken);
+  border-color: var(--fg-4);
+}
+
+.settings-save-button:focus-visible {
+  outline: var(--hairline-bold) solid var(--accent-ring);
+  outline-offset: var(--sp-0_5);
+}
+
+.onboarding-runtime-option {
+  border-radius: var(--radius-input);
+  outline: var(--hairline) solid transparent;
+  outline-offset: var(--sp-0_75);
+}
+
+.onboarding-runtime-option:focus-within {
+  color: color-mix(in oklch, var(--accent) 30%, var(--fg));
+  outline-color: var(--accent-ring);
+}
+
+.onboarding-name-input::placeholder {
+  color: var(--fg-4);
+  opacity: 0.72;
+}
+
+/* Dense table row hover — used by DenseTableRow[data-interactive] */
+tr[data-interactive]:hover {
+  background: var(--bg-hover);
 }

@@ -18,11 +18,12 @@ import {
   TASK_STATUSES,
   TASK_TERMINAL_STATUSES,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, lt, ne } from "drizzle-orm";
+import { and, asc, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { organizations } from "../db/schema/organizations.js";
 import { taskChats, tasks } from "../db/schema/tasks.js";
@@ -83,6 +84,22 @@ export async function ensureSystemTasksAgent(db: Database, organizationId: strin
 
   const uuid = uuidv7();
   const inboxId = `inbox_${uuid}`;
+
+  // Pick an admin member as the manager — system agents still need a non-null
+  // managerId in the unified-user-token milestone. Falls back loudly if no
+  // admin exists in the org.
+  const [adminMember] = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.organizationId, organizationId), eq(members.role, "admin")))
+    .orderBy(asc(members.createdAt))
+    .limit(1);
+  if (!adminMember) {
+    throw new ConflictError(
+      `Cannot create system tasks agent in organization "${organizationId}" — no admin member exists.`,
+    );
+  }
+
   try {
     const [created] = await db
       .insert(agents)
@@ -92,11 +109,11 @@ export async function ensureSystemTasksAgent(db: Database, organizationId: strin
         organizationId,
         type: AGENT_TYPES.AUTONOMOUS_AGENT,
         displayName: "System · Tasks",
-        profile: "Hub-managed pseudo-agent that delivers task assignment notifications.",
         inboxId,
         status: AGENT_STATUSES.ACTIVE,
-        source: AGENT_SOURCES.BOOTSTRAP,
+        source: AGENT_SOURCES.ADMIN_API,
         metadata: { system: true, role: "task-notifier" },
+        managerId: adminMember.id,
       })
       .returning({ uuid: agents.uuid });
     if (created) return created.uuid;
@@ -253,10 +270,13 @@ async function dispatchTaskSystemMessage(
     ...(fromStatus ? { fromStatus } : {}),
     originRef: task.originRef,
   };
+  // Mention the assignee explicitly: agent↔agent direct chats default to
+  // `mention_only` (migration 0029), so without this the task notification
+  // would be parked silently and the assignee never woken.
   return sendMessage(db, chat.id, systemAgentId, {
     format: "task",
     content,
-    metadata: { taskId: task.id, event },
+    metadata: { taskId: task.id, event, mentions: [task.assigneeAgentId] },
   });
 }
 

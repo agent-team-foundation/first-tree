@@ -1,20 +1,26 @@
-/**
- * Feishu-related core operations: bind-bot, bind-user.
- */
+import { AGENT_SELECTOR_HEADER } from "@agent-team-foundation/first-tree-hub-shared";
+import { cliFetch } from "./cli-fetch.js";
 
 /**
- * Self-service bind a Feishu bot (agent binds its own bot).
+ * Feishu-related core operations: bind-bot, bind-user.
+ *
+ * All agent-scoped calls carry both the member access JWT (Authorization)
+ * and the acting agent UUID (X-Agent-Id); the server's agent-selector
+ * middleware enforces Rule R-RUN.
  */
+
 export async function bindFeishuBot(
   serverUrl: string,
-  agentToken: string,
+  accessToken: string,
+  agentId: string,
   appId: string,
   appSecret: string,
 ): Promise<void> {
-  const res = await fetch(`${serverUrl}/api/v1/agent/me/feishu-bot`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/agent/me/feishu-bot`, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${agentToken}`,
+      Authorization: `Bearer ${accessToken}`,
+      [AGENT_SELECTOR_HEADER]: agentId,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ appId, appSecret }),
@@ -26,20 +32,19 @@ export async function bindFeishuBot(
   }
 }
 
-/**
- * Delegate bind a Feishu user (assistant binds owner's Feishu user ID).
- */
 export async function bindFeishuUser(
   serverUrl: string,
-  agentToken: string,
+  accessToken: string,
+  agentId: string,
   humanAgentId: string,
   feishuUserId: string,
   displayName?: string,
 ): Promise<void> {
-  const res = await fetch(`${serverUrl}/api/v1/agent/delegated/${encodeURIComponent(humanAgentId)}/feishu-user`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/agent/delegated/${encodeURIComponent(humanAgentId)}/feishu-user`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${agentToken}`,
+      Authorization: `Bearer ${accessToken}`,
+      [AGENT_SELECTOR_HEADER]: agentId,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ feishuUserId, displayName }),

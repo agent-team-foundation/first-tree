@@ -1,54 +1,59 @@
 // Core functions — programmatic API for external CLI consumers
 
 // SDK — re-export for convenience
-export type { PullResult, RegisterResult, SdkConfig } from "@first-tree-hub/client";
+export type { AccessTokenProvider, PullResult, RegisterResult, SdkConfig } from "@first-tree-hub/client";
 export { FirstTreeHubSDK, SdkError } from "@first-tree-hub/client";
+// SaaS connect helpers — derive the hub URL from a connect token's `iss`.
+// `decodeJwtPayload` is intentionally NOT re-exported: it's an internal
+// helper used by the CLI account-switch prompt, and its only legitimate
+// public use case (URL derivation) already has a dedicated export.
+export { deriveHubUrlFromToken, HubUrlDerivationError } from "./commands/saas-connect.js";
 // Core types
-export type { CheckResult, StartOptions } from "./core/index.js";
+export type { CheckResult, ServiceInfo, ServiceOpResult, ServiceState, StartOptions } from "./core/index.js";
 export {
-  // Feishu
+  AuthRefreshFailedError,
+  AuthRefreshRateLimitedError,
   bindFeishuBot,
   bindFeishuUser,
   blank,
-  // Bootstrap
-  bootstrapToken,
-  // Client runtime
   ClientRuntime,
   checkAgentConfigs,
-  checkAgentTokens,
-  checkBootstrapStatus,
   checkClientConfig,
   checkDatabase,
   checkDocker,
-  // Diagnostics (doctor)
   checkNodeVersion,
   checkServerConfig,
   checkServerHealth,
   checkServerReachable,
   checkWebSocket,
-  createAdminUser,
+  createOwner,
+  ensureFreshAccessToken,
+  ensureFreshAdminToken,
   ensurePostgres,
   formatCheckReport,
-  getGitHubToken,
-  getGitHubUsername,
-  // Admin management
-  hasAdminUser,
-  // Docker PostgreSQL
+  getClientServiceStatus,
+  handleClientOrgMismatch,
+  hasUser,
+  installClientService,
   isDockerAvailable,
   isInteractive,
+  isServiceSupported,
   onboardCheck,
   onboardCreate,
   printResults,
   promptAddAgent,
-  // Interactive prompts
   promptMissingFields,
-  resolveAgentToken,
+  resolveAccessToken,
+  resolveCliInvocation,
   resolveServerUrl,
-  // Database
+  restartClientService,
+  rotateClientIdWithBackup,
+  runHomeMigration,
   runMigrations,
-  // Server lifecycle
+  startClientService,
   startServer,
-  // Output helpers
   status,
+  stopClientService,
   stopPostgres,
+  uninstallClientService,
 } from "./core/index.js";

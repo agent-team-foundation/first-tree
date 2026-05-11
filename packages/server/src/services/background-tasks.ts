@@ -1,10 +1,13 @@
 import type { FastifyInstance } from "fastify";
+import { createLogger } from "../observability/index.js";
 import type { AdapterManager } from "./adapter-manager.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
 import type { KaelRuntime } from "./kael-runtime.js";
+import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
-import * as systemConfigService from "./system-config.js";
+
+const log = createLogger("BackgroundTasks");
 
 export type BackgroundTasks = {
   start(): void;
@@ -27,12 +30,23 @@ export function createBackgroundTasks(
       // Inbox timeout reset — runs every 60 seconds
       inboxTimer = setInterval(async () => {
         try {
-          const configs = await systemConfigService.getAllConfigs(app.db);
-          const timeoutSeconds = (configs.inbox_timeout_seconds as number) ?? 300;
-          const maxRetries = (configs.max_retry_count as number) ?? 3;
+          const timeoutSeconds = app.config.runtime.inboxTimeoutSeconds;
+          const maxRetries = app.config.runtime.maxRetryCount;
           await inboxService.resetTimedOutEntries(app.db, timeoutSeconds, maxRetries);
+          // Silent row GC piggy-backs on the inbox timer (no need for a
+          // second timer — DELETE is rare and tiny). Uses default 30-day
+          // window for stale-pending; acked rows are deleted regardless of
+          // age (they've fulfilled their context-replay purpose). See
+          // pruneStaleSilentEntries jsdoc.
+          const pruned = await inboxService.pruneStaleSilentEntries(app.db);
+          if (pruned.ackedDeleted > 0 || pruned.stalePendingDeleted > 0) {
+            log.debug(
+              { ackedDeleted: pruned.ackedDeleted, stalePendingDeleted: pruned.stalePendingDeleted },
+              "pruned silent inbox rows",
+            );
+          }
         } catch (err) {
-          app.log.error(err, "Failed to reset timed-out inbox entries");
+          log.error({ err }, "failed to reset timed-out inbox entries");
         }
       }, 60_000);
 
@@ -40,12 +54,22 @@ export function createBackgroundTasks(
       heartbeatTimer = setInterval(async () => {
         try {
           await presenceService.heartbeatInstance(app.db, instanceId);
-          const configs = await systemConfigService.getAllConfigs(app.db);
-          const staleSeconds = (configs.presence_cleanup_seconds as number) ?? 60;
+          const staleSeconds = app.config.runtime.presenceCleanupSeconds;
           await presenceService.cleanupStalePresence(app.db, staleSeconds);
           await clientService.cleanupStaleClients(app.db, staleSeconds);
+          // M1: per-agent heartbeat staleness detection
+          const staleAgents = await presenceService.markStaleAgents(app.db, staleSeconds);
+          if (staleAgents.length > 0) {
+            log.info({ count: staleAgents.length, agentIds: staleAgents }, "marked agents as stale");
+            // M1: Create notifications for stale agents. Message text is
+            // composed inside notifyAgentEvent so phrasing (computer hostname
+            // vs agent name) stays consistent across event sources.
+            for (const agentId of staleAgents) {
+              notificationService.notifyAgentEvent(app.db, agentId, "agent_stale", "medium").catch(() => {});
+            }
+          }
         } catch (err) {
-          app.log.error(err, "Failed to heartbeat / cleanup presence");
+          log.error({ err }, "failed to heartbeat / cleanup presence");
         }
       }, 30_000);
 
@@ -54,7 +78,7 @@ export function createBackgroundTasks(
         try {
           await adapterManager.processOutbound();
         } catch (err) {
-          app.log.error(err, "Adapter outbound processing failed");
+          log.error({ err }, "adapter outbound processing failed");
         }
       }, 5_000);
 
@@ -64,14 +88,14 @@ export function createBackgroundTasks(
           try {
             await kaelRuntime.processOutbound();
           } catch (err) {
-            app.log.error(err, "Kael outbound processing failed");
+            log.error({ err }, "kael outbound processing failed");
           }
         }, 5_000);
       }
 
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
-        app.log.error(err, "Failed initial heartbeat");
+        log.error({ err }, "failed initial heartbeat");
       });
     },
 

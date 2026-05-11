@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   agentConfigSchema,
@@ -9,7 +9,10 @@ import {
   resolveConfigReadonly,
   serverConfigSchema,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { blank } from "./output.js";
+import { findStaleAliases, formatStaleReason, type PinnedAgent, type StaleAlias } from "./agent-prune.js";
+import { cliFetch } from "./cli-fetch.js";
+import { blank, print } from "./output.js";
+import { getClientServiceStatus } from "./service-install.js";
 
 export type CheckResult = {
   label: string;
@@ -107,7 +110,7 @@ export async function checkServerHealth(): Promise<CheckResult> {
   const url = `http://${host}:${port}/healthz`;
 
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    const res = await cliFetch(url, { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
       return { label: "Server Health", ok: true, detail: `running at ${host}:${port}` };
     }
@@ -139,7 +142,7 @@ export async function checkServerReachable(): Promise<CheckResult> {
   }
 
   try {
-    const res = await fetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(5000) });
+    const res = await cliFetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       return { label: "Server URL", ok: true, detail: serverUrl };
     }
@@ -174,52 +177,123 @@ export function checkAgentConfigs(): CheckResult {
   }
 }
 
-export async function checkAgentTokens(): Promise<CheckResult> {
-  const config = getClientConfig();
-  const serverUrl = get(config, "server.url");
-  if (typeof serverUrl !== "string" || !serverUrl) {
-    return { label: "Agent Tokens", ok: false, detail: "cannot check (no server URL)" };
-  }
+/**
+ * Server-aware agent reconciliation. Walks `agents/<name>/agent.yaml` and
+ * cross-references each `agentId` with `/api/v1/me/pinned-agents`,
+ * filtering by `clientId` so the "stale" verdict matches what R-RUN will
+ * actually accept on this machine.
+ *
+ * Categorises each local alias into:
+ *   - pinned             — bind would succeed on this client.
+ *   - pinned-elsewhere   — owned by you, but pinned to a different client
+ *                          (alias is dead weight here; real agent is alive
+ *                          on the other machine).
+ *   - unowned            — agentId not in the server's response at all.
+ *   - unreadable         — yaml missing/malformed/no agentId.
+ *
+ * The plain `checkAgentConfigs` (sync, local-only) is retained for
+ * back-compat with external consumers but its "N configured" wording is
+ * misleading because stale aliases never bind at runtime.
+ *
+ * Skipped reconciliation (server unreachable / unauthenticated) returns
+ * `ok: false` — doctor's other server-touching checks already report
+ * connectivity loss as a failure, and silently passing here would hide
+ * the very issue the operator is running doctor to diagnose.
+ */
+export async function reconcileAgentConfigs(opts: {
+  clientId: string;
+  listPinnedAgents: () => Promise<PinnedAgent[]>;
+  /** Override for tests; defaults to `$FIRST_TREE_HUB_HOME/config/agents`. */
+  agentsDir?: string;
+}): Promise<CheckResult> {
+  const agentsDir = opts.agentsDir ?? join(DEFAULT_CONFIG_DIR, "agents");
 
-  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
-  if (!existsSync(agentsDir)) {
-    return { label: "Agent Tokens", ok: false, detail: "no agents to check" };
-  }
-
-  let agents: Map<string, { token: string }>;
-  try {
-    agents = loadAgents({ schema: agentConfigSchema, agentsDir }) as Map<string, { token: string }>;
-  } catch {
-    return { label: "Agent Tokens", ok: false, detail: "error reading agent configs" };
-  }
-
-  if (agents.size === 0) {
-    return { label: "Agent Tokens", ok: false, detail: "no agents to check" };
-  }
-
-  const valid: string[] = [];
-  const invalid: string[] = [];
-
-  for (const [name, agentConfig] of agents) {
-    try {
-      const res = await fetch(`${serverUrl}/api/v1/agent/me`, {
-        headers: { Authorization: `Bearer ${agentConfig.token}` },
-        signal: AbortSignal.timeout(3000),
-      });
-      if (res.ok) {
-        valid.push(name);
-      } else {
-        invalid.push(name);
+  // Count local alias dirs ourselves — `loadAgents` is fail-fast on
+  // malformed yaml, and one bad dir would mask the entire alias set.
+  let localCount = 0;
+  if (existsSync(agentsDir)) {
+    for (const entry of readdirSync(agentsDir)) {
+      try {
+        if (statSync(join(agentsDir, entry)).isDirectory()) localCount++;
+      } catch {
+        // Vanished between readdir and stat; treat as absent.
       }
-    } catch {
-      invalid.push(name);
     }
   }
-
-  if (invalid.length === 0) {
-    return { label: "Agent Tokens", ok: true, detail: `all ${valid.length} valid` };
+  if (localCount === 0) {
+    return { label: "Agents", ok: false, detail: "no agents configured" };
   }
-  return { label: "Agent Tokens", ok: false, detail: `invalid: ${invalid.join(", ")}` };
+
+  let stale: StaleAlias[];
+  try {
+    stale = await findStaleAliases({
+      clientId: opts.clientId,
+      listPinnedAgents: opts.listPinnedAgents,
+      agentsDir,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      label: "Agents",
+      ok: false,
+      detail: `${localCount} configured locally — server reconciliation failed (${msg.slice(0, 60)})`,
+    };
+  }
+
+  const pinnedCount = localCount - stale.length;
+
+  if (stale.length === 0) {
+    return {
+      label: "Agents",
+      ok: true,
+      detail: `${localCount} configured, all pinned to this client`,
+    };
+  }
+
+  const staleSummary = stale
+    .map((s) => `${s.name} [${formatStaleReason(s.reason)}]`)
+    .slice(0, 5)
+    .join("; ");
+  const truncated = stale.length > 5 ? `; ...+${stale.length - 5} more` : "";
+
+  return {
+    label: "Agents",
+    ok: false,
+    detail:
+      `${localCount} configured locally, ${pinnedCount} pinned to this client; ` +
+      `${stale.length} stale: ${staleSummary}${truncated} — ` +
+      "run `first-tree-hub agent prune` to clean up",
+  };
+}
+
+export function checkBackgroundService(): CheckResult {
+  const info = getClientServiceStatus();
+  if (info.platform === "unsupported") {
+    return {
+      label: "Background service",
+      ok: true,
+      detail: `not supported on ${process.platform} — runs inline`,
+    };
+  }
+  if (info.state === "active") {
+    return {
+      label: "Background service",
+      ok: true,
+      detail: `running (${info.platform}${info.detail ? `, ${info.detail}` : ""}); logs at ${info.logDir}`,
+    };
+  }
+  if (info.state === "inactive") {
+    return {
+      label: "Background service",
+      ok: false,
+      detail: `installed but not running${info.detail ? ` — ${info.detail}` : ""}; unit at ${info.unitPath}`,
+    };
+  }
+  return {
+    label: "Background service",
+    ok: false,
+    detail: "not installed — re-run `first-tree-hub client connect <url>` to install",
+  };
 }
 
 export async function checkWebSocket(): Promise<CheckResult> {
@@ -231,7 +305,7 @@ export async function checkWebSocket(): Promise<CheckResult> {
 
   const wsUrl = serverUrl.replace(/^http/, "ws");
   try {
-    const res = await fetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(3000) });
+    const res = await cliFetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
       return { label: "WebSocket", ok: true, detail: `${wsUrl} (server reachable)` };
     }
@@ -248,16 +322,16 @@ export async function checkWebSocket(): Promise<CheckResult> {
 export function printResults(results: CheckResult[]): void {
   for (const r of results) {
     const icon = r.ok ? "\u2713" : "\u2717";
-    process.stderr.write(`  ${icon} ${r.label.padEnd(22)} ${r.detail}\n`);
+    print.line(`  ${icon} ${r.label.padEnd(22)} ${r.detail}\n`);
   }
 
   blank();
 
   const failures = results.filter((r) => !r.ok);
   if (failures.length === 0) {
-    process.stderr.write("  All checks passed.\n");
+    print.line("  All checks passed.\n");
   } else {
-    process.stderr.write(`  ${failures.length} issue(s) found.\n`);
+    print.line(`  ${failures.length} issue(s) found.\n`);
   }
   blank();
 }

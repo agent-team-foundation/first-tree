@@ -1,10 +1,6 @@
 # AGENTS.md
 
-First Tree Hub — centralized collaboration platform for Agent Team (Server + Client + Command + Shared + Web monorepo).
-
-## Overview
-
-First Tree Hub is the infrastructure for Agent Team, providing agent registration/authentication, messaging, external IM bridging, and an admin dashboard.
+First Tree Hub — infrastructure for Agent Team: agent registration/authentication, messaging, external IM bridging, and an admin dashboard. Monorepo: Server + Client + Command + Shared + Web.
 
 ```
 First Tree Hub ≠ Agents themselves (LLM agent logic lives outside First Tree Hub)
@@ -14,51 +10,46 @@ First Tree Hub ≠ Context Tree
 
 ## Tech Stack
 
-**Server:** Fastify / Drizzle ORM / PostgreSQL / Zod / bcrypt / jose / @fastify/websocket / @fastify/rate-limit
-
-**Client:** fetch + ws (SDK + AgentRuntime + pluggable Handlers)
-
-**Command:** Commander.js / @inquirer/prompts (unified CLI)
-
-**Shared:** Zod schemas + TypeScript types + config system (shared across all packages)
-
-**Web:** React 19 / Vite
-
-**Tooling:** pnpm (workspace) / Turborepo / Biome / Vitest / tsdown / tsc
-
-**Node.js:** minimum 22.16, recommended 24
+- **Server:** Fastify / Drizzle ORM / PostgreSQL / Zod
+- **Client:** fetch + ws (SDK + AgentRuntime + pluggable Handlers)
+- **Command:** Commander.js / @inquirer/prompts (unified CLI)
+- **Shared:** Zod schemas + TypeScript types + config system
+- **Web:** React 19 / Vite
+- **Tooling:** pnpm (workspace) / Turborepo / Biome / Vitest / tsdown
+- **Node.js:** minimum 22.16, recommended 24
 
 ## Common Commands
 
 ```bash
-# Environment
 pnpm install                          # Install all dependencies
 docker compose up -d                  # Start PostgreSQL (dev)
 
-# One-command start (CLI, interactive config + auto-migration + embedded Web)
+# One-command CLI start (interactive config + auto-migration + embedded Web)
 pnpm --filter @agent-team-foundation/first-tree-hub dev -- server start
 
-# Separate start (traditional dev)
-pnpm --filter @first-tree-hub/server dev   # Start server (tsx watch, requires .env)
-pnpm --filter @first-tree-hub/web dev      # Start web (Vite dev server)
-
-# Quality
-pnpm check                            # Biome lint + format check
-pnpm format                           # Biome format
-pnpm typecheck                        # tsc --noEmit
+pnpm check && pnpm typecheck          # Run after every change
 pnpm test                             # Vitest
-pnpm --filter @first-tree-hub/server test  # Test (server only)
 
-# Build
-pnpm build                            # Turborepo orchestrated full build
-
-# Database
 pnpm --filter @first-tree-hub/server db:generate    # Generate migrations
 pnpm --filter @first-tree-hub/server db:migrate     # Apply migrations
-pnpm --filter @first-tree-hub/server db:studio      # Drizzle Studio
 ```
 
-> Full CLI commands and environment variables: [docs/cli-reference.md](docs/cli-reference.md)
+> Full CLI commands, env vars, and per-package dev scripts: [docs/cli-reference.md](docs/cli-reference.md). All other scripts (`format`, `build`, `db:studio`, per-package `dev` / `test`) are in each package's `package.json`.
+
+## HTTP Routes & JWT Scope
+
+If your work touches HTTP routes, JWT auth, scope helpers, or anything multi-org — read [docs/http-path-conventions.md](docs/http-path-conventions.md) first. It's the single source of truth for route naming, JWT shape, and middleware choice.
+
+## Local Testing Isolation
+
+Use `scripts/dev-cli.sh` to run the in-tree CLI against an isolated home — it sets `FIRST_TREE_HUB_HOME` and (via the home-derived service-suffix logic) gives the dev build its own systemd unit / launchd label, so it coexists with whatever prod install you already have running.
+
+```bash
+./scripts/dev-cli.sh client connect <hub-url> --token <t>
+./scripts/dev-cli.sh client status
+```
+
+Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/local-dev-isolation.md](docs/local-dev-isolation.md).
 
 ## Repo-Local Skill
 
@@ -67,26 +58,12 @@ pnpm --filter @first-tree-hub/server db:studio      # Drizzle Studio
 
 ## Monorepo Structure
 
-```
-first-tree-hub/
-├── package.json               # pnpm workspace root config
-├── pnpm-workspace.yaml        # Workspace members
-├── turbo.json                 # Turborepo task orchestration
-├── tsconfig.json              # Root tsconfig (project references)
-├── biome.json                 # Biome lint + format
-├── docker-compose.yml         # Local dev PostgreSQL
-│
-├── docs/                          # Documentation
-│   ├── cli-reference.md          # CLI commands + env var reference
-│   └── claim-agent-guide.md      # Claim Agent setup guide
-│
-├── packages/
-│   ├── shared/                # @agent-team-foundation/first-tree-hub-shared — Shared Zod schemas + types + config system
-│   ├── server/                # @first-tree-hub/server — Fastify API server
-│   ├── client/                # @first-tree-hub/client — Agent SDK + Runtime
-│   ├── command/               # @agent-team-foundation/first-tree-hub — Unified CLI (published package)
-│   └── web/                   # @first-tree-hub/web — React admin dashboard
-```
+- `packages/shared/` — `@agent-team-foundation/first-tree-hub-shared` — Zod schemas + types + config system (internal, not published)
+- `packages/server/` — `@first-tree-hub/server` — Fastify API server (private, bundled)
+- `packages/client/` — `@first-tree-hub/client` — Agent SDK + Runtime (private, bundled)
+- `packages/command/` — `@agent-team-foundation/first-tree-hub` — Unified CLI (**published**, the consumer-facing tarball)
+- `packages/web/` — `@first-tree-hub/web` — React admin dashboard (private, bundled)
+- `docs/` — [cli-reference.md](docs/cli-reference.md), [claim-agent-guide.md](docs/claim-agent-guide.md)
 
 ## Architecture Rules
 
@@ -96,10 +73,7 @@ first-tree-hub/
 
 **PostgreSQL only:** No Redis / MQ. PG covers storage, queuing (SKIP LOCKED), and notifications (LISTEN/NOTIFY).
 
-**Dual-track auth isolation:**
-- Agent Token (Bearer) → Agent API — machine credentials
-- Admin JWT → Admin API — human credentials
-- Two auth paths are **completely isolated**; localhost must authenticate too
+**Unified user-JWT auth:** Single user JWT (issued by `client connect`, stored at `~/.first-tree/hub/config/credentials.json`) authorizes both Web/Admin API and every agent the user manages on the Client WebSocket. JWT shape, route classification, and middleware choice live in [docs/http-path-conventions.md](docs/http-path-conventions.md) — this section covers only the runtime *binding* facts not in that spec. Agents bind via `agents.client_id` + a server-pushed `agent:pinned` frame; **R-RUN** is re-evaluated at every `agent:bind` against the live `agents → manager → user` join (cross-org under one user is allowed; revoked memberships refuse the bind immediately). Switching user requires `first-tree-hub client claim --confirm`, which atomically transfers `clients.user_id` and unpins the previous owner's agents. Per-agent `aghub_*` tokens retired by migration `0020`. Background: [docs/decouple-client-from-identity-design-zh.md](docs/decouple-client-from-identity-design-zh.md) (client-from-identity decoupling) and [proposals/hub-strip-jwt-ambient-scope.20260508.md](../first-tree-context/proposals/hub-strip-jwt-ambient-scope.20260508.md) (JWT-scope strip + route refactor).
 
 **Inbox is the Server/Client boundary:** Server writes to Inbox (fan-out on write), Client pulls / receives WebSocket notifications. At-least-once delivery; Client is responsible for deduplication.
 
@@ -123,43 +97,28 @@ first-tree-hub/
 - **Never hand-edit Drizzle migrations**: `drizzle-kit generate` to create, `drizzle-kit migrate` to apply
 - **Custom error classes**: Services throw exceptions, API layer maps to HTTP status codes; no empty `catch {}`
 - **Naming**: files `kebab-case.ts`, types `PascalCase`, variables/functions `camelCase`, constants `UPPER_SNAKE_CASE`
-- **English everywhere on GitHub**: All GitHub-visible content must be in English — code, comments, JSDoc, TODO, commit messages, PR titles/descriptions, issue titles/descriptions, branch names, release notes, CI logs, and any other content visible in the repository
+- **English everywhere on GitHub**: all code, comments, commits, PRs, issues, branch names, and CI logs — anything visible in the repo.
 - **Run after changes**: `pnpm check && pnpm typecheck`
 
 ## Development Workflow
 
 ### New Feature Steps (Server)
 
-1. Define Zod schema (`shared/src/schemas/`)
-2. Define Drizzle table (`server/src/db/schema/`) — if persistence is needed
-3. Implement service (`server/src/services/`)
-4. Define API routes (`server/src/api/`)
-5. Generate migration: `pnpm --filter @first-tree-hub/server db:generate`
-6. Apply migration: `pnpm --filter @first-tree-hub/server db:migrate`
-7. Write tests (`server/src/__tests__/`)
+Zod schema (in `shared`) → Drizzle table (if persistent) → service → API routes → `db:generate` + `db:migrate` → tests. Order matters: types flow left-to-right.
 
 ### New Feature Steps (Client)
 
-1. New SDK method → add in `client/src/sdk.ts`
-2. New handler type → implement and register in `client/src/handlers/`
-3. Runtime changes → `client/src/runtime/` (AgentRuntime / AgentSlot / SessionManager)
-4. If shared types are involved → update `shared/src/schemas/` first
+SDK methods live in `sdk.ts`, handlers register in `handlers/`, runtime changes go in `runtime/` (AgentRuntime / AgentSlot / SessionManager). If shared types are involved, update `shared/` **first** or imports will break.
 
 ### New Feature Steps (Command)
 
-1. Add core logic in `command/src/core/` — all exportable business logic lives here
-2. Add CLI command module in `command/src/commands/` — thin arg parsing layer only
-3. Register command in `command/src/cli/index.ts`
-4. Export new core functions from `command/src/core/index.ts` and `command/src/index.ts`
-5. If config changes are needed → update schema in `shared/src/config/`
+1. Business logic → `core/` (exportable, no CLI-specific concerns)
+2. CLI registration → `commands/` (thin arg parsing that calls `core/*`)
+3. Wire into `cli/index.ts`
+4. Export from **both** `core/index.ts` **and** `src/index.ts` — easy to forget, breaks external consumers
+5. Config changes → schema in `shared/src/config/`
 
-**Command package structure:**
-- `src/core/` — exportable core functions (server start, doctor, admin, migrate, docker, prompts)
-- `src/cli/` — Commander.js CLI entry point + CLI-specific output helpers
-- `src/commands/` — individual command registrations (thin: arg parsing → `core/*` calls)
-- `src/index.ts` — barrel export: re-exports `core/*` + SDK for external consumers
-
-External CLI projects (e.g. context-tree) can `import { startServer, checkDatabase } from "@agent-team-foundation/first-tree-hub"` to reuse core logic with their own arg parsing.
+External projects (e.g. context-tree) import core via `import { startServer, checkDatabase } from "@agent-team-foundation/first-tree-hub"` — this is why `core/` must stay CLI-free.
 
 ### Git Conventions
 
@@ -169,7 +128,31 @@ External CLI projects (e.g. context-tree) can `import { startServer, checkDataba
 - **Releases**: tag + GitHub Release
 - Do not auto-commit; wait for user to test and confirm before committing
 
+### Versioning
+
+- **Bump `packages/command`** on every PR that touches `command` or `client`, **or** parts of `shared` that `command` / `client` actually import. This is the consumer-facing tarball — only changes that flow through `npm install` need a new version.
+- **Do not bump** for changes confined to `server` / `web`, or to `shared` modules consumed only by `server` / `web` (e.g. admin-API contract schemas, server-only Zod schemas, web-only types). Those ship via the docker image and SaaS cloud deploy, not npm.
+- **Never bump** `private: true` packages (`shared` / `client` / `server` / `web`) — `tsdown` inlines them into the `command` tarball; their `version` is inert.
+
+Full policy (how to pick the next version, anti-patterns, bash recipes): [docs/versioning-and-publishing.md](docs/versioning-and-publishing.md).
+
 <!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->
+## First Tree integration
+
+> Managed block — regenerated by `first-tree` tooling. Do not edit by hand.
+
+This repo is a workspace member. Keep all Context Tree files only in the shared `first-tree-context` repo and follow the workspace root's binding for shared context updates in workspace `first-tree-all`.
+
+### Binding
+
+- **Tree repo:** `first-tree-context` (shared)
+- **Binding mode:** `workspace-member`
+- **Entrypoint:** `/workspaces/first-tree-all/repos/first-tree-hub`
+- **Workspace ID:** `first-tree-all`
+- **Tree repo URL:** <https://github.com/agent-team-foundation/first-tree-context>
+- **Source state:** `.first-tree/local-tree.json`
+
+<!--
 FIRST-TREE-SOURCE-INTEGRATION: workspace member bound to shared tree repo `first-tree-context`
 FIRST-TREE-TREE-REPO: `first-tree-context`
 FIRST-TREE-TREE-MODE: `shared`
@@ -177,17 +160,18 @@ FIRST-TREE-BINDING-MODE: `workspace-member`
 FIRST-TREE-TREE-REPO-URL: `https://github.com/agent-team-foundation/first-tree-context`
 FIRST-TREE-ENTRYPOINT: `/workspaces/first-tree-all/repos/first-tree-hub`
 FIRST-TREE-WORKSPACE-ID: `first-tree-all`
-FIRST-TREE-LOCAL-TREE-CONFIG: `.first-tree/local-tree.json`
+FIRST-TREE-SOURCE-STATE: `.first-tree/local-tree.json`
+-->
 
-This repo is a workspace member. Keep all Context Tree files only in the shared `first-tree-context` repo and follow the workspace root's binding for shared context updates in workspace `first-tree-all`.
+### Before every task
 
-Before every task:
-- Read `.first-tree/local-tree.json` first. If it exists, resolve its `localPath` value from this repo root and treat that checkout as the canonical local tree repo.
+- Read `.first-tree/local-tree.json` first. If it exists, resolve its `tree.localPath` value from this repo root and treat that checkout as the canonical local tree repo.
 - If that configured checkout exists locally, update it before you read anything else.
 - If the configured checkout is missing, clone a temporary working copy from `https://github.com/agent-team-foundation/first-tree-context` into `.first-tree/tmp/first-tree-context/`, use it for the current task, and delete it before you finish.
-- Never commit `.first-tree/local-tree.json` or anything under `.first-tree/tmp/` to this repo. They are local-only workspace state.
+- Never commit anything under `.first-tree/tmp/` to this repo. It is local-only workspace state.
 
-After every task:
+### After every task
+
 - Always ask whether the tree needs updating.
 - If the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, open a PR in the tree repo first. Then open the source/workspace code PR.
 - If the task changed only implementation details, skip the tree PR and open only the source/workspace code PR.

@@ -7,20 +7,15 @@ describe("Admin Overview API", () => {
   it("returns system overview", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const { token: t1 } = await createTestAgent(app, { name: "overview-a1" });
+    const a1 = await createTestAgent(app, { name: "overview-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "overview-a2" });
 
-    // Create a chat
-    await app.inject({
-      method: "POST",
-      url: "/api/v1/agent/chats",
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.uuid] },
-    });
+    // Create a chat via the agent-scoped API (uses X-Agent-Id + JWT).
+    await a1.request("POST", "/api/v1/agent/chats", { type: "direct", participantIds: [a2.uuid] });
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/admin/overview",
+      url: `/api/v1/orgs/${admin.organizationId}/overview`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -32,7 +27,7 @@ describe("Admin Overview API", () => {
 
   it("rejects unauthenticated requests", async () => {
     const app = getApp();
-    const res = await app.inject({ method: "GET", url: "/api/v1/admin/overview" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/orgs/any/overview" });
     expect(res.statusCode).toBe(401);
   });
 });

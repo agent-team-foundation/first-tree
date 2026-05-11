@@ -32,6 +32,16 @@
     }
   },
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!**/.turbo", "!**/drizzle", "!**/.venv", "!**/*.code-workspace"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/.turbo",
+      "!**/drizzle",
+      "!**/.venv",
+      "!**/*.code-workspace",
+      "!**/.gstack",
+      "!**/.first-tree/tmp"
+    ]
   }
 }

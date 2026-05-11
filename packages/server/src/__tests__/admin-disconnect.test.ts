@@ -2,68 +2,69 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import * as presenceService from "../services/presence.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createAdminContext, useTestApp } from "./helpers.js";
 
 describe("Admin Agent Disconnect API", () => {
   const getApp = useTestApp();
 
   async function authedRequest(app: FastifyInstance) {
-    const admin = await createTestAdmin(app);
-    return (method: string, url: string, payload?: unknown) =>
+    const ctx = await createAdminContext(app);
+    const req = (method: string, url: string, payload?: unknown) =>
       app.inject({
         method: method as "GET" | "POST" | "PATCH" | "DELETE",
         url,
-        headers: { authorization: `Bearer ${admin.accessToken}` },
+        headers: { authorization: `Bearer ${ctx.accessToken}` },
         ...(payload ? { payload } : {}),
       });
+    return { req, ctx };
   }
 
   it("disconnects an online agent and sets presence to offline", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req, ctx } = await authedRequest(app);
 
     const agent = await createAgent(app.db, {
       name: `disc-a1-${crypto.randomUUID().slice(0, 6)}`,
       type: "autonomous_agent",
       displayName: "Disc Agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
     });
 
-    // Simulate agent being online
     await presenceService.setOnline(app.db, agent.uuid, "test-instance");
     let presence = await presenceService.getPresence(app.db, agent.uuid);
     expect(presence?.status).toBe("online");
 
-    // Call disconnect endpoint
-    const res = await req("POST", `/api/v1/admin/agents/${agent.uuid}/disconnect`);
+    const res = await req("POST", `/api/v1/agents/${agent.uuid}/disconnect`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    // No actual WS connection in test, so wasConnected is false (forceDisconnect returns false)
     expect(body).toHaveProperty("disconnected");
 
-    // Presence should now be offline
     presence = await presenceService.getPresence(app.db, agent.uuid);
     expect(presence?.status).toBe("offline");
   });
 
   it("returns 200 even when agent is already offline", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req, ctx } = await authedRequest(app);
 
     const agent = await createAgent(app.db, {
       name: `disc-a2-${crypto.randomUUID().slice(0, 6)}`,
       type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
     });
 
-    const res = await req("POST", `/api/v1/admin/agents/${agent.uuid}/disconnect`);
+    const res = await req("POST", `/api/v1/agents/${agent.uuid}/disconnect`);
     expect(res.statusCode).toBe(200);
     expect(res.json().disconnected).toBe(false);
   });
 
   it("returns 404 for non-existent agent", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
-    const res = await req("POST", "/api/v1/admin/agents/nonexistent/disconnect");
+    const res = await req("POST", "/api/v1/agents/nonexistent/disconnect");
     expect(res.statusCode).toBe(404);
   });
 
@@ -71,7 +72,7 @@ describe("Admin Agent Disconnect API", () => {
     const app = getApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/admin/agents/any-agent/disconnect",
+      url: "/api/v1/agents/any-agent/disconnect",
     });
     expect(res.statusCode).toBe(401);
   });

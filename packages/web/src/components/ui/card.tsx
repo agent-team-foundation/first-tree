@@ -2,7 +2,11 @@ import { forwardRef, type HTMLAttributes } from "react";
 import { cn } from "../../lib/utils.js";
 
 const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("rounded-xl border bg-card text-card-foreground shadow-sm", className)} {...props} />
+  <div
+    ref={ref}
+    className={cn("rounded-[var(--radius-panel)] border bg-card text-card-foreground shadow-sm", className)}
+    {...props}
+  />
 ));
 Card.displayName = "Card";
 
@@ -12,12 +16,12 @@ const CardHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({
 CardHeader.displayName = "CardHeader";
 
 const CardTitle = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("font-semibold leading-none tracking-tight", className)} {...props} />
+  <div ref={ref} className={cn("text-subtitle leading-none", className)} {...props} />
 ));
 CardTitle.displayName = "CardTitle";
 
 const CardDescription = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("text-sm text-muted-foreground", className)} {...props} />
+  <div ref={ref} className={cn("text-body text-muted-foreground", className)} {...props} />
 ));
 CardDescription.displayName = "CardDescription";
 
