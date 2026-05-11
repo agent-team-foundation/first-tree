@@ -155,7 +155,7 @@ function GroupBody({
 
 function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boolean; onToggle: () => void }) {
   return (
-    <tr>
+    <DenseTableRow>
       <td
         colSpan={COLUMNS.length}
         style={{
@@ -190,7 +190,7 @@ function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boo
           </div>
         )}
       </td>
-    </tr>
+    </DenseTableRow>
   );
 }
 
@@ -281,7 +281,7 @@ function NameCell({
     <div className="flex items-start gap-2">
       <span style={{ marginTop: 2 }}>{icon}</span>
       <div className="min-w-0">
-        <div className="font-medium text-body truncate" style={{ color: "var(--fg)" }}>
+        <div className="font-medium text-body truncate" style={{ color: "var(--fg)" }} title={displayName}>
           {displayName}
           {selfTag && (
             <span className="text-label italic" style={{ marginLeft: 6, color: "var(--fg-3)" }}>
@@ -290,7 +290,7 @@ function NameCell({
           )}
         </div>
         {handle && (
-          <div className="mono text-caption truncate" style={{ color: "var(--fg-4)" }}>
+          <div className="mono text-caption truncate" style={{ color: "var(--fg-4)" }} title={handle}>
             {handle}
           </div>
         )}
@@ -326,7 +326,13 @@ function RuntimeStatusCell({
  */
 function RowActionsMenu({ actions, ariaLabel }: { actions: RowAction[]; ariaLabel: string }) {
   const [open, setOpen] = useState(false);
+  // Flip direction up when the kebab is close to the viewport bottom and the
+  // estimated menu height would clip below. Approximating menu height as
+  // ITEM_HEIGHT_ESTIMATE * action count is close enough — pixel-perfect
+  // collision detection isn't worth the dependency on a positioning lib.
+  const [direction, setDirection] = useState<"down" | "up">("down");
   const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -344,11 +350,22 @@ function RowActionsMenu({ actions, ariaLabel }: { actions: RowAction[]; ariaLabe
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !buttonRef.current) return;
+    const ITEM_HEIGHT_ESTIMATE = 32;
+    const MENU_PADDING = 8;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const estimatedHeight = actions.length * ITEM_HEIGHT_ESTIMATE + MENU_PADDING;
+    setDirection(spaceBelow >= estimatedHeight ? "down" : "up");
+  }, [open, actions.length]);
+
   if (actions.length === 0) return null;
 
   return (
     <div ref={ref} className="relative inline-flex">
       <button
+        ref={buttonRef}
         type="button"
         aria-label={ariaLabel}
         aria-haspopup="menu"
@@ -373,8 +390,12 @@ function RowActionsMenu({ actions, ariaLabel }: { actions: RowAction[]; ariaLabe
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-30 mt-7 rounded-md border bg-popover shadow-md"
-          style={{ minWidth: 180, borderColor: "var(--border)" }}
+          className="absolute right-0 z-30 rounded-md border bg-popover shadow-md"
+          style={{
+            minWidth: 180,
+            borderColor: "var(--border)",
+            ...(direction === "up" ? { bottom: "100%", marginBottom: 4 } : { top: "100%", marginTop: 4 }),
+          }}
         >
           {actions.map((action) => (
             <button
