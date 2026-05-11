@@ -211,21 +211,22 @@ git diff --name-status <window-base>..HEAD -- '*.md'
 Context Status
 Change Summary
 Context Updates + Selected Change
-Context Tree Overview
+Where Context Changed
 Source preview inside Selected Change
 ```
 
 首屏文案:
 
 ```text
-Team context is current
-Agents have a synced team context snapshot available · main@9e664e
+Context Tree is up to date
+Source: main @ 9e664e
+Agents have a synced team context snapshot available.
 
 12 context updates in the last 7 days
 Added 3 · Edited 8 · Removed 1
 ```
 
-### Context Tree Overview
+### Where Context Changed
 
 - 全局态势视图,不是当前 update detail,也不是默认主体验。
 - 使用 `d3-hierarchy` 计算布局。
@@ -298,7 +299,7 @@ agent-hub/web-console.md · 9e664e7
 - source preview。
 - empty / unavailable 状态。
 
-### Phase 3: Context Tree Overview
+### Phase 3: Where Context Changed
 
 - 引入 `d3-hierarchy`。
 - React SVG tree render。
