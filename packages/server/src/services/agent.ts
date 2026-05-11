@@ -196,6 +196,34 @@ async function resolveAgentClient(
 }
 
 /**
+ * Validate a `delegateMention` write at the service layer. Two checks:
+ *   1. Target uuid must resolve to an existing agent — dangling references
+ *      would silently break webhook delegation at runtime.
+ *   2. Target must belong to the same organization as the source agent —
+ *      cross-org delegate links are rejected here at the source so the
+ *      database never accumulates dirty rows. The webhook router has a
+ *      defense-in-depth check that filters them at fan-out time, but this
+ *      keeps the data clean and gives the admin UI an immediate 422 instead
+ *      of a silent runtime drop.
+ *
+ * `null` clears the field — handled by the caller; we are only invoked when
+ * the caller wrote a non-null uuid.
+ */
+async function validateDelegateMentionTarget(db: Database, targetUuid: string, sourceOrgId: string): Promise<void> {
+  const [target] = await db
+    .select({ uuid: agents.uuid, organizationId: agents.organizationId })
+    .from(agents)
+    .where(eq(agents.uuid, targetUuid))
+    .limit(1);
+  if (!target) {
+    throw new BadRequestError(`delegateMention target "${targetUuid}" not found`);
+  }
+  if (target.organizationId !== sourceOrgId) {
+    throw new BadRequestError("delegateMention target must belong to the same organization as the agent");
+  }
+}
+
+/**
  * Pick the first admin member in the org for internal system agents. Throws
  * if the org has no admin — the caller should surface the error so an admin
  * is created before the system tries to register more agents.
@@ -287,6 +315,10 @@ export async function createAgent(
   });
 
   await ensureClientSupportsRuntimeProvider(db, clientId, runtimeProvider, { force: options.force });
+
+  if (data.delegateMention) {
+    await validateDelegateMentionTarget(db, data.delegateMention, orgId);
+  }
 
   // Check organization-level agent quota.
   // NOTE: TOCTOU race — concurrent requests may both pass the check. Acceptable for Phase 1;
@@ -607,7 +639,12 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
   if (data.type !== undefined) updates.type = data.type;
   if (data.displayName !== undefined) updates.displayName = data.displayName;
-  if (data.delegateMention !== undefined) updates.delegateMention = data.delegateMention;
+  if (data.delegateMention !== undefined) {
+    if (data.delegateMention !== null) {
+      await validateDelegateMentionTarget(db, data.delegateMention, agent.organizationId);
+    }
+    updates.delegateMention = data.delegateMention;
+  }
   if (data.visibility !== undefined) updates.visibility = data.visibility;
   if (data.metadata !== undefined) updates.metadata = data.metadata;
 
