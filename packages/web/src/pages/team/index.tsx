@@ -77,7 +77,7 @@ export function TeamPage() {
   // on what's *in* the list, not on the query key.
   const agentsQuery = useQuery({
     queryKey: ["agents", "team-page", isAdmin ? "admin" : "member"],
-    queryFn: () => (isAdmin ? listAllAgents({ limit: 200 }) : listAgents({ limit: 200 })),
+    queryFn: () => (isAdmin ? listAllAgents({ limit: 100 }) : listAgents({ limit: 100 })),
   });
 
   const { data: activity } = useQuery({
