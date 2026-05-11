@@ -1,6 +1,6 @@
 # GitHub App 迁移设计
 
-**状态**：Proposal，等待团队 review。已定 D0–D2，待定 D3–D4（见 §4）。
+**状态**：Proposal，已定全部决策（见 §4），可进入实施。
 **范围**：把 Hub 现有 GitHub OAuth App 升级为 GitHub App，统一承载用户登录、webhook 接入、未来 server-side 写能力三类需求。
 **不在范围**：first-tree-automation 的实际吸收、Phase 4 identity convergence（成员自动同步）的落地、Step 4（GitHub Automation workflow installer）。
 
@@ -50,9 +50,7 @@ per-repo webhook 模型迫使 admin 在 **每一个想接的 GitHub repo** 的 S
 
 ---
 
-## 4. 决策
-
-### 4.1 已定
+## 4. 决策（全部已定）
 
 | ID | 决策 | 备注 |
 |---|---|---|
@@ -60,29 +58,8 @@ per-repo webhook 模型迫使 admin 在 **每一个想接的 GitHub repo** 的 S
 | **D0b** | Permission 声明策略 A：一次性声明完整 read+write | 避免未来 admin 被 GitHub 弹 "review new permissions" |
 | **D1** | Install 触发点 = 登录即安装 | 走 GitHub 的 "Request user authorization (OAuth) during installation"。一个跳转完成 OAuth + install + repo 选择 |
 | **D2** | 覆盖范围 = Org + Personal 都接 | `installation.account_type ∈ {"User", "Organization"}`，1:1 绑到 Hub team |
-
-### 4.2 待定（团队 review 重点）
-
-**D3：老 per-repo webhook 迁移策略**
-
-| 选项 | 描述 | 取舍 |
-|---|---|---|
-| a — 硬切 | 上线日老 endpoint 410，所有 org 重装 | 干净，但断流 |
-| b — 双轨 + sunset | 两套并行 ~6 个月，UI 引导，设强制下线日期 | 运营负担重 |
-| c — 软硬结合 | 老 endpoint 长期接收已配置 org，UI 不再展示老入口，新 org 一律走 App | 无 sunset 压力，代码长期共存（handler 是独立文件，清理成本低）|
-
-**初步倾向**：c。
-
-**D4：是否把 first-tree-automation 并到同一个 App**
-
-那个独立的 Vercel 部署 GitHub App 当前 paused（见 [new-user-onboarding-design.md §10](new-user-onboarding-design.md)）。
-
-| 选项 | 描述 |
-|---|---|
-| 共用同一 App | 未来 Step 4 复活直接复用 installation |
-| 独立 App | 两条产品线解耦 |
-
-**初步倾向**：现在不并，但 App permissions 设计上**留余量**（声明 `workflows:write` 等），automation 真的复活时再 review。
+| **D3** | 老 per-repo webhook = **硬切**，无兼容窗口 | 现阶段无外部用户，直接下掉 `/api/v1/webhooks/github/<orgId>` 和 `webhookSecretCipher` 字段 |
+| **D4** | first-tree-automation **不并**到 Hub App | 保持独立部署。Hub App permissions **不再为 automation 留余量**（移除 `workflows:write`）|
 
 ---
 
@@ -93,9 +70,10 @@ per-repo webhook 模型迫使 admin 在 **每一个想接的 GitHub repo** 的 S
 - **Where can this GitHub App be installed**：Any account（对应 D2）
 - **Request user authorization (OAuth) during installation**：enabled（对应 D1）
 - **Webhook URL**：`<publicUrl>/api/v1/webhooks/github`（单一 endpoint，不带 orgId）
-- **Permissions**（对应 D0b，一次性声明）：
-  - Repository: `contents:write`, `pull_requests:write`, `issues:read`, `metadata:read`, `workflows:write`
+- **Permissions**（对应 D0b，一次性声明 Hub 自身需要的全部读+写）：
+  - Repository: `contents:write`, `pull_requests:write`, `issues:read`, `metadata:read`
   - Organization: `members:read`
+  - 不声明 `workflows:write`（D4：automation 独立部署，Hub App 不接管 workflow 安装）
 - **Events 订阅**：`issues`, `issue_comment`, `pull_request`, `pull_request_review`, `push`, `installation`, `installation_repositories`, `member`
 
 需要在 dev / staging / prod 三个环境各创建一个 App。
@@ -110,7 +88,7 @@ per-repo webhook 模型迫使 admin 在 **每一个想接的 GitHub repo** 的 S
 - `FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID`
 - `FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET`
 
-老 env `FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID/_SECRET` 在 D3 决议前保留作为回滚后路。
+老 env `FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID/_SECRET` 在新 App 上线确认稳定后**删除**（D3 硬切，无长期保留必要；上线前一个 release 可短期保留作为紧急回滚后路）。
 
 ### 5.3 DB Schema
 
@@ -145,7 +123,7 @@ CREATE TABLE github_app_installations (
 | [api/auth/github.ts](../packages/server/src/api/auth/github.ts) | OAuth start endpoint 切换到 App user authorization URL；callback 处理 `installation_id`；token refresh |
 | 新增 `services/github-app.ts` | App JWT 签名（RS256 + private key）；installation token 申请；user token refresh |
 | 新增 `api/webhooks/github-app.ts` | 单一 endpoint；payload 里 `installation.id` 反查 `hub_organization_id`；下游复用现有 `github-adapter` pipeline |
-| [api/webhooks/github.ts](../packages/server/src/api/webhooks/github.ts) | 按 D3 处理（保留只读 / 废弃） |
+| [api/webhooks/github.ts](../packages/server/src/api/webhooks/github.ts) | **删除整个文件**（D3 硬切）；同步删除 `organization_settings.github_integration.webhookSecretCipher` 字段、`org-settings` 服务里相关加解密逻辑、Settings UI 上 per-repo webhook 配置面板 |
 | `services/github-oauth.ts` | 重命名为 `github-api.ts`，新增按 installation token 调 GitHub API 的封装（建议 Octokit App auth） |
 
 ### 5.5 Web 改动
@@ -168,9 +146,8 @@ CREATE TABLE github_app_installations (
 1. **Phase 4 identity convergence 在 personal account 上的语义**：personal account 没有 members 概念。建议 `members/` 同步在 personal-installation 上 no-op 或只同步 owner 自己。**不阻塞本次落地**。
 2. **与 breeze (Candidate A) 的边界**：breeze 是 Hub client variant，持有用户的 `gh` login（user-level）。Hub App installation 是 account-level（org 或 personal）。两者**不冲突但要避免 UI 混淆**——"装了 App 之后 breeze 还要不要单独登录 gh"。breeze 实装时再厘清，本次不解决。背景见 memory `unified-product-direction.md` Candidate A。
 3. **Token 安全模型变化**：从"不过期的 access token"变成"8h TTL + refresh token"。refresh token 本身要加密存储，且 refresh 失败要有明确 UX（提示重新登录）。
-4. **D3 决议影响代码组织**：选 c（共存）意味着新 `webhooks/github-app.ts` 与老 `webhooks/github.ts` 并存，[app.ts](../packages/server/src/app.ts) 路由注册时要清晰区分。
-5. **App private key 的运维**：PEM 不能扔 env var 拼字符串。需要确认团队现有 secret manager pattern。
-6. **Dev / staging / prod 三套 App 的私钥与回调 URL**：三个独立 App 各自一套配置。CI 流程要明确。
+4. **App private key 的运维**：PEM 不能扔 env var 拼字符串。需要确认团队现有 secret manager pattern。
+5. **Dev / staging / prod 三套 App 的私钥与回调 URL**：三个独立 App 各自一套配置。CI 流程要明确。
 
 ---
 
@@ -182,17 +159,16 @@ CREATE TABLE github_app_installations (
 4. Install 回调 + installation 入库
 5. 新 App webhook endpoint + 下游复用 `github-adapter` pipeline
 6. Settings → Integrations UI 上线
-7. **按 D3 决议**处理老 endpoint
+7. 删除老 `/api/v1/webhooks/github/<orgId>` endpoint + `webhookSecretCipher` 字段 + Settings 老 UI 入口（D3 硬切，一次到位）
 
 ---
 
 ## 8. 给 review 的工程师的关键问题
 
-1. **D3 选哪个**？（推 c）
-2. **D4** 是否同意 "现在不并 automation 但 permissions 留余量"？
-3. **installations 表的 1:1**（Hub team ↔ GitHub account）是否同意？还是允许多绑？
-4. **App private key 存储**：团队现在有没有标准 secret manager pattern 可复用？
-5. **Token TTL 变 8h** 对客户端 / API 调用有没有运维影响？
+1. **installations 表的 1:1**（Hub team ↔ GitHub account）是否同意？还是允许多绑？
+2. **App private key 存储**：团队现在有没有标准 secret manager pattern 可复用？
+3. **Token TTL 变 8h** 对客户端 / API 调用有没有运维影响？
+4. **D3 硬切的上线沟通**：现有线上有没有 org 实际配置了 per-repo webhook？如果有（即使是内部测试 org），上线前需要单独通知一下。
 
 ---
 
