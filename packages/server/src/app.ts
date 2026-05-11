@@ -44,6 +44,7 @@ import { orgAdapterRoutes } from "./api/orgs/adapters.js";
 import { orgAgentRoutes } from "./api/orgs/agents.js";
 import { orgChatRoutes } from "./api/orgs/chats.js";
 import { orgClientRoutes } from "./api/orgs/clients.js";
+import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
@@ -453,6 +454,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
           await scope.register(orgMemberRoutes, { prefix: "/members" });
           await scope.register(orgSettingsRoutes, { prefix: "/settings" });
+          await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
         }),
         { prefix: "/orgs/:orgId" },
       );

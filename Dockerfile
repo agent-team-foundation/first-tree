@@ -38,7 +38,9 @@ COPY --from=build /app/packages/command/dist packages/command/dist/
 COPY --from=build /app/packages/server/drizzle packages/server/drizzle/
 COPY --from=build /app/packages/web/dist packages/web/dist/
 
-RUN apk add --no-cache wget
+# git is required by the server-managed Context Tree mirror used by
+# /api/v1/context-tree/snapshot. wget is used by the container healthcheck.
+RUN apk add --no-cache git wget
 
 ENV NODE_ENV=production
 EXPOSE 8000
