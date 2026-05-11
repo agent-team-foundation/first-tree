@@ -275,6 +275,35 @@ describe("GitMirrorManager — crash recovery", () => {
     expect(existsSync(join(firstTarget, "README.md"))).toBe(true);
   });
 
+  it("self-heals when origin/HEAD is missing on createWorktree without an explicit ref", async () => {
+    // Reproduces the production failure mode: a mirror created before the
+    // bidirectional-fallback fix had `set-head --auto` run over a protocol
+    // whose creds were missing — `gitOk` swallowed the failure and left
+    // `refs/remotes/origin/HEAD` unset. Subsequent `createWorktree({ ref:
+    // undefined })` (the default-branch path) blew up in `resolveBase`.
+    //
+    // Now `resolveBase` self-heals: if origin/HEAD is missing, it retries
+    // `set-head --auto` (via the fallback-aware path) before giving up.
+    const m = makeManager();
+    const { mirrorPath } = await m.ensureMirror(fixtureUrl);
+    // Force the broken state: remove origin/HEAD that bootstrap had set.
+    rmSync(join(mirrorPath, "refs", "remotes", "origin", "HEAD"), { force: true });
+    // Sanity check the precondition we're reproducing.
+    expect(tryGitIn(mirrorPath, "rev-parse --verify --quiet refs/remotes/origin/HEAD").ok).toBe(false);
+
+    // createWorktree without an explicit `ref` exercises the default-branch
+    // path through resolveBase — this used to throw with
+    // "Cannot resolve default branch: refs/remotes/origin/HEAD is missing".
+    const target = join(workRoot, "self-heal");
+    const result = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: target,
+      sessionKey: "self-heal-1",
+    });
+    expect(result.headCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(tryGitIn(mirrorPath, "rev-parse --verify --quiet refs/remotes/origin/HEAD").ok).toBe(true);
+  });
+
   it("refuses to proceed when the worktree path exists but the session branch is missing", async () => {
     // Simulates ref-level corruption: the worktree directory survives on disk,
     // but the session branch in the mirror has vanished (manual ref tampering,

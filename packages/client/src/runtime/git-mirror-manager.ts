@@ -260,6 +260,40 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
    * `remote.origin.url` stays as configured, so the next fetch starts back
    * at the original protocol unless this fallback fires again.
    */
+  /**
+   * `remote set-head --auto` is a remote-talking op too — under the same
+   * credential rules as `fetch`. If we don't apply the same fallback,
+   * mirrors whose HTTPS creds are missing end up with `refs/remotes/origin/HEAD`
+   * unset, which then breaks `resolveBase()` for callers without an explicit
+   * `ref` (the default-branch lookup throws).
+   *
+   * Strategy mirrors `fetchOrigin`: try the configured protocol first, fall
+   * back to the peer protocol once via `-c url.<peer>.insteadOf=<origin>`.
+   * Returns true on either success, false if both attempts failed (which
+   * mirrors the historical `gitOk` semantics — non-fatal). No `GitMirrorAuthError`
+   * here: callers that need origin/HEAD already get a clear
+   * `GitMirrorError("Cannot resolve default branch …")` if both attempts fail.
+   */
+  async function setHeadAuto(mirrorPath: string, originUrl: string): Promise<boolean> {
+    if (await gitOk(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000)) return true;
+    const direction = pickFallbackDirection(originUrl);
+    if (!direction) return false;
+    return await gitOk(
+      ["-c", `url.${direction.peerBase}.insteadOf=${direction.originBase}`, "remote", "set-head", "origin", "--auto"],
+      mirrorPath,
+      30_000,
+    );
+  }
+
+  async function readOriginUrl(mirrorPath: string): Promise<string | null> {
+    try {
+      const { stdout } = await git(["config", "--get", "remote.origin.url"], mirrorPath, 10_000);
+      return stdout.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
   async function fetchOrigin(
     mirrorPath: string,
     originUrl: string,
@@ -355,9 +389,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
       // Populate `refs/remotes/origin/*` and set `origin/HEAD`. Without this,
       // newly-migrated mirrors have no remote-tracking refs to base worktrees on.
       await fetchOrigin(mirrorPath, url);
-      // Failing `set-head --auto` is non-fatal — callers that pass an explicit
-      // `ref` don't need origin/HEAD, and fallbacks below handle its absence.
-      await gitOk(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000);
+      await setHeadAuto(mirrorPath, url);
       log?.info({ gitUrl: url }, "mirror config migrated");
     }
 
@@ -376,7 +408,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     await git(["remote", "add", "origin", url], mirrorPath, 10_000);
     await git(["config", "--replace-all", "remote.origin.fetch", FETCH_REFSPEC], mirrorPath, 10_000);
     await fetchOrigin(mirrorPath, url);
-    await gitOk(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000);
+    await setHeadAuto(mirrorPath, url);
   }
 
   async function branchExists(mirrorPath: string, branchName: string): Promise<boolean> {
@@ -395,6 +427,17 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     if (!ref) {
       if (await gitOk(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"], mirrorPath, 10_000)) {
         return "refs/remotes/origin/HEAD";
+      }
+      // Self-heal: mirrors created before the bidirectional-fallback fix may
+      // have had `set-head --auto` run over a broken protocol and skipped
+      // silently, leaving origin/HEAD unset. Try once now via the same
+      // fallback-aware path. No-op if it succeeds-then-fails-again.
+      const url = await readOriginUrl(mirrorPath);
+      if (url && (await setHeadAuto(mirrorPath, url))) {
+        if (await gitOk(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"], mirrorPath, 10_000)) {
+          log?.info({ mirrorPath, gitUrl: url }, "origin/HEAD self-healed via setHeadAuto");
+          return "refs/remotes/origin/HEAD";
+        }
       }
       throw new GitMirrorError(
         "Cannot resolve default branch: refs/remotes/origin/HEAD is missing. Re-run with an explicit `ref`.",
