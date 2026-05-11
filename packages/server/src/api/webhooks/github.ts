@@ -5,6 +5,7 @@ import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
+import { claimEvent, unclaimEvent } from "../../services/adapter-mapping.js";
 import { createAgent } from "../../services/agent.js";
 import { findOrCreateDirectChat } from "../../services/chat.js";
 import { sendMessage } from "../../services/message.js";
@@ -341,29 +342,60 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
         throw new BadRequestError("Missing x-github-event header");
       }
 
-      // Handle ping event (GitHub sends this when webhook is first configured)
+      // Handle ping event (GitHub sends this when webhook is first configured).
+      // Skipped from idempotency tracking: pings have no side effects and
+      // shouldn't consume rows in `processed_events`.
       if (eventType === "ping") {
         return reply.status(200).send({ ok: true, event: "ping" });
       }
 
-      // --- Event-specific handlers (mention delegation runs inside, after action gating) ---
-      if (eventType === "issues") {
-        return handleIssuesEvent(app, orgId, eventType, payload, reply);
+      // Idempotency: GitHub retries failed deliveries (and occasionally
+      // double-fires near-simultaneous events) with the same
+      // `x-github-delivery` UUID. Without this gate, retries produce
+      // duplicate fan-out messages. See issue #283. Reuses the
+      // `processed_events` table that the Feishu adapter already uses
+      // via `claimEvent` / `unclaimEvent`.
+      const deliveryHeader = request.headers["x-github-delivery"];
+      const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
+
+      if (deliveryId) {
+        const claimed = await claimEvent(app.db, deliveryId, "github");
+        if (!claimed) {
+          log.info({ deliveryId, eventType }, "duplicate GitHub delivery, skipping");
+          return reply.status(200).send({ ok: true, event: eventType, deduped: true });
+        }
       }
 
-      if (eventType === "issue_comment") {
-        return handleIssueCommentEvent(app, orgId, eventType, payload, reply);
-      }
+      try {
+        // --- Event-specific handlers (mention delegation runs inside, after action gating) ---
+        if (eventType === "issues") {
+          return await handleIssuesEvent(app, orgId, eventType, payload, reply);
+        }
 
-      // Other event types with @mention support (PRs, discussions, reviews, etc.)
-      // Only run delegation if the action represents new/changed content
-      let mentionsRouted = 0;
-      const allowedActions = MENTION_ACTIONS[eventType];
-      const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
-      if (allowedActions && action && allowedActions.includes(action)) {
-        mentionsRouted = await handleMentionDelegation(app, orgId, eventType, payload);
+        if (eventType === "issue_comment") {
+          return await handleIssueCommentEvent(app, orgId, eventType, payload, reply);
+        }
+
+        // Other event types with @mention support (PRs, discussions, reviews, etc.)
+        // Only run delegation if the action represents new/changed content
+        let mentionsRouted = 0;
+        const allowedActions = MENTION_ACTIONS[eventType];
+        const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
+        if (allowedActions && action && allowedActions.includes(action)) {
+          mentionsRouted = await handleMentionDelegation(app, orgId, eventType, payload);
+        }
+        return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
+      } catch (err) {
+        // Release the claim so GitHub's retry can re-process. On permanent
+        // 4xx failures GitHub does not retry, so the freed row is harmless;
+        // on transient 5xx the retry needs the slot back to succeed.
+        if (deliveryId) {
+          await unclaimEvent(app.db, deliveryId, "github").catch((unclaimErr) => {
+            log.error({ err: unclaimErr, deliveryId }, "failed to unclaim GitHub delivery after handler error");
+          });
+        }
+        throw err;
       }
-      return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
     },
   );
 }

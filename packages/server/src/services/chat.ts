@@ -570,11 +570,17 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
   const commonChatIds = aChats.map((r) => r.chatId).filter((id) => bChatIds.has(id));
 
   if (commonChatIds.length > 0) {
-    // Check if any common chat is a direct chat
+    // Check if any common chat is a direct chat. Order by `created_at` so the
+    // selection is deterministic across calls: webhook re-deliveries / retries
+    // (see issue #283) and any other caller that re-enters this helper for
+    // the same pair must always land on the same chat, regardless of how
+    // many direct chats the pair has accumulated.
     const directChats = await db
       .select()
       .from(chats)
-      .where(and(inArray(chats.id, commonChatIds), eq(chats.type, "direct")));
+      .where(and(inArray(chats.id, commonChatIds), eq(chats.type, "direct")))
+      .orderBy(chats.createdAt, chats.id)
+      .limit(1);
 
     if (directChats.length > 0 && directChats[0]) {
       return directChats[0];
