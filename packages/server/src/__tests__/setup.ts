@@ -39,8 +39,6 @@ function getDb() {
 // on CASCADE NOTICE chains) so adding a new table forces a deliberate
 // decision about whether tests should see clean state.
 const TRUNCATE_TABLES = [
-  "task_chats",
-  "tasks",
   "adapter_message_references",
   "adapter_chat_mappings",
   "adapter_agent_mappings",
