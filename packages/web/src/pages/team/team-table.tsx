@@ -1,7 +1,9 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
-import { Bot, Lock, MoreHorizontal, User } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Bot, Lock, type LucideIcon, MoreHorizontal, User } from "lucide-react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import type { RuntimeAgent } from "../../api/activity.js";
+import { AgentChip } from "../../components/agent-chip.js";
+import { DenseBadge } from "../../components/ui/dense-badge.js";
 import {
   DenseTable,
   DenseTableBody,
@@ -30,11 +32,19 @@ import { formatDay } from "../../lib/utils.js";
 export type HumanRow = {
   kind: "human";
   id: string;
+  /** UUID of the type="human" mirror agent — needed when the row action edits the agent (e.g. setting delegateMention). */
+  agentId: string;
   username: string;
   displayName: string;
   role: string;
   createdAt: string;
   isSelf: boolean;
+  /** Resolved identity of the personal assistant this human delegates to, or null if none configured. */
+  delegate: { name: string | null; displayName: string } | null;
+  /** Whether the current viewer can edit this human's delegate (self, or admin viewing anyone). */
+  canEditDelegate: boolean;
+  /** Open the delegate dialog for this row; only called when canEditDelegate is true. */
+  onEditDelegate: () => void;
 };
 
 export type AgentRow = {
@@ -68,6 +78,8 @@ export type RowAction = {
 type Props = {
   groups: TeamGroup[];
   runtimeMap: Map<string, RuntimeAgent>;
+  /** clientId → hostname; agents whose client isn't in the map render runtime alone. */
+  clientHostMap: Map<string, string>;
   onAgentClick: (uuid: string) => void;
   getHumanActions: (row: HumanRow) => RowAction[];
   getAgentActions: (row: AgentRow) => RowAction[];
@@ -75,19 +87,63 @@ type Props = {
 
 const COLUMNS = [
   { key: "name", label: "Name", width: 260 },
-  { key: "manager", label: "Manager", width: 140 },
-  { key: "runtime", label: "Runtime · Status", width: 170 },
-  { key: "created", label: "Created", width: 120 },
+  // Delegate and Manager are split into separate columns so each header
+  // carries exactly one meaning. Human rows fill Delegate (the assistant
+  // acting on their behalf) and leave Manager as `—`; agent rows fill
+  // Manager (the human who owns the agent) and leave Delegate as `—`.
+  // Order: Delegate before Manager so the Humans section — which renders
+  // first in the table — has its populated cell immediately right of the
+  // Name column, no `—` gap before the data. Each section uniformly fills
+  // one column and leaves the other empty — the half-blank pattern reads
+  // as section structure, not missing data, and neither column has to
+  // mean two things at once.
+  { key: "delegate", label: "Delegate", width: 160 },
+  { key: "manager", label: "Manager", width: 160 },
+  // The cell renders `<runtime-provider> @ <host>` in one line — covers
+  // both framework and host together (plain "Runtime" only described the
+  // framework half). Wider than the other middle columns because the
+  // combined `claude-code @ alice-macbook` form runs roughly 25-30 chars;
+  // this wider column fits most everyday cases, and longer corporate
+  // FQDNs gracefully truncate with the `title` tooltip showing full value.
+  // Status (live operational state) is the orthogonal axis and stays in
+  // its own column so config and live state don't share a cell. Both
+  // blank for human rows.
+  { key: "runtime", label: "Runs on", width: 220 },
+  { key: "status", label: "Status", width: 160 },
+  { key: "created", label: "Created", width: 160 },
+  // Middle columns mostly pin to 160 for grid rhythm. Runs on opts out at
+  // 220 because its content (provider + host) is denser than the others.
+  // Name stays wider (variable display-name + @handle) and Actions stays
+  // narrow (single kebab icon) — those sit at the content-density extremes.
   { key: "actions", label: "", width: 44 },
 ] as const;
 
-export function TeamTable({ groups, runtimeMap, onAgentClick, getHumanActions, getAgentActions }: Props) {
+function sectionCellStyle(isLast: boolean, style?: CSSProperties): CSSProperties | undefined {
+  if (!isLast) return style;
+  return { ...style, borderBottom: 0 };
+}
+
+export function TeamTable({
+  groups,
+  runtimeMap,
+  clientHostMap,
+  onAgentClick,
+  getHumanActions,
+  getAgentActions,
+}: Props) {
   return (
     <DenseTable className="table-fixed">
       <DenseTableHeader>
         <DenseTableRow>
           {COLUMNS.map((col) => (
-            <DenseTableHead key={col.key} style={{ width: col.width }} aria-hidden={col.key === "actions"}>
+            <DenseTableHead
+              key={col.key}
+              // The first column (Name) also shifts to `sp-6` left padding
+              // so the column header sits in the same vertical alignment
+              // line as the section title text and the row name text.
+              style={{ width: col.width, ...(col.key === "name" ? { paddingLeft: "var(--sp-6)" } : null) }}
+              aria-hidden={col.key === "actions"}
+            >
               {col.label}
             </DenseTableHead>
           ))}
@@ -98,6 +154,7 @@ export function TeamTable({ groups, runtimeMap, onAgentClick, getHumanActions, g
           key={group.key}
           group={group}
           runtimeMap={runtimeMap}
+          clientHostMap={clientHostMap}
           onAgentClick={onAgentClick}
           getHumanActions={getHumanActions}
           getAgentActions={getAgentActions}
@@ -110,12 +167,14 @@ export function TeamTable({ groups, runtimeMap, onAgentClick, getHumanActions, g
 function GroupBody({
   group,
   runtimeMap,
+  clientHostMap,
   onAgentClick,
   getHumanActions,
   getAgentActions,
 }: {
   group: TeamGroup;
   runtimeMap: Map<string, RuntimeAgent>;
+  clientHostMap: Map<string, string>;
   onAgentClick: (uuid: string) => void;
   getHumanActions: (row: HumanRow) => RowAction[];
   getAgentActions: (row: AgentRow) => RowAction[];
@@ -129,38 +188,89 @@ function GroupBody({
         <DenseTableRow>
           <DenseTableCell
             colSpan={COLUMNS.length}
-            style={{ color: "var(--fg-4)", textAlign: "center", padding: "var(--sp-4)" }}
+            style={{
+              color: "var(--fg-4)",
+              textAlign: "left",
+              padding: "0 var(--sp-3_5) var(--sp-3) var(--sp-6)",
+              borderBottom: 0,
+            }}
           >
             {group.emptyMessage}
           </DenseTableCell>
         </DenseTableRow>
       )}
       {open &&
-        group.rows.map((row) =>
-          row.kind === "human" ? (
-            <HumanRowView key={`h:${row.id}`} row={row} actions={getHumanActions(row)} />
+        group.rows.map((row, index) => {
+          const isLast = index === group.rows.length - 1;
+          return row.kind === "human" ? (
+            <HumanRowView key={`h:${row.id}`} row={row} actions={getHumanActions(row)} isLast={isLast} />
           ) : (
             <AgentRowView
               key={`a:${row.agent.uuid}`}
               row={row}
               runtime={runtimeMap.get(row.agent.uuid) ?? null}
+              clientHost={row.agent.clientId ? (clientHostMap.get(row.agent.clientId) ?? null) : null}
               actions={getAgentActions(row)}
               onClick={() => onAgentClick(row.agent.uuid)}
+              isLast={isLast}
             />
-          ),
-        )}
+          );
+        })}
     </DenseTableBody>
   );
 }
 
+/**
+ * Map a section's key to the lucide icon that ties it back to the row icons
+ * inside it. Humans use User (matches HumanRowView's name-cell icon), Shared
+ * agents use Bot, and private agent buckets use Lock — same visual vocabulary
+ * the rows themselves use, so the section header becomes a "tab" for that
+ * row-type rather than a separate label scheme.
+ */
+function sectionIcon(key: string): LucideIcon | null {
+  switch (key) {
+    case "humans":
+      return User;
+    case "shared":
+      return Bot;
+    case "private":
+    case "other-private":
+      return Lock;
+    default:
+      return null;
+  }
+}
+
 function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boolean; onToggle: () => void }) {
+  const Icon = sectionIcon(group.key);
+  const inner = (
+    <span className="inline-flex items-center" style={{ gap: "var(--sp-2)" }}>
+      {group.collapsible && (
+        <span aria-hidden style={{ display: "inline-block", width: 10, color: "var(--fg-4)" }}>
+          {open ? "▾" : "▸"}
+        </span>
+      )}
+      {Icon && <Icon className="h-4 w-4" aria-hidden style={{ color: "var(--fg-3)" }} />}
+      <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
+        {group.title}
+      </span>
+      <DenseBadge tone="outline">{group.count}</DenseBadge>
+    </span>
+  );
   return (
     <DenseTableRow>
       <td
         colSpan={COLUMNS.length}
         style={{
-          padding: "var(--sp-3) var(--sp-3_5) var(--sp-1_5)",
-          borderBottom: "var(--hairline) solid var(--border-faint)",
+          // Section header sits at the table's left edge (padding-left: 0);
+          // its icon (sp-4 wide) + gap (sp-2) puts the section TITLE TEXT
+          // at sp-6 from the cell edge. Row first-cells override their
+          // padding-left to sp-6 (see HumanRowView / AgentRowView) so row
+          // names line up vertically with the section title text, while
+          // the section icon "hangs out" to the left as a section marker.
+          // sp-6 top, sp-2 bottom — generous breathing room above, tight
+          // below so the section visually "owns" the rows under it.
+          padding: "var(--sp-6) var(--sp-3_5) var(--sp-2) 0",
         }}
       >
         {group.collapsible ? (
@@ -168,150 +278,194 @@ function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boo
             type="button"
             onClick={onToggle}
             aria-expanded={open}
-            className="inline-flex items-baseline gap-2 text-eyebrow uppercase"
             style={{
-              color: "var(--fg-3)",
               background: "transparent",
               border: 0,
               padding: 0,
               cursor: "pointer",
+              color: "inherit",
             }}
           >
-            <span aria-hidden style={{ display: "inline-block", width: 10 }}>
-              {open ? "▾" : "▸"}
-            </span>
-            <span>{group.title}</span>
-            <span style={{ color: "var(--fg-4)" }}>({group.count})</span>
+            {inner}
           </button>
         ) : (
-          <div className="inline-flex items-baseline gap-2 text-eyebrow uppercase" style={{ color: "var(--fg-3)" }}>
-            <span>{group.title}</span>
-            <span style={{ color: "var(--fg-4)" }}>({group.count})</span>
-          </div>
+          inner
         )}
       </td>
     </DenseTableRow>
   );
 }
 
-function HumanRowView({ row, actions }: { row: HumanRow; actions: RowAction[] }) {
+function HumanRowView({ row, actions, isLast }: { row: HumanRow; actions: RowAction[]; isLast: boolean }) {
   return (
     <DenseTableRow>
-      <DenseTableCell>
-        <NameCell
-          icon={<User className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--fg-3)" }} />}
-          displayName={row.displayName}
-          handle={`@${row.username}`}
-          selfTag={row.isSelf}
-        />
+      <DenseTableCell style={sectionCellStyle(isLast, { paddingLeft: "var(--sp-6)" })}>
+        <NameCell displayName={row.displayName} handle={`@${row.username}`} selfTag={row.isSelf} />
       </DenseTableCell>
-      <DenseTableCell className="text-label" style={{ color: "var(--fg-4)" }}>
+      <DenseTableCell style={sectionCellStyle(isLast)}>
+        <HumanDelegateCell row={row} />
+      </DenseTableCell>
+      <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         —
       </DenseTableCell>
-      <DenseTableCell className="text-label" style={{ color: "var(--fg-4)" }}>
+      <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         —
       </DenseTableCell>
-      <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+      <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
+        —
+      </DenseTableCell>
+      <DenseTableCell className="mono text-caption" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         {formatDay(row.createdAt)}
       </DenseTableCell>
-      <DenseTableCell style={{ padding: 0, textAlign: "right" }}>
+      <DenseTableCell style={sectionCellStyle(isLast, { padding: 0, textAlign: "right" })}>
         <RowActionsMenu actions={actions} ariaLabel={`Actions for ${row.displayName}`} />
       </DenseTableCell>
     </DenseTableRow>
   );
 }
 
+/**
+ * The Manager column has no meaning for humans (they don't have a manager —
+ * they ARE the principals). We repurpose the cell to surface the
+ * `delegateMention` linkage instead: who the human has delegated their
+ * @mention handling to. Showing it inline (rather than only in the kebab
+ * menu) turned an invisible feature into an obvious one — the screenshot
+ * audit found the row felt empty because three of four columns rendered "—".
+ *
+ * Editable affordance shows only when the viewer can persist the change
+ * (self, or admin). For other viewers, the chip is shown read-only or "—".
+ */
+function HumanDelegateCell({ row }: { row: HumanRow }) {
+  // Read-only viewer + no delegate → just the em-dash.
+  if (!row.delegate && !row.canEditDelegate) {
+    return (
+      <span className="text-label" style={{ color: "var(--fg-4)" }}>
+        —
+      </span>
+    );
+  }
+
+  const value = row.delegate ? (
+    <AgentChip name={row.delegate.name} displayName={row.delegate.displayName} />
+  ) : (
+    <span style={{ color: "var(--accent-dim)" }}>Set delegate →</span>
+  );
+
+  const tooltip = row.delegate ? (row.canEditDelegate ? "Change delegate" : undefined) : "Set delegate";
+
+  if (!row.canEditDelegate) {
+    return (
+      <span className="text-label" title={tooltip}>
+        {value}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={row.onEditDelegate}
+      className="text-label hover:underline"
+      style={{
+        background: "transparent",
+        border: 0,
+        padding: 0,
+        cursor: "pointer",
+        color: "inherit",
+        textAlign: "left",
+      }}
+      title={tooltip}
+    >
+      {value}
+    </button>
+  );
+}
+
 function AgentRowView({
   row,
   runtime,
+  clientHost,
   actions,
   onClick,
+  isLast,
 }: {
   row: AgentRow;
   runtime: RuntimeAgent | null;
+  clientHost: string | null;
   actions: RowAction[];
   onClick: () => void;
+  isLast: boolean;
 }) {
   const { agent, managerLabel, isOwnedBySelf } = row;
-  const isPrivate = agent.visibility === "private";
-  const icon = isPrivate ? (
-    <Lock className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--fg-3)" }} />
-  ) : (
-    <Bot className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--fg-3)" }} />
-  );
 
   return (
     <DenseTableRow interactive onClick={onClick}>
-      <DenseTableCell>
-        <NameCell icon={icon} displayName={agent.displayName} handle={agent.name ? `@${agent.name}` : null} />
+      <DenseTableCell style={sectionCellStyle(isLast, { paddingLeft: "var(--sp-6)" })}>
+        <NameCell displayName={agent.displayName} handle={agent.name ? `@${agent.name}` : null} />
       </DenseTableCell>
-      <DenseTableCell className="text-label" style={{ color: "var(--fg-2)" }}>
-        {managerLabel ?? "—"}
-        {isOwnedBySelf && (
-          <span className="text-label italic" style={{ marginLeft: 6, color: "var(--fg-3)" }}>
-            (you)
+      <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
+        —
+      </DenseTableCell>
+      <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-2)" })}>
+        {managerLabel ? (
+          <span className="truncate inline-block max-w-full" title={managerLabel}>
+            {managerLabel}
+            {isOwnedBySelf && (
+              <span className="text-label italic" style={{ marginLeft: 6, color: "var(--fg-3)" }}>
+                (you)
+              </span>
+            )}
           </span>
+        ) : (
+          <span style={{ color: "var(--fg-4)" }}>—</span>
         )}
       </DenseTableCell>
-      <DenseTableCell>
-        <RuntimeStatusCell runtimeState={runtime?.runtimeState ?? null} runtimeProvider={agent.runtimeProvider} />
+      <DenseTableCell className="mono text-caption" style={sectionCellStyle(isLast, { color: "var(--fg-3)" })}>
+        <div
+          className="truncate"
+          title={clientHost ? `${agent.runtimeProvider} @ ${clientHost}` : agent.runtimeProvider}
+        >
+          {agent.runtimeProvider}
+          {clientHost && (
+            <span style={{ color: "var(--fg-4)" }}>
+              {" @ "}
+              {clientHost}
+            </span>
+          )}
+        </div>
       </DenseTableCell>
-      <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+      <DenseTableCell style={sectionCellStyle(isLast)}>
+        <StateChip state={runtime?.runtimeState ?? null} />
+      </DenseTableCell>
+      <DenseTableCell className="mono text-caption" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         {formatDay(agent.createdAt)}
       </DenseTableCell>
-      <DenseTableCell style={{ padding: 0, textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
+      <DenseTableCell
+        style={sectionCellStyle(isLast, { padding: 0, textAlign: "right" })}
+        onClick={(e) => e.stopPropagation()}
+      >
         <RowActionsMenu actions={actions} ariaLabel={`Actions for ${agent.displayName}`} />
       </DenseTableCell>
     </DenseTableRow>
   );
 }
 
-function NameCell({
-  icon,
-  displayName,
-  handle,
-  selfTag,
-}: {
-  icon: ReactNode;
-  displayName: string;
-  handle: string | null;
-  selfTag?: boolean;
-}) {
+function NameCell({ displayName, handle, selfTag }: { displayName: string; handle: string | null; selfTag?: boolean }) {
   return (
-    <div className="flex items-start gap-2">
-      <span style={{ marginTop: 2 }}>{icon}</span>
-      <div className="min-w-0">
-        <div className="font-medium text-body truncate" style={{ color: "var(--fg)" }} title={displayName}>
-          {displayName}
-          {selfTag && (
-            <span className="text-label italic" style={{ marginLeft: 6, color: "var(--fg-3)" }}>
-              (you)
-            </span>
-          )}
-        </div>
-        {handle && (
-          <div className="mono text-caption truncate" style={{ color: "var(--fg-4)" }} title={handle}>
-            {handle}
-          </div>
+    <div className="min-w-0">
+      <div className="font-medium text-body truncate" style={{ color: "var(--fg)" }} title={displayName}>
+        {displayName}
+        {selfTag && (
+          <span className="text-label italic" style={{ marginLeft: 6, color: "var(--fg-3)" }}>
+            (you)
+          </span>
         )}
       </div>
-    </div>
-  );
-}
-
-function RuntimeStatusCell({
-  runtimeState,
-  runtimeProvider,
-}: {
-  runtimeState: string | null;
-  runtimeProvider: string;
-}) {
-  return (
-    <div className="flex flex-col" style={{ gap: 2 }}>
-      <StateChip state={runtimeState} />
-      <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-        {runtimeProvider}
-      </span>
+      {handle && (
+        <div className="mono text-caption truncate" style={{ color: "var(--fg-4)" }} title={handle}>
+          {handle}
+        </div>
+      )}
     </div>
   );
 }
