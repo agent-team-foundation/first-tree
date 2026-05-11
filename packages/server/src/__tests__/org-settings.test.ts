@@ -1,4 +1,4 @@
-import crypto, { createHmac } from "node:crypto";
+import crypto, { createHmac, randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -502,6 +502,33 @@ describe("org-settings API (admin gating + masking)", () => {
     return { admin, member: { ...memberTokens, userId: memberUserId } };
   }
 
+  async function attachOrg(app: Awaited<ReturnType<typeof getApp>>, userId: string) {
+    const orgId = `org-ct-${randomUUID().slice(0, 8)}`;
+    const memberId = uuidv7();
+    await app.db.transaction(async (tx) => {
+      await tx.insert(organizations).values({
+        id: orgId,
+        name: `ct-${randomUUID().slice(0, 8)}`,
+        displayName: "Context Tree Side Org",
+      });
+      const humanAgent = await createAgent(tx as unknown as typeof app.db, {
+        name: `ct-human-${randomUUID().slice(0, 8)}`,
+        type: "human",
+        displayName: "Context Tree Human",
+        managerId: memberId,
+        organizationId: orgId,
+      });
+      await tx.insert(members).values({
+        id: memberId,
+        userId,
+        organizationId: orgId,
+        agentId: humanAgent.uuid,
+        role: "admin",
+      });
+    });
+    return orgId;
+  }
+
   it("admin can GET, PUT, DELETE the namespace", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -537,6 +564,42 @@ describe("org-settings API (admin gating + masking)", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(get2.json()).toEqual({ branch: "main" });
+  });
+
+  it("context tree snapshot uses the org id from the route, not the caller's primary org", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const sideOrgId = await attachOrg(app, admin.userId);
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      sideOrgId,
+      "context_tree",
+      { repo: "https://github.com/example/current-team-context", branch: "--bad" },
+      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+    );
+
+    const sideSnapshot = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${sideOrgId}/context-tree/snapshot?window=7d`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(sideSnapshot.statusCode).toBe(200);
+    expect(sideSnapshot.json()).toMatchObject({
+      repo: "https://github.com/example/current-team-context",
+      branch: "--bad",
+      snapshotStatus: "unavailable",
+    });
+
+    const defaultSnapshot = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/context-tree/snapshot?window=7d`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(defaultSnapshot.statusCode).toBe(200);
+    expect(defaultSnapshot.json()).toMatchObject({
+      repo: null,
+      snapshotStatus: "unavailable",
+    });
   });
 
   it("non-admin member is forbidden from PUT / DELETE on context_tree (write is admin-only)", async () => {
