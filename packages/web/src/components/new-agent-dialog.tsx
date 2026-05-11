@@ -3,12 +3,13 @@ import {
   AGENT_NAME_REGEX,
   type Agent,
   type AgentVisibility,
+  type ClientCapabilities,
   isReservedAgentName,
   type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { type HubClient, listClients } from "../api/activity.js";
+import { getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
 import { type AgentNameAvailability, checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
@@ -56,10 +57,12 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  * Hidden defaults:
  *   - type = "personal_assistant"
  *   - manager = current user
- *   - delegateMention, clientId = not surfaced
+ *   - delegateMention = not surfaced
  *
- * Surfaced choices: visibility (shared with team / private to you) and
- * runtime (Claude Code / Codex).
+ * Surfaced choices: visibility (shared with team / private to you), the
+ * connected computer the agent will run on, and the runtime provider —
+ * filtered to whatever is actually installed and signed-in on that
+ * computer (mirrors onboarding step 2).
  */
 
 // Runtime selection sources its values from `RuntimeProvider`; new providers
@@ -82,6 +85,40 @@ function normalizeNameInput(raw: string): string {
     .slice(0, AGENT_NAME_MAX_LENGTH);
 }
 
+/**
+ * Narrow an arbitrary capability key to a `RuntimeProvider`. Capability
+ * blobs are `Record<string, ...>` so old clients can ship runtimes the UI
+ * doesn't know about yet — the UI just ignores anything it can't render.
+ */
+function asRuntimeProvider(provider: string): RuntimeProvider | null {
+  if (provider === "claude-code" || provider === "codex") return provider;
+  return null;
+}
+
+/**
+ * Pick the preferred runtime among the ones in `ok` state on a given
+ * client. Claude Code wins over Codex; if neither is ok we fall back to
+ * whatever else the client reports as ok (still narrowed to a known
+ * RuntimeProvider), then `null`.
+ */
+function pickPreferredRuntime(caps: ClientCapabilities): RuntimeProvider | null {
+  if (caps["claude-code"]?.state === "ok") return "claude-code";
+  if (caps.codex?.state === "ok") return "codex";
+  for (const [provider, entry] of Object.entries(caps)) {
+    if (entry.state === "ok") {
+      const rt = asRuntimeProvider(provider);
+      if (rt) return rt;
+    }
+  }
+  return null;
+}
+
+function prettyRuntimeLabel(provider: RuntimeProvider): string {
+  if (provider === "claude-code") return "Claude Code";
+  if (provider === "codex") return "Codex";
+  return provider;
+}
+
 function availabilityReasonMessage(reason: "invalid" | "reserved" | "taken"): string {
   switch (reason) {
     case "taken":
@@ -99,7 +136,6 @@ type Props = {
   onCreated: (agent: Agent, runtimeProvider: RuntimeProvider) => void;
 };
 
-type Step = "form" | "pick-computer";
 type AvailabilityState =
   | { status: "idle" }
   | { status: "checking" }
@@ -119,10 +155,15 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   // and offers an Edit affordance for the rest.
   const [editingHandle, setEditingHandle] = useState(false);
 
-  const [step, setStep] = useState<Step>("form");
-  const [candidateClients, setCandidateClients] = useState<HubClient[]>([]);
+  // Computer + runtime detection — lifted into the form so the user sees
+  // which machine will host the agent (and which runtimes are actually
+  // installed there) before clicking Create. Mirrors onboarding step 2.
+  const [connectedClients, setConnectedClients] = useState<HubClient[]>([]);
+  const [clientsLoaded, setClientsLoaded] = useState(false);
   const [pickedClientId, setPickedClientId] = useState<string | null>(null);
-  const [probing, setProbing] = useState(false);
+  const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
+  const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
+
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
   const [availability, setAvailability] = useState<AvailabilityState>({ status: "idle" });
 
@@ -134,10 +175,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setVisibility("organization");
       setRuntime("claude-code");
       setEditingHandle(false);
-      setStep("form");
-      setCandidateClients([]);
+      setConnectedClients([]);
+      setClientsLoaded(false);
       setPickedClientId(null);
-      setProbing(false);
+      setCapabilities(null);
+      setCapabilitiesClientId(null);
       setClientErrors({});
       setAvailability({ status: "idle" });
     }
@@ -193,6 +235,106 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [name, open]);
+
+  // Poll `listClients` to keep the connected-computer list fresh while the
+  // dialog is open. 3s cadence matches onboarding step 2 so a computer
+  // coming online (or going offline) reflects without the user closing
+  // and reopening the dialog.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const tick = async (): Promise<void> => {
+      try {
+        const list = await listClients();
+        if (cancelled) return;
+        const connected = list
+          .filter((c) => c.status === "connected")
+          .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+        setConnectedClients(connected);
+        setClientsLoaded(true);
+      } catch {
+        // Best-effort. Mark as loaded so the empty-state UI shows instead of
+        // a forever spinner — the user can still see *something* and the
+        // next tick will recover.
+        if (!cancelled) setClientsLoaded(true);
+      }
+    };
+    void tick();
+    const handle = window.setInterval(tick, 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [open]);
+
+  // Auto-pick the most-recently-seen connected client, but stay on the
+  // user's manual choice as long as it's still in the list.
+  useEffect(() => {
+    if (connectedClients.length === 0) {
+      setPickedClientId(null);
+      return;
+    }
+    setPickedClientId((prev) => {
+      if (prev && connectedClients.some((c) => c.id === prev)) return prev;
+      return connectedClients[0]?.id ?? null;
+    });
+  }, [connectedClients]);
+
+  // Capability fetch — polls every 3s while a client is picked. Same
+  // cadence as the listClients poll above so a transient API failure
+  // self-heals on the next tick rather than freezing the UI in
+  // "Detecting installed runtimes…" until the user reopens the dialog.
+  // Mirrors onboarding step 2's `detect` loop.
+  useEffect(() => {
+    if (!pickedClientId) {
+      setCapabilities(null);
+      setCapabilitiesClientId(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchCaps = async (): Promise<void> => {
+      try {
+        const res = await getClientCapabilities(pickedClientId);
+        if (cancelled) return;
+        setCapabilities(res.capabilities);
+        setCapabilitiesClientId(pickedClientId);
+      } catch {
+        // Transient — keep whatever we have (initial null shows "detecting…",
+        // prior success keeps the chips). The next tick will retry.
+      }
+    };
+    void fetchCaps();
+    const handle = window.setInterval(fetchCaps, 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [pickedClientId]);
+
+  // Capabilities tied to the *currently* picked client only — guards
+  // against acting on stale data right after the user switches machines.
+  const activeCapabilities = pickedClientId && capabilitiesClientId === pickedClientId ? capabilities : null;
+  const okRuntimes = useMemo<RuntimeProvider[]>(() => {
+    if (!activeCapabilities) return [];
+    const out: RuntimeProvider[] = [];
+    for (const [provider, entry] of Object.entries(activeCapabilities)) {
+      if (entry.state !== "ok") continue;
+      const rt = asRuntimeProvider(provider);
+      if (rt) out.push(rt);
+    }
+    return out;
+  }, [activeCapabilities]);
+
+  // Realign the runtime selection whenever the picked client's capabilities
+  // change — if the previous selection isn't `ok` on the new machine, fall
+  // back to whatever the new machine prefers. Same pattern as onboarding.
+  useEffect(() => {
+    if (!activeCapabilities) return;
+    setRuntime((prev) => {
+      if (activeCapabilities[prev]?.state === "ok") return prev;
+      return pickPreferredRuntime(activeCapabilities) ?? prev;
+    });
+  }, [activeCapabilities]);
 
   const createMut = useMutation({
     mutationFn: async (opts: { clientId?: string }) => {
@@ -268,107 +410,30 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     return errs;
   }
 
-  async function handleSubmit(e: FormEvent) {
+  function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const errs = validateForm();
     setClientErrors(errs);
     if (Object.keys(errs).length > 0) return;
     if (availability.status === "bad") return;
-
-    setProbing(true);
-    try {
-      const clients = await listClients();
-      const connected = clients.filter((c) => c.status === "connected");
-
-      if (connected.length === 0) {
-        createMut.mutate({ clientId: undefined });
-        return;
-      }
-
-      if (connected.length === 1) {
-        createMut.mutate({ clientId: connected[0]?.id });
-        return;
-      }
-
-      const sorted = [...connected].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
-      setCandidateClients(sorted);
-      setPickedClientId(sorted[0]?.id ?? null);
-      setStep("pick-computer");
-    } catch {
-      createMut.mutate({ clientId: undefined });
-    } finally {
-      setProbing(false);
-    }
-  }
-
-  function handlePickerConfirm() {
     if (!pickedClientId) return;
+    // Defense in depth: the Create button is disabled when the picked client
+    // has no ok runtime or when the current selection isn't ok on it. Guard
+    // here too so a button-disabled bypass (browser quirk, Enter while a
+    // focused element re-enables submit, etc.) doesn't push an
+    // un-runnable agent through.
+    if (okRuntimes.length === 0 || !okRuntimes.includes(runtime)) return;
     createMut.mutate({ clientId: pickedClientId });
   }
 
   const hasBlockingAvailability = availability.status === "bad";
-  const canSubmit = displayName.trim().length > 0 && !hasBlockingAvailability && !createMut.isPending && !probing;
-
-  if (step === "pick-computer") {
-    return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Choose a computer</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-body text-muted-foreground">
-              Multiple computers are online. Pick where <span className="font-medium">{displayName || name}</span>{" "}
-              should run:
-            </p>
-            <div className="space-y-2">
-              {candidateClients.map((client) => {
-                const picked = pickedClientId === client.id;
-                return (
-                  <label
-                    key={client.id}
-                    className={
-                      picked
-                        ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                        : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
-                    }
-                  >
-                    <input
-                      type="radio"
-                      name="target-computer"
-                      checked={picked}
-                      onChange={() => setPickedClientId(client.id)}
-                      className="mt-1"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
-                      <div className="text-caption text-muted-foreground">
-                        {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
-                      </div>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-            {fieldErrors.clientId && <p className="text-body text-destructive">{fieldErrors.clientId}</p>}
-            {fieldErrors._root && (
-              <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-body text-destructive">
-                {fieldErrors._root}
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStep("form")} disabled={createMut.isPending}>
-              Back
-            </Button>
-            <Button onClick={handlePickerConfirm} disabled={!pickedClientId || createMut.isPending}>
-              {createMut.isPending ? "Creating…" : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    );
-  }
+  const canSubmit =
+    displayName.trim().length > 0 &&
+    !hasBlockingAvailability &&
+    !createMut.isPending &&
+    !!pickedClientId &&
+    okRuntimes.length > 0 &&
+    okRuntimes.includes(runtime);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -544,52 +609,90 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
             </div>
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             <Label>Where it runs</Label>
-            <div className="space-y-2">
-              <label
-                className={
-                  runtime === "claude-code"
-                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
-                }
-              >
-                <input
-                  type="radio"
-                  name="runtime"
-                  checked={runtime === "claude-code"}
-                  onChange={() => setRuntime("claude-code")}
-                  className="mt-1"
-                />
-                <div>
-                  <div className="text-body font-medium">Claude Code</div>
-                  <div className="text-caption text-muted-foreground">
-                    Anthropic's Claude Code on the bound computer. (default)
-                  </div>
+
+            {/* Computer picker. 0 / 1 / N branches keep the most common
+                case (1 connected computer) free of radio-button noise. */}
+            {!clientsLoaded ? (
+              <p className="text-caption text-muted-foreground">Detecting connected computers…</p>
+            ) : connectedClients.length === 0 ? (
+              <div className="rounded-md border border-border bg-muted/30 p-3 space-y-1">
+                <div className="text-body font-medium">No computer connected yet.</div>
+                <div className="text-caption text-muted-foreground">
+                  Run <code className="font-mono">first-tree-hub connect</code> on the machine where this agent should
+                  live. We&apos;ll pick it up here automatically.
                 </div>
-              </label>
-              <label
-                className={
-                  runtime === "codex"
-                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
-                }
-              >
-                <input
-                  type="radio"
-                  name="runtime"
-                  checked={runtime === "codex"}
-                  onChange={() => setRuntime("codex")}
-                  className="mt-1"
-                />
-                <div>
-                  <div className="text-body font-medium">Codex</div>
-                  <div className="text-caption text-muted-foreground">
-                    OpenAI Codex CLI on the bound computer. Run <code>codex login</code> on the host once.
+              </div>
+            ) : connectedClients.length === 1 ? (
+              <SingleComputerCard client={connectedClients[0]} />
+            ) : (
+              <div className="space-y-2">
+                {connectedClients.map((client) => {
+                  const picked = pickedClientId === client.id;
+                  return (
+                    <label
+                      key={client.id}
+                      className={
+                        picked
+                          ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
+                          : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
+                      }
+                    >
+                      <input
+                        type="radio"
+                        name="picked-client"
+                        checked={picked}
+                        onChange={() => setPickedClientId(client.id)}
+                        className="mt-1"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
+                        <div className="text-caption text-muted-foreground">
+                          {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
+                        </div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Runtime row — only when a computer is picked. The provider
+                list is filtered to whatever reports `ok` on that machine. */}
+            {pickedClientId && (
+              <div className="space-y-1.5">
+                <div className="text-caption text-muted-foreground">Powered by</div>
+                {activeCapabilities === null ? (
+                  <p className="text-caption text-muted-foreground">Detecting installed runtimes…</p>
+                ) : okRuntimes.length === 0 ? (
+                  <p className="text-caption text-destructive">
+                    No runtime ready on this computer. Install Claude Code or Codex on it (and sign in), then come back.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {okRuntimes.map((provider) => {
+                      const active = runtime === provider;
+                      return (
+                        <label
+                          key={provider}
+                          className={
+                            active
+                              ? "inline-flex items-center gap-2 rounded-md border border-primary bg-primary/5 px-3 py-1.5 cursor-pointer"
+                              : "inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 cursor-pointer hover:bg-accent/30"
+                          }
+                        >
+                          <input type="radio" name="runtime" checked={active} onChange={() => setRuntime(provider)} />
+                          <span className="text-body">{prettyRuntimeLabel(provider)}</span>
+                        </label>
+                      );
+                    })}
                   </div>
-                </div>
-              </label>
-            </div>
+                )}
+              </div>
+            )}
+
+            {fieldErrors.clientId && <p className="text-caption text-destructive">{fieldErrors.clientId}</p>}
           </div>
 
           {fieldErrors._root && (
@@ -600,11 +703,28 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
 
           <DialogFooter>
             <Button type="submit" disabled={!canSubmit}>
-              {probing ? "Checking computers…" : createMut.isPending ? "Creating…" : "Create"}
+              {createMut.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Single-computer card. Used in the common case where the user only has
+ * one computer connected — no radio, just a visual confirmation of where
+ * the agent will live.
+ */
+function SingleComputerCard({ client }: { client: HubClient | undefined }) {
+  if (!client) return null;
+  return (
+    <div className="rounded-md border border-primary bg-primary/5 p-3">
+      <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
+      <div className="text-caption text-muted-foreground">
+        {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
+      </div>
+    </div>
   );
 }
