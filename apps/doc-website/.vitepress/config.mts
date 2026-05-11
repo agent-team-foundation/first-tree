@@ -11,6 +11,7 @@ export default defineConfig({
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
+      { text: "concept", link: "/concept/" },
       { text: "cli", link: "/cli/" },
       { text: "cloud", link: "/cloud/" },
     ],
@@ -30,6 +31,10 @@ export default defineConfig({
       "/cloud/": {
         base: "/cloud/",
         items: [{ text: "Cloud", link: "/cloud/" }],
+      },
+      "/concept/": {
+        base: "/concept/",
+        items: [{ text: "Concept", link: "/concept/" }],
       },
     },
   },
