@@ -422,20 +422,20 @@ function isGithubHttpsRepo(repoUrl: string): boolean {
 function contextStatus(warning: { detail: string; stale: boolean } | null): ContextTreeSnapshot["contextStatus"] {
   if (warning?.stale) {
     return {
-      label: "Team context is stale",
+      label: "Context Tree may be stale",
       detail: warning.detail,
       severity: "warning",
     };
   }
   if (warning) {
     return {
-      label: "Team context needs attention",
+      label: "Context Tree needs attention",
       detail: warning.detail,
       severity: "warning",
     };
   }
   return {
-    label: "Team context is current",
+    label: "Context Tree is up to date",
     detail: "Agents have a synced team context snapshot available.",
     severity: "ok",
   };

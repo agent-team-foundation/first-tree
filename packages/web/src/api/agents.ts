@@ -16,6 +16,20 @@ export function listAgents(params?: { limit?: number; cursor?: string; type?: st
 }
 
 /**
+ * Admin-only listing that bypasses the visibility filter and surfaces
+ * private agents owned by other members. Used by the Team page's
+ * "Other members' private agents" governance section. Server enforces
+ * the admin check via {@link requireOrgMembership} + role gate.
+ */
+export function listAllAgents(params?: { limit?: number; cursor?: string }): Promise<PaginatedAgents> {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.cursor) qs.set("cursor", params.cursor);
+  const query = qs.toString();
+  return api.get<PaginatedAgents>(withOrg(`/agents/all${query ? `?${query}` : ""}`));
+}
+
+/**
  * Cross-org list of every agent the caller manages — the web mirror of the
  * CLI `agent list --remote` view. Backed by `GET /me/managed-agents`, which
  * is org-free (joins `agents → members.user_id`) so it returns agents in
