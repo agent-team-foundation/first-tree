@@ -1,0 +1,226 @@
+import { generateKeyPairSync } from "node:crypto";
+import { decodeJwt, decodeProtectedHeader, importPKCS8, jwtVerify } from "jose";
+import { beforeAll, describe, expect, it } from "vitest";
+import { createAppJwt, GithubAppApiError, mintInstallationToken, refreshAppUserToken } from "../services/github-app.js";
+
+/**
+ * Service-layer unit tests for `services/github-app.ts`. Pure module tests;
+ * no Fastify test app, no DB. A throwaway RSA-2048 keypair is generated
+ * per `describe` block so we never check a real (or even "test-real") key
+ * into the repo — there's nothing for a curious reader to mistake for a
+ * production secret.
+ *
+ * The `mintInstallationToken` / `refreshAppUserToken` tests inject a
+ * `fetcher` so the GitHub round-trip is replaced by an in-process stub.
+ * That mirrors the pattern used by `listUserRepos` in `github-oauth.ts`.
+ */
+describe("services/github-app", () => {
+  let appId: string;
+  let privateKeyPem: string;
+  let publicKeyPem: string;
+
+  beforeAll(() => {
+    appId = "123456";
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    });
+    privateKeyPem = privateKey;
+    publicKeyPem = publicKey;
+  });
+
+  describe("createAppJwt", () => {
+    it("returns a JWT signed with RS256 carrying iss=appId", async () => {
+      const jwt = await createAppJwt({ appId, privateKeyPem });
+      const header = decodeProtectedHeader(jwt);
+      expect(header.alg).toBe("RS256");
+      const payload = decodeJwt(jwt);
+      expect(payload.iss).toBe(appId);
+      expect(typeof payload.iat).toBe("number");
+      expect(typeof payload.exp).toBe("number");
+    });
+
+    it("backdates iat by ~60s to absorb clock skew", async () => {
+      const before = Math.floor(Date.now() / 1000);
+      const jwt = await createAppJwt({ appId, privateKeyPem });
+      const after = Math.floor(Date.now() / 1000);
+      const payload = decodeJwt(jwt);
+      // iat is "now - 60s" rounded down to a whole second; allow ±2s slop
+      // for the work between the `before` capture and the `setIssuedAt`
+      // call inside `createAppJwt`.
+      const iat = payload.iat;
+      if (typeof iat !== "number") throw new Error("expected numeric iat");
+      expect(iat).toBeGreaterThanOrEqual(before - 62);
+      expect(iat).toBeLessThanOrEqual(after - 58);
+    });
+
+    it("expires within the 10-minute GitHub upper bound", async () => {
+      const jwt = await createAppJwt({ appId, privateKeyPem });
+      const payload = decodeJwt(jwt);
+      const iat = payload.iat;
+      const exp = payload.exp;
+      if (typeof iat !== "number" || typeof exp !== "number") throw new Error("expected numeric iat/exp");
+      // 9-minute expiry plus 60s iat skew = ≤600s span; GitHub rejects >600s.
+      expect(exp - iat).toBeLessThanOrEqual(600);
+    });
+
+    it("verifies against the matching public key", async () => {
+      const jwt = await createAppJwt({ appId, privateKeyPem });
+      // Build a SPKI key for verification — this is what GitHub's edge
+      // does on receipt. If the signature is malformed jwtVerify throws.
+      const pubKey = await importPKCS8(privateKeyPem, "RS256");
+      // Use the private key for verify too — RS256 verifies with a public
+      // key derived from the same keypair. We re-derive via `crypto` to
+      // confirm the signature actually validates end-to-end.
+      const { createPublicKey } = await import("node:crypto");
+      const pub = createPublicKey(publicKeyPem);
+      const { payload } = await jwtVerify(jwt, pub);
+      expect(payload.iss).toBe(appId);
+      // No-op reference to pubKey to silence "declared but never used" —
+      // confirms importPKCS8 accepted the PEM, which is part of the test.
+      expect(pubKey).toBeDefined();
+    });
+
+    it("rejects an invalid PEM", async () => {
+      await expect(createAppJwt({ appId, privateKeyPem: "not a pem" })).rejects.toThrow();
+    });
+  });
+
+  describe("mintInstallationToken", () => {
+    it("POSTs to /app/installations/:id/access_tokens with bearer header and parses success", async () => {
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      const fakeFetch: typeof fetch = async (url, init) => {
+        calls.push({ url: String(url), init });
+        return new Response(
+          JSON.stringify({
+            token: "ghs_installation_token",
+            expires_at: "2026-05-11T18:00:00Z",
+            permissions: { contents: "write", issues: "read" },
+            repository_selection: "selected",
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      };
+      const result = await mintInstallationToken("app-jwt-stub", 7777, { fetcher: fakeFetch });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://api.github.com/app/installations/7777/access_tokens");
+      const headers = new Headers(calls[0]?.init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer app-jwt-stub");
+      expect(headers.get("accept")).toBe("application/vnd.github+json");
+      expect(headers.get("x-github-api-version")).toBe("2022-11-28");
+      expect(calls[0]?.init?.method).toBe("POST");
+      expect(result).toEqual({
+        token: "ghs_installation_token",
+        expiresAt: "2026-05-11T18:00:00Z",
+        permissions: { contents: "write", issues: "read" },
+        repositorySelection: "selected",
+      });
+    });
+
+    it("defaults repositorySelection to 'all' when GitHub omits the field", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ token: "t", expires_at: "2026-01-01T00:00:00Z" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      const result = await mintInstallationToken("jwt", 1, { fetcher: fakeFetch });
+      expect(result.repositorySelection).toBe("all");
+      expect(result.permissions).toEqual({});
+    });
+
+    it("throws GithubAppApiError with status on non-2xx", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 });
+      await expect(mintInstallationToken("jwt", 1, { fetcher: fakeFetch })).rejects.toMatchObject({
+        name: "GithubAppApiError",
+        status: 401,
+      });
+    });
+  });
+
+  describe("refreshAppUserToken", () => {
+    it("trades a refresh token for a fresh access + refresh pair", async () => {
+      const fixedNow = new Date("2026-05-11T10:00:00.000Z");
+      const calls: Array<{ url: string; body: string }> = [];
+      const fakeFetch: typeof fetch = async (url, init) => {
+        calls.push({ url: String(url), body: String(init?.body ?? "") });
+        return new Response(
+          JSON.stringify({
+            access_token: "ghu_new_access",
+            expires_in: 28800, // 8h
+            refresh_token: "ghr_new_refresh",
+            refresh_token_expires_in: 15897600, // ~6mo
+            scope: "repo,user:email",
+            token_type: "bearer",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      };
+      const result = await refreshAppUserToken("client-id", "client-secret", "old-refresh", {
+        fetcher: fakeFetch,
+        now: () => fixedNow,
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://github.com/login/oauth/access_token");
+      const body = JSON.parse(calls[0]?.body ?? "{}");
+      expect(body).toEqual({
+        client_id: "client-id",
+        client_secret: "client-secret",
+        grant_type: "refresh_token",
+        refresh_token: "old-refresh",
+      });
+      expect(result).toEqual({
+        accessToken: "ghu_new_access",
+        // fixedNow + 28800s = 18:00:00Z
+        accessTokenExpiresAt: "2026-05-11T18:00:00.000Z",
+        refreshToken: "ghr_new_refresh",
+        // fixedNow + 15897600s = +184 days = 2026-11-11
+        refreshTokenExpiresAt: "2026-11-11T10:00:00.000Z",
+        scope: "repo,user:email",
+      });
+    });
+
+    it("maps GitHub's 200-with-`error` body to a 401 GithubAppApiError so callers re-login", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(
+          JSON.stringify({
+            error: "bad_refresh_token",
+            error_description: "The refresh token passed is incorrect or expired.",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      await expect(refreshAppUserToken("cid", "csec", "stale", { fetcher: fakeFetch })).rejects.toMatchObject({
+        name: "GithubAppApiError",
+        status: 401,
+      });
+    });
+
+    it("rejects loudly when GitHub omits expires_in (App misconfigured)", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(
+          JSON.stringify({
+            access_token: "a",
+            refresh_token: "r",
+            // expires_in / refresh_token_expires_in deliberately omitted
+            scope: "repo",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      const err = (await refreshAppUserToken("cid", "csec", "x", { fetcher: fakeFetch }).catch(
+        (e: unknown) => e,
+      )) as GithubAppApiError;
+      expect(err).toBeInstanceOf(GithubAppApiError);
+      expect(err.status).toBe(500);
+      expect(err.message).toContain("expires_in");
+    });
+
+    it("surfaces transport errors as GithubAppApiError with upstream status", async () => {
+      const fakeFetch: typeof fetch = async () => new Response("", { status: 502 });
+      await expect(refreshAppUserToken("cid", "csec", "x", { fetcher: fakeFetch })).rejects.toMatchObject({
+        name: "GithubAppApiError",
+        status: 502,
+      });
+    });
+  });
+});
