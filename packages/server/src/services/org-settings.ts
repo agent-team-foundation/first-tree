@@ -7,12 +7,13 @@ import {
   type OrgSettingOutput,
   type OrgSettingStorage,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
+import { pickDefaultMembership } from "./auth.js";
 import { decryptValue, encryptValue, isEncryptedValue } from "./crypto.js";
 
 /**
@@ -260,22 +261,28 @@ export async function deleteOrgSetting(db: Database, orgId: string, namespace: s
 }
 
 /**
- * Resolve the caller's "primary org" — the earliest-joined active
- * membership for the given user. Used by user-scoped routes that
- * historically didn't take an `:orgId` (e.g. `/context-tree/info`) so
- * the SDK call shape doesn't have to change while the per-tenant lookup
- * still happens correctly.
+ * Resolve the caller's "primary org" for user-scoped routes that
+ * historically didn't take an `:orgId` (e.g. `/context-tree/info`,
+ * `/context-tree/snapshot`).
  *
- * Returns `null` for users with no active membership. Tightening to
- * "explicit org selector" is a future change-once-multi-org-clients-arrive
- * concern. (#7)
+ * Uses the same `pickDefaultMembership` helper that `/me` uses to compute
+ * `defaultOrganizationId` (most-recently-active membership, id desc tie-break).
+ * That guarantees the org `/me` reports as the default is the same org these
+ * server-internal lookups read from — earlier the two sides used opposite
+ * orderings (`/me` desc, this fn asc), so multi-org users saw `/info`
+ * resolve to a different (often unconfigured) org than the one Team Settings
+ * was edited for.
+ *
+ * Returns `null` for users with no active membership.
  */
 export async function resolveUserPrimaryOrgId(db: Database, userId: string): Promise<string | null> {
-  const [row] = await db
-    .select({ organizationId: members.organizationId })
+  const rows = await db
+    .select({
+      id: members.id,
+      organizationId: members.organizationId,
+      createdAt: members.createdAt,
+    })
     .from(members)
-    .where(and(eq(members.userId, userId), eq(members.status, "active")))
-    .orderBy(asc(members.createdAt))
-    .limit(1);
-  return row?.organizationId ?? null;
+    .where(and(eq(members.userId, userId), eq(members.status, "active")));
+  return pickDefaultMembership(rows)?.organizationId ?? null;
 }

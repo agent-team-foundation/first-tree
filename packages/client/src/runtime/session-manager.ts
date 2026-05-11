@@ -4,6 +4,7 @@ import type {
   SessionEvent,
   SessionState,
 } from "@agent-team-foundation/first-tree-hub-shared";
+import { tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
@@ -135,6 +136,38 @@ export class SessionManager {
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
+
+    // 0. AskUserQuestion bridge: a `question_answer` message has two
+    //    delivery paths:
+    //
+    //    a) Live waiter — the original `canUseTool` Promise is still
+    //       pending in the bridge. Resolve it, ack the inbox entry, and
+    //       short-circuit; the SDK takes the answer back into the same
+    //       turn. This is the happy path while the agent's SDK process
+    //       is still alive.
+    //
+    //    b) Stale waiter — the SDK process was killed (idle suspend or
+    //       explicit shutdown) before the user answered. The bridge map
+    //       was cleared by the handler at suspend time, so
+    //       `tryResolveQuestionAnswer` reports no match. We must NOT
+    //       short-circuit here: the answer needs to flow into the regular
+    //       dispatch path so the handler resumes the session and feeds
+    //       the answer to the SDK as fresh user input. The handler's
+    //       formatInboundContent renders question_answer messages as
+    //       readable text ("User selected: ..."), so the resumed turn
+    //       sees a normal text prompt.
+    if (entry.message.format === "question_answer") {
+      const resolved = tryResolveQuestionAnswer(entry.message.content);
+      if (resolved) {
+        await this.ackEntry(entry.id, chatId);
+        return;
+      }
+      this.config.log.info(
+        { chatId, messageId },
+        "question_answer with no live bridge waiter — resuming session with answer as input",
+      );
+      // Fall through to normal dispatch.
+    }
 
     // 1. Deduplication — key by (chatId, messageId), not messageId alone.
     // replyTo cross-chat routing legitimately fan-outs the same message into

@@ -133,4 +133,29 @@ describe("claude-code handler — SDK options", () => {
 
     await handler.shutdown();
   });
+
+  it("registers an AskUserQuestion bridge via canUseTool + toolConfig.askUserQuestion.previewFormat=html", async () => {
+    capturedCalls.length = 0;
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const ctx = buildSessionCtx("chat-askuser");
+    await handler.start(
+      { id: "msg-3", chatId: "chat-askuser", senderId: "user", format: "text", content: "hi", metadata: null },
+      ctx,
+    );
+
+    const options = capturedCalls[0]?.options;
+    // canUseTool MUST be a function — the bridge's only entry point. Without
+    // it the SDK falls back to its default permission flow which has no way
+    // to surface AskUserQuestion to the Hub UI.
+    expect(typeof options?.canUseTool).toBe("function");
+    // previewFormat=html drives the model to emit web-renderable previews;
+    // commit 5 sanitises with DOMPurify before rendering.
+    expect(options?.toolConfig).toEqual({ askUserQuestion: { previewFormat: "html" } });
+
+    await handler.shutdown();
+  });
 });
