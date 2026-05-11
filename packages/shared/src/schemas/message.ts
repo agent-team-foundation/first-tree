@@ -19,8 +19,6 @@ export const MESSAGE_FORMATS = {
   CARD: "card",
   REFERENCE: "reference",
   FILE: "file",
-  /** System-generated task notification. Content shape: TaskMessageContent (see schemas/task.ts). */
-  TASK: "task",
   /** Agent → user structured ask-user prompt. Content shape: QuestionMessageContent (see schemas/question.ts). */
   QUESTION: "question",
   /** User → agent answer to a prior question. Content shape: QuestionAnswerMessageContent (see schemas/question.ts). */
@@ -33,7 +31,6 @@ export const messageFormatSchema = z.enum([
   "card",
   "reference",
   "file",
-  "task",
   "question",
   "question_answer",
 ]);

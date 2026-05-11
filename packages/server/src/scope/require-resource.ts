@@ -5,7 +5,6 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
-import { tasks } from "../db/schema/tasks.js";
 import { NotFoundError } from "../errors.js";
 import { stampAgentResource, stampChatResource, stampOrgScope } from "../observability/request-context.js";
 import { requireUser } from "./require-user.js";
@@ -226,43 +225,6 @@ export async function assertAgentManageableByUser(db: Database, userId: string, 
     throw new NotFoundError(`Agent "${agentUuid}" not found`);
   }
   return scope;
-}
-
-type TaskRow = {
-  organizationId: string;
-};
-
-/**
- * Gate access to a task. Allowed for any active member of the task's org —
- * mirrors the original inline gate in `api/tasks.ts` that this helper
- * replaces. Returns both the task's org row and the caller's resolved
- * `OrgScope`, so handlers can read `scope.memberId` for audit fields.
- */
-export async function requireTaskAccess<P extends { taskId: string }>(
-  request: FastifyRequest<{ Params: P }>,
-  db: Database,
-): Promise<{ task: TaskRow; scope: OrgScope }> {
-  const { userId } = requireUser(request);
-  // See `requireChatAccess` for why this cast is needed despite the generic.
-  const { taskId } = request.params as { taskId: string };
-
-  const [task] = await db
-    .select({ organizationId: tasks.organizationId })
-    .from(tasks)
-    .where(eq(tasks.id, taskId))
-    .limit(1);
-  if (!task) throw new NotFoundError(`Task "${taskId}" not found`);
-
-  const caller = await resolveCallerInOrg(db, userId, task.organizationId);
-  const scope: OrgScope = {
-    userId,
-    organizationId: task.organizationId,
-    memberId: caller.memberId,
-    role: caller.role,
-    humanAgentId: caller.humanAgentId,
-  };
-  stampOrgScope(request, scope);
-  return { task, scope };
 }
 
 /**
