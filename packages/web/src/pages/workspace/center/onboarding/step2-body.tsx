@@ -48,11 +48,12 @@ export function Step2Body({
       : null;
   const initialConnectTokenExpiresAt = initialConnectToken ? (initialDraft?.connectTokenExpiresAt ?? null) : null;
 
-  // Default agent name: "Coder" — most onboarding agents are code agents
-  // (per the Step 2 lead). User can rename in the input or via agent
+  // Default agent name: "Assistant" — neutral on capability domain, since
+  // Step 2 just brings a personal agent online (Step 3 is where the team's
+  // context-tree gets built). User can rename in the input or via agent
   // settings later. The draft override wins so we don't clobber a name
   // a returning user already typed.
-  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "Coder");
+  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "Assistant");
   const [selectedRuntime, setSelectedRuntime] = useState<string | null>(() => initialDraft?.selectedRuntime ?? null);
   const [connectedClient, setConnectedClient] = useState<HubClient | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
@@ -397,20 +398,10 @@ function Step2FormBody({
             <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
               {teamName}
             </span>
-            . Set up your first agent — a{" "}
-            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
-              code agent
-            </span>{" "}
-            that helps with your code.
+            . Set up your first agent — it&apos;ll run on a computer you connect.
           </>
         ) : (
-          <>
-            Set up your first agent — a{" "}
-            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
-              code agent
-            </span>{" "}
-            that helps with your code.
-          </>
+          <>Set up your first agent — it&apos;ll run on a computer you connect.</>
         )}
       </p>
 
@@ -432,7 +423,7 @@ function Step2FormBody({
               aria-label="Agent display name"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="e.g. Code Reviewer"
+              placeholder="e.g. Buddy, Helper, Code Reviewer"
               maxLength={200}
               className="onboarding-name-input text-body font-medium"
               style={{

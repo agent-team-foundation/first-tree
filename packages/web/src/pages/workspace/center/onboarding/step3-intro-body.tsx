@@ -170,6 +170,12 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
   // Picks come from the team-bound list (NOT a GitHub OAuth picker — invitee
   // writing team `source_repos` is the wrong mental model and the API
   // would 403 anyway).
+  //
+  // The useState initializer runs once and relies on InviteeStep3Body not
+  // refetching teamRepos after this body mounts (see the loader in
+  // InviteeStep3Body — single fetch, no live sync). If that invariant ever
+  // changes, add a useEffect that reconciles chosenRepoUrls when teamRepos
+  // identity changes.
   const [chosenRepoUrls, setChosenRepoUrls] = useState<string[]>(() => teamRepos.map((r) => r.url));
   const hasChosen = chosenRepoUrls.length > 0;
 
@@ -460,8 +466,8 @@ function InviteeWaitingBody() {
         Your team admin hasn&apos;t finished setup yet
       </h2>
       <p className="text-body" style={{ marginTop: "var(--sp-2)", color: "var(--fg-3)" }}>
-        Once they bind a source repo and a context-tree, this view will guide you to bind your agent. For now, you can
-        chat with your agent for anything that doesn&apos;t need code context.
+        Once they bind a source repo and a context-tree, this view will guide your agent to join. For now, your agent
+        can help with anything that doesn&apos;t depend on your team&apos;s shared knowledge.
       </p>
     </div>
   );

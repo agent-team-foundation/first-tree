@@ -60,7 +60,7 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
   const skillLine =
     sourceUrls.length === 1
       ? "Your workspace already has the source repo cloned in a subdirectory; the first-tree skill will locate it. Use the first-tree CLI to install the skill in the source, scaffold a sibling tree directory, and write the binding metadata. Then push that new tree directory up to GitHub as a sibling repo under the same owner as the source, and open a PR back to the source with the skill + binding files."
-      : "Your workspace already has each source repo cloned in its own subdirectory; the first-tree skill will locate them. Scaffold ONE shared tree directory that all the source repos bind to. For every source repo, install the first-tree skill and write the binding metadata pointing at that shared tree. Push the new tree directory up to GitHub as its own repo under the same owner as the first source. Then open a PR back to each source repo with its skill + binding files.";
+      : "Your workspace already has each source repo cloned in its own subdirectory; the first-tree skill will locate them. Scaffold ONE shared tree directory that all the source repos bind to. For every source repo, install the first-tree skill and write the binding metadata pointing at that shared tree. Push the new tree directory up to GitHub as its own repo — if all the source repos share a single GitHub owner, host the tree under that owner; otherwise ask me which owner to use before pushing. Then open a PR back to each source repo with its skill + binding files.";
   return [
     opener,
     "",
