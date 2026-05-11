@@ -9,6 +9,7 @@ import { stratify, tree } from "d3-hierarchy";
 import { AlertTriangle, CheckCircle2, Copy, FolderTree, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { type ContextTreeWindow, getContextTreeSnapshot } from "../api/context-tree.js";
+import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Markdown } from "../components/ui/markdown.js";
 import { PageHeader } from "../components/ui/page-header.js";
@@ -21,13 +22,18 @@ const CONTEXT_WINDOWS: Array<{ value: ContextTreeWindow; label: string; summary:
 ];
 
 export function ContextPage() {
+  const { organizationId } = useAuth();
   const [window, setWindow] = useState<ContextTreeWindow>("7d");
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
   const [selectedOverviewNodeId, setSelectedOverviewNodeId] = useState<string | null>(null);
 
   const query = useQuery({
-    queryKey: ["context-tree-snapshot", window],
-    queryFn: () => getContextTreeSnapshot(window),
+    queryKey: ["context-tree-snapshot", organizationId, window],
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getContextTreeSnapshot(organizationId, window);
+    },
+    enabled: !!organizationId,
   });
 
   const snapshot = query.data;
@@ -652,6 +658,7 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const detail = snapshot.repo
     ? "Hub cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
     : "Connect a Context Tree repo to show the team knowledge agents can use.";
+  const syncDetail = snapshot.contextStatus.detail;
   const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
   return (
     <Panel>
@@ -663,6 +670,11 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
               {title}
             </div>
             <div style={{ marginTop: "var(--sp-1)" }}>{detail}</div>
+            {syncDetail ? (
+              <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+                {syncDetail}
+              </div>
+            ) : null}
             {snapshot.repo || snapshot.branch ? (
               <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
                 {repoLabel ? `Repo: ${repoLabel}` : null}
