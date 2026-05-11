@@ -27,6 +27,22 @@ import { users } from "./users.js";
  * The legacy `users.password_hash` column is preserved for backwards-compat
  * with self-host installs created before this milestone; new SaaS users get
  * a non-functional placeholder there and a real `auth_identities` row.
+ *
+ * `metadata` jsonb shape (provider='github'):
+ *   {
+ *     login?: string,                    // GitHub login snapshot
+ *     accessToken?: string,              // AES-256-GCM ciphertext
+ *     accessTokenExpiresAt?: string,     // ISO-8601; present after App switch
+ *     refreshToken?: string,             // AES-256-GCM ciphertext; ditto
+ *     refreshTokenExpiresAt?: string     // ISO-8601; ditto
+ *   }
+ * Pre-GitHub-App rows carry only `login` + `accessToken` (never-expires OAuth
+ * token). After the App switch, the token is a ~8h user-to-server token and
+ * carries the four expiry / refresh fields too. Service code MUST tolerate
+ * both shapes and treat absence of expiry fields as "still on legacy OAuth
+ * token". Wire format is owned by `githubAppUserTokenMetadataSchema` in
+ * `@agent-team-foundation/first-tree-hub-shared`. See
+ * `docs/github-app-design-zh.md` §5.3.
  */
 export const authIdentities = pgTable(
   "auth_identities",
