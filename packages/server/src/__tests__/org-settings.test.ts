@@ -1,9 +1,10 @@
-import { createHmac } from "node:crypto";
+import crypto, { createHmac } from "node:crypto";
 import bcrypt from "bcrypt";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
+import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
@@ -375,6 +376,94 @@ describe("org-settings service", () => {
         { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
       ),
     ).rejects.toThrow(/Organization .* not found/);
+  });
+});
+
+describe("resolveUserPrimaryOrgId", () => {
+  const getApp = useTestApp();
+
+  /**
+   * Add an extra membership for an existing user. `createdAt` is exposed so
+   * tests can deterministically control which membership is "most recent".
+   */
+  async function addMembership(
+    app: Awaited<ReturnType<typeof getApp>>,
+    userId: string,
+    role: "admin" | "member",
+    createdAt?: Date,
+    status: "active" | "left" = "active",
+  ): Promise<{ orgId: string; memberId: string }> {
+    const orgId = `org-rup-${crypto.randomUUID().slice(0, 8)}`;
+    const memberId = uuidv7();
+    await app.db.transaction(async (tx) => {
+      await tx.insert(organizations).values({ id: orgId, name: orgId.slice(0, 30), displayName: "Side org" });
+      const human = await createAgent(tx as unknown as typeof app.db, {
+        name: `rup-h-${crypto.randomUUID().slice(0, 6)}`,
+        type: "human",
+        displayName: "RUP Human",
+        managerId: memberId,
+        organizationId: orgId,
+      });
+      await tx.insert(members).values({
+        id: memberId,
+        userId,
+        organizationId: orgId,
+        agentId: human.uuid,
+        role,
+        status,
+        ...(createdAt ? { createdAt } : {}),
+      });
+    });
+    return { orgId, memberId };
+  }
+
+  it("returns the only active membership when user has one org", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const got = await orgSettingsService.resolveUserPrimaryOrgId(app.db, admin.userId);
+    expect(got).toBe(admin.organizationId);
+  });
+
+  it("returns most-recent active membership for multi-org users (matches /me's defaultOrganizationId)", async () => {
+    const app = getApp();
+    // First org via createTestAdmin. Force its membership createdAt to a known
+    // earlier moment so we can deterministically assert "most recent wins"
+    // regardless of how fast the test runs.
+    const admin = await createTestAdmin(app);
+    const earlier = new Date(Date.now() - 60_000);
+    await app.db.update(members).set({ createdAt: earlier }).where(eq(members.id, admin.memberId));
+
+    // Second org — created "now", which is more recent than `earlier`.
+    const later = await addMembership(app, admin.userId, "admin", new Date());
+
+    const got = await orgSettingsService.resolveUserPrimaryOrgId(app.db, admin.userId);
+    expect(got).toBe(later.orgId);
+    expect(got).not.toBe(admin.organizationId);
+  });
+
+  it("ignores 'left' memberships even when their createdAt is more recent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    // A more-recent membership the user has since left.
+    await addMembership(app, admin.userId, "admin", new Date(Date.now() + 60_000), "left");
+
+    const got = await orgSettingsService.resolveUserPrimaryOrgId(app.db, admin.userId);
+    expect(got).toBe(admin.organizationId);
+  });
+
+  it("returns null when user has no active memberships", async () => {
+    const app = getApp();
+    const userId = uuidv7();
+    const passwordHash = await bcrypt.hash(crypto.randomUUID(), 4);
+    await app.db.insert(users).values({
+      id: userId,
+      username: `nomembers-${crypto.randomUUID().slice(0, 8)}`,
+      passwordHash,
+      displayName: "No Memberships",
+    });
+
+    const got = await orgSettingsService.resolveUserPrimaryOrgId(app.db, userId);
+    expect(got).toBeNull();
   });
 });
 
