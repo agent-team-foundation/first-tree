@@ -91,16 +91,28 @@ export function TeamPage() {
     return m;
   }, [activity?.agents]);
 
-  const members = membersQuery.data ?? [];
+  // Each derivation is memoized so the downstream `groups` useMemo (which
+  // depends on these arrays) can actually cache — without these, every
+  // render produced fresh array refs and `groups` recomputed every time.
+  const members = useMemo<MemberListItem[]>(() => membersQuery.data ?? [], [membersQuery.data]);
   // type === "human" agents are the user-mirrors auto-created for every
   // member (chat-identity proxies). The Humans section above already shows
   // them as people, so the agents groups must hide them to avoid double-listing.
-  const agents = (agentsQuery.data?.items ?? []).filter((a) => a.type !== "human");
+  const agents = useMemo<Agent[]>(
+    () => (agentsQuery.data?.items ?? []).filter((a) => a.type !== "human"),
+    [agentsQuery.data?.items],
+  );
 
-  const adminCount = members.filter((m) => m.role === "admin").length;
-  const sharedAgents = agents.filter((a) => a.visibility === "organization");
-  const yourPrivateAgents = agents.filter((a) => a.visibility === "private" && a.managerId === memberId);
-  const otherPrivateAgents = agents.filter((a) => a.visibility === "private" && a.managerId !== memberId);
+  const adminCount = useMemo(() => members.filter((m) => m.role === "admin").length, [members]);
+  const sharedAgents = useMemo(() => agents.filter((a) => a.visibility === "organization"), [agents]);
+  const yourPrivateAgents = useMemo(
+    () => agents.filter((a) => a.visibility === "private" && a.managerId === memberId),
+    [agents, memberId],
+  );
+  const otherPrivateAgents = useMemo(
+    () => agents.filter((a) => a.visibility === "private" && a.managerId !== memberId),
+    [agents, memberId],
+  );
 
   const subtitle = [
     `${members.length} ${plural(members.length, "human")} (${adminCount} ${plural(adminCount, "admin")})`,
