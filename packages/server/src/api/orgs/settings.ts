@@ -68,23 +68,20 @@ function parseNamespace(raw: string): OrgSettingNamespace {
 /**
  * Resolve namespace-specific server-config-derived fields. The service
  * layer stays config-agnostic — namespace knowledge that needs `app.config`
- * lives here. Currently only `github_integration.webhookUrl` qualifies.
+ * lives here.
  *
- * If `server.publicUrl` is unset on the Hub, `webhookUrl` is left as `""`
- * so the UI can render a "contact your site administrator" notice rather
- * than fall back to `window.location.origin` (which is wrong behind a
- * reverse proxy). (#12)
+ * Currently a pass-through: the only previous resident
+ * (`github_integration.webhookUrl`) was removed in the D3 cutover when
+ * the per-org webhook URL was retired. Kept as a seam for future
+ * namespaces that need the same publicUrl-aware shape.
  */
 function enrichOutput<K extends OrgSettingNamespace>(
   namespace: K,
   out: OrgSettingOutput<K>,
-  orgId: string,
-  publicUrl: string | undefined,
+  _orgId: string,
+  _publicUrl: string | undefined,
 ): OrgSettingOutput<K> {
-  if (namespace === "github_integration") {
-    const o = out as OrgSettingOutput<"github_integration">;
-    const webhookUrl = publicUrl ? `${publicUrl.replace(/\/+$/, "")}/api/v1/webhooks/github/${orgId}` : "";
-    return { ...o, webhookUrl } as OrgSettingOutput<K>;
-  }
+  // Suppress "namespace is unused" by reading it in a no-op branch.
+  void namespace;
   return out;
 }

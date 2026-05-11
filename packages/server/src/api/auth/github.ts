@@ -19,7 +19,6 @@ import {
   fetchInstallation,
 } from "../../services/github-app.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
-import { exchangeCodeForProfile } from "../../services/github-oauth.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
 import { createPersonalTeam, ensureMembership, pickPrimaryMembership } from "../../services/membership.js";
 import {
@@ -34,20 +33,13 @@ import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
 /**
  * GitHub sign-in surface. All routes are public (no member JWT required).
  *
- * Two coexisting flows during the App migration window:
+ * Single flow post-D3 cutover: the GitHub App authorize URL drives both
+ * sign-in and install (D1). Returning users with an existing install
+ * skip the install dialog and just get `code + state`; first-time
+ * installers get `code + state + installation_id`. The legacy OAuth-App
+ * path that lived alongside this until D3 has been removed.
  *
- *   App flow (preferred, enabled when `oauth.githubApp` is configured) —
- *   user gets the combined "OAuth + install" dialog on first sign-in (D1),
- *   returns with `code + state + installation_id`. Token bundle persisted
- *   is the App user-to-server pair (access + refresh + expiries, ~8h /
- *   ~6mo TTLs).
- *
- *   Legacy OAuth flow (kept for back-compat, enabled when only
- *   `oauth.github` is configured) — the pre-App SaaS sign-in path. Token
- *   persisted is a single never-expiring OAuth token. D3 cutover (later
- *   commit in this PR) deletes this path outright.
- *
- *   Dev-callback — bypasses GitHub entirely; available in non-production.
+ * `dev-callback` bypasses GitHub entirely; gated to non-production.
  *
  * Routes:
  *   - GET /auth/github/start         — sign state JWT + cookie + 302 to GitHub
@@ -55,14 +47,10 @@ import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
  *   - GET /auth/github/dev-callback  — dev-only stub (no GitHub round-trip)
  */
 export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
-  const oauthCfg = app.config.oauth?.github;
   const appCfg = app.config.oauth?.githubApp;
-  // App flow takes precedence whenever both are configured during the
-  // transition window. After D3 cutover only `appCfg` remains.
-  if (!appCfg && !oauthCfg) {
+  if (!appCfg) {
     app.log.info(
-      "GitHub sign-in not configured — /auth/github/start will return 503. " +
-        "Set FIRST_TREE_HUB_GITHUB_APP_* (preferred) or FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID/_SECRET to enable.",
+      "GitHub App not configured — /auth/github/start will return 503. Set FIRST_TREE_HUB_GITHUB_APP_* to enable.",
     );
   }
 
@@ -72,8 +60,8 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/start", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
     const { next } = githubStartQuerySchema.parse(request.query);
     const safeNext = safeRedirectPath(next ?? null);
-    if (!appCfg && !oauthCfg) {
-      return reply.status(503).send({ error: "GitHub sign-in is not configured on this hub" });
+    if (!appCfg) {
+      return reply.status(503).send({ error: "GitHub App is not configured on this hub" });
     }
 
     const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext);
@@ -89,33 +77,16 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     );
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
-    if (appCfg) {
-      // App flow: scope/permissions are declared on the App's GitHub-side
-      // settings page (D0b), so we don't pass them here. The user lands on
-      // the combined OAuth + install dialog.
-      return reply.redirect(buildAppAuthorizeUrl({ clientId: appCfg.clientId, redirectUri, state: token }), 302);
-    }
-    // Legacy OAuth flow — kept until D3 cutover. `oauthCfg` is non-null
-    // here because of the guard above + `!appCfg` short-circuit above.
-    // biome-ignore lint/style/noNonNullAssertion: guard upstream proves it
-    const legacy = oauthCfg!;
-    const params = new URLSearchParams({
-      client_id: legacy.clientId,
-      redirect_uri: redirectUri,
-      state: token,
-      // `repo` scope is required by the Step 2 repo picker
-      // (docs/new-user-onboarding-design.md §6.3 / O-1). We grant it at
-      // login rather than on-demand mid-onboarding so the picker works
-      // immediately when the user reaches Step 2 without a second redirect.
-      scope: "read:user user:email repo",
-      allow_signup: "true",
-    });
-    return reply.redirect(`https://github.com/login/oauth/authorize?${params}`, 302);
+    // App flow: scope/permissions are declared on the App's GitHub-side
+    // settings page (D0b), so we don't pass them here. The user lands on
+    // the combined OAuth + install dialog (first-time installer) or just
+    // the OAuth consent (returning user).
+    return reply.redirect(buildAppAuthorizeUrl({ clientId: appCfg.clientId, redirectUri, state: token }), 302);
   });
 
   app.get("/callback", async (request, reply) => {
-    if (!appCfg && !oauthCfg) {
-      return reply.status(503).send({ error: "GitHub sign-in is not configured on this hub" });
+    if (!appCfg) {
+      return reply.status(503).send({ error: "GitHub App is not configured on this hub" });
     }
     const parsed = githubCallbackQuerySchema.parse(request.query);
     const { code, state, installation_id: installationIdRaw } = parsed;
@@ -146,35 +117,21 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     let tokens: GithubTokenBundle;
     let installationId: number | null = null;
     try {
-      if (appCfg) {
-        const result = await exchangeCodeForAppUserProfile({
-          clientId: appCfg.clientId,
-          clientSecret: appCfg.clientSecret,
-          code,
-          redirectUri,
-          installationId: installationIdRaw ? Number(installationIdRaw) : null,
-        });
-        profile = result.profile;
-        tokens = {
-          encryptedAccessToken: encryptValue(result.accessToken, app.config.secrets.encryptionKey),
-          accessTokenExpiresAt: result.accessTokenExpiresAt,
-          encryptedRefreshToken: encryptValue(result.refreshToken, app.config.secrets.encryptionKey),
-          refreshTokenExpiresAt: result.refreshTokenExpiresAt,
-        };
-        installationId = result.installationId;
-      } else {
-        // biome-ignore lint/style/noNonNullAssertion: !appCfg + guard upstream prove oauthCfg is set
-        const legacy = oauthCfg!;
-        const result = await exchangeCodeForProfile(
-          { clientId: legacy.clientId, clientSecret: legacy.clientSecret },
-          code,
-          redirectUri,
-        );
-        profile = result.profile;
-        tokens = {
-          encryptedAccessToken: encryptValue(result.accessToken, app.config.secrets.encryptionKey),
-        };
-      }
+      const result = await exchangeCodeForAppUserProfile({
+        clientId: appCfg.clientId,
+        clientSecret: appCfg.clientSecret,
+        code,
+        redirectUri,
+        installationId: installationIdRaw ? Number(installationIdRaw) : null,
+      });
+      profile = result.profile;
+      tokens = {
+        encryptedAccessToken: encryptValue(result.accessToken, app.config.secrets.encryptionKey),
+        accessTokenExpiresAt: result.accessTokenExpiresAt,
+        encryptedRefreshToken: encryptValue(result.refreshToken, app.config.secrets.encryptionKey),
+        refreshTokenExpiresAt: result.refreshTokenExpiresAt,
+      };
+      installationId = result.installationId;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "GitHub exchange failed";
       app.log.warn({ err }, "github sign-in code exchange failed");

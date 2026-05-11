@@ -14,7 +14,12 @@ import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
-import { decryptValue, encryptValue, isEncryptedValue } from "./crypto.js";
+
+// `crypto.encryptValue` is no longer used here — secret-bearing namespaces
+// have all been removed in the D3 cutover. Importing it would trip the
+// "declared but never read" rule. Kept this comment as a breadcrumb in
+// case a future namespace re-introduces a secret field; the helper still
+// lives at `./crypto.js`.
 
 /**
  * Per-organization settings, keyed by `(organizationId, namespace)`. The
@@ -59,24 +64,23 @@ function emptyStorage<K extends OrgSettingNamespace>(namespace: K): OrgSettingSt
   return schema.parse({}) as OrgSettingStorage<K>;
 }
 
-function ensureEncrypted(value: string, encryptionKey: string): string {
-  return isEncryptedValue(value) ? value : encryptValue(value, encryptionKey);
-}
-
 /**
  * Merge a validated input into the current storage row for a namespace.
- * Secret fields are encrypted here.
  *
  * Input semantics per nullish field:
  *   `undefined` → unchanged
  *   `null`      → cleared
  *   value       → set / replace (already validated as non-empty by the input schema)
+ *
+ * After the D3 cutover no namespace carries a secret field, so the
+ * encryption-key parameter is unused — kept as a seam for future
+ * namespaces that need encrypted storage.
  */
 function applyInputDelta<K extends OrgSettingNamespace>(
   namespace: K,
   current: OrgSettingStorage<K>,
   input: OrgSettingInput<K>,
-  encryptionKey: string,
+  _encryptionKey: string,
 ): OrgSettingStorage<K> {
   if (namespace === "context_tree") {
     const cur = current as OrgSettingStorage<"context_tree">;
@@ -84,19 +88,6 @@ function applyInputDelta<K extends OrgSettingNamespace>(
     const next: OrgSettingStorage<"context_tree"> = {
       repo: inp.repo === undefined ? cur.repo : (inp.repo ?? undefined),
       branch: inp.branch === undefined ? cur.branch : (inp.branch ?? "main"),
-    };
-    return next as OrgSettingStorage<K>;
-  }
-  if (namespace === "github_integration") {
-    const cur = current as OrgSettingStorage<"github_integration">;
-    const inp = input as OrgSettingInput<"github_integration">;
-    const next: OrgSettingStorage<"github_integration"> = {
-      webhookSecretCipher:
-        inp.webhookSecret === undefined
-          ? cur.webhookSecretCipher
-          : inp.webhookSecret === null
-            ? undefined
-            : ensureEncrypted(inp.webhookSecret, encryptionKey),
     };
     return next as OrgSettingStorage<K>;
   }
@@ -125,14 +116,6 @@ function toOutput<K extends OrgSettingNamespace>(namespace: K, storage: OrgSetti
     const out: OrgSettingOutput<"context_tree"> = {
       repo: s.repo,
       branch: s.branch,
-    };
-    return out as OrgSettingOutput<K>;
-  }
-  if (namespace === "github_integration") {
-    const s = storage as OrgSettingStorage<"github_integration">;
-    const out: OrgSettingOutput<"github_integration"> = {
-      webhookSecretConfigured: typeof s.webhookSecretCipher === "string" && s.webhookSecretCipher.length > 0,
-      webhookUrl: "",
     };
     return out as OrgSettingOutput<K>;
   }
@@ -170,22 +153,9 @@ export async function getOrgContextTree(db: Database, orgId: string): Promise<Or
   return (await fetchStorageRow(db, orgId, "context_tree")) ?? emptyStorage("context_tree");
 }
 
-/**
- * Decrypt and return the plaintext GitHub webhook secret for an org.
- * Returns `null` when the org has not configured one. The only intended
- * caller is the webhook route's signature verifier — the result must
- * never leak through HTTP responses or logs. (#4)
- */
-export async function getDecryptedGithubWebhookSecret(
-  db: Database,
-  orgId: string,
-  encryptionKey: string,
-): Promise<string | null> {
-  const storage = await fetchStorageRow(db, orgId, "github_integration");
-  const cipher = storage?.webhookSecretCipher;
-  if (!cipher) return null;
-  return isEncryptedValue(cipher) ? decryptValue(cipher, encryptionKey) : cipher;
-}
+// `getDecryptedGithubWebhookSecret` was removed in the D3 cutover: the
+// GitHub App webhook endpoint uses a single deployment-level secret
+// (`oauth.githubApp.webhookSecret`), not a per-org cipher.
 
 /**
  * Upsert a setting. Returns the masked output of the resulting row.

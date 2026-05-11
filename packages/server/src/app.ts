@@ -57,7 +57,6 @@ import { orgTaskRoutes } from "./api/orgs/tasks.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { sessionRoutes } from "./api/sessions.js";
 import { taskRoutes } from "./api/tasks.js";
-import { githubWebhookRoutes } from "./api/webhooks/github.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
 import type { Config } from "./config.js";
@@ -416,11 +415,9 @@ export async function buildApp(config: Config) {
     namePlugin("apiV1Scope", async (api) => {
       // ── Public routes ────────────────────────────────────────────────────
       await api.register(healthRoutes);
-      await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
-      // GitHub App webhook — new endpoint replacing the per-org one above.
-      // Both coexist until D3 cutover (last commit in this PR). They live
-      // in separate Fastify plugins so each has its own raw-buffer parser
-      // without cross-contaminating other webhook adapters.
+      // GitHub App webhook (single tenant URL — installation_id resolves the
+      // per-org routing). The legacy per-org endpoint that lived alongside
+      // it was removed in the D3 cutover.
       await api.register(githubAppWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });

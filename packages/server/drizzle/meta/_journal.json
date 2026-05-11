@@ -253,6 +253,13 @@
       "when": 1778457600000,
       "tag": "0035_github_app_installations",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1778544000000,
+      "tag": "0036_drop_github_integration_namespace",
+      "breakpoints": true
     }
   ]
 }

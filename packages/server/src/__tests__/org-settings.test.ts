@@ -1,4 +1,4 @@
-import crypto, { createHmac, randomUUID } from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,6 @@ import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
-import { isEncryptedValue } from "../services/crypto.js";
 import * as orgSettingsService from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
@@ -26,10 +25,6 @@ describe("org-settings service", () => {
 
     const ct = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree");
     expect(ct).toEqual({ branch: "main" });
-
-    const gh = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "github_integration");
-    // webhookUrl is left as "" by the service; the route layer enriches it with publicUrl.
-    expect(gh).toEqual({ webhookSecretConfigured: false, webhookUrl: "" });
   });
 
   it("putOrgSetting stores context_tree and round-trips via getOrgSetting", async () => {
@@ -72,79 +67,12 @@ describe("org-settings service", () => {
     expect(after).toEqual({ repo: "https://github.com/example/tree", branch: "main" });
   });
 
-  it("putOrgSetting encrypts webhook secret at rest; getOrgSetting masks it", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-
-    const out = await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: "super-secret-123" },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-    expect(out).toEqual({ webhookSecretConfigured: true, webhookUrl: "" });
-
-    // Stored value never contains plaintext.
-    const [row] = await app.db
-      .select()
-      .from(organizationSettings)
-      .where(
-        and(
-          eq(organizationSettings.organizationId, admin.organizationId),
-          eq(organizationSettings.namespace, "github_integration"),
-        ),
-      );
-    expect(row).toBeDefined();
-    const stored = row?.value as { webhookSecretCipher?: string };
-    expect(stored.webhookSecretCipher).toBeDefined();
-    expect(isEncryptedValue(stored.webhookSecretCipher ?? "")).toBe(true);
-    expect(stored.webhookSecretCipher).not.toContain("super-secret");
-
-    // Internal helper decrypts back to plaintext.
-    const decrypted = await orgSettingsService.getDecryptedGithubWebhookSecret(
-      app.db,
-      admin.organizationId,
-      TEST_ENCRYPTION_KEY,
-    );
-    expect(decrypted).toBe("super-secret-123");
-  });
-
-  it("putOrgSetting null webhookSecret clears the cipher", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-
-    await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: "first" },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-    const cleared = await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: null },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-    expect(cleared.webhookSecretConfigured).toBe(false);
-  });
-
-  it("rejects empty-string webhookSecret at the schema layer (#3)", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-
-    await expect(
-      orgSettingsService.putOrgSetting(
-        app.db,
-        admin.organizationId,
-        "github_integration",
-        { webhookSecret: "" },
-        { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-      ),
-    ).rejects.toThrow();
-  });
+  // The webhook-secret tests that lived here (encrypt-at-rest, null-clears,
+  // empty-string rejection, getDecryptedGithubWebhookSecret round-trip) were
+  // removed in the D3 cutover along with the `github_integration` namespace
+  // they exercised. The GitHub App webhook surface owns the equivalent
+  // coverage (HMAC verification, signature mismatch rejection) in
+  // `github-app-webhook.test.ts`.
 
   it("rejects empty-string repo at the schema layer (#3)", async () => {
     const app = getApp();
@@ -669,30 +597,10 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("PUT webhookSecret then GET returns masked output (no plaintext)", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const url = `/api/v1/orgs/${admin.organizationId}/settings/github_integration`;
-
-    const put = await app.inject({
-      method: "PUT",
-      url,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { webhookSecret: "do-not-leak-me" },
-    });
-    expect(put.statusCode).toBe(200);
-    // webhookUrl is "" in tests because helpers.ts leaves server.publicUrl undefined.
-    expect(put.json()).toEqual({ webhookSecretConfigured: true, webhookUrl: "" });
-    expect(put.body).not.toContain("do-not-leak-me");
-
-    const get = await app.inject({
-      method: "GET",
-      url,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-    });
-    expect(get.json()).toEqual({ webhookSecretConfigured: true, webhookUrl: "" });
-    expect(get.body).not.toContain("do-not-leak-me");
-  });
+  // The HTTP-level "PUT webhookSecret then GET masked" round-trip moved
+  // away with the `github_integration` namespace in the D3 cutover. App
+  // webhook authentication is HMAC-only; there's no secret-via-settings
+  // round-trip to assert anymore.
 
   it("admin can GET, PUT, DELETE source_repos via the generic route", async () => {
     const app = getApp();
@@ -762,252 +670,12 @@ describe("org-settings API (admin gating + masking)", () => {
     }
   });
 
-  it("member is still forbidden from GET github_integration (readPolicy: admin)", async () => {
-    const app = getApp();
-    const { admin, member } = await adminAndMember(app);
-    const url = `/api/v1/orgs/${admin.organizationId}/settings/github_integration`;
-
-    const res = await app.inject({
-      method: "GET",
-      url,
-      headers: { authorization: `Bearer ${member.accessToken}` },
-    });
-    expect(res.statusCode).toBe(403);
-  });
-
-  it("PUT empty-string webhookSecret returns 400 (#3)", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const res = await app.inject({
-      method: "PUT",
-      url: `/api/v1/orgs/${admin.organizationId}/settings/github_integration`,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { webhookSecret: "" },
-    });
-    expect(res.statusCode).toBe(400);
-  });
+  // The "member forbidden from GET github_integration" and "PUT empty
+  // webhookSecret returns 400" assertions were retired along with the
+  // namespace they exercised. Admin-only ACL coverage on the surviving
+  // namespaces is asserted by the member-vs-admin matrix above.
 });
 
-describe("github webhook end-to-end (per-org URL + signature)", () => {
-  const getApp = useTestApp();
-
-  it("POST /webhooks/github/:orgId with valid signature reaches the handler", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-
-    // Configure a webhook secret for this org through the service layer.
-    const SECRET = "e2e-webhook-secret";
-    await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: SECRET },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-
-    // Send a `ping` event — minimal payload that the handler short-circuits on.
-    const body = JSON.stringify({ zen: "Practicality beats purity." });
-    const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
-
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": signature,
-        "x-github-event": "ping",
-      },
-      payload: body,
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, event: "ping" });
-  });
-
-  it("POST /webhooks/github/:orgId with bad signature returns 401", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: "real-secret" },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-
-    const body = JSON.stringify({ zen: "x" });
-    const wrongSignature = `sha256=${createHmac("sha256", "wrong-secret").update(body).digest("hex")}`;
-
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": wrongSignature,
-        "x-github-event": "ping",
-      },
-      payload: body,
-    });
-
-    expect(res.statusCode).toBe(401);
-  });
-
-  it("POST /webhooks/github/:orgId returns 501 when secret never configured", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    // No webhookSecret put for this org — should fall through to 501.
-
-    const body = JSON.stringify({ zen: "x" });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": `sha256=${createHmac("sha256", "anything").update(body).digest("hex")}`,
-        "x-github-event": "ping",
-      },
-      payload: body,
-    });
-
-    expect(res.statusCode).toBe(501);
-  });
-
-  // Pins issue #283 — without idempotency, GitHub retries (and near-simultaneous
-  // duplicate fires) produced duplicate fan-out into the routed chat.
-  it("dedupes repeated x-github-delivery on side-effecting events", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const SECRET = "dedup-secret";
-    await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: SECRET },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-
-    // `push` is not in MENTION_ACTIONS, so the handler returns 200 without
-    // fan-out — perfect for exercising the dedup gate in isolation.
-    const body = JSON.stringify({ ref: "refs/heads/main" });
-    const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
-    const deliveryId = randomUUID();
-
-    const first = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": signature,
-        "x-github-event": "push",
-        "x-github-delivery": deliveryId,
-      },
-      payload: body,
-    });
-    expect(first.statusCode).toBe(200);
-    expect(first.json()).toMatchObject({ ok: true, event: "push" });
-    expect(first.json()).not.toHaveProperty("deduped");
-
-    const second = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": signature,
-        "x-github-event": "push",
-        "x-github-delivery": deliveryId,
-      },
-      payload: body,
-    });
-    expect(second.statusCode).toBe(200);
-    expect(second.json()).toEqual({ ok: true, event: "push", deduped: true });
-  });
-
-  // Regression guard: if someone deletes the `unclaimEvent` call in the
-  // route handler's catch block, GitHub's retry of a failed delivery would
-  // be permanently swallowed by the dedup gate (claim succeeds on attempt 1,
-  // handler throws, claim stays held, retry returns `deduped: true` even
-  // though the work was never done). This test pins the contract that an
-  // erroring handler must release the slot.
-  it("releases the dedup slot when the handler throws so GitHub retry can re-process", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const SECRET = "unclaim-secret";
-    await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: SECRET },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-
-    // Malformed `issues` payload — missing the `issue` / `repository` / `sender`
-    // fields makes `parseIssuesPayload` throw `BadRequestError` deep inside
-    // `handleIssuesEvent`, which exercises the catch-and-unclaim branch.
-    const body = JSON.stringify({ action: "opened" });
-    const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
-    const deliveryId = randomUUID();
-    const headers = {
-      "content-type": "application/json",
-      "x-hub-signature-256": signature,
-      "x-github-event": "issues",
-      "x-github-delivery": deliveryId,
-    };
-
-    const first = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers,
-      payload: body,
-    });
-    expect(first.statusCode).toBe(400);
-
-    const retry = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers,
-      payload: body,
-    });
-    // If unclaim had not run, retry would be 200 with `{ deduped: true }`.
-    expect(retry.statusCode).toBe(400);
-    expect(retry.json()).not.toMatchObject({ deduped: true });
-  });
-
-  it("ping events bypass the idempotency table", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const SECRET = "ping-secret";
-    await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: SECRET },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-
-    const body = JSON.stringify({ zen: "x" });
-    const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
-    const deliveryId = randomUUID();
-    const headers = {
-      "content-type": "application/json",
-      "x-hub-signature-256": signature,
-      "x-github-event": "ping",
-      "x-github-delivery": deliveryId,
-    };
-
-    const first = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers,
-      payload: body,
-    });
-    const second = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers,
-      payload: body,
-    });
-
-    expect(first.json()).toEqual({ ok: true, event: "ping" });
-    expect(second.json()).toEqual({ ok: true, event: "ping" });
-  });
-});
+// The full per-org `POST /webhooks/github/:orgId` end-to-end describe
+// block was removed in the D3 cutover. Its analog for the new App
+// webhook URL lives in `github-app-webhook.test.ts`.

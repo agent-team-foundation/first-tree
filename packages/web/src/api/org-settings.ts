@@ -1,8 +1,6 @@
 import type {
   OrgContextTreeInput,
   OrgContextTreeOutput,
-  OrgGithubIntegrationInput,
-  OrgGithubIntegrationOutput,
   OrgSourceReposInput,
   OrgSourceReposOutput,
 } from "@agent-team-foundation/first-tree-hub-shared";
@@ -24,20 +22,10 @@ export function deleteContextTreeSetting(orgId: string): Promise<void> {
   return api.delete<void>(path(orgId, "context_tree"));
 }
 
-export function getGithubIntegrationSetting(orgId: string): Promise<OrgGithubIntegrationOutput> {
-  return api.get<OrgGithubIntegrationOutput>(path(orgId, "github_integration"));
-}
-
-export function putGithubIntegrationSetting(
-  orgId: string,
-  body: OrgGithubIntegrationInput,
-): Promise<OrgGithubIntegrationOutput> {
-  return api.put<OrgGithubIntegrationOutput>(path(orgId, "github_integration"), body);
-}
-
-export function deleteGithubIntegrationSetting(orgId: string): Promise<void> {
-  return api.delete<void>(path(orgId, "github_integration"));
-}
+// `getGithubIntegrationSetting` / `putGithubIntegrationSetting` /
+// `deleteGithubIntegrationSetting` were removed in the D3 cutover. The
+// per-org webhook secret model is replaced by the GitHub App
+// installation surface — see `api/github-app.ts`.
 
 export function getSourceReposSetting(orgId: string): Promise<OrgSourceReposOutput> {
   return api.get<OrgSourceReposOutput>(path(orgId, "source_repos"));

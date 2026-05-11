@@ -27,20 +27,9 @@ async function main() {
   if (process.env.NODE_ENV === "production" && !serverConfig.server.publicUrl) {
     throw new Error("FIRST_TREE_HUB_PUBLIC_URL is required in production — set the public-facing hub URL.");
   }
-  // Reject the half-configured OAuth shape: clientId without secret (or
-  // vice versa) almost always means the operator intended to enable OAuth
-  // but forgot half the env vars; surface that loudly rather than silently
-  // serving a 503 from `/auth/github/start`.
-  const oauthGh = serverConfig.oauth?.github;
-  if (oauthGh) {
-    const half = (oauthGh.clientId && !oauthGh.clientSecret) || (!oauthGh.clientId && oauthGh.clientSecret);
-    if (half) {
-      throw new Error(
-        "GitHub OAuth is half-configured — set BOTH FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID and ..._CLIENT_SECRET, or neither.",
-      );
-    }
-  }
-  // Same guard for the GitHub App block. All five fields ride together —
+  // Half-configured guard for the GitHub App block — the legacy
+  // `oauth.github` (OAuth App) check that lived next to this was removed
+  // in the D3 cutover. App is the only sign-in path now. All five fields ride together —
   // the App's user-OAuth uses clientId/clientSecret, the App JWT uses
   // appId/privateKeyPem, and the webhook endpoint verifies signatures
   // with webhookSecret. A partially-set block almost always means the

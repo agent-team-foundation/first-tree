@@ -5,12 +5,10 @@ import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { claimEvent, unclaimEvent } from "../../services/adapter-mapping.js";
 import { createAgent } from "../../services/agent.js";
 import { findOrCreateDirectChat } from "../../services/chat.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
-import { getDecryptedGithubWebhookSecret } from "../../services/org-settings.js";
 
 const log = createLogger("GithubWebhook");
 
@@ -344,118 +342,11 @@ function parseIssueCommentPayload(body: unknown): GitHubIssueCommentPayload {
   };
 }
 
-// ── Route ───────────────────────────────────────────────────────────
-
-export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
-  // Scoped to this plugin only (/webhooks). If other webhook adapters (Slack, Feishu)
-  // are added under the same prefix, they should be registered as separate sub-plugins
-  // to avoid inheriting this raw-buffer parser.
-  app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
-    done(null, body);
-  });
-
-  const webhookMax = app.config.rateLimit?.webhookMax ?? 60;
-
-  app.post<{ Params: { orgId: string } }>(
-    "/github/:orgId",
-    { config: { rateLimit: { max: webhookMax, timeWindow: "1 minute" } } },
-    async (request, reply) => {
-      const { orgId } = request.params;
-
-      // Resolve the per-org webhook secret. Missing org and "secret not
-      // configured" both fall through to the same 501 — the orgId is in
-      // the URL already and timing differentiation here wouldn't buy real
-      // defense (UUID v7 is not enumerable). (#5)
-      const webhookSecret = await getDecryptedGithubWebhookSecret(app.db, orgId, app.config.secrets.encryptionKey);
-      if (!webhookSecret) {
-        return reply.status(501).send({
-          error:
-            "GitHub webhook is not configured for this organization. An admin must set the webhook secret in Team settings.",
-        });
-      }
-
-      const rawBody = request.body;
-      if (!Buffer.isBuffer(rawBody)) {
-        throw new BadRequestError("Expected raw body buffer");
-      }
-
-      // Verify webhook signature
-      const signatureHeader = request.headers["x-hub-signature-256"];
-      if (typeof signatureHeader !== "string") {
-        throw new UnauthorizedError("Missing x-hub-signature-256 header");
-      }
-      verifySignature(webhookSecret, rawBody, signatureHeader);
-
-      // Parse JSON from raw body
-      let payload: unknown;
-      try {
-        payload = JSON.parse(rawBody.toString("utf8"));
-      } catch {
-        throw new BadRequestError("Invalid JSON payload");
-      }
-
-      const eventType = request.headers["x-github-event"];
-      if (typeof eventType !== "string") {
-        throw new BadRequestError("Missing x-github-event header");
-      }
-
-      // Handle ping event (GitHub sends this when webhook is first configured).
-      // Skipped from idempotency tracking: pings have no side effects and
-      // shouldn't consume rows in `processed_events`.
-      if (eventType === "ping") {
-        return reply.status(200).send({ ok: true, event: "ping" });
-      }
-
-      // Idempotency: GitHub retries failed deliveries (and occasionally
-      // double-fires near-simultaneous events) with the same
-      // `x-github-delivery` UUID. Without this gate, retries produce
-      // duplicate fan-out messages. See issue #283. Reuses the
-      // `processed_events` table that the Feishu adapter already uses
-      // via `claimEvent` / `unclaimEvent`.
-      const deliveryHeader = request.headers["x-github-delivery"];
-      const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
-
-      if (deliveryId) {
-        const claimed = await claimEvent(app.db, deliveryId, "github");
-        if (!claimed) {
-          log.info({ deliveryId, eventType }, "duplicate GitHub delivery, skipping");
-          return reply.status(200).send({ ok: true, event: eventType, deduped: true });
-        }
-      }
-
-      try {
-        // --- Event-specific handlers (mention delegation runs inside, after action gating) ---
-        if (eventType === "issues") {
-          return await handleIssuesEvent(app, orgId, eventType, payload, reply);
-        }
-
-        if (eventType === "issue_comment") {
-          return await handleIssueCommentEvent(app, orgId, eventType, payload, reply);
-        }
-
-        // Other event types with @mention support (PRs, discussions, reviews, etc.)
-        // Only run delegation if the action represents new/changed content
-        let mentionsRouted = 0;
-        const allowedActions = MENTION_ACTIONS[eventType];
-        const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
-        if (allowedActions && action && allowedActions.includes(action)) {
-          mentionsRouted = await handleMentionDelegation(app, orgId, eventType, payload);
-        }
-        return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
-      } catch (err) {
-        // Release the claim so GitHub's retry can re-process. On permanent
-        // 4xx failures GitHub does not retry, so the freed row is harmless;
-        // on transient 5xx the retry needs the slot back to succeed.
-        if (deliveryId) {
-          await unclaimEvent(app.db, deliveryId, "github").catch((unclaimErr) => {
-            log.error({ err: unclaimErr, deliveryId }, "failed to unclaim GitHub delivery after handler error");
-          });
-        }
-        throw err;
-      }
-    },
-  );
-}
+// Legacy per-org webhook route (`POST /webhooks/github/:orgId`) and the
+// `getDecryptedGithubWebhookSecret` lookup were removed in the D3 cutover.
+// What remains in this file are the dispatch helpers that the App-flow
+// webhook endpoint (`webhooks/github-app.ts`) imports — same downstream
+// pipeline, different ingress.
 
 /** Extract text body from any GitHub webhook event for @mention scanning. */
 function extractEventText(eventType: string, payload: unknown): string | null {
