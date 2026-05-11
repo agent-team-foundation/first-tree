@@ -158,10 +158,10 @@ Where Context Changed 是全局态势视图,不是当前 update detail,也不是
 - 标题使用 `Where Context Changed`,不使用泛泛的 `Context Tree Overview`。
 - 副标题明确数字语义:`Numbers = updated areas under each branch.`
 - 图上方必须轻量显示当前 selected path,例如 `Selected Context Tree / Agent Hub / Web Console`。
-- 图上方必须显示轻量 legend:`Selected path` / `Changed branch` / `Quiet / hidden`,避免用户猜颜色,但不能做成占注意力的说明 banner。
+- 图上方必须显示轻量 legend:`Selected path` / `Updated` / `Quiet / hidden`,避免用户猜颜色,但不能做成占注意力的说明 banner。
 - 默认展示语义压缩后的全貌,而不是全量展开的 tree canvas。
 - 默认节点层级只保留 root、一级 domain、二级重点 domain、最近有变化的 branch,以及当前 selected update 的 ancestor path。
-- 未展开区域折叠成聚合节点,例如 `6 hidden · 2 updated` 或 `1 hidden quiet`,让用户知道这里有内容但当前不是重点。
+- 未展开区域折叠成聚合节点,例如 `6 hidden · 2 updated` 或 `1 hidden quiet area`,让用户知道这里有内容但当前不是重点。
 - changed domain / branch 显示贴近节点的聚合计数,不把 count 漂到画布最右侧。
 - 选中 Update Card 时,Overview 展开并高亮对应节点和 ancestor path,其他 branch 降权。
 - 点击有直接 update 的节点时,选中对应 Update Card;点击聚合 domain 时,只高亮 / focus 该 domain,不改变当前 Selected Change。

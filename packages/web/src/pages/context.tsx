@@ -102,7 +102,7 @@ function ContextStatus({
   const statusIcon =
     snapshot.contextStatus.severity === "ok" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />;
   const currentWindow = windowSummary(window);
-  const statusTitle = contextStatusTitle(snapshot);
+  const statusTitle = snapshot.contextStatus.label;
   const revisionLabel = contextRevisionLabel(snapshot);
   return (
     <Panel>
@@ -412,10 +412,19 @@ function TreeOverview({
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string) => void;
 }) {
-  const visibleNodes = useMemo(() => layoutTree(snapshot.nodes, selectedNodeId), [selectedNodeId, snapshot.nodes]);
+  const counts = useMemo(() => changedCounts(snapshot.nodes), [snapshot.nodes]);
+  const visibleNodes = useMemo(
+    () => layoutTree(snapshot.nodes, selectedNodeId, counts),
+    [selectedNodeId, snapshot.nodes, counts],
+  );
   const width = Math.max(760, ...visibleNodes.map((node) => node.x + 280));
   const height = Math.max(280, ...visibleNodes.map((node) => node.y + 48));
-  const renderedHeight = Math.min(360, Math.max(220, height + 24));
+  // Render the SVG at its natural pixel height so nodes never get squished by
+  // `preserveAspectRatio="meet"`. When the tree is taller than the soft cap, the
+  // container scrolls instead — keeps small trees compact, big trees readable.
+  const naturalHeight = Math.max(220, height + 24);
+  const SOFT_HEIGHT_CAP = 360;
+  const overflowsCap = naturalHeight > SOFT_HEIGHT_CAP;
   const selectedPath = overviewSelectedPath(snapshot.nodes, selectedNodeId);
 
   return (
@@ -454,17 +463,22 @@ function TreeOverview({
               </div>
               <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
                 <OverviewLegendItem color="var(--accent)" label="Selected path" />
-                <OverviewLegendItem color="var(--warn)" label="Changed branch" />
+                <OverviewLegendItem color="var(--accent-bg)" label="Updated" />
                 <OverviewLegendItem color="var(--bg-raised)" label="Quiet / hidden" />
               </div>
             </div>
-            <div style={{ overflow: "hidden" }}>
+            <div
+              style={{
+                overflow: overflowsCap ? "auto" : "hidden",
+                maxHeight: overflowsCap ? `${SOFT_HEIGHT_CAP}px` : undefined,
+              }}
+            >
               <svg
                 viewBox={`0 0 ${width} ${height}`}
                 role="img"
                 aria-label="Context Tree overview"
                 preserveAspectRatio="xMinYMin meet"
-                style={{ display: "block", width: "100%", height: `${renderedHeight}px` }}
+                style={{ display: "block", width: "100%", height: `${naturalHeight}px` }}
               >
                 {visibleNodes.map((node) =>
                   node.parent ? (
@@ -789,8 +803,12 @@ type LayoutNode = OverviewDatum & {
   parent: LayoutNode | null;
 };
 
-function layoutTree(nodes: ContextTreeNode[], selectedNodeId: string | null): LayoutNode[] {
-  const overviewNodes = buildOverviewNodes(nodes, selectedNodeId);
+function layoutTree(
+  nodes: ContextTreeNode[],
+  selectedNodeId: string | null,
+  counts: Map<string, number>,
+): LayoutNode[] {
+  const overviewNodes = buildOverviewNodes(nodes, selectedNodeId, counts);
   if (overviewNodes.length === 0) return [];
 
   const root = stratify<OverviewDatum>()
@@ -816,7 +834,11 @@ function layoutTree(nodes: ContextTreeNode[], selectedNodeId: string | null): La
   }));
 }
 
-function buildOverviewNodes(nodes: ContextTreeNode[], selectedNodeId: string | null): OverviewDatum[] {
+function buildOverviewNodes(
+  nodes: ContextTreeNode[],
+  selectedNodeId: string | null,
+  counts: Map<string, number>,
+): OverviewDatum[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const validNodes = nodes
     .filter((node) => !node.parentId || byId.has(node.parentId))
@@ -824,7 +846,6 @@ function buildOverviewNodes(nodes: ContextTreeNode[], selectedNodeId: string | n
   if (validNodes.length === 0) return [];
 
   const childrenByParent = childMap(validNodes);
-  const counts = changedCounts(validNodes);
   const selectedPath = selectedPathIds(selectedNodeId, byId);
   const visibleIds = new Set<string>();
   const depthById = new Map<string, number>();
@@ -969,13 +990,6 @@ function severityColor(severity: ContextTreeSnapshot["contextStatus"]["severity"
   return "var(--danger)";
 }
 
-function contextStatusTitle(snapshot: ContextTreeSnapshot): string {
-  if (snapshot.contextStatus.label === "Team context is current") return "Context Tree is up to date";
-  if (snapshot.contextStatus.label === "Team context is stale") return "Context Tree may be stale";
-  if (snapshot.contextStatus.label === "Team context needs attention") return "Context Tree needs attention";
-  return snapshot.contextStatus.label;
-}
-
 function contextRevisionLabel(snapshot: ContextTreeSnapshot): string | null {
   const shortCommit = snapshot.headCommit?.slice(0, 7) ?? null;
   if (snapshot.branch && shortCommit) return `Source: ${snapshot.branch} @ ${shortCommit}`;
@@ -1077,18 +1091,12 @@ function changeColor(type: ContextTreeChangeType): string {
   return "var(--danger)";
 }
 
-function nodeColor(type: ContextTreeChangeType | null, selected: boolean): string {
-  if (selected) return "var(--accent)";
-  if (type === "added") return "var(--ok)";
-  if (type === "edited") return "var(--warn)";
-  if (type === "removed") return "var(--danger)";
-  return "var(--bg-raised)";
-}
-
 function overviewNodeColor(node: LayoutNode): string {
   if (node.isSummary) return "var(--bg-sunken)";
   if (node.selected) return "var(--accent)";
-  if (node.changeType) return nodeColor(node.changeType, false);
-  if (node.updateCount > 0) return "var(--accent-bg)";
+  // Any updated node (leaf with a changeType, or branch with rollup updates) uses
+  // accent-bg so the legend stays honest. Type details (added/edited/removed) are
+  // still surfaced via ChangePill in the update list and Selected Change panel.
+  if (node.changeType || node.updateCount > 0) return "var(--accent-bg)";
   return "var(--bg-raised)";
 }
