@@ -58,6 +58,11 @@ type GitHubIssueCommentPayload = {
 
 const GITHUB_ADAPTER_ID = "github-adapter";
 
+/** Exported so the App webhook endpoint can reuse the exact same HMAC check. */
+export function verifyGithubWebhookSignature(secret: string, rawBody: Buffer, signatureHeader: string): void {
+  verifySignature(secret, rawBody, signatureHeader);
+}
+
 function verifySignature(secret: string, rawBody: Buffer, signatureHeader: string): void {
   const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
   const expectedBuf = Buffer.from(expected, "utf8");
@@ -613,7 +618,8 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
  * Run mention delegation for a given event type and payload.
  * Only called after action gating confirms this is a "new content" event.
  */
-async function handleMentionDelegation(
+/** See `handleIssuesEvent` for why this is exported. */
+export async function handleMentionDelegation(
   app: FastifyInstance,
   organizationId: string,
   eventType: string,
@@ -635,7 +641,7 @@ async function handleMentionDelegation(
  * text body — the reviewer is in `requested_reviewer.login`. We pick it up
  * via `extractStructuralMentions`. The complementary `review_request_removed`
  * is intentionally omitted to avoid notifying the reviewer twice. */
-const MENTION_ACTIONS: Record<string, string[]> = {
+export const MENTION_ACTIONS: Record<string, string[]> = {
   issues: ["opened", "edited"],
   issue_comment: ["created"],
   pull_request: ["opened", "edited", "review_requested"],
@@ -646,7 +652,10 @@ const MENTION_ACTIONS: Record<string, string[]> = {
   commit_comment: ["created"],
 };
 
-async function handleIssuesEvent(
+// Exported so the GitHub App webhook endpoint (`webhooks/github-app.ts`)
+// can reuse the same dispatch logic. D3 cutover (last commit in this PR)
+// moves the helpers into a service module and deletes this file outright.
+export async function handleIssuesEvent(
   app: FastifyInstance,
   organizationId: string,
   eventType: string,
@@ -709,7 +718,8 @@ async function handleIssuesEvent(
   return reply.status(200).send({ ok: true, event: "issues", action: data.action, routed: true });
 }
 
-async function handleIssueCommentEvent(
+/** See `handleIssuesEvent` for why this is exported. */
+export async function handleIssueCommentEvent(
   app: FastifyInstance,
   organizationId: string,
   eventType: string,
