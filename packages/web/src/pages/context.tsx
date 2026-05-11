@@ -102,6 +102,8 @@ function ContextStatus({
   const statusIcon =
     snapshot.contextStatus.severity === "ok" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />;
   const currentWindow = windowSummary(window);
+  const statusTitle = snapshot.contextStatus.label;
+  const revisionLabel = contextRevisionLabel(snapshot);
   return (
     <Panel>
       <PanelBody style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
@@ -113,12 +115,11 @@ function ContextStatus({
             <div style={{ minWidth: 0 }}>
               <div className="flex flex-wrap items-baseline" style={{ gap: "var(--sp-2)" }}>
                 <div className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
-                  {snapshot.contextStatus.label}
+                  {statusTitle}
                 </div>
-                {snapshot.branch || snapshot.headCommit ? (
+                {revisionLabel ? (
                   <div className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
-                    {snapshot.branch ?? "unknown"}
-                    {snapshot.headCommit ? `@${snapshot.headCommit.slice(0, 7)}` : ""}
+                    {revisionLabel}
                   </div>
                 ) : null}
               </div>
@@ -411,10 +412,20 @@ function TreeOverview({
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string) => void;
 }) {
-  const visibleNodes = useMemo(() => layoutTree(snapshot.nodes), [snapshot.nodes]);
-  const changedDescendants = useMemo(() => changedCounts(snapshot.nodes), [snapshot.nodes]);
-  const width = Math.max(920, ...visibleNodes.map((node) => node.x + 300));
-  const height = Math.max(340, visibleNodes.length * 34);
+  const counts = useMemo(() => changedCounts(snapshot.nodes), [snapshot.nodes]);
+  const visibleNodes = useMemo(
+    () => layoutTree(snapshot.nodes, selectedNodeId, counts),
+    [selectedNodeId, snapshot.nodes, counts],
+  );
+  const width = Math.max(760, ...visibleNodes.map((node) => node.x + 280));
+  const height = Math.max(280, ...visibleNodes.map((node) => node.y + 48));
+  // Render the SVG at its natural pixel height so nodes never get squished by
+  // `preserveAspectRatio="meet"`. When the tree is taller than the soft cap, the
+  // container scrolls instead — keeps small trees compact, big trees readable.
+  const naturalHeight = Math.max(220, height + 24);
+  const SOFT_HEIGHT_CAP = 360;
+  const overflowsCap = naturalHeight > SOFT_HEIGHT_CAP;
+  const selectedPath = overviewSelectedPath(snapshot.nodes, selectedNodeId);
 
   return (
     <Panel>
@@ -422,10 +433,10 @@ function TreeOverview({
         <div>
           <PanelTitle>
             <FolderTree size={17} />
-            Context Tree Overview
+            Where Context Changed
           </PanelTitle>
           <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Shows where recent context updates are concentrated across the team tree
+            Numbers = updated areas under each branch.
           </div>
         </div>
       </PanelHeader>
@@ -433,67 +444,135 @@ function TreeOverview({
         {visibleNodes.length === 0 ? (
           <UnavailableState snapshot={snapshot} />
         ) : (
-          <div style={{ overflow: "auto", maxHeight: "min(72vh, 52rem)" }}>
-            <svg
-              viewBox={`0 0 ${width} ${height}`}
-              role="img"
-              aria-label="Context Tree overview"
-              style={{ width: "100%", minWidth: "44rem" }}
+          <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+            <div
+              className="flex flex-wrap items-center"
+              style={{
+                columnGap: "var(--sp-4)",
+                rowGap: "var(--sp-1_5)",
+              }}
             >
-              {visibleNodes.map((node) =>
-                node.parent ? (
-                  <line
-                    key={`edge:${node.id}`}
-                    x1={node.parent.x}
-                    y1={node.parent.y}
-                    x2={node.x}
-                    y2={node.y}
-                    stroke="var(--border)"
-                    strokeWidth={1}
-                  />
-                ) : null,
-              )}
-              {visibleNodes.map((node) => {
-                const selected = node.id === selectedNodeId;
-                const count = changedDescendants.get(node.id) ?? 0;
-                return (
-                  <foreignObject key={node.id} x={node.x - 8} y={node.y - 12} width={width - node.x + 8} height={24}>
-                    <button
-                      type="button"
-                      onClick={() => onSelectNode(node.id)}
-                      className="flex w-full items-center text-left text-label"
-                      style={{ color: "var(--fg)", gap: "var(--sp-2)" }}
-                    >
-                      <span
-                        aria-hidden="true"
-                        style={{
-                          width: selected ? "var(--sp-4)" : "var(--sp-3)",
-                          height: selected ? "var(--sp-4)" : "var(--sp-3)",
-                          borderRadius: "50%",
-                          background: nodeColor(node.changeType, selected),
-                          border: `${selected ? "var(--hairline-bold)" : "var(--hairline)"} solid ${
-                            selected ? "var(--accent)" : "var(--border-strong)"
-                          }`,
-                          flex: "0 0 auto",
+              <div
+                className="flex flex-wrap items-center text-label"
+                style={{ color: "var(--fg-3)", gap: "var(--sp-1_5)" }}
+              >
+                <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
+                  Selected
+                </span>
+                <span>{selectedPath ?? "No update selected"}</span>
+              </div>
+              <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
+                <OverviewLegendItem color="var(--accent)" label="Selected path" />
+                <OverviewLegendItem color="var(--accent-bg)" label="Updated" />
+                <OverviewLegendItem color="var(--bg-raised)" label="Quiet / hidden" />
+              </div>
+            </div>
+            <div
+              style={{
+                overflow: overflowsCap ? "auto" : "hidden",
+                maxHeight: overflowsCap ? `${SOFT_HEIGHT_CAP}px` : undefined,
+              }}
+            >
+              <svg
+                viewBox={`0 0 ${width} ${height}`}
+                role="img"
+                aria-label="Context Tree overview"
+                preserveAspectRatio="xMinYMin meet"
+                style={{ display: "block", width: "100%", height: `${naturalHeight}px` }}
+              >
+                {visibleNodes.map((node) =>
+                  node.parent ? (
+                    <line
+                      key={`edge:${node.id}`}
+                      x1={node.parent.x}
+                      y1={node.parent.y}
+                      x2={node.x}
+                      y2={node.y}
+                      stroke={node.selectedPath && node.parent.selectedPath ? "var(--accent)" : "var(--border)"}
+                      strokeOpacity={node.muted ? 0.34 : node.selectedPath ? 0.72 : 0.56}
+                      strokeWidth={node.selectedPath && node.parent.selectedPath ? 1.6 : 1}
+                    />
+                  ) : null,
+                )}
+                {visibleNodes.map((node) => {
+                  return (
+                    <foreignObject key={node.id} x={node.x - 10} y={node.y - 15} width={width - node.x - 8} height={30}>
+                      <button
+                        type="button"
+                        disabled={node.sourceNodeId === null}
+                        onClick={() => {
+                          if (node.sourceNodeId) onSelectNode(node.sourceNodeId);
                         }}
-                      />
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {node.title}
-                      </span>
-                      {count > 0 ? (
-                        <span style={{ color: "var(--fg-3)", marginLeft: "auto", paddingRight: "var(--sp-2)" }}>
-                          {count}
+                        className="flex w-full items-center text-left text-label"
+                        style={{
+                          color: node.muted ? "var(--fg-3)" : "var(--fg)",
+                          cursor: node.sourceNodeId ? "pointer" : "default",
+                          gap: "var(--sp-2)",
+                          opacity: node.muted ? 0.66 : 1,
+                        }}
+                      >
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            width: node.selected ? "var(--sp-4)" : "var(--sp-3)",
+                            height: node.selected ? "var(--sp-4)" : "var(--sp-3)",
+                            borderRadius: "50%",
+                            background: overviewNodeColor(node),
+                            border: `${node.selected ? "var(--hairline-bold)" : "var(--hairline)"} solid ${
+                              node.selected ? "var(--accent)" : "var(--border-strong)"
+                            }`,
+                            flex: "0 0 auto",
+                          }}
+                        />
+                        <span
+                          className={node.selectedPath ? "font-semibold" : "font-medium"}
+                          style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                        >
+                          {node.title}
                         </span>
-                      ) : null}
-                    </button>
-                  </foreignObject>
-                );
-              })}
-            </svg>
+                        {node.updateCount > 0 && !node.isSummary ? (
+                          <span
+                            className="font-semibold"
+                            style={{
+                              background: "var(--accent-bg)",
+                              border: "var(--hairline) solid var(--border-faint)",
+                              borderRadius: "var(--radius-chip)",
+                              color: "var(--fg-2)",
+                              flex: "0 0 auto",
+                              padding: "0 var(--sp-1)",
+                            }}
+                          >
+                            {node.updateCount}
+                          </span>
+                        ) : null}
+                      </button>
+                    </foreignObject>
+                  );
+                })}
+              </svg>
+            </div>
           </div>
         )}
       </PanelBody>
     </Panel>
+  );
+}
+
+function OverviewLegendItem({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center text-label" style={{ color: "var(--fg-3)", gap: "var(--sp-1)" }}>
+      <span
+        aria-hidden="true"
+        style={{
+          background: color,
+          border: "var(--hairline) solid var(--border-strong)",
+          borderRadius: "50%",
+          height: "var(--sp-2)",
+          width: "var(--sp-2)",
+        }}
+      />
+      <span>{label}</span>
+    </span>
   );
 }
 
@@ -701,30 +780,51 @@ function EmptyChanges() {
   );
 }
 
-type LayoutNode = ContextTreeNode & {
+const OVERVIEW_DEFAULT_DEPTH = 2;
+const OVERVIEW_CHANGED_BRANCH_DEPTH = 3;
+
+type OverviewDatum = {
+  id: string;
+  parentId: string | null;
+  sourceNodeId: string | null;
+  title: string;
+  path: string;
+  changeType: ContextTreeChangeType | null;
+  updateCount: number;
+  isSummary: boolean;
+  selected: boolean;
+  selectedPath: boolean;
+  muted: boolean;
+};
+
+type LayoutNode = OverviewDatum & {
   x: number;
   y: number;
   parent: LayoutNode | null;
 };
 
-function layoutTree(nodes: ContextTreeNode[]): LayoutNode[] {
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const validNodes = nodes
-    .filter((node) => !node.parentId || byId.has(node.parentId))
-    .sort((a, b) => a.path.localeCompare(b.path));
-  if (validNodes.length === 0) return [];
+function layoutTree(
+  nodes: ContextTreeNode[],
+  selectedNodeId: string | null,
+  counts: Map<string, number>,
+): LayoutNode[] {
+  const overviewNodes = buildOverviewNodes(nodes, selectedNodeId, counts);
+  if (overviewNodes.length === 0) return [];
 
-  const root = stratify<ContextTreeNode>()
+  const root = stratify<OverviewDatum>()
     .id((node) => node.id)
-    .parentId((node) => node.parentId)(validNodes)
-    .sort((a, b) => a.data.path.localeCompare(b.data.path));
-  const pointRoot = tree<ContextTreeNode>().nodeSize([34, 96])(root);
+    .parentId((node) => node.parentId)(overviewNodes)
+    .sort((a, b) => {
+      if (a.data.isSummary !== b.data.isSummary) return a.data.isSummary ? 1 : -1;
+      return a.data.path.localeCompare(b.data.path);
+    });
+  const pointRoot = tree<OverviewDatum>().nodeSize([42, 190])(root);
   const points = pointRoot.descendants();
   const minX = Math.min(...points.map((point) => point.x));
   const laidOut = points.map((point) => ({
     ...point.data,
-    x: 24 + point.y,
-    y: 24 + point.x - minX,
+    x: 28 + point.y,
+    y: 28 + point.x - minX,
     parent: null,
   }));
 
@@ -732,6 +832,138 @@ function layoutTree(nodes: ContextTreeNode[]): LayoutNode[] {
     ...node,
     parent: node.parentId ? (all.find((candidate) => candidate.id === node.parentId) ?? null) : null,
   }));
+}
+
+function buildOverviewNodes(
+  nodes: ContextTreeNode[],
+  selectedNodeId: string | null,
+  counts: Map<string, number>,
+): OverviewDatum[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const validNodes = nodes
+    .filter((node) => !node.parentId || byId.has(node.parentId))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  if (validNodes.length === 0) return [];
+
+  const childrenByParent = childMap(validNodes);
+  const selectedPath = selectedPathIds(selectedNodeId, byId);
+  const visibleIds = new Set<string>();
+  const depthById = new Map<string, number>();
+
+  for (const node of validNodes) {
+    const depth = nodeDepth(node, byId, depthById);
+    const updateCount = counts.get(node.id) ?? 0;
+    if (
+      depth <= OVERVIEW_DEFAULT_DEPTH ||
+      selectedPath.has(node.id) ||
+      (updateCount > 0 && depth <= OVERVIEW_CHANGED_BRANCH_DEPTH && node.kind !== "leaf")
+    ) {
+      addWithAncestors(node.id, byId, visibleIds);
+    }
+  }
+
+  const selectedActive = selectedPath.size > 0;
+  const realNodes = validNodes
+    .filter((node) => visibleIds.has(node.id))
+    .map((node): OverviewDatum => {
+      const updateCount = counts.get(node.id) ?? 0;
+      const selectedPathNode = selectedPath.has(node.id);
+      return {
+        id: node.id,
+        parentId: node.parentId && visibleIds.has(node.parentId) ? node.parentId : null,
+        sourceNodeId: node.id,
+        title: node.title,
+        path: node.path,
+        changeType: node.changeType,
+        updateCount,
+        isSummary: false,
+        selected: selectedNodeId === node.id,
+        selectedPath: selectedPathNode,
+        muted: selectedActive && !selectedPathNode && updateCount === 0,
+      };
+    });
+
+  const summaryNodes: OverviewDatum[] = [];
+  for (const node of validNodes) {
+    if (!visibleIds.has(node.id)) continue;
+    const hiddenChildren = (childrenByParent.get(node.id) ?? []).filter((child) => !visibleIds.has(child.id));
+    if (hiddenChildren.length === 0) continue;
+    const changedHiddenCount = hiddenChildren.filter((child) => (counts.get(child.id) ?? 0) > 0).length;
+    summaryNodes.push({
+      id: `summary:${node.id}`,
+      parentId: node.id,
+      sourceNodeId: null,
+      title: summaryTitle(hiddenChildren.length, changedHiddenCount),
+      path: `${node.path}/~summary`,
+      changeType: null,
+      updateCount: changedHiddenCount,
+      isSummary: true,
+      selected: false,
+      selectedPath: selectedPath.has(node.id),
+      muted: selectedActive && !selectedPath.has(node.id),
+    });
+  }
+
+  return [...realNodes, ...summaryNodes];
+}
+
+function childMap(nodes: ContextTreeNode[]): Map<string, ContextTreeNode[]> {
+  const childrenByParent = new Map<string, ContextTreeNode[]>();
+  for (const node of nodes) {
+    if (!node.parentId) continue;
+    const siblings = childrenByParent.get(node.parentId) ?? [];
+    siblings.push(node);
+    childrenByParent.set(node.parentId, siblings);
+  }
+  for (const siblings of childrenByParent.values()) {
+    siblings.sort((a, b) => a.path.localeCompare(b.path));
+  }
+  return childrenByParent;
+}
+
+function selectedPathIds(selectedNodeId: string | null, byId: Map<string, ContextTreeNode>): Set<string> {
+  const pathIds = new Set<string>();
+  let current = selectedNodeId ? byId.get(selectedNodeId) : undefined;
+  while (current) {
+    pathIds.add(current.id);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return pathIds;
+}
+
+function overviewSelectedPath(nodes: ContextTreeNode[], selectedNodeId: string | null): string | null {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const path: string[] = [];
+  let current = selectedNodeId ? byId.get(selectedNodeId) : undefined;
+  while (current) {
+    path.unshift(current.title);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return path.length > 0 ? path.join(" / ") : null;
+}
+
+function addWithAncestors(nodeId: string, byId: Map<string, ContextTreeNode>, visibleIds: Set<string>): void {
+  let current = byId.get(nodeId);
+  while (current) {
+    visibleIds.add(current.id);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+}
+
+function nodeDepth(node: ContextTreeNode, byId: Map<string, ContextTreeNode>, depthById: Map<string, number>): number {
+  const known = depthById.get(node.id);
+  if (known !== undefined) return known;
+  const parent = node.parentId ? byId.get(node.parentId) : undefined;
+  const depth = parent ? nodeDepth(parent, byId, depthById) + 1 : 0;
+  depthById.set(node.id, depth);
+  return depth;
+}
+
+function summaryTitle(hiddenCount: number, changedHiddenCount: number): string {
+  if (changedHiddenCount > 0) {
+    return `${hiddenCount} hidden · ${changedHiddenCount} updated`;
+  }
+  return `${hiddenCount} hidden quiet area${hiddenCount === 1 ? "" : "s"}`;
 }
 
 function changedCounts(nodes: ContextTreeNode[]): Map<string, number> {
@@ -756,6 +988,14 @@ function severityColor(severity: ContextTreeSnapshot["contextStatus"]["severity"
   if (severity === "ok") return "var(--ok)";
   if (severity === "warning") return "var(--warn)";
   return "var(--danger)";
+}
+
+function contextRevisionLabel(snapshot: ContextTreeSnapshot): string | null {
+  const shortCommit = snapshot.headCommit?.slice(0, 7) ?? null;
+  if (snapshot.branch && shortCommit) return `Source: ${snapshot.branch} @ ${shortCommit}`;
+  if (snapshot.branch) return `Branch: ${snapshot.branch}`;
+  if (shortCommit) return `Commit: ${shortCommit}`;
+  return null;
 }
 
 function changeBadgeLabel(type: ContextTreeChangeType): string {
@@ -851,10 +1091,12 @@ function changeColor(type: ContextTreeChangeType): string {
   return "var(--danger)";
 }
 
-function nodeColor(type: ContextTreeChangeType | null, selected: boolean): string {
-  if (selected) return "var(--accent)";
-  if (type === "added") return "var(--ok)";
-  if (type === "edited") return "var(--warn)";
-  if (type === "removed") return "var(--danger)";
+function overviewNodeColor(node: LayoutNode): string {
+  if (node.isSummary) return "var(--bg-sunken)";
+  if (node.selected) return "var(--accent)";
+  // Any updated node (leaf with a changeType, or branch with rollup updates) uses
+  // accent-bg so the legend stays honest. Type details (added/edited/removed) are
+  // still surfaced via ChangePill in the update list and Selected Change panel.
+  if (node.changeType || node.updateCount > 0) return "var(--accent-bg)";
   return "var(--bg-raised)";
 }

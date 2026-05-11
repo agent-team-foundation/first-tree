@@ -145,8 +145,45 @@ export function extractMentions(text: string | null | undefined): string[] {
   return [...names];
 }
 
+/** Extract mentions from structural payload fields (not free-form text).
+ * GitHub's `pull_request.review_requested` puts the targeted reviewer in
+ * `requested_reviewer.login`, not in any text body — `extractMentions` would
+ * miss it. Team requests use `requested_team` instead, which we deliberately
+ * skip to stay consistent with `extractMentions` ignoring `@org/team`. */
+export function extractStructuralMentions(eventType: string, payload: unknown): string[] {
+  if (!isRecord(payload)) return [];
+  if (eventType !== "pull_request") return [];
+  if (payload.action !== "review_requested") return [];
+  const reviewer = isRecord(payload.requested_reviewer) ? payload.requested_reviewer : null;
+  const login = typeof reviewer?.login === "string" ? reviewer.login : null;
+  return login ? [login.toLowerCase()] : [];
+}
+
+/** Verdict on whether a delegate_mention target is eligible to receive a fan-out.
+ * Split from `routeMentionDelegations` so the rejection logic is unit-testable
+ * without mocking the fastify app / DB / chat service. */
+export type DelegateTargetVerdict = "ok" | "not_found" | "cross_org" | "inactive";
+
+const DELEGATE_VERDICT_MESSAGES: Record<DelegateTargetVerdict, string> = {
+  ok: "delegate_mention target eligible",
+  not_found: "delegate_mention target not found, skipping",
+  cross_org: "delegate_mention target belongs to another org, skipping",
+  inactive: "delegate_mention target not active, skipping",
+};
+
+export function evaluateDelegateTarget(
+  target: { organizationId: string; status: string } | undefined,
+  sourceOrgId: string,
+): DelegateTargetVerdict {
+  if (!target) return "not_found";
+  if (target.organizationId !== sourceOrgId) return "cross_org";
+  if (target.status !== "active") return "inactive";
+  return "ok";
+}
+
 type MentionContext = {
   event: string;
+  action?: string;
   repository: string;
   sender: string;
   title: string;
@@ -188,17 +225,30 @@ async function routeMentionDelegations(
   for (const agent of delegates) {
     if (agent.status !== "active" || !agent.delegateMention) continue;
 
-    // Verify delegate target exists and is active (delegateMention stores a UUID)
+    // Verify delegate target exists, is active, and belongs to the same org.
+    // Cross-org checks are split out so the log distinguishes "target gone"
+    // from "target misconfigured". `findOrCreateDirectChat` would also reject
+    // a cross-org pair (commit 6a68a6d / #292) but only as a generic
+    // BadRequestError swallowed by the catch below — the explicit check here
+    // surfaces a misconfiguration warning ops can act on.
     const [target] = await app.db
-      .select({ id: agents.uuid, status: agents.status })
+      .select({ id: agents.uuid, status: agents.status, organizationId: agents.organizationId })
       .from(agents)
       .where(eq(agents.uuid, agent.delegateMention))
       .limit(1);
 
-    if (!target || target.status !== "active") {
+    const verdict = evaluateDelegateTarget(target, organizationId);
+    if (verdict !== "ok") {
       log.warn(
-        { targetAgent: agent.delegateMention, sourceAgent: agent.name },
-        "delegate_mention target not active, skipping",
+        {
+          targetAgent: agent.delegateMention,
+          sourceAgent: agent.name,
+          sourceOrg: organizationId,
+          targetOrg: target?.organizationId,
+          targetStatus: target?.status,
+          verdict,
+        },
+        DELEGATE_VERDICT_MESSAGES[verdict],
       );
       continue;
     }
@@ -211,6 +261,7 @@ async function routeMentionDelegations(
           type: "github_mention",
           mentionedUser: agent.name,
           event: ctx.event,
+          action: ctx.action,
           repository: ctx.repository,
           sender: ctx.sender,
           title: ctx.title,
@@ -221,6 +272,7 @@ async function routeMentionDelegations(
           source: "github",
           event: "mention_delegation",
           mentionedUser: agent.name,
+          action: ctx.action,
         },
       });
       notifyRecipients(app.notifier, recipients, msg.id);
@@ -441,6 +493,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
   const sender = isRecord(payload.sender) ? payload.sender : null;
   const repository = typeof repo?.full_name === "string" ? repo.full_name : "";
   const senderLogin = typeof sender?.login === "string" ? sender.login : "";
+  const action = typeof payload.action === "string" ? payload.action : undefined;
 
   switch (eventType) {
     case "issues": {
@@ -448,6 +501,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
       if (!issue) return null;
       return {
         event: "issues",
+        action,
         repository,
         sender: senderLogin,
         title: `Issue #${issue.number}: ${issue.title}`,
@@ -461,6 +515,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
       if (!issue || !comment) return null;
       return {
         event: "issue_comment",
+        action,
         repository,
         sender: senderLogin,
         title: `Issue #${issue.number}: ${issue.title}`,
@@ -473,6 +528,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
       if (!pr) return null;
       return {
         event: "pull_request",
+        action,
         repository,
         sender: senderLogin,
         title: `PR #${pr.number}: ${pr.title}`,
@@ -486,6 +542,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
       if (!pr || !review) return null;
       return {
         event: "pull_request_review",
+        action,
         repository,
         sender: senderLogin,
         title: `PR #${pr.number}: ${pr.title}`,
@@ -499,6 +556,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
       if (!pr || !comment) return null;
       return {
         event: "pull_request_review_comment",
+        action,
         repository,
         sender: senderLogin,
         title: `PR #${pr.number}: ${pr.title}`,
@@ -511,6 +569,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
       if (!disc) return null;
       return {
         event: "discussion",
+        action,
         repository,
         sender: senderLogin,
         title: typeof disc.title === "string" ? disc.title : "",
@@ -524,6 +583,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
       if (!disc || !comment) return null;
       return {
         event: "discussion_comment",
+        action,
         repository,
         sender: senderLogin,
         title: typeof disc.title === "string" ? disc.title : "",
@@ -536,6 +596,7 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
       if (!comment) return null;
       return {
         event: "commit_comment",
+        action,
         repository,
         sender: senderLogin,
         title: "Commit comment",
@@ -559,7 +620,9 @@ async function handleMentionDelegation(
   payload: unknown,
 ): Promise<number> {
   const mentionText = extractEventText(eventType, payload);
-  const mentions = extractMentions(mentionText);
+  const textMentions = extractMentions(mentionText);
+  const structuralMentions = extractStructuralMentions(eventType, payload);
+  const mentions = [...new Set([...textMentions, ...structuralMentions])];
   const mentionCtx = extractEventContext(eventType, payload);
   if (mentions.length > 0 && mentionCtx) {
     return routeMentionDelegations(app, organizationId, mentions, mentionCtx);
@@ -567,11 +630,15 @@ async function handleMentionDelegation(
   return 0;
 }
 
-/** Actions that represent new/changed content (worth scanning for @mentions). */
+/** Actions that represent new/changed content (worth scanning for @mentions).
+ * Note: `pull_request.review_requested` doesn't carry an @mention in any
+ * text body — the reviewer is in `requested_reviewer.login`. We pick it up
+ * via `extractStructuralMentions`. The complementary `review_request_removed`
+ * is intentionally omitted to avoid notifying the reviewer twice. */
 const MENTION_ACTIONS: Record<string, string[]> = {
   issues: ["opened", "edited"],
   issue_comment: ["created"],
-  pull_request: ["opened", "edited"],
+  pull_request: ["opened", "edited", "review_requested"],
   pull_request_review: ["submitted"],
   pull_request_review_comment: ["created"],
   discussion: ["created", "edited"],

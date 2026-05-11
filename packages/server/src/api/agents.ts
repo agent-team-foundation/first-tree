@@ -131,7 +131,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { uuid: string } }>("/:uuid/test", async (request, reply) => {
     const { uuid } = request.params;
-    await requireAgentAccess(request, app.db, "manage");
+    const { agent: targetAgent } = await requireAgentAccess(request, app.db, "manage");
 
     const presence = await presenceService.getPresence(app.db, uuid);
     const wsConnected = hasActiveConnection(uuid);
@@ -189,10 +189,21 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
+    // Sender must live in the target's org. Without this scope, the owner
+    // lookup (delegate_mention → uuid) or the fallback ("any other active
+    // agent") can pick up an agent from an unrelated org — `findOrCreateDirectChat`
+    // would then refuse the pair, and historically (before that guard) it
+    // produced cross-org chats unreachable by their nominal owner.
     const [owner] = await app.db
       .select({ uuid: agents.uuid })
       .from(agents)
-      .where(and(eq(agents.delegateMention, uuid), eq(agents.status, "active")))
+      .where(
+        and(
+          eq(agents.delegateMention, uuid),
+          eq(agents.status, "active"),
+          eq(agents.organizationId, targetAgent.organizationId),
+        ),
+      )
       .limit(1);
 
     let senderId = owner?.uuid ?? null;
@@ -200,7 +211,13 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       const [other] = await app.db
         .select({ uuid: agents.uuid })
         .from(agents)
-        .where(and(ne(agents.uuid, uuid), eq(agents.status, "active")))
+        .where(
+          and(
+            ne(agents.uuid, uuid),
+            eq(agents.status, "active"),
+            eq(agents.organizationId, targetAgent.organizationId),
+          ),
+        )
         .limit(1);
       senderId = other?.uuid ?? null;
     }
@@ -208,7 +225,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     if (!senderId) {
       return reply.status(200).send({
         status: "error",
-        message: "No suitable sender found. Need at least one other active agent.",
+        message: "No suitable sender found. Need at least one other active agent in the same organization.",
         connection,
       });
     }
