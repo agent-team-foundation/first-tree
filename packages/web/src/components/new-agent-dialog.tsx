@@ -44,11 +44,14 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  *
  * Display-name-first layout (see docs/agent-naming-design.md §3.6):
  *   - "Display name" is the primary input at the top (required-feeling, unicode).
- *   - "Agent name" auto-slugifies from display name and carries the immutable
- *     `@` prefix adornment. Editing it severs the slug-follows-display-name
+ *   - The derived @handle previews under the display name as a quiet
+ *     `@my-dev-assistant · permanent · Edit` line. Most users never need to
+ *     touch it; clicking Edit reveals the full handle editor (input, helper,
+ *     availability status). Editing severs the slug-follows-display-name
  *     link so the user stays in control.
  *   - A debounced availability probe calls the server so collisions and
- *     reserved words surface inline before submit.
+ *     reserved words surface inline before submit; the error shows under
+ *     the compact preview too, so the collapsed view never hides a problem.
  *
  * Hidden defaults:
  *   - type = "personal_assistant"
@@ -111,6 +114,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [nameDirty, setNameDirty] = useState(false);
   const [visibility, setVisibility] = useState<AgentVisibility>("organization");
   const [runtime, setRuntime] = useState<RuntimeProvider>("claude-code");
+  // The @handle editor is collapsed by default — 99% of users keep the
+  // auto-derived slug. The preview line under "Display name" surfaces it
+  // and offers an Edit affordance for the rest.
+  const [editingHandle, setEditingHandle] = useState(false);
 
   const [step, setStep] = useState<Step>("form");
   const [candidateClients, setCandidateClients] = useState<HubClient[]>([]);
@@ -126,6 +133,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setNameDirty(false);
       setVisibility("organization");
       setRuntime("claude-code");
+      setEditingHandle(false);
       setStep("form");
       setCandidateClients([]);
       setPickedClientId(null);
@@ -392,72 +400,101 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 {fieldErrors.displayName}
               </p>
             )}
+            {/* Compact @handle preview. Lives inside the displayName block so
+                it reads as "and here's the handle that comes out of it";
+                appears only once the user has typed something so the dialog
+                opens quietly. */}
+            {!editingHandle && (displayName.trim() || name) && (
+              <div className="flex items-baseline gap-2 text-caption text-muted-foreground">
+                {name ? (
+                  <>
+                    <span className="font-mono">@{name}</span>
+                    <span aria-hidden>·</span>
+                    <span>permanent</span>
+                  </>
+                ) : (
+                  <span className="italic">No @handle from this display name</span>
+                )}
+                <span aria-hidden>·</span>
+                <button
+                  type="button"
+                  onClick={() => setEditingHandle(true)}
+                  className="text-foreground underline underline-offset-2 hover:text-primary focus:outline-none focus-visible:text-primary"
+                >
+                  Edit
+                </button>
+              </div>
+            )}
+            {!editingHandle && fieldErrors.name && <p className="text-caption text-destructive">{fieldErrors.name}</p>}
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="new-agent-name">Agent name</Label>
-            <div className="flex items-stretch">
-              <span
-                aria-hidden
-                className="inline-flex items-center px-2 font-mono text-body text-muted-foreground border border-r-0 border-input rounded-l-[var(--radius-input)] bg-muted/40"
-              >
-                @
-              </span>
-              <Input
-                id="new-agent-name"
-                value={name}
-                onChange={(e) => {
-                  // `normalizeNameInput` keeps trailing `-`/`_` so users
-                  // can type `alice-bot` one char at a time; the stricter
-                  // `slugify` fires only on blur to tidy a trailing
-                  // separator the user never follows up with a letter.
-                  const next = normalizeNameInput(e.target.value);
-                  setName(next);
-                  setNameDirty(true);
-                  if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
-                }}
-                onBlur={(e) => {
-                  const cleaned = slugify(e.target.value);
-                  if (cleaned !== name) setName(cleaned);
-                }}
-                placeholder="my-dev-assistant"
-                className="rounded-l-none font-mono"
-                maxLength={AGENT_NAME_MAX_LENGTH}
-                aria-invalid={fieldErrors.name ? true : undefined}
-                aria-describedby="new-agent-name-help new-agent-name-error new-agent-name-status"
-              />
+          {editingHandle && (
+            <div className="space-y-2">
+              <Label htmlFor="new-agent-name">Agent name</Label>
+              <div className="flex items-stretch">
+                <span
+                  aria-hidden
+                  className="inline-flex items-center px-2 font-mono text-body text-muted-foreground border border-r-0 border-input rounded-l-[var(--radius-input)] bg-muted/40"
+                >
+                  @
+                </span>
+                <Input
+                  id="new-agent-name"
+                  value={name}
+                  autoFocus
+                  onChange={(e) => {
+                    // `normalizeNameInput` keeps trailing `-`/`_` so users
+                    // can type `alice-bot` one char at a time; the stricter
+                    // `slugify` fires only on blur to tidy a trailing
+                    // separator the user never follows up with a letter.
+                    const next = normalizeNameInput(e.target.value);
+                    setName(next);
+                    setNameDirty(true);
+                    if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
+                  }}
+                  onBlur={(e) => {
+                    const cleaned = slugify(e.target.value);
+                    if (cleaned !== name) setName(cleaned);
+                  }}
+                  placeholder="my-dev-assistant"
+                  className="rounded-l-none font-mono"
+                  maxLength={AGENT_NAME_MAX_LENGTH}
+                  aria-invalid={fieldErrors.name ? true : undefined}
+                  aria-describedby="new-agent-name-help new-agent-name-error new-agent-name-status"
+                />
+              </div>
+              <p id="new-agent-name-help" className="text-caption text-muted-foreground">
+                Used in @mentions and CLI commands. Lowercase letters, digits, hyphens (-), and underscores (_). Up to{" "}
+                {AGENT_NAME_MAX_LENGTH} characters. Permanent after creation.
+              </p>
+              {/* availability chip — only renders when there's a status worth
+                  announcing. We skip it for the `idle` case (no name typed, or
+                  the probe network-failed) so screen readers don't land on an
+                  empty paragraph via `aria-describedby`. */}
+              {name && !fieldErrors.name && availability.status !== "idle" && (
+                <p
+                  id="new-agent-name-status"
+                  className="text-caption"
+                  style={{
+                    color:
+                      availability.status === "ok"
+                        ? "var(--state-idle)"
+                        : availability.status === "checking"
+                          ? "var(--fg-3)"
+                          : "var(--fg-4)",
+                  }}
+                >
+                  {availability.status === "checking" && "Checking availability…"}
+                  {availability.status === "ok" && "Available."}
+                </p>
+              )}
+              {fieldErrors.name && (
+                <p id="new-agent-name-error" className="text-caption text-destructive">
+                  {fieldErrors.name}
+                </p>
+              )}
             </div>
-            <p id="new-agent-name-help" className="text-caption text-muted-foreground">
-              Used in @mentions and CLI commands. Lowercase letters, digits, hyphens (-), and underscores (_). Up to{" "}
-              {AGENT_NAME_MAX_LENGTH} characters. Permanent after creation.
-            </p>
-            {/* availability chip — only renders when there's a status worth
-                announcing. We skip it for the `idle` case (no name typed, or
-                the probe network-failed) so screen readers don't land on an
-                empty paragraph via `aria-describedby`. */}
-            {name && !fieldErrors.name && availability.status !== "idle" && (
-              <p
-                id="new-agent-name-status"
-                className="text-caption"
-                style={{
-                  color:
-                    availability.status === "ok"
-                      ? "var(--state-idle)"
-                      : availability.status === "checking"
-                        ? "var(--fg-3)"
-                        : "var(--fg-4)",
-                }}
-              >
-                {availability.status === "checking" && "Checking availability…"}
-                {availability.status === "ok" && "Available."}
-              </p>
-            )}
-            {fieldErrors.name && (
-              <p id="new-agent-name-error" className="text-caption text-destructive">
-                {fieldErrors.name}
-              </p>
-            )}
-          </div>
+          )}
 
           <div className="space-y-2">
             <Label>Visibility</Label>
