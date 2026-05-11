@@ -15,6 +15,13 @@ export default defineConfig({
       { text: "cloud", link: "/cloud/" },
     ],
 
+    socialLinks: [
+      {
+        icon: "github",
+        link: "https://github.com/agent-team-foundation/first-tree",
+      },
+    ],
+
     sidebar: {
       "/cli/": {
         base: "/cli/",
@@ -25,9 +32,5 @@ export default defineConfig({
         items: [{ text: "Cloud", link: "/cloud/" }],
       },
     },
-
-    socialLinks: [
-      { icon: "github", link: "https://github.com/vuejs/vitepress" },
-    ],
   },
 });
