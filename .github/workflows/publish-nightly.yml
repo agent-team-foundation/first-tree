@@ -65,3 +65,20 @@ jobs:
         run: |
           echo "Published version: ${{ steps.version.outputs.version }}"
           echo "NPM dist-tag: nightly"
+
+      - name: Send feishu message
+        if: always()
+        env:
+          ACTIONS_FEISHU_TAG: "v1.3.1"
+          INPUT_WEBHOOK: "${{ secrets.RELEASE_BOT_URL }}"
+          INPUT_MESSAGE_TYPE: "post"
+          INPUT_TITLE: "Publish Nightly Package"
+          INPUT_CONTENT: |
+            发布是否成功：${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
+            当前发布版本：${{ steps.version.outputs.version }}
+            安装说明：npm install -g first-tree@nightly
+            运行链接：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          wget -q https://github.com/xiachufang/actions-feishu/releases/download/${{ env.ACTIONS_FEISHU_TAG }}/linux-amd64-actions-feishu.tar.gz
+          tar zxf linux-amd64-actions-feishu.tar.gz feishu
+          ./feishu
