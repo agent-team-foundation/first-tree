@@ -16,6 +16,7 @@ import { createLogger, messageAttrs, withSpan } from "../observability/index.js"
 import { upsertSessionState } from "./activity.js";
 import { findOrCreateDirectChat } from "./chat.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
+import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from "./questions.js";
 
 const log = createLogger("message");
 
@@ -173,6 +174,15 @@ async function sendMessageInner(
       }
     }
 
+    // 2d. Defensive: only Claude-runtime agents may emit ask-user questions.
+    //     Codex SDK has no ask-user surface, so any `format=question` message
+    //     coming from a codex-runtime sender is a runtime regression. We
+    //     surface it as 403 here rather than silently writing the row, so
+    //     the buggy caller is forced to fix itself. See questions.ts.
+    if (data.format === "question") {
+      await assertSenderMayEmitQuestion(tx, senderId);
+    }
+
     // 3. Store the message (with merged metadata + normalised content).
     const messageId = randomUUID();
     const [msg] = await tx
@@ -190,6 +200,19 @@ async function sendMessageInner(
         source: data.source ?? null,
       })
       .returning();
+
+    // 3b. For ask-user questions, record the pending lifecycle row in the
+    //     same transaction so a rollback drops both. The content was just
+    //     stored verbatim above; recordPendingQuestionFromMessage parses it
+    //     to extract the correlationId and rejects malformed payloads.
+    if (data.format === "question" && msg) {
+      await recordPendingQuestionFromMessage(tx, {
+        agentId: senderId,
+        chatId,
+        messageId: msg.id,
+        content: outboundContent,
+      });
+    }
 
     // 4. Fan-out: create inbox entries for every non-sender participant.
     //    The `notify` flag splits them in two:
