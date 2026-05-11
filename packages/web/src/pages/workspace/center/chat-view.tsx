@@ -6,7 +6,7 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getActivityOverview } from "../../../api/activity.js";
 import {
   type FileMessageContent,
@@ -21,6 +21,7 @@ import {
 } from "../../../api/chats.js";
 import { getImage, putImage } from "../../../api/image-store.js";
 import { addMeChatParticipants } from "../../../api/me-chats.js";
+import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -37,6 +38,7 @@ import {
   type QuestionStatus,
 } from "../../../components/chat/question-message.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
+import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
   ambiguousDisplayNames,
   groupAndSortCandidates,
@@ -632,9 +634,32 @@ export function ChatView({
     focusPrimedRef.current = false;
   }, [chatId]);
 
+  // Hydrate timeline from local IndexedDB cache so chat-switches feel
+  // instant (no spinner-then-content flash). Cache scope is messages only;
+  // session_events / session_outputs are session-lifecycle scoped on the
+  // server (see agent-hub/client-runtime.md) and intentionally not cached.
+  // staleTime: Infinity — cache lookup never re-fetches; React Query's
+  // gcTime keeps the result in memory for instant re-display when the user
+  // bounces between chats.
+  const { data: cachedMessages } = useQuery({
+    queryKey: ["chat-messages-cache", chatId],
+    queryFn: () => getCachedMessages(chatId),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+  // Server fetch — same 5s polling as before, plus a fire-and-forget
+  // write-through to the cache so subsequent opens hit hot. The cache
+  // write is intentionally not awaited: it must never delay rendering or
+  // surface as an error to the user; on IndexedDB unavailability it
+  // silently no-ops.
   const { data: messagesData } = useQuery({
     queryKey: ["chat-messages", chatId],
-    queryFn: () => listChatMessages(chatId, { limit: 50 }),
+    queryFn: async () => {
+      const fresh = await listChatMessages(chatId, { limit: 50 });
+      void cacheMessages(chatId, fresh.items);
+      return fresh;
+    },
     refetchInterval: 5_000,
   });
 
@@ -798,17 +823,57 @@ export function ChatView({
    * turn-grouping filter so completed turns collapse to just their result
    * message. See `filterEventsForTimeline` for the full rules.
    */
+  // Merge cached + server messages, dedup by id (server wins so updated
+  // delivery status / metadata overrides any older cached copy), and
+  // sort by createdAt. This is the union the timeline renders from.
+  const mergedMessages = useMemo<MessageWithDelivery[]>(() => {
+    const fromCache = cachedMessages ?? [];
+    const fromServer = messagesData?.items ?? [];
+    const byId = new Map<string, MessageWithDelivery>();
+    for (const m of fromCache) byId.set(m.id, m);
+    for (const m of fromServer) byId.set(m.id, m);
+    return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }, [cachedMessages, messagesData]);
+
+  // Detect a known gap between the cache range and the server's "last 50"
+  // window: if there's no overlap and the server's oldest fetched message
+  // is strictly newer than the cache's newest, the user was away long
+  // enough that more than 50 messages went past in between, and we have
+  // no way to fill them in until cursor pagination ships. Render a banner
+  // after the message id returned here. Returns null when there's overlap
+  // (the common case) or when either side is empty.
+  const gapAfterMessageId = useMemo<string | null>(() => {
+    const fromCache = cachedMessages ?? [];
+    const fromServer = messagesData?.items ?? [];
+    const firstCached = fromCache[0];
+    const firstServer = fromServer[0];
+    if (!firstCached || !firstServer) return null;
+    const serverIds = new Set(fromServer.map((m) => m.id));
+    for (const cached of fromCache) {
+      if (serverIds.has(cached.id)) return null;
+    }
+    let newestCached = firstCached;
+    for (const m of fromCache) {
+      if (m.createdAt > newestCached.createdAt) newestCached = m;
+    }
+    let oldestServer = firstServer;
+    for (const m of fromServer) {
+      if (m.createdAt < oldestServer.createdAt) oldestServer = m;
+    }
+    if (oldestServer.createdAt <= newestCached.createdAt) return null;
+    return newestCached.id;
+  }, [cachedMessages, messagesData]);
+
   const items: TimelineItem[] = useMemo(() => {
-    const msgs = messagesData?.items ?? [];
     const visibleEvents = filterEventsForTimeline(eventsData?.items ?? []);
 
     const out: TimelineItem[] = [
-      ...msgs.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
+      ...mergedMessages.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
       ...visibleEvents.map((e) => ({ kind: "event" as const, at: e.createdAt, key: `e-${e.id}`, data: e })),
     ];
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
-  }, [messagesData, eventsData]);
+  }, [mergedMessages, eventsData]);
 
   /**
    * For every `format=question` message we render, we need the matching
@@ -1183,43 +1248,56 @@ export function ChatView({
             </div>
           )}
           <div className="flex flex-col" style={{ gap: 4 }}>
-            {items.map((item) => {
+            {items.flatMap((item) => {
+              let node: ReactNode = null;
               if (item.kind === "event") {
                 const ev = item.data;
                 switch (ev.kind) {
                   case "tool_call":
-                    return <ToolCallStatusRow key={item.key} event={ev} />;
+                    node = <ToolCallStatusRow key={item.key} event={ev} />;
+                    break;
                   case "assistant_text":
-                    return <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
+                    node = <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
+                    break;
                   case "thinking":
-                    return <ThinkingRow key={item.key} event={ev} />;
+                    node = <ThinkingRow key={item.key} event={ev} />;
+                    break;
                   case "error":
-                    return <ErrorRow key={item.key} event={ev} />;
+                    node = <ErrorRow key={item.key} event={ev} />;
+                    break;
                   default:
                     // turn_end is filtered upstream; any unknown kind is dropped.
-                    return null;
+                    node = null;
+                }
+              } else {
+                const msg = item.data;
+                if (msg.format === "question" && isQuestionContent(msg.content)) {
+                  const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
+                  const status: QuestionStatus = answer ? "answered" : "pending";
+                  node = (
+                    <QuestionMessageRow
+                      key={item.key}
+                      msg={msg}
+                      chatId={chatId}
+                      content={msg.content}
+                      answer={answer}
+                      status={status}
+                      agentNameFn={agentName}
+                    />
+                  );
+                } else if (msg.format === "question_answer") {
+                  node = <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={agentName} />;
+                } else {
+                  node = <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={agentName} />;
                 }
               }
-              const msg = item.data;
-              if (msg.format === "question" && isQuestionContent(msg.content)) {
-                const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
-                const status: QuestionStatus = answer ? "answered" : "pending";
-                return (
-                  <QuestionMessageRow
-                    key={item.key}
-                    msg={msg}
-                    chatId={chatId}
-                    content={msg.content}
-                    answer={answer}
-                    status={status}
-                    agentNameFn={agentName}
-                  />
-                );
+              // Insert the gap banner immediately after the last cached
+              // message when there's a known break between cache and the
+              // server window.
+              if (item.kind === "message" && item.data.id === gapAfterMessageId) {
+                return [node, <HistoryGapBanner key={`gap-after-${item.data.id}`} />];
               }
-              if (msg.format === "question_answer") {
-                return <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={agentName} />;
-              }
-              return <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={agentName} />;
+              return node;
             })}
           </div>
           <div ref={messagesEndRef} />
