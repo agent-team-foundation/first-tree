@@ -174,6 +174,21 @@ export async function buildApp(config: Config) {
     );
   }
 
+  // Dead env-var watchdog. PR #256 moved the Context Tree repo URL from a
+  // deployment-level env (FIRST_TREE_HUB_CONTEXT_TREE_REPO) to per-org Team
+  // Settings (organization_settings.context_tree). The env var is no longer
+  // read by any code, so operators who still have it set on a deploy may
+  // assume Context Tree is configured when it isn't. Surface a one-line WARN
+  // at boot so the next operator who inherits the deploy sees it in startup
+  // logs and cleans up. See #279.
+  if (process.env.FIRST_TREE_HUB_CONTEXT_TREE_REPO) {
+    app.log.warn(
+      "FIRST_TREE_HUB_CONTEXT_TREE_REPO is set but no longer read since PR #256. " +
+        "Remove it from your deployment env. Per-org Team Settings is now the " +
+        "source of truth for the Context Tree binding.",
+    );
+  }
+
   // HTTP tracing — `@autotelic/fastify-opentelemetry` opens one span on
   // `onRequest`, ends it on `onResponse`. No per-hook child spans (so we
   // never see `handler - async (app) => …` noise), and the span is exposed

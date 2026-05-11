@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
@@ -88,6 +88,52 @@ describe("buildApp — token-lifetime config validation", () => {
       await expect(async () => {
         app = await buildApp(cfg);
       }).rejects.toThrow(/access=30m, refresh=bogus, connect=10m/);
+    } finally {
+      await safeClose(app);
+    }
+  });
+});
+
+describe("buildApp — dead env-var watchdog", () => {
+  const ENV_KEY = "FIRST_TREE_HUB_CONTEXT_TREE_REPO";
+  let originalEnvValue: string | undefined;
+
+  beforeEach(() => {
+    originalEnvValue = process.env[ENV_KEY];
+  });
+
+  afterEach(() => {
+    if (originalEnvValue === undefined) {
+      delete process.env[ENV_KEY];
+    } else {
+      process.env[ENV_KEY] = originalEnvValue;
+    }
+  });
+
+  // We deliberately don't assert the warn message text — pino's level dispatch
+  // plus Fastify's logger wiring make spying on `rootLogger.warn` flaky from a
+  // unit test. The watchdog is one if-block in `buildApp`; a code reviewer can
+  // confirm the message text by reading it. What this test DOES guarantee is
+  // that the watchdog stays on the boot path: the env var being set must not
+  // crash boot, and the env var being unset must remain the normal happy path.
+
+  it("boots cleanly when FIRST_TREE_HUB_CONTEXT_TREE_REPO is set (warn-only, no crash)", async () => {
+    process.env[ENV_KEY] = "https://github.com/example/x";
+    let app: FastifyInstance | undefined;
+    try {
+      app = await buildApp(baseConfig);
+      expect(app).toBeDefined();
+    } finally {
+      await safeClose(app);
+    }
+  });
+
+  it("boots cleanly when FIRST_TREE_HUB_CONTEXT_TREE_REPO is unset", async () => {
+    delete process.env[ENV_KEY];
+    let app: FastifyInstance | undefined;
+    try {
+      app = await buildApp(baseConfig);
+      expect(app).toBeDefined();
     } finally {
       await safeClose(app);
     }
