@@ -6,8 +6,8 @@ import type {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
-import { AlertTriangle, CheckCircle2, Copy, FolderTree, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, CheckCircle2, ChevronRight, Copy, FolderTree, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { type ContextTreeWindow, getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
@@ -21,22 +21,23 @@ const CONTEXT_WINDOWS: Array<{ value: ContextTreeWindow; label: string; summary:
   { value: "30d", label: "30 days", summary: "last 30 days" },
 ];
 
-export function ContextPage() {
+export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTreeSnapshot } = {}) {
   const { organizationId } = useAuth();
   const [window, setWindow] = useState<ContextTreeWindow>("7d");
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
   const [selectedOverviewNodeId, setSelectedOverviewNodeId] = useState<string | null>(null);
+  const preview = previewSnapshot !== undefined;
 
   const query = useQuery({
-    queryKey: ["context-tree-snapshot", organizationId, window],
+    queryKey: ["context-tree-snapshot", organizationId, window, preview],
     queryFn: () => {
       if (!organizationId) throw new Error("No organization selected");
       return getContextTreeSnapshot(organizationId, window);
     },
-    enabled: !!organizationId,
+    enabled: !preview && !!organizationId,
   });
 
-  const snapshot = query.data;
+  const snapshot = previewSnapshot ?? query.data;
   const selectedUpdate = useMemo(() => {
     if (!snapshot) return null;
     return snapshot.updates.find((update) => update.id === selectedUpdateId) ?? snapshot.updates[0] ?? null;
@@ -59,11 +60,11 @@ export function ContextPage() {
     <div className="-m-6">
       <PageHeader title="Context" subtitle="Team context available to agents, and how it is changing" />
       <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
-        {query.isLoading ? <LoadingState /> : null}
-        {query.error ? (
+        {!preview && query.isLoading ? <LoadingState /> : null}
+        {!preview && query.error ? (
           <ErrorState message={query.error instanceof Error ? query.error.message : "Failed to load"} />
         ) : null}
-        {snapshot && !query.isLoading ? (
+        {snapshot && (preview || !query.isLoading) ? (
           <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
             {snapshot.snapshotStatus === "unavailable" ? (
               <UnavailableState snapshot={snapshot} />
@@ -412,18 +413,35 @@ function TreeOverview({
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string) => void;
 }) {
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set());
   const counts = useMemo(() => changedCounts(snapshot.nodes), [snapshot.nodes]);
   const visibleNodes = useMemo(
-    () => layoutTree(snapshot.nodes, selectedNodeId, counts),
-    [selectedNodeId, snapshot.nodes, counts],
+    () => layoutTree(snapshot.nodes, selectedNodeId, counts, expandedParents),
+    [selectedNodeId, snapshot.nodes, counts, expandedParents],
   );
+
+  // Callback ref attached only to the currently selected node's button. Fires
+  // when the selected button mounts (after a selection change) so it scrolls
+  // into view if it was off-screen — no separate effect / dep dance.
+  const scrollSelectedIntoView = useCallback((el: HTMLButtonElement | null) => {
+    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, []);
+
+  const toggleAggregate = useCallback((parentId: string) => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
+      return next;
+    });
+  }, []);
   const width = Math.max(760, ...visibleNodes.map((node) => node.x + 280));
   const height = Math.max(280, ...visibleNodes.map((node) => node.y + 48));
   // Render the SVG at its natural pixel height so nodes never get squished by
   // `preserveAspectRatio="meet"`. When the tree is taller than the soft cap, the
   // container scrolls instead — keeps small trees compact, big trees readable.
-  const naturalHeight = Math.max(220, height + 24);
-  const SOFT_HEIGHT_CAP = 360;
+  const naturalHeight = height + 24;
+  const SOFT_HEIGHT_CAP = 560;
   const overflowsCap = naturalHeight > SOFT_HEIGHT_CAP;
   const selectedPath = overviewSelectedPath(snapshot.nodes, selectedNodeId);
 
@@ -471,6 +489,7 @@ function TreeOverview({
               style={{
                 overflow: overflowsCap ? "auto" : "hidden",
                 maxHeight: overflowsCap ? `${SOFT_HEIGHT_CAP}px` : undefined,
+                minHeight: `${Math.min(naturalHeight, SOFT_HEIGHT_CAP)}px`,
               }}
             >
               <svg
@@ -495,35 +514,62 @@ function TreeOverview({
                   ) : null,
                 )}
                 {visibleNodes.map((node) => {
+                  const interactive = node.isSummary || node.sourceNodeId !== null;
+                  const handleClick = () => {
+                    if (node.isSummary && node.parentId) {
+                      toggleAggregate(node.parentId);
+                    } else if (node.sourceNodeId) {
+                      onSelectNode(node.sourceNodeId);
+                    }
+                  };
                   return (
                     <foreignObject key={node.id} x={node.x - 10} y={node.y - 15} width={width - node.x - 8} height={30}>
                       <button
+                        ref={node.selected ? scrollSelectedIntoView : undefined}
                         type="button"
-                        disabled={node.sourceNodeId === null}
-                        onClick={() => {
-                          if (node.sourceNodeId) onSelectNode(node.sourceNodeId);
-                        }}
-                        className="flex w-full items-center text-left text-label"
+                        disabled={!interactive}
+                        onClick={handleClick}
+                        className="flex w-full items-center text-left text-label transition-colors"
                         style={{
+                          background: "transparent",
                           color: node.muted ? "var(--fg-3)" : "var(--fg)",
-                          cursor: node.sourceNodeId ? "pointer" : "default",
+                          cursor: interactive ? "pointer" : "default",
                           gap: "var(--sp-2)",
                           opacity: node.muted ? 0.66 : 1,
+                          padding: "0 var(--sp-1)",
+                        }}
+                        onMouseEnter={(event) => {
+                          if (interactive) event.currentTarget.style.background = "var(--bg-sunken)";
+                        }}
+                        onMouseLeave={(event) => {
+                          event.currentTarget.style.background = "transparent";
                         }}
                       >
-                        <span
-                          aria-hidden="true"
-                          style={{
-                            width: node.selected ? "var(--sp-4)" : "var(--sp-3)",
-                            height: node.selected ? "var(--sp-4)" : "var(--sp-3)",
-                            borderRadius: "50%",
-                            background: overviewNodeColor(node),
-                            border: `${node.selected ? "var(--hairline-bold)" : "var(--hairline)"} solid ${
-                              node.selected ? "var(--accent)" : "var(--border-strong)"
-                            }`,
-                            flex: "0 0 auto",
-                          }}
-                        />
+                        {node.isSummary ? (
+                          <ChevronRight
+                            size={12}
+                            style={{
+                              color: "var(--fg-4)",
+                              flex: "0 0 auto",
+                              transform: node.isExpanded ? "rotate(90deg)" : undefined,
+                              transition: "transform 120ms",
+                            }}
+                          />
+                        ) : (
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: node.selected ? "var(--sp-4)" : "var(--sp-3)",
+                              height: node.selected ? "var(--sp-4)" : "var(--sp-3)",
+                              borderRadius: "50%",
+                              background: overviewNodeColor(node),
+                              border: `${node.selected ? "var(--hairline-bold)" : "var(--hairline)"} solid ${
+                                node.selected ? "var(--accent)" : overviewNodeBorder(node)
+                              }`,
+                              flex: "0 0 auto",
+                            }}
+                          />
+                        )}
                         <span
                           className={node.selectedPath ? "font-semibold" : "font-medium"}
                           style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
@@ -780,7 +826,11 @@ function EmptyChanges() {
   );
 }
 
-const OVERVIEW_DEFAULT_DEPTH = 2;
+// Always show root + top-level branches. Anything deeper only shows when it
+// actually has activity (own changes or descendants with changes) or sits on
+// the selected lineage. Keeps the overview focused on "where things changed"
+// instead of flooding the canvas with quiet L2 children.
+const OVERVIEW_DEFAULT_DEPTH = 1;
 const OVERVIEW_CHANGED_BRANCH_DEPTH = 3;
 
 type OverviewDatum = {
@@ -792,6 +842,10 @@ type OverviewDatum = {
   changeType: ContextTreeChangeType | null;
   updateCount: number;
   isSummary: boolean;
+  // For summary aggregates only: whether the parent is currently expanded
+  // (children that would normally be hidden are showing). Drives chevron
+  // orientation and click semantics (toggle off vs toggle on).
+  isExpanded: boolean;
   selected: boolean;
   selectedPath: boolean;
   muted: boolean;
@@ -807,8 +861,9 @@ function layoutTree(
   nodes: ContextTreeNode[],
   selectedNodeId: string | null,
   counts: Map<string, number>,
+  expandedParents: Set<string>,
 ): LayoutNode[] {
-  const overviewNodes = buildOverviewNodes(nodes, selectedNodeId, counts);
+  const overviewNodes = buildOverviewNodes(nodes, selectedNodeId, counts, expandedParents);
   if (overviewNodes.length === 0) return [];
 
   const root = stratify<OverviewDatum>()
@@ -818,7 +873,7 @@ function layoutTree(
       if (a.data.isSummary !== b.data.isSummary) return a.data.isSummary ? 1 : -1;
       return a.data.path.localeCompare(b.data.path);
     });
-  const pointRoot = tree<OverviewDatum>().nodeSize([42, 190])(root);
+  const pointRoot = tree<OverviewDatum>().nodeSize([30, 170])(root);
   const points = pointRoot.descendants();
   const minX = Math.min(...points.map((point) => point.x));
   const laidOut = points.map((point) => ({
@@ -838,6 +893,7 @@ function buildOverviewNodes(
   nodes: ContextTreeNode[],
   selectedNodeId: string | null,
   counts: Map<string, number>,
+  expandedParents: Set<string>,
 ): OverviewDatum[] {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const validNodes = nodes
@@ -847,7 +903,11 @@ function buildOverviewNodes(
 
   const childrenByParent = childMap(validNodes);
   const selectedPath = selectedPathIds(selectedNodeId, byId);
-  const visibleIds = new Set<string>();
+  // compactVisibleIds = what the default depth/changed-branch rule shows. We
+  // track this separately from visibleIds so the "X hidden quiet areas"
+  // summary stays as a *toggle* even after the user expands a parent —
+  // otherwise expanding hides the only way to collapse again.
+  const compactVisibleIds = new Set<string>();
   const depthById = new Map<string, number>();
 
   for (const node of validNodes) {
@@ -856,9 +916,17 @@ function buildOverviewNodes(
     if (
       depth <= OVERVIEW_DEFAULT_DEPTH ||
       selectedPath.has(node.id) ||
-      (updateCount > 0 && depth <= OVERVIEW_CHANGED_BRANCH_DEPTH && node.kind !== "leaf")
+      (updateCount > 0 && depth <= OVERVIEW_CHANGED_BRANCH_DEPTH)
     ) {
-      addWithAncestors(node.id, byId, visibleIds);
+      addWithAncestors(node.id, byId, compactVisibleIds);
+    }
+  }
+
+  const visibleIds = new Set(compactVisibleIds);
+  for (const parentId of expandedParents) {
+    if (!visibleIds.has(parentId)) continue;
+    for (const child of childrenByParent.get(parentId) ?? []) {
+      visibleIds.add(child.id);
     }
   }
 
@@ -877,6 +945,7 @@ function buildOverviewNodes(
         changeType: node.changeType,
         updateCount,
         isSummary: false,
+        isExpanded: false,
         selected: selectedNodeId === node.id,
         selectedPath: selectedPathNode,
         muted: selectedActive && !selectedPathNode && updateCount === 0,
@@ -886,18 +955,22 @@ function buildOverviewNodes(
   const summaryNodes: OverviewDatum[] = [];
   for (const node of validNodes) {
     if (!visibleIds.has(node.id)) continue;
-    const hiddenChildren = (childrenByParent.get(node.id) ?? []).filter((child) => !visibleIds.has(child.id));
-    if (hiddenChildren.length === 0) continue;
-    const changedHiddenCount = hiddenChildren.filter((child) => (counts.get(child.id) ?? 0) > 0).length;
+    const naturallyHidden = (childrenByParent.get(node.id) ?? []).filter((child) => !compactVisibleIds.has(child.id));
+    if (naturallyHidden.length === 0) continue;
+    const isExpanded = expandedParents.has(node.id);
+    const changedHiddenCount = naturallyHidden.filter((child) => (counts.get(child.id) ?? 0) > 0).length;
     summaryNodes.push({
       id: `summary:${node.id}`,
       parentId: node.id,
       sourceNodeId: null,
-      title: summaryTitle(hiddenChildren.length, changedHiddenCount),
+      title: isExpanded
+        ? `Hide ${naturallyHidden.length} quiet area${naturallyHidden.length === 1 ? "" : "s"}`
+        : summaryTitle(naturallyHidden.length, changedHiddenCount),
       path: `${node.path}/~summary`,
       changeType: null,
       updateCount: changedHiddenCount,
       isSummary: true,
+      isExpanded,
       selected: false,
       selectedPath: selectedPath.has(node.id),
       muted: selectedActive && !selectedPath.has(node.id),
@@ -1094,9 +1167,15 @@ function changeColor(type: ContextTreeChangeType): string {
 function overviewNodeColor(node: LayoutNode): string {
   if (node.isSummary) return "var(--bg-sunken)";
   if (node.selected) return "var(--accent)";
-  // Any updated node (leaf with a changeType, or branch with rollup updates) uses
-  // accent-bg so the legend stays honest. Type details (added/edited/removed) are
-  // still surfaced via ChangePill in the update list and Selected Change panel.
-  if (node.changeType || node.updateCount > 0) return "var(--accent-bg)";
+  // Nodes with their own change-type get severity color (added=ok / edited=warn /
+  // removed=danger) so the map surfaces *what kind* of change happened, not just
+  // that something changed. Pure rollup branches stay neutral accent-bg.
+  if (node.changeType) return changeColor(node.changeType);
+  if (node.updateCount > 0) return "var(--accent-bg)";
   return "var(--bg-raised)";
+}
+
+function overviewNodeBorder(node: LayoutNode): string {
+  if (node.changeType) return changeColor(node.changeType);
+  return "var(--border-strong)";
 }
