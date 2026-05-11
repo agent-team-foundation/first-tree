@@ -160,7 +160,11 @@ describe("org-settings service", () => {
     ).rejects.toThrow();
   });
 
-  it("rejects non-HTTPS or credential-bearing Context Tree repo URLs", async () => {
+  it("accepts HTTPS, ssh://, and scp-like Context Tree repo URLs (no embedded credentials)", async () => {
+    // Schema accepts both protocols so the client-side fallback layer can
+    // pick whichever the user has credentials for. We still reject embedded
+    // credentials (logs / API responses would leak them) and `http://`
+    // (plaintext, MITM-able).
     const app = getApp();
     const admin = await createTestAdmin(app);
     const putRepo = (repo: string) =>
@@ -172,8 +176,17 @@ describe("org-settings service", () => {
         { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
       );
 
-    await expect(putRepo("ssh://git@github.com/example/tree.git")).rejects.toThrow();
-    await expect(putRepo("https://user:secret@github.com/example/tree.git")).rejects.toThrow();
+    // All three accepted forms.
+    await expect(putRepo("https://github.com/example/tree.git")).resolves.toBeDefined();
+    await expect(putRepo("ssh://git@github.com/example/tree.git")).resolves.toBeDefined();
+    await expect(putRepo("git@github.com:example/tree.git")).resolves.toBeDefined();
+
+    // Embedded credentials always rejected, regardless of protocol.
+    await expect(putRepo("https://user:secret@github.com/example/tree.git")).rejects.toThrow(/credentials/);
+    await expect(putRepo("ssh://git:secret@github.com/example/tree.git")).rejects.toThrow(/credentials/);
+    // Plaintext / unauthenticated protocols still rejected.
+    await expect(putRepo("http://github.com/example/tree")).rejects.toThrow();
+    await expect(putRepo("git://github.com/example/tree")).rejects.toThrow();
   });
 
   it("putOrgSetting bumps version on subsequent writes", async () => {
@@ -327,18 +340,45 @@ describe("org-settings service", () => {
     ).rejects.toThrow();
   });
 
-  it("source_repos rejects http:// URLs (HTTPS-only)", async () => {
+  it("source_repos rejects insecure / unauthenticated protocols (http://, git://)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    await expect(
+    const putUrl = (url: string) =>
       orgSettingsService.putOrgSetting(
         app.db,
         admin.organizationId,
         "source_repos",
-        { repos: [{ url: "http://github.com/example/insecure" }] },
+        { repos: [{ url }] },
         { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-      ),
-    ).rejects.toThrow(/HTTPS/);
+      );
+
+    await expect(putUrl("http://github.com/example/insecure")).rejects.toThrow(/HTTPS or SSH/);
+    await expect(putUrl("git://github.com/example/insecure")).rejects.toThrow();
+  });
+
+  it("source_repos accepts ssh:// and scp-like SSH URLs alongside HTTPS", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const out = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "source_repos",
+      {
+        repos: [
+          { url: "https://github.com/example/https-form" },
+          { url: "ssh://git@github.com/example/ssh-url-form.git" },
+          { url: "git@github.com:example/scp-form.git" },
+        ],
+      },
+      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+    );
+    expect(out.repos).toHaveLength(3);
+    expect(out.repos.map((r) => r.url)).toEqual([
+      "https://github.com/example/https-form",
+      "ssh://git@github.com/example/ssh-url-form.git",
+      "git@github.com:example/scp-form.git",
+    ]);
   });
 
   it("source_repos rejects URLs with embedded credentials", async () => {

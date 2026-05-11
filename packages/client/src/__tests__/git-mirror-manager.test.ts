@@ -5,11 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  canonicalizeRepoUrl,
   createGitMirrorManager,
   deriveSessionBranchName,
+  GitMirrorAuthError,
   GitMirrorError,
   type GitMirrorManager,
   GitMirrorWorktreeConflictError,
+  hashUrl,
+  httpsToSshBaseRewrite,
+  isLikelyHttpsAuthFailure,
+  isLikelySshAuthFailure,
+  sshToHttpsBaseRewrite,
 } from "../runtime/git-mirror-manager.js";
 
 let workRoot: string;
@@ -289,6 +296,260 @@ describe("GitMirrorManager — crash recovery", () => {
     await expect(
       m.createWorktree({ url: fixtureUrl, targetPath: target, sessionKey: "ghosty" }),
     ).rejects.toBeInstanceOf(GitMirrorError);
+  });
+});
+
+describe("GitMirrorManager — HTTPS auth failure heuristic (isLikelyHttpsAuthFailure)", () => {
+  it.each([
+    // The canonical systemd / launchd background-service failure that
+    // motivated this code path — taken verbatim from a production log.
+    "git fetch --prune origin exited with code 128: fatal: could not read Username for 'GitHub · Change is constant.': No such device or address",
+    "fatal: Authentication failed for 'https://github.com/foo/bar.git/'",
+    "remote: HTTP Basic: Access denied",
+    "fatal: unable to access 'https://example.com/x.git/': The requested URL returned error: 401",
+    "fatal: unable to access 'https://example.com/x.git/': The requested URL returned error: 403",
+    "remote: Invalid username or password.",
+    "fatal: could not read Password for 'https://x@github.com'",
+    "fatal: terminal prompts disabled",
+  ])("matches HTTPS credential-shaped error: %s", (msg) => {
+    expect(isLikelyHttpsAuthFailure(msg)).toBe(true);
+  });
+
+  it.each([
+    "",
+    "fatal: Could not resolve host: github.com",
+    "ssh: connect to host github.com port 22: Connection refused",
+    "fatal: couldn't find remote ref refs/heads/missing",
+    "fatal: repository 'https://example.com/none.git/' not found",
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: self signed certificate",
+    "fatal: index file corrupt",
+    "error: Could not write config file",
+    // SSH-side failures — should NOT be misclassified as HTTPS.
+    "git@github.com: Permission denied (publickey).",
+    "Host key verification failed.",
+  ])("does NOT match: %s", (msg) => {
+    expect(isLikelyHttpsAuthFailure(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — SSH auth failure heuristic (isLikelySshAuthFailure)", () => {
+  it.each([
+    "git@github.com: Permission denied (publickey).",
+    "Permission denied, please try again.",
+    "Permission denied (publickey,password,keyboard-interactive).",
+    "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
+    "Host key verification failed.\nfatal: Could not read from remote repository.",
+    "Unable to negotiate with 1.2.3.4 port 22: no matching host key type found.",
+    "Unable to negotiate: no mutual signature algorithm",
+  ])("matches SSH credential-shaped error: %s", (msg) => {
+    expect(isLikelySshAuthFailure(msg)).toBe(true);
+  });
+
+  it.each([
+    "",
+    "ssh: connect to host github.com port 22: Connection refused",
+    "ssh: connect to host github.com port 22: Connection timed out",
+    "ssh: Could not resolve hostname github.com: Name or service not known",
+    "fatal: couldn't find remote ref refs/heads/missing",
+    // HTTPS-side failures — should NOT be misclassified as SSH.
+    "fatal: Authentication failed for 'https://github.com/foo/bar.git/'",
+    "fatal: could not read Username for 'https://github.com'",
+  ])("does NOT match: %s", (msg) => {
+    expect(isLikelySshAuthFailure(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — https→ssh URL rewrite (httpsToSshBaseRewrite)", () => {
+  it("maps the common github.com case to scp-like ssh", () => {
+    expect(httpsToSshBaseRewrite("https://github.com/owner/repo.git")).toEqual({
+      httpsBase: "https://github.com/",
+      sshBase: "git@github.com:",
+    });
+  });
+
+  it("preserves the path-less form (rewrite is on the host base, not the full URL)", () => {
+    expect(httpsToSshBaseRewrite("https://gitlab.com/group/sub/project")).toEqual({
+      httpsBase: "https://gitlab.com/",
+      sshBase: "git@gitlab.com:",
+    });
+  });
+
+  it("returns null when the URL carries a non-default port (no portable HTTPS↔SSH port mapping)", () => {
+    expect(httpsToSshBaseRewrite("https://gitlab.example.com:8443/x/y.git")).toBeNull();
+  });
+
+  it("treats the explicit default port 443 as no-port", () => {
+    expect(httpsToSshBaseRewrite("https://github.com:443/owner/repo.git")).toEqual({
+      httpsBase: "https://github.com/",
+      sshBase: "git@github.com:",
+    });
+  });
+
+  it("ignores non-HTTPS URLs (file://, ssh://, git@, http://)", () => {
+    expect(httpsToSshBaseRewrite("file:///tmp/repo")).toBeNull();
+    expect(httpsToSshBaseRewrite("ssh://git@github.com/foo/bar.git")).toBeNull();
+    expect(httpsToSshBaseRewrite("git@github.com:foo/bar.git")).toBeNull();
+    expect(httpsToSshBaseRewrite("http://github.com/foo/bar.git")).toBeNull();
+  });
+
+  it("refuses URLs with embedded credentials (never silently downgrade auth strength)", () => {
+    expect(httpsToSshBaseRewrite("https://user:token@github.com/foo/bar.git")).toBeNull();
+    expect(httpsToSshBaseRewrite("https://user@github.com/foo/bar.git")).toBeNull();
+  });
+
+  it("returns null on parse failure / empty input", () => {
+    expect(httpsToSshBaseRewrite("")).toBeNull();
+    expect(httpsToSshBaseRewrite("not a url")).toBeNull();
+  });
+});
+
+describe("GitMirrorManager — ssh→https URL rewrite (sshToHttpsBaseRewrite)", () => {
+  it("maps scp-like to https", () => {
+    expect(sshToHttpsBaseRewrite("git@github.com:owner/repo.git")).toEqual({
+      sshBase: "git@github.com:",
+      httpsBase: "https://github.com/",
+    });
+  });
+
+  it("scp-like without user@ still maps", () => {
+    // Edge: `host:path` without explicit user. Not common, but valid ssh.
+    expect(sshToHttpsBaseRewrite("github.com:owner/repo.git")).toEqual({
+      sshBase: "github.com:",
+      httpsBase: "https://github.com/",
+    });
+  });
+
+  it("maps ssh:// URL form to https (default port)", () => {
+    expect(sshToHttpsBaseRewrite("ssh://git@github.com/owner/repo.git")).toEqual({
+      sshBase: "ssh://git@github.com/",
+      httpsBase: "https://github.com/",
+    });
+  });
+
+  it("treats explicit ssh port 22 as default and maps", () => {
+    expect(sshToHttpsBaseRewrite("ssh://git@github.com:22/owner/repo.git")).toEqual({
+      sshBase: "ssh://git@github.com:22/",
+      httpsBase: "https://github.com/",
+    });
+  });
+
+  it("returns null for ssh:// with non-default port (no portable mapping)", () => {
+    expect(sshToHttpsBaseRewrite("ssh://git@gitlab.example.com:2222/x/y.git")).toBeNull();
+  });
+
+  it("rejects scp-like that looks like host:port (ambiguous)", () => {
+    // `host:1234/...` — git would interpret this as ssh://host:1234/...
+    expect(sshToHttpsBaseRewrite("github.com:8080/owner/repo.git")).toBeNull();
+  });
+
+  it("rejects scp-like whose path starts with `/` (matches shared schema rule)", () => {
+    // `git@host:/path` is not legal scp form; the shared schema rejects it on
+    // input. Keep client-side rewrite in lockstep so the two layers can't
+    // disagree on what's "ssh".
+    expect(sshToHttpsBaseRewrite("git@github.com:/owner/repo.git")).toBeNull();
+  });
+
+  it("rejects embedded password in either form", () => {
+    expect(sshToHttpsBaseRewrite("ssh://git:secret@github.com/x.git")).toBeNull();
+    // scp-like has no password field — the regex would reject ":pass@host:path".
+    expect(sshToHttpsBaseRewrite("git:secret@github.com:owner/repo.git")).toBeNull();
+  });
+
+  it("returns null for non-SSH URLs", () => {
+    expect(sshToHttpsBaseRewrite("https://github.com/foo/bar.git")).toBeNull();
+    expect(sshToHttpsBaseRewrite("file:///tmp/repo")).toBeNull();
+    expect(sshToHttpsBaseRewrite("")).toBeNull();
+    expect(sshToHttpsBaseRewrite("not-a-url")).toBeNull();
+  });
+});
+
+describe("GitMirrorManager — canonical URL hashing (canonicalizeRepoUrl + hashUrl)", () => {
+  it("collapses https / ssh / scp-like for the same upstream into one canonical form", () => {
+    const expected = "github.com/owner/repo";
+    expect(canonicalizeRepoUrl("https://github.com/owner/repo.git")).toBe(expected);
+    expect(canonicalizeRepoUrl("https://github.com/owner/repo")).toBe(expected);
+    expect(canonicalizeRepoUrl("git@github.com:owner/repo.git")).toBe(expected);
+    expect(canonicalizeRepoUrl("git@github.com:owner/repo")).toBe(expected);
+    expect(canonicalizeRepoUrl("ssh://git@github.com/owner/repo.git")).toBe(expected);
+    expect(canonicalizeRepoUrl("ssh://git@github.com:22/owner/repo.git")).toBe(expected);
+    expect(canonicalizeRepoUrl("https://github.com:443/owner/repo.git")).toBe(expected);
+    // Mixed-case host normalises down.
+    expect(canonicalizeRepoUrl("https://GitHub.com/owner/repo.git")).toBe(expected);
+  });
+
+  it("ignores trailing slash on path (OAuth pickers occasionally emit it)", () => {
+    const expected = "github.com/owner/repo";
+    expect(canonicalizeRepoUrl("https://github.com/owner/repo/")).toBe(expected);
+    expect(canonicalizeRepoUrl("https://github.com/owner/repo.git/")).toBe(expected);
+    expect(canonicalizeRepoUrl("ssh://git@github.com/owner/repo/")).toBe(expected);
+    // hash collapses too — same mirror dir for slash / no-slash forms.
+    expect(hashUrl("https://github.com/owner/repo/")).toBe(hashUrl("https://github.com/owner/repo"));
+  });
+
+  it("preserves non-default ports (different upstream → different mirror)", () => {
+    expect(canonicalizeRepoUrl("ssh://git@gitlab.example.com:2222/x/y.git")).toBe("gitlab.example.com:2222/x/y");
+    expect(canonicalizeRepoUrl("https://gitlab.example.com:8443/x/y.git")).toBe("gitlab.example.com:8443/x/y");
+  });
+
+  it("hashUrl is identical for all addressing forms of the same repo", () => {
+    const h1 = hashUrl("https://github.com/owner/repo.git");
+    const h2 = hashUrl("git@github.com:owner/repo.git");
+    const h3 = hashUrl("ssh://git@github.com/owner/repo.git");
+    expect(h1).toBe(h2);
+    expect(h2).toBe(h3);
+  });
+
+  it("hashUrl differs for different repos on the same host", () => {
+    expect(hashUrl("https://github.com/a/b.git")).not.toBe(hashUrl("https://github.com/c/d.git"));
+  });
+
+  it("falls back to raw input for un-parseable strings", () => {
+    expect(canonicalizeRepoUrl("garbage")).toBe("garbage");
+  });
+});
+
+describe("GitMirrorManager — ssh fallback", () => {
+  it("does NOT touch ssh path for non-https origins (file://, ssh://) — failure surfaces raw", async () => {
+    // The fixture URL is file:// — even if we point it at a corrupt repo and
+    // fetch fails, the manager must surface the raw `GitMirrorError`, not
+    // `GitMirrorAuthError`. Fallback is HTTPS-only by design; misclassifying
+    // a file:// failure as "try ssh" would mask real bugs and waste a retry.
+    const m = makeManager();
+    const { mirrorPath } = await m.ensureMirror(fixtureUrl);
+    // Corrupt the mirror's origin to an unreachable file:// path.
+    execSync("git remote set-url origin file:///nonexistent/path/that/does/not/exist.git", { cwd: mirrorPath });
+
+    let caught: unknown;
+    try {
+      await m.fetchMirror(fixtureUrl);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(GitMirrorError);
+    expect(caught).not.toBeInstanceOf(GitMirrorAuthError);
+  });
+
+  it("does NOT classify a non-credential https failure as auth — bootstrap against an unreachable https URL throws raw GitMirrorError", async () => {
+    // Drive `ensureMirror` (which goes through the same `fetchOrigin` helper
+    // as `fetchMirror`) against an https URL whose connect() always refuses.
+    // The bootstrap MUST fail with the raw `GitMirrorError` — wrapping a
+    // connect-refused error in `GitMirrorAuthError` would falsely imply that
+    // ssh was tried and also failed for credential reasons.
+    //
+    // Port 1 is reserved & always refuses connections → fast deterministic
+    // failure, no real network egress, safe in any CI sandbox.
+    const m = createGitMirrorManager({
+      dataDir: mkdtempSync(join(tmpdir(), "ftt-mgr-https-")),
+      cloneTimeoutMs: 15_000,
+    });
+    let caught: unknown;
+    try {
+      await m.ensureMirror("https://127.0.0.1:1/nope.git");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(GitMirrorError);
+    expect(caught).not.toBeInstanceOf(GitMirrorAuthError);
   });
 });
 
