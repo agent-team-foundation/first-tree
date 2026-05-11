@@ -1,5 +1,5 @@
 import type { OrgContextTreeOutput, OrgSourceReposOutput } from "@agent-team-foundation/first-tree-hub-shared";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getAgentConfig, updateAgentConfig } from "../../../../api/agent-config.js";
@@ -164,16 +164,27 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
   const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Single repo: pre-selected so Confirm is one click. Multi-repo: invitee
-  // picks from the team-bound list (NOT a GitHub OAuth picker — invitee
+  // Pre-select everything: the common case is "invitee works on the same
+  // team-bound repos as everyone else." Single repo → Confirm is one click.
+  // Multi-repo → invitee can uncheck any they don't personally work on.
+  // Picks come from the team-bound list (NOT a GitHub OAuth picker — invitee
   // writing team `source_repos` is the wrong mental model and the API
   // would 403 anyway).
-  const [chosenRepoUrl, setChosenRepoUrl] = useState<string | null>(
-    teamRepos.length === 1 ? (teamRepos[0]?.url ?? null) : null,
-  );
+  //
+  // The useState initializer runs once and relies on InviteeStep3Body not
+  // refetching teamRepos after this body mounts (see the loader in
+  // InviteeStep3Body — single fetch, no live sync). If that invariant ever
+  // changes, add a useEffect that reconciles chosenRepoUrls when teamRepos
+  // identity changes.
+  const [chosenRepoUrls, setChosenRepoUrls] = useState<string[]>(() => teamRepos.map((r) => r.url));
+  const hasChosen = chosenRepoUrls.length > 0;
+
+  const toggleChosenRepo = useCallback((url: string) => {
+    setChosenRepoUrls((prev) => (prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]));
+  }, []);
 
   const handleConfirm = useCallback(async () => {
-    if (!chosenRepoUrl) return;
+    if (chosenRepoUrls.length === 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -181,10 +192,10 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
       const cfg = await getAgentConfig(agent.uuid);
       await updateAgentConfig(agent.uuid, {
         expectedVersion: cfg.version,
-        payload: { gitRepos: [{ url: chosenRepoUrl }] },
+        payload: { gitRepos: chosenRepoUrls.map((url) => ({ url })) },
       });
       const chat = await createAgentChat(agent.uuid);
-      const bootstrap = buildBindBootstrap(chosenRepoUrl, treeUrl);
+      const bootstrap = buildBindBootstrap(chosenRepoUrls, treeUrl);
       try {
         await sendChatMessage(chat.id, bootstrap);
       } catch {
@@ -202,7 +213,7 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
       setError(err instanceof Error ? err.message : "Failed to start the chat");
       setBusy(false);
     }
-  }, [chosenRepoUrl, treeUrl, navigate, dismissOnboarding]);
+  }, [chosenRepoUrls, treeUrl, navigate, dismissOnboarding]);
 
   const handleLater = useCallback(() => {
     void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite" });
@@ -228,10 +239,10 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
             style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)", margin: 0, padding: 0, border: 0 }}
           >
             <legend className="text-label" style={{ color: "var(--fg-3)", padding: 0, marginBottom: "var(--sp-1)" }}>
-              Pick the source repo to bind your agent to
+              Pick the source repos to bind your agent to
             </legend>
             {teamRepos.map((repo) => {
-              const active = chosenRepoUrl === repo.url;
+              const active = chosenRepoUrls.includes(repo.url);
               return (
                 <label
                   key={repo.url}
@@ -252,13 +263,30 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
                   }}
                 >
                   <input
-                    type="radio"
-                    name="invitee-source-repo"
+                    type="checkbox"
                     value={repo.url}
                     checked={active}
-                    onChange={() => setChosenRepoUrl(repo.url)}
+                    onChange={() => toggleChosenRepo(repo.url)}
                     className="sr-only"
                   />
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: "var(--sp-3_5)",
+                      height: "var(--sp-3_5)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border)",
+                      borderRadius: "var(--radius-chip)",
+                      background: active ? "var(--accent)" : "transparent",
+                      color: "var(--bg)",
+                      transition: "background 120ms ease, border-color 120ms ease",
+                    }}
+                  >
+                    {active ? <Check className="h-3 w-3" strokeWidth={3} /> : null}
+                  </span>
                   <span className="mono truncate" style={{ minWidth: 0, flex: 1 }}>
                     {repo.url}
                   </span>
@@ -271,7 +299,7 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
         {error ? <ErrorBanner>{error}</ErrorBanner> : null}
 
         <div className="flex" style={{ gap: "var(--sp-2)" }}>
-          <Button type="button" disabled={!chosenRepoUrl || busy} onClick={() => void handleConfirm()}>
+          <Button type="button" disabled={!hasChosen || busy} onClick={() => void handleConfirm()}>
             {busy ? "Starting…" : "Confirm"}
           </Button>
           <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
@@ -291,7 +319,12 @@ function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
   const [error, setError] = useState<string | null>(null);
   const [repos, setRepos] = useState<GithubRepo[] | null>(null);
   const [reposError, setReposError] = useState<string | null>(null);
-  const [selectedRepoUrl, setSelectedRepoUrl] = useState<string | null>(null);
+  const [selectedRepoUrls, setSelectedRepoUrls] = useState<string[]>([]);
+  const hasSelection = selectedRepoUrls.length > 0;
+
+  const toggleSelectedRepo = useCallback((url: string) => {
+    setSelectedRepoUrls((prev) => (prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -310,7 +343,7 @@ function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
   }, []);
 
   const handleContinue = useCallback(async () => {
-    if (!selectedRepoUrl) return;
+    if (selectedRepoUrls.length === 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -318,14 +351,14 @@ function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
       const cfg = await getAgentConfig(agent.uuid);
       await updateAgentConfig(agent.uuid, {
         expectedVersion: cfg.version,
-        payload: { gitRepos: [{ url: selectedRepoUrl }] },
+        payload: { gitRepos: selectedRepoUrls.map((url) => ({ url })) },
       });
-      // Deliberately NOT writing the invitee's pick back into the team's
+      // Deliberately NOT writing the invitee's picks back into the team's
       // `source_repos` namespace — that's an admin-write surface (server
-      // would 403 too). The invitee's repo is a personal agent binding,
+      // would 403 too). The invitee's repos are a personal agent binding,
       // not a team-wide statement.
       const chat = await createAgentChat(agent.uuid);
-      const bootstrap = buildBindBootstrap(selectedRepoUrl, treeUrl);
+      const bootstrap = buildBindBootstrap(selectedRepoUrls, treeUrl);
       try {
         await sendChatMessage(chat.id, bootstrap);
       } catch {
@@ -343,7 +376,7 @@ function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
       setError(err instanceof Error ? err.message : "Failed to start the chat");
       setBusy(false);
     }
-  }, [selectedRepoUrl, treeUrl, navigate, dismissOnboarding]);
+  }, [selectedRepoUrls, treeUrl, navigate, dismissOnboarding]);
 
   const handleLater = useCallback(() => {
     void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite" });
@@ -354,7 +387,7 @@ function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
   return (
     <>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
-        Joining your team&apos;s <span style={{ color: "var(--fg-2)" }}>context-tree</span>. Pick the source repo
+        Joining your team&apos;s <span style={{ color: "var(--fg-2)" }}>context-tree</span>. Pick the source repos
         you&apos;ll work with.
       </p>
 
@@ -365,37 +398,38 @@ function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
           <ReadOnlyValueRow label="Tree" value={treeUrl} />
         </StepFrame>
 
-        <StepFrame number="02" state={selectedRepoUrl ? "complete" : "active"}>
+        <StepFrame number="02" state={hasSelection ? "complete" : "active"}>
           <RepoPickerSection
             disabled={busy}
             repos={repos}
             error={reposError}
-            selectedRepoUrl={selectedRepoUrl}
-            onSelect={setSelectedRepoUrl}
+            selectedRepoUrls={selectedRepoUrls}
+            onToggle={toggleSelectedRepo}
           />
         </StepFrame>
 
-        <StepFrame number="03" state={selectedRepoUrl ? "active" : "idle"}>
+        <StepFrame number="03" state={hasSelection ? "active" : "idle"}>
           <h2
             className="text-subtitle font-semibold"
             style={{
               margin: 0,
-              color: selectedRepoUrl ? "var(--fg)" : "var(--fg-4)",
-              fontWeight: selectedRepoUrl ? 600 : 500,
+              color: hasSelection ? "var(--fg)" : "var(--fg-4)",
+              fontWeight: hasSelection ? 600 : 500,
             }}
           >
             Let your agent join the tree
           </h2>
-          {selectedRepoUrl ? (
+          {hasSelection ? (
             <>
               <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-                It&apos;ll install the skill and bind your source repo to the existing team tree.
+                It&apos;ll install the skill and bind{" "}
+                {selectedRepoUrls.length > 1 ? "each source repo" : "your source repo"} to the existing team tree.
               </p>
 
               {error ? <ErrorBanner style={{ marginTop: "var(--sp-3)" }}>{error}</ErrorBanner> : null}
 
               <div className="flex" style={{ marginTop: "var(--sp-3)", gap: "var(--sp-2)" }}>
-                <Button type="button" disabled={!selectedRepoUrl || busy} onClick={() => void handleContinue()}>
+                <Button type="button" disabled={!hasSelection || busy} onClick={() => void handleContinue()}>
                   {busy ? "Starting…" : "Continue"}
                 </Button>
                 <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
@@ -446,8 +480,8 @@ function InviteeWaitingBody() {
         Your team admin hasn&apos;t finished setup yet
       </h2>
       <p className="text-body" style={{ marginTop: "var(--sp-2)", color: "var(--fg-3)" }}>
-        Once they bind a source repo and a context-tree, this view will guide you to bind your agent. For now, you can
-        chat with your agent for anything that doesn&apos;t need code context.
+        Once they finish setup, this view will guide your agent to join. For now, your agent can help with anything that
+        doesn&apos;t depend on your team&apos;s shared knowledge.
       </p>
     </div>
   );
@@ -463,9 +497,13 @@ function AdminBindCreateBody() {
   const [error, setError] = useState<string | null>(null);
   const [treeMode, setTreeMode] = useState<TreeMode | null>(null);
   const [existingTreeUrl, setExistingTreeUrl] = useState("");
-  const [selectedRepoUrl, setSelectedRepoUrl] = useState<string | null>(null);
+  const [selectedRepoUrls, setSelectedRepoUrls] = useState<string[]>([]);
   const [repos, setRepos] = useState<GithubRepo[] | null>(null);
   const [reposError, setReposError] = useState<string | null>(null);
+
+  const toggleSelectedRepo = useCallback((url: string) => {
+    setSelectedRepoUrls((prev) => (prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]));
+  }, []);
 
   // Lazy-load the GitHub repo list once when Step 3 mounts. Plan B keeps
   // source picker here (not Step 2) so agent creation in Step 2 stays
@@ -535,7 +573,7 @@ function AdminBindCreateBody() {
   }, [dismissOnboarding, addToast, navigate]);
 
   const handleContinue = useCallback(async () => {
-    if (!selectedRepoUrl) return;
+    if (selectedRepoUrls.length === 0) return;
     if (!treeMode) return;
     if (treeMode === "existing" && !isExistingUrlValid) return;
     setError(null);
@@ -543,25 +581,25 @@ function AdminBindCreateBody() {
     try {
       const agent = await resolveOnboardingAgent();
       const cfg = await getAgentConfig(agent.uuid);
+      const repoEntries = selectedRepoUrls.map((url) => ({ url }));
       await updateAgentConfig(agent.uuid, {
         expectedVersion: cfg.version,
-        payload: { gitRepos: [{ url: selectedRepoUrl }] },
+        payload: { gitRepos: repoEntries },
       });
 
-      // Phase B: mirror the chosen source repo to the team-level
+      // Phase B: mirror the chosen source repos to the team-level
       // `source_repos` namespace so subsequent invitees route through
       // InviteeConfirmBody (one-click join) rather than InviteePickerBody
-      // (re-walk GitHub OAuth). This is the admin's first-time write —
-      // a single-entry list that overwrites whatever was there before.
-      // Admins managing multiple source repos do so via Team Settings;
-      // onboarding doesn't try to merge.
+      // (re-walk GitHub OAuth). The write overwrites whatever was there
+      // before — onboarding is the admin's initial setup; subsequent
+      // additions/removals happen in Team Settings.
       //
       // Non-fatal — agent's own gitRepos already saved above, so a failure
       // here only means the next invitee will see the picker instead of
       // the confirm card.
       if (organizationId) {
         try {
-          await putSourceReposSetting(organizationId, { repos: [{ url: selectedRepoUrl }] });
+          await putSourceReposSetting(organizationId, { repos: repoEntries });
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn("Step 3: PUT source_repos failed; agent gitRepos already saved", err);
@@ -597,8 +635,8 @@ function AdminBindCreateBody() {
       const chat = await createAgentChat(agent.uuid);
       const bootstrap =
         treeMode === "existing"
-          ? buildBindBootstrap(selectedRepoUrl, trimmedTreeUrl)
-          : buildCreateBootstrap(selectedRepoUrl);
+          ? buildBindBootstrap(selectedRepoUrls, trimmedTreeUrl)
+          : buildCreateBootstrap(selectedRepoUrls);
       try {
         await sendChatMessage(chat.id, bootstrap);
       } catch {
@@ -618,7 +656,7 @@ function AdminBindCreateBody() {
       setBusy(false);
     }
   }, [
-    selectedRepoUrl,
+    selectedRepoUrls,
     treeMode,
     isExistingUrlValid,
     trimmedTreeUrl,
@@ -628,7 +666,8 @@ function AdminBindCreateBody() {
     addToast,
   ]);
 
-  const canContinue = !!selectedRepoUrl && treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
+  const hasSelection = selectedRepoUrls.length > 0;
+  const canContinue = hasSelection && treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
   const treeModeChosen = !!treeMode && (treeMode === "new" || isExistingUrlValid);
 
   return (
@@ -641,28 +680,28 @@ function AdminBindCreateBody() {
       <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
         <StepRailLine />
 
-        <StepFrame number="01" state={selectedRepoUrl ? "complete" : "active"}>
+        <StepFrame number="01" state={hasSelection ? "complete" : "active"}>
           <RepoPickerSection
             disabled={busy}
             repos={repos}
             error={reposError}
-            selectedRepoUrl={selectedRepoUrl}
-            onSelect={setSelectedRepoUrl}
+            selectedRepoUrls={selectedRepoUrls}
+            onToggle={toggleSelectedRepo}
           />
         </StepFrame>
 
-        <StepFrame number="02" state={treeModeChosen ? "complete" : selectedRepoUrl ? "active" : "idle"}>
+        <StepFrame number="02" state={treeModeChosen ? "complete" : hasSelection ? "active" : "idle"}>
           <h2
             className="text-subtitle font-semibold"
             style={{
               margin: 0,
-              color: selectedRepoUrl ? "var(--fg)" : "var(--fg-4)",
-              fontWeight: selectedRepoUrl ? 600 : 500,
+              color: hasSelection ? "var(--fg)" : "var(--fg-4)",
+              fontWeight: hasSelection ? 600 : 500,
             }}
           >
             Bind or create the tree
           </h2>
-          {selectedRepoUrl ? (
+          {hasSelection ? (
             <div style={{ marginTop: "var(--sp-3)", display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
               {/* Segmented toggle — two-option choice as a single inline
                 control instead of stacked radio cards. Real <input
@@ -750,7 +789,8 @@ function AdminBindCreateBody() {
 
               {treeMode === "new" ? (
                 <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
-                  Your agent will scaffold a new GitHub repo for the tree and bind it to your source repo.
+                  Your agent will scaffold a new GitHub repo for the tree and bind{" "}
+                  {selectedRepoUrls.length > 1 ? "each selected source repo" : "the source repo"} to it.
                 </p>
               ) : null}
             </div>
@@ -771,7 +811,8 @@ function AdminBindCreateBody() {
           {treeModeChosen ? (
             <>
               <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-                It&apos;ll install the skill, set up the tree, and open a PR back to your source repo.
+                It&apos;ll install the skill, set up the tree, and open a PR back to{" "}
+                {selectedRepoUrls.length > 1 ? "each source repo" : "your source repo"}.
               </p>
 
               {error ? <ErrorBanner style={{ marginTop: "var(--sp-3)" }}>{error}</ErrorBanner> : null}
@@ -872,14 +913,14 @@ function RepoPickerSection({
   disabled,
   repos,
   error,
-  selectedRepoUrl,
-  onSelect,
+  selectedRepoUrls,
+  onToggle,
 }: {
   disabled: boolean;
   repos: GithubRepo[] | null;
   error: string | null;
-  selectedRepoUrl: string | null;
-  onSelect: (url: string | null) => void;
+  selectedRepoUrls: readonly string[];
+  onToggle: (url: string) => void;
 }) {
   const heading = (
     <h2
@@ -889,7 +930,7 @@ function RepoPickerSection({
         fontWeight: disabled ? 500 : 600,
       }}
     >
-      Pick the source repo
+      Pick source repos
     </h2>
   );
 
@@ -939,26 +980,29 @@ function RepoPickerSection({
     <div style={{ animation: "subtle-fade 200ms ease-out" }}>
       {heading}
       <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-        The code your tree will organize knowledge about.
+        The code your tree will organize knowledge about. Pick one or more.
       </p>
-      <RepoPickerPopover repos={repos} selectedRepoUrl={selectedRepoUrl} onSelect={onSelect} />
+      <RepoPickerPopover repos={repos} selectedRepoUrls={selectedRepoUrls} onToggle={onToggle} />
     </div>
   );
 }
 
 function RepoPickerPopover({
   repos,
-  selectedRepoUrl,
-  onSelect,
+  selectedRepoUrls,
+  onToggle,
 }: {
   repos: GithubRepo[];
-  selectedRepoUrl: string | null;
-  onSelect: (url: string | null) => void;
+  selectedRepoUrls: readonly string[];
+  onToggle: (url: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   // Click-outside + Escape, mirroring user-menu.tsx's popover pattern.
+  // Multi-select: clicking a row toggles selection without closing — the
+  // user closes the popover explicitly by clicking outside, hitting Escape,
+  // or clicking the trigger button again.
   useEffect(() => {
     if (!open) return;
     const onMouseDown = (e: MouseEvent) => {
@@ -990,10 +1034,27 @@ function RepoPickerPopover({
     return [...byOwner.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [repos]);
 
-  const selectedRepo = repos.find((r) => r.cloneUrl === selectedRepoUrl) ?? null;
+  const selectedSet = useMemo(() => new Set(selectedRepoUrls), [selectedRepoUrls]);
+  const selectedRepos = useMemo(() => repos.filter((r) => selectedSet.has(r.cloneUrl)), [repos, selectedSet]);
+  const triggerLabel = selectedRepos.length === 0 ? "Select repositories…" : "Add another repository";
 
   return (
     <div ref={ref} className="relative" style={{ marginTop: "var(--sp-2)" }}>
+      {selectedRepos.length > 0 && (
+        <div
+          style={{
+            marginBottom: "var(--sp-2)",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "var(--sp-1_5)",
+          }}
+        >
+          {selectedRepos.map((repo) => (
+            <SelectedRepoChip key={repo.cloneUrl} fullName={repo.fullName} onRemove={() => onToggle(repo.cloneUrl)} />
+          ))}
+        </div>
+      )}
+
       <button
         type="button"
         aria-haspopup="listbox"
@@ -1010,14 +1071,14 @@ function RepoPickerPopover({
           background: "var(--bg)",
           border: "var(--hairline) solid var(--border)",
           borderRadius: "var(--radius-input)",
-          color: selectedRepo ? "var(--fg)" : "var(--fg-3)",
+          color: "var(--fg-3)",
           outline: "none",
           cursor: "pointer",
           textAlign: "left",
         }}
       >
         <span className="truncate" style={{ minWidth: 0, flex: 1 }}>
-          {selectedRepo ? selectedRepo.fullName : "Select a repository…"}
+          {triggerLabel}
         </span>
         <ChevronDown
           className="h-4 w-4"
@@ -1033,7 +1094,8 @@ function RepoPickerPopover({
       {open && (
         <div
           role="listbox"
-          aria-label="GitHub repository"
+          aria-label="GitHub repositories"
+          aria-multiselectable="true"
           className="absolute z-30 rounded-md border bg-popover shadow-md"
           style={{
             top: "calc(100% + var(--sp-1))",
@@ -1046,27 +1108,20 @@ function RepoPickerPopover({
         >
           {groups.map(([owner, ownerRepos], groupIdx) => (
             <div key={owner}>
-              {groupIdx > 0 && (
-                <div
-                  aria-hidden="true"
-                  style={{
-                    margin: "var(--sp-1) 0",
-                    height: "var(--hairline)",
-                    background: "var(--border-faint)",
-                  }}
-                />
-              )}
               <div
                 className="text-eyebrow"
                 style={{
-                  padding: "var(--sp-1) var(--sp-3)",
-                  color: "var(--fg-3)",
+                  paddingTop: groupIdx > 0 ? "var(--sp-3)" : "var(--sp-1)",
+                  paddingBottom: "var(--sp-1)",
+                  paddingLeft: "calc(var(--sp-3) + var(--sp-3_5) + var(--sp-2))",
+                  paddingRight: "var(--sp-3)",
+                  color: "var(--fg-2)",
                 }}
               >
                 {owner}
               </div>
               {ownerRepos.map((repo) => {
-                const selected = repo.cloneUrl === selectedRepoUrl;
+                const selected = selectedSet.has(repo.cloneUrl);
                 const repoName = repo.fullName.slice(owner.length + 1);
                 return (
                   <button
@@ -1074,16 +1129,13 @@ function RepoPickerPopover({
                     type="button"
                     role="option"
                     aria-selected={selected}
-                    onClick={() => {
-                      onSelect(repo.cloneUrl);
-                      setOpen(false);
-                    }}
+                    onClick={() => onToggle(repo.cloneUrl)}
                     className="text-body transition-colors w-full"
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: "var(--sp-2)",
-                      padding: "var(--sp-1_5) var(--sp-3)",
+                      padding: "var(--sp-1) var(--sp-3)",
                       background: selected ? "var(--accent-bg)" : "transparent",
                       color: selected ? "var(--accent)" : "var(--fg)",
                       border: "none",
@@ -1097,8 +1149,25 @@ function RepoPickerPopover({
                       if (!selected) e.currentTarget.style.background = "transparent";
                     }}
                   >
-                    <span style={{ width: 14, display: "inline-flex", flexShrink: 0 }}>
-                      {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: "var(--sp-3_5)",
+                        height: "var(--sp-3_5)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                        border: selected
+                          ? "var(--hairline) solid var(--accent)"
+                          : "var(--hairline) solid var(--border)",
+                        borderRadius: "var(--radius-chip)",
+                        background: selected ? "var(--accent)" : "transparent",
+                        color: "var(--bg)",
+                        transition: "background 120ms ease, border-color 120ms ease",
+                      }}
+                    >
+                      {selected ? <Check className="h-3 w-3" strokeWidth={3} /> : null}
                     </span>
                     <span className="truncate" style={{ minWidth: 0, flex: 1 }}>
                       {repoName}
@@ -1109,8 +1178,8 @@ function RepoPickerPopover({
                         style={{
                           padding: "var(--hairline) var(--sp-1_75)",
                           borderRadius: "var(--radius-chip)",
-                          color: "var(--fg-3)",
-                          border: "var(--hairline) solid var(--border)",
+                          color: "var(--fg-4)",
+                          border: "var(--hairline) solid var(--border-faint)",
                           background: "var(--bg-sunken)",
                           flexShrink: 0,
                         }}
@@ -1126,5 +1195,59 @@ function RepoPickerPopover({
         </div>
       )}
     </div>
+  );
+}
+
+function SelectedRepoChip({ fullName, onRemove }: { fullName: string; onRemove: () => void }) {
+  return (
+    <span
+      className="text-label inline-flex items-center"
+      style={{
+        gap: "var(--sp-1)",
+        paddingLeft: "var(--sp-2)",
+        paddingRight: "var(--sp-0_5)",
+        paddingTop: "var(--sp-0_5)",
+        paddingBottom: "var(--sp-0_5)",
+        background: "var(--surface-1)",
+        border: "var(--hairline) solid var(--border-faint)",
+        borderRadius: "var(--radius-chip)",
+        color: "var(--fg-2)",
+        maxWidth: "20rem",
+      }}
+    >
+      <span className="mono truncate" style={{ minWidth: 0 }}>
+        {fullName}
+      </span>
+      <button
+        type="button"
+        aria-label={`Remove ${fullName}`}
+        onClick={onRemove}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "var(--sp-4)",
+          height: "var(--sp-4)",
+          border: 0,
+          padding: 0,
+          background: "transparent",
+          color: "var(--fg-3)",
+          cursor: "pointer",
+          borderRadius: "var(--radius-chip)",
+          flexShrink: 0,
+          transition: "background 120ms ease, color 120ms ease",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "var(--surface-2)";
+          e.currentTarget.style.color = "var(--fg)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = "var(--fg-3)";
+        }}
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </span>
   );
 }

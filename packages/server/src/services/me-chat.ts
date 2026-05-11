@@ -89,6 +89,7 @@ export function decodeCursor(cursor: string): { lastMessageAt: Date | null; chat
 export async function listMeChats(
   db: Database,
   humanAgentId: string,
+  organizationId: string,
   query: ListMeChatsQuery,
 ): Promise<ListMeChatsResponse> {
   const limit = query.limit;
@@ -168,6 +169,11 @@ export async function listMeChats(
       FROM chats c
       JOIN deduped d ON d.chat_id = c.id
      WHERE c.parent_chat_id IS NULL
+       /* Scope to the caller's org. Without this, cross-org dirty chats
+          whose chat_participants still reference the caller's human agent
+          (historical pollution — see fix/cross-org-direct-chat-pollution)
+          would leak into the list and 404 on click via requireChatAccess. */
+       AND c.organization_id = ${organizationId}
        /* Filter: unread / watching */
        AND (${!filterUnreadOnly}::bool OR d.unread_mention_count > 0)
        AND (${!filterWatchingOnly}::bool OR d.membership_kind = 'watching')

@@ -555,6 +555,32 @@ export async function leaveChat(db: Database, chatId: string, humanAgentId: stri
 }
 
 export async function findOrCreateDirectChat(db: Database, agentAId: string, agentBId: string) {
+  // Resolve both endpoints up front. Two reasons:
+  //   1. Reject cross-org pairs. A direct chat whose `chats.organization_id`
+  //      disagrees with one of its participants is unreachable by the chat
+  //      owner (org membership fails `requireChatAccess` → 404) yet still
+  //      leaks into the other side's chat list — exactly the breakage
+  //      observed when a caller (e.g. agent connection test, follow-up to
+  //      #288) handed us a cross-org pair.
+  //   2. Carry `organizationId` into the existing-chat lookup below so we
+  //      cannot reuse a historical dirty row whose participants happen to
+  //      include both ends but whose chat lives in another org.
+  const ends = await db
+    .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
+    .from(agents)
+    .where(inArray(agents.uuid, [agentAId, agentBId]));
+
+  const agentA = ends.find((a) => a.uuid === agentAId);
+  if (!agentA) throw new NotFoundError(`Agent "${agentAId}" not found`);
+  const agentB = ends.find((a) => a.uuid === agentBId);
+  if (!agentB) throw new NotFoundError(`Agent "${agentBId}" not found`);
+  if (agentA.organizationId !== agentB.organizationId) {
+    throw new BadRequestError(
+      `Cannot create direct chat across organizations: agent "${agentAId}" (org "${agentA.organizationId}") vs agent "${agentBId}" (org "${agentB.organizationId}")`,
+    );
+  }
+  const orgId = agentA.organizationId;
+
   // Find existing direct chat between the two agents
   const aChats = await db
     .select({ chatId: chatParticipants.chatId })
@@ -570,15 +596,15 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
   const commonChatIds = aChats.map((r) => r.chatId).filter((id) => bChatIds.has(id));
 
   if (commonChatIds.length > 0) {
-    // Check if any common chat is a direct chat. Order by `created_at` so the
-    // selection is deterministic across calls: webhook re-deliveries / retries
-    // (see issue #283) and any other caller that re-enters this helper for
-    // the same pair must always land on the same chat, regardless of how
-    // many direct chats the pair has accumulated.
+    // Order by `created_at` for determinism across webhook re-deliveries
+    // and any other caller re-entering for the same pair (see #283).
+    // The `organizationId` predicate is what prevents reuse of historical
+    // cross-org dirty rows — without it, two new-org agents could resolve
+    // to an old-org chat just because both names sit in its participants.
     const directChats = await db
       .select()
       .from(chats)
-      .where(and(inArray(chats.id, commonChatIds), eq(chats.type, "direct")))
+      .where(and(inArray(chats.id, commonChatIds), eq(chats.type, "direct"), eq(chats.organizationId, orgId)))
       .orderBy(chats.createdAt, chats.id)
       .limit(1);
 
@@ -587,20 +613,9 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
     }
   }
 
-  // Create new direct chat. Fetch both agents' types so we can apply the
-  // "agent-only direct → mention_only" rule (see also `createChat` and
-  // migration 0029): without it, A↔B replies loop forever because every
-  // message in a `full` direct chat wakes the other party unconditionally.
-  const ends = await db
-    .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
-    .from(agents)
-    .where(inArray(agents.uuid, [agentAId, agentBId]));
-
-  const agentA = ends.find((a) => a.uuid === agentAId);
-  if (!agentA) throw new NotFoundError(`Agent "${agentAId}" not found`);
-  const agentB = ends.find((a) => a.uuid === agentBId);
-  if (!agentB) throw new NotFoundError(`Agent "${agentBId}" not found`);
-
+  // Create new direct chat. The "agent-only direct → mention_only" rule
+  // (see also `createChat` and migration 0029) prevents A↔B reply loops in
+  // `full` mode where every message wakes the other party unconditionally.
   const isDirectAgentOnly = agentA.type !== "human" && agentB.type !== "human";
   const mode = isDirectAgentOnly ? "mention_only" : "full";
 
@@ -610,7 +625,7 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
       .insert(chats)
       .values({
         id: chatId,
-        organizationId: agentA.organizationId,
+        organizationId: orgId,
         type: "direct",
       })
       .returning();
