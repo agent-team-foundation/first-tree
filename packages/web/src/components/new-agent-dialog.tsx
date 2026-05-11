@@ -2,6 +2,7 @@ import {
   AGENT_NAME_MAX_LENGTH,
   AGENT_NAME_REGEX,
   type Agent,
+  type AgentVisibility,
   isReservedAgentName,
   type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
@@ -52,7 +53,10 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  * Hidden defaults:
  *   - type = "personal_assistant"
  *   - manager = current user
- *   - delegateMention, visibility, clientId = not surfaced
+ *   - delegateMention, clientId = not surfaced
+ *
+ * Surfaced choices: visibility (shared with team / private to you) and
+ * runtime (Claude Code / Codex).
  */
 
 // Runtime selection sources its values from `RuntimeProvider`; new providers
@@ -105,6 +109,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [displayName, setDisplayName] = useState("");
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
+  const [visibility, setVisibility] = useState<AgentVisibility>("organization");
   const [runtime, setRuntime] = useState<RuntimeProvider>("claude-code");
 
   const [step, setStep] = useState<Step>("form");
@@ -119,6 +124,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setDisplayName("");
       setName("");
       setNameDirty(false);
+      setVisibility("organization");
       setRuntime("claude-code");
       setStep("form");
       setCandidateClients([]);
@@ -190,6 +196,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         displayName: effectiveDisplay,
         clientId: opts.clientId,
         runtimeProvider: runtime,
+        visibility,
         // Pin the agent to the org the user is currently viewing in the
         // dropdown — the JWT default org is non-deterministic across logins
         // (auth.ts member pick) and creating into "wherever the JWT lands"
@@ -450,6 +457,54 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 {fieldErrors.name}
               </p>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Visibility</Label>
+            <div className="space-y-2">
+              <label
+                className={
+                  visibility === "organization"
+                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
+                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
+                }
+              >
+                <input
+                  type="radio"
+                  name="visibility"
+                  checked={visibility === "organization"}
+                  onChange={() => setVisibility("organization")}
+                  className="mt-1"
+                />
+                <div>
+                  <div className="text-body font-medium">Shared with team</div>
+                  <div className="text-caption text-muted-foreground">
+                    Anyone in your org can @mention and chat with this agent. (default)
+                  </div>
+                </div>
+              </label>
+              <label
+                className={
+                  visibility === "private"
+                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
+                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
+                }
+              >
+                <input
+                  type="radio"
+                  name="visibility"
+                  checked={visibility === "private"}
+                  onChange={() => setVisibility("private")}
+                  className="mt-1"
+                />
+                <div>
+                  <div className="text-body font-medium">Private to you</div>
+                  <div className="text-caption text-muted-foreground">
+                    Only you can see this agent and chat with it. Others on the team won't see it listed.
+                  </div>
+                </div>
+              </label>
+            </div>
           </div>
 
           <div className="space-y-2">
