@@ -44,6 +44,12 @@ describe("Team page grouping", () => {
     expect(result.map((a) => a.uuid)).toEqual(["human-1", "assistant-1"]);
   });
 
+  it("fails fast if agent pagination does not terminate", async () => {
+    await expect(fetchAllAgents(async () => ({ items: [], nextCursor: "same-cursor" }))).rejects.toThrow(
+      "fetchAllAgents exceeded 100 pages",
+    );
+  });
+
   it("resolves a human delegate from the fully loaded agent map", () => {
     const human = agent({ uuid: "human-1", type: "human", displayName: "Ada", delegateMention: "assistant-1" });
     const assistant = agent({
@@ -98,9 +104,15 @@ describe("Team page grouping", () => {
       displayName: "Suspended Assistant",
       status: "suspended",
     });
+    const humanAgent = agent({ uuid: "human-1", type: "human", displayName: "Ada" });
+    const autonomousAgent = agent({
+      uuid: "auto-1",
+      type: "autonomous_agent",
+      displayName: "Cron Bot",
+    });
 
-    expect(selectDelegateCandidates([privateAssistant, suspendedAssistant]).map((a) => a.uuid)).toEqual([
-      "private-assistant",
-    ]);
+    expect(
+      selectDelegateCandidates([humanAgent, autonomousAgent, privateAssistant, suspendedAssistant]).map((a) => a.uuid),
+    ).toEqual(["private-assistant"]);
   });
 });

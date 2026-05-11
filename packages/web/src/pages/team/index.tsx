@@ -73,18 +73,20 @@ type DelegateTarget = {
 type FilterKey = "all" | "humans" | "shared" | "private";
 
 const AGENT_PAGE_SIZE = 100;
+const MAX_AGENT_PAGES = 100;
 
 export async function fetchAllAgents(
   fetchPage: (params: { limit: number; cursor?: string }) => Promise<{ items: Agent[]; nextCursor: string | null }>,
 ): Promise<Agent[]> {
   const items: Agent[] = [];
   let cursor: string | undefined;
-  do {
+  for (let pageCount = 0; pageCount < MAX_AGENT_PAGES; pageCount++) {
     const page = await fetchPage(cursor ? { limit: AGENT_PAGE_SIZE, cursor } : { limit: AGENT_PAGE_SIZE });
     items.push(...page.items);
-    cursor = page.nextCursor ?? undefined;
-  } while (cursor);
-  return items;
+    if (!page.nextCursor) return items;
+    cursor = page.nextCursor;
+  }
+  throw new Error(`fetchAllAgents exceeded ${MAX_AGENT_PAGES} pages; server cursor pagination may be broken`);
 }
 
 export function TeamPage() {

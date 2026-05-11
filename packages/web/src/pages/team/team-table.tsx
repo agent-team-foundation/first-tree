@@ -300,7 +300,16 @@ function HumanRowView({ row, actions, isLast }: { row: HumanRow; actions: RowAct
   return (
     <DenseTableRow>
       <DenseTableCell style={sectionCellStyle(isLast, { paddingLeft: "var(--sp-6)" })}>
-        <NameCell displayName={row.displayName} handle={`@${row.username}`} selfTag={row.isSelf} />
+        <div className="flex min-w-0 items-start" style={{ gap: "var(--sp-2)" }}>
+          <div className="min-w-0 flex-1">
+            <NameCell displayName={row.displayName} handle={`@${row.username}`} selfTag={row.isSelf} />
+          </div>
+          {row.role === "admin" && (
+            <DenseBadge tone="outline" style={{ flexShrink: 0, marginTop: 1 }}>
+              admin
+            </DenseBadge>
+          )}
+        </div>
       </DenseTableCell>
       <DenseTableCell style={sectionCellStyle(isLast)}>
         <HumanDelegateCell row={row} />
