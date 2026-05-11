@@ -317,7 +317,7 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
       const shouldRetry = binaryMissing || unsupportedByThisCli;
       const isLastAttempt = index === attempts.length - 1;
       if (shouldRetry && !isLastAttempt) {
-        log(`First-tree integration via ${attempt.label} unusable; falling back: ${msg.slice(0, 160)}`);
+        log(`First-tree integration via ${attempt.label} unusable; falling back: ${msg.slice(0, 200)}`);
         continue;
       }
       log(`First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`);

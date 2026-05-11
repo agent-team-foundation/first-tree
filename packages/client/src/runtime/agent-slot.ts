@@ -178,7 +178,6 @@ export class AgentSlot {
         agentName: this.config.name,
         contextTreePath: contextTreeBinding?.path,
         contextTreeRepoUrl: contextTreeBinding?.repoUrl,
-        contextTreeBranch: contextTreeBinding?.branch,
         gitMirrorManager,
       },
       agentIdentity: {

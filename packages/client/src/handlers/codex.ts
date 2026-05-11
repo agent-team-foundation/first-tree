@@ -514,17 +514,22 @@ export const createCodexHandler: HandlerFactory = (config) => {
         };
       }
 
-      // Idempotent — if `.agent/identity.json` already exists this rewrites
-      // it with the fresh agent identity, but won't churn unrelated state.
-      bootstrapWorkspace({
-        workspacePath: cwd,
-        identity: sessionCtx.agent,
-        contextTreePath,
-        serverUrl: sessionCtx.sdk.serverUrl,
-        chatId: sessionCtx.chatId,
-        briefing: { format: "agents-md", content: buildAgentBriefing(payload) },
-      });
-      ensureFirstTreeBinding(cwd, sessionCtx);
+      // Mirror claude-code's resume fast-path: skip workspace bootstrap and
+      // the `first-tree tree integrate` shell-out when `.agent/identity.json`
+      // already exists. Idempotent doesn't mean free — integrate forks the
+      // CLI (or falls back to `npx -y first-tree@latest`) every time, which
+      // is unnecessary latency once the workspace is already populated.
+      if (!existsSync(join(cwd, ".agent", "identity.json"))) {
+        bootstrapWorkspace({
+          workspacePath: cwd,
+          identity: sessionCtx.agent,
+          contextTreePath,
+          serverUrl: sessionCtx.sdk.serverUrl,
+          chatId: sessionCtx.chatId,
+          briefing: { format: "agents-md", content: buildAgentBriefing(payload) },
+        });
+        ensureFirstTreeBinding(cwd, sessionCtx);
+      }
 
       await prepareGitWorktrees(payload, cwd, sessionCtx.chatId);
 
