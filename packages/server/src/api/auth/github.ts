@@ -12,7 +12,13 @@ import {
   type GithubTokenBundle,
 } from "../../services/auth-identity.js";
 import { encryptValue } from "../../services/crypto.js";
-import { buildAppAuthorizeUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
+import {
+  buildAppAuthorizeUrl,
+  createAppJwt,
+  exchangeCodeForAppUserProfile,
+  fetchInstallation,
+} from "../../services/github-app.js";
+import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
 import { exchangeCodeForProfile } from "../../services/github-oauth.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
 import { createPersonalTeam, ensureMembership, pickPrimaryMembership } from "../../services/membership.js";
@@ -175,18 +181,32 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: msg });
     }
 
-    // installationId plumbing into github_app_installations lands in the
-    // next commit (install state machine). For now we log so a real
-    // round-trip can be observed in dev/staging without it being silently
-    // dropped.
-    if (installationId !== null) {
-      app.log.info(
-        { event: "github_app.install_callback_received", installationId, githubId: profile.githubId },
-        "github app install callback received — installation persistence wires up in a follow-up commit",
-      );
+    // Fetch + UPSERT the installation row when the user just installed
+    // the App. We pull the metadata from GitHub's API (rather than wait
+    // for the `installation: created` webhook) so the callback doesn't
+    // depend on webhook delivery order — and so the Settings panel can
+    // render the connected-account block on the very next page load.
+    //
+    // Bind-to-org happens after `completeOauthFlow` has resolved which
+    // Hub team the user lands on (existing primary, invite redemption,
+    // or a freshly-minted personal team).
+    if (installationId !== null && appCfg) {
+      try {
+        const appJwt = await createAppJwt({ appId: appCfg.appId, privateKeyPem: appCfg.privateKeyPem });
+        const installation = await fetchInstallation(appJwt, installationId);
+        await upsertInstallationFromMetadata(app.db, { installation });
+      } catch (err) {
+        // Log + continue. The webhook handler (commit 7) will land the
+        // same row on its own; degrading gracefully here means the user
+        // still gets signed in even if GitHub's App API is briefly down.
+        app.log.warn(
+          { err, installationId, githubId: profile.githubId },
+          "github app install fetch/upsert failed — webhook will reconcile",
+        );
+      }
     }
 
-    return completeOauthFlow(app, request, reply, profile, next, tokens);
+    return completeOauthFlow(app, request, reply, profile, next, tokens, installationId);
   });
 
   app.get("/dev-callback", async (request, reply) => {
@@ -216,7 +236,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     const tokens: GithubTokenBundle = devPat
       ? { encryptedAccessToken: encryptValue(devPat, app.config.secrets.encryptionKey) }
       : {};
-    return completeOauthFlow(app, request, reply, profile, next, tokens);
+    return completeOauthFlow(app, request, reply, profile, next, tokens, null);
   });
 }
 
@@ -232,6 +252,13 @@ async function completeOauthFlow(
    * always includes the full pair (access + refresh + expiries).
    */
   oauthTokens: GithubTokenBundle,
+  /**
+   * GitHub-side installation id when the user just installed the App;
+   * null on the legacy OAuth path, returning App users without a fresh
+   * install, and `dev-callback`. Used after team resolution to bind the
+   * installation row to the user's Hub team.
+   */
+  installationId: number | null,
 ) {
   const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
 
@@ -246,6 +273,7 @@ async function completeOauthFlow(
   // auto-provisioning. Invite paths look like `/invite/abc123`.
   const inviteMatch = /^\/invite\/([^/?#]+)/.exec(next);
   let resolved = false;
+  let resolvedOrganizationId: string | null = null;
 
   if (inviteMatch?.[1]) {
     const token = inviteMatch[1];
@@ -268,6 +296,7 @@ async function completeOauthFlow(
     });
     joinPath = "invite";
     resolved = true;
+    resolvedOrganizationId = inv.organizationId;
     // Drop the now-consumed invite path; land on the team dashboard so the
     // onboarding modal can layer on top.
     next = "/";
@@ -275,6 +304,7 @@ async function completeOauthFlow(
     const primary = await pickPrimaryMembership(app.db, userId);
     if (primary) {
       resolved = true;
+      resolvedOrganizationId = primary.organizationId;
       // joinPath stays "returning"; preserve caller's original `next` intent.
     } else {
       const personal = await createPersonalTeam(app.db, {
@@ -288,6 +318,7 @@ async function completeOauthFlow(
       });
       joinPath = "solo";
       resolved = true;
+      resolvedOrganizationId = personal.organizationId;
       next = "/";
       // Onboarding funnel: structured log marker. Picked up by logfire/otel
       // pipelines via `event: "onboarding.team_created"` for funnel views.
@@ -299,6 +330,27 @@ async function completeOauthFlow(
           source: "oauth-bootstrap",
         },
         "onboarding funnel: team auto-created at OAuth bootstrap",
+      );
+    }
+  }
+
+  // Bind the installation to whichever Hub team the user just resolved
+  // into. Late-bound (after team resolution) so a personal-team-creating
+  // signup ends up bound to the team it just minted, and an invitee binds
+  // to the inviting org.
+  //
+  // Tolerates the "already bound to this org" no-op case (idempotent on
+  // returning sign-ins). Refuses to rebind to a different org per D2 1:1
+  // — that path logs a warning and lets the sign-in succeed; the
+  // installation stays attached to whoever installed it first, which is
+  // the documented design (no "transfer install" UX yet).
+  if (installationId !== null && resolvedOrganizationId) {
+    try {
+      await bindInstallationToOrg(app.db, installationId, resolvedOrganizationId);
+    } catch (err) {
+      app.log.warn(
+        { err, installationId, hubOrganizationId: resolvedOrganizationId, userId },
+        "github app install bind-to-org failed — sign-in continues; reconcile in Settings",
       );
     }
   }

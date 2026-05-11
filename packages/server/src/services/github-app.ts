@@ -46,6 +46,7 @@ const APP_JWT_EXPIRY = "9m";
 const APP_JWT_IAT_SKEW_SECONDS = 60;
 
 const APP_INSTALLATION_TOKEN_URL = (id: number) => `https://api.github.com/app/installations/${id}/access_tokens`;
+const APP_INSTALLATION_URL = (id: number) => `https://api.github.com/app/installations/${id}`;
 const OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const USER_API_URL = "https://api.github.com/user";
@@ -96,6 +97,67 @@ export async function createAppJwt(creds: GithubAppCredentials): Promise<string>
     .setIssuedAt(now - APP_JWT_IAT_SKEW_SECONDS)
     .setExpirationTime(APP_JWT_EXPIRY)
     .sign(key);
+}
+
+/**
+ * Installation metadata as returned by `GET /app/installations/:id`.
+ * Mirrors the `installation` block on webhook payloads (intentional —
+ * the same shape lands in `github_app_installations` whether it was
+ * pulled via this endpoint or pushed by webhook).
+ */
+export type AppInstallation = {
+  id: number;
+  accountType: "User" | "Organization";
+  accountLogin: string;
+  accountGithubId: number;
+  permissions: Record<string, "read" | "write" | "admin">;
+  events: string[];
+  /** ISO-8601 if suspended upstream; null when active. */
+  suspendedAt: string | null;
+};
+
+/**
+ * Fetch the installation metadata. Used by the OAuth callback path to
+ * resolve the bare `installation_id` query param into a full row before
+ * UPSERTing into `github_app_installations` — so the callback doesn't
+ * depend on the `installation: created` webhook arriving first
+ * (delivery order between callback and webhook is not guaranteed).
+ *
+ * The webhook handler skips this call entirely because the payload it
+ * receives already carries the same shape.
+ */
+export async function fetchInstallation(
+  appJwt: string,
+  installationId: number,
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<AppInstallation> {
+  const fetcher = opts.fetcher ?? fetch;
+  const res = await fetcher(APP_INSTALLATION_URL(installationId), {
+    headers: {
+      Authorization: `Bearer ${appJwt}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!res.ok) {
+    throw new GithubAppApiError(res.status, `GitHub App installation fetch failed (${res.status})`);
+  }
+  const body = (await res.json()) as {
+    id: number;
+    account: { id: number; login: string; type: "User" | "Organization" };
+    permissions?: Record<string, "read" | "write" | "admin">;
+    events?: string[];
+    suspended_at?: string | null;
+  };
+  return {
+    id: body.id,
+    accountType: body.account.type,
+    accountLogin: body.account.login,
+    accountGithubId: body.account.id,
+    permissions: body.permissions ?? {},
+    events: body.events ?? [],
+    suspendedAt: body.suspended_at ?? null,
+  };
 }
 
 export type InstallationToken = {

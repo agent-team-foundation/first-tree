@@ -5,6 +5,7 @@ import {
   buildAppAuthorizeUrl,
   createAppJwt,
   exchangeCodeForAppUserProfile,
+  fetchInstallation,
   GithubAppApiError,
   mintInstallationToken,
   refreshAppUserToken,
@@ -142,6 +143,63 @@ describe("services/github-app", () => {
       await expect(mintInstallationToken("jwt", 1, { fetcher: fakeFetch })).rejects.toMatchObject({
         name: "GithubAppApiError",
         status: 401,
+      });
+    });
+  });
+
+  describe("fetchInstallation", () => {
+    it("GETs /app/installations/:id with bearer header and parses the account block", async () => {
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      const fakeFetch: typeof fetch = async (url, init) => {
+        calls.push({ url: String(url), init });
+        return new Response(
+          JSON.stringify({
+            id: 5555,
+            account: { id: 999, login: "acme", type: "Organization" },
+            permissions: { contents: "write", issues: "read" },
+            events: ["push", "issues"],
+            suspended_at: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      };
+      const result = await fetchInstallation("jwt-stub", 5555, { fetcher: fakeFetch });
+      expect(calls[0]?.url).toBe("https://api.github.com/app/installations/5555");
+      const headers = new Headers(calls[0]?.init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer jwt-stub");
+      expect(headers.get("x-github-api-version")).toBe("2022-11-28");
+      expect(result).toEqual({
+        id: 5555,
+        accountType: "Organization",
+        accountLogin: "acme",
+        accountGithubId: 999,
+        permissions: { contents: "write", issues: "read" },
+        events: ["push", "issues"],
+        suspendedAt: null,
+      });
+    });
+
+    it("normalizes a suspended installation to a non-null suspendedAt", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(
+          JSON.stringify({
+            id: 1,
+            account: { id: 2, login: "u", type: "User" },
+            suspended_at: "2026-05-11T10:00:00Z",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      const result = await fetchInstallation("jwt", 1, { fetcher: fakeFetch });
+      expect(result.suspendedAt).toBe("2026-05-11T10:00:00Z");
+      expect(result.accountType).toBe("User");
+    });
+
+    it("throws GithubAppApiError on 404 (installation deleted upstream)", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      await expect(fetchInstallation("jwt", 1, { fetcher: fakeFetch })).rejects.toMatchObject({
+        name: "GithubAppApiError",
+        status: 404,
       });
     });
   });
