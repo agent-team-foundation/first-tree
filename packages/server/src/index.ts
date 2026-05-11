@@ -40,6 +40,37 @@ async function main() {
       );
     }
   }
+  // Same guard for the GitHub App block. All five fields ride together —
+  // the App's user-OAuth uses clientId/clientSecret, the App JWT uses
+  // appId/privateKeyPem, and the webhook endpoint verifies signatures
+  // with webhookSecret. A partially-set block almost always means the
+  // operator copied the env recipe but missed one var; fail loud rather
+  // than serve a half-working install flow.
+  const ghApp = serverConfig.oauth?.githubApp;
+  if (ghApp) {
+    const required = {
+      FIRST_TREE_HUB_GITHUB_APP_ID: ghApp.appId,
+      FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID: ghApp.clientId,
+      FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET: ghApp.clientSecret,
+      FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY: ghApp.privateKeyPem,
+      FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET: ghApp.webhookSecret,
+    } as const;
+    const missing = Object.entries(required)
+      .filter(([, v]) => !v)
+      .map(([k]) => k);
+    if (missing.length > 0 && missing.length < Object.keys(required).length) {
+      throw new Error(`GitHub App is half-configured — missing env vars: ${missing.join(", ")}. Set all five or none.`);
+    }
+    // Belt-and-braces: a real PKCS#8 PEM starts with this header. Catches
+    // the common operator mistake of pasting only the body or leaving in
+    // literal `\n` sequences instead of newlines. Cheap to check at boot.
+    if (ghApp.privateKeyPem && !ghApp.privateKeyPem.includes("-----BEGIN PRIVATE KEY-----")) {
+      throw new Error(
+        "FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY does not look like a PKCS#8 PEM — expected `-----BEGIN PRIVATE KEY-----` header. " +
+          "If the value came from a single-line env file, replace literal `\\n` with real newlines.",
+      );
+    }
+  }
 
   const config: Config = {
     ...serverConfig,

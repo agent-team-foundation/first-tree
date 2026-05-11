@@ -91,6 +91,18 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
         clientId: "test-github-client",
         clientSecret: "test-github-secret",
       },
+      // Stub GitHub App creds so the config-shape requirement (when
+      // `oauth` is present, both nested blocks are required) is satisfied.
+      // Tests that exercise the App flow inject fetchers / mocks at the
+      // service-call layer and never actually consume these values — see
+      // github-app.test.ts.
+      githubApp: {
+        appId: "test-app-id",
+        clientId: "test-app-client-id",
+        clientSecret: "test-app-client-secret",
+        privateKeyPem: "test-app-private-key-pem",
+        webhookSecret: "test-app-webhook-secret",
+      },
     },
     trustProxy: false,
     rateLimit: { ...baseRateLimit, ...opts.rateLimit },

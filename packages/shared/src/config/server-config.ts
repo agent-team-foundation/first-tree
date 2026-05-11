@@ -80,15 +80,53 @@ export const serverConfigSchema = defineConfig({
   }),
   oauth: optional({
     /**
-     * GitHub OAuth App credentials for SaaS sign-in. The "half configured"
-     * shape (only one of clientId/clientSecret set) is rejected at boot so a
-     * misconfigured production instance can't accidentally expose the
-     * dev-callback bypass with no real OAuth wired up.
+     * Legacy GitHub OAuth App credentials. Used by `/auth/github/start`
+     * and the callback until the GitHub App switchover (design doc §7
+     * step 3) takes effect. The "half configured" shape (only one of
+     * clientId/clientSecret set) is rejected at boot so a misconfigured
+     * production instance can't accidentally expose the dev-callback
+     * bypass with no real OAuth wired up.
+     *
+     * Deleted after the App rollout is verified stable (design doc §5.2
+     * — "上线确认稳定后删除").
      */
     github: optional({
       clientId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID" }),
       clientSecret: field(z.string(), {
         env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET",
+        secret: true,
+      }),
+    }),
+    /**
+     * GitHub App credentials — supersedes `oauth.github` per design doc
+     * `docs/github-app-design-zh.md` §5.2. A single App installation
+     * simultaneously unlocks user-OAuth, the webhook stream, and
+     * installation-token minting (§3). All five fields are required
+     * together; partial configuration is rejected at boot for the same
+     * reason as the legacy block — a half-wired App is worse than no App.
+     *
+     * Dev / staging / prod each have a separate App with its own set of
+     * values; the env file selects which to load.
+     *
+     * `privateKeyPem` is the raw PKCS#8 PEM (multi-line, starts with
+     * `-----BEGIN PRIVATE KEY-----`). Self-hosters typically inline it via
+     * a `.env` file with `\n` escapes; SaaS operators should source it
+     * from their secret manager (design doc §6 risk 4 — pending
+     * team-wide pattern).
+     */
+    githubApp: optional({
+      appId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_APP_ID" }),
+      clientId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID" }),
+      clientSecret: field(z.string(), {
+        env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET",
+        secret: true,
+      }),
+      privateKeyPem: field(z.string(), {
+        env: "FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY",
+        secret: true,
+      }),
+      webhookSecret: field(z.string(), {
+        env: "FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET",
         secret: true,
       }),
     }),
