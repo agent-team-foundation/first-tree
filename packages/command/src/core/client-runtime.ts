@@ -7,8 +7,10 @@ import { agentConfigSchema, loadAgents } from "@agent-team-foundation/first-tree
 import {
   AgentSlot,
   ClientConnection,
+  type ContextTreeBinding,
   getHandlerFactory,
   registerBuiltinHandlers,
+  syncContextTree,
   type UpdateHooks,
   UpdateManager,
 } from "@first-tree-hub/client";
@@ -59,6 +61,14 @@ export class ClientRuntime {
   private updateManager: UpdateManager | null = null;
   private watcher: FSWatcher | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Per-org Context Tree binding resolved at `start()`. Threaded through every
+   * `slot.start()` so handlers can copy `AGENT.md` / root `NODE.md` into the
+   * agent workspace's `.agent/context/` and install the first-tree skill.
+   * `null` when the user has no primary org, the org has no tree configured,
+   * or git sync failed — handlers degrade gracefully (empty context dir).
+   */
+  private contextTreeBinding: ContextTreeBinding | null = null;
   /**
    * Directory we write auto-registered agent configs into (same path that
    * `first-tree-hub agent add` uses). Set by `watchAgentsDir` so the
@@ -141,6 +151,19 @@ export class ClientRuntime {
   }
 
   async start(): Promise<void> {
+    // Sync the per-org Context Tree before connecting agents. Mirrors what
+    // `AgentRuntime` (the SDK-level orchestrator) does at line runtime.ts:111.
+    // Without this, every slot.start() ran with `contextTreeBinding: undefined`,
+    // so handlers wrote empty `.agent/context/` dirs and skipped the
+    // first-tree skill install (see PR #298 — the threading was added but
+    // this entry point never fed it).
+    this.contextTreeBinding = await syncContextTree(
+      this.serverUrl,
+      (opts) => ensureFreshAccessToken(opts),
+      (msg) => print.status("[context-tree]", msg),
+      CLI_USER_AGENT,
+    );
+
     // Attach before connecting so the first welcome frame on a stale client
     // is acted on rather than missed until the next reconnect.
     if (this.options.currentVersion && this.options.update) {
@@ -167,7 +190,7 @@ export class ClientRuntime {
     await Promise.allSettled(
       this.agents.map(async (agent) => {
         try {
-          const identity = await agent.slot.start();
+          const identity = await agent.slot.start(this.contextTreeBinding);
           print.check(true, `${agent.name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
@@ -315,7 +338,7 @@ export class ClientRuntime {
     const entry = this.agents.find((a) => a.name === name);
     if (!entry) return;
     entry.slot
-      .start()
+      .start(this.contextTreeBinding)
       .then((identity) => {
         print.check(true, `${name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
       })
