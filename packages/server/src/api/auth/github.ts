@@ -236,7 +236,56 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     const tokens: GithubTokenBundle = devPat
       ? { encryptedAccessToken: encryptValue(devPat, app.config.secrets.encryptionKey) }
       : {};
-    return completeOauthFlow(app, request, reply, profile, next, tokens, null);
+
+    // App-flow dev bypass: when the request supplied an `installationId`,
+    // stub a `github_app_installations` row before completing the OAuth
+    // flow so the rest of the dev session looks identical to a real
+    // post-install state — Settings → Integrations renders the connected
+    // account, the App webhook endpoint resolves the binding, etc.
+    //
+    // Unlike the real path (which fetches metadata from GitHub), we just
+    // mint the row directly. The `permissions` / `events` blocks mirror
+    // what the App declares on its GitHub-side settings page (D0b) so the
+    // dev row matches what a real install would look like for QA purposes.
+    let devInstallationId: number | null = null;
+    if (params.installationId) {
+      devInstallationId = Number(params.installationId);
+      try {
+        await upsertInstallationFromMetadata(app.db, {
+          installation: {
+            id: devInstallationId,
+            accountType: params.installationAccountType ?? "User",
+            accountLogin: params.installationAccountLogin ?? params.login,
+            accountGithubId: Number(params.installationAccountGithubId ?? params.githubId),
+            permissions: {
+              contents: "write",
+              pull_requests: "write",
+              issues: "read",
+              metadata: "read",
+              members: "read",
+            },
+            events: [
+              "issues",
+              "issue_comment",
+              "pull_request",
+              "pull_request_review",
+              "push",
+              "installation",
+              "installation_repositories",
+              "member",
+            ],
+            suspendedAt: null,
+          },
+        });
+      } catch (err) {
+        // Dev-only path; log and continue so a bad query string doesn't
+        // brick local sign-in. The OAuth flow still completes; bind is
+        // attempted below and will simply fail to find the row.
+        app.log.warn({ err, installationId: devInstallationId }, "dev-callback installation stub upsert failed");
+      }
+    }
+
+    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId);
   });
 }
 

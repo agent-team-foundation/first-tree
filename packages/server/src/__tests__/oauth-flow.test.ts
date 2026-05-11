@@ -210,4 +210,45 @@ describe("OAuth callback rejects malformed state", () => {
     const params = new URLSearchParams(fragment);
     expect(params.get("next")).toBe("/");
   });
+
+  it("dev-callback stubs github_app_installations + binds to the new personal team when installationId is supplied", async () => {
+    const app = getApp();
+    const installationId = 8_810_001;
+    const res = await app.inject({
+      method: "GET",
+      url:
+        "/api/v1/auth/github/dev-callback?githubId=909&login=devappuser&displayName=Dev+App+User" +
+        `&installationId=${installationId}&installationAccountType=User&installationAccountLogin=devappuser&installationAccountGithubId=909`,
+    });
+    expect(res.statusCode).toBe(302);
+
+    const { findInstallationByGithubId } = await import("../services/github-app-installations.js");
+    const row = await findInstallationByGithubId(app.db, installationId);
+    expect(row).not.toBeNull();
+    expect(row?.accountLogin).toBe("devappuser");
+    expect(row?.accountType).toBe("User");
+    // hub_organization_id is the freshly-minted personal team for the new
+    // GitHub user — assert the binding by checking it's non-null. Verifying
+    // the exact id would duplicate createPersonalTeam's slug derivation that
+    // the earlier dev-callback test already pins down.
+    expect(row?.hubOrganizationId).not.toBeNull();
+    // App-declared permissions mirror D0b — the dev stub looks like a real
+    // install for downstream QA.
+    expect(row?.permissions).toMatchObject({ contents: "write", members: "read" });
+  });
+
+  it("dev-callback without installationId leaves github_app_installations untouched (legacy OAuth-only dev flow)", async () => {
+    const app = getApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=910&login=plainuser",
+    });
+    expect(res.statusCode).toBe(302);
+
+    const { githubAppInstallations } = await import("../db/schema/github-app-installations.js");
+    const rows = await app.db.select().from(githubAppInstallations);
+    // No installation rows attributable to this synthetic GitHub id.
+    const own = rows.filter((r) => r.accountGithubId === 910);
+    expect(own).toHaveLength(0);
+  });
 });
