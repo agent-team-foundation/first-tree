@@ -9,6 +9,7 @@ import { stratify, tree } from "d3-hierarchy";
 import { AlertTriangle, CheckCircle2, Copy, FolderTree, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { type ContextTreeWindow, getContextTreeSnapshot } from "../api/context-tree.js";
+import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Markdown } from "../components/ui/markdown.js";
 import { PageHeader } from "../components/ui/page-header.js";
@@ -21,13 +22,18 @@ const CONTEXT_WINDOWS: Array<{ value: ContextTreeWindow; label: string; summary:
 ];
 
 export function ContextPage() {
+  const { organizationId } = useAuth();
   const [window, setWindow] = useState<ContextTreeWindow>("7d");
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
   const [selectedOverviewNodeId, setSelectedOverviewNodeId] = useState<string | null>(null);
 
   const query = useQuery({
-    queryKey: ["context-tree-snapshot", window],
-    queryFn: () => getContextTreeSnapshot(window),
+    queryKey: ["context-tree-snapshot", organizationId, window],
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getContextTreeSnapshot(organizationId, window);
+    },
+    enabled: !!organizationId,
   });
 
   const snapshot = query.data;
@@ -98,29 +104,44 @@ function ContextStatus({
   const currentWindow = windowSummary(window);
   return (
     <Panel>
-      <PanelBody>
-        <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-          <div className="flex flex-wrap items-start justify-between" style={{ gap: "var(--sp-3)" }}>
-            <div className="flex items-start" style={{ gap: "var(--sp-2)" }}>
-              <span style={{ color: severityColor(snapshot.contextStatus.severity), paddingTop: "var(--sp-0_5)" }}>
-                {statusIcon}
-              </span>
-              <div>
-                <div className="text-title font-semibold" style={{ color: "var(--fg)" }}>
+      <PanelBody style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
+        <div className="flex flex-wrap items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+          <div className="flex items-center" style={{ gap: "var(--sp-2)", minWidth: 0 }}>
+            <span style={{ color: severityColor(snapshot.contextStatus.severity), flex: "0 0 auto" }}>
+              {statusIcon}
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <div className="flex flex-wrap items-baseline" style={{ gap: "var(--sp-2)" }}>
+                <div className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
                   {snapshot.contextStatus.label}
                 </div>
-                <div className="text-body" style={{ color: "var(--fg-2)", marginTop: "var(--sp-1)" }}>
-                  {snapshot.contextStatus.detail ?? "Agents have a synced team context snapshot available."}
-                  {snapshot.branch || snapshot.headCommit ? (
-                    <>
-                      {" "}
-                      <span style={{ color: "var(--fg-3)" }}>·</span>{" "}
-                      <span className="font-medium">{snapshot.branch ?? "unknown"}</span>
-                      {snapshot.headCommit ? `@${snapshot.headCommit.slice(0, 7)}` : ""}
-                    </>
-                  ) : null}
-                </div>
+                {snapshot.branch || snapshot.headCommit ? (
+                  <div className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
+                    {snapshot.branch ?? "unknown"}
+                    {snapshot.headCommit ? `@${snapshot.headCommit.slice(0, 7)}` : ""}
+                  </div>
+                ) : null}
               </div>
+              <div
+                className="text-label"
+                style={{
+                  color: "var(--fg-3)",
+                  marginTop: "var(--sp-0_5)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {snapshot.contextStatus.detail ?? "Agents have a synced team context snapshot available."}
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-end" style={{ gap: "var(--sp-3)" }}>
+            <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
+              <StatusMetric value={snapshot.summary.changedNodeCount} label={`updates in the ${currentWindow}`} />
+              <StatusMetric value={snapshot.summary.addedCount} label="added" tone="added" />
+              <StatusMetric value={snapshot.summary.editedCount} label="edited" tone="edited" />
+              <StatusMetric value={snapshot.summary.removedCount} label="removed" tone="removed" />
             </div>
             <fieldset className="flex flex-wrap" style={{ gap: "var(--sp-1)" }}>
               <legend className="sr-only">Context update window</legend>
@@ -128,22 +149,13 @@ function ContextStatus({
                 <Button
                   key={option.value}
                   variant={option.value === window ? "default" : "outline"}
-                  size="sm"
+                  size="xs"
                   onClick={() => onWindowChange(option.value)}
                 >
                   {option.label}
                 </Button>
               ))}
             </fieldset>
-          </div>
-          <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
-            <SummaryPill
-              label={`${snapshot.summary.changedNodeCount} context updates in the ${currentWindow}`}
-              strong
-            />
-            <SummaryPill label={`Added ${snapshot.summary.addedCount}`} tone="added" />
-            <SummaryPill label={`Edited ${snapshot.summary.editedCount}`} tone="edited" />
-            <SummaryPill label={`Removed ${snapshot.summary.removedCount}`} tone="removed" />
           </div>
         </div>
       </PanelBody>
@@ -177,10 +189,10 @@ function UpdatesView({
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
       <div
-        className="grid grid-cols-1 xl:grid-cols-[minmax(22rem,0.78fr)_minmax(0,1.22fr)]"
-        style={{ gap: "var(--sp-4)", alignItems: "start" }}
+        className="grid grid-cols-1 xl:grid-cols-[minmax(26rem,1fr)_minmax(0,1fr)]"
+        style={{ gap: "var(--sp-4)", alignItems: "stretch" }}
       >
-        <Panel>
+        <Panel className="flex h-full flex-col">
           <PanelHeader>
             <div className="flex flex-col">
               <PanelTitle>Context Updates</PanelTitle>
@@ -189,15 +201,15 @@ function UpdatesView({
               </span>
             </div>
           </PanelHeader>
-          <PanelBody>
+          <PanelBody className="flex-1">
             {snapshot.updates.length === 0 ? (
               <EmptyChanges />
             ) : (
               <div
                 className="flex flex-col"
                 style={{
-                  gap: "var(--sp-2)",
-                  maxHeight: "min(64vh, 38rem)",
+                  gap: "var(--sp-1_5)",
+                  height: "min(52vh, 30rem)",
                   overflow: "auto",
                   paddingRight: "var(--sp-0_5)",
                 }}
@@ -245,14 +257,23 @@ function UpdateCard({
         borderColor: selected ? "var(--accent)" : "var(--border)",
         borderRadius: "var(--radius-panel)",
         background: selected ? "var(--bg-sunken)" : "var(--bg)",
-        padding: "var(--sp-3)",
+        padding: "var(--sp-2_5)",
       }}
     >
       <div className="flex items-start justify-between" style={{ gap: "var(--sp-2)" }}>
         <div style={{ minWidth: 0 }}>
           <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
             <ChangePill type={update.changeType} />
-            <span className="text-body font-semibold" style={{ color: "var(--fg)" }}>
+            <span
+              className="text-body font-semibold"
+              style={{
+                color: "var(--fg)",
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 2,
+                overflow: "hidden",
+              }}
+            >
               {updateCardHeadline(update)}
             </span>
           </div>
@@ -297,90 +318,83 @@ function UpdateDetail({
   const sourcePath = node?.sourcePath ?? update?.path ?? null;
   const sourceCommit = update?.sourceCommit ? update.sourceCommit.slice(0, 7) : "no commit";
   const ownership = update ? ownerText(update.owners) : "No owner";
+  const linkedContextItems =
+    related && related.length > 0 ? related.map((item) => item.title || item.path || "root") : [];
+  const contextArea = update ? areaLabel(update.path) || pathLabel(update.path) : "root";
 
   return (
-    <Panel>
+    <Panel className="flex h-full flex-col">
       <PanelHeader>
         <div>
           <PanelTitle>Selected Change</PanelTitle>
           <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            What changed, and what agents can use from it
+            Summary and source context
           </div>
         </div>
         {update ? <ChangePill type={update.changeType} /> : null}
       </PanelHeader>
-      <PanelBody>
+      <PanelBody className="flex-1">
         {!update ? (
           <EmptyChanges />
         ) : (
-          <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+          <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
             <div>
               <div className="text-title font-semibold" style={{ color: "var(--fg)" }}>
                 {update.title}
               </div>
-              <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-                In {pathLabel(update.path)}
+              <div
+                className="text-label"
+                style={{
+                  color: "var(--fg-3)",
+                  marginTop: "var(--sp-1)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {changedByLabel(update)} · {changeTypeLabel(update.changeType)} · {contextArea}
               </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2" style={{ gap: "var(--sp-3)" }}>
-              <MeaningBlock label="What changed" value={updateDetailActivity(update)} />
-              <MeaningBlock label="What agents can use" value={updateDetailMeaning(update)} />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3" style={{ gap: "var(--sp-3)" }}>
-              <DetailMetric label="Change" value={changeTypeLabel(update.changeType)} />
-              <DetailMetric label="Context area" value={areaLabel(update.path) || pathLabel(update.path)} />
-              <DetailMetric label={update.owners.length > 1 ? "Owners" : "Owner"} value={ownership} />
+              <div
+                className="text-label font-mono"
+                style={{
+                  color: "var(--fg-4)",
+                  marginTop: "var(--sp-0_5)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {update.path}
+              </div>
             </div>
 
             <div
-              className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.7fr)]"
-              style={{ gap: "var(--sp-4)" }}
+              style={{
+                borderTop: "var(--hairline) solid var(--border-faint)",
+                paddingTop: "var(--sp-3)",
+              }}
             >
-              <MetaList
-                title="Linked context"
-                items={
-                  related && related.length > 0 ? related.map((item) => item.title || item.path || "root") : ["none"]
-                }
-              />
-              <div>
-                <MetaList title="Source" items={[sourcePath ?? update.path, sourceCommit]} />
-                {sourcePath ? (
-                  <div className="flex flex-wrap" style={{ gap: "var(--sp-1)", marginTop: "var(--sp-2)" }}>
-                    <Button
-                      variant="outline"
-                      size="xs"
-                      onClick={() => {
-                        setSourceExpanded((value) => !value);
-                      }}
-                    >
-                      Preview source
-                    </Button>
-                    <Button variant="ghost" size="xs" onClick={() => void navigator.clipboard.writeText(sourcePath)}>
-                      <Copy size={14} />
-                      Copy path
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
+              <SummaryBlock value={updateDetailActivity(update)} impact={updateDetailMeaning(update)} />
             </div>
-            {sourceExpanded ? (
-              <div
-                style={{
-                  borderTop: "var(--hairline) solid var(--border-faint)",
-                  paddingTop: "var(--sp-3)",
+
+            <div
+              style={{
+                borderTop: "var(--hairline) solid var(--border-faint)",
+                paddingTop: "var(--sp-3)",
+              }}
+            >
+              <ReferenceBlock
+                commit={sourceCommit}
+                linkedContextItems={linkedContextItems}
+                owner={ownership}
+                path={sourcePath ?? update.path}
+                preview={node?.preview ?? null}
+                sourceExpanded={sourceExpanded}
+                onTogglePreview={() => {
+                  setSourceExpanded((value) => !value);
                 }}
-              >
-                {node?.preview ? (
-                  <Markdown>{node.preview}</Markdown>
-                ) : (
-                  <div className="text-body" style={{ color: "var(--fg-3)" }}>
-                    No source preview available.
-                  </div>
-                )}
-              </div>
-            ) : null}
+              />
+            </div>
           </div>
         )}
       </PanelBody>
@@ -483,16 +497,27 @@ function TreeOverview({
   );
 }
 
+function StatusMetric({ value, label, tone }: { value: number; label: string; tone?: ContextTreeChangeType }) {
+  return (
+    <span className="inline-flex items-baseline text-label" style={{ color: "var(--fg-3)", gap: "var(--sp-1)" }}>
+      <span className="font-semibold" style={{ color: tone ? changeColor(tone) : "var(--fg)" }}>
+        {value}
+      </span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
 function SummaryPill({ label, tone, strong }: { label: string; tone?: ContextTreeChangeType; strong?: boolean }) {
   return (
     <span
       className={`text-label ${strong ? "font-semibold" : "font-medium"}`}
       style={{
         color: tone ? changeColor(tone) : "var(--fg)",
-        background: "var(--bg-sunken)",
-        border: "var(--hairline) solid var(--border)",
+        background: tone ? "var(--accent-bg)" : "var(--bg-sunken)",
+        border: "var(--hairline) solid var(--border-faint)",
         borderRadius: "var(--radius-chip)",
-        padding: "var(--sp-1) var(--sp-2)",
+        padding: "var(--sp-0_5) var(--sp-1_5)",
       }}
     >
       {label}
@@ -504,60 +529,100 @@ function ChangePill({ type }: { type: ContextTreeChangeType }) {
   return <SummaryPill label={changeBadgeLabel(type)} tone={type} />;
 }
 
-function DetailMetric({ label, value }: { label: string; value: string }) {
+function SummaryBlock({ value, impact }: { value: string; impact: string }) {
   return (
-    <div>
-      <div className="text-label font-semibold" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-        {label}
-      </div>
-      <div className="text-body font-semibold" style={{ color: "var(--fg)" }}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function MeaningBlock({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        color: "var(--fg-2)",
-        background: "var(--bg-sunken)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-panel)",
-        padding: "var(--sp-3)",
-      }}
-    >
-      <div className="text-label font-semibold" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-        {label}
+    <div style={{ color: "var(--fg-2)" }}>
+      <div className="text-label font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-1)" }}>
+        Change summary
       </div>
       <div className="text-body">{value}</div>
+      <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+        Impact: {impact}
+      </div>
     </div>
   );
 }
 
-function MetaList({ title, items }: { title: string; items: string[] }) {
+function ReferenceBlock({
+  path,
+  commit,
+  linkedContextItems,
+  owner,
+  preview,
+  sourceExpanded,
+  onTogglePreview,
+}: {
+  path: string;
+  commit: string;
+  linkedContextItems: string[];
+  owner: string;
+  preview: string | null;
+  sourceExpanded: boolean;
+  onTogglePreview: () => void;
+}) {
+  const items: Array<{ label: string; value: string; mono?: boolean }> = [
+    { label: "Owner", value: owner },
+    ...(linkedContextItems.length > 0 ? [{ label: "Linked", value: linkedContextItems.join(", ") }] : []),
+    { label: "Source", value: path, mono: true },
+    { label: "Commit", value: commit, mono: true },
+  ];
+
   return (
     <div>
       <div className="text-label font-semibold" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-        {title}
+        Reference
       </div>
-      <div className="flex flex-wrap" style={{ gap: "var(--sp-1)" }}>
+      <dl className="grid grid-cols-1 md:grid-cols-2" style={{ columnGap: "var(--sp-4)", rowGap: "var(--sp-2)" }}>
         {items.map((item) => (
-          <span
-            key={item}
-            className="text-label"
-            style={{
-              color: "var(--fg-2)",
-              background: "var(--bg-sunken)",
-              borderRadius: "var(--radius-chip)",
-              padding: "var(--sp-1) var(--sp-2)",
-            }}
+          <div
+            key={item.label}
+            className="grid"
+            style={{ gridTemplateColumns: "4rem minmax(0,1fr)", gap: "var(--sp-2)" }}
           >
-            {item}
-          </span>
+            <dt className="text-label font-semibold" style={{ color: "var(--fg-3)" }}>
+              {item.label}
+            </dt>
+            <dd
+              className={`text-label ${item.mono ? "font-mono" : "font-medium"}`}
+              style={{
+                color: "var(--fg-2)",
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {item.value}
+            </dd>
+          </div>
         ))}
+      </dl>
+      <div className="flex flex-wrap" style={{ gap: "var(--sp-1)", marginTop: "var(--sp-3)" }}>
+        <Button variant="outline" size="xs" onClick={onTogglePreview}>
+          {sourceExpanded ? "Hide source" : "Preview source"}
+        </Button>
+        <Button variant="ghost" size="xs" onClick={() => void navigator.clipboard.writeText(path)}>
+          <Copy size={14} />
+          Copy path
+        </Button>
       </div>
+      {sourceExpanded ? (
+        <div
+          style={{
+            borderTop: "var(--hairline) solid var(--border-faint)",
+            marginTop: "var(--sp-3)",
+            paddingTop: "var(--sp-3)",
+          }}
+        >
+          {preview ? (
+            <Markdown>{preview}</Markdown>
+          ) : (
+            <div className="text-body" style={{ color: "var(--fg-3)" }}>
+              No source preview available.
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -593,6 +658,7 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const detail = snapshot.repo
     ? "Hub cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
     : "Connect a Context Tree repo to show the team knowledge agents can use.";
+  const syncDetail = snapshot.contextStatus.detail;
   const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
   return (
     <Panel>
@@ -604,6 +670,11 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
               {title}
             </div>
             <div style={{ marginTop: "var(--sp-1)" }}>{detail}</div>
+            {syncDetail ? (
+              <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+                {syncDetail}
+              </div>
+            ) : null}
             {snapshot.repo || snapshot.branch ? (
               <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
                 {repoLabel ? `Repo: ${repoLabel}` : null}
@@ -713,6 +784,12 @@ function updateCardHeadline(update: ContextTreeUpdate): string {
   const actor = update.changedBy ?? "Someone";
   const action = update.changeType === "added" ? "added" : update.changeType === "removed" ? "removed" : "updated";
   return `${actor} ${action} ${update.title}`;
+}
+
+function changedByLabel(update: ContextTreeUpdate): string {
+  const actor = update.changedBy ?? "Someone";
+  const action = update.changeType === "added" ? "Added" : update.changeType === "removed" ? "Removed" : "Updated";
+  return `${action} by ${actor}`;
 }
 
 function updateDetailActivity(update: ContextTreeUpdate): string {

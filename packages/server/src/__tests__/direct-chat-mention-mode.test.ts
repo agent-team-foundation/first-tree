@@ -210,3 +210,47 @@ describe("direct chat default mode (migration 0029)", () => {
     });
   });
 });
+
+/**
+ * Pins the fix for issue #283: when a (human, delegate) pair has multiple
+ * direct chats — which the product explicitly allows — `findOrCreateDirectChat`
+ * MUST return the same chat across calls. Previously the lookup had no
+ * `ORDER BY`, so the row returned was effectively arbitrary, and GitHub
+ * webhook fan-out landed in non-deterministic chats / split across them on
+ * near-simultaneous retries.
+ */
+describe("findOrCreateDirectChat deterministic selection (issue #283)", () => {
+  const getApp = useTestApp();
+
+  it("returns the earliest-created direct chat every call when multiple exist for the same pair", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const human = await createTestAgent(app, { name: `det-h-${uid}`, type: "human" });
+    const { agent } = await createTestAgent(app, { name: `det-a-${uid}` });
+
+    // Create two direct chats for the same pair. Product allows this — users
+    // can "New chat" from the workspace whenever they like.
+    const first = await createChat(app.db, human.agent.uuid, {
+      type: "direct",
+      participantIds: [agent.uuid],
+    });
+    // Force a distinct created_at so the ordering is unambiguous regardless
+    // of clock resolution on the test runner.
+    await new Promise((r) => setTimeout(r, 5));
+    const second = await createChat(app.db, human.agent.uuid, {
+      type: "direct",
+      participantIds: [agent.uuid],
+    });
+
+    expect(first.id).not.toBe(second.id);
+
+    // Repeated lookup must always land on the earliest chat.
+    const a = await findOrCreateDirectChat(app.db, human.agent.uuid, agent.uuid);
+    const b = await findOrCreateDirectChat(app.db, human.agent.uuid, agent.uuid);
+    const c = await findOrCreateDirectChat(app.db, agent.uuid, human.agent.uuid);
+
+    expect(a.id).toBe(first.id);
+    expect(b.id).toBe(first.id);
+    expect(c.id).toBe(first.id);
+  });
+});
