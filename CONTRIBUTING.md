@@ -26,6 +26,20 @@ That means good contributions here do two things at once:
 - If a change is large, cross-cutting, or proposal-shaping, open an issue or
   draft PR first so maintainers can align on the intended direction.
 
+## Repository Boundaries
+
+Keep changes in the correct package scope:
+
+- Runtime/CLI behavior goes to `apps/*` (published packages).
+- Shared internal logic belongs in `packages/*`.
+- Documentation site content belongs in `apps/doc-website/`.
+
+For VitePress documentation:
+
+- Author content under `apps/doc-website/docs`.
+- Update site behavior in `apps/doc-website/.vitepress/config.mts`.
+- Keep the `srcDir` setting in that config aligned with actual file layout.
+
 ## Local Setup
 
 Use the same baseline as CI:
@@ -39,6 +53,14 @@ Install dependencies from the repo root:
 pnpm install
 ```
 
+Use the doc site for content work:
+
+```bash
+pnpm --filter doc-website docs:dev
+pnpm --filter doc-website docs:build
+pnpm --filter doc-website docs:preview
+```
+
 ## Validation
 
 Run the standard checks before opening a PR:
@@ -50,12 +72,63 @@ pnpm test
 pnpm build
 ```
 
+For documentation-only changes:
+
+```bash
+pnpm --filter doc-website docs:build
+```
+
+When your change includes documentation updates, run these too:
+
+```bash
+pnpm --filter doc-website docs:dev
+pnpm --filter doc-website docs:preview
+```
+
 If you touch the published CLI package, also verify the built entry manually:
 
 ```bash
 pnpm --filter first-tree build
 node apps/cli/dist/index.js --help
 ```
+
+If you touch both code and docs, run:
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm --filter first-tree build
+pnpm --filter doc-website docs:build
+```
+
+## Documentation Contributions
+
+`packages/doc-website` follows a VitePress-first workflow and should be treated as
+code-like content:
+
+- Add content files under `packages/doc-website/docs`.
+- Keep file names descriptive and kebab-case, e.g. `deployment-guidelines.md`.
+- Place a new page at a location that matches its destination route and intent.
+- Do not move unrelated legacy docs.
+- Add or update `frontmatter` only when needed.
+  - `outline: deep` is recommended for long pages with multiple heading levels.
+  - Prefer a single top-level `#` title and keep heading levels nested in
+    order (`#`, `##`, `###`, ...).
+- Use relative Markdown links and assets paths inside docs to reduce fragility.
+- After adding, renaming, or removing pages, keep `packages/doc-website/.vitepress/config.mts`
+  navigation updated:
+  - `themeConfig.nav`
+  - `themeConfig.sidebar`
+- If the content touches CLI/behavior docs, ensure the corresponding command docs,
+  examples, and migration notes stay synchronized.
+
+A typical minimal doc page update flow is:
+
+1. Edit or add content under `packages/doc-website/docs`.
+2. Update route visibility in `packages/doc-website/.vitepress/config.mts`.
+3. Run `pnpm --filter doc-website docs:build`.
+4. For reviewable UI changes, run `pnpm --filter doc-website docs:dev` and confirm
+   the page is reachable from nav/sidebar.
 
 ## Change Discipline
 
@@ -69,6 +142,12 @@ node apps/cli/dist/index.js --help
   proposal's new public paths instead of reviving deprecated names.
 - Keep the root package thin. Product-facing CLI code belongs in `apps/cli/`;
   reusable runtime logic belongs in `packages/`.
+- Keep code and docs in sync for behavior changes. If a command contract,
+  workflow, or user-visible output changes, update docs in the same PR.
+- For documentation-only changes, avoid changing unrelated code modules unless
+  required for content accuracy.
+- Keep docs page titles, links, and navigation deterministic; run docs build before
+  opening PRs that touch `packages/doc-website`.
 
 ## Pull Requests
 
@@ -78,6 +157,8 @@ Helpful PRs for this repo usually include:
 - the affected surface area (`tree`, `github scan`, `hub`, docs, packaging, or tests)
 - the validation commands you ran
 - any follow-up work that is still intentionally left out
+- the documentation impact (`packages/doc-website`, affected routes, and any
+  screenshots if UI/formatting changed)
 
 ## Where To Start Reading
 
