@@ -103,10 +103,10 @@ pnpm --filter doc-website docs:build
 
 ## Documentation Contributions
 
-`packages/doc-website` follows a VitePress-first workflow and should be treated as
+`apps/doc-website` follows a VitePress-first workflow and should be treated as
 code-like content:
 
-- Add content files under `packages/doc-website/docs`.
+- Add content files under `apps/doc-website/docs`.
 - Keep file names descriptive and kebab-case, e.g. `deployment-guidelines.md`.
 - Place a new page at a location that matches its destination route and intent.
 - Do not move unrelated legacy docs.
@@ -115,7 +115,7 @@ code-like content:
   - Prefer a single top-level `#` title and keep heading levels nested in
     order (`#`, `##`, `###`, ...).
 - Use relative Markdown links and assets paths inside docs to reduce fragility.
-- After adding, renaming, or removing pages, keep `packages/doc-website/.vitepress/config.mts`
+- After adding, renaming, or removing pages, keep `apps/doc-website/.vitepress/config.mts`
   navigation updated:
   - `themeConfig.nav`
   - `themeConfig.sidebar`
@@ -124,8 +124,8 @@ code-like content:
 
 A typical minimal doc page update flow is:
 
-1. Edit or add content under `packages/doc-website/docs`.
-2. Update route visibility in `packages/doc-website/.vitepress/config.mts`.
+1. Edit or add content under `apps/doc-website/docs`.
+2. Update route visibility in `apps/doc-website/.vitepress/config.mts`.
 3. Run `pnpm --filter doc-website docs:build`.
 4. For reviewable UI changes, run `pnpm --filter doc-website docs:dev` and confirm
    the page is reachable from nav/sidebar.
@@ -147,7 +147,7 @@ A typical minimal doc page update flow is:
 - For documentation-only changes, avoid changing unrelated code modules unless
   required for content accuracy.
 - Keep docs page titles, links, and navigation deterministic; run docs build before
-  opening PRs that touch `packages/doc-website`.
+  opening PRs that touch `apps/doc-website`.
 
 ## Pull Requests
 
@@ -157,7 +157,7 @@ Helpful PRs for this repo usually include:
 - the affected surface area (`tree`, `github scan`, `hub`, docs, packaging, or tests)
 - the validation commands you ran
 - any follow-up work that is still intentionally left out
-- the documentation impact (`packages/doc-website`, affected routes, and any
+- the documentation impact (`apps/doc-website`, affected routes, and any
   screenshots if UI/formatting changed)
 
 ## Where To Start Reading
