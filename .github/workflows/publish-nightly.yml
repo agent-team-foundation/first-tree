@@ -1,0 +1,67 @@
+name: Publish Nightly Package
+
+on:
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-nightly:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run CI checks
+        run: pnpm ci:check
+
+      - name: Prepare nightly version
+        id: version
+        run: |
+          BASE_VERSION=$(node -p "require('./apps/cli/package.json').version.split('-')[0]")
+          DATE=$(TZ=Asia/Shanghai date +%y%m%d)
+          SHORT_SHA=$(git -C . rev-parse --short=7 HEAD)
+          VERSION="${BASE_VERSION}-nightly.${DATE}.${SHORT_SHA}"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Prepared nightly version: $VERSION"
+          echo "Publishing dist-tag: nightly"
+
+      - name: Set package version
+        working-directory: apps/cli
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: npm version "$PKG_VERSION" --no-git-tag-version
+
+      - name: Publish to NPM
+        working-directory: apps/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --tag nightly --access public --no-git-checks
+
+      - name: Publish summary
+        run: |
+          echo "Published version: ${{ steps.version.outputs.version }}"
+          echo "NPM dist-tag: nightly"
