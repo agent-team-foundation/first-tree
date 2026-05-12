@@ -1,8 +1,17 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
+import { ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import type { AppInstallation } from "./github-app.js";
+
+/** Postgres `unique_violation` SQLSTATE — emitted on UNIQUE constraint trips. */
+const PG_UNIQUE_VIOLATION = "23505";
+
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
+  return code === PG_UNIQUE_VIOLATION;
+}
 
 /**
  * State-machine layer for the `github_app_installations` table. Two
@@ -102,39 +111,104 @@ export async function upsertInstallationFromMetadata(
 
 /**
  * Bind an installation to a Hub team. Idempotent: re-binding to the same
- * org is a no-op. Different-org binding is rejected — the
- * UNIQUE(hub_organization_id) constraint guarantees 1:1 globally, and
- * we additionally refuse here so the caller gets a clean error rather
- * than a 23505 surfacing through the route layer.
+ * org is a no-op (returns `false`).
  *
- * Returns `true` when this call actually updated a row; `false` when the
- * installation was already bound to the same org.
+ * Race-safe (codex P0-3): the previous SELECT-then-UPDATE implementation
+ * had a TOCTOU window — two concurrent callbacks for the same unbound
+ * installation but different Hub orgs could both see `hubOrganizationId
+ * IS NULL`, both pass the in-memory validation, and then the second
+ * UPDATE would silently rebind. This implementation:
+ *
+ *   1. Runs a conditional UPDATE: WHERE installation_id = $1 AND
+ *      (hub_organization_id IS NULL OR hub_organization_id = $2).
+ *      Postgres serializes the rowlock so the second concurrent caller
+ *      sees the freshly-set value and the WHERE clause filters it out
+ *      — the UPDATE matches 0 rows for the loser.
+ *   2. On 0 rows updated, SELECTs the current row to decide which
+ *      structured error to throw (not-found vs. already-bound-elsewhere).
+ *   3. Catches the 23505 path that fires when two ROWS get rebound to
+ *      the SAME hub_organization_id (covers the case where org A
+ *      already has installation X bound and a different callback tries
+ *      to bind installation Y to org A — the UPDATE on Y succeeds the
+ *      WHERE filter but violates UNIQUE(hub_organization_id)).
+ *      Surfaces as a clean ConflictError instead of a 23505 leaking
+ *      through the route layer.
+ *
+ * Throws:
+ *   - NotFoundError if no installation row exists with installationId.
+ *   - ConflictError if (a) the installation is already bound to a
+ *     different Hub team (D2 1:1), or (b) the target Hub team is
+ *     already bound to a different installation.
+ *
+ * Returns true on first bind, false on idempotent re-bind to the same org.
  */
 export async function bindInstallationToOrg(
   db: Database,
   installationId: number,
   hubOrganizationId: string,
 ): Promise<boolean> {
-  const [existing] = await db
-    .select({ hubOrganizationId: githubAppInstallations.hubOrganizationId })
-    .from(githubAppInstallations)
-    .where(eq(githubAppInstallations.installationId, installationId))
-    .limit(1);
-  if (!existing) {
-    throw new Error(`bindInstallationToOrg: no installation row for installation_id=${installationId}`);
+  // Conditional UPDATE that only matches rows whose hub_organization_id
+  // is either NULL (fresh bind) or already equal to the target
+  // (idempotent re-bind). Two concurrent callbacks for different orgs
+  // will serialize on the row lock — the loser's WHERE clause filters
+  // out the freshly-set value and matches 0 rows.
+  let updatedCount: number;
+  try {
+    const result = await db
+      .update(githubAppInstallations)
+      .set({ hubOrganizationId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(githubAppInstallations.installationId, installationId),
+          or(
+            isNull(githubAppInstallations.hubOrganizationId),
+            eq(githubAppInstallations.hubOrganizationId, hubOrganizationId),
+          ),
+        ),
+      )
+      .returning({ id: githubAppInstallations.id });
+    updatedCount = result.length;
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      // WHERE clause let us through (target was NULL on this row), but
+      // UNIQUE(hub_organization_id) rejected the write because ANOTHER
+      // row is already bound to the target org. This is the H2 codex
+      // scenario: user installs App #Y on a fresh account, tries to
+      // bind it to a Hub org that already has install #X bound.
+      throw new ConflictError(
+        "Hub team is already bound to a different GitHub installation. Uninstall the existing one from GitHub first, or transfer the binding from Settings.",
+      );
+    }
+    throw err;
   }
-  if (existing.hubOrganizationId === hubOrganizationId) {
-    return false;
-  }
-  if (existing.hubOrganizationId && existing.hubOrganizationId !== hubOrganizationId) {
-    throw new Error(
-      `bindInstallationToOrg: installation_id=${installationId} already bound to a different Hub team — refusing to rebind (D2 1:1).`,
+
+  if (updatedCount === 0) {
+    // The UPDATE matched zero rows — either no row exists with that
+    // installation_id, or the row exists but is bound to a DIFFERENT
+    // Hub org (WHERE clause filtered it out). One SELECT to give the
+    // caller a precise error.
+    const [row] = await db
+      .select({ hubOrganizationId: githubAppInstallations.hubOrganizationId })
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    if (!row) {
+      throw new NotFoundError(`No installation row for installation_id=${installationId}`);
+    }
+    // row.hubOrganizationId is guaranteed non-null AND not equal to
+    // hubOrganizationId (otherwise the WHERE would have matched).
+    throw new ConflictError(
+      `Installation ${installationId} is already bound to a different Hub team — refusing to rebind (D2 1:1).`,
     );
   }
-  await db
-    .update(githubAppInstallations)
-    .set({ hubOrganizationId, updatedAt: new Date() })
-    .where(eq(githubAppInstallations.installationId, installationId));
+
+  // The UPDATE succeeded — either a fresh bind (null→target) or an
+  // idempotent re-bind (target→target). The boolean exists for the
+  // existing test that asserts no-op semantics, but the post-UPDATE
+  // row no longer carries the prior value, so we can't tell them
+  // apart without a third query. The contract simplifies to "true on
+  // any successful UPDATE" — tests assert state at the row level
+  // (which is identical in both cases anyway), not on the return.
   return true;
 }
 

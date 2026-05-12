@@ -87,32 +87,91 @@ describe("services/github-app-installations", () => {
   });
 
   describe("bindInstallationToOrg", () => {
-    it("returns true on first bind, false on idempotent re-bind to the same org", async () => {
+    it("first bind sets hub_organization_id; idempotent re-bind is a no-op at the row level", async () => {
       const app = getApp();
       const orgId = await makeOrg();
       const installation = { ...baseInstallation, id: 1_001_001 };
       await upsertInstallationFromMetadata(app.db, { installation });
 
       expect(await bindInstallationToOrg(app.db, installation.id, orgId)).toBe(true);
-      expect(await bindInstallationToOrg(app.db, installation.id, orgId)).toBe(false);
+      const first = await findInstallationByGithubId(app.db, installation.id);
+      expect(first?.hubOrganizationId).toBe(orgId);
+
+      // Second call to the same org is allowed (idempotent retry-safe);
+      // the row's hub_organization_id is unchanged.
+      expect(await bindInstallationToOrg(app.db, installation.id, orgId)).toBe(true);
+      const second = await findInstallationByGithubId(app.db, installation.id);
+      expect(second?.hubOrganizationId).toBe(orgId);
     });
 
-    it("refuses to rebind to a different org (D2 1:1)", async () => {
+    it("refuses to rebind installation X to a different org (D2 1:1) — ConflictError", async () => {
       const app = getApp();
       const orgA = await makeOrg();
       const orgB = await makeOrg();
       const installation = { ...baseInstallation, id: 1_001_002 };
       await upsertInstallationFromMetadata(app.db, { installation });
       await bindInstallationToOrg(app.db, installation.id, orgA);
-      await expect(bindInstallationToOrg(app.db, installation.id, orgB)).rejects.toThrow(
-        /already bound to a different Hub team/,
-      );
+      const err = await bindInstallationToOrg(app.db, installation.id, orgB).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).name).toBe("ConflictError");
+      expect((err as Error).message).toMatch(/already bound to a different Hub team/);
     });
 
-    it("throws when the installation row does not exist", async () => {
+    it("refuses to bind installation Y when org A already has install X bound (H2 / codex P0-3 follow-up)", async () => {
+      const app = getApp();
+      const orgA = await makeOrg();
+      const installX = { ...baseInstallation, id: 1_001_010 };
+      const installY = { ...baseInstallation, id: 1_001_011, accountGithubId: 9_000_010 };
+      await upsertInstallationFromMetadata(app.db, { installation: installX });
+      await upsertInstallationFromMetadata(app.db, { installation: installY });
+      await bindInstallationToOrg(app.db, installX.id, orgA);
+
+      // Now try to bind installY to orgA — UNIQUE(hub_organization_id)
+      // would surface as 23505; the service translates to ConflictError
+      // with a clean user-facing message.
+      const err = await bindInstallationToOrg(app.db, installY.id, orgA).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).name).toBe("ConflictError");
+      expect((err as Error).message).toMatch(/already bound to a different GitHub installation/);
+
+      // installY remains unbound.
+      const y = await findInstallationByGithubId(app.db, installY.id);
+      expect(y?.hubOrganizationId).toBeNull();
+    });
+
+    it("NotFoundError when the installation row does not exist", async () => {
       const app = getApp();
       const orgId = await makeOrg();
-      await expect(bindInstallationToOrg(app.db, 9_999_999, orgId)).rejects.toThrow(/no installation row/);
+      const err = await bindInstallationToOrg(app.db, 9_999_999, orgId).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).name).toBe("NotFoundError");
+      expect((err as Error).message).toMatch(/no installation row/i);
+    });
+
+    it("race-safe: two concurrent binds to different orgs — exactly one wins, other gets ConflictError", async () => {
+      const app = getApp();
+      const orgA = await makeOrg();
+      const orgB = await makeOrg();
+      const installation = { ...baseInstallation, id: 1_001_020 };
+      await upsertInstallationFromMetadata(app.db, { installation });
+
+      // Fire both calls concurrently. With the old SELECT-then-UPDATE
+      // both could see NULL and the second UPDATE would silently win;
+      // with the conditional UPDATE the second loses cleanly.
+      const results = await Promise.allSettled([
+        bindInstallationToOrg(app.db, installation.id, orgA),
+        bindInstallationToOrg(app.db, installation.id, orgB),
+      ]);
+      const fulfilled = results.filter((r): r is PromiseFulfilledResult<boolean> => r.status === "fulfilled");
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.reason?.name).toBe("ConflictError");
+
+      // The row's binding is one of the two orgs (whichever won the
+      // race), not silently both / neither.
+      const row = await findInstallationByGithubId(app.db, installation.id);
+      expect([orgA, orgB]).toContain(row?.hubOrganizationId);
     });
   });
 
