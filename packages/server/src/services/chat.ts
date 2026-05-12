@@ -4,7 +4,8 @@ import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { leaveAsParticipant, recomputeChatWatchers } from "./watcher.js";
@@ -13,38 +14,48 @@ import { leaveAsParticipant, recomputeChatWatchers } from "./watcher.js";
 type DbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update">;
 
 /**
- * When a direct chat grows past 2 participants, upgrade it to `group` and
- * flip every existing non-human agent participant to `mention_only` — see
- * proposals/hub-agent-messaging-reply-and-mentions §3.3. The caller is
- * expected to insert the new participant AFTER this runs, so the "existing"
- * set excludes them.
+ * When a direct chat grows past 2 speakers, upgrade it to `group` and
+ * flip every existing non-human speaker to `mention_only` — see
+ * proposals/hub-agent-messaging-reply-and-mentions §3.3. The caller
+ * is expected to insert the new speaker AFTER this runs, so the
+ * "existing" set excludes them.
+ *
+ * Speaker count is gated on `access_mode = 'speaker'` — watcher rows
+ * do not count toward the direct→group threshold (they don't appear
+ * in fan-out either).
  *
  * Idempotent: if the chat is already a group, no-op.
  */
 async function maybeUpgradeDirectToGroup(
   db: DbLike,
   chatId: string,
-  existingParticipantIds: string[],
-  newParticipantCount: number,
+  existingSpeakerIds: string[],
+  newSpeakerCount: number,
 ): Promise<void> {
-  if (existingParticipantIds.length + newParticipantCount < 3) return;
+  if (existingSpeakerIds.length + newSpeakerCount < 3) return;
 
   const [chat] = await db.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1);
   if (!chat || chat.type !== "direct") return;
 
   await db.update(chats).set({ type: "group", updatedAt: new Date() }).where(eq(chats.id, chatId));
 
-  if (existingParticipantIds.length === 0) return;
+  if (existingSpeakerIds.length === 0) return;
   const nonHumans = await db
     .select({ uuid: agents.uuid })
     .from(agents)
-    .where(and(inArray(agents.uuid, existingParticipantIds), ne(agents.type, "human")));
+    .where(and(inArray(agents.uuid, existingSpeakerIds), ne(agents.type, "human")));
   const ids = nonHumans.map((a) => a.uuid);
   if (ids.length === 0) return;
   await db
-    .update(chatParticipants)
+    .update(chatMembership)
     .set({ mode: "mention_only" })
-    .where(and(eq(chatParticipants.chatId, chatId), inArray(chatParticipants.agentId, ids)));
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        inArray(chatMembership.agentId, ids),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    );
 }
 
 export async function createChat(db: Database, creatorId: string, data: CreateChat) {
@@ -93,14 +104,16 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
       })
       .returning();
 
-    const participantRows = [...allParticipantIds].map((agentId) => ({
+    const membershipRows = [...allParticipantIds].map((agentId) => ({
       chatId,
       agentId,
-      role: agentId === creatorId ? "owner" : "member",
-      ...(isDirectAgentOnly ? { mode: "mention_only" as const } : {}),
+      role: agentId === creatorId ? ("owner" as const) : ("member" as const),
+      accessMode: "speaker" as const,
+      mode: (isDirectAgentOnly ? "mention_only" : "full") as "full" | "mention_only",
+      source: "manual" as const,
     }));
 
-    await tx.insert(chatParticipants).values(participantRows);
+    await tx.insert(chatMembership).values(membershipRows);
 
     // Watcher rows: every active manager whose managed non-human agent
     // is now in the chat (and who isn't already a speaker) should see
@@ -109,7 +122,10 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
     // adapter / admin chats silently broke design AC #8.
     await recomputeChatWatchers(tx, chatId);
 
-    const participants = await tx.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+    const participants = await tx
+      .select()
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
     if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
     return { ...chat, participants };
@@ -126,17 +142,22 @@ export async function getChat(db: Database, chatId: string) {
 
 export async function getChatDetail(db: Database, chatId: string) {
   const chat = await getChat(db, chatId);
-  const participants = await db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+  const participants = await db
+    .select()
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
   return { ...chat, participants };
 }
 
 export async function listChats(db: Database, agentId: string, limit: number, cursor?: string) {
-  // Find all chat IDs where agent is a participant
+  // Find all chat IDs where agent is a speaker (watcher rows excluded
+  // by access_mode filter — admin agent-scoped chats list shows only
+  // chats the agent actually speaks in, matching pre-refactor behaviour).
   const participantRows = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(eq(chatParticipants.agentId, agentId));
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.agentId, agentId), eq(chatMembership.accessMode, "speaker")));
 
   const chatIds = participantRows.map((r) => r.chatId);
   if (chatIds.length === 0) {
@@ -171,25 +192,31 @@ export async function listChats(db: Database, agentId: string, limit: number, cu
 export async function listChatParticipantsWithNames(db: Database, chatId: string) {
   const rows = await db
     .select({
-      agentId: chatParticipants.agentId,
-      role: chatParticipants.role,
-      mode: chatParticipants.mode,
-      joinedAt: chatParticipants.joinedAt,
+      agentId: chatMembership.agentId,
+      role: chatMembership.role,
+      mode: chatMembership.mode,
+      joinedAt: chatMembership.joinedAt,
       name: agents.name,
       displayName: agents.displayName,
       type: agents.type,
     })
-    .from(chatParticipants)
-    .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
-    .where(eq(chatParticipants.chatId, chatId));
+    .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
   return rows;
 }
 
 export async function assertParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
   const [row] = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        eq(chatMembership.agentId, agentId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
     .limit(1);
 
   if (!row) {
@@ -204,55 +231,68 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
  */
 export async function isParticipant(db: Database, chatId: string, agentId: string): Promise<boolean> {
   const [row] = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        eq(chatMembership.agentId, agentId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
     .limit(1);
   return Boolean(row);
 }
 
-/** Ensure an agent is a participant of a chat. Silently adds them if not already. */
+/** Ensure an agent is a speaker of a chat. Silently adds them if not already. */
 export async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
-  // Short-circuit if already a participant so we don't spuriously trigger the
+  // Short-circuit if already a speaker so we don't spuriously trigger the
   // direct→group upgrade on every admin message in a chat the sender already
   // belongs to. Read outside the transaction — if a race adds this agent
-  // concurrently, the onConflictDoNothing inside the transaction is the
-  // authoritative dedupe.
+  // concurrently, the UPSERT inside the transaction is the authoritative
+  // dedupe.
   const [existing] = await db
-    .select({ agentId: chatParticipants.agentId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+    .select({ accessMode: chatMembership.accessMode })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, agentId)))
     .limit(1);
-  if (existing) return;
+  if (existing?.accessMode === "speaker") return;
 
   // This is a genuine join — apply the same upgrade rule as joinChat /
   // addParticipant. Web-console "start typing in a chat" funnels through
   // here, so missing this call left the proposal's no-echo invariant
-  // silently off for UI-initiated joins. Atomic: upgrade + insert must not
+  // silently off for UI-initiated joins. Atomic: upgrade + UPSERT must not
   // interleave with sendMessage's participant read.
+  //
+  // If a watcher row already exists for this (chat, agent) pair, the
+  // ON CONFLICT DO UPDATE upgrades it to speaker in place. chat_user_state
+  // is structurally separate so the user's read state survives the
+  // promotion untouched — no state-carry needed (proposal §8.4).
   await db.transaction(async (tx) => {
-    const current = await tx
-      .select({ agentId: chatParticipants.agentId })
-      .from(chatParticipants)
-      .where(eq(chatParticipants.chatId, chatId));
+    const currentSpeakers = await tx
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
     await maybeUpgradeDirectToGroup(
       tx,
       chatId,
-      current.map((p) => p.agentId),
+      currentSpeakers.map((p) => p.agentId),
       1,
     );
-    // Defensive: drop any pre-existing watcher row for this agent so
-    // invariant 1 holds (chat_subscriptions and chat_participants are
-    // mutually exclusive on `(chat_id, agent_id)`). Migration 0030
-    // backfilled watcher rows for every (manager, chat) pair, so a
-    // human-bridge agent calling through here on day 1 could collide.
     await tx
-      .delete(chatSubscriptions)
-      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, agentId)));
-    await tx
-      .insert(chatParticipants)
-      .values({ chatId, agentId, mode: "full" })
-      .onConflictDoNothing({ target: [chatParticipants.chatId, chatParticipants.agentId] });
+      .insert(chatMembership)
+      .values({
+        chatId,
+        agentId,
+        role: "member",
+        accessMode: "speaker",
+        mode: "full",
+        source: "manual",
+      })
+      .onConflictDoUpdate({
+        target: [chatMembership.chatId, chatMembership.agentId],
+        set: { accessMode: "speaker", mode: "full", source: "manual" },
+      });
     // Reconcile watcher rows for managers of any non-human in chat.
     await recomputeChatWatchers(tx, chatId);
   });
@@ -281,46 +321,60 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
     throw new BadRequestError("Cannot add agent from different organization");
   }
 
-  // Check not already a participant
+  // Check not already a speaker. A watcher row is allowed — it's the
+  // expected source state for the manager's "promote myself to speaker"
+  // path (the UPSERT below upgrades it).
   const [existing] = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, data.agentId)))
+    .select({ accessMode: chatMembership.accessMode })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, data.agentId)))
     .limit(1);
 
-  if (existing) {
+  if (existing?.accessMode === "speaker") {
     throw new ConflictError(`Agent "${data.agentId}" is already a participant`);
   }
 
-  // Direct chats become groups on the third participant. Flip existing
-  // non-human agents to mention_only so the group doesn't devolve into noise.
-  // Atomic: upgrade + insert must not interleave with sendMessage's participant
-  // read, or a concurrent send would see chats.type='group' with mode='full'.
+  // Direct chats become groups on the third speaker. Flip existing
+  // non-human speakers to mention_only so the group doesn't devolve into
+  // noise. Atomic: upgrade + UPSERT must not interleave with sendMessage's
+  // participant read, or a concurrent send would see chats.type='group'
+  // with mode='full'.
+  //
+  // Watcher → speaker UPSERT preserves chat_user_state (read state) by
+  // construction — they live in a different table (proposal §8.4).
   await db.transaction(async (tx) => {
-    const currentParticipants = await tx
-      .select({ agentId: chatParticipants.agentId })
-      .from(chatParticipants)
-      .where(eq(chatParticipants.chatId, chatId));
+    const currentSpeakers = await tx
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
     await maybeUpgradeDirectToGroup(
       tx,
       chatId,
-      currentParticipants.map((p) => p.agentId),
+      currentSpeakers.map((p) => p.agentId),
       1,
     );
-    // Defensive: drop watcher row for this agent (invariant 1).
     await tx
-      .delete(chatSubscriptions)
-      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, data.agentId)));
-    await tx.insert(chatParticipants).values({
-      chatId,
-      agentId: data.agentId,
-      mode: data.mode ?? "full",
-    });
+      .insert(chatMembership)
+      .values({
+        chatId,
+        agentId: data.agentId,
+        role: "member",
+        accessMode: "speaker",
+        mode: data.mode ?? "full",
+        source: "manual",
+      })
+      .onConflictDoUpdate({
+        target: [chatMembership.chatId, chatMembership.agentId],
+        set: { accessMode: "speaker", mode: data.mode ?? "full", source: "manual" },
+      });
     await recomputeChatWatchers(tx, chatId);
   });
   invalidateChatAudience(chatId);
 
-  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+  return db
+    .select()
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 }
 
 export async function removeParticipant(db: Database, chatId: string, requesterId: string, targetAgentId: string) {
@@ -332,9 +386,18 @@ export async function removeParticipant(db: Database, chatId: string, requesterI
     throw new BadRequestError("Cannot remove yourself from a chat");
   }
 
+  // Only target the speaker row — leaving any watcher row to be handled
+  // by `recomputeChatWatchers` below (it will be dropped if its anchor
+  // condition no longer holds, or kept otherwise).
   const [removed] = await db
-    .delete(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, targetAgentId)))
+    .delete(chatMembership)
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        eq(chatMembership.agentId, targetAgentId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
     .returning();
 
   if (!removed) {
@@ -342,12 +405,15 @@ export async function removeParticipant(db: Database, chatId: string, requesterI
   }
   // Reconcile watchers: a manager who was previously anchored to the
   // removed agent may need their watcher row dropped (if no other
-  // managed agent remains in chat) or re-created (if they had been a
-  // participant for a different reason — rare).
+  // managed agent remains in chat) or re-created (if the removed agent
+  // was a speaker but their manager is now eligible to watch).
   await recomputeChatWatchers(db, chatId);
   invalidateChatAudience(chatId);
 
-  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+  return db
+    .select()
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 }
 
 /**
@@ -384,16 +450,19 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
   const agentIds = [...agentMap.keys()];
   if (agentIds.length === 0) return [];
 
-  // Find all chat participations for these agents
+  // Find all chat participations (speaker rows) for these agents.
+  // Watcher rows are not surfaced through this admin endpoint — it's
+  // matching pre-refactor behaviour (chat_participants didn't include
+  // them either).
   const participations = await db
     .select({
-      chatId: chatParticipants.chatId,
-      agentId: chatParticipants.agentId,
-      role: chatParticipants.role,
-      mode: chatParticipants.mode,
+      chatId: chatMembership.chatId,
+      agentId: chatMembership.agentId,
+      role: chatMembership.role,
+      mode: chatMembership.mode,
     })
-    .from(chatParticipants)
-    .where(inArray(chatParticipants.agentId, agentIds));
+    .from(chatMembership)
+    .where(and(inArray(chatMembership.agentId, agentIds), eq(chatMembership.accessMode, "speaker")));
 
   if (participations.length === 0) return [];
 
@@ -415,7 +484,7 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
       metadata: chats.metadata,
       createdAt: chats.createdAt,
       updatedAt: chats.updatedAt,
-      participantCount: sql<number>`(SELECT count(*)::int FROM chat_participants WHERE chat_id = ${chats.id})`,
+      participantCount: sql<number>`(SELECT count(*)::int FROM chat_membership WHERE chat_id = ${chats.id} AND access_mode = 'speaker')`,
     })
     .from(chats)
     .where(inArray(chats.id, chatIds))
@@ -482,15 +551,18 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
 export async function joinChat(db: Database, chatId: string, memberId: string, humanAgentId: string) {
   const chat = await getChat(db, chatId);
 
-  // Check supervision rights: member must manage at least one participant
-  const participants = await db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+  // Check supervision rights: member must manage at least one speaker.
+  const speakers = await db
+    .select()
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
-  const participantAgentIds = participants.map((p) => p.agentId);
+  const participantAgentIds = speakers.map((p) => p.agentId);
   if (participantAgentIds.length === 0) {
     throw new NotFoundError("Chat has no participants");
   }
 
-  // Check if already a participant
+  // Check if already a speaker
   if (participantAgentIds.includes(humanAgentId)) {
     throw new ConflictError("Already a participant in this chat");
   }
@@ -516,39 +588,41 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
     throw new BadRequestError("Agent does not belong to the same organization as the chat");
   }
 
-  // Human joining a direct chat turns it into a group — existing agent
-  // participants (non-human) switch to mention_only so they only respond when
-  // explicitly addressed. Atomic: upgrade + insert must not interleave with
-  // sendMessage's participant read (mode is part of the mention-filter rule).
-  // State-carry from any pre-existing watcher row: a manager who joins
-  // here likely had a `chat_subscriptions` row from migration 0030's
-  // backfill (or a recompute pass). Without DELETE-RETURNING + INSERT-
-  // with-state, their `last_read_at` and `unread_mention_count` would
-  // silently reset to defaults — and worse, leaving the watcher row
-  // intact would violate invariant 1 (mutual exclusion of participant
-  // / subscription on `(chat, agent)`).
+  // Human joining a direct chat turns it into a group — existing
+  // non-human speakers switch to mention_only so they only respond
+  // when explicitly addressed. Atomic: upgrade + UPSERT must not
+  // interleave with sendMessage's participant read.
+  //
+  // If a watcher row already exists for the joining manager (the
+  // common case — migration 0030's backfill, or a prior recompute
+  // pass), the ON CONFLICT DO UPDATE upgrades it to speaker in
+  // place. chat_user_state lives in a separate table by design, so
+  // the manager's read state survives the promotion automatically —
+  // no state-carry transaction needed.
   await db.transaction(async (tx) => {
-    const [carriedRow] = await tx
-      .delete(chatSubscriptions)
-      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, humanAgentId)))
-      .returning({
-        lastReadAt: chatSubscriptions.lastReadAt,
-        unreadMentionCount: chatSubscriptions.unreadMentionCount,
-      });
     await maybeUpgradeDirectToGroup(tx, chatId, participantAgentIds, 1);
-    await tx.insert(chatParticipants).values({
-      chatId,
-      agentId: humanAgentId,
-      role: "member",
-      mode: "full",
-      lastReadAt: carriedRow?.lastReadAt ?? null,
-      unreadMentionCount: carriedRow?.unreadMentionCount ?? 0,
-    });
+    await tx
+      .insert(chatMembership)
+      .values({
+        chatId,
+        agentId: humanAgentId,
+        role: "member",
+        accessMode: "speaker",
+        mode: "full",
+        source: "manual",
+      })
+      .onConflictDoUpdate({
+        target: [chatMembership.chatId, chatMembership.agentId],
+        set: { accessMode: "speaker", mode: "full", source: "manual" },
+      });
     await recomputeChatWatchers(tx, chatId);
   });
   invalidateChatAudience(chatId);
 
-  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+  return db
+    .select()
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 }
 
 /**
@@ -565,7 +639,10 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
 export async function leaveChat(db: Database, chatId: string, humanAgentId: string) {
   await leaveAsParticipant(db, chatId, humanAgentId);
   invalidateChatAudience(chatId);
-  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+  return db
+    .select()
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 }
 
 export async function findOrCreateDirectChat(db: Database, agentAId: string, agentBId: string) {
@@ -595,16 +672,16 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
   }
   const orgId = agentA.organizationId;
 
-  // Find existing direct chat between the two agents
+  // Find existing direct chat between the two agents (speaker rows only).
   const aChats = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(eq(chatParticipants.agentId, agentAId));
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.agentId, agentAId), eq(chatMembership.accessMode, "speaker")));
 
   const bChats = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(eq(chatParticipants.agentId, agentBId));
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.agentId, agentBId), eq(chatMembership.accessMode, "speaker")));
 
   const bChatIds = new Set(bChats.map((r) => r.chatId));
   const commonChatIds = aChats.map((r) => r.chatId).filter((id) => bChatIds.has(id));
@@ -644,9 +721,9 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
       })
       .returning();
 
-    await tx.insert(chatParticipants).values([
-      { chatId, agentId: agentAId, role: "member", mode },
-      { chatId, agentId: agentBId, role: "member", mode },
+    await tx.insert(chatMembership).values([
+      { chatId, agentId: agentAId, role: "member", accessMode: "speaker", mode, source: "manual" },
+      { chatId, agentId: agentBId, role: "member", accessMode: "speaker", mode, source: "manual" },
     ]);
 
     // Watcher rows: managers of either non-human end should immediately

@@ -53,7 +53,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
           createdAt: chats.createdAt,
           updatedAt: chats.updatedAt,
           participantCount: sql<number>`(
-            SELECT count(*)::int FROM chat_participants WHERE chat_id = ${chats.id}
+            SELECT count(*)::int FROM chat_membership WHERE chat_id = ${chats.id} AND access_mode = 'speaker'
           )`,
         })
         .from(chats)

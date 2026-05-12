@@ -6,7 +6,8 @@ import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterChatMappings } from "../db/schema/adapter-chat-mappings.js";
 import { adapterMessageReferences } from "../db/schema/adapter-message-references.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { resolveDefaultOrgId } from "./organization.js";
 
 // ── Event deduplication ─────────────────────────────────────────────
@@ -217,12 +218,35 @@ export async function findOrCreateChatForChannel(
     // `mention_only` rule from migration 0029 without an audit.
     const participants =
       data.botAgentId === data.senderAgentId
-        ? [{ chatId, agentId: data.botAgentId, role: "member" as const, mode: "full" as const }]
+        ? [
+            {
+              chatId,
+              agentId: data.botAgentId,
+              role: "member" as const,
+              accessMode: "speaker" as const,
+              mode: "full" as const,
+              source: "manual" as const,
+            },
+          ]
         : [
-            { chatId, agentId: data.botAgentId, role: "member" as const, mode: "full" as const },
-            { chatId, agentId: data.senderAgentId, role: "member" as const, mode: "full" as const },
+            {
+              chatId,
+              agentId: data.botAgentId,
+              role: "member" as const,
+              accessMode: "speaker" as const,
+              mode: "full" as const,
+              source: "manual" as const,
+            },
+            {
+              chatId,
+              agentId: data.senderAgentId,
+              role: "member" as const,
+              accessMode: "speaker" as const,
+              mode: "full" as const,
+              source: "manual" as const,
+            },
           ];
-    await tx.insert(chatParticipants).values(participants);
+    await tx.insert(chatMembership).values(participants);
 
     // Create mapping
     await tx.insert(adapterChatMappings).values({
@@ -237,17 +261,32 @@ export async function findOrCreateChatForChannel(
   });
 }
 
-/** Ensure an agent is a participant of a chat (no-op if already). */
+/** Ensure an agent is a speaker of a chat (no-op if already). */
 async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
   const [exists] = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+    .select({ accessMode: chatMembership.accessMode })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, agentId)))
     .limit(1);
 
-  if (!exists) {
-    await db.insert(chatParticipants).values({ chatId, agentId, role: "member" }).onConflictDoNothing();
-  }
+  if (exists?.accessMode === "speaker") return;
+
+  // Either no row yet or only a watcher row — UPSERT to speaker.
+  // chat_user_state (if any) is preserved untouched per proposal §8.4.
+  await db
+    .insert(chatMembership)
+    .values({
+      chatId,
+      agentId,
+      role: "member",
+      accessMode: "speaker",
+      mode: "full",
+      source: "manual",
+    })
+    .onConflictDoUpdate({
+      target: [chatMembership.chatId, chatMembership.agentId],
+      set: { accessMode: "speaker", mode: "full", source: "manual" },
+    });
 }
 
 // ── Message references ──────────────────────────────────────────────
