@@ -21,15 +21,16 @@
  * "Risk Constraints"):
  *   - This module appends ONLY. Never edits existing fan-out / inbox /
  *     mention-extraction code.
- *   - Watchers (chat_subscriptions) are NEVER added to inbox_entries here.
- *     Their counters are bumped purely as a per-user red-dot signal.
- *   - Mention candidate set is `chat_participants` only; watchers are not
- *     direct `@`-mention targets.
+ *   - Watcher rows (chat_membership with access_mode='watcher') are
+ *     NEVER added to inbox_entries here. Their counters in
+ *     chat_user_state are bumped purely as a per-user red-dot signal.
+ *   - Mention candidate set is `chat_membership` speakers only;
+ *     watchers are not direct `@`-mention targets.
  */
 
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
-import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
+import { chats } from "../db/schema/chats.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: cross-schema compatibility
 type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
@@ -108,52 +109,55 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
 
   if (mentionedAgentIds.length === 0) return;
 
-  // 2a. Speaker counters — exclude sender; also a no-op when no row matches.
-  // Use drizzle's `inArray` so the JS string[] binds correctly through the
-  // postgres-js array path.
-  await tx
-    .update(chatParticipants)
-    .set({ unreadMentionCount: sql`${chatParticipants.unreadMentionCount} + 1` })
-    .where(
-      and(
-        eq(chatParticipants.chatId, chatId),
-        inArray(chatParticipants.agentId, mentionedAgentIds),
-        ne(chatParticipants.agentId, senderId),
-      ),
-    );
-
-  // 2b. Watcher counters — propagate to manager's human-agent row in
-  //     chat_subscriptions for any non-human mentioned agent. We resolve the
-  //     manager's human agents in a small SELECT first (so the surrounding
-  //     UPDATE can also use drizzle's `inArray` builder), and bail early if
-  //     no managers exist. Sender exclusion is not needed: a watcher row
-  //     never represents the sender (sender is, by definition, a speaker).
-  const managerRowsRaw = (await tx.execute(sql`
-    SELECT DISTINCT m.agent_id AS human_agent_id
-      FROM agents a
-      JOIN members m ON m.id = a.manager_id
-     WHERE a.uuid IN ${makeUuidList(mentionedAgentIds)}
-       AND a.type <> 'human'
-       AND m.status = 'active'
-  `)) as unknown as Array<{ human_agent_id: string }>;
-  const managerHumanAgentIds = managerRowsRaw.map((r) => r.human_agent_id);
-  if (managerHumanAgentIds.length === 0) return;
-
-  await tx
-    .update(chatSubscriptions)
-    .set({ unreadMentionCount: sql`${chatSubscriptions.unreadMentionCount} + 1` })
-    .where(and(eq(chatSubscriptions.chatId, chatId), inArray(chatSubscriptions.agentId, managerHumanAgentIds)));
-}
-
-/**
- * Build a parenthesised, comma-separated list of bound parameters: `(?, ?, ?)`.
- * Used in raw SQL where drizzle's `inArray` can't be directly applied (e.g.
- * inside a hand-rolled SELECT). Always called with a non-empty list — the
- * caller short-circuits the empty case.
- */
-function makeUuidList(ids: string[]) {
-  return sql`(${sql.join(
-    ids.map((id) => sql`${id}`),
+  // 2. Mention counter propagation — single UPSERT into chat_user_state.
+  //
+  // The target set is built via a UNION of two disjoint queries
+  // (access_mode='speaker' XOR access_mode='watcher' is enforced by the
+  // chat_membership table structure), so the same (chat_id, agent_id)
+  // row never appears twice in the VALUES list — safe for ON CONFLICT
+  // DO UPDATE.
+  //
+  // Speaker branch:
+  //   - target = mentioned ∩ chat speakers, sender excluded
+  //   - these agents were directly @-mentioned in the message
+  //
+  // Watcher branch:
+  //   - target = (manager's human-agent) of any mentioned non-human,
+  //     restricted to watchers of this chat (i.e. the manager itself
+  //     is NOT a speaker — otherwise their counter is already bumped
+  //     by the speaker branch via the explicit @ on themselves).
+  //   - sender exclusion is not needed here: the sender is by
+  //     definition a speaker, never a watcher row.
+  //
+  // chat_user_state rows are lazily materialised: missing → INSERT
+  // with count=1; existing → UPDATE count = count + 1.
+  const mentionedList = sql.join(
+    mentionedAgentIds.map((id) => sql`${id}`),
     sql`, `,
-  )})`;
+  );
+
+  await tx.execute(sql`
+    INSERT INTO chat_user_state (chat_id, agent_id, unread_mention_count)
+    SELECT chat_id, agent_id, 1
+      FROM (
+        SELECT cm.chat_id, cm.agent_id
+          FROM chat_membership cm
+         WHERE cm.chat_id     = ${chatId}
+           AND cm.access_mode = 'speaker'
+           AND cm.agent_id    IN (${mentionedList})
+           AND cm.agent_id   <> ${senderId}
+        UNION
+        SELECT cm.chat_id, cm.agent_id
+          FROM chat_membership cm
+          JOIN members m  ON m.agent_id    = cm.agent_id
+          JOIN agents  a  ON a.manager_id  = m.id
+         WHERE cm.chat_id     = ${chatId}
+           AND cm.access_mode = 'watcher'
+           AND a.uuid         IN (${mentionedList})
+           AND a.type        <> 'human'
+           AND m.status       = 'active'
+      ) targets
+    ON CONFLICT (chat_id, agent_id)
+    DO UPDATE SET unread_mention_count = chat_user_state.unread_mention_count + 1
+  `);
 }

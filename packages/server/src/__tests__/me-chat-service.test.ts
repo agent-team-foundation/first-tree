@@ -193,16 +193,57 @@ describe("chat-first workspace service layer", () => {
     });
 
     // Pre: counter is 1+
-    const before = await countUnreadMeChats(app.db, admin.humanAgentUuid);
+    const before = await countUnreadMeChats(app.db, admin.humanAgentUuid, admin.organizationId);
     expect(before).toBeGreaterThanOrEqual(1);
 
     await markMeChatRead(app.db, chatId, admin.humanAgentUuid);
 
-    const after = await countUnreadMeChats(app.db, admin.humanAgentUuid);
+    const after = await countUnreadMeChats(app.db, admin.humanAgentUuid, admin.organizationId);
     expect(after).toBe(0);
   });
 
-  it("joinMeChat upgrades watcher → participant carrying read state", async () => {
+  it("countUnreadMeChats excludes detached chats (chat_user_state preserved but no membership)", async () => {
+    // Regression: §11.4 preserves chat_user_state on full detach so a
+    // leave-then-rejoin round-trip remembers read state. But the badge
+    // count must NOT include those preserved rows — `listMeChats`
+    // inner-joins chat_membership, so without the same join the badge
+    // would show "1 unread" while the conversation list shows nothing.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "peer-detach" });
+
+    // Direct chat where admin is a speaker (not a manager of any peer
+    // agent in this chat) — so leaveMeChat fully detaches admin.
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    // Seed an unread mention directly. We bypass the mention pipeline
+    // here because `createTestAdmin` doesn't surface the admin's
+    // randomised agent name; the contract under test is the count
+    // query, not the resolver.
+    await app.db.execute(sql`
+      INSERT INTO chat_user_state (chat_id, agent_id, unread_mention_count)
+      VALUES (${chatId}, ${admin.humanAgentUuid}, 1)
+      ON CONFLICT (chat_id, agent_id) DO UPDATE SET unread_mention_count = 1
+    `);
+    expect(await countUnreadMeChats(app.db, admin.humanAgentUuid, admin.organizationId)).toBeGreaterThanOrEqual(1);
+
+    // Fully detach admin (admin manages no other speaker in this chat).
+    const result = await leaveMeChat(app.db, chatId, admin.humanAgentUuid);
+    expect(result.membershipKind).toBeNull();
+
+    // chat_user_state row is intentionally preserved …
+    const [preserved] = await app.db.execute<{ unread_mention_count: number }>(
+      sql`SELECT unread_mention_count FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(preserved?.unread_mention_count ?? 0).toBeGreaterThanOrEqual(1);
+
+    // … but the badge count must not include it.
+    expect(await countUnreadMeChats(app.db, admin.humanAgentUuid, admin.organizationId)).toBe(0);
+  });
+
+  it("joinMeChat upgrades watcher → speaker; chat_user_state is preserved across the access_mode flip", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const { createAgent } = await import("../services/agent.js");
@@ -218,25 +259,33 @@ describe("chat-first workspace service layer", () => {
     const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
       participantIds: [managed.uuid],
     });
-    // raise the watcher counter
+    // Bump the watcher's unread counter via a mention of the managed agent.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
       format: "text",
       content: `@${managed.name} ping`,
     });
 
+    // Pre-state: admin's chat_user_state row has unread_mention_count >= 1.
+    const [preState] = await app.db.execute<{ unread_mention_count: number }>(
+      sql`SELECT unread_mention_count FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(preState?.unread_mention_count).toBeGreaterThanOrEqual(1);
+
     await joinMeChat(app.db, chatId, admin.humanAgentUuid);
 
-    // participant row should now carry the carried counter (>=1)
-    const [participantRow] = await app.db.execute<{ unread_mention_count: number }>(
-      sql`SELECT unread_mention_count FROM chat_participants WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    // chat_membership row is now access_mode = 'speaker' (the access_mode flip
+    // is the entirety of the watcher → speaker transition under the new model).
+    const [membershipRow] = await app.db.execute<{ access_mode: string }>(
+      sql`SELECT access_mode FROM chat_membership WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
     );
-    expect(participantRow?.unread_mention_count).toBeGreaterThanOrEqual(1);
+    expect(membershipRow?.access_mode).toBe("speaker");
 
-    // and the watcher row is gone
-    const [subRow] = await app.db.execute<{ count: number }>(
-      sql`SELECT count(*)::int AS count FROM chat_subscriptions WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    // chat_user_state row is untouched — the read state persists across the
+    // promotion without any state-carry transaction (proposal §8.4).
+    const [postState] = await app.db.execute<{ unread_mention_count: number }>(
+      sql`SELECT unread_mention_count FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
     );
-    expect(subRow?.count).toBe(0);
+    expect(postState?.unread_mention_count).toBe(preState?.unread_mention_count);
   });
 
   it("leaveMeChat returns to 'watching' if user still manages a chat participant", async () => {
@@ -283,12 +332,13 @@ describe("chat-first workspace service layer", () => {
     expect(chatRow?.type).toBe("group");
   });
 
-  it("addMeChatParticipants: carries watcher read state into the new participant row", async () => {
+  it("addMeChatParticipants: chat_user_state is preserved when a watcher is promoted to speaker", async () => {
     // Regression for review #228 issue #1: when a watcher is promoted via
     // POST /me/chats/:id/participants, its lastReadAt + unreadMentionCount
-    // must move from chat_subscriptions to chat_participants. Without
-    // state-carry the user's red-dot resets to zero and they'd assume
-    // everything was already read.
+    // must survive the transition. Under the new model, chat_user_state
+    // lives in a separate table from chat_membership, so the promotion
+    // is a single UPDATE of access_mode — the read state is preserved by
+    // construction, no state-carry transaction needed.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const { createAgent } = await import("../services/agent.js");
@@ -306,43 +356,47 @@ describe("chat-first workspace service layer", () => {
     const { chatId } = await createMeChat(app.db, owner.agent.uuid, owner.organizationId, {
       participantIds: [managed.uuid],
     });
-    // Seed a non-trivial watcher state: pretend the admin has 3 mentions
-    // outstanding and last read 1h ago. Direct UPDATE keeps the test
-    // independent of mention-fan-out timing.
+    // Seed a non-trivial read state: pretend the admin has 3 mentions
+    // outstanding and last read 1h ago. Direct UPSERT into chat_user_state
+    // keeps the test independent of mention-fan-out timing.
     const lastReadAt = new Date(Date.now() - 3600_000);
-    const { and: drizzleAnd, eq: drizzleEq } = await import("drizzle-orm");
-    const { chatSubscriptions } = await import("../db/schema/chats.js");
+    const { chatUserState } = await import("../db/schema/chat-user-state.js");
     await app.db
-      .update(chatSubscriptions)
-      .set({ lastReadAt, unreadMentionCount: 3 })
-      .where(
-        drizzleAnd(
-          drizzleEq(chatSubscriptions.chatId, chatId),
-          drizzleEq(chatSubscriptions.agentId, admin.humanAgentUuid),
-        ),
-      );
+      .insert(chatUserState)
+      .values({
+        chatId,
+        agentId: admin.humanAgentUuid,
+        lastReadAt,
+        unreadMentionCount: 3,
+      })
+      .onConflictDoUpdate({
+        target: [chatUserState.chatId, chatUserState.agentId],
+        set: { lastReadAt, unreadMentionCount: 3 },
+      });
 
     // Owner adds admin as a speaking participant.
     await addMeChatParticipants(app.db, chatId, owner.agent.uuid, owner.organizationId, {
       participantIds: [admin.humanAgentUuid],
     });
 
-    const [participantRow] = await app.db.execute<{
+    // chat_membership row is now access_mode = 'speaker'.
+    const [membershipRow] = await app.db.execute<{ access_mode: string }>(sql`
+      SELECT access_mode FROM chat_membership
+       WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
+    `);
+    expect(membershipRow?.access_mode).toBe("speaker");
+
+    // chat_user_state row is untouched — read state preserved.
+    const [stateRow] = await app.db.execute<{
       last_read_at: string | null;
       unread_mention_count: number;
     }>(sql`
-      SELECT last_read_at, unread_mention_count FROM chat_participants
+      SELECT last_read_at, unread_mention_count FROM chat_user_state
        WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
     `);
-    expect(participantRow).toBeDefined();
-    expect(participantRow?.unread_mention_count).toBe(3);
-    expect(new Date(participantRow?.last_read_at ?? 0).toISOString()).toBe(lastReadAt.toISOString());
-
-    const [subRow] = await app.db.execute<{ chat_id: string }>(sql`
-      SELECT chat_id FROM chat_subscriptions
-       WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
-    `);
-    expect(subRow).toBeUndefined();
+    expect(stateRow).toBeDefined();
+    expect(stateRow?.unread_mention_count).toBe(3);
+    expect(new Date(stateRow?.last_read_at ?? 0).toISOString()).toBe(lastReadAt.toISOString());
   });
 
   it("addMeChatParticipants: refuses caller who is not a speaking participant", async () => {
@@ -382,18 +436,24 @@ describe("chat-first workspace service layer", () => {
     });
 
     // peer @-mentions admin (the watcher) by name. Mention extraction reads
-    // chat_participants only, so admin is NOT in the candidate set — the
-    // resulting message must NOT bump admin's `unread_mention_count`.
+    // speakers only (chat_membership where access_mode = 'speaker'), so
+    // admin is NOT in the candidate set — the resulting message must NOT
+    // bump admin's `unread_mention_count` in chat_user_state.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
       format: "text",
       content: `Hi @${admin.username}, please look`,
     });
 
-    const [adminSubRow] = await app.db.execute<{ unread_mention_count: number }>(sql`
-      SELECT unread_mention_count FROM chat_subscriptions
+    const [adminStateRow] = await app.db.execute<{ unread_mention_count: number | null }>(sql`
+      SELECT unread_mention_count FROM chat_user_state
        WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
     `);
-    expect(adminSubRow?.unread_mention_count).toBe(0);
+    // Either the row was never created (lazy materialisation, no event
+    // touched it) or the count was bumped via the watcher-manager path
+    // (which IS the legitimate channel for a manager-of-mentioned-non-human).
+    // In this test the mention target is admin themselves, not the managed
+    // agent — so neither the speaker nor the watcher branch should fire.
+    expect(adminStateRow?.unread_mention_count ?? 0).toBe(0);
   });
 
   it("listMeChats: cursor pagination is correct across NULL-timestamped chats", async () => {

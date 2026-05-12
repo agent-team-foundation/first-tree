@@ -5,10 +5,10 @@ import {
   imageInlineContentSchema,
   type SendMessage,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { messages } from "../db/schema/messages.js";
 import type { Notifier } from "./notifier.js";
 
@@ -89,9 +89,9 @@ export async function prepareImageOutbound(
 async function collectTargetInboxes(db: Database, chatId: string, inReplyTo: string | undefined): Promise<string[]> {
   const participants = await db
     .select({ inboxId: agents.inboxId })
-    .from(chatParticipants)
-    .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
-    .where(eq(chatParticipants.chatId, chatId));
+    .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
   const set = new Set(participants.map((p) => p.inboxId));
 

@@ -4,7 +4,8 @@ import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { NotFoundError } from "../errors.js";
@@ -410,9 +411,15 @@ export async function filterSessionsByParticipant(
 
   const chatIds = sessions.map((s) => s.chatId);
   const participantRows = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(inArray(chatParticipants.chatId, chatIds), eq(chatParticipants.agentId, participantAgentId)));
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(
+      and(
+        inArray(chatMembership.chatId, chatIds),
+        eq(chatMembership.agentId, participantAgentId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    );
 
   const allowedChatIds = new Set(participantRows.map((r) => r.chatId));
   return sessions.filter((s) => allowedChatIds.has(s.chatId));

@@ -1,128 +1,145 @@
 /**
- * Chat-first workspace — watcher subscription helpers.
+ * Chat-first workspace — membership lifecycle helpers.
  *
- * Watchers (rows in `chat_subscriptions`) are non-speaking observers. A
- * member who manages an agent that participates in a chat — but whose own
- * human agent is not a speaker there — sees the chat in their workspace
- * via a watcher row.
+ * After the chat data model restructure (see
+ * proposals/chat-data-model-restructure.20260512.md §8), "watcher" is
+ * just an `access_mode` value on `chat_membership`, not a separate
+ * table. Speaker ↔ watcher transitions are a single-table UPDATE;
+ * read state lives in `chat_user_state` and is structurally isolated
+ * from access_mode changes — there is no state-carry path anymore.
  *
  * Two distinct kinds of operation live here:
  *
- *   1. Set rebuilds (`recompute*`). Idempotent set-based recomputations
- *      driven by lifecycle events (chat created, participant added/removed,
- *      member status flipped, etc.). These DEFAULT new rows to NULL/0 read
- *      state.
+ *   1. Set rebuilds (`recompute*`). Idempotent set-based
+ *      recomputations driven by lifecycle events (chat created,
+ *      participant added/removed, member status flipped, agent
+ *      rebind, etc.). Strict invariant: ONLY INSERT or DELETE rows
+ *      where access_mode = 'watcher'. NEVER UPDATE any row with
+ *      access_mode = 'speaker' — the user's own join/leave decision
+ *      must not be overwritten by ops paths.
  *
- *   2. State-carry transitions (`joinAsParticipant`, `leaveAsParticipant`).
- *      Move a single (chat, agent) pair between `chat_participants` and
- *      `chat_subscriptions` while preserving `last_read_at` and
- *      `unread_mention_count`. NEVER call recompute on this path or you'll
- *      lose read state.
+ *   2. Speaker ↔ watcher transitions (`joinAsParticipant`,
+ *      `leaveAsParticipant`). Single-table UPDATE on
+ *      `chat_membership.access_mode`; `chat_user_state` rows for
+ *      the (chat, agent) pair are not touched. Per §11.4 default,
+ *      a fully-detached user keeps their `chat_user_state` row
+ *      (read state remembered for re-add).
  *
- * See docs/chat-first-workspace-product-design.md "State Transitions" and
- * "Risk Constraints".
+ * File name preserved across the refactor for diff readability; may
+ * be renamed in a follow-up. Public function names preserved too —
+ * `recomputeChatWatchers` still describes what it does (recomputes
+ * the watcher rows), so the rename to `recomputeChatMembership`
+ * would obscure rather than clarify.
  */
 
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chatSubscriptions } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { addChatParticipants, changeChatType, wouldUpgradeToGroup } from "./participant-mode.js";
 
 /**
  * Structural DB type that accepts both the top-level `Database` and a
- * transaction client. We widen via `PgDatabase` so the schema generic stays
- * unconstrained.
+ * transaction client.
  */
 // biome-ignore lint/suspicious/noExplicitAny: needed for cross-schema compatibility
 type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
 
 // ---------------------------------------------------------------------------
-// Recompute helpers — set rebuilds. Idempotent. Default read state.
+// Recompute helpers — set rebuilds. Idempotent. Touch ONLY watcher rows.
 // ---------------------------------------------------------------------------
 
 /**
  * Recompute watcher rows for ONE chat. For every active member who:
  *   - manages a non-human agent that speaks in the chat, AND
  *   - whose own human agent is NOT a speaker in the chat
- * an `(chat_id, member.agent_id)` watcher row is upserted (NULL read state).
+ * a `(chat_id, member.agent_id)` watcher row is upserted.
  *
- * Watchers whose anchoring condition no longer holds (manager left, the
- * managed agent was removed from the chat, the manager joined as a speaker
- * themselves) are deleted.
+ * Strict invariant: only writes rows with access_mode = 'watcher';
+ * never updates or deletes any access_mode = 'speaker' row. The
+ * ON CONFLICT DO NOTHING clause guarantees that if a (chat, agent)
+ * row already exists as a speaker (the manager joined as a real
+ * participant themselves), we leave it alone.
+ *
+ * Watchers whose anchoring condition no longer holds (manager left,
+ * the managed agent was removed from the chat, the manager joined as
+ * a speaker themselves) are deleted — also gated on access_mode =
+ * 'watcher'.
  *
  * Idempotent: safe to call multiple times for the same chat.
  */
 export async function recomputeChatWatchers(db: DbLike, chatId: string): Promise<void> {
-  // Insert the desired set; ON CONFLICT keeps existing read state intact.
+  // Insert the desired set of watcher rows; speaker rows are
+  // preserved by the ON CONFLICT clause + the NOT EXISTS guard in
+  // the SELECT.
   await db.execute(sql`
-    INSERT INTO chat_subscriptions
-      (chat_id, agent_id, kind, last_read_at, unread_mention_count, created_at)
-    SELECT DISTINCT cp.chat_id, m.agent_id, 'watching', NULL::timestamp with time zone, 0, now()
-      FROM chat_participants cp
-      JOIN agents  a ON a.uuid = cp.agent_id
+    INSERT INTO chat_membership
+      (chat_id, agent_id, role, access_mode, mode, source, joined_at)
+    SELECT DISTINCT cm.chat_id, m.agent_id, 'member', 'watcher', 'full', 'auto_manager', now()
+      FROM chat_membership cm
+      JOIN agents  a ON a.uuid = cm.agent_id
       JOIN members m ON m.id   = a.manager_id
-     WHERE cp.chat_id = ${chatId}
-       AND m.status   = 'active'
-       AND a.type    <> 'human'
+     WHERE cm.chat_id = ${chatId}
+       AND cm.access_mode = 'speaker'
+       AND m.status = 'active'
+       AND a.type   <> 'human'
        AND NOT EXISTS (
-         SELECT 1 FROM chat_participants cp2
-          WHERE cp2.chat_id  = cp.chat_id
-            AND cp2.agent_id = m.agent_id
+         SELECT 1 FROM chat_membership cm2
+          WHERE cm2.chat_id  = cm.chat_id
+            AND cm2.agent_id = m.agent_id
        )
     ON CONFLICT (chat_id, agent_id) DO NOTHING
   `);
 
   // Drop watcher rows whose anchoring condition no longer holds.
+  // Speaker rows are protected by the access_mode = 'watcher'
+  // clause — they will never be touched here regardless of join
+  // shape.
   await db.execute(sql`
-    DELETE FROM chat_subscriptions cs
-     WHERE cs.chat_id = ${chatId}
+    DELETE FROM chat_membership cm
+     WHERE cm.chat_id = ${chatId}
+       AND cm.access_mode = 'watcher'
        AND NOT EXISTS (
          SELECT 1
-           FROM chat_participants cp
-           JOIN agents  a ON a.uuid = cp.agent_id
+           FROM chat_membership speakers
+           JOIN agents  a ON a.uuid = speakers.agent_id
            JOIN members m ON m.id   = a.manager_id
-          WHERE cp.chat_id = cs.chat_id
-            AND m.agent_id = cs.agent_id
-            AND m.status   = 'active'
-            AND a.type    <> 'human'
-            AND NOT EXISTS (
-              SELECT 1 FROM chat_participants cp2
-               WHERE cp2.chat_id  = cp.chat_id
-                 AND cp2.agent_id = m.agent_id
-            )
+          WHERE speakers.chat_id     = cm.chat_id
+            AND speakers.access_mode = 'speaker'
+            AND m.agent_id           = cm.agent_id
+            AND m.status             = 'active'
+            AND a.type              <> 'human'
        )
   `);
 }
 
 /**
- * Recompute watcher rows touching ONE agent across all chats it speaks in.
- * Used after `rebindAgent` (manager change) so the new manager picks up
- * watcher rows and the old manager's are dropped.
+ * Recompute watcher rows touching ONE agent across all chats it
+ * speaks in. Used after `rebindAgent` (manager change) so the new
+ * manager picks up watcher rows and the old manager's are dropped.
  */
 export async function recomputeWatchersForAgent(db: DbLike, agentId: string): Promise<void> {
   const chatRows = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(eq(chatParticipants.agentId, agentId));
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.agentId, agentId), eq(chatMembership.accessMode, "speaker")));
   for (const { chatId } of chatRows) {
     await recomputeChatWatchers(db, chatId);
   }
 }
 
 /**
- * Recompute watcher rows touching ONE member across all chats. Triggered
- * when the member's status flips active ↔ left.
+ * Recompute watcher rows touching ONE member across all chats.
+ * Triggered when the member's status flips active ↔ left.
  */
 export async function recomputeWatchersForMember(db: DbLike, memberId: string): Promise<void> {
-  // Find all chats where this member's managed non-human agents participate.
   const rows = await db
-    .selectDistinct({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
-    .where(and(eq(agents.managerId, memberId), ne(agents.type, "human")));
+    .selectDistinct({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .where(and(eq(chatMembership.accessMode, "speaker"), eq(agents.managerId, memberId), ne(agents.type, "human")));
 
   for (const { chatId } of rows) {
     await recomputeChatWatchers(db, chatId);
@@ -130,76 +147,69 @@ export async function recomputeWatchersForMember(db: DbLike, memberId: string): 
 }
 
 // ---------------------------------------------------------------------------
-// State-carry transitions. Single transaction. NEVER call recompute here.
+// Speaker ↔ watcher transitions. Single-table UPDATE on access_mode.
+// chat_user_state rows for the (chat, agent) pair are not touched.
 // ---------------------------------------------------------------------------
 
 export type JoinResult = {
   chatId: string;
-  /** True when the call inserted a fresh participant row (vs. no-op if already a member). */
+  /** True when the call inserted a fresh `chat_membership` row (vs. UPDATE or no-op). */
   inserted: boolean;
-  /** Read state carried forward from a watcher row, if one existed. */
-  carried: { lastReadAt: Date | null; unreadMentionCount: number } | null;
+  /**
+   * Read state previously carried — always null in the new model.
+   * Kept for API surface compatibility; `chat_user_state` is
+   * structurally separate and is never touched by access_mode
+   * transitions.
+   */
+  carried: null;
 };
 
 /**
- * Watcher → speaking participant. State-carry transaction.
+ * Watcher → speaker (or fresh speaker insert).
  *
- *   1. DELETE the watcher row (returning read state).
- *   2. If a participant row already exists, no-op (idempotent).
- *   3. Otherwise, run the direct → group upgrade rule against the *current*
- *      participant set, then INSERT the participant row carrying read state.
+ *   1. SELECT the existing chat_membership row for the (chat, agent) pair.
+ *   2. If already a speaker → no-op (idempotent).
+ *   3. If a watcher row → run the direct→group upgrade rule, then
+ *      UPDATE access_mode to 'speaker'.
+ *   4. If no row → run the direct→group upgrade rule, then INSERT a
+ *      fresh speaker row.
  *
- * If `requireWatcherOrVisible` is true, refuse when the user has neither a
- * watcher row nor admin-derived visibility — used to keep the public
- * `/me/chats/:chatId/join` endpoint honest. Pre-check happens in the
- * route layer where we have the full member scope.
+ * Caller is expected to have verified the user is authorised to join
+ * (admin override OR an existing watcher row); this helper does not
+ * gate on visibility.
  */
 export async function joinAsParticipant(db: Database, chatId: string, humanAgentId: string): Promise<JoinResult> {
   return db.transaction(async (tx) => {
-    const [carriedRow] = await tx
-      .delete(chatSubscriptions)
-      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, humanAgentId)))
-      .returning({
-        lastReadAt: chatSubscriptions.lastReadAt,
-        unreadMentionCount: chatSubscriptions.unreadMentionCount,
-      });
-
     const [existing] = await tx
-      .select({ chatId: chatParticipants.chatId })
-      .from(chatParticipants)
-      .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, humanAgentId)))
+      .select({ accessMode: chatMembership.accessMode })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)))
       .limit(1);
-    if (existing) {
-      return { chatId, inserted: false, carried: carriedRow ?? null };
+
+    if (existing?.accessMode === "speaker") {
+      return { chatId, inserted: false, carried: null };
     }
 
-    const currentParticipants = await tx
-      .select({ agentId: chatParticipants.agentId })
-      .from(chatParticipants)
-      .where(eq(chatParticipants.chatId, chatId));
-    if (wouldUpgradeToGroup(currentParticipants.length, 1)) {
+    const currentSpeakers = await tx
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+    if (wouldUpgradeToGroup(currentSpeakers.length, 1)) {
       await changeChatType(tx, chatId, "group");
     }
 
     // `/me/chats/:id/join` admits only the manager's human agent.
     // `assertHuman: true` makes a non-human caller surface as a 400 rather
     // than silently inserting with an inappropriate mode.
-    await addChatParticipants(
-      tx,
-      chatId,
-      [
-        {
-          agentId: humanAgentId,
-          role: "member",
-          carriedReadState: carriedRow
-            ? { lastReadAt: carriedRow.lastReadAt, unreadMentionCount: carriedRow.unreadMentionCount }
-            : undefined,
-        },
-      ],
-      { assertHuman: true },
-    );
+    // `upgradeWatcherToSpeaker` promotes a pre-existing watcher row in place;
+    // chat_user_state is structurally separate so the user's read state
+    // survives untouched — no state-carry needed.
+    await addChatParticipants(tx, chatId, [{ agentId: humanAgentId, role: "member" }], {
+      assertHuman: true,
+      upgradeWatcherToSpeaker: true,
+    });
 
-    return { chatId, inserted: true, carried: carriedRow ?? null };
+    return { chatId, inserted: !existing, carried: null };
   });
 }
 
@@ -210,57 +220,69 @@ export type LeaveResult = {
 };
 
 /**
- * Speaking participant → watcher (or fully detach).
+ * Speaker → watcher (or fully detach).
  *
- *   1. DELETE the participant row (returning read state).
- *   2. Test "still visible": is the user still the manager of an agent that
- *      remains a participant in this chat? If yes, INSERT a watcher row
- *      carrying read state. If no, drop entirely.
- *
- * Caller must validate that the user actually has a participant row to
- * leave (returns `NotFoundError` if not).
+ *   1. SELECT the existing speaker row; 404 if not present.
+ *   2. Test "still visible": does the user still manage a non-human
+ *      agent that remains a speaker in this chat?
+ *      - If yes → UPDATE access_mode to 'watcher'.
+ *      - If no  → DELETE the chat_membership row entirely.
+ *   3. `chat_user_state` row (if any) is preserved either way per
+ *      §11.4 default — read state is remembered for re-add.
  */
 export async function leaveAsParticipant(db: Database, chatId: string, humanAgentId: string): Promise<LeaveResult> {
   return db.transaction(async (tx) => {
-    const [carried] = await tx
-      .delete(chatParticipants)
-      .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, humanAgentId)))
-      .returning({ lastReadAt: chatParticipants.lastReadAt, unreadMentionCount: chatParticipants.unreadMentionCount });
-    if (!carried) throw new NotFoundError("Not a participant of this chat");
+    const [existing] = await tx
+      .select({ accessMode: chatMembership.accessMode })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)))
+      .limit(1);
+    if (!existing || existing.accessMode !== "speaker") {
+      throw new NotFoundError("Not a participant of this chat");
+    }
 
-    // Still visible? The "user" here is identified by their human-agent uuid.
-    // We need to find the matching member row in the chat's organisation and
-    // check whether any of that member's managed non-human agents still
-    // participates. SQL does the join in one shot.
-    const [stillVisibleRow] = await tx.execute<{ visible: boolean }>(sql`
+    // Still visible? The "user" here is identified by their
+    // human-agent uuid. We find the matching member row in the
+    // chat's organisation and check whether any of that member's
+    // managed non-human agents still speaks in this chat.
+    const result = (await tx.execute(sql`
       SELECT EXISTS (
         SELECT 1
-          FROM chat_participants cp
-          JOIN agents  a ON a.uuid = cp.agent_id
+          FROM chat_membership cm
+          JOIN agents  a ON a.uuid = cm.agent_id
           JOIN members m ON m.id   = a.manager_id
-         WHERE cp.chat_id = ${chatId}
+         WHERE cm.chat_id = ${chatId}
+           AND cm.access_mode = 'speaker'
            AND m.agent_id = ${humanAgentId}
            AND m.status   = 'active'
            AND a.type    <> 'human'
       ) AS visible
-    `);
-    const stillVisible = Boolean(stillVisibleRow?.visible);
+    `)) as unknown as Array<{ visible: boolean }>;
+    const stillVisible = Boolean(result[0]?.visible);
 
     if (!stillVisible) {
+      // Fully detach: DELETE chat_membership row. chat_user_state
+      // row (if any) is preserved per §11.4 default — the user's
+      // read state is remembered if they are ever re-added.
+      await tx
+        .delete(chatMembership)
+        .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)));
       return { chatId, membershipKind: null };
     }
 
+    // Downgrade speaker → watcher. chat_user_state is untouched (read
+    // state survives the access_mode flip per §11.4). `mode` and
+    // `source` are intentionally preserved so a later re-promotion via
+    // `joinAsParticipant` keeps the agent's original mode (e.g.
+    // `mention_only` instead of being silently reset to `full`). Even
+    // though `addChatParticipants` re-derives `mode` on the promotion
+    // UPSERT path today, leaving the original values in place is the
+    // safer invariant — it means the watcher row is a faithful
+    // snapshot of the speaker row minus the access_mode flip.
     await tx
-      .insert(chatSubscriptions)
-      .values({
-        chatId,
-        agentId: humanAgentId,
-        kind: "watching",
-        lastReadAt: carried.lastReadAt,
-        unreadMentionCount: carried.unreadMentionCount,
-      })
-      .onConflictDoNothing();
-
+      .update(chatMembership)
+      .set({ accessMode: "watcher" })
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)));
     return { chatId, membershipKind: "watching" };
   });
 }
@@ -270,39 +292,33 @@ export async function leaveAsParticipant(db: Database, chatId: string, humanAgen
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the membership row of the human agent for the given chat. Returns
- * one of: 'participant', 'watching', or null.
+ * Resolve the membership row of the human agent for the given chat.
+ * Returns one of: 'participant' (speaker), 'watching' (watcher),
+ * or null (no row).
  *
- * Used by `/me/chats/:chatId/join` to refuse a join when the user has
- * neither a watcher row nor a participant row, and isn't otherwise
- * authorised (admin in the chat's org).
+ * Used by `/me/chats/:chatId/join` to refuse a join when the user
+ * has neither a watcher row nor a participant row, and isn't
+ * otherwise authorised (admin in the chat's org).
  */
 export async function resolveChatMembership(
   db: DbLike,
   chatId: string,
   humanAgentId: string,
 ): Promise<"participant" | "watching" | null> {
-  const [participant] = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, humanAgentId)))
+  const [row] = await db
+    .select({ accessMode: chatMembership.accessMode })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)))
     .limit(1);
-  if (participant) return "participant";
-
-  const [sub] = await db
-    .select({ chatId: chatSubscriptions.chatId })
-    .from(chatSubscriptions)
-    .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, humanAgentId)))
-    .limit(1);
-  if (sub) return "watching";
-
-  return null;
+  if (!row) return null;
+  return row.accessMode === "speaker" ? "participant" : "watching";
 }
 
 /**
- * Used by `/me/chats/:chatId/join`. Throw 409 if already a speaker (no work
- * to do) and 403 if no watcher row and no admin override. Admin override is
- * resolved at the route layer; this helper only reports the watcher state.
+ * Used by `/me/chats/:chatId/join`. Throw 409 if already a speaker
+ * (no work to do) and 403 if no row at all (admin override is
+ * resolved at the route layer; this helper only reports the membership
+ * state).
  */
 export function ensureCanJoin(membership: "participant" | "watching" | null): void {
   if (membership === "participant") {

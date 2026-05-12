@@ -10,7 +10,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { messages as messagesTable } from "../db/schema/messages.js";
 
 /**
@@ -47,7 +47,7 @@ function normaliseMode(mode: string | null | undefined): ParticipantMode {
  * `entryChatId` is the chat this payload is routed to on the receiver side
  * — often equal to `message.chatId`, but in `replyTo` routing the original
  * sender may be notified in a *different* chat (see services/message.ts).
- * It drives `recipientMode` lookup from `chat_participants`.
+ * It drives `recipientMode` lookup from `chat_membership` (speaker rows).
  *
  * Production code should prefer `buildClientMessagePayloadsForInbox` — the
  * single-message variant is kept only because it simplifies the dispatcher
@@ -130,9 +130,15 @@ export async function buildClientMessagePayloadsForInbox(
   const modeByChat = new Map<string, ParticipantMode>();
   if (chatIds.length > 0) {
     const rows = await db
-      .select({ chatId: chatParticipants.chatId, mode: chatParticipants.mode })
-      .from(chatParticipants)
-      .where(and(eq(chatParticipants.agentId, agentId), inArray(chatParticipants.chatId, chatIds)));
+      .select({ chatId: chatMembership.chatId, mode: chatMembership.mode })
+      .from(chatMembership)
+      .where(
+        and(
+          eq(chatMembership.agentId, agentId),
+          inArray(chatMembership.chatId, chatIds),
+          eq(chatMembership.accessMode, "speaker"),
+        ),
+      );
     for (const r of rows) modeByChat.set(r.chatId, normaliseMode(r.mode));
   }
 
@@ -175,9 +181,15 @@ export async function buildClientMessagePayloadsForInbox(
 
 async function resolveRecipientMode(db: DbLike, agentId: string, chatId: string): Promise<ParticipantMode> {
   const [row] = await db
-    .select({ mode: chatParticipants.mode })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.agentId, agentId), eq(chatParticipants.chatId, chatId)))
+    .select({ mode: chatMembership.mode })
+    .from(chatMembership)
+    .where(
+      and(
+        eq(chatMembership.agentId, agentId),
+        eq(chatMembership.chatId, chatId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
     .limit(1);
   return normaliseMode(row?.mode);
 }
