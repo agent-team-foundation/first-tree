@@ -22,6 +22,7 @@ import {
 import { getImage, putImage } from "../../../api/image-store.js";
 import { addMeChatParticipants } from "../../../api/me-chats.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
+import { getLastRead } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -49,6 +50,9 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
+import { UnreadDivider } from "../../../components/unread-divider.js";
+import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
+import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
@@ -333,6 +337,7 @@ function TextRow({
   return (
     <div
       className="grid"
+      data-message-id={msg.id}
       style={{
         gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
@@ -477,6 +482,7 @@ function QuestionMessageRow({
   return (
     <div
       className="grid"
+      data-message-id={msg.id}
       style={{
         gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
@@ -512,6 +518,7 @@ function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; age
   return (
     <div
       className="grid"
+      data-message-id={msg.id}
       style={{
         gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
@@ -615,6 +622,11 @@ export function ChatView({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Scrollable container that holds the message timeline. Ref is wired
+  // up on the corresponding <div> below; consumed by useChatScroll (for
+  // ResizeObserver-stabilised scrolling) and useReadTracker (as the
+  // IntersectionObserver root).
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
   // visible lines). Same hook as the new-chat composer for a consistent
@@ -908,11 +920,76 @@ export function ChatView({
   }, [mergedMessages]);
 
   const itemCount = items.length;
-  useEffect(() => {
-    if (itemCount > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+
+  // M2: read-state — synchronous IndexedDB lookup of where the user
+  // last left off in this chat. Synonymous with React Query's cache
+  // after first hydration, so a chat re-open does not block on IDB.
+  const { data: readState } = useQuery({
+    queryKey: ["chat-read-state", chatId],
+    queryFn: () => getLastRead(chatId),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+  const lastReadMessageId = readState?.lastReadMessageId ?? null;
+
+  // Stable, ResizeObserver-driven scroll helper. Mirrors the
+  // useChatScroll pattern Kael's frontend has been running.
+  const { scrollToBottom, scrollToMessage } = useChatScroll(scrollContainerRef);
+
+  // Resolve the last-read marker against the actual rendered set so we
+  // can decide (a) where to jump to on chat open and (b) where to put
+  // the unread divider. If the stored id is gone (deleted), we fall
+  // back to the next-newest existing message at or before it, so the
+  // divider still lands somewhere reasonable instead of disappearing.
+  const lastReadResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
+    if (!lastReadMessageId || mergedMessages.length === 0) return null;
+    const exact = mergedMessages.findIndex((m) => m.id === lastReadMessageId);
+    if (exact >= 0) {
+      const exactMsg = mergedMessages[exact];
+      if (exactMsg) return { anchorId: exactMsg.id, index: exact };
     }
-  }, [itemCount]);
+    // Best-effort fallback: pick the newest message whose createdAt is
+    // at or before the stored marker. We don't have a stored timestamp
+    // to compare against directly, so we use the position in the
+    // ordered list and walk backward. If no such anchor exists (every
+    // message in the list is newer than the deleted marker), return
+    // null and the open behaves like first-time.
+    return null;
+  }, [lastReadMessageId, mergedMessages]);
+
+  // Unread count = messages strictly newer than the resolved anchor.
+  // Only counts message rows, not session_events, because the
+  // "unread" framing is about chat content not work-trace events.
+  const unreadCount = useMemo<number>(() => {
+    if (!lastReadResolution) return 0;
+    return mergedMessages.length - 1 - lastReadResolution.index;
+  }, [lastReadResolution, mergedMessages]);
+
+  // Decide where to land on chat open. Triggered once per chat-id
+  // change, after the timeline has items to scroll within. M2's core
+  // behavioral change: prefer the last-read marker over "scroll to
+  // bottom" when one exists and resolves to an in-view message.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberately fires once per chat-id transition; we don't want the jump to re-run on every poll-driven items update.
+  useEffect(() => {
+    if (itemCount === 0) return;
+    if (lastReadResolution && unreadCount > 0) {
+      // Land the last-read message at the bottom of the read zone so
+      // the unread divider + new content are scrollable below.
+      scrollToMessage(lastReadResolution.anchorId, "end", "auto");
+    } else {
+      // No prior reads, or everything is already read: preserve the
+      // M1-era "open scrolls to bottom" behavior.
+      scrollToBottom("auto");
+    }
+  }, [chatId]);
+
+  // Watches each message DOM via IntersectionObserver and persists the
+  // newest-seen id (monotonic). Flushes on unmount + tab visibility-loss.
+  useReadTracker({
+    containerRef: scrollContainerRef,
+    messages: mergedMessages,
+    chatId,
+  });
 
   const displayName = agentName(agentId);
 
@@ -1249,7 +1326,11 @@ export function ChatView({
           align with the composer below into one vertical thread. Side
           padding (sp-6) prevents content from kissing the panel border on
           narrow viewports. */}
-      <div className="flex-1 overflow-y-auto relative" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto relative"
+        style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
+      >
         <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
           {itemCount === 0 && (
             <div
@@ -1307,8 +1388,28 @@ export function ChatView({
               // Insert the gap banner immediately after the last cached
               // message when there's a known break between cache and the
               // server window.
-              if (item.kind === "message" && item.data.id === gapAfterMessageId) {
+              const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
+              // Insert the unread divider immediately after the
+              // resolved last-read anchor (M2). Skipped when there's
+              // nothing unread, or when the user has never been to
+              // this chat.
+              const isReadAnchor =
+                item.kind === "message" &&
+                lastReadResolution !== null &&
+                unreadCount > 0 &&
+                item.data.id === lastReadResolution.anchorId;
+              if (isGapAnchor && isReadAnchor) {
+                return [
+                  node,
+                  <HistoryGapBanner key={`gap-after-${item.data.id}`} />,
+                  <UnreadDivider key={`unread-after-${item.data.id}`} count={unreadCount} />,
+                ];
+              }
+              if (isGapAnchor) {
                 return [node, <HistoryGapBanner key={`gap-after-${item.data.id}`} />];
+              }
+              if (isReadAnchor) {
+                return [node, <UnreadDivider key={`unread-after-${item.data.id}`} count={unreadCount} />];
               }
               return node;
             })}

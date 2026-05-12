@@ -25,9 +25,14 @@
 import type { MessageWithDelivery } from "./chats.js";
 
 const DB_NAME = "first-tree-hub-chat-cache";
-const DB_VERSION = 1;
+// Schema version is shared with read-state-store.ts (M2). Both modules
+// open the same DB; whichever opens first triggers any pending upgrade.
+// Each module's onupgradeneeded must defensively create-if-not-exists
+// every store, so the schema lands the same regardless of call order.
+const DB_VERSION = 2;
 const STORE = "messages";
 const INDEX_BY_CHAT_CREATED = "by_chat_created";
+const READ_STATE_STORE = "read-state";
 
 type StoredMessage = {
   // Composite key columns first so the keyPath is `[chatId, messageId]`.
@@ -59,6 +64,12 @@ function openDb(): Promise<IDBDatabase | null> {
       if (!db.objectStoreNames.contains(STORE)) {
         const store = db.createObjectStore(STORE, { keyPath: ["chatId", "messageId"] });
         store.createIndex(INDEX_BY_CHAT_CREATED, ["chatId", "createdAt"], { unique: false });
+      }
+      // Mirror the read-state store creation so this module's upgrade
+      // handler is self-sufficient regardless of which module triggers
+      // the v1 → v2 transition.
+      if (!db.objectStoreNames.contains(READ_STATE_STORE)) {
+        db.createObjectStore(READ_STATE_STORE, { keyPath: "chatId" });
       }
     };
     req.onsuccess = () => resolve(req.result);
