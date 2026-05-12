@@ -3,16 +3,17 @@
  * workspace).
  *
  * Responsibilities:
- *   - Cursor-paginated conversation list across participant + watcher rows
- *     for the caller's human agent.
+ *   - Cursor-paginated conversation list (single-stream JOIN over the
+ *     unified `chat_membership` + `chat_user_state` tables).
  *   - Create a new chat (no dedupe, runs `recomputeChatWatchers` after).
- *   - Add participants (idempotent, runs `recomputeChatWatchers` after).
- *   - Mark-read (touches whichever of the two tables holds the user's row).
- *   - Join → state-carry watcher → speaker (delegates to `watcher.ts`).
- *   - Leave → state-carry speaker → watcher (delegates to `watcher.ts`).
+ *   - Add participants (idempotent, UPSERT into `chat_membership`,
+ *     runs `recomputeChatWatchers` after).
+ *   - Mark-read (UPSERT into `chat_user_state`).
+ *   - Join → watcher to speaker (delegates to `watcher.ts`).
+ *   - Leave → speaker to watcher or detach (delegates to `watcher.ts`).
  *
- * See docs/chat-first-workspace-product-design.md "API Contract" + "Data
- * Model".
+ * See proposals/chat-data-model-restructure.20260512.md §8 (schema)
+ * and §11.1 (per-route mapping).
  */
 
 import { randomUUID } from "node:crypto";
@@ -28,7 +29,9 @@ import type {
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chatUserState } from "../db/schema/chat-user-state.js";
+import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
@@ -78,13 +81,18 @@ export function decodeCursor(cursor: string): { lastMessageAt: Date | null; chat
  * GET /me/chats — cursor-paginated conversation list.
  *
  * SQL strategy:
- *   - One query that UNIONs participant rows and subscription rows for the
- *     caller's human agent, joined to chats. The UNION+coalesce keeps both
- *     `unread_mention_count` and `membership_kind` per row.
- *   - Filter `parent_chat_id IS NULL` (threads are excluded in v1).
+ *   - Single-stream query: `chats JOIN chat_membership LEFT JOIN
+ *     chat_user_state`. The membership row carries access_mode
+ *     (speaker → "participant" / watcher → "watching"); the user
+ *     state row supplies the unread counter (COALESCE → 0 when
+ *     row is missing).
+ *   - Filter `parent_chat_id IS NULL` (threads excluded in v1).
+ *   - Filter `c.organization_id = ?` to defend against historical
+ *     cross-org pollution rows that may still reference the caller
+ *     (see fix/cross-org-direct-chat-pollution).
  *   - Sort `(last_message_at DESC NULLS LAST, chat_id DESC)`.
- *   - Cursor narrows the result to rows STRICTLY before `(cursor.ts, cursor.id)`.
- *   - Followed by a small participant-list lookup for the page only.
+ *   - Cursor narrows the result to rows STRICTLY before the cursor.
+ *   - Followed by a participants-list lookup for the page only.
  */
 export async function listMeChats(
   db: Database,
@@ -98,33 +106,16 @@ export async function listMeChats(
     throw new BadRequestError("Invalid cursor");
   }
 
-  // The UNION keeps both rows distinguishable via membership_kind. We fetch
-  // limit+1 to know whether to emit a nextCursor.
-  // NOTE: when this user is somehow a watcher AND a participant (should be
-  // impossible per design invariant 1), the participant row wins via DISTINCT
-  // ON.
   const filterUnreadOnly = query.filter === "unread";
   const filterWatchingOnly = query.filter === "watching";
 
   // Cursor predicate (sort: last_message_at DESC NULLS LAST, chat_id DESC).
-  // The cursor identifies one row; we want every row STRICTLY AFTER it in
-  // that ordering. Three cases:
-  //
-  //   1. No cursor → first page, no predicate (TRUE).
-  //   2. Cursor's lastMessageAt is null → we're already in the NULL tail.
-  //      Only NULL-timestamped rows with smaller chat_id can come after.
-  //   3. Cursor's lastMessageAt is non-null → rows with strictly-smaller
-  //      timestamp, OR same-timestamp + smaller chat_id, OR any
-  //      NULL-timestamped row (NULLS LAST puts them after every non-null).
-  //
-  // Splitting these into a single `OR` with NULL inputs is hostile to
-  // PostgreSQL's planner and was previously buggy (NULL `<` non-null is
-  // NULL, not false, but NULL `<` NULL is also NULL — so naive `<` filter
-  // dropped NULL rows on case 3).
-  // postgres-js can't serialize a JS Date when it's bound through a raw
-  // `sql` template (no column-type metadata) — the typed builders normally
-  // do this for us. Pre-stringify to ISO so the param goes through as text
-  // and the `::timestamptz` cast in SQL handles the rest.
+  // See the original commentary in git history for the case-by-case
+  // analysis — preserved verbatim from the pre-refactor implementation
+  // because the entity-layer (chats) sort key has not changed.
+  // postgres-js can't serialize a JS Date through a raw sql template
+  // without column metadata; pre-stringify to ISO so the param goes
+  // through as text and the `::timestamptz` cast handles the rest.
   const cursorTsIso = cursor?.lastMessageAt ? cursor.lastMessageAt.toISOString() : null;
   const cursorPredicate = !cursor
     ? sql`TRUE`
@@ -134,28 +125,10 @@ export async function listMeChats(
              OR c.last_message_at < ${cursorTsIso}::timestamptz
              OR (c.last_message_at = ${cursorTsIso}::timestamptz AND c.id < ${cursor.chatId}))`;
 
-  // postgres-js returns timestamptz as ISO strings when bound through a raw
-  // `sql\`...\`` template (no column-type metadata), unlike drizzle's typed
-  // select which would parse to Date. We accept either shape and coerce
-  // below so the response uses ISO strings consistently.
+  // postgres-js returns timestamptz as ISO strings when bound through
+  // a raw sql template; coerce below so the response uses ISO
+  // strings consistently.
   const rawRows = (await db.execute(sql`
-    WITH membership AS (
-      SELECT chat_id, 'participant'::text AS membership_kind, unread_mention_count
-        FROM chat_participants
-       WHERE agent_id = ${humanAgentId}
-      UNION ALL
-      SELECT chat_id, 'watching'::text   AS membership_kind, unread_mention_count
-        FROM chat_subscriptions
-       WHERE agent_id = ${humanAgentId}
-    ),
-    /* Resolve duplicates (should not happen post-invariant-1, but cheap) by
-       preferring the participant row. */
-    deduped AS (
-      SELECT DISTINCT ON (chat_id)
-        chat_id, membership_kind, unread_mention_count
-        FROM membership
-        ORDER BY chat_id, CASE WHEN membership_kind = 'participant' THEN 0 ELSE 1 END
-    )
     SELECT
       c.id                  AS chat_id,
       c.type                AS type,
@@ -163,20 +136,24 @@ export async function listMeChats(
       c.parent_chat_id      AS parent_chat_id,
       c.last_message_at     AS last_message_at,
       c.last_message_preview AS last_message_preview,
-      (SELECT count(*) FROM chat_participants WHERE chat_id = c.id) AS participant_count,
-      d.membership_kind     AS membership_kind,
-      d.unread_mention_count AS unread_mention_count
+      (SELECT count(*) FROM chat_membership
+        WHERE chat_id = c.id AND access_mode = 'speaker') AS participant_count,
+      cm.access_mode AS access_mode,
+      COALESCE(cus.unread_mention_count, 0) AS unread_mention_count
       FROM chats c
-      JOIN deduped d ON d.chat_id = c.id
+      JOIN chat_membership cm
+        ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
+      LEFT JOIN chat_user_state cus
+        ON cus.chat_id = c.id AND cus.agent_id = ${humanAgentId}
      WHERE c.parent_chat_id IS NULL
-       /* Scope to the caller's org. Without this, cross-org dirty chats
-          whose chat_participants still reference the caller's human agent
-          (historical pollution — see fix/cross-org-direct-chat-pollution)
-          would leak into the list and 404 on click via requireChatAccess. */
+       /* Scope to the caller's org. Without this, cross-org dirty
+          chats whose chat_membership still references the caller's
+          human agent (historical pollution — see
+          fix/cross-org-direct-chat-pollution) would leak into the
+          list and 404 on click via requireChatAccess. */
        AND c.organization_id = ${organizationId}
-       /* Filter: unread / watching */
-       AND (${!filterUnreadOnly}::bool OR d.unread_mention_count > 0)
-       AND (${!filterWatchingOnly}::bool OR d.membership_kind = 'watching')
+       AND (${!filterUnreadOnly}::bool OR COALESCE(cus.unread_mention_count, 0) > 0)
+       AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
        AND ${cursorPredicate}
      ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
      LIMIT ${limit + 1}
@@ -188,7 +165,7 @@ export async function listMeChats(
     last_message_at: Date | string | null;
     last_message_preview: string | null;
     participant_count: number | string;
-    membership_kind: "participant" | "watching";
+    access_mode: "speaker" | "watcher";
     unread_mention_count: number;
   }>;
 
@@ -206,18 +183,18 @@ export async function listMeChats(
 
   const chatIds = pageRaw.map((r) => r.chat_id);
 
-  // Lookup participants for the page (single query). Includes display_name +
-  // type so the row can render an inline summary.
+  // Lookup participants (speakers only — watchers do not appear in
+  // the conversation row's participant chip list).
   const participantRows = await db
     .select({
-      chatId: chatParticipants.chatId,
-      agentId: chatParticipants.agentId,
+      chatId: chatMembership.chatId,
+      agentId: chatMembership.agentId,
       displayName: agents.displayName,
       type: agents.type,
     })
-    .from(chatParticipants)
-    .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
-    .where(inArray(chatParticipants.chatId, chatIds));
+    .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker")));
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
   for (const p of participantRows) {
@@ -226,13 +203,11 @@ export async function listMeChats(
     participantsByChat.set(p.chatId, list);
   }
 
-  // First-message lookup for the page — drives the auto-title fallback in
-  // `resolveChatTitle` so chats without a manual `topic` get a meaningful
-  // identity (`"请帮我重构这个文件"` rather than just the participant join,
-  // which often duplicates the chip row). Mirrors `session.ts:listAgentSessions`'s
-  // `selectDistinctOn` pattern over `idx_messages_chat_time`. Read-time
-  // (vs a denormalized projection column) so editing/deleting the first
-  // message naturally flows into the title without a separate write path.
+  // First-message lookup for auto-title fallback. Mirrors
+  // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
+  // logic is the same as before the schema refactor — first-message
+  // resolution is a `messages` concern, independent of the membership
+  // tables.
   const firstMessageRows =
     chatIds.length > 0
       ? await db
@@ -251,10 +226,11 @@ export async function listMeChats(
   const rows: MeChatRow[] = pageRaw.map((r) => {
     const participants = participantsByChat.get(r.chat_id) ?? [];
     const title = resolveChatTitle(r.topic, firstMessageSummary.get(r.chat_id) ?? null, participants, humanAgentId);
+    const isSpeaker = r.access_mode === "speaker";
     return {
       chatId: r.chat_id,
       type: r.type,
-      membershipKind: r.membership_kind,
+      membershipKind: isSpeaker ? "participant" : "watching",
       title,
       topic: r.topic,
       participants,
@@ -262,7 +238,7 @@ export async function listMeChats(
       lastMessageAt: toDate(r.last_message_at)?.toISOString() ?? null,
       lastMessagePreview: r.last_message_preview,
       unreadMentionCount: r.unread_mention_count,
-      canReply: r.membership_kind === "participant",
+      canReply: isSpeaker,
     };
   });
 
@@ -275,11 +251,6 @@ export async function listMeChats(
  *   1. `chat.topic` (manual, set via `PATCH /chats/:chatId`)
  *   2. First message summary (auto, ≤ 50 chars from `extractSummary`)
  *   3. Participant join (fallback when chat has no messages yet)
- *
- * The first-message fallback is the chat-first equivalent of how
- * ChatGPT / Claude.ai name conversations from the user's opening
- * prompt — gives same-agent multi-chats distinct identities and
- * removes the "title duplicates participants chip row" anti-pattern.
  */
 export function resolveChatTitle(
   topic: string | null,
@@ -290,12 +261,6 @@ export function resolveChatTitle(
   if (topic && topic.length > 0) return topic;
   if (firstMessageSummary && firstMessageSummary.length > 0) return firstMessageSummary;
   const others = participants.filter((p) => p.agentId !== selfAgentId);
-  // Reachable transiently — e.g., a watcher loads a chat in the brief
-  // window between `recomputeChatWatchers` removing the last managed
-  // agent and the watcher row itself being dropped, or right after an
-  // admin removes the last non-self speaker. Show a neutral, user-
-  // facing label rather than the parenthesized engineering sentinel
-  // it used to render.
   if (others.length === 0) return "Empty chat";
   if (others.length <= 3) return others.map((p) => p.displayName).join(", ");
   return `${others[0]?.displayName}, ${others[1]?.displayName} +${others.length - 2}`;
@@ -316,7 +281,6 @@ export async function createMeChat(
     throw new BadRequestError("At least one non-self participant required");
   }
 
-  // Verify all participants exist and are in the same org as the user.
   const allIds = [humanAgentId, ...distinctIds];
   const found = await db
     .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
@@ -335,9 +299,10 @@ export async function createMeChat(
 
   const chatType = distinctIds.length === 1 ? "direct" : "group";
 
-  // "Agent-only direct" rule: when both ends of a direct chat are non-human,
-  // every message would otherwise wake the other party in `full` mode and
-  // cause a reply loop. Mirror the same rule used by services/chat.ts.
+  // "Agent-only direct" rule: when both ends of a direct chat are
+  // non-human, every message would otherwise wake the other party in
+  // `full` mode and cause a reply loop. Mirror the same rule used by
+  // services/chat.ts.
   const isDirectAgentOnly = chatType === "direct" && found.every((a) => a.type !== "human");
 
   const chatId = randomUUID();
@@ -351,16 +316,19 @@ export async function createMeChat(
       topic,
     });
 
-    await tx.insert(chatParticipants).values(
+    await tx.insert(chatMembership).values(
       allIds.map((agentId) => ({
         chatId,
         agentId,
         role: agentId === humanAgentId ? ("owner" as const) : ("member" as const),
-        ...(isDirectAgentOnly ? { mode: "mention_only" as const } : {}),
+        accessMode: "speaker" as const,
+        mode: isDirectAgentOnly ? ("mention_only" as const) : ("full" as const),
+        source: "manual" as const,
       })),
     );
 
-    // Add watchers for managers of any non-human participant. Idempotent.
+    // Add watcher rows for managers of any non-human participant.
+    // Idempotent.
     await recomputeChatWatchers(tx, chatId);
   });
 
@@ -391,21 +359,23 @@ export async function addMeChatParticipants(
     .limit(1);
   if (!chat) throw new NotFoundError(`Chat "${chatId}" not found`);
 
-  // Caller-side authorisation. We return 404 (not 403) for "cannot see this
-  // chat" so a non-participant cannot probe chat existence by uuid. The two
-  // gates:
-  //   1. the chat lives in the caller's currently-active organisation, AND
-  //   2. the caller is a speaking participant of the chat.
-  // Watcher-only callers MUST `join` first — adding speakers is a speaker
-  // privilege. (Watchers can't speak, so it would be weird for them to invite
-  // others to speak.)
+  // Caller-side authorisation. 404 (not 403) for "cannot see this
+  // chat" so non-participants cannot probe chat existence by uuid.
+  // Two gates: (1) chat lives in caller's active org; (2) caller is a
+  // speaking participant (watchers cannot invite speakers).
   if (chat.organizationId !== callerOrganizationId) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
   }
   const [callerRow] = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, callerHumanAgentId)))
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        eq(chatMembership.agentId, callerHumanAgentId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
     .limit(1);
   if (!callerRow) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
@@ -427,23 +397,24 @@ export async function addMeChatParticipants(
   }
 
   await db.transaction(async (tx) => {
-    const existing = await tx
-      .select({ agentId: chatParticipants.agentId })
-      .from(chatParticipants)
-      .where(eq(chatParticipants.chatId, chatId));
-    const existingSet = new Set(existing.map((e) => e.agentId));
-    const toInsert = distinct.filter((id) => !existingSet.has(id));
-    if (toInsert.length === 0) {
-      // Idempotent — nothing to do, but still recompute watchers in case the
-      // caller is fixing a stale watcher set.
+    // Existing speakers (for the direct → group upgrade rule and
+    // for filtering out already-speaking agents from the insert
+    // batch).
+    const existingSpeakers = await tx
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+    const existingSpeakerSet = new Set(existingSpeakers.map((e) => e.agentId));
+    const toUpsert = distinct.filter((id) => !existingSpeakerSet.has(id));
+    if (toUpsert.length === 0) {
+      // Idempotent — nothing to do, but still recompute watchers in
+      // case the caller is fixing a stale watcher set.
       await recomputeChatWatchers(tx, chatId);
       return;
     }
 
-    // Direct → group upgrade: 3+ speakers triggers it. We mirror the rule
-    // here (and not via services/chat.ts) so we can write the upgrade and
-    // the inserts in the same tx without a circular import.
-    const isUpgradingToGroup = existing.length + toInsert.length >= 3 && chat.type === "direct";
+    // Direct → group upgrade: 3+ speakers triggers it.
+    const isUpgradingToGroup = existingSpeakers.length + toUpsert.length >= 3 && chat.type === "direct";
     const isAlreadyGroup = chat.type === "group";
     const isGroupAfter = isUpgradingToGroup || isAlreadyGroup;
 
@@ -456,7 +427,7 @@ export async function addMeChatParticipants(
           and(
             inArray(
               agents.uuid,
-              existing.map((e) => e.agentId),
+              existingSpeakers.map((e) => e.agentId),
             ),
             sql`${agents.type} <> 'human'`,
           ),
@@ -464,61 +435,51 @@ export async function addMeChatParticipants(
       const nonHumanIds = nonHumans.map((a) => a.uuid);
       if (nonHumanIds.length > 0) {
         await tx
-          .update(chatParticipants)
+          .update(chatMembership)
           .set({ mode: "mention_only" })
-          .where(and(eq(chatParticipants.chatId, chatId), inArray(chatParticipants.agentId, nonHumanIds)));
+          .where(
+            and(
+              eq(chatMembership.chatId, chatId),
+              inArray(chatMembership.agentId, nonHumanIds),
+              eq(chatMembership.accessMode, "speaker"),
+            ),
+          );
       }
     }
 
-    // State-carry: any toInsert agent that was previously a watcher must
-    // carry its `lastReadAt` / `unreadMentionCount` over. Single DELETE
-    // RETURNING gives us both the watcher cleanup (mutual exclusion with
-    // chat_participants) and the prior read state in one round-trip; we
-    // index by agentId and feed each entry into the participant INSERT.
-    // Without this, `markRead` would silently reset the user's red-dot
-    // counter on a watcher → participant transition (regression flagged
-    // by review #228 issue #1).
-    const carriedRows = await tx
-      .delete(chatSubscriptions)
-      .where(and(eq(chatSubscriptions.chatId, chatId), inArray(chatSubscriptions.agentId, toInsert)))
-      .returning({
-        agentId: chatSubscriptions.agentId,
-        lastReadAt: chatSubscriptions.lastReadAt,
-        unreadMentionCount: chatSubscriptions.unreadMentionCount,
-      });
-    const carriedByAgent = new Map(carriedRows.map((r) => [r.agentId, r] as const));
-
-    // Pick each new participant's mode based on the *post-upgrade* chat
-    // type. If the chat is (or just became) a group, non-human agents go
-    // in as `mention_only` — otherwise they'd respond to every message
-    // and defeat the auto-quieting that direct→group did to the existing
-    // non-humans. Humans always stay `full`.
+    // UPSERT: if a watcher row already exists for any of the to-upsert
+    // agents, upgrade it to speaker. `chat_user_state` is structurally
+    // separate from `chat_membership` so no state-carry is needed —
+    // any read state the agent had as a watcher is preserved untouched.
     const typeByAgent = new Map(found.map((a) => [a.uuid, a.type]));
-    await tx
-      .insert(chatParticipants)
-      .values(
-        toInsert.map((agentId) => {
-          const agentType = typeByAgent.get(agentId);
-          const mode: "full" | "mention_only" = isGroupAfter && agentType !== "human" ? "mention_only" : "full";
-          const carried = carriedByAgent.get(agentId);
-          return {
-            chatId,
-            agentId,
-            role: "member" as const,
+    for (const agentId of toUpsert) {
+      const agentType = typeByAgent.get(agentId);
+      const mode: "full" | "mention_only" = isGroupAfter && agentType !== "human" ? "mention_only" : "full";
+      await tx
+        .insert(chatMembership)
+        .values({
+          chatId,
+          agentId,
+          role: "member" as const,
+          accessMode: "speaker" as const,
+          mode,
+          source: "manual" as const,
+        })
+        .onConflictDoUpdate({
+          target: [chatMembership.chatId, chatMembership.agentId],
+          set: {
+            accessMode: "speaker" as const,
             mode,
-            lastReadAt: carried?.lastReadAt ?? null,
-            unreadMentionCount: carried?.unreadMentionCount ?? 0,
-          };
-        }),
-      )
-      .onConflictDoNothing();
+            source: "manual" as const,
+          },
+        });
+    }
 
     await recomputeChatWatchers(tx, chatId);
   });
 
   // Bust the WS audience cache so the next `chat:message` dispatch
-  // resolves the fresh participant set. Without this, newly added
-  // speakers would miss pushes for up to the cache TTL.
+  // resolves the fresh speaker set.
   invalidateChatAudience(chatId);
 }
 
@@ -528,19 +489,23 @@ export async function addMeChatParticipants(
 
 export async function markMeChatRead(db: Database, chatId: string, humanAgentId: string): Promise<MeChatReadResponse> {
   const now = new Date();
-  // One UPDATE per table; both are idempotent. The "either or both rows
-  // exist" case is fine — the design invariant says exactly one of the two
-  // exists for any (chat, user) pair, but the writes are safe even if a
-  // race ever inserted both.
+  // Single-table UPSERT into chat_user_state. Lazy materialisation —
+  // the row is created on first markRead if it didn't already exist.
   await db
-    .update(chatParticipants)
-    .set({ lastReadAt: now, unreadMentionCount: 0 })
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, humanAgentId)));
-
-  await db
-    .update(chatSubscriptions)
-    .set({ lastReadAt: now, unreadMentionCount: 0 })
-    .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, humanAgentId)));
+    .insert(chatUserState)
+    .values({
+      chatId,
+      agentId: humanAgentId,
+      lastReadAt: now,
+      unreadMentionCount: 0,
+    })
+    .onConflictDoUpdate({
+      target: [chatUserState.chatId, chatUserState.agentId],
+      set: {
+        lastReadAt: now,
+        unreadMentionCount: 0,
+      },
+    });
 
   return { chatId, lastReadAt: now.toISOString(), unreadMentionCount: 0 };
 }
@@ -567,18 +532,15 @@ export async function leaveMeChat(db: Database, chatId: string, humanAgentId: st
 // ---------------------------------------------------------------------------
 
 /**
- * Used by future bell-badge / list-pill counts. Cheap aggregate query so
- * the web client never has to scan the page rows itself.
+ * Used by future bell-badge / list-pill counts. Single-table count
+ * over `chat_user_state` — much cheaper than the legacy UNION because
+ * the partial index `idx_user_state_unread` bounds the scan by the
+ * unread row count alone.
  */
 export async function countUnreadMeChats(db: Database, humanAgentId: string): Promise<number> {
   const rows = await db.execute<{ count: number }>(sql`
-    SELECT count(*)::int AS count FROM (
-      SELECT chat_id FROM chat_participants
-       WHERE agent_id = ${humanAgentId} AND unread_mention_count > 0
-      UNION
-      SELECT chat_id FROM chat_subscriptions
-       WHERE agent_id = ${humanAgentId} AND unread_mention_count > 0
-    ) sub
+    SELECT count(*)::int AS count FROM chat_user_state
+     WHERE agent_id = ${humanAgentId} AND unread_mention_count > 0
   `);
   return rows[0]?.count ?? 0;
 }
