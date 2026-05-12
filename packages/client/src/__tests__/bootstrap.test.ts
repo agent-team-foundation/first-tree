@@ -80,7 +80,7 @@ describe("bootstrapWorkspace", () => {
     expect(content).toContain("FIRST_TREE_HUB_ACCESS_TOKEN");
     expect(content).toContain("How You Communicate");
     expect(content).toContain("Agent Hub");
-    expect(content).toContain("[From: sender-id]");
+    expect(content).toContain("[From: <agent-name>]");
     expect(content).toContain("Use your judgment about when to respond");
   });
 
