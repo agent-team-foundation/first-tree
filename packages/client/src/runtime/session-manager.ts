@@ -432,7 +432,39 @@ export class SessionManager {
       this.persistRegistry();
       this.notifySessionState(chatId, "active");
     } catch (err) {
-      this.config.log.error({ chatId, err, phase: evicted ? "resume" : "start" }, "session start/resume failed");
+      // Pre-fix this catch only logged and torn local state down. The
+      // server's `agent_chat_sessions.state` stayed `active`, no chat
+      // message was emitted, and the agent looked silently failed to
+      // every observer. F2 (chat-participant-mode-fix-design.md §3.3)
+      // signals the failure three ways: structured log (existing),
+      // `session:state=errored` to the server (so admin/UI see it), and
+      // a single user-visible chat message via the result-sink (so the
+      // requester knows the agent didn't drop their message on purpose).
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const phase: "start" | "resume" = evicted ? "resume" : "start";
+      this.config.log.error({ chatId, err, phase }, "session start/resume failed");
+
+      // 1) Server-side state. notifySessionState dedupes against the last
+      //    reported value, so even if we somehow already reported "active"
+      //    for this chat, this `errored` transition will go through.
+      this.notifySessionState(chatId, "errored");
+
+      // 2) User-visible chat message. Truncate to 800 chars so we don't
+      //    leak full stderr (which may include FS paths or git internals)
+      //    into the chat timeline; the full error is in the structured log.
+      try {
+        const preview = errMsg.slice(0, 800);
+        const agentLabel = this.config.agentIdentity.displayName ?? this.config.agentIdentity.agentId;
+        const userMsg = `⚠️ Session ${phase} failed (${agentLabel}): ${preview}`;
+        await ctx.forwardResult(userMsg);
+      } catch (forwardErr) {
+        this.config.log.warn({ chatId, forwardErr }, "session error forward failed");
+      }
+
+      // 3) Existing local cleanup. Forward first, tear down second —
+      //    keeps the order obviously safe regardless of future cleanup-
+      //    block refactors. The follow-up message routes as a fresh
+      //    start once the entry is gone.
       this.sessions.delete(chatId);
       this.sessionRuntimeStates.delete(chatId);
       this.recomputeRuntimeState();
@@ -477,8 +509,29 @@ export class SessionManager {
       this.persistRegistry();
       this.notifySessionState(entry.chatId, "active");
     } catch (err) {
-      this.config.log.warn({ chatId: entry.chatId, err }, "resume failed");
-      entry.status = "suspended";
+      // Mirror `startNewSession`'s F2 contract (design §3.3): a resume that
+      // throws is not the same shape as a suspend (the entry is unusable,
+      // not just idle), so leaving `status = "suspended"` would lie to the
+      // server and let the broken entry persist locally. Notify `errored`,
+      // forward a chat-visible error, then drop the entry so the next
+      // inbound message routes through `startNewSession` for a clean restart.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.config.log.error({ chatId: entry.chatId, err }, "resume failed");
+
+      this.notifySessionState(entry.chatId, "errored");
+
+      try {
+        const preview = errMsg.slice(0, 800);
+        const agentLabel = this.config.agentIdentity.displayName ?? this.config.agentIdentity.agentId;
+        const userMsg = `⚠️ Session resume failed (${agentLabel}): ${preview}`;
+        await ctx.forwardResult(userMsg);
+      } catch (forwardErr) {
+        this.config.log.warn({ chatId: entry.chatId, forwardErr }, "session error forward failed");
+      }
+
+      this.sessions.delete(entry.chatId);
+      this.sessionRuntimeStates.delete(entry.chatId);
+      this.recomputeRuntimeState();
       this._activeCount--;
     }
   }

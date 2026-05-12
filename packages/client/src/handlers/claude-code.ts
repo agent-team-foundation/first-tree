@@ -37,7 +37,7 @@ import type {
 } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
-import { acquireWorkspace } from "../runtime/workspace.js";
+import { acquireWorkspace, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { clearPendingForAgent, registerPendingQuestion, rejectPendingForAgent } from "./ask-user-bridge.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
@@ -839,16 +839,23 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // D10: fresh fetch on every new dialog. Failure aborts session creation.
       await gitMirrorManager.fetchMirror(repo.url);
 
+      // Group-chat agents share a `chatId`, so the branch name must fold in
+      // the agent dimension or peers collide on `git worktree add`. Prefer
+      // the operator-stable `agentName` (factory-closure value); fall back
+      // to the agent UUID, which is globally unique. See
+      // docs/workspace-session-branch-collision-fix-design.md §3.2.
+      const branchAgentKey = agentName ?? sessionCtx.agent.agentId;
+
       // If a prior session left a worktree behind at the same path, reuse it
       // rather than fighting the `git worktree add` lock. The matching session
-      // branch is re-derived deterministically from (chatId, url) so cleanup
-      // later can still drop it.
+      // branch is re-derived deterministically from (chatId, agentName, url)
+      // so cleanup later can still drop it.
       if (existsSync(targetPath) && isHubWorktreeMarker(targetPath)) {
         sessionCtx.log(`Git: reusing existing worktree at ${localPath}`);
         ownedWorktrees.push({
           url: repo.url,
           path: targetPath,
-          branchName: deriveSessionBranchName(sessionCtx.chatId, repo.url),
+          branchName: deriveSessionBranchName(sessionCtx.chatId, branchAgentKey, repo.url),
         });
         continue;
       }
@@ -858,6 +865,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         ref: repo.ref,
         targetPath,
         sessionKey: sessionCtx.chatId,
+        agentName: branchAgentKey,
       });
       ownedWorktrees.push({ url: repo.url, path: targetPath, branchName });
       sessionCtx.log(`Git: worktree at ${localPath} @ ${headCommit.slice(0, 7)} on ${branchName}`);
@@ -921,6 +929,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       await prepareGitWorktrees(cwd, payload, sessionCtx);
 
+      // Stage-2 sentinel: only written after all setup succeeded. A future
+      // `acquireWorkspace` that sees the boundary marker but not this file
+      // treats the directory as half-baked and wipes it. See workspace.ts.
+      markWorkspaceInitComplete(cwd);
+
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
       );
@@ -938,8 +951,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       retryCount = 0;
       cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
 
-      // Bootstrap on resume only if .agent/ is missing
-      if (!existsSync(join(cwd, ".agent", "identity.json"))) {
+      // Bootstrap on resume only if the stage-2 sentinel is missing. Pre-F3
+      // this check looked at `.agent/identity.json`; now `.agent/init-complete`
+      // is the authoritative "stage 2 finished" signal, written by
+      // `markWorkspaceInitComplete` after worktrees materialise.
+      if (!existsSync(join(cwd, INIT_COMPLETE_SENTINEL_REL))) {
         runBootstrap(cwd, sessionCtx);
       }
 
@@ -948,6 +964,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // worktree is reused if still present (handled inside prepareGitWorktrees).
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       await prepareGitWorktrees(cwd, payload, sessionCtx);
+
+      // Ensure the sentinel is present after resume too. Idempotent — only
+      // matters when the bootstrap branch above ran (e.g. resume of a
+      // half-baked workspace that `acquireWorkspace` just wiped).
+      markWorkspaceInitComplete(cwd);
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId);

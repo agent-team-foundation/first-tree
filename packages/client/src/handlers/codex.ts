@@ -10,7 +10,7 @@ import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER, installFirstTreeIntegration } from "../runtime/bootstrap.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
-import { acquireWorkspace } from "../runtime/workspace.js";
+import { acquireWorkspace, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -159,9 +159,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
   async function prepareGitWorktrees(
     payload: AgentRuntimeConfigPayload,
     workspaceCwd: string,
-    chatId: string,
+    sessionCtx: SessionContext,
   ): Promise<void> {
     if (!gitMirrorManager) return;
+    // See claude-code's `prepareGitWorktrees`: fold the agent dimension into
+    // the branch hash so group-chat peers don't collide on `git worktree add`.
+    const branchAgentKey = agentName ?? sessionCtx.agent.agentId;
     for (const repo of payload.gitRepos) {
       const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
       if (!localPath) continue;
@@ -174,7 +177,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
           url: repo.url,
           ref: repo.ref,
           targetPath,
-          sessionKey: chatId,
+          sessionKey: sessionCtx.chatId,
+          agentName: branchAgentKey,
         });
         ownedWorktrees.push({ url: repo.url, path: targetPath, branchName: result.branchName });
       } catch (err) {
@@ -476,7 +480,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
       });
       ensureFirstTreeBinding(cwd, sessionCtx);
 
-      await prepareGitWorktrees(payload, cwd, sessionCtx.chatId);
+      await prepareGitWorktrees(payload, cwd, sessionCtx);
+
+      // Stage-2 sentinel — see workspace.ts. Only written after all setup
+      // succeeded so a future `acquireWorkspace` can detect and wipe
+      // half-baked directories from a previous failed start.
+      markWorkspaceInitComplete(cwd);
 
       codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
@@ -515,11 +524,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
       }
 
       // Mirror claude-code's resume fast-path: skip workspace bootstrap and
-      // the `first-tree tree integrate` shell-out when `.agent/identity.json`
-      // already exists. Idempotent doesn't mean free — integrate forks the
-      // CLI (or falls back to `npx -y first-tree@latest`) every time, which
-      // is unnecessary latency once the workspace is already populated.
-      if (!existsSync(join(cwd, ".agent", "identity.json"))) {
+      // the `first-tree tree integrate` shell-out when the stage-2 sentinel
+      // is present. Pre-F3 we keyed on `.agent/identity.json`; now the
+      // explicit `.agent/init-complete` is the authoritative "stage 2
+      // succeeded" signal, written by `markWorkspaceInitComplete` after
+      // worktrees materialise.
+      if (!existsSync(join(cwd, INIT_COMPLETE_SENTINEL_REL))) {
         bootstrapWorkspace({
           workspacePath: cwd,
           identity: sessionCtx.agent,
@@ -531,7 +541,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
         ensureFirstTreeBinding(cwd, sessionCtx);
       }
 
-      await prepareGitWorktrees(payload, cwd, sessionCtx.chatId);
+      await prepareGitWorktrees(payload, cwd, sessionCtx);
+
+      // Stage-2 sentinel. Idempotent on a healthy resume; only matters when
+      // the bootstrap branch above ran (e.g. resume of a half-baked
+      // workspace that `acquireWorkspace` just wiped).
+      markWorkspaceInitComplete(cwd);
 
       codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —

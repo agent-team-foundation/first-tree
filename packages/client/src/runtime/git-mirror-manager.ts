@@ -53,6 +53,12 @@ export interface GitMirrorManager {
     ref?: string;
     targetPath: string;
     sessionKey: string;
+    /**
+     * Identifier for the agent owning this worktree. Required so the derived
+     * branch name does not collide with peer agents in the same chat — see
+     * `deriveSessionBranchName` docblock.
+     */
+    agentName: string;
   }): Promise<{ worktreePath: string; headCommit: string; branchName: string }>;
   removeWorktree(args: { url: string; path: string; branchName: string }): Promise<void>;
   gcMirrors(stillReferencedUrls: Set<string>): Promise<{ removed: string[] }>;
@@ -141,8 +147,26 @@ function shortHash(input: string): string {
   return createHash("sha256").update(input).digest("hex").slice(0, 8);
 }
 
-export function deriveSessionBranchName(sessionKey: string, url: string): string {
-  return `${SESSION_BRANCH_PREFIX}-${shortHash(sessionKey)}-${shortHash(url)}`;
+/**
+ * Branch name a session's worktree attaches to. The hash inputs include the
+ * agent dimension because `(chat, url)` alone is not unique: two agents that
+ * share a chat each open their own worktree at
+ * `<workspaces>/<agent>/<chatId>/...`, and git refuses to point two worktrees
+ * at the same branch (`fatal: '<branch>' is already used by worktree at …`).
+ * Hash inputs are joined with `:` so `(chatA, agentB)` cannot collide with
+ * `(chatAB, "")`.
+ *
+ * The caller picks `agentName`. Prefer the operator-stable name
+ * (`config.yaml::agents.<name>`); fall back to `agent.agentId` (a UUID,
+ * globally unique) when the stable name isn't available. Anything stable
+ * across `start` and `resume` for the same `(agent, chat)` pair will do —
+ * the contract is "no collision with a peer agent in the same chat", not
+ * "human-readable in the branch name".
+ *
+ * See docs/workspace-session-branch-collision-fix-design.md §3.2.
+ */
+export function deriveSessionBranchName(sessionKey: string, agentName: string, url: string): string {
+  return `${SESSION_BRANCH_PREFIX}-${shortHash(`${sessionKey}:${agentName}`)}-${shortHash(url)}`;
 }
 
 /**
@@ -518,14 +542,14 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
       });
     },
 
-    createWorktree({ url, ref, targetPath, sessionKey }) {
+    createWorktree({ url, ref, targetPath, sessionKey, agentName }) {
       return withUrlLock(url, async () => {
         const mirror = mirrorDir(url);
         if (!existsSync(join(mirror, "HEAD"))) {
           throw new GitMirrorError(`Cannot create worktree — no mirror exists for "${url}"`);
         }
         const absTarget = resolve(targetPath);
-        const branchName = deriveSessionBranchName(sessionKey, url);
+        const branchName = deriveSessionBranchName(sessionKey, agentName, url);
 
         // D13: target path must be free OR a Hub-managed worktree we can reuse.
         if (existsSync(absTarget) && !isHubManagedWorktree(absTarget)) {
