@@ -28,6 +28,13 @@ export type MentionCandidate = {
   agentId: string;
   name: string | null;
   displayName: string | null;
+  /** True iff the caller's member is this agent's `managerId`. Drives
+   *  participant-picker grouping (mine first, then teammates') and the
+   *  empty-query branch of mention autocomplete so the user's own agents
+   *  always surface first. Populated from `/activity` (server-derived);
+   *  callers that can't determine it should pass `false` rather than
+   *  omitting — there's no "unknown" state. */
+  managedByMe: boolean;
 };
 
 /**
@@ -139,15 +146,57 @@ export function detectMentionTrigger(text: string, cursor: number): ActiveTrigge
   return { triggerIndex: i, query };
 }
 
+/** Alphabetical comparator over a candidate's user-visible label. */
+function byDisplayName(a: MentionCandidate, b: MentionCandidate): number {
+  return (a.displayName ?? a.name ?? "").localeCompare(b.displayName ?? b.name ?? "");
+}
+
+/**
+ * Marker emitted by {@link groupAndSortCandidates} between the
+ * my-managed group and the others group. Renderers should detect it
+ * via `"divider" in item` and emit a separator instead of a list row.
+ */
+export type CandidateDivider = { divider: true };
+
+/**
+ * Group candidates into "mine first, others second" with each group
+ * sorted alphabetically by display name, and insert a divider marker
+ * between groups iff both are non-empty.
+ *
+ * Used by participant pickers (`[+]` dropdown in new-chat draft and in
+ * existing chats' ParticipantsHeader) so the user can scan their own
+ * agents at the top without reading any header text — the gap speaks
+ * for itself. Both pickers share this helper so the visual contract
+ * stays identical across the app.
+ */
+export function groupAndSortCandidates(candidates: MentionCandidate[]): Array<MentionCandidate | CandidateDivider> {
+  const mine = candidates.filter((c) => c.managedByMe).sort(byDisplayName);
+  const others = candidates.filter((c) => !c.managedByMe).sort(byDisplayName);
+  if (mine.length > 0 && others.length > 0) {
+    return [...mine, { divider: true }, ...others];
+  }
+  return [...mine, ...others];
+}
+
 /**
  * Rank candidates against a lowercased query. Empty query returns every
- * candidate sorted by display name so the popover still shows useful
- * suggestions immediately after typing `@`.
+ * candidate sorted my-managed-first, then alphabetically within each
+ * group, so the popover surfaces the caller's own agents immediately
+ * after typing `@`. With a query, matches are scored by match position
+ * (name prefix > displayName prefix > displayName contains) and ties
+ * are still broken alphabetically — managedByMe is intentionally NOT a
+ * scoring signal once the user has typed something, because at that
+ * point they're targeting a specific name and we shouldn't reorder
+ * matches under them.
  */
-function rankCandidates(candidates: MentionCandidate[], query: string): MentionCandidate[] {
+export function rankCandidates(candidates: MentionCandidate[], query: string): MentionCandidate[] {
   if (!query) {
-    return [...candidates]
-      .sort((a, b) => (a.displayName ?? a.name ?? "").localeCompare(b.displayName ?? b.name ?? ""))
+    // Reuse the picker's grouping logic, strip the divider marker, and
+    // cap at 8. Keeping the empty-query path in lockstep with the
+    // picker means changing one (mine-first, alpha) tomorrow won't
+    // silently leave the other behind.
+    return groupAndSortCandidates(candidates)
+      .filter((item): item is MentionCandidate => !("divider" in item))
       .slice(0, 8);
   }
   const scored: Array<{ c: MentionCandidate; score: number }> = [];

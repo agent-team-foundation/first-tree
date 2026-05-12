@@ -8,12 +8,14 @@ import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
   ambiguousDisplayNames,
+  groupAndSortCandidates,
   MentionAutocompletePopover,
   type MentionCandidate,
   MentionLabel,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
+import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
 
 /**
@@ -56,6 +58,11 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   const seededDefaultRef = useRef(false);
   const pickerContainerRef = useRef<HTMLDivElement>(null);
 
+  // Auto-grow the textarea up to the CSS `max-height` cap (10.5rem ≈ 8
+  // visible lines). Re-measure on every keystroke so paste and delete
+  // both adjust instantly; past the cap content scrolls inside.
+  useAutoResizeTextarea(textareaRef, draft);
+
   const { data: activity } = useQuery({
     queryKey: ["activity"],
     queryFn: getActivityOverview,
@@ -69,7 +76,12 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
       if (myAgentId && row.agentId === myAgentId) continue;
       const ident = agentIdentity(row.agentId);
       if (!ident || !ident.name) continue;
-      out.push({ agentId: row.agentId, name: ident.name, displayName: ident.displayName });
+      out.push({
+        agentId: row.agentId,
+        name: ident.name,
+        displayName: ident.displayName,
+        managedByMe: row.managedByMe,
+      });
     }
     return out;
   }, [activity, agentIdentity, myAgentId]);
@@ -263,6 +275,12 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                   padding: "var(--sp-2) var(--sp-3)",
                   background: "transparent",
                   border: "none",
+                  // `rows={1}` sets the initial height; useAutoResizeTextarea
+                  // expands it on each keystroke. Cap at 10.5rem (~8 visible
+                  // lines) so long pastes scroll inside the textarea instead
+                  // of pushing the send button off-screen.
+                  maxHeight: "10.5rem",
+                  overflowY: "auto",
                   resize: "none",
                   color: "var(--fg)",
                 }}
@@ -432,26 +450,51 @@ function ParticipantChips({
           >
             {(() => {
               const ambiguous = ambiguousDisplayNames(chipCandidates);
-              return chipCandidates.map((c) => (
-                <button
-                  key={c.agentId}
-                  type="button"
-                  role="option"
-                  aria-selected="false"
-                  title={c.name ? `@${c.name}` : undefined}
-                  onClick={() => onAdd(c.agentId)}
-                  className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                  style={{
-                    background: "transparent",
-                    color: "var(--fg)",
-                    border: "none",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  <MentionLabel candidate={c} ambiguous={ambiguous} />
-                </button>
-              ));
+              // My-managed agents first, then teammates', alphabetical
+              // within each group, divider between the two groups (only
+              // when both are non-empty). The thin --border-faint
+              // hairline is intentional: visible enough to read as
+              // grouping, quiet enough to not compete for attention.
+              return groupAndSortCandidates(chipCandidates).map((item) => {
+                if ("divider" in item) {
+                  return (
+                    <div
+                      key="__divider"
+                      // `role="presentation"` strips this from the a11y
+                      // tree: listbox semantics expect children to be
+                      // `option`s, and an announced separator inflates
+                      // the "N of M" count in some screen readers. The
+                      // grouping is purely a visual cue.
+                      role="presentation"
+                      style={{
+                        height: "var(--hairline)",
+                        background: "var(--border-faint)",
+                        margin: "var(--sp-0_5) var(--sp-3)",
+                      }}
+                    />
+                  );
+                }
+                return (
+                  <button
+                    key={item.agentId}
+                    type="button"
+                    role="option"
+                    aria-selected="false"
+                    title={item.name ? `@${item.name}` : undefined}
+                    onClick={() => onAdd(item.agentId)}
+                    className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                    style={{
+                      background: "transparent",
+                      color: "var(--fg)",
+                      border: "none",
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <MentionLabel candidate={item} ambiguous={ambiguous} />
+                  </button>
+                );
+              });
             })()}
           </div>
         )}
@@ -461,15 +504,36 @@ function ParticipantChips({
 }
 
 /** Pick a default seed chip when the user opens an empty draft.
- *  Most-recently-active agent first, then any `personal_assistant`,
- *  then whatever sorts first in the candidate list. */
+ *
+ *  Scope: agents the caller **personally manages** — never another
+ *  member's agent (even if it's org-visible). Defaulting a new chat to
+ *  a coworker's agent is a footgun: the user might fire off a message
+ *  thinking it's their own assistant. When the caller manages no
+ *  agents, return `null` and let the user pick — better an empty chip
+ *  row than a wrong default.
+ *
+ *  Within the my-managed subset:
+ *    1. Most-recently-active (by `runtimeUpdatedAt`) — runtime presence
+ *       signal, not a true "last conversation" timestamp, but the only
+ *       MRU signal currently exposed by `/activity`.
+ *    2. Any `personal_assistant` — covers the case where my agents have
+ *       no runtime activity yet (fresh-install / cold-start).
+ *    3. First my-managed agent in the candidates list — final fallback
+ *       so we always seed something if I do manage at least one. */
 function pickDefault(candidates: MentionCandidate[], activity: RuntimeAgent[]): string | null {
   const ids = new Set(candidates.map((c) => c.agentId));
-  const mru = [...activity]
-    .filter((a) => ids.has(a.agentId) && a.runtimeUpdatedAt)
+  const mine = activity.filter((a) => ids.has(a.agentId) && a.managedByMe);
+  if (mine.length === 0) return null;
+
+  const mru = [...mine]
+    .filter((a) => a.runtimeUpdatedAt)
     .sort((a, b) => (b.runtimeUpdatedAt ?? "").localeCompare(a.runtimeUpdatedAt ?? ""))[0];
   if (mru) return mru.agentId;
-  const pa = activity.find((a) => ids.has(a.agentId) && a.type === "personal_assistant");
+
+  const pa = mine.find((a) => a.type === "personal_assistant");
   if (pa) return pa.agentId;
-  return candidates[0]?.agentId ?? null;
+
+  // Any my-managed agent — `mine` is already candidates ∩ managedByMe,
+  // so the first row is a valid seed without another candidates scan.
+  return mine[0]?.agentId ?? null;
 }
