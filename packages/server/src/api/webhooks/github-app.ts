@@ -234,11 +234,15 @@ async function handleInstallationEvent(app: FastifyInstance, payload: unknown, r
       return reply.status(200).send({ ok: true, event: "installation", action: "deleted" });
     }
     case "suspend": {
-      await markInstallationSuspended(app.db, parsed.installation.id);
+      // GitHub stamps `installation.suspended_at` on the suspend event;
+      // fall back to receive-time only if the field is somehow absent.
+      const suspendedAt = parsed.installation.suspendedAt ? new Date(parsed.installation.suspendedAt) : new Date();
+      await markInstallationSuspended(app.db, parsed.installation.id, suspendedAt);
       return reply.status(200).send({ ok: true, event: "installation", action: "suspend" });
     }
     case "unsuspend": {
-      await markInstallationUnsuspended(app.db, parsed.installation.id);
+      // The unsuspend payload carries no event timestamp — use receive time.
+      await markInstallationUnsuspended(app.db, parsed.installation.id, new Date());
       return reply.status(200).send({ ok: true, event: "installation", action: "unsuspend" });
     }
     default: {
