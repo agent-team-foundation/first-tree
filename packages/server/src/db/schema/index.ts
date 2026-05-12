@@ -9,6 +9,7 @@ export { agents } from "./agents.js";
 export { authIdentities } from "./auth-identities.js";
 export { chatParticipants, chatSubscriptions, chats } from "./chats.js";
 export { clients } from "./clients.js";
+export { githubAppInstallations } from "./github-app-installations.js";
 export { githubEntityChatMappings } from "./github-entity-chat-mappings.js";
 export { inboxEntries } from "./inbox-entries.js";
 export { invitationRedemptions, invitations } from "./invitations.js";
