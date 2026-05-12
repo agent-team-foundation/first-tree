@@ -157,18 +157,15 @@ describe("GitHub App webhook (/api/v1/webhooks/github)", () => {
       expect(row?.permissions).toMatchObject({ contents: "write" });
     });
 
-    it("installation:deleted removes the row (when it's past the create-grace window)", async () => {
+    it("installation:deleted removes the row even if created seconds ago", async () => {
+      // Was previously two tests: one for "past the 1-min grace" and one
+      // asserting a freshly-created row survives. Both reverted after a
+      // post-Phase-C codex challenge: install-then-immediate-uninstall must
+      // be honored — otherwise GitHub gets a 200 no-op, never redelivers,
+      // and the Hub row becomes a permanent orphan.
       const app = getApp();
       const { orgId } = await makeOrgWithInstallation(9_910_002);
       expect(orgId).toBeTruthy();
-      // `installation: deleted` only deletes rows older than the 1-minute
-      // grace window (codex P1-7 — guards a delayed `deleted` from wiping a
-      // just-created re-install row). Backdate so this exercises the
-      // delete path.
-      await app.db
-        .update(githubAppInstallations)
-        .set({ createdAt: new Date(Date.now() - 5 * 60_000) })
-        .where(eq(githubAppInstallations.installationId, 9_910_002));
       const body = JSON.stringify(buildInstallationPayload("deleted", { id: 9_910_002 }));
       const res = await app.inject({
         method: "POST",
@@ -182,29 +179,7 @@ describe("GitHub App webhook (/api/v1/webhooks/github)", () => {
         payload: body,
       });
       expect(res.statusCode).toBe(200);
-      const row = await findInstallationByGithubId(app.db, 9_910_002);
-      expect(row).toBeNull();
-    });
-
-    it("installation:deleted does NOT remove a row created within the grace window (codex P1-7)", async () => {
-      const app = getApp();
-      const installationId = 9_910_009;
-      await makeOrgWithInstallation(installationId); // createdAt ≈ now
-      const body = JSON.stringify(buildInstallationPayload("deleted", { id: installationId }));
-      const res = await app.inject({
-        method: "POST",
-        url: PATH,
-        headers: {
-          "content-type": "application/json",
-          "x-github-event": "installation",
-          "x-github-delivery": uuidv7(),
-          "x-hub-signature-256": signBody(body),
-        },
-        payload: body,
-      });
-      expect(res.statusCode).toBe(200);
-      // Row survives — a stale `deleted` mustn't wipe a fresh re-install.
-      expect(await findInstallationByGithubId(app.db, installationId)).not.toBeNull();
+      expect(await findInstallationByGithubId(app.db, 9_910_002)).toBeNull();
     });
 
     it("installation:suspend sets suspended_at; installation:unsuspend clears it", async () => {

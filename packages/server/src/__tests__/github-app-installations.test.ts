@@ -223,15 +223,10 @@ describe("services/github-app-installations", () => {
   });
 
   describe("deleteInstallationByGithubId", () => {
-    it("deletes a row older than the grace window and is idempotent on a missing installation", async () => {
+    it("deletes the row outright and is idempotent on a missing installation", async () => {
       const app = getApp();
       const installation = { ...baseInstallation, id: 1_003_001 };
       await upsertInstallationFromMetadata(app.db, { installation });
-      // Backdate past the 1-minute grace window so `deleted` is honored.
-      await app.db
-        .update(githubAppInstallations)
-        .set({ createdAt: new Date(Date.now() - 5 * 60_000) })
-        .where(eq(githubAppInstallations.installationId, installation.id));
 
       await deleteInstallationByGithubId(app.db, installation.id);
       expect(await findInstallationByGithubId(app.db, installation.id)).toBeNull();
@@ -239,13 +234,20 @@ describe("services/github-app-installations", () => {
       await deleteInstallationByGithubId(app.db, installation.id);
     });
 
-    it("does NOT delete a freshly-created row — guards against an out-of-order `deleted` after re-install (codex P1-7)", async () => {
+    it("deletes a freshly-created row — install-then-immediate-uninstall must be honored", async () => {
+      // Was previously a "do NOT delete within grace window" test (codex P1-7).
+      // Reverted after a post-Phase-C codex challenge: a real install +
+      // immediate uninstall (within 60s) was being permanently swallowed —
+      // GitHub got a 200 no-op delete, never redelivered, and the row stayed
+      // bound forever even though the App was gone upstream. The grace was
+      // guarding a non-issue (GitHub mints a fresh installation.id per
+      // install, so a stale `deleted` for id N can't wipe a fresh re-install
+      // with id M ≠ N).
       const app = getApp();
       const installation = { ...baseInstallation, id: 1_003_002 };
       await upsertInstallationFromMetadata(app.db, { installation }); // createdAt ≈ now
       await deleteInstallationByGithubId(app.db, installation.id);
-      // Still there — the row is younger than the grace window.
-      expect(await findInstallationByGithubId(app.db, installation.id)).not.toBeNull();
+      expect(await findInstallationByGithubId(app.db, installation.id)).toBeNull();
     });
   });
 

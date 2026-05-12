@@ -271,35 +271,34 @@ export async function markInstallationUnsuspended(
     );
 }
 
-/** Rows younger than this are treated as "just created" and not deleted by a stray `installation: deleted`. */
-const DELETE_GRACE_MS = 60_000;
-
 /**
  * Webhook handler for `installation: deleted`. Removes the row outright —
  * the user uninstalled the App from their account; the row has no value.
  *
- * Out-of-order safety (codex P1-7): the `deleted` payload has no
- * timestamp, so if a delayed `deleted` arrives after the account was
- * re-installed (a fresh row with a fresh binding), deleting blindly would
- * wipe the new state. Conservative heuristic: only delete rows older than
- * a 1-minute grace window — a re-install row created seconds ago is left
- * untouched. (A `deleted` that's genuinely lagging by >1min for a
- * re-installed account is vanishingly unlikely, and even then the next
- * `installation: created` re-creates the row.)
+ * The earlier 60-s `createdAt`-based grace window (added in C.12 codex P1-7
+ * to guard against delayed `deleted` events clobbering fresh re-installs)
+ * was reverted after a post-Phase-C codex challenge flagged a worse bug:
+ * a real install + immediate uninstall (within 60 s) became permanent —
+ * the handler returned a 200 no-op so GitHub never redelivered, and the
+ * Hub-side row lived forever even though the App was gone upstream.
  *
- * Note: deleting the org on the Hub side is the inverse case — that's
- * handled by the `ON DELETE SET NULL` FK on `hub_organization_id`, which
- * keeps the installation row alive so a future rebind can recover.
+ * The original race the grace was meant to solve doesn't actually exist:
+ * GitHub mints a fresh `installation.id` per install, so a delayed
+ * `deleted` for id N cannot wipe a fresh re-install (which has id M ≠ N).
+ * Same-id replays are handled by the `processed_events` dedup table.
+ *
+ * The remaining "stale `created` after `deleted` resurrects the row" risk
+ * is a pre-existing hole in `upsertInstallationFromMetadata` (not
+ * introduced by Phase C). Tracked as a Phase D follow-up — the upsert
+ * path needs a `last_lifecycle_event_at` column or tombstone to be
+ * order-safe.
+ *
+ * Note: deleting the org on the Hub side is the inverse case — handled
+ * by the `ON DELETE SET NULL` FK on `hub_organization_id`, which keeps
+ * the installation row alive so a future rebind can recover.
  */
 export async function deleteInstallationByGithubId(db: Database, installationId: number): Promise<void> {
-  await db
-    .delete(githubAppInstallations)
-    .where(
-      and(
-        eq(githubAppInstallations.installationId, installationId),
-        lt(githubAppInstallations.createdAt, new Date(Date.now() - DELETE_GRACE_MS)),
-      ),
-    );
+  await db.delete(githubAppInstallations).where(eq(githubAppInstallations.installationId, installationId));
 }
 
 /**
