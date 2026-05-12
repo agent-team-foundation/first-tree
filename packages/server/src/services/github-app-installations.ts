@@ -111,7 +111,7 @@ export async function upsertInstallationFromMetadata(
 
 /**
  * Bind an installation to a Hub team. Idempotent: re-binding to the same
- * org is a no-op (returns `false`).
+ * org is a no-op at the row level.
  *
  * Race-safe (codex P0-3): the previous SELECT-then-UPDATE implementation
  * had a TOCTOU window — two concurrent callbacks for the same unbound
@@ -140,7 +140,11 @@ export async function upsertInstallationFromMetadata(
  *     different Hub team (D2 1:1), or (b) the target Hub team is
  *     already bound to a different installation.
  *
- * Returns true on first bind, false on idempotent re-bind to the same org.
+ * Returns `true` on any successful UPDATE — fresh bind and idempotent
+ * re-bind both succeed identically and we don't pay the extra SELECT to
+ * tell them apart. The boolean exists for forward-compat with callers
+ * that may want to surface a "freshly bound" log line; today both paths
+ * leave the row in the same state, so the value is advisory.
  */
 export async function bindInstallationToOrg(
   db: Database,
