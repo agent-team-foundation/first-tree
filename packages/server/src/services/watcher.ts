@@ -270,10 +270,18 @@ export async function leaveAsParticipant(db: Database, chatId: string, humanAgen
       return { chatId, membershipKind: null };
     }
 
-    // Downgrade speaker → watcher. chat_user_state untouched.
+    // Downgrade speaker → watcher. chat_user_state is untouched (read
+    // state survives the access_mode flip per §11.4). `mode` and
+    // `source` are intentionally preserved so a later re-promotion via
+    // `joinAsParticipant` keeps the agent's original mode (e.g.
+    // `mention_only` instead of being silently reset to `full`). Even
+    // though `addChatParticipants` re-derives `mode` on the promotion
+    // UPSERT path today, leaving the original values in place is the
+    // safer invariant — it means the watcher row is a faithful
+    // snapshot of the speaker row minus the access_mode flip.
     await tx
       .update(chatMembership)
-      .set({ accessMode: "watcher", mode: "full", source: "auto_manager" })
+      .set({ accessMode: "watcher" })
       .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)));
     return { chatId, membershipKind: "watching" };
   });

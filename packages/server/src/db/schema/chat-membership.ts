@@ -34,6 +34,6 @@ export const chatMembership = pgTable(
   (table) => [
     primaryKey({ columns: [table.chatId, table.agentId] }),
     index("idx_membership_agent").on(table.agentId),
-    index("idx_membership_chat_access").on(table.chatId, table.accessMode),
+    index("idx_membership_chat_role").on(table.chatId, table.accessMode),
   ],
 );

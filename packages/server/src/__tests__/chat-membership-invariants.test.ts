@@ -22,6 +22,7 @@ import { chatUserState } from "../db/schema/chat-user-state.js";
 import { createAgent } from "../services/agent.js";
 import { createMeChat, joinMeChat, leaveMeChat, markMeChatRead } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
+import { addChatParticipants } from "../services/participant-mode.js";
 import { recomputeChatWatchers } from "../services/watcher.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
@@ -144,6 +145,66 @@ describe("chat membership invariants", () => {
     expect(stateAfter?.lastReadAt?.getTime()).toBe(stateBefore?.lastReadAt?.getTime());
   });
 
+  it("detach → re-add round-trip revives chat_user_state (read state survives the full cycle)", async () => {
+    // §11.4 says read state is "remembered if the user is ever re-added".
+    // The preserve-on-detach test above only covers the first half. This
+    // test pins the full round-trip: speaker → DELETE chat_membership →
+    // re-INSERT chat_membership → chat_user_state row still carries the
+    // pre-detach last_read_at / unread_mention_count.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "peer-revive" });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    // Seed an unread mention so chat_user_state has a non-trivial payload
+    // to survive the round-trip. Direct seed avoids the mention-pipeline
+    // dependency on `agents.name` (createTestAdmin doesn't expose it).
+    await app.db.execute(sql`
+      INSERT INTO chat_user_state (chat_id, agent_id, last_read_at, unread_mention_count)
+      VALUES (${chatId}, ${admin.humanAgentUuid}, now() - interval '1 hour', 3)
+      ON CONFLICT (chat_id, agent_id) DO UPDATE
+        SET last_read_at = EXCLUDED.last_read_at,
+            unread_mention_count = EXCLUDED.unread_mention_count
+    `);
+    const [pre] = await app.db
+      .select({ lastReadAt: chatUserState.lastReadAt, unread: chatUserState.unreadMentionCount })
+      .from(chatUserState)
+      .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, admin.humanAgentUuid)));
+    expect(pre?.unread).toBe(3);
+
+    // Full detach (admin manages nobody in this chat).
+    const leaveResult = await leaveMeChat(app.db, chatId, admin.humanAgentUuid);
+    expect(leaveResult.membershipKind).toBeNull();
+    const [membershipAfterLeave] = await app.db
+      .select({ chatId: chatMembership.chatId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, admin.humanAgentUuid)));
+    expect(membershipAfterLeave).toBeUndefined();
+
+    // Re-add admin as a speaker via the canonical entry point. addChatParticipants
+    // UPSERTs chat_membership but does NOT touch chat_user_state — the read
+    // state is structurally separate (§8 design intent).
+    await addChatParticipants(app.db, chatId, [{ agentId: admin.humanAgentUuid, role: "member" }]);
+
+    // chat_membership is back as speaker …
+    const [membershipAfterRejoin] = await app.db
+      .select({ accessMode: chatMembership.accessMode })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, admin.humanAgentUuid)));
+    expect(membershipAfterRejoin?.accessMode).toBe("speaker");
+
+    // … and the read state is byte-for-byte identical to pre-detach.
+    const [post] = await app.db
+      .select({ lastReadAt: chatUserState.lastReadAt, unread: chatUserState.unreadMentionCount })
+      .from(chatUserState)
+      .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, admin.humanAgentUuid)));
+    expect(post?.lastReadAt?.getTime()).toBe(pre?.lastReadAt?.getTime());
+    expect(post?.unread).toBe(pre?.unread);
+  });
+
   it("markMeChatRead writes chat_user_state without touching chat_membership.access_mode", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -228,6 +289,50 @@ describe("chat membership invariants", () => {
       .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, admin.humanAgentUuid)));
     expect(stateAfter?.lastReadAt?.getTime()).toBe(stateBefore?.lastReadAt?.getTime());
     expect(stateAfter?.unreadMentionCount).toBe(stateBefore?.unreadMentionCount);
+  });
+
+  it("speaker → watcher downgrade preserves mode and source (only access_mode flips)", async () => {
+    // Concern from review on PR #325: `leaveAsParticipant`'s downgrade
+    // path historically reset `mode='full'` and `source='auto_manager'`,
+    // silently throwing away the row's original metadata. The fix is to
+    // flip ONLY `access_mode`; this test pins that contract so future
+    // refactors don't reintroduce the reset.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const managed = await createAgent(app.db, {
+      name: `mng-mode-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Mng-Mode",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId: undefined,
+    });
+    const peer = await createTestAgent(app, { name: "peer-mode" });
+
+    const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
+      participantIds: [managed.uuid],
+    });
+    await joinMeChat(app.db, chatId, admin.humanAgentUuid);
+
+    // Mutate admin's speaker row to a non-default mode + source so the
+    // downgrade has something visible to either preserve or clobber.
+    await app.db.execute(sql`
+      UPDATE chat_membership
+         SET mode = 'mention_only', source = 'manual'
+       WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
+    `);
+
+    // Admin leaves → downgrades to watcher (managed is still a speaker, so admin stays as watcher).
+    const result = await leaveMeChat(app.db, chatId, admin.humanAgentUuid);
+    expect(result.membershipKind).toBe("watching");
+
+    const [after] = await app.db
+      .select({ accessMode: chatMembership.accessMode, mode: chatMembership.mode, source: chatMembership.source })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, admin.humanAgentUuid)));
+    expect(after?.accessMode).toBe("watcher");
+    expect(after?.mode).toBe("mention_only");
+    expect(after?.source).toBe("manual");
   });
 
   it("recomputeChatWatchers does not leave orphan rows when speakers come and go", async () => {
