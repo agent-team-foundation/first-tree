@@ -142,25 +142,77 @@ describe("parseFixesRefs", () => {
 
 describe("formatEntityTitle", () => {
   it("renders Issue title", () => {
-    expect(formatEntityTitle({ type: "issue", key: "owner/repo#42", title: "Refactor inbox" })).toBe(
-      "Issue owner/repo#42: Refactor inbox",
-    );
+    expect(
+      formatEntityTitle({ type: "issue", key: "owner/repo#42", title: "Refactor inbox" }, "issues", "opened"),
+    ).toBe("Issue repo#42: Refactor inbox");
   });
 
-  it("renders PR title", () => {
-    expect(formatEntityTitle({ type: "pull_request", key: "owner/repo#50", title: "Implement refactor" })).toBe(
-      "PR owner/repo#50: Implement refactor",
-    );
+  it("renders Issue title for issue_comment.created", () => {
+    expect(
+      formatEntityTitle({ type: "issue", key: "owner/repo#42", title: "Refactor inbox" }, "issue_comment", "created"),
+    ).toBe("Issue repo#42: Refactor inbox");
+  });
+
+  it("renders PR title for pull_request.opened", () => {
+    expect(
+      formatEntityTitle(
+        { type: "pull_request", key: "owner/repo#307", title: "Improve context overview map" },
+        "pull_request",
+        "opened",
+      ),
+    ).toBe("PR repo#307: Improve context overview map");
+  });
+
+  it("renders PR Review title for pull_request.review_requested", () => {
+    expect(
+      formatEntityTitle(
+        { type: "pull_request", key: "owner/repo#307", title: "Improve context overview map" },
+        "pull_request",
+        "review_requested",
+      ),
+    ).toBe("PR Review repo#307: Improve context overview map");
+  });
+
+  it("renders PR Review title for pull_request_review.submitted", () => {
+    expect(
+      formatEntityTitle(
+        { type: "pull_request", key: "owner/repo#50", title: "Implement refactor" },
+        "pull_request_review",
+        "submitted",
+      ),
+    ).toBe("PR Review repo#50: Implement refactor");
+  });
+
+  it("renders PR Review title for pull_request_review_comment.created", () => {
+    expect(
+      formatEntityTitle(
+        { type: "pull_request", key: "owner/repo#50", title: "Implement refactor" },
+        "pull_request_review_comment",
+        "created",
+      ),
+    ).toBe("PR Review repo#50: Implement refactor");
   });
 
   it("renders Discussion title", () => {
-    expect(formatEntityTitle({ type: "discussion", key: "owner/repo#discussion-9", title: "RFC" })).toBe(
-      "Discussion owner/repo#discussion-9: RFC",
+    expect(
+      formatEntityTitle({ type: "discussion", key: "owner/repo#discussion-9", title: "RFC" }, "discussion", "created"),
+    ).toBe("Discussion repo#discussion-9: RFC");
+  });
+
+  it("renders Commit title (no entity title)", () => {
+    expect(formatEntityTitle({ type: "commit", key: "owner/repo@abc1234" }, "commit_comment", "created")).toBe(
+      "Commit repo@abc1234",
     );
   });
 
   it("falls back to key when title is missing", () => {
-    expect(formatEntityTitle({ type: "issue", key: "owner/repo#42" })).toBe("Issue owner/repo#42");
+    expect(formatEntityTitle({ type: "issue", key: "owner/repo#42" }, "issues", "opened")).toBe("Issue repo#42");
+  });
+
+  it("keeps the full key when no owner segment is present", () => {
+    // Defensive — entity keys are always `owner/repo...` in practice, but the
+    // helper shouldn't choke if a future caller drops the slash.
+    expect(formatEntityTitle({ type: "issue", key: "repo#42" }, "issues", "opened")).toBe("Issue repo#42");
   });
 });
 
