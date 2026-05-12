@@ -8,7 +8,8 @@ import {
 import { and, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
@@ -83,14 +84,14 @@ async function sendMessageInner(
     const [participants, [chatRow], [senderRow]] = await Promise.all([
       tx
         .select({
-          agentId: chatParticipants.agentId,
+          agentId: chatMembership.agentId,
           inboxId: agents.inboxId,
-          mode: chatParticipants.mode,
+          mode: chatMembership.mode,
           name: agents.name,
         })
-        .from(chatParticipants)
-        .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
-        .where(eq(chatParticipants.chatId, chatId)),
+        .from(chatMembership)
+        .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+        .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"))),
       tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1),
       tx
         .select({ inboxId: agents.inboxId, organizationId: agents.organizationId })
