@@ -436,9 +436,10 @@ function FilterBar({
   counts: { humans: number; shared: number; private: number };
 }) {
   // Admins-only filter was dropped: it duplicated the Humans filter for
-  // small orgs (typical case is 1–5 admins) and the per-row `admin` badge
-  // now surfaces role inline so users don't need a filter click to find
-  // who's an admin.
+  // small orgs (typical case is 1–5 admins). Admin role distribution now
+  // surfaces as a subtitle on the Humans section header (`Humans 2 · 1
+  // admin`) — same information, placed next to the rows it describes
+  // instead of in a filter chip you have to click to use.
   const chips: Array<{ key: FilterKey; label: string; count?: number }> = [
     { key: "all", label: "All" },
     { key: "humans", label: "Humans", count: counts.humans },
@@ -567,6 +568,15 @@ export function buildGroups(args: {
   const yourPrivateRows: AgentRow[] = yourPrivateAgents.filter(matchAgent).map(toAgentRow);
   const otherPrivateRows: AgentRow[] = otherPrivateAgents.filter(matchAgent).map(toAgentRow);
 
+  // Surface admin role distribution alongside the Humans section count,
+  // since the page-level subtitle was removed and the Admins filter chip
+  // was dropped in favor of inline visibility. We compute against the
+  // unfiltered members list so the admin count stays meaningful even when
+  // a search trims `humanRows`. Omitted when 0 (no info worth surfacing).
+  const totalAdminCount = members.filter((m) => m.role === "admin").length;
+  const humansSubtitle =
+    totalAdminCount > 0 ? `${totalAdminCount} ${totalAdminCount === 1 ? "admin" : "admins"}` : undefined;
+
   const groups: TeamGroup[] = [];
   if (showHumans) {
     groups.push({
@@ -574,6 +584,7 @@ export function buildGroups(args: {
       title: "Humans",
       count: humanRows.length,
       rows: humanRows,
+      subtitle: humansSubtitle,
       emptyMessage: search ? "No humans match this search." : undefined,
     });
   }

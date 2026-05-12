@@ -65,6 +65,13 @@ export type TeamGroup = {
   emptyMessage?: string;
   /** When set, the group renders as a collapsible disclosure starting collapsed. */
   collapsible?: boolean;
+  /**
+   * Optional secondary fact rendered next to the count badge in `text-caption` /
+   * `--fg-4`. Used by the Humans section to surface admin count (`1 admin`) —
+   * the role distribution was previously in the page subtitle, now lives next
+   * to the rows it describes.
+   */
+  subtitle?: string;
 };
 
 export type RowAction = {
@@ -255,6 +262,11 @@ function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boo
         {group.title}
       </span>
       <DenseBadge tone="outline">{group.count}</DenseBadge>
+      {group.subtitle && (
+        <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+          · {group.subtitle}
+        </span>
+      )}
     </span>
   );
   return (
