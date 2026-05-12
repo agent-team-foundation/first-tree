@@ -1,62 +1,21 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
-import type { FastifyInstance, FastifyReply } from "fastify";
-import type { Database } from "../../db/connection.js";
+import type { FastifyInstance } from "fastify";
 import { agents } from "../../db/schema/agents.js";
-import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
+import { UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { createAgent } from "../../services/agent.js";
-import { findOrCreateDirectChat } from "../../services/chat.js";
+import { resolveTargetChat } from "../../services/github-entity-chat.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
+import { extractEventEntity, type GithubEntity, isRecord, parseFixesRefs } from "./github-entity.js";
 
 const log = createLogger("GithubWebhook");
 
-// ── GitHub payload types ────────────────────────────────────────────
-
-type GitHubIssue = {
-  number: number;
-  title: string;
-  body: string | null;
-  html_url: string;
-  labels: Array<{ name: string }>;
-  state: string;
-};
-
-type GitHubComment = {
-  body: string;
-  html_url: string;
-  user: { login: string };
-};
-
-type GitHubRepository = {
-  full_name: string;
-};
-
-type GitHubSender = {
-  login: string;
-};
-
-type GitHubIssuesPayload = {
-  action: string;
-  issue: GitHubIssue;
-  repository: GitHubRepository;
-  sender: GitHubSender;
-};
-
-type GitHubIssueCommentPayload = {
-  action: string;
-  issue: GitHubIssue;
-  comment: GitHubComment;
-  repository: GitHubRepository;
-  sender: GitHubSender;
-};
-
 // ── Helpers ─────────────────────────────────────────────────────────
 
-const GITHUB_ADAPTER_ID = "github-adapter";
-
-/** Exported so the App webhook endpoint can reuse the exact same HMAC check. */
+/** Exposed so the GitHub App webhook (`webhooks/github-app.ts`) can reuse the
+ * exact same HMAC check — same algorithm, same timing-safe compare; only the
+ * secret source differs (global env var vs per-org cipher). */
 export function verifyGithubWebhookSignature(secret: string, rawBody: Buffer, signatureHeader: string): void {
   verifySignature(secret, rawBody, signatureHeader);
 }
@@ -69,68 +28,6 @@ function verifySignature(secret: string, rawBody: Buffer, signatureHeader: strin
   if (expectedBuf.length !== receivedBuf.length || !timingSafeEqual(expectedBuf, receivedBuf)) {
     throw new UnauthorizedError("Invalid webhook signature");
   }
-}
-
-async function ensureGitHubAdapterAgent(db: Database, organizationId: string): Promise<string> {
-  const [existing] = await db
-    .select({ uuid: agents.uuid })
-    .from(agents)
-    .where(and(eq(agents.organizationId, organizationId), eq(agents.name, GITHUB_ADAPTER_ID)))
-    .limit(1);
-
-  if (existing) {
-    return existing.uuid;
-  }
-
-  try {
-    const agent = await createAgent(db, {
-      name: GITHUB_ADAPTER_ID,
-      type: "autonomous_agent",
-      displayName: "GitHub Adapter",
-      organizationId,
-      metadata: { source: "github", managed: true },
-    });
-    return agent.uuid;
-  } catch (err) {
-    if (err instanceof ConflictError) {
-      // Another concurrent request created it first
-      const [created] = await db
-        .select({ uuid: agents.uuid })
-        .from(agents)
-        .where(and(eq(agents.organizationId, organizationId), eq(agents.name, GITHUB_ADAPTER_ID)))
-        .limit(1);
-      if (created) return created.uuid;
-    }
-    throw err;
-  }
-}
-
-async function findTargetAgent(db: Database, organizationId: string, repoFullName: string): Promise<string | null> {
-  // First: look for an agent whose metadata has github.repos containing the repo full_name
-  const allAgents = await db
-    .select({ id: agents.uuid, name: agents.name, metadata: agents.metadata, type: agents.type })
-    .from(agents)
-    .where(and(eq(agents.organizationId, organizationId), eq(agents.status, "active")));
-
-  for (const agent of allAgents) {
-    if (agent.name === GITHUB_ADAPTER_ID) continue;
-    const meta = agent.metadata;
-    if (meta && typeof meta === "object" && "github" in meta) {
-      const github = meta.github;
-      if (isRecord(github) && "repos" in github) {
-        const repos = github.repos;
-        if (Array.isArray(repos) && repos.includes(repoFullName)) {
-          return agent.id;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Extract unique @mentions from text. Returns lowercase usernames.
@@ -196,14 +93,24 @@ type MentionContext = {
 
 /**
  * Route @mentions to delegate agents.
- * For each mentioned user who has delegate_mention configured,
- * send a card message from the mentioned user to their delegate.
+ *
+ * For each mentioned GitHub user who maps to an agent with `delegate_mention`
+ * configured, resolve which chat the event belongs to (via §4.4's
+ * entity-clustering rules) and post a card from the human-bound agent to its
+ * delegate.
+ *
+ * The entity argument is the §4.2 entity for the current event; `relatedRefs`
+ * is the parsed `Fixes #N` list (empty for non-PR events). Both are
+ * pre-computed by the caller so the heavy parsing doesn't run once per
+ * mention.
  */
 async function routeMentionDelegations(
   app: FastifyInstance,
   organizationId: string,
   mentionedNames: string[],
   ctx: MentionContext,
+  entity: GithubEntity,
+  relatedRefs: GithubEntity[],
 ): Promise<number> {
   if (mentionedNames.length === 0) return 0;
 
@@ -230,10 +137,10 @@ async function routeMentionDelegations(
 
     // Verify delegate target exists, is active, and belongs to the same org.
     // Cross-org checks are split out so the log distinguishes "target gone"
-    // from "target misconfigured". `findOrCreateDirectChat` would also reject
-    // a cross-org pair (commit 6a68a6d / #292) but only as a generic
-    // BadRequestError swallowed by the catch below — the explicit check here
-    // surfaces a misconfiguration warning ops can act on.
+    // from "target misconfigured". `createChat` (called by resolveTargetChat)
+    // would also reject a cross-org pair via the same BadRequestError but
+    // the explicit check here surfaces a misconfiguration warning ops can
+    // act on.
     const [target] = await app.db
       .select({ id: agents.uuid, status: agents.status, organizationId: agents.organizationId })
       .from(agents)
@@ -257,8 +164,25 @@ async function routeMentionDelegations(
     }
 
     try {
-      const chat = await findOrCreateDirectChat(app.db, agent.id, agent.delegateMention);
-      const { message: msg, recipients } = await sendMessage(app.db, chat.id, agent.id, {
+      const resolved = await resolveTargetChat(app.db, {
+        organizationId,
+        humanAgentId: agent.id,
+        delegateAgentId: agent.delegateMention,
+        entity,
+        relatedEntities: relatedRefs,
+      });
+      log.info(
+        {
+          chatId: resolved.chatId,
+          entityType: entity.type,
+          entityKey: entity.key,
+          boundVia: resolved.boundVia,
+          created: resolved.created,
+          humanAgent: agent.name,
+        },
+        "resolved entity chat",
+      );
+      const { message: msg, recipients } = await sendMessage(app.db, resolved.chatId, agent.id, {
         format: "card",
         content: {
           type: "github_mention",
@@ -270,12 +194,15 @@ async function routeMentionDelegations(
           title: ctx.title,
           body: ctx.body,
           url: ctx.url,
+          entity: { type: entity.type, key: entity.key, url: entity.url ?? null },
         },
         metadata: {
           source: "github",
           event: "mention_delegation",
           mentionedUser: agent.name,
           action: ctx.action,
+          entityType: entity.type,
+          entityKey: entity.key,
         },
       });
       notifyRecipients(app.notifier, recipients, msg.id);
@@ -291,62 +218,11 @@ async function routeMentionDelegations(
   return routed;
 }
 
-function parseIssuesPayload(body: unknown): GitHubIssuesPayload {
-  if (!isRecord(body)) throw new BadRequestError("Invalid payload: expected object");
-  if (typeof body.action !== "string") throw new BadRequestError("Invalid payload: missing action");
-  if (!isRecord(body.issue)) throw new BadRequestError("Invalid payload: missing issue");
-  if (!isRecord(body.repository)) throw new BadRequestError("Invalid payload: missing repository");
-  if (!isRecord(body.sender)) throw new BadRequestError("Invalid payload: missing sender");
-
-  const issue = body.issue;
-  const labels = Array.isArray(issue.labels)
-    ? issue.labels.filter((l): l is { name: string } => isRecord(l) && typeof l.name === "string")
-    : [];
-
-  return {
-    action: body.action,
-    issue: {
-      number: typeof issue.number === "number" ? issue.number : 0,
-      title: typeof issue.title === "string" ? issue.title : "",
-      body: typeof issue.body === "string" ? issue.body : null,
-      html_url: typeof issue.html_url === "string" ? issue.html_url : "",
-      labels,
-      state: typeof issue.state === "string" ? issue.state : "open",
-    },
-    repository: {
-      full_name: typeof body.repository.full_name === "string" ? body.repository.full_name : "",
-    },
-    sender: {
-      login: typeof body.sender.login === "string" ? body.sender.login : "",
-    },
-  };
-}
-
-function parseIssueCommentPayload(body: unknown): GitHubIssueCommentPayload {
-  const base = parseIssuesPayload(body);
-  if (!isRecord(body)) throw new BadRequestError("Invalid payload: expected object");
-  if (!isRecord(body.comment)) throw new BadRequestError("Invalid payload: missing comment");
-
-  const comment = body.comment;
-  const commentUser = isRecord(comment.user) ? comment.user : { login: "" };
-
-  return {
-    ...base,
-    comment: {
-      body: typeof comment.body === "string" ? comment.body : "",
-      html_url: typeof comment.html_url === "string" ? comment.html_url : "",
-      user: {
-        login: typeof commentUser.login === "string" ? commentUser.login : "",
-      },
-    },
-  };
-}
-
-// Legacy per-org webhook route (`POST /webhooks/github/:orgId`) and the
-// `getDecryptedGithubWebhookSecret` lookup were removed in the D3 cutover.
-// What remains in this file are the dispatch helpers that the App-flow
-// webhook endpoint (`webhooks/github-app.ts`) imports — same downstream
-// pipeline, different ingress.
+// The legacy per-org webhook route (`POST /webhooks/github/:orgId`) was
+// removed in PR-300's D3 cutover. The App-flow webhook (`webhooks/github-app.ts`,
+// registered as `POST /webhooks/github`) inherits the same dispatch shape:
+// `verifyGithubWebhookSignature` → `shouldSilent` → claim dedup →
+// `handleMentionDelegation`. This file now only owns the shared helpers.
 
 /** Extract text body from any GitHub webhook event for @mention scanning. */
 function extractEventText(eventType: string, payload: unknown): string | null {
@@ -509,7 +385,6 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
  * Run mention delegation for a given event type and payload.
  * Only called after action gating confirms this is a "new content" event.
  */
-/** See `handleIssuesEvent` for why this is exported. */
 export async function handleMentionDelegation(
   app: FastifyInstance,
   organizationId: string,
@@ -520,11 +395,25 @@ export async function handleMentionDelegation(
   const textMentions = extractMentions(mentionText);
   const structuralMentions = extractStructuralMentions(eventType, payload);
   const mentions = [...new Set([...textMentions, ...structuralMentions])];
-  const mentionCtx = extractEventContext(eventType, payload);
-  if (mentions.length > 0 && mentionCtx) {
-    return routeMentionDelegations(app, organizationId, mentions, mentionCtx);
+  if (mentions.length === 0) return 0;
+
+  const ctx = extractEventContext(eventType, payload);
+  if (!ctx) return 0;
+
+  const entity = extractEventEntity(eventType, payload);
+  if (!entity) {
+    log.warn({ eventType }, "mention extracted but no entity resolvable; skipping fan-out");
+    return 0;
   }
-  return 0;
+
+  // `Fixes #N` is only meaningful on PR bodies (§4.5). Other event types
+  // (issue/discussion/commit-comment) deliberately do not parse — closing
+  // keywords appearing in an issue body are conversational, not link
+  // intent, and would otherwise mis-cluster.
+  const relatedRefs =
+    eventType === "pull_request" && ctx.repository.length > 0 ? parseFixesRefs(ctx.body, ctx.repository) : [];
+
+  return routeMentionDelegations(app, organizationId, mentions, ctx, entity, relatedRefs);
 }
 
 /** Actions that represent new/changed content (worth scanning for @mentions).
@@ -542,136 +431,3 @@ export const MENTION_ACTIONS: Record<string, string[]> = {
   discussion_comment: ["created"],
   commit_comment: ["created"],
 };
-
-// Exported so the GitHub App webhook endpoint (`webhooks/github-app.ts`)
-// can reuse the same dispatch logic. D3 cutover (last commit in this PR)
-// moves the helpers into a service module and deletes this file outright.
-export async function handleIssuesEvent(
-  app: FastifyInstance,
-  organizationId: string,
-  eventType: string,
-  payload: unknown,
-  reply: FastifyReply,
-): Promise<unknown> {
-  const data = parseIssuesPayload(payload);
-
-  // Mention delegation — only on new/changed content
-  if (MENTION_ACTIONS.issues?.includes(data.action)) {
-    await handleMentionDelegation(app, organizationId, eventType, payload);
-  }
-
-  // Only handle specific actions for repo-targeted routing
-  const handledActions = ["opened", "edited", "labeled"];
-  if (!handledActions.includes(data.action)) {
-    return reply.status(200).send({ ok: true, event: "issues", action: data.action, handled: false });
-  }
-
-  const [senderId, targetAgentId] = await Promise.all([
-    ensureGitHubAdapterAgent(app.db, organizationId),
-    findTargetAgent(app.db, organizationId, data.repository.full_name),
-  ]);
-
-  if (!targetAgentId) {
-    log.warn({ repo: data.repository.full_name, event: "issue" }, "no target agent found for GitHub event");
-    return reply.status(200).send({ ok: true, event: "issues", action: data.action, routed: false });
-  }
-
-  const content = {
-    type: "github_issue",
-    action: data.action,
-    issue: {
-      number: data.issue.number,
-      title: data.issue.title,
-      body: data.issue.body,
-      url: data.issue.html_url,
-      labels: data.issue.labels.map((l) => l.name),
-      state: data.issue.state,
-    },
-    repository: data.repository.full_name,
-    sender: data.sender.login,
-  };
-
-  const metadata = {
-    source: "github",
-    event: "issues",
-    action: data.action,
-  };
-
-  const chat = await findOrCreateDirectChat(app.db, senderId, targetAgentId);
-  const { message: msg, recipients } = await sendMessage(app.db, chat.id, senderId, {
-    format: "card",
-    content,
-    metadata,
-  });
-
-  notifyRecipients(app.notifier, recipients, msg.id);
-
-  return reply.status(200).send({ ok: true, event: "issues", action: data.action, routed: true });
-}
-
-/** See `handleIssuesEvent` for why this is exported. */
-export async function handleIssueCommentEvent(
-  app: FastifyInstance,
-  organizationId: string,
-  eventType: string,
-  payload: unknown,
-  reply: FastifyReply,
-): Promise<unknown> {
-  const data = parseIssueCommentPayload(payload);
-
-  // Mention delegation — only on new comments
-  if (MENTION_ACTIONS.issue_comment?.includes(data.action)) {
-    await handleMentionDelegation(app, organizationId, eventType, payload);
-  }
-
-  // Only handle "created" action for repo-targeted routing
-  if (data.action !== "created") {
-    return reply.status(200).send({ ok: true, event: "issue_comment", action: data.action, handled: false });
-  }
-
-  const [senderId, targetAgentId] = await Promise.all([
-    ensureGitHubAdapterAgent(app.db, organizationId),
-    findTargetAgent(app.db, organizationId, data.repository.full_name),
-  ]);
-
-  if (!targetAgentId) {
-    log.warn({ repo: data.repository.full_name, event: "issue_comment" }, "no target agent found for GitHub event");
-    return reply.status(200).send({ ok: true, event: "issue_comment", action: data.action, routed: false });
-  }
-
-  const content = {
-    type: "github_issue_comment",
-    action: data.action,
-    issue: {
-      number: data.issue.number,
-      title: data.issue.title,
-      url: data.issue.html_url,
-      labels: data.issue.labels.map((l) => l.name),
-      state: data.issue.state,
-    },
-    comment: {
-      body: data.comment.body,
-      url: data.comment.html_url,
-      author: data.comment.user.login,
-    },
-    repository: data.repository.full_name,
-    sender: data.sender.login,
-  };
-
-  const metadata = {
-    source: "github",
-    event: "issue_comment",
-    action: data.action,
-  };
-
-  const chat = await findOrCreateDirectChat(app.db, senderId, targetAgentId);
-  const { message: msg, recipients } = await sendMessage(app.db, chat.id, senderId, {
-    format: "card",
-    content,
-    metadata,
-  });
-
-  notifyRecipients(app.notifier, recipients, msg.id);
-
-  return reply.status(200).send({ ok: true, event: "issue_comment", action: data.action, routed: true });
-}

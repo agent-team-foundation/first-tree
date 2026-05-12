@@ -129,6 +129,19 @@ export {
   updateChatSchema,
 } from "./schemas/chat.js";
 export {
+  type ChatMetadata,
+  chatMetadataSchema,
+  type FeishuChatMetadata,
+  feishuChatMetadataSchema,
+  GITHUB_ENTITY_TYPES,
+  type GithubChatMetadata,
+  type GithubEntityType,
+  githubChatMetadataSchema,
+  githubEntityTypeSchema,
+  type OptionalChatMetadata,
+  optionalChatMetadataSchema,
+} from "./schemas/chat-metadata.js";
+export {
   CLIENT_STATUSES,
   type ClaimClientResponse,
   type Client,

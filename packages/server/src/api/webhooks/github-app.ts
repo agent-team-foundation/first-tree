@@ -9,13 +9,8 @@ import {
   markInstallationUnsuspended,
   upsertInstallationFromMetadata,
 } from "../../services/github-app-installations.js";
-import {
-  handleIssueCommentEvent,
-  handleIssuesEvent,
-  handleMentionDelegation,
-  MENTION_ACTIONS,
-  verifyGithubWebhookSignature,
-} from "./github.js";
+import { handleMentionDelegation, MENTION_ACTIONS, verifyGithubWebhookSignature } from "./github.js";
+import { isRecord, shouldSilent } from "./github-entity.js";
 
 const log = createLogger("GithubAppWebhook");
 
@@ -25,13 +20,19 @@ const log = createLogger("GithubAppWebhook");
  * `installation.id` → `github_app_installations.hub_organization_id`.
  *
  * Replaces the per-repo `/api/v1/webhooks/github/<orgId>` endpoint
- * (deleted in D3 cutover later in this PR). The downstream pipeline —
- * `github-adapter` agent, `handleIssuesEvent` / `handleIssueCommentEvent`,
- * mention delegation — is identical; only the ingress changes.
+ * (deleted in D3 cutover later in this PR). The downstream pipeline aligns
+ * with the per-org webhook on main (#304): static `shouldSilent` filter at
+ * entry, then mention-only fan-out via `handleMentionDelegation`. Only
+ * `@username` mentions of agents with `delegate_mention` configured trigger
+ * any chat-fan-out; other content events are 200-acked with no side effects.
  *
  * Event dispatch:
  *
  *   ping                            — 200 ok, no-op.
+ *   silent events                   — `shouldSilent`-matched (workflow_run,
+ *                                     check_run, push, label noise, bot
+ *                                     senders) → 200 ok, no claim row, no
+ *                                     processing.
  *   installation                    — drive the install state machine
  *                                     (create / delete / suspend / unsuspend
  *                                     / new_permissions_accepted). No org
@@ -41,11 +42,11 @@ const log = createLogger("GithubAppWebhook");
  *                                     Per-repo children table is not yet
  *                                     modelled (design doc §6 punt).
  *   issues / issue_comment / pull_request / etc.
- *                                   — reverse-lookup the org binding then
- *                                     reuse the legacy handler logic. If
- *                                     no binding exists (orphan webhook),
- *                                     200 ok with `routed:false` so GitHub
- *                                     doesn't retry forever.
+ *                                   — reverse-lookup installation → org
+ *                                     binding, then run mention delegation.
+ *                                     If no binding exists (orphan webhook),
+ *                                     503 unclaimed so GitHub retries (Phase
+ *                                     C C.11 — covered by handler reorder).
  */
 export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void> {
   // Scoped buffer parser — same pattern as the legacy `github.ts` plugin.
@@ -104,6 +105,15 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         return reply.status(200).send({ ok: true, event: "ping" });
       }
 
+      // Static silent-events filter (parity with the per-org webhook on
+      // main, #304 §4.8). Drops `workflow_run` / `check_run` / `push` /
+      // label noise and `sender.type === "Bot"` events BEFORE the dedup
+      // claim — silent events are net-zero side effect, claiming them
+      // would waste rows in `processed_events` for no benefit.
+      if (shouldSilent(eventType, payload)) {
+        return reply.status(200).send({ ok: true, event: eventType, silent: true });
+      }
+
       // Idempotency via `x-github-delivery`. Same approach as the
       // per-org endpoint (#283). Apps share the same retry semantics so
       // the dedup table is reused as-is.
@@ -151,22 +161,17 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         }
         const organizationId = row.hubOrganizationId;
 
-        if (eventType === "issues") {
-          return await handleIssuesEvent(app, organizationId, eventType, payload, reply);
-        }
-        if (eventType === "issue_comment") {
-          return await handleIssueCommentEvent(app, organizationId, eventType, payload, reply);
-        }
-
-        // Other events with mention support — delegate via the
-        // action-gated path on the legacy module.
-        let mentionsRouted = 0;
+        // Mention-only fan-out: action-gated, runs `handleMentionDelegation`
+        // which resolves the `(org, human, delegate, entity)` chat via
+        // `resolveTargetChat` and posts a card. Same dispatch shape as
+        // the per-org webhook on main (#304); only the ingress differs.
         const allowedActions = MENTION_ACTIONS[eventType];
         const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
-        if (allowedActions && action && allowedActions.includes(action)) {
-          mentionsRouted = await handleMentionDelegation(app, organizationId, eventType, payload);
+        if (!allowedActions || !action || !allowedActions.includes(action)) {
+          return reply.status(200).send({ ok: true, event: eventType, handled: false });
         }
-        return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
+        const mentionsRouted = await handleMentionDelegation(app, organizationId, eventType, payload);
+        return reply.status(200).send({ ok: true, event: eventType, mentionsRouted });
       } catch (err) {
         if (deliveryId) {
           await unclaimEvent(app.db, deliveryId, "github-app").catch((unclaimErr) => {
@@ -239,10 +244,6 @@ async function handleInstallationRepositoriesEvent(
 }
 
 // ── Payload helpers ──────────────────────────────────────────────
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function extractInstallationId(payload: unknown): number | null {
   if (!isRecord(payload)) return null;
