@@ -30,9 +30,15 @@ export async function resolveTargetChat(
     delegateAgentId: string;
     entity: GithubEntity;
     relatedEntities: GithubEntity[];
+    /** GitHub event type that triggered this resolution, used only when path
+     * (c) creates a fresh chat to pick the title prefix. Existing chats reuse
+     * their original title regardless. */
+    eventType: string;
+    /** GitHub action on `eventType`. Same scope as `eventType`. */
+    action: string;
   },
 ): Promise<{ chatId: string; created: boolean; boundVia: "direct" | "fixes_link" }> {
-  const { organizationId, humanAgentId, delegateAgentId, entity, relatedEntities } = params;
+  const { organizationId, humanAgentId, delegateAgentId, entity, relatedEntities, eventType, action } = params;
 
   // (a) Direct hit.
   const direct = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, entity);
@@ -62,7 +68,7 @@ export async function resolveTargetChat(
   // first chat. The orphan chat is harmless (no participants beyond the two
   // agents, no messages — we have not yet written one) and the design accepts
   // it as the cost of avoiding a serialisable transaction on every webhook.
-  const chat = await createEntityChat(db, humanAgentId, delegateAgentId, entity);
+  const chat = await createEntityChat(db, humanAgentId, delegateAgentId, entity, eventType, action);
   const inserted = await insertMappingIfAbsent(db, {
     organizationId,
     humanAgentId,
@@ -164,6 +170,8 @@ async function createEntityChat(
   humanAgentId: string,
   delegateAgentId: string,
   entity: GithubEntity,
+  eventType: string,
+  action: string,
 ): Promise<{ id: string }> {
   // Symmetric with the feishu raw-INSERT path in
   // `services/adapter-mapping.ts::findOrCreateChatForChannel`: parse the
@@ -181,7 +189,7 @@ async function createEntityChat(
   const chat = await createChat(db, humanAgentId, {
     type: "direct",
     participantIds: [delegateAgentId],
-    topic: formatEntityTitle(entity),
+    topic: formatEntityTitle(entity, eventType, action),
     metadata,
   });
   return { id: chat.id };

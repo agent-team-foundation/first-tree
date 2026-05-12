@@ -172,7 +172,8 @@ describe("GitHub App webhook — entity-clustering routing (Phase 0)", () => {
       .from(chats)
       .where(eq(chats.id, mappingsAfter1[0]?.chatId ?? ""))
       .limit(1);
-    expect(chat1?.topic).toBe(`Issue owner/repo#42: Refactor inbox #42`);
+    expect(chat1?.topic).toBe(`Issue repo#42: Refactor inbox #42`);
+    expect(chat1?.metadata).toMatchObject({ source: "github", entityType: "issue", entityKey: "owner/repo#42" });
 
     const r2 = await postWebhook(
       app,

@@ -55,6 +55,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: issue42,
       relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
     });
 
     expect(result.created).toBe(true);
@@ -72,7 +74,7 @@ describe("resolveTargetChat", () => {
 
     // Chat topic = formatEntityTitle(entity); metadata carries entity fields.
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, result.chatId)).limit(1);
-    expect(chat?.topic).toBe("Issue owner/repo#42: Refactor inbox");
+    expect(chat?.topic).toBe("Issue repo#42: Refactor inbox");
     expect(chat?.metadata).toMatchObject({
       source: "github",
       entityType: "issue",
@@ -92,6 +94,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: issue42,
       relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
     });
     const second = await resolveTargetChat(app.db, {
       organizationId: admin.organizationId,
@@ -99,6 +103,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: issue42,
       relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
     });
 
     expect(second.chatId).toBe(first.chatId);
@@ -120,6 +126,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: issue42,
       relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
     });
     const prResolved = await resolveTargetChat(app.db, {
       organizationId: admin.organizationId,
@@ -127,6 +135,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: pr50,
       relatedEntities: [issue42],
+      eventType: "pull_request",
+      action: "opened",
     });
 
     expect(prResolved.chatId).toBe(issueResolved.chatId);
@@ -152,6 +162,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: pr50,
       relatedEntities: [issue43],
+      eventType: "pull_request",
+      action: "opened",
     });
 
     expect(prResolved.created).toBe(true);
@@ -170,6 +182,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: issue42,
       relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
     });
     const issue43Resolved = await resolveTargetChat(app.db, {
       organizationId: admin.organizationId,
@@ -177,6 +191,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: issue43,
       relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
     });
     expect(issue42Resolved.chatId).not.toBe(issue43Resolved.chatId);
 
@@ -187,6 +203,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegate,
       entity: pr50,
       relatedEntities: [issue42, issue43],
+      eventType: "pull_request",
+      action: "opened",
     });
 
     expect(prResolved.chatId).toBe(issue42Resolved.chatId);
@@ -216,6 +234,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegateA,
       entity: issue42,
       relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
     });
     const resolvedB = await resolveTargetChat(app.db, {
       organizationId: adminB.organizationId,
@@ -223,6 +243,8 @@ describe("resolveTargetChat", () => {
       delegateAgentId: delegateB,
       entity: issue42,
       relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
     });
 
     expect(resolvedA.chatId).not.toBe(resolvedB.chatId);
@@ -245,6 +267,8 @@ describe("resolveTargetChat", () => {
         delegateAgentId: delegate,
         entity: issue42,
         relatedEntities: [],
+        eventType: "issues",
+        action: "opened",
       }),
       resolveTargetChat(app.db, {
         organizationId: admin.organizationId,
@@ -252,6 +276,8 @@ describe("resolveTargetChat", () => {
         delegateAgentId: delegate,
         entity: issue42,
         relatedEntities: [],
+        eventType: "issues",
+        action: "opened",
       }),
     ]);
 
@@ -263,5 +289,54 @@ describe("resolveTargetChat", () => {
       .where(eq(githubEntityChatMappings.entityKey, issue42.key));
     expect(mappings).toHaveLength(1);
     expect(mappings[0]?.chatId).toBe(r1.chatId);
+  });
+
+  it("renders 'PR Review' topic when a PR chat is first created by review_requested", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedDelegate(app, admin.organizationId, admin.memberId, `dlg-${randomUUID().slice(0, 6)}`);
+
+    const resolved = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: pr50,
+      relatedEntities: [],
+      eventType: "pull_request",
+      action: "review_requested",
+    });
+
+    const [chat] = await app.db.select().from(chats).where(eq(chats.id, resolved.chatId)).limit(1);
+    expect(chat?.topic).toBe("PR Review repo#50: Implement refactor");
+  });
+
+  it("keeps the original topic when a follow-up event with a different prefix reuses the chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedDelegate(app, admin.organizationId, admin.memberId, `dlg-${randomUUID().slice(0, 6)}`);
+
+    // PR chat first created by `pull_request.opened` → title prefix is "PR".
+    const first = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: pr50,
+      relatedEntities: [],
+      eventType: "pull_request",
+      action: "opened",
+    });
+    // A later review-flow event for the same PR must NOT rewrite the title.
+    await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: pr50,
+      relatedEntities: [],
+      eventType: "pull_request_review",
+      action: "submitted",
+    });
+
+    const [chat] = await app.db.select().from(chats).where(eq(chats.id, first.chatId)).limit(1);
+    expect(chat?.topic).toBe("PR repo#50: Implement refactor");
   });
 });
