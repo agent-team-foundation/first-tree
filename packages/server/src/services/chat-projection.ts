@@ -27,6 +27,7 @@
  *     direct `@`-mention targets.
  */
 
+import { CHAT_ENGAGEMENT_STATUSES } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
@@ -96,15 +97,25 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
   const previewClipped = contentPreview.length > 0 ? contentPreview.slice(0, 200) : null;
   const ts = messageCreatedAt ?? new Date();
 
-  // 1. Chats projection — single statement via the typed builder so the Date
-  // → timestamptz binding goes through drizzle's column-type serializer.
-  // (Raw `sql` template hands the Date straight to postgres-js, which can't
-  // serialize it without an explicit serializer setting.)
-  // NOTE: `updated_at` is intentionally NOT touched here. `services/message.ts`
-  // step 5 has already set `chats.updated_at = NOW()` earlier in the same
-  // transaction; setting it again to `messageCreatedAt` would be a
-  // redundant write that may leave the value slightly behind real time.
-  await tx.update(chats).set({ lastMessageAt: ts, lastMessagePreview: previewClipped }).where(eq(chats.id, chatId));
+  // `chats.updated_at` is intentionally NOT touched here. `services/message.ts`
+  // step 5 has already set it earlier in the same transaction; rewriting it
+  // here would be a redundant no-op (or even slightly behind real time when
+  // `messageCreatedAt` is supplied).
+  //
+  // Auto-revive only flips `archived` → `active`. `deleted` rows stay deleted
+  // (per spec — only the user can restore from the chat detail page).
+  const { ACTIVE, ARCHIVED } = CHAT_ENGAGEMENT_STATUSES;
+  await Promise.all([
+    tx.update(chats).set({ lastMessageAt: ts, lastMessagePreview: previewClipped }).where(eq(chats.id, chatId)),
+    tx
+      .update(chatParticipants)
+      .set({ engagementStatus: ACTIVE })
+      .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.engagementStatus, ARCHIVED))),
+    tx
+      .update(chatSubscriptions)
+      .set({ engagementStatus: ACTIVE })
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.engagementStatus, ARCHIVED))),
+  ]);
 
   if (mentionedAgentIds.length === 0) return;
 

@@ -1,16 +1,17 @@
-import type { MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatEngagementView, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listMeChats } from "../../../api/me-chats.js";
 import { FilterPill } from "../../../components/ui/filter-pill.js";
 import { cn } from "../../../lib/utils.js";
+import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
  * Workspace left rail — conversation list. Replaces `AgentRoster`.
  *
- * URL contract: the parent page owns the `?c=` param. The list emits
- * `onSelectChat(chatId)` for an existing conversation and
+ * URL contract: the parent page owns the `?c=` and `?engagement=` params.
+ * The list emits `onSelectChat(chatId)` for an existing conversation and
  * `onSelectChat(DRAFT_CHAT_ID)` for the inline new-chat draft.
  *
  * See docs/chat-first-workspace-product-design.md "Conversation List rules".
@@ -19,6 +20,12 @@ import { cn } from "../../../lib/utils.js";
 export const DRAFT_CHAT_ID = "draft" as const;
 
 type Filter = "all" | "unread" | "watching";
+
+const ENGAGEMENT_TABS: ReadonlyArray<{ value: ChatEngagementView; label: string }> = [
+  { value: "active", label: "Active" },
+  { value: "archived", label: "Archived" },
+  { value: "all", label: "All" },
+];
 
 function formatRowTime(iso: string | null): string {
   if (!iso) return "";
@@ -62,10 +69,14 @@ export function ConversationList({
   selectedChatId,
   onSelectChat,
   onNewChat,
+  engagement,
+  onEngagementChange,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
   onNewChat: () => void;
+  engagement: ChatEngagementView;
+  onEngagementChange: (view: ChatEngagementView) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -74,13 +85,13 @@ export function ConversationList({
   const [moreError, setMoreError] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["me", "chats", filter] as const,
-    queryFn: () => listMeChats({ filter }),
+    queryKey: ["me", "chats", filter, engagement] as const,
+    queryFn: () => listMeChats({ filter, engagement }),
     refetchInterval: 15_000,
   });
 
-  // Reset paginated tail when filter/query change so we don't bleed rows
-  // from a different filter into the current view.
+  // Reset paginated tail when filter / engagement / query change so we don't
+  // bleed rows from a different view into the current one.
   const resetExtras = (): void => {
     if (extraPages.length > 0) setExtraPages([]);
     setMoreError(null);
@@ -109,7 +120,7 @@ export function ConversationList({
     setLoadingMore(true);
     setMoreError(null);
     try {
-      const next = await listMeChats({ filter, cursor });
+      const next = await listMeChats({ filter, engagement, cursor });
       setExtraPages((prev) => [...prev, ...next.rows]);
       // Keep `data.nextCursor` reflecting the freshest tail by appending the
       // next cursor onto the React-Query cache via the data object. We do
@@ -225,6 +236,22 @@ export function ConversationList({
             />
           </div>
         </div>
+        <div className="flex items-center" style={{ gap: 4 }}>
+          {ENGAGEMENT_TABS.map((tab) => (
+            <FilterPill
+              key={tab.value}
+              active={engagement === tab.value}
+              onClick={() => {
+                if (engagement !== tab.value) {
+                  onEngagementChange(tab.value);
+                  resetExtras();
+                }
+              }}
+            >
+              {tab.label}
+            </FilterPill>
+          ))}
+        </div>
       </div>
 
       {/* List */}
@@ -259,7 +286,11 @@ export function ConversationList({
           const subtitle = rawSubtitle && rawSubtitle !== row.title ? rawSubtitle : "";
           const hasUnread = row.unreadMentionCount > 0;
           return (
-            <div key={row.chatId} style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
+            <div
+              key={row.chatId}
+              className="group relative"
+              style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}
+            >
               <button
                 type="button"
                 onClick={() => onSelectChat(row.chatId)}
@@ -297,7 +328,12 @@ export function ConversationList({
                     {row.title}
                   </span>
                   {row.lastMessageAt && (
-                    <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                    // Time vacates its right-anchor slot so the ⋯ trigger can take it
+                    // on hover or while the menu is open (Gmail-style swap).
+                    <span
+                      className="mono text-caption shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
+                      style={{ color: "var(--fg-4)" }}
+                    >
                       {formatRowTime(row.lastMessageAt)}
                     </span>
                   )}
@@ -312,6 +348,16 @@ export function ConversationList({
                   {subtitle || "—"}
                 </div>
               </button>
+              <div
+                className="absolute"
+                style={{
+                  top: "50%",
+                  right: "var(--sp-3)",
+                  transform: "translateY(-50%)",
+                }}
+              >
+                <RowEngagementMenu chatId={row.chatId} status={row.engagementStatus} />
+              </div>
             </div>
           );
         })}

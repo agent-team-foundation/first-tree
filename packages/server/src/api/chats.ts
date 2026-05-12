@@ -1,6 +1,7 @@
 import {
   addMeChatParticipantsSchema,
   paginationQuerySchema,
+  patchChatEngagementSchema,
   sendMessageSchema,
   submitQuestionAnswerSchema,
   updateChatSchema,
@@ -16,10 +17,12 @@ import { ensureParticipant, joinChat, leaveChat } from "../services/chat.js";
 import { prepareImageOutbound } from "../services/image-broadcast.js";
 import {
   addMeChatParticipants,
+  getCallerEngagement,
   joinMeChat,
   leaveMeChat,
   markMeChatRead,
   resolveChatTitle,
+  setChatEngagement,
 } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { notifyRecipients } from "../services/notifier.js";
@@ -65,10 +68,18 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     });
     const title = resolveChatTitle(chat.topic, firstMessagePreview, participantsForTitle, scope.humanAgentId);
 
+    // Prefer the participant row already in memory; fall back to a subscription
+    // lookup only when the caller is a supervisor without a participant row.
+    const callerParticipantRow = participants.find((p) => p.agentId === scope.humanAgentId);
+    const engagementStatus = callerParticipantRow
+      ? callerParticipantRow.engagementStatus
+      : await getCallerEngagement(app.db, chat.id, scope.humanAgentId);
+
     return {
       ...chat,
       title,
       firstMessagePreview,
+      engagementStatus,
       createdAt: chat.createdAt.toISOString(),
       updatedAt: chat.updatedAt.toISOString(),
       participants: participants.map((p) => ({
@@ -96,6 +107,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),
     };
+  });
+
+  app.post<{ Params: { chatId: string } }>("/:chatId/engagement", async (request, reply) => {
+    const { scope } = await requireChatAccess(request, app.db);
+    const body = patchChatEngagementSchema.parse(request.body);
+    await setChatEngagement(app.db, request.params.chatId, scope.humanAgentId, body.status);
+    return reply.status(200).send({ chatId: request.params.chatId, engagementStatus: body.status });
   });
 
   app.get<{ Params: { chatId: string } }>("/:chatId/messages", async (request) => {

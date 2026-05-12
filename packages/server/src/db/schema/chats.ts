@@ -49,6 +49,8 @@ export const chatParticipants = pgTable(
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
     /** Maintained on write by mention-propagation in `services/chat-projection.ts`. */
     unreadMentionCount: integer("unread_mention_count").notNull().default(0),
+    /** Per-(chat, user) engagement state. See `CHAT_ENGAGEMENT_STATUSES` in shared. */
+    engagementStatus: text("engagement_status").notNull().default("active"),
     joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -85,6 +87,8 @@ export const chatSubscriptions = pgTable(
     kind: text("kind").notNull().default("watching"),
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
     unreadMentionCount: integer("unread_mention_count").notNull().default(0),
+    /** Per-(chat, user) engagement state. See `CHAT_ENGAGEMENT_STATUSES` in shared. */
+    engagementStatus: text("engagement_status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

@@ -10,6 +10,30 @@ export const CHAT_TYPES = {
 export const chatTypeSchema = z.enum(["direct", "group", "thread"]);
 export type ChatType = z.infer<typeof chatTypeSchema>;
 
+/**
+ * Per-(chat, user) engagement state. Stored on `chat_participants` and
+ * `chat_subscriptions` so each user manages their own view independently.
+ *
+ *   active   — default; chat is in the user's active conversation list.
+ *   archived — user-snoozed; auto-revives to `active` when a new message
+ *              lands in the chat (see `services/chat-projection.ts`).
+ *   deleted  — user-removed; never auto-revives. Restorable only by the
+ *              user from the chat detail page.
+ */
+export const CHAT_ENGAGEMENT_STATUSES = {
+  ACTIVE: "active",
+  ARCHIVED: "archived",
+  DELETED: "deleted",
+} as const;
+
+export const chatEngagementStatusSchema = z.enum(["active", "archived", "deleted"]);
+export type ChatEngagementStatus = z.infer<typeof chatEngagementStatusSchema>;
+
+export const patchChatEngagementSchema = z.object({
+  status: chatEngagementStatusSchema,
+});
+export type PatchChatEngagement = z.infer<typeof patchChatEngagementSchema>;
+
 export const createChatSchema = z.object({
   type: chatTypeSchema,
   topic: z.string().max(500).optional(),
@@ -66,6 +90,9 @@ export const chatDetailSchema = chatSchema.extend({
    *  with no `text` field). Exposed alongside the resolved `title` so
    *  callers can use it for tooltips / hover descriptions. */
   firstMessagePreview: z.string().nullable(),
+  /** Caller's engagement state. Null in the transient window where the caller
+   *  is reachable via supervisor scope but holds no membership row yet. */
+  engagementStatus: chatEngagementStatusSchema.nullable(),
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
 

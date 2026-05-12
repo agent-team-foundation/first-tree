@@ -16,16 +16,19 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type {
-  AddMeChatParticipants,
-  CreateMeChat,
-  ListMeChatsQuery,
-  ListMeChatsResponse,
-  MeChatLeaveResponse,
-  MeChatReadResponse,
-  MeChatRow,
+import {
+  type AddMeChatParticipants,
+  CHAT_ENGAGEMENT_STATUSES,
+  type ChatEngagementStatus,
+  type ChatEngagementView,
+  type CreateMeChat,
+  type ListMeChatsQuery,
+  type ListMeChatsResponse,
+  type MeChatLeaveResponse,
+  type MeChatReadResponse,
+  type MeChatRow,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
@@ -71,6 +74,71 @@ export function decodeCursor(cursor: string): { lastMessageAt: Date | null; chat
 }
 
 // ---------------------------------------------------------------------------
+// Engagement
+// ---------------------------------------------------------------------------
+
+const { ACTIVE, ARCHIVED } = CHAT_ENGAGEMENT_STATUSES;
+
+/**
+ * SQL predicate for each engagement view tab. `deleted` is never a valid view
+ * value — deleted rows are reachable only via the chat detail endpoint.
+ */
+const ENGAGEMENT_VIEW_PREDICATE: Record<ChatEngagementView, SQL> = {
+  active: sql`d.engagement_status = ${ACTIVE}`,
+  archived: sql`d.engagement_status = ${ARCHIVED}`,
+  all: sql`d.engagement_status IN (${ACTIVE}, ${ARCHIVED})`,
+};
+
+/**
+ * Write the caller's engagement state for this chat. One of the two membership
+ * rows (participant / subscription) matches by invariant; both UPDATEs are
+ * idempotent so we run them in parallel and let the no-op side return zero rows.
+ */
+export async function setChatEngagement(
+  db: Database,
+  chatId: string,
+  agentId: string,
+  status: ChatEngagementStatus,
+): Promise<void> {
+  await Promise.all([
+    db
+      .update(chatParticipants)
+      .set({ engagementStatus: status })
+      .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId))),
+    db
+      .update(chatSubscriptions)
+      .set({ engagementStatus: status })
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, agentId))),
+  ]);
+}
+
+/**
+ * Read the caller's engagement state. Null only in the transient state where
+ * the caller is reachable through `requireChatAccess` but holds neither
+ * membership row (e.g. mid `recomputeChatWatchers`). Web treats null as active.
+ */
+export async function getCallerEngagement(
+  db: Database,
+  chatId: string,
+  agentId: string,
+): Promise<ChatEngagementStatus | null> {
+  const [participant, subscription] = await Promise.all([
+    db
+      .select({ engagementStatus: chatParticipants.engagementStatus })
+      .from(chatParticipants)
+      .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+      .limit(1),
+    db
+      .select({ engagementStatus: chatSubscriptions.engagementStatus })
+      .from(chatSubscriptions)
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, agentId)))
+      .limit(1),
+  ]);
+  const raw = participant[0]?.engagementStatus ?? subscription[0]?.engagementStatus ?? null;
+  return raw as ChatEngagementStatus | null;
+}
+
+// ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
 
@@ -105,6 +173,7 @@ export async function listMeChats(
   // ON.
   const filterUnreadOnly = query.filter === "unread";
   const filterWatchingOnly = query.filter === "watching";
+  const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
 
   // Cursor predicate (sort: last_message_at DESC NULLS LAST, chat_id DESC).
   // The cursor identifies one row; we want every row STRICTLY AFTER it in
@@ -140,11 +209,11 @@ export async function listMeChats(
   // below so the response uses ISO strings consistently.
   const rawRows = (await db.execute(sql`
     WITH membership AS (
-      SELECT chat_id, 'participant'::text AS membership_kind, unread_mention_count
+      SELECT chat_id, 'participant'::text AS membership_kind, unread_mention_count, engagement_status
         FROM chat_participants
        WHERE agent_id = ${humanAgentId}
       UNION ALL
-      SELECT chat_id, 'watching'::text   AS membership_kind, unread_mention_count
+      SELECT chat_id, 'watching'::text   AS membership_kind, unread_mention_count, engagement_status
         FROM chat_subscriptions
        WHERE agent_id = ${humanAgentId}
     ),
@@ -152,7 +221,7 @@ export async function listMeChats(
        preferring the participant row. */
     deduped AS (
       SELECT DISTINCT ON (chat_id)
-        chat_id, membership_kind, unread_mention_count
+        chat_id, membership_kind, unread_mention_count, engagement_status
         FROM membership
         ORDER BY chat_id, CASE WHEN membership_kind = 'participant' THEN 0 ELSE 1 END
     )
@@ -165,7 +234,8 @@ export async function listMeChats(
       c.last_message_preview AS last_message_preview,
       (SELECT count(*) FROM chat_participants WHERE chat_id = c.id) AS participant_count,
       d.membership_kind     AS membership_kind,
-      d.unread_mention_count AS unread_mention_count
+      d.unread_mention_count AS unread_mention_count,
+      d.engagement_status   AS engagement_status
       FROM chats c
       JOIN deduped d ON d.chat_id = c.id
      WHERE c.parent_chat_id IS NULL
@@ -177,6 +247,7 @@ export async function listMeChats(
        /* Filter: unread / watching */
        AND (${!filterUnreadOnly}::bool OR d.unread_mention_count > 0)
        AND (${!filterWatchingOnly}::bool OR d.membership_kind = 'watching')
+       AND ${engagementPredicate}
        AND ${cursorPredicate}
      ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
      LIMIT ${limit + 1}
@@ -190,6 +261,7 @@ export async function listMeChats(
     participant_count: number | string;
     membership_kind: "participant" | "watching";
     unread_mention_count: number;
+    engagement_status: "active" | "archived" | "deleted";
   }>;
 
   const toDate = (v: Date | string | null): Date | null => {
@@ -263,6 +335,7 @@ export async function listMeChats(
       lastMessagePreview: r.last_message_preview,
       unreadMentionCount: r.unread_mention_count,
       canReply: r.membership_kind === "participant",
+      engagementStatus: r.engagement_status,
     };
   });
 

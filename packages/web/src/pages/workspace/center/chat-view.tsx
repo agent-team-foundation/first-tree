@@ -1,4 +1,5 @@
 import {
+  CHAT_ENGAGEMENT_STATUSES,
   extractMentions,
   type MentionParticipant,
   type QuestionAnswerMessageContent,
@@ -14,6 +15,7 @@ import {
   type ImageRefContent,
   listChatMessages,
   type MessageWithDelivery,
+  patchChatEngagement,
   readFileAsBase64,
   renameChat,
   sendChatMessage,
@@ -784,6 +786,16 @@ export function ChatView({
     renameMut.mutate(trimmed.length > 0 ? trimmed : null);
   };
 
+  // Deleted chats have no row in the conversation list — this banner is the
+  // sole recovery entry point.
+  const restoreMut = useMutation({
+    mutationFn: () => patchChatEngagement(chatId, CHAT_ENGAGEMENT_STATUSES.ACTIVE),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
+      queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
+    },
+  });
+
   /**
    * Timeline composition: messages (real chat rows, including the forwarded
    * final result) are always visible; transient events go through the
@@ -1138,6 +1150,40 @@ export function ChatView({
           />
         </div>
       </div>
+
+      {chatDetail?.engagementStatus === CHAT_ENGAGEMENT_STATUSES.DELETED && (
+        <div
+          className="shrink-0 flex items-center"
+          style={{
+            gap: "var(--sp-2)",
+            padding: "var(--sp-1_5) var(--sp-6)",
+            background: "var(--bg-sunken)",
+            borderBottom: "var(--hairline) solid var(--border-faint)",
+            color: "var(--fg-2)",
+          }}
+        >
+          <span className="text-body" style={{ flex: 1 }}>
+            This chat is deleted and won't appear in your conversation list.
+          </span>
+          <button
+            type="button"
+            disabled={restoreMut.isPending}
+            onClick={() => restoreMut.mutate()}
+            className="text-body"
+            style={{
+              padding: "var(--sp-0_5) var(--sp-2)",
+              border: "var(--hairline) solid var(--border)",
+              borderRadius: "var(--radius-input)",
+              background: "var(--bg-raised)",
+              color: "var(--fg)",
+              cursor: restoreMut.isPending ? "default" : "pointer",
+              opacity: restoreMut.isPending ? 0.6 : 1,
+            }}
+          >
+            {restoreMut.isPending ? "Restoring…" : "Restore"}
+          </button>
+        </div>
+      )}
 
       {/* Timeline. Scroll viewport stays full-width so the scrollbar hugs
           the panel's right edge — pushing it inward would float the column.

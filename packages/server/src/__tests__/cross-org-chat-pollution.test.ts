@@ -145,6 +145,7 @@ describe("cross-org direct chat pollution — guard rails", () => {
     const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
       limit: 50,
       filter: "all",
+      engagement: "all",
     });
     expect(res.rows.find((r) => r.chatId === dirtyChatId)).toBeUndefined();
   });
