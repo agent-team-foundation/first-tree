@@ -653,6 +653,13 @@ export function ChatView({
   // write is intentionally not awaited: it must never delay rendering or
   // surface as an error to the user; on IndexedDB unavailability it
   // silently no-ops.
+  //
+  // TODO(perf): the write-through re-upserts all 50 messages every 5s
+  // (~600 idempotent IDB puts/min/chat). Functionally correct because
+  // upsert is keyed by [chatId, messageId], but most writes overwrite
+  // identical rows. A future iteration can diff against the cached set
+  // and only write rows whose id is new or whose deliveryStatus changed.
+  // Flagged by yuezengwu in PR 286 review — non-blocking.
   const { data: messagesData } = useQuery({
     queryKey: ["chat-messages", chatId],
     queryFn: async () => {
@@ -883,16 +890,22 @@ export function ChatView({
    * the canonical "answered" signal. v1 collapses superseded into pending
    * since we don't have a WS-pushed supersede signal yet (commit 6).
    */
+  // Build the lookup from mergedMessages (cache ∪ server), not just
+  // messagesData. Otherwise a cached question_answer that has aged out of
+  // the server's "last 50" window would be invisible to this lookup —
+  // its matching question would render as `pending` even though the
+  // answer is right there in the timeline (cached). Caught in PR 286
+  // review by Codex / yuezengwu.
   const answersByCorrelationId = useMemo(() => {
     const map = new Map<string, QuestionAnswerMessageContent>();
-    for (const m of messagesData?.items ?? []) {
+    for (const m of mergedMessages) {
       if (m.format !== "question_answer") continue;
       if (isQuestionAnswerContent(m.content)) {
         map.set(m.content.correlationId, m.content);
       }
     }
     return map;
-  }, [messagesData]);
+  }, [mergedMessages]);
 
   const itemCount = items.length;
   useEffect(() => {

@@ -16,7 +16,6 @@
 export function HistoryGapBanner() {
   return (
     <div
-      aria-hidden="true"
       className="inline-flex items-center w-full"
       style={{
         margin: "var(--sp-2) 0",
@@ -24,11 +23,13 @@ export function HistoryGapBanner() {
         color: "var(--fg-muted)",
       }}
     >
-      <span style={{ flex: 1, height: "var(--hairline)", background: "var(--border)" }} />
+      {/* Hairlines are decorative — hide from screen readers. The caption
+          text below carries the actual information and stays readable. */}
+      <span aria-hidden="true" style={{ flex: 1, height: "var(--hairline)", background: "var(--border)" }} />
       <span className="text-caption" style={{ whiteSpace: "nowrap" }}>
         Some older messages may not be loaded
       </span>
-      <span style={{ flex: 1, height: "var(--hairline)", background: "var(--border)" }} />
+      <span aria-hidden="true" style={{ flex: 1, height: "var(--hairline)", background: "var(--border)" }} />
     </div>
   );
 }
