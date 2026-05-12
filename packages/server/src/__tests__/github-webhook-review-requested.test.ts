@@ -2,7 +2,8 @@ import { createHmac, randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { organizations } from "../db/schema/organizations.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -101,13 +102,13 @@ async function countDirectChatsBetween(
   agentB: string,
 ): Promise<number> {
   const aRows = await app.db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(eq(chatParticipants.agentId, agentA));
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(eq(chatMembership.agentId, agentA));
   const bRows = await app.db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(eq(chatParticipants.agentId, agentB));
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(eq(chatMembership.agentId, agentB));
   const bSet = new Set(bRows.map((r) => r.chatId));
   const sharedIds = aRows.map((r) => r.chatId).filter((id) => bSet.has(id));
   if (sharedIds.length === 0) return 0;

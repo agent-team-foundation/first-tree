@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createChat, findOrCreateDirectChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
@@ -24,9 +24,9 @@ describe("direct chat default mode (migration 0029)", () => {
   async function loadModes(chatId: string) {
     const app = getApp();
     return app.db
-      .select({ agentId: chatParticipants.agentId, mode: chatParticipants.mode })
-      .from(chatParticipants)
-      .where(eq(chatParticipants.chatId, chatId));
+      .select({ agentId: chatMembership.agentId, mode: chatMembership.mode })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
   }
 
   async function notifyEntries(chatId: string, agentUuid: string) {

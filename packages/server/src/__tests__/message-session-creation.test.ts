@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
-import { chatParticipants } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { createChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -88,9 +88,9 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     // Flip silent to mention_only mode: without an @mention the fan-out marks
     // its row notify=false, so the predictive activation must skip it.
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode: "mention_only" })
-      .where(and(eq(chatParticipants.chatId, chat.id), eq(chatParticipants.agentId, silent.uuid)));
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, silent.uuid)));
 
     await sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: "hello team" });
 

@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { addParticipant, createChat, ensureParticipant, joinChat } from "../services/chat.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
@@ -17,8 +18,8 @@ describe("chat upgrade — direct to group", () => {
     const app = getApp();
     const [row] = await app.db
       .select()
-      .from(chatParticipants)
-      .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)));
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, agentId)));
     return row;
   }
 
@@ -107,13 +108,13 @@ describe("chat upgrade — direct to group", () => {
     // Manually pin a1 to full, a2 to mention_only so we can detect any
     // inadvertent downgrade.
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode: "full" })
-      .where(and(eq(chatParticipants.chatId, chat.id), eq(chatParticipants.agentId, a1.agent.uuid)));
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, a1.agent.uuid)));
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode: "mention_only" })
-      .where(and(eq(chatParticipants.chatId, chat.id), eq(chatParticipants.agentId, a2.uuid)));
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, a2.uuid)));
 
     await addParticipant(app.db, chat.id, a1.agent.uuid, { agentId: a4.uuid, mode: "full" });
 
@@ -163,9 +164,9 @@ describe("chat upgrade — direct to group", () => {
     });
     // Pin a1 to a distinct mode so any inadvertent re-upgrade is visible.
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode: "full" })
-      .where(and(eq(chatParticipants.chatId, chat.id), eq(chatParticipants.agentId, a1.agent.uuid)));
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, a1.agent.uuid)));
 
     await ensureParticipant(app.db, chat.id, a1.agent.uuid);
 

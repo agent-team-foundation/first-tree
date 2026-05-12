@@ -1,7 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { addParticipant, createChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
@@ -51,9 +52,9 @@ describe("server mention resolution + fan-out filter", () => {
     mode: "full" | "mention_only",
   ) {
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode })
-      .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentUuid)));
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, agentUuid)));
   }
 
   /**

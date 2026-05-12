@@ -228,12 +228,12 @@ describe("messaging E2E — proposal §六 scenarios", () => {
       type: "group",
       participantIds: [b1.uuid, b2.uuid],
     });
-    const { chatParticipants } = await import("../db/schema/chats.js");
+    const { chatMembership } = await import("../db/schema/chat-membership.js");
     const { and, eq, inArray } = await import("drizzle-orm");
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode: "mention_only" })
-      .where(and(eq(chatParticipants.chatId, chat.id), inArray(chatParticipants.agentId, [b1.uuid, b2.uuid])));
+      .where(and(eq(chatMembership.chatId, chat.id), inArray(chatMembership.agentId, [b1.uuid, b2.uuid])));
 
     // Human messages with explicit mention of b1.
     await sendMessage(app.db, chat.id, a1.uuid, {
@@ -289,12 +289,12 @@ describe("messaging E2E — proposal §六 scenarios", () => {
       type: "group",
       participantIds: [b1.uuid, b2.uuid, b3.uuid],
     });
-    const { chatParticipants } = await import("../db/schema/chats.js");
+    const { chatMembership } = await import("../db/schema/chat-membership.js");
     const { and, eq, inArray } = await import("drizzle-orm");
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode: "mention_only" })
-      .where(and(eq(chatParticipants.chatId, chat.id), inArray(chatParticipants.agentId, [b1.uuid, b2.uuid, b3.uuid])));
+      .where(and(eq(chatMembership.chatId, chat.id), inArray(chatMembership.agentId, [b1.uuid, b2.uuid, b3.uuid])));
 
     // a1 pings b1.
     const ping = await sendMessage(app.db, chat.id, a1.uuid, {

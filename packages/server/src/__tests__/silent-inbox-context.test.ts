@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { chatParticipants } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
@@ -54,9 +54,9 @@ describe("silent inbox + preceding context", () => {
     // Force observer to mention_only; everyone else stays full so they receive
     // every message and won't pollute these assertions.
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode: "mention_only" })
-      .where(and(eq(chatParticipants.chatId, chat.id), eq(chatParticipants.agentId, observer.uuid)));
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, observer.uuid)));
     return { human, observer, peer, chat };
   }
 
@@ -337,9 +337,9 @@ describe("silent inbox + preceding context", () => {
     });
     for (const chatId of [chatA.id, chatB.id]) {
       await app.db
-        .update(chatParticipants)
+        .update(chatMembership)
         .set({ mode: "mention_only" })
-        .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, observer.uuid)));
+        .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, observer.uuid)));
     }
 
     // Chat A: silent-A then mention-A. Chat B: silent-B then mention-B.

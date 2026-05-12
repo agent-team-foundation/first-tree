@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError } from "../errors.js";
 import { createAgent } from "../services/agent.js";
@@ -102,9 +103,9 @@ describe("cross-org direct chat pollution — guard rails", () => {
       organizationId: otherOrg.orgId,
       type: "direct",
     });
-    await app.db.insert(chatParticipants).values([
-      { chatId: dirtyChatId, agentId: peerA.uuid, role: "member" },
-      { chatId: dirtyChatId, agentId: peerB.uuid, role: "member" },
+    await app.db.insert(chatMembership).values([
+      { chatId: dirtyChatId, agentId: peerA.uuid, role: "member", accessMode: "speaker" },
+      { chatId: dirtyChatId, agentId: peerB.uuid, role: "member", accessMode: "speaker" },
     ]);
 
     // Pre-fix behavior: returns the dirty chat. Post-fix: filters by
@@ -129,17 +130,17 @@ describe("cross-org direct chat pollution — guard rails", () => {
       organizationId: foreign.orgId,
       type: "direct",
     });
-    await app.db.insert(chatParticipants).values([
-      { chatId: dirtyChatId, agentId: foreign.agentUuid, role: "member" },
-      { chatId: dirtyChatId, agentId: admin.humanAgentUuid, role: "member" },
+    await app.db.insert(chatMembership).values([
+      { chatId: dirtyChatId, agentId: foreign.agentUuid, role: "member", accessMode: "speaker" },
+      { chatId: dirtyChatId, agentId: admin.humanAgentUuid, role: "member", accessMode: "speaker" },
     ]);
 
     // Sanity check that the dirty row really would have leaked without the
     // org filter: the caller IS a participant.
     const [participantRow] = await app.db
-      .select({ chatId: chatParticipants.chatId })
-      .from(chatParticipants)
-      .where(eq(chatParticipants.agentId, admin.humanAgentUuid));
+      .select({ chatId: chatMembership.chatId })
+      .from(chatMembership)
+      .where(eq(chatMembership.agentId, admin.humanAgentUuid));
     expect(participantRow?.chatId).toBe(dirtyChatId);
 
     const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
