@@ -432,7 +432,39 @@ export class SessionManager {
       this.persistRegistry();
       this.notifySessionState(chatId, "active");
     } catch (err) {
-      this.config.log.error({ chatId, err, phase: evicted ? "resume" : "start" }, "session start/resume failed");
+      // Pre-fix this catch only logged and torn local state down. The
+      // server's `agent_chat_sessions.state` stayed `active`, no chat
+      // message was emitted, and the agent looked silently failed to
+      // every observer. F2 (chat-participant-mode-fix-design.md §3.3)
+      // signals the failure three ways: structured log (existing),
+      // `session:state=errored` to the server (so admin/UI see it), and
+      // a single user-visible chat message via the result-sink (so the
+      // requester knows the agent didn't drop their message on purpose).
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const phase: "start" | "resume" = evicted ? "resume" : "start";
+      this.config.log.error({ chatId, err, phase }, "session start/resume failed");
+
+      // 1) Server-side state. notifySessionState dedupes against the last
+      //    reported value, so even if we somehow already reported "active"
+      //    for this chat, this `errored` transition will go through.
+      this.notifySessionState(chatId, "errored");
+
+      // 2) User-visible chat message. Truncate to 800 chars so we don't
+      //    leak full stderr (which may include FS paths or git internals)
+      //    into the chat timeline; the full error is in the structured log.
+      try {
+        const preview = errMsg.slice(0, 800);
+        const agentLabel = this.config.agentIdentity.displayName ?? this.config.agentIdentity.agentId;
+        const userMsg = `⚠️ Session ${phase} failed (${agentLabel}): ${preview}`;
+        await ctx.forwardResult(userMsg);
+      } catch (forwardErr) {
+        this.config.log.warn({ chatId, forwardErr }, "session error forward failed");
+      }
+
+      // 3) Existing local cleanup. Order matters: forward FIRST while the
+      //    session entry is still live (forwardResult reads currentTrigger
+      //    / participant cache via the session context built above);
+      //    THEN tear down so a follow-up message can route as a fresh start.
       this.sessions.delete(chatId);
       this.sessionRuntimeStates.delete(chatId);
       this.recomputeRuntimeState();

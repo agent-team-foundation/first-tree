@@ -96,10 +96,11 @@ describe("GitMirrorManager — lifecycle", () => {
       url: fixtureUrl,
       targetPath: target,
       sessionKey: "chat-1",
+      agentName: "agent-x",
     });
     expect(worktreePath).toBe(target);
     expect(headCommit).toMatch(/^[0-9a-f]{40}$/);
-    expect(branchName).toBe(deriveSessionBranchName("chat-1", fixtureUrl));
+    expect(branchName).toBe(deriveSessionBranchName("chat-1", "agent-x", fixtureUrl));
     // HEAD should be a symbolic ref to the session branch (not detached).
     expect(gitIn(target, "symbolic-ref HEAD")).toBe(`refs/heads/${branchName}`);
     expect(existsSync(join(target, "README.md"))).toBe(true);
@@ -110,12 +111,45 @@ describe("GitMirrorManager — lifecycle", () => {
     await m.ensureMirror(fixtureUrl);
     const a = join(workRoot, "two-sess-a");
     const b = join(workRoot, "two-sess-b");
-    const ra = await m.createWorktree({ url: fixtureUrl, targetPath: a, sessionKey: "chat-A" });
-    const rb = await m.createWorktree({ url: fixtureUrl, targetPath: b, sessionKey: "chat-B" });
+    const ra = await m.createWorktree({ url: fixtureUrl, targetPath: a, sessionKey: "chat-A", agentName: "agent-x" });
+    const rb = await m.createWorktree({ url: fixtureUrl, targetPath: b, sessionKey: "chat-B", agentName: "agent-x" });
     expect(ra.branchName).not.toBe(rb.branchName);
     writeFileSync(join(a, "scratch.txt"), "in A only");
     expect(existsSync(join(a, "scratch.txt"))).toBe(true);
     expect(existsSync(join(b, "scratch.txt"))).toBe(false);
+  });
+
+  it("(sameSessionKey, differentAgents) produces disjoint branches — fixes group-chat collision", async () => {
+    // Reproduces the bug from docs/workspace-session-branch-collision-fix-design.md
+    // §1: in a group chat, multiple agents reach `createWorktree` with the
+    // SAME `sessionKey` (= chatId). Pre-fix the derived branch name was
+    // `(sessionKey, url)`-only, so the second agent's `git worktree add`
+    // failed with `fatal: '<branch>' is already used by worktree at ...`.
+    // Post-fix the branch name also folds in `agentName`, so peer agents
+    // get disjoint branches and both worktrees succeed.
+    const m = makeManager();
+    await m.ensureMirror(fixtureUrl);
+    const sharedChat = "shared-chat-1";
+    const targetA = join(workRoot, "peer-agent-a");
+    const targetB = join(workRoot, "peer-agent-b");
+    const ra = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: targetA,
+      sessionKey: sharedChat,
+      agentName: "architect",
+    });
+    const rb = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: targetB,
+      sessionKey: sharedChat,
+      agentName: "developer",
+    });
+    expect(ra.branchName).not.toBe(rb.branchName);
+    expect(ra.branchName).toBe(deriveSessionBranchName(sharedChat, "architect", fixtureUrl));
+    expect(rb.branchName).toBe(deriveSessionBranchName(sharedChat, "developer", fixtureUrl));
+    // Both worktrees materialise — pre-fix the second one would have thrown.
+    expect(existsSync(join(targetA, "README.md"))).toBe(true);
+    expect(existsSync(join(targetB, "README.md"))).toBe(true);
   });
 
   it("createWorktree rejects a non-Hub occupant (D13)", async () => {
@@ -125,7 +159,7 @@ describe("GitMirrorManager — lifecycle", () => {
     mkdirSync(occupied, { recursive: true });
     writeFileSync(join(occupied, "user-data.txt"), "important");
     await expect(
-      m.createWorktree({ url: fixtureUrl, targetPath: occupied, sessionKey: "chat-C" }),
+      m.createWorktree({ url: fixtureUrl, targetPath: occupied, sessionKey: "chat-C", agentName: "agent-x" }),
     ).rejects.toBeInstanceOf(GitMirrorWorktreeConflictError);
     expect(existsSync(join(occupied, "user-data.txt"))).toBe(true);
   });
@@ -138,6 +172,7 @@ describe("GitMirrorManager — lifecycle", () => {
       url: fixtureUrl,
       targetPath: target,
       sessionKey: "chat-rm",
+      agentName: "agent-x",
     });
     expect(tryGitIn(mirrorPath, `rev-parse --verify --quiet refs/heads/${branchName}`).ok).toBe(true);
     await m.removeWorktree({ url: fixtureUrl, path: target, branchName });
@@ -174,6 +209,7 @@ describe("GitMirrorManager — session isolation regressions", () => {
       url: fixtureUrl,
       targetPath: target,
       sessionKey: "incident-1",
+      agentName: "agent-x",
     });
 
     // Advance upstream by one commit (plain commit, not force-push — good enough
@@ -216,8 +252,8 @@ describe("GitMirrorManager — session isolation regressions", () => {
     await m.ensureMirror(fixtureUrl);
     const a = join(workRoot, "incident-3-a");
     const b = join(workRoot, "incident-3-b");
-    await m.createWorktree({ url: fixtureUrl, targetPath: a, sessionKey: "incident-3-A" });
-    await m.createWorktree({ url: fixtureUrl, targetPath: b, sessionKey: "incident-3-B" });
+    await m.createWorktree({ url: fixtureUrl, targetPath: a, sessionKey: "incident-3-A", agentName: "agent-x" });
+    await m.createWorktree({ url: fixtureUrl, targetPath: b, sessionKey: "incident-3-B", agentName: "agent-x" });
     await expect(m.fetchMirror(fixtureUrl)).resolves.toBeDefined();
   });
 });
@@ -258,6 +294,7 @@ describe("GitMirrorManager — crash recovery", () => {
       url: fixtureUrl,
       targetPath: firstTarget,
       sessionKey: "crashy",
+      agentName: "agent-x",
     });
     // User or an external process removed the worktree dir without running
     // `git worktree remove`. Git marks it prunable on next access.
@@ -269,6 +306,7 @@ describe("GitMirrorManager — crash recovery", () => {
       url: fixtureUrl,
       targetPath: firstTarget,
       sessionKey: "crashy",
+      agentName: "agent-x",
     });
     expect(reopened.branchName).toBe(branchName);
     expect(reopened.headCommit).toBe(headCommit);
@@ -299,6 +337,7 @@ describe("GitMirrorManager — crash recovery", () => {
       url: fixtureUrl,
       targetPath: target,
       sessionKey: "self-heal-1",
+      agentName: "agent-x",
     });
     expect(result.headCommit).toMatch(/^[0-9a-f]{40}$/);
     expect(tryGitIn(mirrorPath, "rev-parse --verify --quiet refs/remotes/origin/HEAD").ok).toBe(true);
@@ -316,6 +355,7 @@ describe("GitMirrorManager — crash recovery", () => {
       url: fixtureUrl,
       targetPath: target,
       sessionKey: "ghosty",
+      agentName: "agent-x",
     });
     // Bypass git's safety net and delete the ref file directly. Works against
     // loose refs; a freshly-created branch never reaches packed-refs.
@@ -323,7 +363,7 @@ describe("GitMirrorManager — crash recovery", () => {
     rmSync(refPath, { force: true });
 
     await expect(
-      m.createWorktree({ url: fixtureUrl, targetPath: target, sessionKey: "ghosty" }),
+      m.createWorktree({ url: fixtureUrl, targetPath: target, sessionKey: "ghosty", agentName: "agent-x" }),
     ).rejects.toBeInstanceOf(GitMirrorError);
   });
 });
@@ -600,8 +640,8 @@ describe("GitMirrorManager — concurrency", () => {
     const a = join(workRoot, "conc-a");
     const b = join(workRoot, "conc-b");
     const [ra, rb] = await Promise.all([
-      m.createWorktree({ url: fixtureUrl, targetPath: a, sessionKey: "conc-A" }),
-      m.createWorktree({ url: fixtureUrl, targetPath: b, sessionKey: "conc-B" }),
+      m.createWorktree({ url: fixtureUrl, targetPath: a, sessionKey: "conc-A", agentName: "agent-x" }),
+      m.createWorktree({ url: fixtureUrl, targetPath: b, sessionKey: "conc-B", agentName: "agent-x" }),
     ]);
     expect(ra.branchName).not.toBe(rb.branchName);
     expect(existsSync(a)).toBe(true);

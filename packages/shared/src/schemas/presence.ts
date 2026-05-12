@@ -26,14 +26,23 @@ export const SESSION_STATES = {
   ACTIVE: "active",
   SUSPENDED: "suspended",
   EVICTED: "evicted",
+  /**
+   * Handler-start (or resume) raised an exception before the session was
+   * usable. Distinct from `suspended` (which is the client's idle / preempted
+   * state and means "resumable on next message"); `errored` records a
+   * concrete failure that ops / admin / the user should see. The next inbound
+   * message for the chat is still allowed to start a fresh session — see
+   * docs/workspace-session-branch-collision-fix-design.md §3.3.
+   */
+  ERRORED: "errored",
 } as const;
 
 /** DB + admin surface. `evicted` is server-only (admin Terminate); never carried on the wire. */
-export const sessionStateSchema = z.enum(["active", "suspended", "evicted"]);
+export const sessionStateSchema = z.enum(["active", "suspended", "evicted", "errored"]);
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
 /** Wire-level states a client may report. `evicted` from a stale client is rejected. */
-export const clientSessionStateSchema = z.enum(["active", "suspended"]);
+export const clientSessionStateSchema = z.enum(["active", "suspended", "errored"]);
 export type ClientSessionState = z.infer<typeof clientSessionStateSchema>;
 
 export const sessionStateMessageSchema = z.object({
