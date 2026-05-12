@@ -257,21 +257,21 @@
     {
       "idx": 36,
       "version": "7",
-      "when": 1778544000000,
+      "when": 1778716800000,
       "tag": "0036_github_entity_chat_mappings",
       "breakpoints": true
     },
     {
       "idx": 37,
       "version": "7",
-      "when": 1778630400000,
+      "when": 1778803200000,
       "tag": "0037_github_app_installations",
       "breakpoints": true
     },
     {
       "idx": 38,
       "version": "7",
-      "when": 1778716800000,
+      "when": 1778889600000,
       "tag": "0038_drop_github_integration_namespace",
       "breakpoints": true
     }
