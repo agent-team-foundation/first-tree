@@ -170,3 +170,98 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     await sm.shutdown();
   });
 });
+
+describe("SessionManager: session-resume failure signalling (F2, resume path)", () => {
+  /**
+   * Build a manager whose concurrency is 1 so two consecutive dispatches
+   * to different chats preempt the first onto the resume path. The handler
+   * factory threads a per-chat queue so each test can stage the exact
+   * start/resume outcomes it needs.
+   */
+  function makeSerializedManager(opts: {
+    handlerQueue: AgentHandler[];
+    onStateChange?: (chatId: string, state: SessionState) => void;
+    sdk?: FirstTreeHubSDK;
+  }) {
+    const queue = [...opts.handlerQueue];
+    return new SessionManager({
+      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      concurrency: 1,
+      handlerFactory: () => queue.shift() ?? workingHandler(),
+      handlerConfig: { workspaceRoot: "/tmp/test" },
+      agentIdentity: {
+        agentId: "agent-1",
+        inboxId: "inbox-agent-1",
+        displayName: "Test Agent",
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk: opts.sdk ?? mockSdk().sdk,
+      log: silentLogger(),
+      onStateChange: opts.onStateChange,
+    });
+  }
+
+  it("emits onStateChange('errored') and forwards a chat-visible error when handler.resume throws", async () => {
+    // Stage: handlerA.start() succeeds; chat-B start preempts chat-A to
+    // suspended; the third dispatch then hits resume on chat-A which throws.
+    const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
+    const { sdk, sendMessage } = mockSdk();
+    const handlerA: AgentHandler = {
+      start: vi.fn().mockResolvedValue("session-A"),
+      resume: vi.fn().mockRejectedValue(new Error("git mirror fetch failed: connection refused")),
+      inject: vi.fn(),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const sm = makeSerializedManager({
+      handlerQueue: [handlerA, workingHandler("session-B")],
+      sdk,
+      onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-A" })); // start succeeds
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-B" })); // preempts chat-A
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-A" })); // resume → throws
+
+    const chatAStates = stateChanges.filter((c) => c.chatId === "chat-A").map((c) => c.state);
+    expect(chatAStates.at(-1)).toBe("errored");
+    const resumeFwd = sendMessage.mock.calls.find((call) =>
+      ((call[1] as { content?: string })?.content ?? "").includes("Session resume failed"),
+    );
+    expect(resumeFwd).toBeDefined();
+    expect(handlerA.resume).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
+  it("allows the next inbound message for the same chat to start a fresh session after a resume failure", async () => {
+    const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
+    const handlerA: AgentHandler = {
+      start: vi.fn().mockResolvedValue("session-A"),
+      resume: vi.fn().mockRejectedValue(new Error("resume blew up")),
+      inject: vi.fn(),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const handlerARecovery = workingHandler("session-A-fresh");
+    const sm = makeSerializedManager({
+      handlerQueue: [handlerA, workingHandler("session-B"), handlerARecovery],
+      onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-A" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-B" }));
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-A" })); // resume → errored
+
+    // A fresh inbound for chat-A should route as start (entry was dropped
+    // on resume failure — the resume catch tears down the same way the
+    // start catch does, so there's no "stuck suspended" entry blocking it).
+    await sm.dispatch(mockEntry({ id: 4, chatId: "chat-A" }));
+    expect(handlerARecovery.start).toHaveBeenCalledTimes(1);
+    expect(stateChanges.filter((c) => c.chatId === "chat-A").at(-1)?.state).toBe("active");
+
+    await sm.shutdown();
+  });
+});
