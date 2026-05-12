@@ -165,6 +165,13 @@ async function routeMentionDelegations(
         delegateAgentId: agent.delegateMention,
         entity,
         relatedEntities: relatedRefs,
+        eventType: ctx.event,
+        // `ctx.action` is narrowed to a non-empty string upstream
+        // (`MENTION_ACTIONS` gating in the webhook route), but the
+        // `MentionContext` type keeps it optional. Fall back to "" for the
+        // unreachable case so the prefix table just picks the entity-type
+        // default.
+        action: ctx.action ?? "",
       });
       log.info(
         {
