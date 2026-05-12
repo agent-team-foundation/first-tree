@@ -14,7 +14,7 @@ import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
 import { upsertSessionState } from "./activity.js";
-import { findOrCreateDirectChat } from "./chat.js";
+import { findOrCreateDirectChat, isParticipant } from "./chat.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from "./questions.js";
 
@@ -381,13 +381,9 @@ export async function sendToAgent(
     throw new NotFoundError(`Agent "${targetName}" not found${hint}`);
   }
 
-  // Find or create direct chat
-  const chat = await findOrCreateDirectChat(db, senderUuid, target.uuid);
-
-  // The receiver is explicit (`<name>`); merge them into metadata.mentions so
-  // sendMessage's step 2c will prepend `@<name>` to content. One uniform
-  // injection path means agent-to-agent and result-sink replies use exactly
-  // the same logic — no risk of the two drifting on edge cases.
+  // Build the merged-mentions metadata once — both the current-chat routing
+  // branch and the direct-chat fallback need the receiver in `metadata.mentions`
+  // so sendMessage's step 2c will prepend `@<name>` to the content.
   const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
   const existingMentionsRaw = incomingMeta.mentions;
   const existingMentions = Array.isArray(existingMentionsRaw)
@@ -395,6 +391,41 @@ export async function sendToAgent(
     : [];
   const mergedMentions = existingMentions.includes(target.uuid) ? existingMentions : [...existingMentions, target.uuid];
   const metadata = { ...incomingMeta, mentions: mergedMentions };
+
+  // Routing: if the caller is currently sitting in a chat (CLI auto-injects
+  // FIRST_TREE_HUB_CHAT_ID into `replyToChat` via resolveReplyToFromEnv) AND
+  // the target is already a participant of that chat, deliver the message
+  // there instead of opening a parallel direct chat. This is what every
+  // observed group-chat flow wants: "agent A in group G calls `agent send B`"
+  // should land in G when B is a member.
+  //
+  // Falls through to the direct-chat path when:
+  //   - replyToChat is missing (caller isn't in a session)
+  //   - target isn't a participant of replyToChat (caller in unrelated chat,
+  //     wants a private DM with B)
+  //   - replyToChat doesn't exist anymore (isParticipant returns false)
+  if (data.replyToChat && (await isParticipant(db, data.replyToChat, target.uuid))) {
+    return sendMessage(
+      db,
+      data.replyToChat,
+      senderUuid,
+      {
+        format: data.format,
+        content: data.content,
+        metadata,
+        // The message lands in replyToChat itself, so the reply-routing
+        // envelope is redundant — strip it so future replies fan out via
+        // normal participant rules instead of self-referencing.
+        replyToInbox: undefined,
+        replyToChat: undefined,
+        source: data.source,
+      },
+      { normalizeMentionsInContent: true },
+    );
+  }
+
+  // Direct-chat fallback: find or create the pair's direct chat.
+  const chat = await findOrCreateDirectChat(db, senderUuid, target.uuid);
 
   return sendMessage(
     db,
