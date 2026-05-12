@@ -12,6 +12,11 @@ export type RuntimeAgent = {
   totalSessions: number | null;
   runtimeUpdatedAt: string | null;
   type: AgentType | null;
+  /** True iff the caller's member is the agent's `managerId`. Server-derived;
+   *  the client never receives raw `managerId`. Used by the workspace
+   *  new-chat view to seed the default chip from agents the caller
+   *  personally manages. */
+  managedByMe: boolean;
 };
 
 export type ActivityOverview = {

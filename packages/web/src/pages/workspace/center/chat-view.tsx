@@ -39,6 +39,7 @@ import {
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import {
   ambiguousDisplayNames,
+  groupAndSortCandidates,
   MentionAutocompletePopover,
   type MentionCandidate,
   MentionLabel,
@@ -47,6 +48,7 @@ import {
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 
@@ -611,6 +613,11 @@ export function ChatView({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
+  // visible lines). Same hook as the new-chat composer for a consistent
+  // typing experience across both entry points.
+  useAutoResizeTextarea(textareaRef, draft);
   /** Once-per-chat guard for the focus auto-prime: after the user has
    * focused the input even once, we don't keep slapping `@` back into an
    * empty draft. Reset when switching chats. */
@@ -856,12 +863,30 @@ export function ChatView({
     for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
     for (const a of activity?.agents ?? []) ids.add(a.agentId);
     if (ids.size === 0) ids.add(agentId);
+    // Build a lookup from `/activity` so we can attach `managedByMe`
+    // per candidate. Known limitation: agents that appear only via
+    // `chatDetail.participants` (no runtime presence row, e.g. an
+    // autonomous agent that has never been bound to a client) default
+    // to false. That means a caller's own offline agent can be
+    // misclassified into the "teammates" group of the [+] picker.
+    // The picker grouping is a visual hint, not a security boundary,
+    // so we accept this fidelity loss rather than widen `/activity`'s
+    // shape (which is also consumed by roster / team / clients pages).
+    // To revisit: surface `managedByMe` independently of runtime via a
+    // dedicated `/me/managed-agents` endpoint and intersect here.
+    const managedByMeMap = new Map<string, boolean>();
+    for (const a of activity?.agents ?? []) managedByMeMap.set(a.agentId, a.managedByMe);
     const out: MentionCandidate[] = [];
     for (const id of ids) {
       if (id === myAgentId) continue;
       const ident = agentIdentity(id);
       if (!ident || !ident.name) continue;
-      out.push({ agentId: id, name: ident.name, displayName: ident.displayName });
+      out.push({
+        agentId: id,
+        name: ident.name,
+        displayName: ident.displayName,
+        managedByMe: managedByMeMap.get(id) ?? false,
+      });
     }
     return out;
   }, [chatDetail?.participants, activity?.agents, agentId, agentIdentity, myAgentId]);
@@ -1381,6 +1406,19 @@ export function ChatView({
                       padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                       background: "transparent",
                       border: "none",
+                      // `rows={2}` alone won't survive the auto-resize hook:
+                      // useLayoutEffect immediately sets `height = scrollHeight`,
+                      // which collapses an empty textarea to ~1 line and
+                      // breaks chat-view's pre-auto-grow 2-line contract.
+                      // CSS `min-height` is a hard floor that wins over the
+                      // hook's inline `height`, so we restate the 2-line
+                      // starting size here: 2 line-heights + top + bottom
+                      // padding. Cap at 10.5rem (~8 visible lines) so long
+                      // pastes scroll inside instead of pushing the footer
+                      // toolbar off-screen.
+                      minHeight: "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
+                      maxHeight: "10.5rem",
+                      overflowY: "auto",
                       resize: "none",
                       color: "var(--fg)",
                     }}
@@ -1641,27 +1679,46 @@ function ParticipantsHeader({
             >
               {(() => {
                 const ambiguous = ambiguousDisplayNames(outsideCandidates);
-                return outsideCandidates.map((c) => (
-                  <button
-                    key={c.agentId}
-                    type="button"
-                    role="option"
-                    aria-selected="false"
-                    title={c.name ? `@${c.name}` : undefined}
-                    onClick={() => addMut.mutate(c.agentId)}
-                    disabled={addMut.isPending}
-                    className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                    style={{
-                      background: "transparent",
-                      color: "var(--fg)",
-                      border: "none",
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    <MentionLabel candidate={c} ambiguous={ambiguous} />
-                  </button>
-                ));
+                // Same grouping contract as the new-chat picker: mine
+                // first, teammates' second, --border-faint hairline
+                // between (only when both groups are non-empty).
+                return groupAndSortCandidates(outsideCandidates).map((item) => {
+                  if ("divider" in item) {
+                    return (
+                      <div
+                        key="__divider"
+                        // See new-chat-draft.tsx — same a11y reasoning.
+                        role="presentation"
+                        style={{
+                          height: "var(--hairline)",
+                          background: "var(--border-faint)",
+                          margin: "var(--sp-0_5) var(--sp-3)",
+                        }}
+                      />
+                    );
+                  }
+                  return (
+                    <button
+                      key={item.agentId}
+                      type="button"
+                      role="option"
+                      aria-selected="false"
+                      title={item.name ? `@${item.name}` : undefined}
+                      onClick={() => addMut.mutate(item.agentId)}
+                      disabled={addMut.isPending}
+                      className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                      style={{
+                        background: "transparent",
+                        color: "var(--fg)",
+                        border: "none",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <MentionLabel candidate={item} ambiguous={ambiguous} />
+                    </button>
+                  );
+                });
               })()}
             </div>
           )}
