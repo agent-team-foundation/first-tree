@@ -80,41 +80,20 @@ export const serverConfigSchema = defineConfig({
   }),
   oauth: optional({
     /**
-     * GitHub OAuth App credentials for SaaS sign-in. The "half configured"
-     * shape (only one of clientId/clientSecret set) is rejected at boot so a
-     * misconfigured production instance can't accidentally expose the
-     * dev-callback bypass with no real OAuth wired up.
+     * GitHub App credentials — the sign-in surface introduced by PR 2/3 of
+     * the GitHub App migration split. A single App installation simultaneously
+     * unlocks user-OAuth, the webhook stream (PR 3/3), and installation-token
+     * minting. All five required fields must be set together; partial
+     * configuration is rejected at boot for the same reason as the legacy
+     * block — a half-wired App is worse than no App.
      *
-     * NOTE (PR-A of GitHub App split): the legacy OAuth client coexists with
-     * the new GitHub App block during the transition. PR-B removes this block
-     * and all callers as part of the D3 hard cut.
-     */
-    github: optional({
-      clientId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID" }),
-      clientSecret: field(z.string(), {
-        env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET",
-        secret: true,
-      }),
-    }),
-    /**
-     * GitHub App credentials — new sign-in surface introduced in PR-A of the
-     * GitHub App split. Wired into actual sign-in / webhook routes by PR-B/PR-C.
-     * Until then this block is read at boot (so misconfig is caught early) but
-     * not consumed by any user-facing flow. See design doc
-     * `docs/github-app-design-zh.md` §5.2. A single App installation
-     * simultaneously unlocks user-OAuth, the webhook stream, and
-     * installation-token minting (§3). All five fields are required
-     * together; partial configuration is rejected at boot for the same
-     * reason as the legacy block — a half-wired App is worse than no App.
-     *
-     * Dev / staging / prod each have a separate App with its own set of
-     * values; the env file selects which to load.
+     * Staging and prod each have a separate App with its own set of values;
+     * the env file selects which to load.
      *
      * `privateKeyPem` is the raw PKCS#8 PEM (multi-line, starts with
      * `-----BEGIN PRIVATE KEY-----`). Self-hosters typically inline it via
      * a `.env` file with `\n` escapes; SaaS operators should source it
-     * from their secret manager (design doc §6 risk 4 — pending
-     * team-wide pattern).
+     * from their secret manager (a team-wide pattern is still TBD).
      */
     // `.min(1)` on every field: blank env values (empty string env
     // sets that resolve to `""` after substitution) must NOT make the
