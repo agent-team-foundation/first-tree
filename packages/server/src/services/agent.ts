@@ -32,10 +32,9 @@ import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
 /**
- * Names beginning with `__` are reserved for Hub-internal pseudo agents
- * (e.g. the task notifier). User-facing creation must not be able to
- * squat on them, otherwise internal traffic could be routed through a
- * real account.
+ * Names beginning with `__` are reserved for Hub-internal pseudo agents.
+ * User-facing creation must not be able to squat on them, otherwise
+ * internal traffic could be routed through a real account.
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
 
@@ -279,9 +278,9 @@ export async function createAgent(
   //      would fail. We trust the caller and skip the lookup; DB FK still
   //      enforces the manager_id at commit time.
   //
-  //   3. System path (github webhook, task service) — caller omits
-  //      `managerId` and passes `organizationId` explicitly. We resolve the
-  //      first admin of that org as the manager.
+  //   3. System path (github webhook) — caller omits `managerId` and passes
+  //      `organizationId` explicitly. We resolve the first admin of that
+  //      org as the manager.
   let orgId: string;
   let managerId: string;
 

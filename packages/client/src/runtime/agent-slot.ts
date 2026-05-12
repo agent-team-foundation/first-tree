@@ -11,6 +11,7 @@ import type { ClientConnection, SessionReconcileResult } from "../client-connect
 import { createLogger, type pino } from "../observability/logger.js";
 import type { RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
+import type { ContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import { createGitMirrorManager } from "./git-mirror-manager.js";
 import type { HandlerFactory } from "./handler.js";
@@ -80,7 +81,7 @@ export class AgentSlot {
     return this.sessionManager?.getQuietGateSnapshot() ?? { activeCount: 0, lastActivityMs: 0 };
   }
 
-  async start(contextTreePath?: string | null): Promise<RegisterResult> {
+  async start(contextTreeBinding?: ContextTreeBinding | null): Promise<RegisterResult> {
     const bound = await this.clientConnection.bindAgent(
       this.config.agentId,
       this.config.runtimeType ?? this.config.type,
@@ -174,7 +175,9 @@ export class AgentSlot {
       handlerFactory: this.config.handlerFactory,
       handlerConfig: {
         workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name),
-        contextTreePath: contextTreePath ?? undefined,
+        agentName: this.config.name,
+        contextTreePath: contextTreeBinding?.path,
+        contextTreeRepoUrl: contextTreeBinding?.repoUrl,
         gitMirrorManager,
       },
       agentIdentity: {

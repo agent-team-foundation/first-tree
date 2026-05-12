@@ -263,8 +263,6 @@ export async function listMeChats(
       lastMessagePreview: r.last_message_preview,
       unreadMentionCount: r.unread_mention_count,
       canReply: r.membership_kind === "participant",
-      taskId: null,
-      taskStatus: null,
     };
   });
 

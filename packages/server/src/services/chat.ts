@@ -637,8 +637,8 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
 
     // Watcher rows: managers of either non-human end should immediately
     // see this fresh chat under "Watching". Without this, agent-to-agent
-    // direct chats created via `sendToAgent` / webhooks / task assignment
-    // never surfaced for the manager — design AC #8 silently broke.
+    // direct chats created via `sendToAgent` / webhooks never surfaced for
+    // the manager — design AC #8 silently broke.
     await recomputeChatWatchers(tx, chatId);
 
     if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");

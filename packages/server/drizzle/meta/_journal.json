@@ -251,14 +251,21 @@
       "idx": 35,
       "version": "7",
       "when": 1778457600000,
-      "tag": "0035_github_app_installations",
+      "tag": "0035_drop_hub_tasks",
       "breakpoints": true
     },
     {
       "idx": 36,
       "version": "7",
       "when": 1778544000000,
-      "tag": "0036_drop_github_integration_namespace",
+      "tag": "0036_github_app_installations",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1778630400000,
+      "tag": "0037_drop_github_integration_namespace",
       "breakpoints": true
     }
   ]

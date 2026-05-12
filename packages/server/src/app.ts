@@ -20,7 +20,6 @@ import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
-import { agentTaskRoutes } from "./api/agent/tasks.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { agentActivityRoutes } from "./api/agent-activity.js";
 import { agentRoutes } from "./api/agents.js";
@@ -53,10 +52,8 @@ import { orgNotificationRoutes } from "./api/orgs/notifications.js";
 import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
-import { orgTaskRoutes } from "./api/orgs/tasks.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { sessionRoutes } from "./api/sessions.js";
-import { taskRoutes } from "./api/tasks.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
 import type { Config } from "./config.js";
@@ -451,7 +448,6 @@ export async function buildApp(config: Config) {
           await scope.register(orgAdapterStatusRoutes, { prefix: "/adapters/status" });
           await scope.register(orgOverviewRoutes, { prefix: "/overview" });
           await scope.register(orgActivityRoutes, { prefix: "/activity" });
-          await scope.register(orgTaskRoutes, { prefix: "/tasks" });
           await scope.register(orgSessionRoutes, { prefix: "/sessions" });
           await scope.register(orgNotificationRoutes, { prefix: "/notifications" });
           await scope.register(orgClientRoutes, { prefix: "/clients" });
@@ -475,7 +471,6 @@ export async function buildApp(config: Config) {
           await scope.register(agentActivityRoutes, { prefix: "/agents" });
           await scope.register(sessionRoutes, { prefix: "/agents" });
           await scope.register(chatRoutes, { prefix: "/chats" });
-          await scope.register(taskRoutes, { prefix: "/tasks" });
           await scope.register(adapterRoutes, { prefix: "/adapters" });
           await scope.register(adapterMappingRoutes, { prefix: "/adapter-mappings" });
           await scope.register(clientRoutes, { prefix: "/clients" });
@@ -492,7 +487,6 @@ export async function buildApp(config: Config) {
           await scope.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
-          await scope.register(agentTaskRoutes, { prefix: "/tasks" });
 
           await scope.register(agentFeishuBotRoutes);
           await scope.register(agentFeishuUserRoutes, { prefix: "/delegated" });

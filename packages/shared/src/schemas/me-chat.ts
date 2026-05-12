@@ -41,8 +41,6 @@ export const meChatRowSchema = z.object({
   lastMessagePreview: z.string().nullable(),
   unreadMentionCount: z.number().int(),
   canReply: z.boolean(),
-  taskId: z.string().nullable(),
-  taskStatus: z.string().nullable(),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 

@@ -108,13 +108,13 @@ export class AgentRuntime {
 
   async start(): Promise<void> {
     const contextTreeLogger = createLogger("context-tree");
-    const contextTreePath = await syncContextTree(
+    const contextTreeBinding = await syncContextTree(
       this.config.server,
       this.getAccessToken,
       (msg) => contextTreeLogger.info(msg),
       this.userAgent,
     );
-    if (!contextTreePath) {
+    if (!contextTreeBinding) {
       this.logger.info(
         "context tree not configured or sync skipped — agents will start without organizational context",
       );
@@ -145,7 +145,7 @@ export class AgentRuntime {
 
     this.logger.info({ count: this.slots.length }, "starting agents");
 
-    const results = await Promise.allSettled(this.slots.map((slot) => slot.start(contextTreePath)));
+    const results = await Promise.allSettled(this.slots.map((slot) => slot.start(contextTreeBinding)));
 
     let failed = 0;
     const failures: Array<{ agentName: string; agentId: string; reason: string }> = [];
