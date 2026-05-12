@@ -6,6 +6,15 @@ import { connectDatabase } from "../db/connection.js";
 // Fixed test fixture UUID — not a real org, recreated before each test
 export const DEFAULT_ORG_ID = "01961234-0000-7000-8000-000000000000";
 
+// Enable the dev-callback bypass for the whole test run. The codex P1-9
+// hardening added an explicit opt-in env var on top of the existing
+// `NODE_ENV !== "production"` gate; tests that exercise dev-callback
+// (oauth-flow.test.ts and friends) would otherwise hit 404. Set once
+// here so individual tests don't have to plumb it through.
+if (!process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED) {
+  process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED = "1";
+}
+
 // Switch this worker process to its dedicated pre-created DB. Done eagerly
 // at module load (i.e. once per worker process — even with `isolate: false`,
 // vitest re-evaluates setupFiles per worker) so any code that reads

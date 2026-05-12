@@ -80,27 +80,7 @@ export const serverConfigSchema = defineConfig({
   }),
   oauth: optional({
     /**
-     * GitHub OAuth App credentials for SaaS sign-in. The "half configured"
-     * shape (only one of clientId/clientSecret set) is rejected at boot so a
-     * misconfigured production instance can't accidentally expose the
-     * dev-callback bypass with no real OAuth wired up.
-     *
-     * NOTE (PR-A of GitHub App split): the legacy OAuth client coexists with
-     * the new GitHub App block during the transition. PR-B removes this block
-     * and all callers as part of the D3 hard cut.
-     */
-    github: optional({
-      clientId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID" }),
-      clientSecret: field(z.string(), {
-        env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET",
-        secret: true,
-      }),
-    }),
-    /**
-     * GitHub App credentials — new sign-in surface introduced in PR-A of the
-     * GitHub App split. Wired into actual sign-in / webhook routes by PR-B/PR-C.
-     * Until then this block is read at boot (so misconfig is caught early) but
-     * not consumed by any user-facing flow. See design doc
+     * GitHub App credentials — sole sign-in surface post-D3 cutover per design doc
      * `docs/github-app-design-zh.md` §5.2. A single App installation
      * simultaneously unlocks user-OAuth, the webhook stream, and
      * installation-token minting (§3). All five fields are required

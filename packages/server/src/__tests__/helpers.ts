@@ -57,6 +57,22 @@ type AgentRequestFn = (
  */
 export type CreateTestAppOptions = {
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
+  /**
+   * Drop `oauth.githubApp.slug` from the test config. Used by the
+   * `/github-app-installation/install-url` 503 test — the slug is the
+   * one App field that's optional within the block, so a deployment can
+   * have sign-in/webhooks wired but no install URL.
+   */
+  omitGithubAppSlug?: boolean;
+  /**
+   * Override `oauth.githubApp.privateKeyPem`. The default is a syntactically
+   * valid PKCS#8 header with junk body — `createAppJwt` rejects it. Tests
+   * that need the App-JWT path to actually sign (e.g. the
+   * `/auth/github/callback` integration tests where the install row is
+   * UPSERTed via `fetchInstallation` rather than pre-seeded) generate a
+   * throwaway RSA-2048 keypair and pass it in here.
+   */
+  githubAppPrivateKeyPem?: string;
 };
 
 export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<FastifyInstance> {
@@ -87,24 +103,21 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       connectTokenExpiry: "10m",
     },
     oauth: {
-      github: {
-        clientId: "test-github-client",
-        clientSecret: "test-github-secret",
-      },
-      // Stub GitHub App creds for PR-A foundation. Tests that exercise
-      // the App service primitives inject fetchers / mocks at the
-      // service-call layer and never actually consume these values —
-      // see github-app.test.ts. The `privateKeyPem` must contain the
-      // BEGIN PRIVATE KEY header so the boot guard (codex P1-8) passes;
-      // body is junk and never used to actually sign.
+      // Stub GitHub App creds. Tests that exercise the App flow inject
+      // fetchers / mocks at the service-call layer and never actually
+      // consume these values — see github-app.test.ts.
+      // `privateKeyPem` must contain the BEGIN PRIVATE KEY header — the
+      // boot guard now runs from `buildApp` (codex P1-8 fix), so the
+      // test path exercises it. Body is junk; we never sign with it.
       githubApp: {
         appId: "test-app-id",
         clientId: "test-app-client-id",
         clientSecret: "test-app-client-secret",
         privateKeyPem:
+          opts.githubAppPrivateKeyPem ??
           "-----BEGIN PRIVATE KEY-----\nstub-base64-key-body-not-actually-signed\n-----END PRIVATE KEY-----\n",
         webhookSecret: "test-app-webhook-secret",
-        slug: "test-app-slug",
+        slug: opts.omitGithubAppSlug ? undefined : "test-app-slug",
       },
     },
     trustProxy: false,

@@ -6,11 +6,31 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { signTokensForUser } from "../../services/auth.js";
-import { findOrCreateUserFromGithub, type GithubProfile } from "../../services/auth-identity.js";
+import {
+  findOrCreateUserFromGithub,
+  type GithubProfile,
+  type GithubTokenBundle,
+} from "../../services/auth-identity.js";
 import { encryptValue } from "../../services/crypto.js";
-import { exchangeCodeForProfile } from "../../services/github-oauth.js";
+import {
+  buildAppAuthorizeUrl,
+  createAppJwt,
+  exchangeCodeForAppUserProfile,
+  fetchInstallation,
+  listUserAccessibleInstallationIds,
+} from "../../services/github-app.js";
+import {
+  bindInstallationToOrg,
+  findUnboundInstallationsByAccount,
+  upsertInstallationFromMetadata,
+} from "../../services/github-app-installations.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
-import { createPersonalTeam, ensureMembership, pickPrimaryMembership } from "../../services/membership.js";
+import {
+  createPersonalTeam,
+  ensureMembership,
+  findActiveMembership,
+  pickPrimaryMembership,
+} from "../../services/membership.js";
 import {
   OAUTH_STATE_COOKIE,
   OAUTH_STATE_COOKIE_MAX_AGE_S,
@@ -21,7 +41,15 @@ import { resolvePublicUrl } from "../../utils/public-url.js";
 import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
 
 /**
- * GitHub OAuth surface. All routes are public (no member JWT required).
+ * GitHub sign-in surface. All routes are public (no member JWT required).
+ *
+ * Single flow post-D3 cutover: the GitHub App authorize URL drives both
+ * sign-in and install (D1). Returning users with an existing install
+ * skip the install dialog and just get `code + state`; first-time
+ * installers get `code + state + installation_id`. The legacy OAuth-App
+ * path that lived alongside this until D3 has been removed.
+ *
+ * `dev-callback` bypasses GitHub entirely; gated to non-production.
  *
  * Routes:
  *   - GET /auth/github/start         — sign state JWT + cookie + 302 to GitHub
@@ -29,14 +57,10 @@ import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
  *   - GET /auth/github/dev-callback  — dev-only stub (no GitHub round-trip)
  */
 export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
-  // Half-configured guard — gate `dev-callback` on a real OAuth client when
-  // the operator opted into it. Half-config (clientId without clientSecret
-  // or vice versa) is rejected by the config singleton; here we just refuse
-  // to mount the routes with a clear log line if neither side is wired up.
-  const oauthCfg = app.config.oauth?.github;
-  if (!oauthCfg) {
+  const appCfg = app.config.oauth?.githubApp;
+  if (!appCfg) {
     app.log.info(
-      "GitHub OAuth not configured — /auth/github/start will return 503. Set FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID/_SECRET to enable.",
+      "GitHub App not configured — /auth/github/start will return 503. Set FIRST_TREE_HUB_GITHUB_APP_* to enable.",
     );
   }
 
@@ -46,8 +70,8 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/start", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
     const { next } = githubStartQuerySchema.parse(request.query);
     const safeNext = safeRedirectPath(next ?? null);
-    if (!oauthCfg) {
-      return reply.status(503).send({ error: "GitHub OAuth is not configured on this hub" });
+    if (!appCfg) {
+      return reply.status(503).send({ error: "GitHub App is not configured on this hub" });
     }
 
     const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, safeNext);
@@ -63,31 +87,27 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     );
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
-    const params = new URLSearchParams({
-      client_id: oauthCfg.clientId,
-      redirect_uri: redirectUri,
-      state: token,
-      // `repo` scope is required by the Step 2 repo picker
-      // (docs/new-user-onboarding-design.md §6.3 / O-1). We grant it at
-      // login rather than on-demand mid-onboarding so the picker works
-      // immediately when the user reaches Step 2 without a second redirect.
-      scope: "read:user user:email repo",
-      allow_signup: "true",
-    });
-    return reply.redirect(`https://github.com/login/oauth/authorize?${params}`, 302);
+    // App flow: scope/permissions are declared on the App's GitHub-side
+    // settings page (D0b), so we don't pass them here. The user lands on
+    // the combined OAuth + install dialog (first-time installer) or just
+    // the OAuth consent (returning user).
+    return reply.redirect(buildAppAuthorizeUrl({ clientId: appCfg.clientId, redirectUri, state: token }), 302);
   });
 
   app.get("/callback", async (request, reply) => {
-    if (!oauthCfg) {
-      return reply.status(503).send({ error: "GitHub OAuth is not configured on this hub" });
+    if (!appCfg) {
+      return reply.status(503).send({ error: "GitHub App is not configured on this hub" });
     }
-    const { code, state } = githubCallbackQuerySchema.parse(request.query);
+    const parsed = githubCallbackQuerySchema.parse(request.query);
+    const { code, state, installation_id: installationIdRaw } = parsed;
     const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
 
     let next: string;
+    let targetOrganizationId: string | null = null;
     try {
       const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
       next = verified.next;
+      targetOrganizationId = verified.targetOrganizationId ?? null;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "OAuth state rejected";
       return reply.status(401).send({ error: msg });
@@ -106,31 +126,135 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
     let profile: GithubProfile;
-    let accessToken: string;
+    let tokens: GithubTokenBundle;
+    let plaintextUserAccessToken: string;
+    let installationId: number | null = null;
     try {
-      const result = await exchangeCodeForProfile(
-        { clientId: oauthCfg.clientId, clientSecret: oauthCfg.clientSecret },
+      const result = await exchangeCodeForAppUserProfile({
+        clientId: appCfg.clientId,
+        clientSecret: appCfg.clientSecret,
         code,
         redirectUri,
-      );
+        installationId: installationIdRaw ? Number(installationIdRaw) : null,
+      });
       profile = result.profile;
-      accessToken = result.accessToken;
+      plaintextUserAccessToken = result.accessToken;
+      tokens = {
+        encryptedAccessToken: encryptValue(result.accessToken, app.config.secrets.encryptionKey),
+        accessTokenExpiresAt: result.accessTokenExpiresAt,
+        encryptedRefreshToken: encryptValue(result.refreshToken, app.config.secrets.encryptionKey),
+        refreshTokenExpiresAt: result.refreshTokenExpiresAt,
+      };
+      installationId = result.installationId;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "GitHub exchange failed";
-      app.log.warn({ err }, "github oauth code exchange failed");
+      app.log.warn({ err }, "github sign-in code exchange failed");
       return reply.status(401).send({ error: msg });
     }
 
-    return completeOauthFlow(app, request, reply, profile, next, accessToken);
+    // SECURITY (codex P0-2): the `installation_id` query parameter
+    // arrives over the user's browser address bar — it is NOT a secret
+    // and NOT signed. Without authorization, any signed-in user could
+    // append `?installation_id=<some-other-org's-id>` and bind that
+    // installation to their own Hub team (the App JWT has read access
+    // to every installation, so `fetchInstallation` would succeed).
+    //
+    // Verify the authenticated user actually has access to this
+    // installation via GitHub's `/user/installations` endpoint, which
+    // lists installations the user-access-token holder can administer
+    // (User-type they own + Organization-type they admin). If the
+    // claim doesn't check out, drop the installation_id and continue
+    // sign-in — the user is still authenticated, but no install row
+    // gets fetched or bound to their team.
+    if (installationId !== null) {
+      try {
+        const allowedIds = await listUserAccessibleInstallationIds(plaintextUserAccessToken);
+        if (!allowedIds.has(installationId)) {
+          app.log.warn(
+            {
+              event: "github_app.installation_id_unauthorized",
+              installationId,
+              githubId: profile.githubId,
+              allowedCount: allowedIds.size,
+            },
+            "callback installation_id is not in /user/installations — refusing to bind (attempted hijack?)",
+          );
+          installationId = null;
+        }
+      } catch (err) {
+        // Failing closed: if we can't verify access, don't bind. User
+        // still signs in; install can be re-attempted on next visit.
+        app.log.warn(
+          { err, installationId, githubId: profile.githubId },
+          "github app /user/installations check failed — refusing to bind to be safe",
+        );
+        installationId = null;
+      }
+    }
+
+    // Fetch + UPSERT the installation row when the user just installed
+    // the App. We pull the metadata from GitHub's API (rather than wait
+    // for the `installation: created` webhook) so the callback doesn't
+    // depend on webhook delivery order — and so the Settings panel can
+    // render the connected-account block on the very next page load.
+    //
+    // Bind-to-org happens after `completeOauthFlow` has resolved which
+    // Hub team the user lands on (existing primary, invite redemption,
+    // or a freshly-minted personal team).
+    if (installationId !== null && appCfg) {
+      try {
+        const appJwt = await createAppJwt({ appId: appCfg.appId, privateKeyPem: appCfg.privateKeyPem });
+        const installation = await fetchInstallation(appJwt, installationId);
+        await upsertInstallationFromMetadata(app.db, { installation });
+      } catch (err) {
+        // Codex P2 follow-up: the previous "log and continue" path left
+        // `installationId` intact, so the later `bindInstallationToOrg`
+        // would run against a missing row and silently log a warning,
+        // leaving the user with a successful sign-in but a 404 in
+        // Settings → Integrations. The webhook can't reconcile either
+        // — it has no Hub-org context for the install. Drop the id so
+        // the bind step is skipped entirely; sign-in still succeeds,
+        // and the Settings panel surfaces a clean "Install" CTA the
+        // user can re-trigger. The orphan-reclaim sweep below also
+        // bails (it only runs when the row exists).
+        app.log.warn(
+          { err, installationId, githubId: profile.githubId },
+          "github app install fetch/upsert failed — clearing installation_id, user can retry from Settings",
+        );
+        installationId = null;
+      }
+    }
+
+    return completeOauthFlow(app, request, reply, profile, next, tokens, installationId, targetOrganizationId);
   });
 
   app.get("/dev-callback", async (request, reply) => {
-    // dev-callback mints a stub GitHub identity without round-tripping to
-    // github.com. Always disabled in production — there's no flag to flip,
-    // so a misconfigured prod deploy can never accidentally expose it.
-    // In any non-production environment it's enabled unconditionally so dev
-    // can sign in with one click without standing up a real OAuth client.
+    // dev-callback mints a stub GitHub identity (and, post-PR-300, a
+    // stub GitHub App installation) without round-tripping to
+    // github.com. Two-gate access control to defeat the codex P1-9
+    // failure mode where a misconfigured staging deploy with `NODE_ENV`
+    // unset would leak this bypass:
+    //
+    //   Gate 1: NODE_ENV must not be 'production'. Same as before —
+    //           defense-in-depth, blocks the dumbest mistake.
+    //   Gate 2: FIRST_TREE_HUB_DEV_CALLBACK_ENABLED must be explicitly
+    //           "1" or "true". An unset env var defaults to disabled —
+    //           operators MUST opt in. Vitest's setup script
+    //           (`vitest.setup.ts`) sets this to "1" so the existing
+    //           dev-callback test suite keeps working without per-test
+    //           plumbing.
+    //
+    // Either gate failing → 404 (not 403 — we don't want to confirm the
+    // route exists at all to unauthenticated callers).
     if (process.env.NODE_ENV === "production") {
+      return reply.status(404).send({ error: "Not found" });
+    }
+    const devCallbackOptIn = process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED;
+    if (devCallbackOptIn !== "1" && devCallbackOptIn !== "true") {
+      app.log.info(
+        { url: request.url },
+        "dev-callback request refused — FIRST_TREE_HUB_DEV_CALLBACK_ENABLED is not set",
+      );
       return reply.status(404).send({ error: "Not found" });
     }
     const params = githubDevCallbackQuerySchema.parse(request.query);
@@ -148,7 +272,61 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // the dev env to enable. Never read in production (the early-return
     // above already guards `dev-callback` itself).
     const devPat = process.env.DEV_GITHUB_PAT?.trim() || null;
-    return completeOauthFlow(app, request, reply, profile, next, devPat);
+    const tokens: GithubTokenBundle = devPat
+      ? { encryptedAccessToken: encryptValue(devPat, app.config.secrets.encryptionKey) }
+      : {};
+
+    // App-flow dev bypass: when the request supplied an `installationId`,
+    // stub a `github_app_installations` row before completing the OAuth
+    // flow so the rest of the dev session looks identical to a real
+    // post-install state — Settings → Integrations renders the connected
+    // account, the App webhook endpoint resolves the binding, etc.
+    //
+    // Unlike the real path (which fetches metadata from GitHub), we just
+    // mint the row directly. The `permissions` / `events` blocks mirror
+    // what the App declares on its GitHub-side settings page (D0b) so the
+    // dev row matches what a real install would look like for QA purposes.
+    let devInstallationId: number | null = null;
+    if (params.installationId) {
+      devInstallationId = Number(params.installationId);
+      try {
+        await upsertInstallationFromMetadata(app.db, {
+          installation: {
+            id: devInstallationId,
+            accountType: params.installationAccountType ?? "User",
+            accountLogin: params.installationAccountLogin ?? params.login,
+            accountGithubId: Number(params.installationAccountGithubId ?? params.githubId),
+            permissions: {
+              contents: "write",
+              pull_requests: "write",
+              issues: "read",
+              metadata: "read",
+              members: "read",
+            },
+            events: [
+              "issues",
+              "issue_comment",
+              "pull_request",
+              "pull_request_review",
+              "push",
+              "installation",
+              "installation_repositories",
+              "member",
+            ],
+            suspendedAt: null,
+          },
+        });
+      } catch (err) {
+        // Dev-only path; log and continue so a bad query string doesn't
+        // brick local sign-in. The OAuth flow still completes; bind is
+        // attempted below and will simply fail to find the row.
+        app.log.warn({ err, installationId: devInstallationId }, "dev-callback installation stub upsert failed");
+      }
+    }
+
+    // Dev bypass never carries a `targetOrganizationId` — the install
+    // stub binds to whatever team the dev session resolves into.
+    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null);
   });
 }
 
@@ -159,16 +337,29 @@ async function completeOauthFlow(
   profile: GithubProfile,
   next: string,
   /**
-   * Raw GitHub OAuth access token. Persisted (encrypted) so the Step 2
-   * repo picker can call GitHub APIs without a second OAuth round-trip.
-   * `null` for `dev-callback` (no real GitHub round-trip happened).
+   * Persisted (encrypted) GitHub token bundle. Empty when called from
+   * `dev-callback` without a `DEV_GITHUB_PAT` set, or — in the App flow —
+   * always includes the full pair (access + refresh + expiries).
    */
-  rawAccessToken: string | null,
+  oauthTokens: GithubTokenBundle,
+  /**
+   * GitHub-side installation id when the user just installed the App;
+   * null on the legacy OAuth path, returning App users without a fresh
+   * install, and `dev-callback`. Used after team resolution to bind the
+   * installation row to the user's Hub team.
+   */
+  installationId: number | null,
+  /**
+   * Hub org the install should bind to, carried in the signed state when
+   * the flow was kicked off from an org's Settings panel (codex P1-3).
+   * The user MUST be an active admin of it (re-checked here against the
+   * live `members` row — the state JWT outlives a membership revoke).
+   * Overridden by invite-redemption: if `next` is an `/invite/<token>`
+   * path, that org wins regardless. Null on the plain sign-in flow.
+   */
+  targetOrganizationId: string | null,
 ) {
-  const encryptedAccessToken = rawAccessToken
-    ? encryptValue(rawAccessToken, app.config.secrets.encryptionKey)
-    : undefined;
-  const { userId } = await findOrCreateUserFromGithub(app.db, profile, { encryptedAccessToken });
+  const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
 
   // Track which signup path the user took. Surfaced to the SPA via the
   // post-OAuth fragment so the onboarding modal can pick context-aware copy.
@@ -181,6 +372,7 @@ async function completeOauthFlow(
   // auto-provisioning. Invite paths look like `/invite/abc123`.
   const inviteMatch = /^\/invite\/([^/?#]+)/.exec(next);
   let resolved = false;
+  let resolvedOrganizationId: string | null = null;
 
   if (inviteMatch?.[1]) {
     const token = inviteMatch[1];
@@ -203,13 +395,29 @@ async function completeOauthFlow(
     });
     joinPath = "invite";
     resolved = true;
+    resolvedOrganizationId = inv.organizationId;
     // Drop the now-consumed invite path; land on the team dashboard so the
     // onboarding modal can layer on top.
     next = "/";
+  } else if (targetOrganizationId) {
+    // App-install flow: the org was chosen on a Settings page and rode in
+    // the signed state (codex P1-3). Re-check the user is still an active
+    // admin of it — the state JWT outlives a membership revoke, so a stale
+    // token must not bind another team's install to an org the user no
+    // longer administers.
+    const membership = await findActiveMembership(app.db, userId, targetOrganizationId);
+    if (!membership || membership.role !== "admin") {
+      return reply.status(403).send({ error: "Not an admin of the organization this installation targets" });
+    }
+    resolved = true;
+    resolvedOrganizationId = targetOrganizationId;
+    // joinPath stays "returning"; keep caller's `next` (the Settings page)
+    // so the panel re-renders with the now-bound installation.
   } else {
     const primary = await pickPrimaryMembership(app.db, userId);
     if (primary) {
       resolved = true;
+      resolvedOrganizationId = primary.organizationId;
       // joinPath stays "returning"; preserve caller's original `next` intent.
     } else {
       const personal = await createPersonalTeam(app.db, {
@@ -223,6 +431,7 @@ async function completeOauthFlow(
       });
       joinPath = "solo";
       resolved = true;
+      resolvedOrganizationId = personal.organizationId;
       next = "/";
       // Onboarding funnel: structured log marker. Picked up by logfire/otel
       // pipelines via `event: "onboarding.team_created"` for funnel views.
@@ -235,6 +444,62 @@ async function completeOauthFlow(
         },
         "onboarding funnel: team auto-created at OAuth bootstrap",
       );
+    }
+  }
+
+  // Bind the installation to whichever Hub team the user just resolved
+  // into. Late-bound (after team resolution) so a personal-team-creating
+  // signup ends up bound to the team it just minted, and an invitee binds
+  // to the inviting org.
+  //
+  // Tolerates the "already bound to this org" no-op case (idempotent on
+  // returning sign-ins). Refuses to rebind to a different org per D2 1:1
+  // — that path logs a warning and lets the sign-in succeed; the
+  // installation stays attached to whoever installed it first, which is
+  // the documented design (no "transfer install" UX yet).
+  if (installationId !== null && resolvedOrganizationId) {
+    try {
+      await bindInstallationToOrg(app.db, installationId, resolvedOrganizationId);
+    } catch (err) {
+      app.log.warn(
+        { err, installationId, hubOrganizationId: resolvedOrganizationId, userId },
+        "github app install bind-to-org failed — sign-in continues; reconcile in Settings",
+      );
+    }
+  }
+
+  // Orphan-install reclaim (codex P1-5 + H1): if a prior sign-in UPSERTed
+  // an installation row but the bind step failed, the row stays unbound
+  // forever — GitHub only sends `installation_id` on the initial install,
+  // so a later sign-in never re-attempts the bind via the branch above.
+  // Sweep here for unbound rows whose GitHub account is *this user's own*
+  // personal account (the same authorization basis the callback's
+  // `/user/installations` check enforced when the row was first written),
+  // and auto-claim if there's exactly one. Multiple → leave them for the
+  // Settings "Claim install" buttons rather than guess.
+  if (resolvedOrganizationId) {
+    try {
+      const orphans = await findUnboundInstallationsByAccount(app.db, Number(profile.githubId));
+      if (orphans.length === 1) {
+        const orphan = orphans[0];
+        if (orphan) {
+          await bindInstallationToOrg(app.db, orphan.installationId, resolvedOrganizationId).catch((err) => {
+            app.log.warn(
+              { err, installationId: orphan.installationId, hubOrganizationId: resolvedOrganizationId, userId },
+              "orphan install reclaim failed — Settings UI can retry the manual claim",
+            );
+          });
+        }
+      } else if (orphans.length > 1) {
+        app.log.info(
+          { count: orphans.length, accountGithubId: Number(profile.githubId), userId },
+          "multiple unbound installs match this account — skipping auto-claim, Settings UI surfaces a picker",
+        );
+      }
+    } catch (err) {
+      // The reclaim sweep is best-effort; a failure here must never block
+      // sign-in.
+      app.log.warn({ err, userId }, "orphan install reclaim sweep failed");
     }
   }
 
