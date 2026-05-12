@@ -22,7 +22,7 @@ import {
 import { getImage, putImage } from "../../../api/image-store.js";
 import { addMeChatParticipants } from "../../../api/me-chats.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
-import { getLastRead } from "../../../api/read-state-store.js";
+import { getLastRead, type ReadState } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -965,13 +965,27 @@ export function ChatView({
     return mergedMessages.length - 1 - lastReadResolution.index;
   }, [lastReadResolution, mergedMessages]);
 
-  // Decide where to land on chat open. Triggered once per chat-id
-  // change, after the timeline has items to scroll within. M2's core
-  // behavioral change: prefer the last-read marker over "scroll to
-  // bottom" when one exists and resolves to an in-view message.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberately fires once per chat-id transition; we don't want the jump to re-run on every poll-driven items update.
+  // Decide where to land on chat open. Fires exactly once per
+  // chat-id visit, the first moment the timeline has items to scroll
+  // within — so a hard-reload that loads chatId before queries
+  // hydrate still lands correctly when items arrive.
+  //
+  // Gated by `landedForChatRef`, which records the chatId we already
+  // fired for. When the user navigates A → B → A, the ref's value
+  // differs from the current chatId on each visit, so we fire again.
+  // When the same chatId is in scope and items count grows (poll-
+  // driven append), the ref matches and we bail — M3 will handle
+  // "follow new message if at bottom".
+  //
+  // Caught in PR 286 review (M2 round): Bug 1 — first chat open
+  // after hard reload landed at the top because the effect previously
+  // had `deps: [chatId]` and bailed on `itemCount === 0` without
+  // re-firing when items arrived.
+  const landedForChatRef = useRef<string | null>(null);
   useEffect(() => {
     if (itemCount === 0) return;
+    if (landedForChatRef.current === chatId) return;
+    landedForChatRef.current = chatId;
     if (lastReadResolution && unreadCount > 0) {
       // Land the last-read message at the bottom of the read zone so
       // the unread divider + new content are scrollable below.
@@ -981,14 +995,27 @@ export function ChatView({
       // M1-era "open scrolls to bottom" behavior.
       scrollToBottom("auto");
     }
-  }, [chatId]);
+  }, [chatId, itemCount, lastReadResolution, unreadCount, scrollToMessage, scrollToBottom]);
 
   // Watches each message DOM via IntersectionObserver and persists the
   // newest-seen id (monotonic). Flushes on unmount + tab visibility-loss.
+  //
+  // `onWrite` mirrors every IDB write into React Query's cache for
+  // the `["chat-read-state", chatId]` key, so a same-session re-visit
+  // (A → B → A) picks up the latest marker even though the query has
+  // `staleTime: Infinity` and would otherwise return its first-mount
+  // value. Caught in PR 286 review (M2 round): Bug 2.
   useReadTracker({
     containerRef: scrollContainerRef,
     messages: mergedMessages,
     chatId,
+    onWrite: (cid, lastReadMessageId) => {
+      queryClient.setQueryData<ReadState>(["chat-read-state", cid], {
+        chatId: cid,
+        lastReadMessageId,
+        lastReadAt: Date.now(),
+      });
+    },
   });
 
   const displayName = agentName(agentId);

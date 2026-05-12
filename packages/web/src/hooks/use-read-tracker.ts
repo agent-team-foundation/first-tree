@@ -40,6 +40,18 @@ type UseReadTrackerOptions = {
   messages: readonly Message[];
   /** Chat the messages belong to. Read-state writes are keyed by this. */
   chatId: string;
+  /**
+   * Fires immediately after every successful IDB write (both the
+   * debounced and the flush-on-hide paths). Callers use this to keep
+   * an in-memory cache (e.g. React Query) in sync with the IDB row
+   * — otherwise switching away and back within the same session
+   * would read the stale value.
+   *
+   * Caught in PR 286 review (M2 round): Bug 2 — same-session
+   * `A → B → A` didn't pick up new read-tracker writes because
+   * `useQuery` had `staleTime: Infinity` and was never invalidated.
+   */
+  onWrite?: (chatId: string, lastReadMessageId: string) => void;
   /** Hold time before a visible message counts as "seen". Default 500ms. */
   visibleHoldMs?: number;
   /** Debounce for IndexedDB writes during continuous scrolling. Default 1000ms. */
@@ -52,10 +64,20 @@ export function useReadTracker({
   containerRef,
   messages,
   chatId,
+  onWrite,
   visibleHoldMs = 500,
   writeDebounceMs = 1000,
   intersectionThreshold = 0.6,
 }: UseReadTrackerOptions): void {
+  // Keep `onWrite` reachable from inside the effects below without
+  // putting the caller-supplied function in their dep arrays —
+  // otherwise the IntersectionObserver / visibilitychange listener
+  // would rebuild on every render that produces a new callback
+  // identity.
+  const onWriteRef = useRef(onWrite);
+  useEffect(() => {
+    onWriteRef.current = onWrite;
+  }, [onWrite]);
   // The newest message id (by chronological position) we have ever
   // observed as "seen" in this chat session. Monotonic — only moves
   // forward through the messages list, never backward.
@@ -123,13 +145,18 @@ export function useReadTracker({
     };
 
     // Schedule / cancel the debounced IDB write. At most one write in
-    // flight at a time per chatId.
+    // flight at a time per chatId. After the IDB write resolves, fire
+    // the optional `onWrite` callback so the chat-view can keep its
+    // React Query cache (`["chat-read-state", chatId]`) in sync with
+    // what was just persisted — otherwise an in-session re-visit
+    // would read the stale value from React Query's memory.
     const scheduleWrite = () => {
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
       writeTimerRef.current = setTimeout(() => {
         writeTimerRef.current = null;
         const id = seenSoFarRef.current;
-        if (id) void setLastRead(chatId, id);
+        if (!id) return;
+        void setLastRead(chatId, id).then(() => onWriteRef.current?.(chatId, id));
       }, writeDebounceMs);
     };
 
@@ -184,7 +211,8 @@ export function useReadTracker({
         writeTimerRef.current = null;
       }
       const id = seenSoFarRef.current;
-      if (id) void setLastRead(chatId, id);
+      if (!id) return;
+      void setLastRead(chatId, id).then(() => onWriteRef.current?.(chatId, id));
     };
     const onVis = () => {
       if (document.visibilityState === "hidden") flushNow();
