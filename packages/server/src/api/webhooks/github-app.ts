@@ -41,11 +41,14 @@ const log = createLogger("GithubAppWebhook");
  *                                     Per-repo children table is not yet
  *                                     modelled (design doc §6 punt).
  *   issues / issue_comment / pull_request / etc.
- *                                   — reverse-lookup the org binding then
- *                                     reuse the legacy handler logic. If
- *                                     no binding exists (orphan webhook),
- *                                     200 ok with `routed:false` so GitHub
- *                                     doesn't retry forever.
+ *                                   — reverse-lookup the org binding FIRST
+ *                                     (before claiming the delivery for
+ *                                     dedup — codex P1-6), then reuse the
+ *                                     legacy handler logic. If no binding
+ *                                     exists yet (webhook racing ahead of
+ *                                     the OAuth-callback bind), reply 503
+ *                                     WITHOUT claiming so GitHub redelivers
+ *                                     once the bind lands.
  */
 export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void> {
   // Scoped buffer parser — same pattern as the legacy `github.ts` plugin.
@@ -106,51 +109,86 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
 
       // Idempotency via `x-github-delivery`. Same approach as the
       // per-org endpoint (#283). Apps share the same retry semantics so
-      // the dedup table is reused as-is.
+      // the dedup table is reused as-is. GitHub keeps the delivery GUID
+      // stable across its own redeliveries, so claiming/dedup survives
+      // retries.
       const deliveryHeader = request.headers["x-github-delivery"];
       const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
 
-      if (deliveryId) {
+      // claimEvent helper: insert the dedup row; on conflict (already
+      // processed) short-circuit with a deduped 200. Returns `true` when
+      // the caller may proceed, `false` when it already wrote the reply
+      // (the caller then just `return reply`).
+      const tryClaim = async (): Promise<boolean> => {
+        if (!deliveryId) return true;
         const claimed = await claimEvent(app.db, deliveryId, "github-app");
         if (!claimed) {
           log.info({ deliveryId, eventType }, "duplicate GitHub App delivery, skipping");
-          return reply.status(200).send({ ok: true, event: eventType, deduped: true });
+          reply.status(200).send({ ok: true, event: eventType, deduped: true });
+          return false;
+        }
+        return true;
+      };
+      const releaseClaimOnError = async (err: unknown): Promise<never> => {
+        if (deliveryId) {
+          await unclaimEvent(app.db, deliveryId, "github-app").catch((unclaimErr) => {
+            log.error({ err: unclaimErr, deliveryId }, "failed to unclaim GitHub App delivery after handler error");
+          });
+        }
+        throw err;
+      };
+
+      // ── Installation lifecycle events ────────────────────────────────
+      // These events MANAGE the binding (create / delete / suspend / …),
+      // so there's no "wait for the bind" race — claim + handle.
+      if (eventType === "installation" || eventType === "installation_repositories") {
+        if (!(await tryClaim())) return reply;
+        try {
+          return eventType === "installation"
+            ? await handleInstallationEvent(app, payload, reply)
+            : await handleInstallationRepositoriesEvent(app, payload, reply);
+        } catch (err) {
+          return releaseClaimOnError(err);
         }
       }
 
+      // ── All other events: resolve installation → org BEFORE claiming ──
+      // (codex P1-6) The old order claimed first, so an `issues` /
+      // `pull_request` event that arrived in the window between
+      // `installation: created` and the OAuth-callback bind got burned as
+      // "processed" while returning 200 — GitHub then never redelivered
+      // it. Now we look up the binding first; if it's not there yet, we
+      // 503 WITHOUT claiming, so GitHub redelivers (the bind almost
+      // certainly lands within seconds of the OAuth round-trip) and the
+      // redelivery — same GUID, still unclaimed — gets a second chance.
+      const installationIdRaw = extractInstallationId(payload);
+      if (installationIdRaw === null) {
+        // GitHub always includes `installation` on App webhooks for events
+        // that aren't App-management lifecycle. Missing it is a payload
+        // bug a redelivery won't fix — ack (200) and don't claim (claiming
+        // is moot, nothing reprocesses an event we can't route).
+        log.warn({ eventType }, "github app webhook missing installation block");
+        return reply.status(200).send({ ok: true, event: eventType, routed: false, reason: "no_installation" });
+      }
+      const row = await findInstallationByGithubId(app.db, installationIdRaw);
+      if (!row || !row.hubOrganizationId) {
+        // Race with the OAuth-callback bind (or a never-bound install).
+        // 503 (NOT a deduped/processed 200) so GitHub keeps redelivering
+        // on its retry schedule; deliberately NOT claimed so the next
+        // attempt is processed fresh. If the bind never lands GitHub
+        // eventually gives up — those events were genuinely unroutable.
+        log.info(
+          { eventType, installationId: installationIdRaw, hasRow: !!row },
+          "github app webhook for unbound installation — 503 so GitHub redelivers after the bind lands",
+        );
+        return reply
+          .status(503)
+          .send({ ok: false, event: eventType, routed: false, reason: "no_binding", retryable: true });
+      }
+      const organizationId = row.hubOrganizationId;
+
+      if (!(await tryClaim())) return reply;
       try {
-        // ── Installation lifecycle events ──────────────────────────
-        if (eventType === "installation") {
-          return await handleInstallationEvent(app, payload, reply);
-        }
-        if (eventType === "installation_repositories") {
-          return await handleInstallationRepositoriesEvent(app, payload, reply);
-        }
-
-        // ── All other events: resolve installation → org, dispatch ─
-        const installationIdRaw = extractInstallationId(payload);
-        if (installationIdRaw === null) {
-          // GitHub always includes `installation` on App webhooks for
-          // events that aren't App-management lifecycle. Missing it is a
-          // payload bug we want to see in logs.
-          log.warn({ eventType }, "github app webhook missing installation block");
-          return reply.status(200).send({ ok: true, event: eventType, routed: false, reason: "no_installation" });
-        }
-        const row = await findInstallationByGithubId(app.db, installationIdRaw);
-        if (!row || !row.hubOrganizationId) {
-          // Orphan webhook — installation row not yet inserted (race with
-          // the callback) or never bound to a Hub team. Either way the
-          // sender's only sane response is "ack so GitHub doesn't retry
-          // forever"; the binding will catch up via OAuth callback or
-          // the `installation: created` event.
-          log.info(
-            { eventType, installationId: installationIdRaw, hasRow: !!row },
-            "github app webhook for unbound installation, dropping",
-          );
-          return reply.status(200).send({ ok: true, event: eventType, routed: false, reason: "no_binding" });
-        }
-        const organizationId = row.hubOrganizationId;
-
         if (eventType === "issues") {
           return await handleIssuesEvent(app, organizationId, eventType, payload, reply);
         }
@@ -168,12 +206,7 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         }
         return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
       } catch (err) {
-        if (deliveryId) {
-          await unclaimEvent(app.db, deliveryId, "github-app").catch((unclaimErr) => {
-            log.error({ err: unclaimErr, deliveryId }, "failed to unclaim GitHub App delivery after handler error");
-          });
-        }
-        throw err;
+        return releaseClaimOnError(err);
       }
     },
   );

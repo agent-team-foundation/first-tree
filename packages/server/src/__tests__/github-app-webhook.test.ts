@@ -5,7 +5,7 @@ import { githubAppInstallations } from "../db/schema/github-app-installations.js
 import { organizations } from "../db/schema/organizations.js";
 import { findInstallationByGithubId, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { uuidv7 } from "../uuid.js";
-import { useTestApp } from "./helpers.js";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 const WEBHOOK_SECRET = "test-app-webhook-secret";
 const PATH = "/api/v1/webhooks/github";
@@ -272,7 +272,7 @@ describe("GitHub App webhook (/api/v1/webhooks/github)", () => {
   });
 
   describe("other events", () => {
-    it("unknown installation returns 200 with reason='no_binding' (orphan webhook)", async () => {
+    it("unknown installation returns 503 with reason='no_binding' so GitHub redelivers (codex P1-6)", async () => {
       const app = getApp();
       const body = JSON.stringify({
         action: "opened",
@@ -292,8 +292,57 @@ describe("GitHub App webhook (/api/v1/webhooks/github)", () => {
         },
         payload: body,
       });
-      expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ ok: true, routed: false, reason: "no_binding" });
+      // 503 (not 200) — a 2xx would tell GitHub the delivery succeeded and
+      // it'd never retry, dropping the event for good.
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ ok: false, routed: false, reason: "no_binding" });
+    });
+
+    it("does NOT claim the delivery on no_binding — a redelivery after the bind lands is routed (codex P1-6)", async () => {
+      const app = getApp();
+      // The bound org needs an admin member for the github-adapter agent
+      // to be createable when the redelivered event actually routes.
+      const admin = await createTestAdmin(app, { username: `wh-redeliver-${uuidv7().slice(0, 8)}` });
+      const installationId = 9_960_001;
+      const deliveryId = uuidv7();
+      const body = JSON.stringify({
+        action: "opened",
+        installation: { id: installationId },
+        issue: { number: 7, title: "race", body: "", html_url: "" },
+        repository: { full_name: "u/r" },
+        sender: { login: "u" },
+      });
+      const headers = {
+        "content-type": "application/json",
+        "x-github-event": "issues",
+        "x-github-delivery": deliveryId,
+        "x-hub-signature-256": signBody(body),
+      };
+
+      // 1st delivery: arrives before the OAuth callback binds the install.
+      const first = await app.inject({ method: "POST", url: PATH, headers, payload: body });
+      expect(first.statusCode).toBe(503);
+
+      // The bind lands (OAuth callback completes).
+      await upsertInstallationFromMetadata(app.db, {
+        installation: {
+          id: installationId,
+          accountType: "Organization",
+          accountLogin: "acme",
+          accountGithubId: 7_700_010,
+          permissions: {},
+          events: [],
+          suspendedAt: null,
+        },
+        hubOrganizationId: admin.organizationId,
+      });
+
+      // GitHub redelivers the SAME delivery id — because the first attempt
+      // wasn't claimed, it's processed fresh and now routes (no target
+      // agent for `u/r`, so `routed:false`, but a real 200 — not deduped).
+      const second = await app.inject({ method: "POST", url: PATH, headers, payload: body });
+      expect(second.statusCode).toBe(200);
+      expect(second.json()).not.toMatchObject({ deduped: true });
     });
 
     it("missing installation block returns 200 with reason='no_installation'", async () => {
