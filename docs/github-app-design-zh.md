@@ -76,7 +76,7 @@ per-repo webhook 模型迫使 admin 在 **每一个想接的 GitHub repo** 的 S
   - 不声明 `workflows:write`（D4：automation 独立部署，Hub App 不接管 workflow 安装）
 - **Events 订阅**：`issues`, `issue_comment`, `pull_request`, `pull_request_review`, `push`, `installation`, `installation_repositories`, `member`
 
-需要在 dev / staging / prod 三个环境各创建一个 App。
+需要在 staging 和 prod 两个环境各创建一个 App。本团队 dev 与 staging 共用同一套部署，所以两套 App 即可——dev 直接复用 staging 的 App 凭证。
 
 ### 5.2 Env / Secrets
 
@@ -147,13 +147,13 @@ CREATE TABLE github_app_installations (
 2. **与 breeze (Candidate A) 的边界**：breeze 是 Hub client variant，持有用户的 `gh` login（user-level）。Hub App installation 是 account-level（org 或 personal）。两者**不冲突但要避免 UI 混淆**——"装了 App 之后 breeze 还要不要单独登录 gh"。breeze 实装时再厘清，本次不解决。背景见 memory `unified-product-direction.md` Candidate A。
 3. **Token 安全模型变化**：从"不过期的 access token"变成"8h TTL + refresh token"。refresh token 本身要加密存储，且 refresh 失败要有明确 UX（提示重新登录）。
 4. **App private key 的运维**：PEM 不能扔 env var 拼字符串。需要确认团队现有 secret manager pattern。
-5. **Dev / staging / prod 三套 App 的私钥与回调 URL**：三个独立 App 各自一套配置。CI 流程要明确。
+5. **Staging / prod 两套 App 的私钥与回调 URL**：两个独立 App 各自一套配置（dev 复用 staging）。CI 流程要明确，避免把 staging 凭证误写进 prod 部署。
 
 ---
 
 ## 7. 落地建议顺序（Phase 1 候选）
 
-1. 创建 GitHub App（dev / staging / prod 三套），团队层面分配 secret
+1. 创建 GitHub App（staging + prod 两套；dev 复用 staging），团队层面分配 secret
 2. DB migration：新增 `github_app_installations` 表 + `auth_identities` 扩字段
 3. OAuth 切换：登录走 App user authorization；保留老 OAuth client_id 作为回滚后路
 4. Install 回调 + installation 入库
