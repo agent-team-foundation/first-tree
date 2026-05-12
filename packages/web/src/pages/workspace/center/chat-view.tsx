@@ -39,6 +39,7 @@ import {
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import {
   ambiguousDisplayNames,
+  groupAndSortCandidates,
   MentionAutocompletePopover,
   type MentionCandidate,
   MentionLabel,
@@ -856,12 +857,30 @@ export function ChatView({
     for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
     for (const a of activity?.agents ?? []) ids.add(a.agentId);
     if (ids.size === 0) ids.add(agentId);
+    // Build a lookup from `/activity` so we can attach `managedByMe`
+    // per candidate. Known limitation: agents that appear only via
+    // `chatDetail.participants` (no runtime presence row, e.g. an
+    // autonomous agent that has never been bound to a client) default
+    // to false. That means a caller's own offline agent can be
+    // misclassified into the "teammates" group of the [+] picker.
+    // The picker grouping is a visual hint, not a security boundary,
+    // so we accept this fidelity loss rather than widen `/activity`'s
+    // shape (which is also consumed by roster / team / clients pages).
+    // To revisit: surface `managedByMe` independently of runtime via a
+    // dedicated `/me/managed-agents` endpoint and intersect here.
+    const managedByMeMap = new Map<string, boolean>();
+    for (const a of activity?.agents ?? []) managedByMeMap.set(a.agentId, a.managedByMe);
     const out: MentionCandidate[] = [];
     for (const id of ids) {
       if (id === myAgentId) continue;
       const ident = agentIdentity(id);
       if (!ident || !ident.name) continue;
-      out.push({ agentId: id, name: ident.name, displayName: ident.displayName });
+      out.push({
+        agentId: id,
+        name: ident.name,
+        displayName: ident.displayName,
+        managedByMe: managedByMeMap.get(id) ?? false,
+      });
     }
     return out;
   }, [chatDetail?.participants, activity?.agents, agentId, agentIdentity, myAgentId]);
@@ -1641,27 +1660,46 @@ function ParticipantsHeader({
             >
               {(() => {
                 const ambiguous = ambiguousDisplayNames(outsideCandidates);
-                return outsideCandidates.map((c) => (
-                  <button
-                    key={c.agentId}
-                    type="button"
-                    role="option"
-                    aria-selected="false"
-                    title={c.name ? `@${c.name}` : undefined}
-                    onClick={() => addMut.mutate(c.agentId)}
-                    disabled={addMut.isPending}
-                    className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                    style={{
-                      background: "transparent",
-                      color: "var(--fg)",
-                      border: "none",
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    <MentionLabel candidate={c} ambiguous={ambiguous} />
-                  </button>
-                ));
+                // Same grouping contract as the new-chat picker: mine
+                // first, teammates' second, --border-faint hairline
+                // between (only when both groups are non-empty).
+                return groupAndSortCandidates(outsideCandidates).map((item) => {
+                  if ("divider" in item) {
+                    return (
+                      <div
+                        key="__divider"
+                        // See new-chat-draft.tsx — same a11y reasoning.
+                        role="presentation"
+                        style={{
+                          height: "var(--hairline)",
+                          background: "var(--border-faint)",
+                          margin: "var(--sp-0_5) var(--sp-3)",
+                        }}
+                      />
+                    );
+                  }
+                  return (
+                    <button
+                      key={item.agentId}
+                      type="button"
+                      role="option"
+                      aria-selected="false"
+                      title={item.name ? `@${item.name}` : undefined}
+                      onClick={() => addMut.mutate(item.agentId)}
+                      disabled={addMut.isPending}
+                      className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                      style={{
+                        background: "transparent",
+                        color: "var(--fg)",
+                        border: "none",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <MentionLabel candidate={item} ambiguous={ambiguous} />
+                    </button>
+                  );
+                });
               })()}
             </div>
           )}

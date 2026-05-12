@@ -8,6 +8,7 @@ import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
   ambiguousDisplayNames,
+  groupAndSortCandidates,
   MentionAutocompletePopover,
   type MentionCandidate,
   MentionLabel,
@@ -69,7 +70,12 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
       if (myAgentId && row.agentId === myAgentId) continue;
       const ident = agentIdentity(row.agentId);
       if (!ident || !ident.name) continue;
-      out.push({ agentId: row.agentId, name: ident.name, displayName: ident.displayName });
+      out.push({
+        agentId: row.agentId,
+        name: ident.name,
+        displayName: ident.displayName,
+        managedByMe: row.managedByMe,
+      });
     }
     return out;
   }, [activity, agentIdentity, myAgentId]);
@@ -432,26 +438,51 @@ function ParticipantChips({
           >
             {(() => {
               const ambiguous = ambiguousDisplayNames(chipCandidates);
-              return chipCandidates.map((c) => (
-                <button
-                  key={c.agentId}
-                  type="button"
-                  role="option"
-                  aria-selected="false"
-                  title={c.name ? `@${c.name}` : undefined}
-                  onClick={() => onAdd(c.agentId)}
-                  className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                  style={{
-                    background: "transparent",
-                    color: "var(--fg)",
-                    border: "none",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  <MentionLabel candidate={c} ambiguous={ambiguous} />
-                </button>
-              ));
+              // My-managed agents first, then teammates', alphabetical
+              // within each group, divider between the two groups (only
+              // when both are non-empty). The thin --border-faint
+              // hairline is intentional: visible enough to read as
+              // grouping, quiet enough to not compete for attention.
+              return groupAndSortCandidates(chipCandidates).map((item) => {
+                if ("divider" in item) {
+                  return (
+                    <div
+                      key="__divider"
+                      // `role="presentation"` strips this from the a11y
+                      // tree: listbox semantics expect children to be
+                      // `option`s, and an announced separator inflates
+                      // the "N of M" count in some screen readers. The
+                      // grouping is purely a visual cue.
+                      role="presentation"
+                      style={{
+                        height: "var(--hairline)",
+                        background: "var(--border-faint)",
+                        margin: "var(--sp-0_5) var(--sp-3)",
+                      }}
+                    />
+                  );
+                }
+                return (
+                  <button
+                    key={item.agentId}
+                    type="button"
+                    role="option"
+                    aria-selected="false"
+                    title={item.name ? `@${item.name}` : undefined}
+                    onClick={() => onAdd(item.agentId)}
+                    className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                    style={{
+                      background: "transparent",
+                      color: "var(--fg)",
+                      border: "none",
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <MentionLabel candidate={item} ambiguous={ambiguous} />
+                  </button>
+                );
+              });
             })()}
           </div>
         )}
