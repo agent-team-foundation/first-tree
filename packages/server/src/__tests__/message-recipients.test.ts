@@ -52,9 +52,18 @@ describe("sendMessage returns recipients", () => {
 
   it("returns multiple recipients in group chat", async () => {
     const app = getApp();
-    const { agent: a1 } = await createTestAgent(app, { name: `recip-g1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a2 } = await createTestAgent(app, { name: `recip-g2-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a3 } = await createTestAgent(app, { name: `recip-g3-${crypto.randomUUID().slice(0, 6)}` });
+    // Phase 1 (chat-participant-mode-fix-design.md §2.1) seeds every
+    // non-human agent in a group chat as `mention_only`, so an unmentioned
+    // message produces 0 notifying recipients. Make a1 a `human` sender so
+    // group humans (none here) and `@`-mentioned agents wake; explicitly
+    // mention a2 and a3 in the body to get both into the notify=true set.
+    const uid = crypto.randomUUID().slice(0, 6);
+    const name1 = `recip-g1-${uid}`;
+    const name2 = `recip-g2-${uid}`;
+    const name3 = `recip-g3-${uid}`;
+    const { agent: a1 } = await createTestAgent(app, { name: name1, type: "human" });
+    const { agent: a2 } = await createTestAgent(app, { name: name2 });
+    const { agent: a3 } = await createTestAgent(app, { name: name3 });
 
     const chat = await createChat(app.db, a1.uuid, {
       type: "group",
@@ -63,7 +72,7 @@ describe("sendMessage returns recipients", () => {
 
     const result = await sendMessage(app.db, chat.id, a1.uuid, {
       format: "text",
-      content: "group msg",
+      content: `group msg @${name2} @${name3}`,
     });
 
     expect(result.recipients).toHaveLength(2);
