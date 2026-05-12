@@ -4,6 +4,7 @@ import type { Database } from "../db/connection.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
 import { uuidv7 } from "../uuid.js";
+import { decryptValue } from "./crypto.js";
 
 export type GithubProfile = {
   /** GitHub numeric id — stable for the lifetime of the account. */
@@ -110,6 +111,38 @@ export async function findOrCreateUserFromGithub(
   });
 
   return { userId };
+}
+
+/**
+ * Decrypt the GitHub user-to-server access token persisted on this user's
+ * `auth_identities.metadata`, or `null` when there's no GitHub identity,
+ * no captured token (e.g. `dev-callback` sign-in), or the ciphertext can't
+ * be decoded.
+ *
+ * Does NOT refresh an expired App token — callers that need a guaranteed-
+ * fresh token (the Step 2 repo picker) do the refresh dance inline; callers
+ * that just want a best-effort identity check (the manual install-claim
+ * endpoint) tolerate a stale token failing the downstream GitHub call.
+ */
+export async function getStoredGithubAccessToken(
+  db: Database,
+  userId: string,
+  encryptionKey: string,
+): Promise<string | null> {
+  const [identity] = await db
+    .select({ metadata: authIdentities.metadata })
+    .from(authIdentities)
+    .where(and(eq(authIdentities.provider, "github"), eq(authIdentities.userId, userId)))
+    .limit(1);
+  const meta =
+    identity?.metadata && typeof identity.metadata === "object" ? (identity.metadata as Record<string, unknown>) : null;
+  const encrypted = meta && typeof meta.accessToken === "string" && meta.accessToken ? meta.accessToken : null;
+  if (!encrypted) return null;
+  try {
+    return decryptValue(encrypted, encryptionKey);
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -1,9 +1,14 @@
-import type { GithubAccountType, GithubAppInstallationOutput } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  type GithubAccountType,
+  type GithubAppInstallationOutput,
+  githubAppInstallationClaimBodySchema,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
-import { NotFoundError } from "../../errors.js";
+import { ForbiddenError, NotFoundError } from "../../errors.js";
 import { requireOrgAdmin } from "../../scope/require-org.js";
-import { buildAppInstallUrl } from "../../services/github-app.js";
-import { findInstallationByOrg } from "../../services/github-app-installations.js";
+import { getStoredGithubAccessToken } from "../../services/auth-identity.js";
+import { buildAppInstallUrl, GithubAppApiError, listUserAccessibleInstallationIds } from "../../services/github-app.js";
+import { bindInstallationToOrg, findInstallationByOrg } from "../../services/github-app-installations.js";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../../services/oauth-state.js";
 import { buildCookie } from "../auth/oauth-cookie.js";
 
@@ -121,5 +126,52 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       }),
     );
     return { installUrl: buildAppInstallUrl({ appSlug: appCfg.slug, state: token }) };
+  });
+
+  // ── Manual install claim ────────────────────────────────────────────
+  //
+  // Recovery hatch for an installation row that ended up unbound — the
+  // OAuth callback's auto-reclaim sweep handles the single-orphan case at
+  // sign-in, but bails when there are several (or when the install is on
+  // an org account, where "the user is an org admin" isn't a strong enough
+  // basis to auto-claim). The Settings panel surfaces a "Claim install"
+  // button per orphan; this is what it POSTs.
+  //
+  // Authorization mirrors the OAuth callback's `installation_id` check
+  // (codex P0-2): being an admin of the target Hub org isn't sufficient —
+  // installation IDs aren't secrets, so we also confirm the caller can
+  // actually administer this installation on GitHub via `/user/installations`
+  // before binding it. Otherwise an admin who learned an unbound install's
+  // ID could attach someone else's GitHub account to their Hub team.
+  app.post<{ Params: { orgId: string }; Body: unknown }>("/claim", async (request) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    const { installationId } = githubAppInstallationClaimBodySchema.parse(request.body);
+
+    const githubToken = await getStoredGithubAccessToken(app.db, scope.userId, app.config.secrets.encryptionKey);
+    if (!githubToken) {
+      throw new ForbiddenError("No GitHub access token on file — sign in with GitHub again before claiming an install");
+    }
+    let accessible: Set<number>;
+    try {
+      accessible = await listUserAccessibleInstallationIds(githubToken);
+    } catch (err) {
+      const status = err instanceof GithubAppApiError ? err.status : 0;
+      if (status === 401) {
+        throw new ForbiddenError("Your GitHub session has expired — sign in with GitHub again, then retry the claim");
+      }
+      // Upstream hiccup — surface as a 403 so the caller retries rather
+      // than treating a transient GitHub outage as a hard failure.
+      app.log.warn({ err, installationId, userId: scope.userId }, "claim: /user/installations check failed");
+      throw new ForbiddenError("Couldn't verify GitHub access for this installation — try again in a moment");
+    }
+    if (!accessible.has(installationId)) {
+      throw new ForbiddenError("You don't administer this installation on GitHub");
+    }
+
+    // bindInstallationToOrg throws NotFoundError (no such install row) →
+    // 404, ConflictError (install already bound elsewhere, or this org
+    // already has a different install) → 409.
+    await bindInstallationToOrg(app.db, installationId, scope.organizationId);
+    return { installationId, organizationId: scope.organizationId, bound: true };
   });
 }
