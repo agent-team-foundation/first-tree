@@ -8,6 +8,16 @@ describe("OAuth state JWT", () => {
     const { token, nonce } = await signOAuthState(SECRET, "/welcome");
     const result = await verifyOAuthState(SECRET, token, nonce);
     expect(result.next).toBe("/welcome");
+    expect(result.targetOrganizationId).toBeUndefined();
+  });
+
+  it("round-trips a targetOrganizationId when supplied", async () => {
+    const { token, nonce } = await signOAuthState(SECRET, "/settings/github", {
+      targetOrganizationId: "01961234-aaaa-7000-8000-000000000001",
+    });
+    const result = await verifyOAuthState(SECRET, token, nonce);
+    expect(result.next).toBe("/settings/github");
+    expect(result.targetOrganizationId).toBe("01961234-aaaa-7000-8000-000000000001");
   });
 
   it("rejects a tampered state token", async () => {

@@ -260,6 +260,13 @@
       "when": 1778544000000,
       "tag": "0036_github_entity_chat_mappings",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1778803200000,
+      "tag": "0037_github_app_installations",
+      "breakpoints": true
     }
   ]
 }

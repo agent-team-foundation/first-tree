@@ -91,6 +91,21 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
         clientId: "test-github-client",
         clientSecret: "test-github-secret",
       },
+      // Stub GitHub App creds for PR-A foundation. Tests that exercise
+      // the App service primitives inject fetchers / mocks at the
+      // service-call layer and never actually consume these values —
+      // see github-app.test.ts. The `privateKeyPem` must contain the
+      // BEGIN PRIVATE KEY header so the boot guard (codex P1-8) passes;
+      // body is junk and never used to actually sign.
+      githubApp: {
+        appId: "test-app-id",
+        clientId: "test-app-client-id",
+        clientSecret: "test-app-client-secret",
+        privateKeyPem:
+          "-----BEGIN PRIVATE KEY-----\nstub-base64-key-body-not-actually-signed\n-----END PRIVATE KEY-----\n",
+        webhookSecret: "test-app-webhook-secret",
+        slug: "test-app-slug",
+      },
     },
     trustProxy: false,
     rateLimit: { ...baseRateLimit, ...opts.rateLimit },
