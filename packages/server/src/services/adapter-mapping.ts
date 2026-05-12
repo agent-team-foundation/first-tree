@@ -6,7 +6,8 @@ import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterChatMappings } from "../db/schema/adapter-chat-mappings.js";
 import { adapterMessageReferences } from "../db/schema/adapter-message-references.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chats } from "../db/schema/chats.js";
+import { ensureParticipant } from "./chat.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { addChatParticipants } from "./participant-mode.js";
 
@@ -239,24 +240,6 @@ export async function findOrCreateChatForChannel(
 
     return chatId;
   });
-}
-
-/**
- * Ensure an agent is a participant of a chat (no-op if already). Mode is
- * derived via the canonical entrypoint — pre-fix this also wrote `mode:`
- * implicitly via schema default `'full'`, which is wrong for non-human
- * agents in a group chat (the bug §1.1 of the Phase 1 design doc fixes).
- */
-async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
-  const [exists] = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
-    .limit(1);
-
-  if (!exists) {
-    await addChatParticipants(db, chatId, [{ agentId, role: "member" }], { onConflictDoNothing: true });
-  }
 }
 
 // ── Message references ──────────────────────────────────────────────

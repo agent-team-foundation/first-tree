@@ -3,7 +3,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { NotFoundError } from "../errors.js";
 import { stampAgentResource, stampChatResource, stampOrgScope } from "../observability/request-context.js";
@@ -153,11 +154,17 @@ export async function requireChatAccess<P extends { chatId: string }>(
     humanAgentId: caller.humanAgentId,
   };
 
-  // Direct participant?
+  // Direct speaker?
   const [direct] = await db
-    .select({ chatId: chatParticipants.chatId })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, caller.humanAgentId)))
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        eq(chatMembership.agentId, caller.humanAgentId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
     .limit(1);
   if (direct) {
     stampOrgScope(request, scope);
@@ -165,11 +172,11 @@ export async function requireChatAccess<P extends { chatId: string }>(
     return { chat: chat as ChatRow, scope };
   }
 
-  // Supervised participant — any agent the caller manages.
+  // Supervised speaker — any agent the caller manages.
   const participantRows = await db
-    .select({ agentId: chatParticipants.agentId })
-    .from(chatParticipants)
-    .where(eq(chatParticipants.chatId, chatId));
+    .select({ agentId: chatMembership.agentId })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
   if (participantRows.length === 0) {
     throw new NotFoundError(`Chat "${chatId}" not found`);

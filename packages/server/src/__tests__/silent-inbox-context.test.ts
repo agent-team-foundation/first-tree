@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { chatParticipants } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
@@ -56,7 +56,7 @@ describe("silent inbox + preceding context", () => {
       participantIds: [observer.uuid, peer.uuid],
     });
     // Phase 1 already seeds `observer` (non-human) as `mention_only` on
-    // creation, so the previous defensive `UPDATE chat_participants SET
+    // creation, so the previous defensive `UPDATE chat_membership SET
     // mode = 'mention_only' WHERE agent_id = observer` is no longer
     // required. Keep the read-back contract: assert nothing here, the
     // tests below read modes via inbox effects directly.
@@ -340,9 +340,9 @@ describe("silent inbox + preceding context", () => {
     });
     for (const chatId of [chatA.id, chatB.id]) {
       await app.db
-        .update(chatParticipants)
+        .update(chatMembership)
         .set({ mode: "mention_only" })
-        .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, observer.uuid)));
+        .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, observer.uuid)));
     }
 
     // Chat A: silent-A then mention-A. Chat B: silent-B then mention-B.

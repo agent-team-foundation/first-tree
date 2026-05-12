@@ -1,9 +1,9 @@
 /**
  * Process-local cache for the per-chat realtime push audience
- * (`chat_participants ∪ chat_subscriptions`, keyed by human agent
- * uuid). Sits in front of the admin WS dispatch so a chat with N
- * messages/sec doesn't issue N audience-resolution queries; one query
- * + cache hit per chat per TTL window.
+ * (every row in `chat_membership` for the chat — speakers + watchers,
+ * keyed by human agent uuid). Sits in front of the admin WS dispatch
+ * so a chat with N messages/sec doesn't issue N audience-resolution
+ * queries; one query + cache hit per chat per TTL window.
  *
  * The cache exposes both a populator (`getCachedAudience`) and an
  * invalidator (`invalidateChatAudience`). Participant-mutation paths
@@ -45,9 +45,7 @@ export async function getCachedAudience(db: Database, chatId: string): Promise<S
 
   try {
     const rows = await db.execute<{ agent_id: string }>(sql`
-      SELECT agent_id FROM chat_participants WHERE chat_id = ${chatId}
-      UNION
-      SELECT agent_id FROM chat_subscriptions WHERE chat_id = ${chatId}
+      SELECT agent_id FROM chat_membership WHERE chat_id = ${chatId}
     `);
     const audience = new Set(rows.map((r) => r.agent_id));
     cache.set(chatId, { audience, expiresAt: now + TTL_MS });

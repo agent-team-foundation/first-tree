@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
-import { chatParticipants } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
@@ -177,9 +177,9 @@ describe("inbox WS data-plane claim helpers", () => {
       participantIds: [observer.uuid, peer.uuid],
     });
     await app.db
-      .update(chatParticipants)
+      .update(chatMembership)
       .set({ mode: "mention_only" })
-      .where(and(eq(chatParticipants.chatId, chat.id), eq(chatParticipants.agentId, observer.uuid)));
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, observer.uuid)));
 
     // Three silent messages, then a trigger that @mentions observer.
     await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "first silent" });

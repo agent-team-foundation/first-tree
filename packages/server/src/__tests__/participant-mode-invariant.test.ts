@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { findOrCreateChatForChannel } from "../services/adapter-mapping.js";
 import { createAgent } from "../services/agent.js";
 import { addParticipant, createChat, ensureParticipant, findOrCreateDirectChat } from "../services/chat.js";
@@ -11,15 +11,18 @@ import { createAdminContext, createTestAgent, useTestApp } from "./helpers.js";
 /**
  * Phase 1 invariant matrix — pins
  *
- *   `chat_participants.mode` is derived from `(chats.type, agents.type)` at
- *   every write path; no caller can land in an inconsistent state.
+ *   `chat_membership.mode` (for `access_mode = 'speaker'` rows) is derived
+ *   from `(chats.type, agents.type)` at every write path; no caller can
+ *   land in an inconsistent state.
  *
  * Each `it` exercises one entrypoint, then directly inspects the
- * `chat_participants` row to assert the post-write mode. If a future
+ * `chat_membership` row to assert the post-write mode. If a future
  * refactor reintroduces a hand-rolled mode somewhere, exactly one row in
  * this matrix flips.
  *
- * See docs/chat-participant-mode-fix-design.md §3.5.
+ * See docs/chat-participant-mode-fix-design.md §3.5 and
+ * proposals/chat-data-model-restructure.20260512.md §8 (post-restructure
+ * the underlying table is `chat_membership` rather than `chat_participants`).
  */
 
 async function loadMode(
@@ -28,14 +31,20 @@ async function loadMode(
   agentId: string,
 ): Promise<string | undefined> {
   const [row] = await app.db
-    .select({ mode: chatParticipants.mode })
-    .from(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+    .select({ mode: chatMembership.mode })
+    .from(chatMembership)
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        eq(chatMembership.agentId, agentId),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    )
     .limit(1);
   return row?.mode;
 }
 
-describe("Phase 1 invariant: chat_participants.mode is server-derived", () => {
+describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
   const getApp = useTestApp();
 
   it("createChat / direct + human + agent → both 'full'", async () => {

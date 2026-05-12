@@ -8,7 +8,8 @@ import {
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
@@ -36,7 +37,10 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {
     const { chat, scope } = await requireChatAccess(request, app.db);
 
-    const participants = await app.db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chat.id));
+    const participants = await app.db
+      .select()
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.accessMode, "speaker")));
 
     const firstMsgRows = (await app.db.execute<{ content: unknown }>(sql`
       SELECT content FROM messages
