@@ -79,6 +79,81 @@ export type PaginatedResult<T> = {
 
 const FETCH_TIMEOUT_MS = 15_000;
 
+/**
+ * Node-level error codes (undici / DNS / TCP) treated as transient by the
+ * `doFetch` retry layer. The set covers the failure modes that a *brief*
+ * network blip can produce mid-request:
+ *
+ *   - `ECONNRESET`     — TCP RST mid-stream (commonly a keep-alive idle
+ *                        connection closed by the peer and reused before we
+ *                        noticed)
+ *   - `ETIMEDOUT`      — kernel-level connect/read timeout (peer slow, not
+ *                        absent)
+ *   - `ENETUNREACH`    — transient routing-table flap (local network reload,
+ *                        wifi roam)
+ *   - `EAI_AGAIN`      — DNS resolver returned a temporary failure; the
+ *                        resolver itself tells us to retry
+ *   - `UND_ERR_SOCKET` — undici's internal socket-level error, wrapping the
+ *                        above when the request happens through its
+ *                        connection pool
+ *
+ * Deliberately **not** retried at this layer:
+ *   - `ECONNREFUSED` — peer is reachable but refusing; retrying immediately
+ *                      won't fix anything, and the caller's higher-level
+ *                      reconnect logic is the right response
+ *   - `ENOTFOUND`    — DNS reports the host doesn't exist (typo or rotated
+ *                      record); a 1s retry isn't going to materialise the
+ *                      record
+ *   - other 4xx-class HTTP statuses — handled by the caller, never reach
+ *                                     this set
+ */
+const RETRYABLE_NETWORK_CODES: ReadonlySet<string> = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "UND_ERR_SOCKET",
+]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Decide whether an error thrown by `fetch()` represents a transient
+ * network-layer failure that the caller should retry.
+ *
+ * Walks the `cause` chain (undici nests the real reason one level deep via
+ * `TypeError("fetch failed").cause`) and checks each link for:
+ *   - `message` containing `"fetch failed"` (undici's signature)
+ *   - `name === "AbortError"` (our 15s `AbortSignal.timeout`)
+ *   - `code` ∈ `RETRYABLE_NETWORK_CODES`
+ *
+ * `unknown` input is intentional: this function is the gatekeeper for the
+ * retry decision in `doFetch`'s catch block, where TS sees `unknown`.
+ *
+ * Depth is bounded (~5) to defend against the pathological case of a
+ * self-referencing cause chain.
+ */
+function isTransientNetworkError(err: unknown): boolean {
+  let current: unknown = err;
+  let depth = 0;
+  while (current !== null && current !== undefined && depth < 5) {
+    if (typeof current !== "object") return false;
+    // Narrow `unknown` to a property bag without losing type-safety on the
+    // probe sites below. A direct `as` is unavoidable here because the
+    // structural shape varies per error library (undici / DNS / our own
+    // SdkError), so we cannot derive it from a single typed interface.
+    const obj = current as { message?: unknown; name?: unknown; code?: unknown; cause?: unknown };
+    if (typeof obj.message === "string" && obj.message.includes("fetch failed")) return true;
+    if (obj.name === "AbortError") return true;
+    if (typeof obj.code === "string" && RETRYABLE_NETWORK_CODES.has(obj.code)) return true;
+    current = obj.cause;
+    depth++;
+  }
+  return false;
+}
+
 export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
   private readonly getAccessToken: AccessTokenProvider;
@@ -227,7 +302,59 @@ export class FirstTreeHubSDK {
     return (await response.json()) as T;
   }
 
+  /**
+   * Retry transient network-layer failures and HTTP 5xx with a fixed backoff
+   * schedule. Short-term fix for the chat-visible `Result forward failed:
+   * fetch failed` errors (see docs/sdk-fetch-retry-design.md): undici's
+   * "fetch failed" / `AbortError` / `ECONNRESET`-class errors and any 5xx
+   * response trigger up to two retries with `[0, 500ms, 1000ms]` spacing,
+   * adding at most ~1.5s of latency beyond the per-attempt 15s timeout.
+   *
+   * 4xx responses and non-network exceptions are returned/thrown unchanged
+   * — they indicate a deterministic failure that retrying cannot fix.
+   *
+   * Idempotency caveat: `sendMessage` is not natively idempotent, so a
+   * `fetch failed` from a request the server actually committed will
+   * produce a duplicate message on retry. The design accepts this for now
+   * (small window, low rate, mitigated long-term by an Outbox pattern with
+   * client-generated UUIDs).
+   *
+   * The retry signature and externally-visible behaviour match `doFetch`'s
+   * pre-retry contract: callers see the same Response on success or the
+   * same error type on terminal failure.
+   */
   private async doFetch(path: string, init?: RequestInit): Promise<Response> {
+    const delays = [0, 500, 1000];
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      const delay = delays[attempt];
+      if (delay !== undefined && delay > 0) {
+        await sleep(delay);
+      }
+      try {
+        const response = await this.doFetchOnce(path, init);
+        const isLastAttempt = attempt === delays.length - 1;
+        if (response.status >= 500 && !isLastAttempt) {
+          console.warn(`sdk: retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
+          lastErr = new Error(`HTTP ${response.status}`);
+          continue;
+        }
+        return response;
+      } catch (err) {
+        lastErr = err;
+        if (!isTransientNetworkError(err)) throw err;
+        const isLastAttempt = attempt === delays.length - 1;
+        if (!isLastAttempt) {
+          const reason =
+            err instanceof Error ? (err.name === "AbortError" ? "timeout" : err.message.slice(0, 60)) : "unknown";
+          console.warn(`sdk: retry attempt=${attempt + 1} reason=${reason} path=${path}`);
+        }
+      }
+    }
+    throw lastErr;
+  }
+
+  private async doFetchOnce(path: string, init?: RequestInit): Promise<Response> {
     const url = `${this._baseUrl}${path}`;
     const token = await this.getAccessToken();
     const headers: Record<string, string> = {
