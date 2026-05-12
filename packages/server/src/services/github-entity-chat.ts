@@ -163,7 +163,7 @@ async function insertMappingIfAbsent(
  *   - direct agent-only chats automatically get `mode=mention_only`
  *   - watcher rows are recomputed
  *   - a future addParticipant call would upgrade the chat to `group` via
- *     `maybeUpgradeDirectToGroup` instead of raw INSERT shortcuts
+ *     the server's `changeChatType` service instead of raw INSERT shortcuts
  */
 async function createEntityChat(
   db: Database,

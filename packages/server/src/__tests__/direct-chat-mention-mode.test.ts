@@ -113,11 +113,12 @@ describe("direct chat default mode (migration 0029)", () => {
       expect(modes.map((m) => m.mode).sort()).toEqual(["full", "full"]);
     });
 
-    it("type='group' is unaffected by the rule (kept as `full` default)", async () => {
-      // The group-chat upgrade rule lives in `maybeUpgradeDirectToGroup` and
-      // only fires on the direct→group transition. A born-as-group chat
-      // intentionally starts everyone in `full` — group-noise control is
-      // applied by upgrade-time flips, not at creation.
+    it("type='group' with only non-human agents seeds everyone as `mention_only` (Phase 1)", async () => {
+      // Phase 1 fixed the bug where a born-as-group chat with non-human
+      // participants kept them in `'full'` — silently breaking the
+      // mention_only fanout rule (see docs/chat-participant-mode-fix-design.md
+      // §1.1). The post-fix invariant: in any group chat, every non-human
+      // participant is seeded `mention_only`. Humans (none here) stay `full`.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const a1 = await createTestAgent(app, { name: `cc-g1-${uid}` });
@@ -129,7 +130,7 @@ describe("direct chat default mode (migration 0029)", () => {
         participantIds: [a2.uuid, a3.uuid],
       });
       const modes = await loadModes(chat.id);
-      expect(modes.every((m) => m.mode === "full")).toBe(true);
+      expect(modes.every((m) => m.mode === "mention_only")).toBe(true);
     });
   });
 

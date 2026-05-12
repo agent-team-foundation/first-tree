@@ -297,8 +297,9 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
+    const targetName = `race-tgt-${crypto.randomUUID().slice(0, 6)}`;
     const target = await createAgent(app.db, {
-      name: `race-tgt-${crypto.randomUUID().slice(0, 6)}`,
+      name: targetName,
       type: "autonomous_agent",
       displayName: "Race target",
       managerId: admin.memberId,
@@ -322,9 +323,15 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     //   (transitioned=false).
     //
     // sendMessage always wins, due to archive's conservative gate.
+    //
+    // Phase 1: in this group chat both `sender` and `target` are non-human
+    // agents auto-seeded as `mention_only`. Without `@<target>` in the
+    // body, the predictive session-activation path skips the target
+    // (notify=false) and the race never occurs. Explicitly mention the
+    // target to keep the race semantics intact.
     await Promise.all([
       sessionService.archiveSession(app.db, target.uuid, chat.id, admin.organizationId, app.notifier),
-      sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: "race" }),
+      sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: `race @${targetName}` }),
     ]);
 
     expect(await readState(app, target.uuid, chat.id)).toBe("active");

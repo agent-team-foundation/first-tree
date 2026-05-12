@@ -23,12 +23,13 @@
  * "Risk Constraints".
  */
 
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
+import { chatParticipants, chatSubscriptions } from "../db/schema/chats.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { addChatParticipants, changeChatType, wouldUpgradeToGroup } from "./participant-mode.js";
 
 /**
  * Structural DB type that accepts both the top-level `Database` and a
@@ -132,29 +133,6 @@ export async function recomputeWatchersForMember(db: DbLike, memberId: string): 
 // State-carry transitions. Single transaction. NEVER call recompute here.
 // ---------------------------------------------------------------------------
 
-/**
- * Mirror of `services/chat.ts` `maybeUpgradeDirectToGroup`. Inlined here so
- * `joinAsParticipant` keeps the upgrade rule + the state carry in one
- * transaction without depending on chat.ts (avoids a circular import).
- */
-async function maybeUpgradeDirectToGroup(tx: DbLike, chatId: string, existingParticipantIds: string[]): Promise<void> {
-  if (existingParticipantIds.length + 1 < 3) return;
-  const [chat] = await tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1);
-  if (!chat || chat.type !== "direct") return;
-  await tx.update(chats).set({ type: "group", updatedAt: new Date() }).where(eq(chats.id, chatId));
-  if (existingParticipantIds.length === 0) return;
-  const nonHumans = await tx
-    .select({ uuid: agents.uuid })
-    .from(agents)
-    .where(and(inArray(agents.uuid, existingParticipantIds), ne(agents.type, "human")));
-  const ids = nonHumans.map((r) => r.uuid);
-  if (ids.length === 0) return;
-  await tx
-    .update(chatParticipants)
-    .set({ mode: "mention_only" })
-    .where(and(eq(chatParticipants.chatId, chatId), inArray(chatParticipants.agentId, ids)));
-}
-
 export type JoinResult = {
   chatId: string;
   /** True when the call inserted a fresh participant row (vs. no-op if already a member). */
@@ -199,20 +177,27 @@ export async function joinAsParticipant(db: Database, chatId: string, humanAgent
       .select({ agentId: chatParticipants.agentId })
       .from(chatParticipants)
       .where(eq(chatParticipants.chatId, chatId));
-    await maybeUpgradeDirectToGroup(
+    if (wouldUpgradeToGroup(currentParticipants.length, 1)) {
+      await changeChatType(tx, chatId, "group");
+    }
+
+    // `/me/chats/:id/join` admits only the manager's human agent.
+    // `assertHuman: true` makes a non-human caller surface as a 400 rather
+    // than silently inserting with an inappropriate mode.
+    await addChatParticipants(
       tx,
       chatId,
-      currentParticipants.map((p) => p.agentId),
+      [
+        {
+          agentId: humanAgentId,
+          role: "member",
+          carriedReadState: carriedRow
+            ? { lastReadAt: carriedRow.lastReadAt, unreadMentionCount: carriedRow.unreadMentionCount }
+            : undefined,
+        },
+      ],
+      { assertHuman: true },
     );
-
-    await tx.insert(chatParticipants).values({
-      chatId,
-      agentId: humanAgentId,
-      role: "member",
-      mode: "full",
-      lastReadAt: carriedRow?.lastReadAt ?? null,
-      unreadMentionCount: carriedRow?.unreadMentionCount ?? 0,
-    });
 
     return { chatId, inserted: true, carried: carriedRow ?? null };
   });

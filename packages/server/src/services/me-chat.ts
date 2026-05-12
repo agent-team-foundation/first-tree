@@ -32,6 +32,7 @@ import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.j
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { addChatParticipants, changeChatType } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
 import {
   ensureCanJoin,
@@ -335,11 +336,6 @@ export async function createMeChat(
 
   const chatType = distinctIds.length === 1 ? "direct" : "group";
 
-  // "Agent-only direct" rule: when both ends of a direct chat are non-human,
-  // every message would otherwise wake the other party in `full` mode and
-  // cause a reply loop. Mirror the same rule used by services/chat.ts.
-  const isDirectAgentOnly = chatType === "direct" && found.every((a) => a.type !== "human");
-
   const chatId = randomUUID();
   const topic = body.topic ?? null;
 
@@ -351,12 +347,18 @@ export async function createMeChat(
       topic,
     });
 
-    await tx.insert(chatParticipants).values(
+    // Mode derived per-row from `(chats.type, agents.type)` via the
+    // canonical entrypoint — pre-fix `createMeChat` wrote
+    // `mode: 'mention_only'` only on the direct-agent-only branch and
+    // defaulted everything else to `'full'`, which silently left
+    // `(type='group', non-human)` participants in `'full'` mode (the
+    // root-cause group-chat bug from §1.1 of the Phase 1 design doc).
+    await addChatParticipants(
+      tx,
+      chatId,
       allIds.map((agentId) => ({
-        chatId,
         agentId,
         role: agentId === humanAgentId ? ("owner" as const) : ("member" as const),
-        ...(isDirectAgentOnly ? { mode: "mention_only" as const } : {}),
       })),
     );
 
@@ -440,34 +442,13 @@ export async function addMeChatParticipants(
       return;
     }
 
-    // Direct → group upgrade: 3+ speakers triggers it. We mirror the rule
-    // here (and not via services/chat.ts) so we can write the upgrade and
-    // the inserts in the same tx without a circular import.
+    // Direct → group upgrade: 3+ speakers triggers it. Delegate the type
+    // flip + re-grading of existing non-human participants to
+    // `changeChatType` so the rule lives in one place
+    // (`services/participant-mode.ts`).
     const isUpgradingToGroup = existing.length + toInsert.length >= 3 && chat.type === "direct";
-    const isAlreadyGroup = chat.type === "group";
-    const isGroupAfter = isUpgradingToGroup || isAlreadyGroup;
-
     if (isUpgradingToGroup) {
-      await tx.update(chats).set({ type: "group", updatedAt: new Date() }).where(eq(chats.id, chatId));
-      const nonHumans = await tx
-        .select({ uuid: agents.uuid })
-        .from(agents)
-        .where(
-          and(
-            inArray(
-              agents.uuid,
-              existing.map((e) => e.agentId),
-            ),
-            sql`${agents.type} <> 'human'`,
-          ),
-        );
-      const nonHumanIds = nonHumans.map((a) => a.uuid);
-      if (nonHumanIds.length > 0) {
-        await tx
-          .update(chatParticipants)
-          .set({ mode: "mention_only" })
-          .where(and(eq(chatParticipants.chatId, chatId), inArray(chatParticipants.agentId, nonHumanIds)));
-      }
+      await changeChatType(tx, chatId, "group");
     }
 
     // State-carry: any toInsert agent that was previously a watcher must
@@ -488,30 +469,26 @@ export async function addMeChatParticipants(
       });
     const carriedByAgent = new Map(carriedRows.map((r) => [r.agentId, r] as const));
 
-    // Pick each new participant's mode based on the *post-upgrade* chat
-    // type. If the chat is (or just became) a group, non-human agents go
-    // in as `mention_only` — otherwise they'd respond to every message
-    // and defeat the auto-quieting that direct→group did to the existing
-    // non-humans. Humans always stay `full`.
-    const typeByAgent = new Map(found.map((a) => [a.uuid, a.type]));
-    await tx
-      .insert(chatParticipants)
-      .values(
-        toInsert.map((agentId) => {
-          const agentType = typeByAgent.get(agentId);
-          const mode: "full" | "mention_only" = isGroupAfter && agentType !== "human" ? "mention_only" : "full";
-          const carried = carriedByAgent.get(agentId);
-          return {
-            chatId,
-            agentId,
-            role: "member" as const,
-            mode,
-            lastReadAt: carried?.lastReadAt ?? null,
-            unreadMentionCount: carried?.unreadMentionCount ?? 0,
-          };
-        }),
-      )
-      .onConflictDoNothing();
+    // Mode derived per-row from `(chats.type, agents.type)` by the canonical
+    // entrypoint. `addChatParticipants` re-reads `chats.type` so it picks
+    // up the post-`changeChatType` value above; we don't have to pass an
+    // `isGroupAfter` flag around. `onConflictDoNothing: true` matches the
+    // pre-refactor idempotent behaviour for partial-add retries.
+    await addChatParticipants(
+      tx,
+      chatId,
+      toInsert.map((agentId) => {
+        const carried = carriedByAgent.get(agentId);
+        return {
+          agentId,
+          role: "member" as const,
+          carriedReadState: carried
+            ? { lastReadAt: carried.lastReadAt, unreadMentionCount: carried.unreadMentionCount }
+            : undefined,
+        };
+      }),
+      { onConflictDoNothing: true },
+    );
 
     await recomputeChatWatchers(tx, chatId);
   });
