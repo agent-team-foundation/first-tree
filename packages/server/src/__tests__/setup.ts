@@ -48,6 +48,8 @@ const TRUNCATE_TABLES = [
   "session_events",
   "notifications",
   "messages",
+  "chat_user_state",
+  "chat_membership",
   "chat_subscriptions",
   "chat_participants",
   "chats",
