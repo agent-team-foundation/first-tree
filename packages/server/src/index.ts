@@ -19,47 +19,9 @@ async function main() {
     bridgeToSpanLevel: serverConfig.observability.logging.bridgeToSpanLevel,
   });
 
-  // Production hardening — `server.publicUrl` is what the connect-token
-  // `iss` claim and OAuth callback URL are built off of. Booting prod
-  // without it means the CLI's `connect <token>` form would have no
-  // anchor and OAuth would echo back to whatever the inbound proxy
-  // injected via Host headers (forgery risk). Fail closed instead.
-  if (process.env.NODE_ENV === "production" && !serverConfig.server.publicUrl) {
-    throw new Error("FIRST_TREE_HUB_PUBLIC_URL is required in production — set the public-facing hub URL.");
-  }
-  // Half-configured guard for the GitHub App block — the legacy
-  // `oauth.github` (OAuth App) check that lived next to this was removed
-  // in the D3 cutover. App is the only sign-in path now. All five fields ride together —
-  // the App's user-OAuth uses clientId/clientSecret, the App JWT uses
-  // appId/privateKeyPem, and the webhook endpoint verifies signatures
-  // with webhookSecret. A partially-set block almost always means the
-  // operator copied the env recipe but missed one var; fail loud rather
-  // than serve a half-working install flow.
-  const ghApp = serverConfig.oauth?.githubApp;
-  if (ghApp) {
-    const required = {
-      FIRST_TREE_HUB_GITHUB_APP_ID: ghApp.appId,
-      FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID: ghApp.clientId,
-      FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET: ghApp.clientSecret,
-      FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY: ghApp.privateKeyPem,
-      FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET: ghApp.webhookSecret,
-    } as const;
-    const missing = Object.entries(required)
-      .filter(([, v]) => !v)
-      .map(([k]) => k);
-    if (missing.length > 0 && missing.length < Object.keys(required).length) {
-      throw new Error(`GitHub App is half-configured — missing env vars: ${missing.join(", ")}. Set all five or none.`);
-    }
-    // Belt-and-braces: a real PKCS#8 PEM starts with this header. Catches
-    // the common operator mistake of pasting only the body or leaving in
-    // literal `\n` sequences instead of newlines. Cheap to check at boot.
-    if (ghApp.privateKeyPem && !ghApp.privateKeyPem.includes("-----BEGIN PRIVATE KEY-----")) {
-      throw new Error(
-        "FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY does not look like a PKCS#8 PEM — expected `-----BEGIN PRIVATE KEY-----` header. " +
-          "If the value came from a single-line env file, replace literal `\\n` with real newlines.",
-      );
-    }
-  }
+  // Boot-time config validation (publicUrl + GitHub App config shape)
+  // lives in `buildApp` / `boot-guards.ts` so the CLI server-start path
+  // also runs it. See codex P1-8 for the regression this fixes.
 
   const config: Config = {
     ...serverConfig,

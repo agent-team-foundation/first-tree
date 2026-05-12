@@ -96,18 +96,27 @@ export const serverConfigSchema = defineConfig({
      * from their secret manager (design doc §6 risk 4 — pending
      * team-wide pattern).
      */
+    // `.min(1)` on every field: blank env values (empty string env
+    // sets that resolve to `""` after substitution) must NOT make the
+    // block resolve to a truthy object. The HMAC-empty-key forgery
+    // path codex flagged (P1-8) trips exactly when `webhookSecret`
+    // sneaks through as `""` — `createHmac("sha256", "")` is a valid
+    // hash any attacker can reproduce. Same defense applies to all
+    // five fields: empty appId would make App JWTs unverifiable
+    // upstream, empty clientId would let GitHub round-trip an
+    // anonymous OAuth, etc. Fail loud at Zod parse time.
     githubApp: optional({
-      appId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_APP_ID" }),
-      clientId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID" }),
-      clientSecret: field(z.string(), {
+      appId: field(z.string().min(1), { env: "FIRST_TREE_HUB_GITHUB_APP_ID" }),
+      clientId: field(z.string().min(1), { env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID" }),
+      clientSecret: field(z.string().min(1), {
         env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET",
         secret: true,
       }),
-      privateKeyPem: field(z.string(), {
+      privateKeyPem: field(z.string().min(1), {
         env: "FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY",
         secret: true,
       }),
-      webhookSecret: field(z.string(), {
+      webhookSecret: field(z.string().min(1), {
         env: "FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET",
         secret: true,
       }),

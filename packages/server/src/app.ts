@@ -56,6 +56,7 @@ import { orgWsRoutes } from "./api/orgs/ws.js";
 import { sessionRoutes } from "./api/sessions.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
+import { assertBootConfigValid } from "./boot-guards.js";
 import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
 import { AppError } from "./errors.js";
@@ -139,6 +140,14 @@ export async function buildApp(config: Config) {
       `${msg} — check FIRST_TREE_HUB_AUTH_*_EXPIRY env vars (got access=${config.auth.accessTokenExpiry}, refresh=${config.auth.refreshTokenExpiry}, connect=${config.auth.connectTokenExpiry}).`,
     );
   }
+
+  // Production hardening + GitHub-App config-shape validation. Lives
+  // here (not in `packages/server/src/index.ts`) so the CLI server-start
+  // path (`packages/command/src/core/server.ts` → `buildApp`) also runs
+  // it — the previous home in `index.ts` was only exercised by the
+  // standalone bin, leaving the CLI path with NO config guard
+  // (codex P1-8).
+  assertBootConfigValid(config);
 
   applyLoggerConfig({
     level: config.observability.logging.level,

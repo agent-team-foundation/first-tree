@@ -90,11 +90,15 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       // Stub GitHub App creds. Tests that exercise the App flow inject
       // fetchers / mocks at the service-call layer and never actually
       // consume these values — see github-app.test.ts.
+      // `privateKeyPem` must contain the BEGIN PRIVATE KEY header — the
+      // boot guard now runs from `buildApp` (codex P1-8 fix), so the
+      // test path exercises it. Body is junk; we never sign with it.
       githubApp: {
         appId: "test-app-id",
         clientId: "test-app-client-id",
         clientSecret: "test-app-client-secret",
-        privateKeyPem: "test-app-private-key-pem",
+        privateKeyPem:
+          "-----BEGIN PRIVATE KEY-----\nstub-base64-key-body-not-actually-signed\n-----END PRIVATE KEY-----\n",
         webhookSecret: "test-app-webhook-secret",
       },
     },
