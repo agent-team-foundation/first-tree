@@ -98,6 +98,18 @@ export type GithubAppUserTokenMetadata = z.infer<typeof githubAppUserTokenMetada
  * here yet); included now so the panel's API shape is stable from the
  * first ship.
  */
+/**
+ * Body for `POST /orgs/:orgId/github-app-installation/claim` — manual
+ * recovery for an installation row that ended up unbound (codex P1-5 + H1).
+ * The orphan-reclaim sweep at sign-in auto-claims the single-orphan case;
+ * this endpoint backs the Settings "Claim install" buttons when there's
+ * more than one (or the account is an org, where auto-claim is too risky).
+ */
+export const githubAppInstallationClaimBodySchema = z.object({
+  installationId: z.number().int().positive(),
+});
+export type GithubAppInstallationClaimBody = z.infer<typeof githubAppInstallationClaimBodySchema>;
+
 export const githubAppInstallationOutputSchema = z.object({
   installationId: z.number().int().positive(),
   accountType: githubAccountTypeSchema,

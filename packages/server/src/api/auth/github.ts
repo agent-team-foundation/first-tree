@@ -19,7 +19,11 @@ import {
   fetchInstallation,
   listUserAccessibleInstallationIds,
 } from "../../services/github-app.js";
-import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
+import {
+  bindInstallationToOrg,
+  findUnboundInstallationsByAccount,
+  upsertInstallationFromMetadata,
+} from "../../services/github-app-installations.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
 import {
   createPersonalTeam,
@@ -453,6 +457,41 @@ async function completeOauthFlow(
         { err, installationId, hubOrganizationId: resolvedOrganizationId, userId },
         "github app install bind-to-org failed — sign-in continues; reconcile in Settings",
       );
+    }
+  }
+
+  // Orphan-install reclaim (codex P1-5 + H1): if a prior sign-in UPSERTed
+  // an installation row but the bind step failed, the row stays unbound
+  // forever — GitHub only sends `installation_id` on the initial install,
+  // so a later sign-in never re-attempts the bind via the branch above.
+  // Sweep here for unbound rows whose GitHub account is *this user's own*
+  // personal account (the same authorization basis the callback's
+  // `/user/installations` check enforced when the row was first written),
+  // and auto-claim if there's exactly one. Multiple → leave them for the
+  // Settings "Claim install" buttons rather than guess.
+  if (resolvedOrganizationId) {
+    try {
+      const orphans = await findUnboundInstallationsByAccount(app.db, Number(profile.githubId));
+      if (orphans.length === 1) {
+        const orphan = orphans[0];
+        if (orphan) {
+          await bindInstallationToOrg(app.db, orphan.installationId, resolvedOrganizationId).catch((err) => {
+            app.log.warn(
+              { err, installationId: orphan.installationId, hubOrganizationId: resolvedOrganizationId, userId },
+              "orphan install reclaim failed — Settings UI can retry the manual claim",
+            );
+          });
+        }
+      } else if (orphans.length > 1) {
+        app.log.info(
+          { count: orphans.length, accountGithubId: Number(profile.githubId), userId },
+          "multiple unbound installs match this account — skipping auto-claim, Settings UI surfaces a picker",
+        );
+      }
+    } catch (err) {
+      // The reclaim sweep is best-effort; a failure here must never block
+      // sign-in.
+      app.log.warn({ err, userId }, "orphan install reclaim sweep failed");
     }
   }
 
