@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { ConflictError, NotFoundError } from "../errors.js";
@@ -213,39 +213,93 @@ export async function bindInstallationToOrg(
 }
 
 /**
- * Webhook handler for `installation: suspend`. Sets `suspended_at` to
- * the supplied timestamp (or `now()` if the webhook payload omits it).
- * No-op when the row is already suspended (idempotent retry-safe).
+ * Webhook handler for `installation: suspend`. Sets `suspended_at` to the
+ * timestamp GitHub put on `installation.suspended_at`.
+ *
+ * Out-of-order safety (codex P1-7): GitHub doesn't guarantee delivery
+ * order and redelivers on failure, so a *stale* `suspend` event could
+ * arrive after a newer one. The conditional UPDATE only writes when the
+ * row is currently unsuspended OR carries an *earlier* `suspended_at` —
+ * a stale re-suspend with an older timestamp is a no-op.
+ *
+ * (Limitation: once an `unsuspend` has cleared `suspended_at` to NULL we
+ * no longer know *when* that happened, so a stale `suspend` arriving after
+ * an `unsuspend` would still re-suspend. Proper handling would need a
+ * dedicated lifecycle-sequence column; in practice suspend/unsuspend are
+ * minutes-apart human actions, well outside any realistic reorder window.)
  */
 export async function markInstallationSuspended(
   db: Database,
   installationId: number,
-  suspendedAt?: Date,
+  suspendedAt: Date,
 ): Promise<void> {
   await db
     .update(githubAppInstallations)
-    .set({ suspendedAt: suspendedAt ?? new Date(), updatedAt: new Date() })
-    .where(eq(githubAppInstallations.installationId, installationId));
-}
-
-/** Webhook handler for `installation: unsuspend`. Clears `suspended_at`. */
-export async function markInstallationUnsuspended(db: Database, installationId: number): Promise<void> {
-  await db
-    .update(githubAppInstallations)
-    .set({ suspendedAt: null, updatedAt: new Date() })
-    .where(eq(githubAppInstallations.installationId, installationId));
+    .set({ suspendedAt, updatedAt: new Date() })
+    .where(
+      and(
+        eq(githubAppInstallations.installationId, installationId),
+        or(isNull(githubAppInstallations.suspendedAt), lt(githubAppInstallations.suspendedAt, suspendedAt)),
+      ),
+    );
 }
 
 /**
- * Webhook handler for `installation: deleted`. Removes the row outright.
- * The user uninstalled the App from their account; the row has no value.
+ * Webhook handler for `installation: unsuspend`. Clears `suspended_at`.
+ *
+ * `unsuspendedAt` is the time we received the event (GitHub's `unsuspend`
+ * payload, unlike `suspend`, carries no event timestamp). The conditional
+ * UPDATE only clears when the current `suspended_at` predates that — i.e.
+ * a stale `unsuspend` that lost the race to a newer `suspend` won't undo
+ * it. A row that's already unsuspended (`suspended_at IS NULL`) is left
+ * alone (the `< unsuspendedAt` comparison is NULL → no match), which is
+ * the desired no-op.
+ */
+export async function markInstallationUnsuspended(
+  db: Database,
+  installationId: number,
+  unsuspendedAt: Date,
+): Promise<void> {
+  await db
+    .update(githubAppInstallations)
+    .set({ suspendedAt: null, updatedAt: new Date() })
+    .where(
+      and(
+        eq(githubAppInstallations.installationId, installationId),
+        lt(githubAppInstallations.suspendedAt, unsuspendedAt),
+      ),
+    );
+}
+
+/** Rows younger than this are treated as "just created" and not deleted by a stray `installation: deleted`. */
+const DELETE_GRACE_MS = 60_000;
+
+/**
+ * Webhook handler for `installation: deleted`. Removes the row outright —
+ * the user uninstalled the App from their account; the row has no value.
+ *
+ * Out-of-order safety (codex P1-7): the `deleted` payload has no
+ * timestamp, so if a delayed `deleted` arrives after the account was
+ * re-installed (a fresh row with a fresh binding), deleting blindly would
+ * wipe the new state. Conservative heuristic: only delete rows older than
+ * a 1-minute grace window — a re-install row created seconds ago is left
+ * untouched. (A `deleted` that's genuinely lagging by >1min for a
+ * re-installed account is vanishingly unlikely, and even then the next
+ * `installation: created` re-creates the row.)
  *
  * Note: deleting the org on the Hub side is the inverse case — that's
  * handled by the `ON DELETE SET NULL` FK on `hub_organization_id`, which
  * keeps the installation row alive so a future rebind can recover.
  */
 export async function deleteInstallationByGithubId(db: Database, installationId: number): Promise<void> {
-  await db.delete(githubAppInstallations).where(eq(githubAppInstallations.installationId, installationId));
+  await db
+    .delete(githubAppInstallations)
+    .where(
+      and(
+        eq(githubAppInstallations.installationId, installationId),
+        lt(githubAppInstallations.createdAt, new Date(Date.now() - DELETE_GRACE_MS)),
+      ),
+    );
 }
 
 /**

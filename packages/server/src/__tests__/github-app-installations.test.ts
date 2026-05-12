@@ -185,22 +185,67 @@ describe("services/github-app-installations", () => {
       const suspended = await findInstallationByGithubId(app.db, installation.id);
       expect(suspended?.suspendedAt?.toISOString()).toBe("2026-05-11T12:00:00.000Z");
 
-      await markInstallationUnsuspended(app.db, installation.id);
+      // Unsuspend timestamp after the suspension → clears.
+      await markInstallationUnsuspended(app.db, installation.id, new Date("2026-05-11T13:00:00Z"));
       const unsuspended = await findInstallationByGithubId(app.db, installation.id);
       expect(unsuspended?.suspendedAt).toBeNull();
+    });
+
+    it("a stale suspend (older timestamp) does not overwrite a newer suspend (codex P1-7)", async () => {
+      const app = getApp();
+      const installation = { ...baseInstallation, id: 1_002_002 };
+      await upsertInstallationFromMetadata(app.db, { installation });
+
+      const newer = new Date("2026-05-11T12:05:00Z");
+      const stale = new Date("2026-05-11T12:00:00Z");
+      await markInstallationSuspended(app.db, installation.id, newer);
+      await markInstallationSuspended(app.db, installation.id, stale); // out-of-order redelivery
+      const row = await findInstallationByGithubId(app.db, installation.id);
+      expect(row?.suspendedAt?.toISOString()).toBe(newer.toISOString());
+    });
+
+    it("a stale unsuspend (timestamp before the current suspension) does not clear it (codex P1-7)", async () => {
+      const app = getApp();
+      const installation = { ...baseInstallation, id: 1_002_003 };
+      await upsertInstallationFromMetadata(app.db, { installation });
+
+      const suspendedAt = new Date("2026-05-11T12:10:00Z");
+      await markInstallationSuspended(app.db, installation.id, suspendedAt);
+      // Stale unsuspend whose receive-time predates the suspension → no-op.
+      await markInstallationUnsuspended(app.db, installation.id, new Date("2026-05-11T12:00:00Z"));
+      expect((await findInstallationByGithubId(app.db, installation.id))?.suspendedAt?.toISOString()).toBe(
+        suspendedAt.toISOString(),
+      );
+      // A later unsuspend does clear it.
+      await markInstallationUnsuspended(app.db, installation.id, new Date("2026-05-11T12:20:00Z"));
+      expect((await findInstallationByGithubId(app.db, installation.id))?.suspendedAt).toBeNull();
     });
   });
 
   describe("deleteInstallationByGithubId", () => {
-    it("removes the row and is idempotent on a missing installation", async () => {
+    it("deletes a row older than the grace window and is idempotent on a missing installation", async () => {
       const app = getApp();
       const installation = { ...baseInstallation, id: 1_003_001 };
       await upsertInstallationFromMetadata(app.db, { installation });
+      // Backdate past the 1-minute grace window so `deleted` is honored.
+      await app.db
+        .update(githubAppInstallations)
+        .set({ createdAt: new Date(Date.now() - 5 * 60_000) })
+        .where(eq(githubAppInstallations.installationId, installation.id));
+
       await deleteInstallationByGithubId(app.db, installation.id);
-      const after = await findInstallationByGithubId(app.db, installation.id);
-      expect(after).toBeNull();
+      expect(await findInstallationByGithubId(app.db, installation.id)).toBeNull();
       // Repeated delete is a no-op (no row matches), not an error.
       await deleteInstallationByGithubId(app.db, installation.id);
+    });
+
+    it("does NOT delete a freshly-created row — guards against an out-of-order `deleted` after re-install (codex P1-7)", async () => {
+      const app = getApp();
+      const installation = { ...baseInstallation, id: 1_003_002 };
+      await upsertInstallationFromMetadata(app.db, { installation }); // createdAt ≈ now
+      await deleteInstallationByGithubId(app.db, installation.id);
+      // Still there — the row is younger than the grace window.
+      expect(await findInstallationByGithubId(app.db, installation.id)).not.toBeNull();
     });
   });
 
