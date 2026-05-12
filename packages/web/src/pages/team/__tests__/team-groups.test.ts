@@ -73,8 +73,8 @@ describe("Team page grouping", () => {
           createdAt: "2026-01-01T00:00:00.000Z",
         },
       ],
-      sharedAgents: [],
-      yourPrivateAgents: [],
+      yourAgents: [],
+      teamAgents: [],
       otherPrivateAgents: [],
       resolveMember: (id) => id,
       agentByUuid: new Map([
@@ -84,10 +84,156 @@ describe("Team page grouping", () => {
       openDelegate: () => {},
     });
 
-    const row = groups[0]?.rows[0];
-    if (row?.kind !== "human") throw new Error("expected first row to be human");
+    // "Your agents" renders first (even when empty); humans is the second
+    // group. Locate it by key rather than positional indexing so the test
+    // doesn't rot if section order changes again.
+    const humansGroup = groups.find((g) => g.key === "humans");
+    if (!humansGroup) throw new Error("expected a humans group");
+    const row = humansGroup.rows[0];
+    if (row?.kind !== "human") throw new Error("expected first humans row to be human");
     expect(row.delegate).toEqual({ name: "ada-helper", displayName: "Ada Assistant" });
     expect(row.canEditDelegate).toBe(true);
+  });
+
+  it("places Your agents section first and partitions agents by manager", () => {
+    const myShared = agent({
+      uuid: "my-shared",
+      type: "personal_assistant",
+      displayName: "My Shared Bot",
+      visibility: "organization",
+      managerId: "member-1",
+    });
+    const myPrivate = agent({
+      uuid: "my-private",
+      type: "personal_assistant",
+      displayName: "My Private Bot",
+      visibility: "private",
+      managerId: "member-1",
+    });
+    const theirShared = agent({
+      uuid: "their-shared",
+      type: "personal_assistant",
+      displayName: "Their Shared Bot",
+      visibility: "organization",
+      managerId: "member-2",
+    });
+    const groups = buildGroups({
+      filter: "all",
+      search: "",
+      isAdmin: false,
+      selfMemberId: "member-1",
+      members: [],
+      yourAgents: [myShared, myPrivate],
+      teamAgents: [theirShared],
+      otherPrivateAgents: [],
+      resolveMember: (id) => id,
+      agentByUuid: new Map(),
+      openDelegate: () => {},
+    });
+
+    expect(groups.map((g) => g.key)).toEqual(["yours", "humans", "team"]);
+    const yoursGroup = groups[0];
+    if (!yoursGroup) throw new Error("expected yours group");
+    expect(yoursGroup.title).toBe("Your agents");
+    expect(yoursGroup.count).toBe(2);
+    // Private agents sort to the top of Your agents — governance attention
+    // belongs on the sensitive rows.
+    const yoursFirst = yoursGroup.rows[0];
+    if (yoursFirst?.kind !== "agent") throw new Error("expected agent row");
+    expect(yoursFirst.agent.uuid).toBe("my-private");
+    expect(yoursFirst.showVisibilityChip).toBe(true);
+
+    const teamGroup = groups.find((g) => g.key === "team");
+    if (!teamGroup) throw new Error("expected team group");
+    expect(teamGroup.count).toBe(1);
+    const teamFirst = teamGroup.rows[0];
+    if (teamFirst?.kind !== "agent") throw new Error("expected agent row");
+    // Homogeneous section — no per-row visibility chip needed.
+    expect(teamFirst.showVisibilityChip).toBe(false);
+  });
+
+  it("shows Other members' private agents collapsibly for admins only", () => {
+    const theirPrivate = agent({
+      uuid: "their-private",
+      type: "personal_assistant",
+      displayName: "Their Private Bot",
+      visibility: "private",
+      managerId: "member-2",
+    });
+
+    const memberView = buildGroups({
+      filter: "all",
+      search: "",
+      isAdmin: false,
+      selfMemberId: "member-1",
+      members: [],
+      yourAgents: [],
+      teamAgents: [],
+      otherPrivateAgents: [theirPrivate],
+      resolveMember: (id) => id,
+      agentByUuid: new Map(),
+      openDelegate: () => {},
+    });
+    expect(memberView.find((g) => g.key === "other-private")).toBeUndefined();
+
+    const adminView = buildGroups({
+      filter: "all",
+      search: "",
+      isAdmin: true,
+      selfMemberId: "member-1",
+      members: [],
+      yourAgents: [],
+      teamAgents: [],
+      otherPrivateAgents: [theirPrivate],
+      resolveMember: (id) => id,
+      agentByUuid: new Map(),
+      openDelegate: () => {},
+    });
+    const adminOtherPrivate = adminView.find((g) => g.key === "other-private");
+    expect(adminOtherPrivate).toBeDefined();
+    expect(adminOtherPrivate?.collapsible).toBe(true);
+    expect(adminOtherPrivate?.count).toBe(1);
+  });
+
+  it("respects the yours / team / humans filter pills", () => {
+    const myAgent = agent({
+      uuid: "my-agent",
+      type: "personal_assistant",
+      displayName: "Mine",
+      managerId: "member-1",
+    });
+    const theirAgent = agent({
+      uuid: "their-agent",
+      type: "personal_assistant",
+      displayName: "Theirs",
+      visibility: "organization",
+      managerId: "member-2",
+    });
+    const baseArgs = {
+      search: "",
+      isAdmin: false,
+      selfMemberId: "member-1",
+      members: [
+        {
+          id: "member-1",
+          agentId: "human-1",
+          username: "ada",
+          displayName: "Ada",
+          role: "member",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      yourAgents: [myAgent],
+      teamAgents: [theirAgent],
+      otherPrivateAgents: [],
+      resolveMember: (id: string) => id,
+      agentByUuid: new Map(),
+      openDelegate: () => {},
+    };
+
+    expect(buildGroups({ ...baseArgs, filter: "yours" }).map((g) => g.key)).toEqual(["yours"]);
+    expect(buildGroups({ ...baseArgs, filter: "humans" }).map((g) => g.key)).toEqual(["humans"]);
+    expect(buildGroups({ ...baseArgs, filter: "team" }).map((g) => g.key)).toEqual(["team"]);
   });
 
   it("keeps private active assistants selectable for admin delegate edits", () => {

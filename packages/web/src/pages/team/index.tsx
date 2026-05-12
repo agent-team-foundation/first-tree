@@ -28,15 +28,19 @@ import { type AgentRow, type HumanRow, type RowAction, type TeamGroup, TeamTable
 
 /**
  * Team page — single roster combining humans and agents into one merged
- * table. Sectioning carries the visibility/identity semantics:
+ * table. Section order is built around the two main reasons a user lands
+ * on this tab: creating a new agent (top-right CTA) and configuring agents
+ * they own. "Your agents" is therefore pinned to the top regardless of
+ * visibility, so the most likely target of "I want to tweak this" is the
+ * first thing in the user's eye-line.
  *
- *   - Humans                      (login users; org members)
- *   - Shared agents               (visibility = organization; team-mentionable)
- *   - Your private agents         (visibility = private && managerId = self)
+ *   - Your agents                 (managerId = self, any visibility — chip on row marks shared vs private)
+ *   - Humans                      (login users; org members — set-delegate flow lives here)
+ *   - Team agents                 (visibility = organization && managerId != self)
  *   - Other members' private agents (admin-only governance, collapsed)
  *
- * Per-page primary CTA is `+ New agent`; visibility is chosen inside
- * NewAgentDialog (so we don't multiply CTAs per section).
+ * The three agent sections form a clean partition: every agent belongs to
+ * exactly one section, so the table never double-lists a row.
  *
  * Admin role decides the data source: admins fetch `/agents/all` which
  * surfaces other members' private agents; members fetch the regular
@@ -70,7 +74,7 @@ type DelegateTarget = {
   currentDelegate: string | null;
 };
 
-type FilterKey = "all" | "humans" | "shared" | "private";
+type FilterKey = "all" | "yours" | "humans" | "team";
 
 const AGENT_PAGE_SIZE = 100;
 const MAX_AGENT_PAGES = 100;
@@ -165,9 +169,14 @@ export function TeamPage() {
   // them as people, so the agents groups must hide them to avoid double-listing.
   const agents = useMemo<Agent[]>(() => allAgents.filter((a) => a.type !== "human"), [allAgents]);
 
-  const sharedAgents = useMemo(() => agents.filter((a) => a.visibility === "organization"), [agents]);
-  const yourPrivateAgents = useMemo(
-    () => agents.filter((a) => a.visibility === "private" && a.managerId === memberId),
+  // Three-way partition of the loaded agent list — every agent appears in
+  // exactly one bucket so the table never double-lists a row.
+  //   - yourAgents:         managed by me (any visibility) → top section, the headline answer to "what did I build?"
+  //   - teamAgents:         org-shared agents managed by *others* → "what did the team build?"
+  //   - otherPrivateAgents: private agents managed by others (admin-only) → governance bucket, collapsed
+  const yourAgents = useMemo(() => agents.filter((a) => a.managerId === memberId), [agents, memberId]);
+  const teamAgents = useMemo(
+    () => agents.filter((a) => a.visibility === "organization" && a.managerId !== memberId),
     [agents, memberId],
   );
   const otherPrivateAgents = useMemo(
@@ -220,8 +229,8 @@ export function TeamPage() {
         isAdmin,
         selfMemberId: memberId,
         members,
-        sharedAgents,
-        yourPrivateAgents,
+        yourAgents,
+        teamAgents,
         otherPrivateAgents,
         resolveMember,
         agentByUuid,
@@ -238,8 +247,8 @@ export function TeamPage() {
       isAdmin,
       memberId,
       members,
-      sharedAgents,
-      yourPrivateAgents,
+      yourAgents,
+      teamAgents,
       otherPrivateAgents,
       resolveMember,
       agentByUuid,
@@ -346,9 +355,9 @@ export function TeamPage() {
           query={query}
           onQuery={setQuery}
           counts={{
+            yours: yourAgents.length,
             humans: members.length,
-            shared: sharedAgents.length,
-            private: yourPrivateAgents.length,
+            team: teamAgents.length,
           }}
         />
 
@@ -433,17 +442,18 @@ function FilterBar({
   onFilter: (k: FilterKey) => void;
   query: string;
   onQuery: (q: string) => void;
-  counts: { humans: number; shared: number; private: number };
+  counts: { yours: number; humans: number; team: number };
 }) {
-  // Admins-only filter was dropped: role governance is not a primary
-  // browsing mode for this roster. Role remains editable in the profile
-  // dialog, but the main scan surface stays focused on identity, delegate,
-  // manager, runtime, and status.
+  // Pills sit in the same order the sections render below: "Your agents"
+  // first because it's the primary scan target (creating + tweaking your
+  // own agents is the main reason people open this tab), then Humans
+  // (where the set-delegate flow lives), then Team agents. Each pill maps
+  // 1:1 to a section title so the filter mental model is trivial.
   const chips: Array<{ key: FilterKey; label: string; count?: number }> = [
     { key: "all", label: "All" },
+    { key: "yours", label: "Your agents", count: counts.yours },
     { key: "humans", label: "Humans", count: counts.humans },
-    { key: "shared", label: "Shared agents", count: counts.shared },
-    { key: "private", label: "Your private", count: counts.private },
+    { key: "team", label: "Team agents", count: counts.team },
   ];
   return (
     <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
@@ -491,8 +501,11 @@ export function buildGroups(args: {
   isAdmin: boolean;
   selfMemberId: string | null;
   members: MemberListItem[];
-  sharedAgents: Agent[];
-  yourPrivateAgents: Agent[];
+  /** Agents managed by the viewer, any visibility. Rendered first. */
+  yourAgents: Agent[];
+  /** Shared agents managed by other members. */
+  teamAgents: Agent[];
+  /** Private agents managed by other members — admin governance bucket. */
   otherPrivateAgents: Agent[];
   resolveMember: (id: string) => string;
   agentByUuid: Map<string, Agent>;
@@ -504,8 +517,8 @@ export function buildGroups(args: {
     isAdmin,
     selfMemberId,
     members,
-    sharedAgents,
-    yourPrivateAgents,
+    yourAgents,
+    teamAgents,
     otherPrivateAgents,
     agentByUuid,
     openDelegate,
@@ -527,9 +540,11 @@ export function buildGroups(args: {
   const matchAgent = (a: Agent) =>
     !search || a.displayName.toLowerCase().includes(search) || (a.name ?? "").toLowerCase().includes(search);
 
+  const showYours = filter === "all" || filter === "yours";
   const showHumans = filter === "all" || filter === "humans";
-  const showShared = filter === "all" || filter === "shared";
-  const showPrivate = filter === "all" || filter === "private";
+  const showTeam = filter === "all" || filter === "team";
+  // Admin governance bucket only renders inside the All view; the
+  // dedicated pills don't surface it to keep their meaning literal.
   const showOtherPrivate = isAdmin && filter === "all";
 
   const humanRows: HumanRow[] = members
@@ -556,18 +571,43 @@ export function buildGroups(args: {
     // the rest.
     .sort((a, b) => Number(b.isSelf) - Number(a.isSelf));
 
-  const toAgentRow = (agent: Agent): AgentRow => ({
+  const toAgentRow = (agent: Agent, opts?: { showVisibilityChip?: boolean }): AgentRow => ({
     kind: "agent",
     agent,
     managerLabel: agent.managerId ? args.resolveMember(agent.managerId) : null,
     isOwnedBySelf: agent.managerId === selfMemberId,
+    showVisibilityChip: opts?.showVisibilityChip ?? false,
   });
 
-  const sharedRows: AgentRow[] = sharedAgents.filter(matchAgent).map(toAgentRow);
-  const yourPrivateRows: AgentRow[] = yourPrivateAgents.filter(matchAgent).map(toAgentRow);
-  const otherPrivateRows: AgentRow[] = otherPrivateAgents.filter(matchAgent).map(toAgentRow);
+  // "Your agents" mixes shared + private rows, so each row carries an
+  // inline visibility chip so the viewer can tell them apart at a glance.
+  // Sorted so private agents (the more sensitive ones) appear first inside
+  // the section — that's where governance attention belongs.
+  const yourRows: AgentRow[] = yourAgents
+    .filter(matchAgent)
+    .map((a) => toAgentRow(a, { showVisibilityChip: true }))
+    .sort((a, b) => {
+      const aPriv = a.agent.visibility === "private" ? 0 : 1;
+      const bPriv = b.agent.visibility === "private" ? 0 : 1;
+      return aPriv - bPriv;
+    });
+  // Team / Other-private rows are homogeneous in visibility (shared / private
+  // respectively); the section title already encodes that, so no chip.
+  const teamRows: AgentRow[] = teamAgents.filter(matchAgent).map((a) => toAgentRow(a));
+  const otherPrivateRows: AgentRow[] = otherPrivateAgents.filter(matchAgent).map((a) => toAgentRow(a));
 
   const groups: TeamGroup[] = [];
+  if (showYours) {
+    groups.push({
+      key: "yours",
+      title: "Your agents",
+      count: yourRows.length,
+      rows: yourRows,
+      emptyMessage: search
+        ? "No agents match this search."
+        : "You haven't created any agents yet. Click New agent above to add one.",
+    });
+  }
   if (showHumans) {
     groups.push({
       key: "humans",
@@ -577,24 +617,13 @@ export function buildGroups(args: {
       emptyMessage: search ? "No humans match this search." : undefined,
     });
   }
-  if (showShared) {
+  if (showTeam) {
     groups.push({
-      key: "shared",
-      title: "Shared agents",
-      count: sharedRows.length,
-      rows: sharedRows,
-      emptyMessage: search ? "No shared agents match this search." : "No shared agents yet.",
-    });
-  }
-  if (showPrivate) {
-    groups.push({
-      key: "private",
-      title: "Your private agents",
-      count: yourPrivateRows.length,
-      rows: yourPrivateRows,
-      emptyMessage: search
-        ? "No private agents match this search."
-        : "No private agents — pick Private in the create dialog to keep one to yourself.",
+      key: "team",
+      title: "Team agents",
+      count: teamRows.length,
+      rows: teamRows,
+      emptyMessage: search ? "No team agents match this search." : "No shared agents from other team members yet.",
     });
   }
   if (showOtherPrivate && otherPrivateRows.length > 0) {

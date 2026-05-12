@@ -1,5 +1,5 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
-import { Bot, Lock, type LucideIcon, MoreHorizontal, User } from "lucide-react";
+import { Bot, Lock, type LucideIcon, MoreHorizontal, User, Users } from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import type { RuntimeAgent } from "../../api/activity.js";
 import { AgentChip } from "../../components/agent-chip.js";
@@ -52,6 +52,14 @@ export type AgentRow = {
   agent: Agent;
   managerLabel: string | null;
   isOwnedBySelf: boolean;
+  /**
+   * Whether to render the visibility chip (Shared / Private) next to the
+   * agent name. Set true for rows inside heterogeneous sections (e.g. "Your
+   * agents" mixes both visibilities); false for sections where visibility
+   * is already encoded by the section title (Team agents = shared, Other
+   * private = private). Keeps chips out of cells where they'd be redundant.
+   */
+  showVisibilityChip?: boolean;
 };
 
 export type TeamRow = HumanRow | AgentRow;
@@ -86,7 +94,12 @@ type Props = {
 };
 
 const COLUMNS = [
-  { key: "name", label: "Name", width: 260 },
+  // Name (220) holds displayName + @handle. The internal NameCell already
+  // truncates both lines with a `title` tooltip on overflow, so 220 covers
+  // the realistic 90th-percentile name pair and longer names degrade
+  // gracefully. Down from 260 — the freed width is redistributed to
+  // Delegate / Manager which were causing 2-line wraps at 160.
+  { key: "name", label: "Name", width: 220 },
   // Delegate and Manager are split into separate columns so each header
   // carries exactly one meaning. Human rows fill Delegate (the assistant
   // acting on their behalf) and leave Manager as `—`; agent rows fill
@@ -97,8 +110,13 @@ const COLUMNS = [
   // one column and leaves the other empty — the half-blank pattern reads
   // as section structure, not missing data, and neither column has to
   // mean two things at once.
-  { key: "delegate", label: "Delegate", width: 160 },
-  { key: "manager", label: "Manager", width: 160 },
+  //
+  // 180 (up from 160): the cell renders an AgentChip ("Display Name
+  // @handle") which at 160 wrapped onto two lines for typical agent names
+  // — the bump keeps it on one line and the inner truncate handles the
+  // long tail, mirroring Runs on.
+  { key: "delegate", label: "Delegate", width: 180 },
+  { key: "manager", label: "Manager", width: 180 },
   // The cell renders `<runtime-provider> @ <host>` in one line — covers
   // both framework and host together (plain "Runtime" only described the
   // framework half). Wider than the other middle columns because the
@@ -111,10 +129,11 @@ const COLUMNS = [
   { key: "runtime", label: "Runs on", width: 220 },
   { key: "status", label: "Status", width: 160 },
   { key: "created", label: "Created", width: 160 },
-  // Middle columns mostly pin to 160 for grid rhythm. Runs on opts out at
-  // 220 because its content (provider + host) is denser than the others.
-  // Name stays wider (variable display-name + @handle) and Actions stays
-  // narrow (single kebab icon) — those sit at the content-density extremes.
+  // Middle columns mostly pin to 160-180 for grid rhythm. Runs on opts out
+  // at 220 because its content (provider + host) is denser than the
+  // others. Name stays wider (variable display-name + @handle) and Actions
+  // stays narrow (single kebab icon) — those sit at the content-density
+  // extremes.
   { key: "actions", label: "", width: 44 },
 ] as const;
 
@@ -231,9 +250,12 @@ function sectionIcon(key: string): LucideIcon | null {
   switch (key) {
     case "humans":
       return User;
-    case "shared":
+    // "yours" mixes visibilities — use the generic Bot icon (same as the
+    // old "shared" section) because the per-row visibility chip carries
+    // the public/private signal at the row level.
+    case "yours":
+    case "team":
       return Bot;
-    case "private":
     case "other-private":
       return Lock;
     default:
@@ -243,10 +265,40 @@ function sectionIcon(key: string): LucideIcon | null {
 
 function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boolean; onToggle: () => void }) {
   const Icon = sectionIcon(group.key);
+  // Alignment contract (must hold across all 4 sections):
+  //   - Section icon at cell X=0 ("hangs out" as section marker).
+  //   - Section title text at X=sp-6 — same X as row-name text in the
+  //     Name column (HumanRowView / AgentRowView set paddingLeft: sp-6
+  //     on the first cell). Section titles and the data column align.
+  //   - For collapsible sections, the chevron is rendered OUT-OF-FLOW
+  //     to the LEFT of the icon (absolute positioning), so the icon
+  //     stays at X=0 and the title stays at X=sp-6 — same alignment as
+  //     the non-collapsible sections. The chevron visually "hangs" in
+  //     the container's left padding (the table sits inside a parent
+  //     with sp-5 left padding, plenty of room for the overhang).
+  //
+  // An earlier iteration reserved a uniform arrow SLOT on every section
+  // (transparent for non-collapsible) which aligned the 4 sections to
+  // each other but broke alignment with row names. This restores the
+  // dominant alignment (title ↔ row-name) and keeps the collapsible
+  // chevron from displacing the icon.
   const inner = (
-    <span className="inline-flex items-center" style={{ gap: "var(--sp-2)" }}>
+    <span className="inline-flex items-center relative" style={{ gap: "var(--sp-2)" }}>
       {group.collapsible && (
-        <span aria-hidden style={{ display: "inline-block", width: 10, color: "var(--fg-4)" }}>
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            // Pull the chevron to the left of the icon column. sp-3 ≈ 12,
+            // enough clearance to read it as a separate glyph without
+            // running into the icon glyph.
+            left: "calc(-1 * var(--sp-3))",
+            top: "50%",
+            transform: "translateY(-50%)",
+            color: "var(--fg-4)",
+            lineHeight: 1,
+          }}
+        >
           {open ? "▾" : "▸"}
         </span>
       )}
@@ -281,9 +333,15 @@ function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boo
             style={{
               background: "transparent",
               border: 0,
-              padding: 0,
               cursor: "pointer",
               color: "inherit",
+              // padding-left + matching negative margin-left extends the
+              // click target leftward to include the hanging chevron,
+              // without visually shifting the icon/title. Users can
+              // click the chevron OR the title and either triggers the
+              // toggle.
+              padding: "0 0 0 var(--sp-3)",
+              marginLeft: "calc(-1 * var(--sp-3))",
             }}
           >
             {inner}
@@ -345,17 +403,39 @@ function HumanDelegateCell({ row }: { row: HumanRow }) {
     );
   }
 
+  // AgentChip is inline-flex by default which lets long display names
+  // wrap into the row. Wrapping the chip in a block-level truncate
+  // container (same recipe as the Runs-on column) keeps the cell to a
+  // single line, drops an ellipsis on overflow, and surfaces the full
+  // "Display Name (@handle)" via the title attribute on hover. Without
+  // this, a wide delegate name at the narrow Delegate column width
+  // wrapped to two lines — the issue reported by users.
+  const fullLabel = row.delegate
+    ? row.delegate.name
+      ? `${row.delegate.displayName} (@${row.delegate.name})`
+      : row.delegate.displayName
+    : "Set delegate";
+
   const value = row.delegate ? (
-    <AgentChip name={row.delegate.name} displayName={row.delegate.displayName} />
+    <span
+      className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap"
+      // Cell holds an inline AgentChip — wrapping in `block` + truncate
+      // utilities is necessary because the chip itself is inline-flex.
+    >
+      <AgentChip name={row.delegate.name} displayName={row.delegate.displayName} />
+    </span>
   ) : (
-    <span style={{ color: "var(--accent-dim)" }}>Set delegate →</span>
+    // Shorter placeholder ("Set →" instead of "Set delegate →") so the
+    // CTA fits comfortably at the Delegate column width with the
+    // tooltip carrying the full label.
+    <span style={{ color: "var(--accent-dim)" }}>Set →</span>
   );
 
-  const tooltip = row.delegate ? (row.canEditDelegate ? "Change delegate" : undefined) : "Set delegate";
+  const tooltip = row.delegate ? (row.canEditDelegate ? `Change delegate · ${fullLabel}` : fullLabel) : "Set delegate";
 
   if (!row.canEditDelegate) {
     return (
-      <span className="text-label" title={tooltip}>
+      <span className="text-label block max-w-full overflow-hidden" title={tooltip}>
         {value}
       </span>
     );
@@ -365,7 +445,7 @@ function HumanDelegateCell({ row }: { row: HumanRow }) {
     <button
       type="button"
       onClick={row.onEditDelegate}
-      className="text-label hover:underline"
+      className="text-label hover:underline block max-w-full overflow-hidden"
       style={{
         background: "transparent",
         border: 0,
@@ -396,12 +476,16 @@ function AgentRowView({
   onClick: () => void;
   isLast: boolean;
 }) {
-  const { agent, managerLabel, isOwnedBySelf } = row;
+  const { agent, managerLabel, isOwnedBySelf, showVisibilityChip } = row;
 
   return (
     <DenseTableRow interactive onClick={onClick}>
       <DenseTableCell style={sectionCellStyle(isLast, { paddingLeft: "var(--sp-6)" })}>
-        <NameCell displayName={agent.displayName} handle={agent.name ? `@${agent.name}` : null} />
+        <NameCell
+          displayName={agent.displayName}
+          handle={agent.name ? `@${agent.name}` : null}
+          visibility={showVisibilityChip ? agent.visibility : null}
+        />
       </DenseTableCell>
       <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         —
@@ -450,16 +534,35 @@ function AgentRowView({
   );
 }
 
-function NameCell({ displayName, handle, selfTag }: { displayName: string; handle: string | null; selfTag?: boolean }) {
+function NameCell({
+  displayName,
+  handle,
+  selfTag,
+  visibility,
+}: {
+  displayName: string;
+  handle: string | null;
+  selfTag?: boolean;
+  /**
+   * Optional visibility marker rendered to the right of the display name.
+   * Only used in heterogeneous sections (e.g. "Your agents" which mixes
+   * shared + private rows) — homogeneous sections skip this prop since
+   * the section title already encodes the visibility.
+   */
+  visibility?: Agent["visibility"] | null;
+}) {
   return (
     <div className="min-w-0">
-      <div className="font-medium text-body truncate" style={{ color: "var(--fg)" }} title={displayName}>
-        {displayName}
+      <div className="flex items-baseline gap-1.5 min-w-0">
+        <span className="font-medium text-body truncate" style={{ color: "var(--fg)" }} title={displayName}>
+          {displayName}
+        </span>
         {selfTag && (
-          <span className="text-label italic" style={{ marginLeft: 6, color: "var(--fg-3)" }}>
+          <span className="text-label italic shrink-0" style={{ color: "var(--fg-3)" }}>
             (you)
           </span>
         )}
+        {visibility && <VisibilityChip visibility={visibility} />}
       </div>
       {handle && (
         <div className="mono text-caption truncate" style={{ color: "var(--fg-4)" }} title={handle}>
@@ -467,6 +570,30 @@ function NameCell({ displayName, handle, selfTag }: { displayName: string; handl
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Inline visibility marker. `shared` = team-mentionable (DenseBadge accent
+ * tone matches the agent-detail page's chip). `private` = owner-only (the
+ * Lock icon + DenseBadge outline tone reuses the section-icon vocabulary,
+ * so a private chip next to a name and the Lock-icon section header carry
+ * the same meaning visually).
+ */
+function VisibilityChip({ visibility }: { visibility: Agent["visibility"] }) {
+  if (visibility === "private") {
+    return (
+      <DenseBadge tone="outline" title="Private — only you can see this agent" className="shrink-0">
+        <Lock className="h-2.5 w-2.5" aria-hidden style={{ marginRight: 3 }} />
+        Private
+      </DenseBadge>
+    );
+  }
+  return (
+    <DenseBadge tone="accent" title="Shared — anyone in the team can @mention this agent" className="shrink-0">
+      <Users className="h-2.5 w-2.5" aria-hidden style={{ marginRight: 3 }} />
+      Shared
+    </DenseBadge>
   );
 }
 
