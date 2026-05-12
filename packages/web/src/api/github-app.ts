@@ -27,13 +27,26 @@ export async function getGithubAppInstallation(organizationId: string): Promise<
 }
 
 /**
- * Build the URL that kicks off the App's install flow. We reuse the
- * standard `/auth/github/start` endpoint — when the App is configured
- * upstream it builds the combined OAuth + install authorize URL (D1).
+ * Fetch the GitHub App install URL for the active org. The server mints a
+ * signed `state` JWT, sets the `oauth_state_nonce` cookie alongside it,
+ * and returns `https://github.com/apps/<slug>/installations/new?state=…`
+ * — GitHub's install dialog (repo picker + permission review). The SPA
+ * navigates the browser to it via `window.location`.
  *
- * `next` lands the user back on the Settings page after the install
- * completes so the panel can re-render with the now-bound state.
+ * codex P1-1: the previous implementation pointed the "Install on GitHub"
+ * CTA at `/auth/github/start`, which builds the OAuth `authorize` URL.
+ * For a user who hasn't installed the App yet that URL only triggers
+ * OAuth consent — GitHub never shows the install picker and never returns
+ * an `installation_id`, so the bind silently never happens. The
+ * `installations/new` URL is the one that actually surfaces the install
+ * dialog.
+ *
+ * Throws `ApiError` with `status === 503` when the operator hasn't set
+ * `FIRST_TREE_HUB_GITHUB_APP_SLUG`; the panel surfaces that as a hint.
  */
-export function buildInstallStartUrl(): string {
-  return "/api/v1/auth/github/start?next=/settings/github";
+export async function getGithubAppInstallUrl(organizationId: string): Promise<string> {
+  const { installUrl } = await api.get<{ installUrl: string }>(
+    `/orgs/${organizationId}/github-app-installation/install-url`,
+  );
+  return installUrl;
 }

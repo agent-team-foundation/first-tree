@@ -2,7 +2,19 @@ import type { GithubAccountType, GithubAppInstallationOutput } from "@agent-team
 import type { FastifyInstance } from "fastify";
 import { NotFoundError } from "../../errors.js";
 import { requireOrgAdmin } from "../../scope/require-org.js";
+import { buildAppInstallUrl } from "../../services/github-app.js";
 import { findInstallationByOrg } from "../../services/github-app-installations.js";
+import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../../services/oauth-state.js";
+import { buildCookie } from "../auth/oauth-cookie.js";
+
+/**
+ * Where the post-install OAuth callback lands the user once the install
+ * dialog is done — back on the Settings → GitHub panel so it can
+ * re-render with the now-bound installation. The callback resolves the
+ * actual destination from the signed state JWT, not from a query param,
+ * so this is tamper-proof.
+ */
+const POST_INSTALL_NEXT = "/settings/github";
 
 /**
  * Class B — `/api/v1/orgs/:orgId/github-app-installation`.
@@ -55,5 +67,53 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       updatedAt: row.updatedAt.toISOString(),
     };
     return out;
+  });
+
+  // ── POST-ish helper: build the "Install on GitHub" URL ──────────────
+  //
+  // Why a server endpoint and not a static link the SPA builds itself:
+  //
+  //   1. The slug lives in server config (env var), not in any client
+  //      bundle — surfacing it would mean shipping it to the browser
+  //      anyway, but more importantly the URL has to carry a signed
+  //      `state` JWT (CSRF defense) that only the server can mint.
+  //   2. We need to set the `oauth_state_nonce` cookie alongside the
+  //      JWT — same double-submit defense as `/auth/github/start`. A
+  //      static `<a href>` can't do that.
+  //   3. The signed state encodes which org the install should bind to
+  //      — that decision is the admin caller's identity, which only the
+  //      server can authenticate. (Wired through in C.9.)
+  //
+  // The SPA fetches this (with its bearer token), gets `{ installUrl }`
+  // back plus a `Set-Cookie`, then does `window.location = installUrl`.
+  // GitHub shows the install dialog, the user picks repos, GitHub
+  // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`,
+  // and the callback verifies the state cookie + binds the install.
+  app.get<{ Params: { orgId: string } }>("/install-url", async (request, reply) => {
+    // Admin-gated: the resolved scope is the org the install will be
+    // bound to once C.9 threads `targetOrganizationId` through the state.
+    await requireOrgAdmin(request, app.db);
+    const appCfg = app.config.oauth?.githubApp;
+    if (!appCfg?.slug) {
+      // The App may be configured for sign-in/webhooks but missing the
+      // slug needed for the install dialog. 503 (not 404/400) — the
+      // operator can fix it by setting one env var; the panel renders a
+      // "ask your operator to set FIRST_TREE_HUB_GITHUB_APP_SLUG" hint.
+      return reply
+        .status(503)
+        .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_HUB_GITHUB_APP_SLUG is not configured." });
+    }
+
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, POST_INSTALL_NEXT);
+    reply.header(
+      "Set-Cookie",
+      buildCookie({
+        name: OAUTH_STATE_COOKIE,
+        value: nonce,
+        maxAge: OAUTH_STATE_COOKIE_MAX_AGE_S,
+        secure: process.env.NODE_ENV === "production",
+      }),
+    );
+    return { installUrl: buildAppInstallUrl({ appSlug: appCfg.slug, state: token }) };
   });
 }

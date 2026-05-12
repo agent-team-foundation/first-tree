@@ -57,6 +57,13 @@ type AgentRequestFn = (
  */
 export type CreateTestAppOptions = {
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
+  /**
+   * Drop `oauth.githubApp.slug` from the test config. Used by the
+   * `/github-app-installation/install-url` 503 test — the slug is the
+   * one App field that's optional within the block, so a deployment can
+   * have sign-in/webhooks wired but no install URL.
+   */
+  omitGithubAppSlug?: boolean;
 };
 
 export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<FastifyInstance> {
@@ -100,6 +107,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
         privateKeyPem:
           "-----BEGIN PRIVATE KEY-----\nstub-base64-key-body-not-actually-signed\n-----END PRIVATE KEY-----\n",
         webhookSecret: "test-app-webhook-secret",
+        slug: opts.omitGithubAppSlug ? undefined : "test-app-slug",
       },
     },
     trustProxy: false,

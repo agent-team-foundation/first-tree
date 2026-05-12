@@ -120,6 +120,21 @@ export const serverConfigSchema = defineConfig({
         env: "FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET",
         secret: true,
       }),
+      /**
+       * The App's URL slug — the last path segment of
+       * `https://github.com/apps/<slug>`. Used to build the
+       * `installations/new` URL that surfaces GitHub's install dialog
+       * (the OAuth `authorize` URL only triggers consent, never the
+       * install picker, for users who haven't installed the App yet —
+       * codex P1-1).
+       *
+       * Optional *within* the App block (unlike the five fields above):
+       * the rest of the App surface — sign-in, webhook verification,
+       * installation-token minting — works without it. Only the
+       * "Install on GitHub" CTA in Settings needs the slug, and that
+       * endpoint returns 503 when it's unset rather than blocking boot.
+       */
+      slug: field(z.string().min(1).optional(), { env: "FIRST_TREE_HUB_GITHUB_APP_SLUG" }),
     }),
   }),
   cors: optional({
