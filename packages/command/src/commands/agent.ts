@@ -14,7 +14,7 @@ import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@fi
 import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
-import { resolveReplyToFromEnv } from "../core/agent-messaging.js";
+import { resolveReplyToFromEnv, resolveSenderName } from "../core/agent-messaging.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../core/bootstrap.js";
 import { cliFetch } from "../core/cli-fetch.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
@@ -42,21 +42,33 @@ type ResolvedAgentConfig = {
 function resolveLocalAgent(agentName?: string): ResolvedAgentConfig {
   const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
   const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
-  if (agents.size === 0) {
-    fail("MISSING_AGENT", "No agent configured. Run `first-tree-hub agent add` first.", 2);
-  }
+
+  const resolution = resolveSenderName({
+    override: agentName,
+    envAgentId: process.env.FIRST_TREE_HUB_AGENT_ID,
+    agents,
+  });
 
   let resolvedName: string;
-  if (agentName) {
-    resolvedName = agentName;
-  } else if (agents.size === 1) {
-    const [only] = [...agents.keys()];
-    if (!only) fail("MISSING_AGENT", "No agent configured. Run `first-tree-hub agent add` first.", 2);
-    resolvedName = only;
+  if (resolution.kind === "ok") {
+    resolvedName = resolution.name;
+  } else if (resolution.kind === "none") {
+    fail("MISSING_AGENT", "No agent configured. Run `first-tree-hub agent add` first.", 2);
+  } else if (resolution.kind === "envMismatch") {
+    fail(
+      "ENV_AGENT_NOT_LOCAL",
+      `FIRST_TREE_HUB_AGENT_ID="${resolution.envAgentId}" is not configured on this machine. ` +
+        `Available local agents: ${resolution.available.join(", ")}. ` +
+        `Pick one explicitly: \`first-tree-hub agent send --agent <senderName> <recipientName> "..."\`.`,
+      2,
+    );
   } else {
     fail(
       "AMBIGUOUS_AGENT",
-      `Multiple agents configured — specify --agent <name>. Available: ${[...agents.keys()].join(", ")}`,
+      `Multiple agents are configured on this machine (${resolution.available.join(", ")}) and ` +
+        `FIRST_TREE_HUB_AGENT_ID is not set, so the CLI can't tell which one is the sender. ` +
+        `Specify it explicitly: \`first-tree-hub agent send --agent <senderName> <recipientName> "..."\` ` +
+        `(--agent picks the SENDER; the recipient is the next positional argument).`,
       2,
     );
   }
