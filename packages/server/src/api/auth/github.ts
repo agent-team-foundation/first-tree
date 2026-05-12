@@ -338,8 +338,10 @@ async function completeOauthFlow(
   next: string,
   /**
    * Persisted (encrypted) GitHub token bundle. Empty when called from
-   * `dev-callback` without a `DEV_GITHUB_PAT` set, or — in the App flow —
-   * always includes the full pair (access + refresh + expiries).
+   * `dev-callback` without a `DEV_GITHUB_PAT` set; otherwise — in the
+   * App flow — typically includes the full pair (access + refresh +
+   * expiries). The `dev-callback` path also reaches here with an empty
+   * bundle, so callers must tolerate the empty shape.
    */
   oauthTokens: GithubTokenBundle,
   /**
@@ -476,7 +478,8 @@ async function completeOauthFlow(
   // personal account (the same authorization basis the callback's
   // `/user/installations` check enforced when the row was first written),
   // and auto-claim if there's exactly one. Multiple → leave them for the
-  // Settings "Claim install" buttons rather than guess.
+  // manual `POST /claim` endpoint to disambiguate (the Settings "Claim install"
+  // UI that drives that endpoint is tracked in #318 and not in PR 2/3 yet).
   if (resolvedOrganizationId) {
     try {
       const orphans = await findUnboundInstallationsByAccount(app.db, Number(profile.githubId));
@@ -486,14 +489,14 @@ async function completeOauthFlow(
           await bindInstallationToOrg(app.db, orphan.installationId, resolvedOrganizationId).catch((err) => {
             app.log.warn(
               { err, installationId: orphan.installationId, hubOrganizationId: resolvedOrganizationId, userId },
-              "orphan install reclaim failed — Settings UI can retry the manual claim",
+              "orphan install reclaim failed — operator can retry via POST /claim (UI tracked in #318)",
             );
           });
         }
       } else if (orphans.length > 1) {
         app.log.info(
           { count: orphans.length, accountGithubId: Number(profile.githubId), userId },
-          "multiple unbound installs match this account — skipping auto-claim, Settings UI surfaces a picker",
+          "multiple unbound installs match this account — skipping auto-claim; operator must POST /claim to pick (UI #318)",
         );
       }
     } catch (err) {

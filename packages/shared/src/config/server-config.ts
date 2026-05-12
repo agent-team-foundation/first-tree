@@ -80,21 +80,20 @@ export const serverConfigSchema = defineConfig({
   }),
   oauth: optional({
     /**
-     * GitHub App credentials — sole sign-in surface post-D3 cutover per design doc
-     * `docs/github-app-design-zh.md` §5.2. A single App installation
-     * simultaneously unlocks user-OAuth, the webhook stream, and
-     * installation-token minting (§3). All five fields are required
-     * together; partial configuration is rejected at boot for the same
-     * reason as the legacy block — a half-wired App is worse than no App.
+     * GitHub App credentials — the sign-in surface introduced by PR 2/3 of
+     * the GitHub App migration split. A single App installation simultaneously
+     * unlocks user-OAuth, the webhook stream (PR 3/3), and installation-token
+     * minting. All five required fields must be set together; partial
+     * configuration is rejected at boot for the same reason as the legacy
+     * block — a half-wired App is worse than no App.
      *
-     * Dev / staging / prod each have a separate App with its own set of
-     * values; the env file selects which to load.
+     * Staging and prod each have a separate App with its own set of values;
+     * the env file selects which to load.
      *
      * `privateKeyPem` is the raw PKCS#8 PEM (multi-line, starts with
      * `-----BEGIN PRIVATE KEY-----`). Self-hosters typically inline it via
      * a `.env` file with `\n` escapes; SaaS operators should source it
-     * from their secret manager (design doc §6 risk 4 — pending
-     * team-wide pattern).
+     * from their secret manager (a team-wide pattern is still TBD).
      */
     // `.min(1)` on every field: blank env values (empty string env
     // sets that resolve to `""` after substitution) must NOT make the

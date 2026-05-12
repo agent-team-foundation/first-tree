@@ -134,8 +134,13 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // OAuth callback's auto-reclaim sweep handles the single-orphan case at
   // sign-in, but bails when there are several (or when the install is on
   // an org account, where "the user is an org admin" isn't a strong enough
-  // basis to auto-claim). The Settings panel surfaces a "Claim install"
-  // button per orphan; this is what it POSTs.
+  // basis to auto-claim).
+  //
+  // ⚠ This endpoint is **API-only** in PR 2/3 — there is no Settings UI
+  // that calls it yet. The orphan-list endpoint and the `Claim install`
+  // button per orphan are tracked in #318 and intentionally deferred to
+  // keep PR 2/3 focused. Until #318 ships, multi-orphan recovery requires
+  // the operator to POST to this endpoint directly.
   //
   // Authorization mirrors the OAuth callback's `installation_id` check
   // (codex P0-2): being an admin of the target Hub org isn't sufficient —

@@ -11,6 +11,13 @@ export const DEFAULT_ORG_ID = "01961234-0000-7000-8000-000000000000";
 // `NODE_ENV !== "production"` gate; tests that exercise dev-callback
 // (oauth-flow.test.ts and friends) would otherwise hit 404. Set once
 // here so individual tests don't have to plumb it through.
+//
+// Per-worker-env note: `oauth-flow.test.ts` mutates and restores this
+// var inside individual tests to exercise the disabled path. That's
+// safe today because vitest's forks pool gives each worker process its
+// own `process.env`; if the runner ever switches to a thread-pool model
+// (or `pool: "vmThreads"` with shared env), those mutations would leak
+// across tests. Re-evaluate then.
 if (!process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED) {
   process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED = "1";
 }

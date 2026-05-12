@@ -8,10 +8,12 @@ import { GithubAppInstallationPanel } from "../github-app-installation-panel.js"
  * admin-gated server-side, so a member landing here would just see a
  * 403 in the panel. Redirect them out instead.
  *
- * Post-D3 cutover, the sole panel is the App installation surface. The
- * legacy `GithubIntegrationPanel` (per-org webhook secret) was deleted
- * along with the per-repo webhook endpoint and the `github_integration`
- * settings namespace.
+ * The legacy `GithubIntegrationPanel` (per-org webhook secret config)
+ * was deleted in this PR (PR 2/3 of the GitHub App split). The matching
+ * server-side cleanup — per-org webhook endpoint + `github_integration`
+ * settings namespace + migration `0038` — lands in PR 3/3 alongside the
+ * App webhook switch. Until that lands, the legacy webhook route still
+ * accepts deliveries; the namespace just has no Settings UI to write to.
  */
 export function SettingsGithubPage() {
   const { role } = useAuth();
