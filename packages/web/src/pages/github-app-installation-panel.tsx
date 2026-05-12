@@ -1,7 +1,8 @@
 import type { GithubAppInstallationOutput } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { Building2, ExternalLink, PauseCircle, User } from "lucide-react";
-import { buildInstallStartUrl, getGithubAppInstallation } from "../api/github-app.js";
+import { ApiError } from "../api/client.js";
+import { getGithubAppInstallation, getGithubAppInstallUrl } from "../api/github-app.js";
 import { useAuth } from "../auth/auth-context.js";
 import { SettingsSection } from "../components/ui/settings-section.js";
 
@@ -49,7 +50,7 @@ export function GithubAppInstallationPanel({ isFirst = false }: { isFirst?: bool
         // `null` (404 — no install bound) and `undefined` (query disabled
         // because organizationId hasn't loaded) both render the empty
         // state; the loading branch above already caught the in-flight case.
-        <NotInstalledState />
+        <NotInstalledState organizationId={organizationId} />
       ) : (
         <InstalledState data={installationQuery.data} />
       )}
@@ -57,32 +58,61 @@ export function GithubAppInstallationPanel({ isFirst = false }: { isFirst?: bool
   );
 }
 
-function NotInstalledState() {
+function NotInstalledState({ organizationId }: { organizationId: string | null }) {
+  // The install URL is fetched (not statically built) because the server
+  // mints a signed `state` JWT + sets the matching cookie before handing
+  // back the `https://github.com/apps/<slug>/installations/new?state=…`
+  // URL. We navigate the browser there with `window.location` so the
+  // state cookie set on this XHR response rides along to GitHub's
+  // post-install redirect (codex P1-1).
+  const installUrlQuery = useQuery({
+    queryKey: ["github-app-install-url", organizationId],
+    queryFn: () => (organizationId ? getGithubAppInstallUrl(organizationId) : Promise.reject(new Error("no org"))),
+    enabled: !!organizationId,
+    retry: false,
+  });
+
+  const slugMissing = installUrlQuery.error instanceof ApiError && installUrlQuery.error.status === 503;
+
   return (
     <div>
       <p className="text-body" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-3)" }}>
         Install the GitHub App on your personal account or organization to start receiving issues, pull requests, and
         reviews as routed messages.
       </p>
-      {/* The install flow is `<a>`-based because it's a server-initiated
-       * 302 — using <Button as="a"> would require the Button component to
-       * polymorphism that it doesn't expose. The styling matches the
-       * default button via the shared utility classes. */}
-      <a
-        href={buildInstallStartUrl()}
-        className="inline-flex items-center justify-center font-medium"
-        style={{
-          gap: "var(--sp-1)",
-          padding: "var(--sp-2) var(--sp-3)",
-          background: "var(--accent)",
-          color: "var(--accent-fg, white)",
-          borderRadius: "var(--radius-input)",
-          textDecoration: "none",
-        }}
-      >
-        Install on GitHub
-        <ExternalLink className="h-3 w-3" />
-      </a>
+      {slugMissing ? (
+        <p className="text-body" style={{ color: "var(--state-error)" }}>
+          The GitHub App slug isn't configured on this hub. Ask your operator to set{" "}
+          <code className="mono">FIRST_TREE_HUB_GITHUB_APP_SLUG</code>.
+        </p>
+      ) : installUrlQuery.error ? (
+        <p className="text-body" style={{ color: "var(--state-error)" }}>
+          {installUrlQuery.error instanceof Error ? installUrlQuery.error.message : "Failed to build the install URL"}
+        </p>
+      ) : (
+        // Anchor (not a router link) because navigating here leaves the
+        // SPA entirely — off to github.com. `aria-disabled` while the URL
+        // is still loading; the styling matches the default button via the
+        // shared utility classes.
+        <a
+          href={installUrlQuery.data ?? undefined}
+          aria-disabled={!installUrlQuery.data}
+          className="inline-flex items-center justify-center font-medium"
+          style={{
+            gap: "var(--sp-1)",
+            padding: "var(--sp-2) var(--sp-3)",
+            background: "var(--accent)",
+            color: "var(--accent-fg, white)",
+            borderRadius: "var(--radius-input)",
+            textDecoration: "none",
+            opacity: installUrlQuery.data ? 1 : 0.6,
+            pointerEvents: installUrlQuery.data ? undefined : "none",
+          }}
+        >
+          {installUrlQuery.data ? "Install on GitHub" : "Loading…"}
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      )}
     </div>
   );
 }

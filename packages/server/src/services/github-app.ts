@@ -394,6 +394,34 @@ export function buildAppAuthorizeUrl(opts: { clientId: string; redirectUri: stri
   return url.toString();
 }
 
+const APP_INSTALL_URL = (slug: string) => `https://github.com/apps/${encodeURIComponent(slug)}/installations/new`;
+
+/**
+ * Build the App's `installations/new` URL — the one that actually surfaces
+ * GitHub's install dialog (repo picker + permission review). Distinct from
+ * `buildAppAuthorizeUrl`:
+ *
+ *   - `authorize` (login URL) → for a user who already has the App
+ *     installed, returns `code`. For one who DOESN'T, it only triggers
+ *     OAuth consent — no install dialog, no `installation_id` ever comes
+ *     back. So "Install on GitHub" CTAs that point at `authorize` silently
+ *     never produce an install (codex P1-1).
+ *   - `installations/new` → always shows the install picker. After the
+ *     user confirms, GitHub redirects to the App's configured callback /
+ *     setup URL with `installation_id` and (because the App has "Request
+ *     user authorization (OAuth) during installation" enabled, D1) also
+ *     `code` + the `state` we threaded through here.
+ *
+ * `state` is the same signed JWT minted by `oauth-state.ts` — GitHub
+ * round-trips it on the post-install redirect, so the callback can verify
+ * CSRF + recover `next` + (codex P1-3) the target org to bind to.
+ */
+export function buildAppInstallUrl(opts: { appSlug: string; state: string }): string {
+  const url = new URL(APP_INSTALL_URL(opts.appSlug));
+  url.searchParams.set("state", opts.state);
+  return url.toString();
+}
+
 export type ExchangeAppCodeResult = {
   profile: GithubProfile;
   accessToken: string;
