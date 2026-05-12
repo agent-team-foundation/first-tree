@@ -10,9 +10,9 @@
 
 ## 摘要
 
-First Tree Hub 的 `/team` 从原本的 master-detail(Members / Agents / Settings 三个子 tab)统一为**单页两表**:**Humans**(org members)+ **Agents**(filter type=human 之后的真 bot)。
+First Tree Hub 的 `/team` 从原本的 master-detail(Members / Agents / Settings 三个子 tab)统一为**单页 roster**:**Humans**(org members)+ agent sections(filter type=human 之后的真 bot)共享一套表格列。
 
-Page-level subtitle 用 "1 human and 2 agents working together" 在产品入口直接体现 AI-native team 叙事 —— "team = 人 + agent 共同体" 这一观念。
+页面不再用 page-level subtitle 或 role badge 承载二级信息。主扫描层只保留 section、count、delegate、manager、runtime / status 等任务相关事实;admin role 留在 profile edit / governance 操作里。
 
 `Team settings` 仍作为 admin-only sub-route 保留,但主入口默认进 `/team` 单页,无需先选 tab。
 
@@ -57,8 +57,10 @@ agents       — agent 系统的 actor,type ∈ {human, personal_assistant, auto
 `/team` 页面是这两份数据的视图聚合:
 
 ```text
-Humans 表       ← members JOIN users(列出 org members)
-Agents 表       ← agents WHERE type ≠ "human"(列出团队的 bot)
+Humans section              ← members JOIN users(列出 org members)
+Shared agents section       ← agents WHERE type ≠ "human" AND visibility = organization
+Your private agents section ← agents WHERE type ≠ "human" AND visibility = private AND manager = self
+Other private agents        ← admin governance view,collapsed by default
 ```
 
 ### `human`-type agent 在 UI 中的定位
@@ -74,22 +76,24 @@ Agents 表       ← agents WHERE type ≠ "human"(列出团队的 bot)
 UI 层面应该跟这一立场对齐 —— **不把 `type=human` 暴露成"agent 实体"**:
 
 - 用户在产品里"是" Ta 自己,不是"Ta 自己的 human-type agent record"
-- 用户去 `/team` 看团队人员时,应只看到 humans 一次(在 Humans 表里),不应该在 Agents 表里再看到自己一行被标 `HUMAN`
+- 用户去 `/team` 看团队人员时,应只看到 humans 一次(在 Humans section 里),不应该在 agent sections 里再看到自己一行被标 `HUMAN`
 - 类比:用户不会在某个 settings 页里看到一个叫 "Apple ID record" 的"东西"等待管理 — 用户**就是**自己的 Apple ID
 
-实施上,Agents 表的查询结果在前端 `filter((a) => a.type !== "human")`。
+实施上,agent section 的查询结果在前端 `filter((a) => a.type !== "human")`。
 
 ### Members / Agents 平级而非嵌套
 
-不把 Agents 作为 Members 的子集或反过来。两者是**两份不同来源的数据**(`members` 表 vs `agents` 表),代表团队的两类参与者。在 `/team` 页面用两段平行的 section 展示:
+不把 Agents 作为 Members 的子集或反过来。两者是**两份不同来源的数据**(`members` 表 vs `agents` 表),代表团队的两类参与者。在 `/team` 页面用一个统一 roster 的多个平行 section 展示:
 
 ```text
 Team
-├─ Humans · [count]   ← members 表数据
-└─ Agents · [count]   ← agents 表数据(filter type=human)
+├─ Humans · [count]                 ← members 表数据
+├─ Shared agents · [count]          ← organization visibility
+├─ Your private agents · [count]    ← private visibility,managed by self
+└─ Other members' private agents    ← admin-only governance view
 ```
 
-count 信息通过 page-level subtitle 表达(`1 human and 2 agents working together`),section header 自身保持纯文字标识(`Humans` / `Agents`)。
+count 信息就近放在 section header。Role / type 不再通过额外 badge 重复表达:Humans section 已经说明这些行是人;admin 不是主浏览维度,不进入 filter chip、row badge 或 section subtitle。
 
 ## 决策:UI 层级和命名
 
@@ -155,10 +159,10 @@ admin:
 
 跟 chat-first workspace 一致,/team 也走克制现代风:
 
-- **Panel 边框移除** —— Members / Agents 表直接坐在页面上
+- **Panel 边框移除** —— roster sections 直接坐在页面上
 - **PageHeader 去 bg-fill 和 border-bottom** —— 标题靠字号区分层级,不靠灰条
 - **DenseTable 表头 sentence-case** —— 不再 mono uppercase
-- **Type / Visibility / Role 改纯文字**(去 DenseBadge)—— 文字本身的"Admin / Personal assistant / Private"已含信号,不需要色块
+- **Role 不进入主扫描层** —— admin role 影响权限和管理操作,但不是 roster 的主要浏览维度;不提供 Admins filter、per-row admin badge 或 Humans section admin count
 - **Status 保留 StateChip** —— 实时变化(working / offline)需要可扫描的色 dot
 
 ## 决策:Admin 高频动作的入口位置
@@ -169,9 +173,9 @@ admin:
 
 未来 invite 扩展为复杂面板(history / 邀请角色控制 / 链接 rotation 等)时,再考虑迁入 Team settings。
 
-### `+ New agent` 在 Agents section 右侧
+### `+ New agent` 在 PageHeader 右侧
 
-跟 GitHub / Linear 等 SaaS 一致 —— section 级 action 放 section header 右。
+创建 agent 是 Team 页的主动作,放在 PageHeader 右侧;visibility 在 NewAgentDialog 内选择,不为 shared/private section 分裂多个 CTA。
 
 ## 决策:Members 表中 admin 的 self-delete 防护
 
@@ -196,12 +200,12 @@ admin 看 Members 时,自己那行**不渲染 Delete 按钮**(Edit 仍渲染,以
 ├─ Context              tree visualization(占位,#101)
 ├─ Team
 │  ├─ /team(默认)
-│  │  ├─ PageHeader     "Team / 1 human and 2 agents working together"
-│  │  │                 + admin: [Invite link] popover
-│  │  ├─ Humans 区
-│  │  │  └─ table       Display name | Username | Role | Created | (admin: Edit/Delete)
-│  │  └─ Agents 区      + [+ New agent]
-│  │     └─ table       Display name | Agent name | Type | Managed by | Visibility | Status | Created
+│  │  ├─ PageHeader     "Team" + [New agent] + admin: [Invite link]
+│  │  └─ roster         Name | Delegate | Manager | Runs on | Status | Created | Actions
+│  │     ├─ Humans
+│  │     ├─ Shared agents
+│  │     ├─ Your private agents
+│  │     └─ Other members' private agents(admin-only,collapsed)
 │  └─ /team/settings   admin only(Team identity + System configuration)
 └─ Settings
    ├─ /settings/computers

@@ -4,8 +4,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, UserPlus } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { getActivityOverview, type RuntimeAgent } from "../../api/activity.js";
-import { deleteAgent, listAgents, listAllAgents, reactivateAgent, suspendAgent } from "../../api/agents.js";
+import { getActivityOverview, listClients, type RuntimeAgent } from "../../api/activity.js";
+import {
+  deleteAgent,
+  listAgents,
+  listAllAgents,
+  reactivateAgent,
+  suspendAgent,
+  updateAgent,
+} from "../../api/agents.js";
 import { deleteMember, listMembers, updateMember } from "../../api/members.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { NewAgentDialog } from "../../components/new-agent-dialog.js";
@@ -39,6 +46,8 @@ import { type AgentRow, type HumanRow, type RowAction, type TeamGroup, TeamTable
 
 type MemberListItem = {
   id: string;
+  /** UUID of the human-mirror agent (members.agent_id). Needed by the Set-delegate dialog so it can PATCH the right agent row. */
+  agentId: string;
   username: string;
   displayName: string;
   role: string;
@@ -52,7 +61,33 @@ type MemberEditTarget = {
   role: string;
 };
 
-type FilterKey = "all" | "humans" | "shared" | "private" | "admins";
+type DelegateTarget = {
+  /** UUID of the human agent whose delegateMention we are editing. */
+  humanAgentId: string;
+  /** Display name of the human — shown in the dialog body so the user knows whose delegate they're configuring. */
+  humanDisplayName: string;
+  /** Current value of delegateMention on the human agent, or null. */
+  currentDelegate: string | null;
+};
+
+type FilterKey = "all" | "humans" | "shared" | "private";
+
+const AGENT_PAGE_SIZE = 100;
+const MAX_AGENT_PAGES = 100;
+
+export async function fetchAllAgents(
+  fetchPage: (params: { limit: number; cursor?: string }) => Promise<{ items: Agent[]; nextCursor: string | null }>,
+): Promise<Agent[]> {
+  const items: Agent[] = [];
+  let cursor: string | undefined;
+  for (let pageCount = 0; pageCount < MAX_AGENT_PAGES; pageCount++) {
+    const page = await fetchPage(cursor ? { limit: AGENT_PAGE_SIZE, cursor } : { limit: AGENT_PAGE_SIZE });
+    items.push(...page.items);
+    if (!page.nextCursor) return items;
+    cursor = page.nextCursor;
+  }
+  throw new Error(`fetchAllAgents exceeded ${MAX_AGENT_PAGES} pages; server cursor pagination may be broken`);
+}
 
 export function TeamPage() {
   const { role, memberId } = useAuth();
@@ -64,6 +99,7 @@ export function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<MemberEditTarget | null>(null);
+  const [delegateTarget, setDelegateTarget] = useState<DelegateTarget | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
 
@@ -77,7 +113,7 @@ export function TeamPage() {
   // on what's *in* the list, not on the query key.
   const agentsQuery = useQuery({
     queryKey: ["agents", "team-page", isAdmin ? "admin" : "member"],
-    queryFn: () => (isAdmin ? listAllAgents({ limit: 100 }) : listAgents({ limit: 100 })),
+    queryFn: () => fetchAllAgents((params) => (isAdmin ? listAllAgents(params) : listAgents(params))),
   });
 
   const { data: activity } = useQuery({
@@ -91,19 +127,44 @@ export function TeamPage() {
     return m;
   }, [activity?.agents]);
 
+  // `/me/clients` is the cross-org list of clients the caller owns. We use
+  // it to enrich each agent's Runtime cell with the host it's bound to
+  // (e.g. `claude-code @ alice-macbook`). Agents bound to clients we don't
+  // own (other members' machines hosting shared agents) won't resolve — the
+  // cell falls back to just the runtime provider, which is acceptable: a
+  // dedicated org-admin clients endpoint exists server-side but isn't wired
+  // here yet.
+  const { data: clientsData } = useQuery({
+    queryKey: ["clients", "team-page"],
+    queryFn: listClients,
+    staleTime: 30_000,
+  });
+  const clientHostMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of clientsData ?? []) {
+      if (c.hostname) m.set(c.id, c.hostname);
+    }
+    return m;
+  }, [clientsData]);
+
   // Each derivation is memoized so the downstream `groups` useMemo (which
   // depends on these arrays) can actually cache — without these, every
   // render produced fresh array refs and `groups` recomputed every time.
   const members = useMemo<MemberListItem[]>(() => membersQuery.data ?? [], [membersQuery.data]);
+  // Full agents list — includes humans, used to resolve a member's
+  // delegateMention into a display identity. The visible agent groups
+  // filter humans out below (they're already shown in the Humans section).
+  const allAgents = useMemo<Agent[]>(() => agentsQuery.data ?? [], [agentsQuery.data]);
+  const agentByUuid = useMemo(() => {
+    const m = new Map<string, Agent>();
+    for (const a of allAgents) m.set(a.uuid, a);
+    return m;
+  }, [allAgents]);
   // type === "human" agents are the user-mirrors auto-created for every
   // member (chat-identity proxies). The Humans section above already shows
   // them as people, so the agents groups must hide them to avoid double-listing.
-  const agents = useMemo<Agent[]>(
-    () => (agentsQuery.data?.items ?? []).filter((a) => a.type !== "human"),
-    [agentsQuery.data?.items],
-  );
+  const agents = useMemo<Agent[]>(() => allAgents.filter((a) => a.type !== "human"), [allAgents]);
 
-  const adminCount = useMemo(() => members.filter((m) => m.role === "admin").length, [members]);
   const sharedAgents = useMemo(() => agents.filter((a) => a.visibility === "organization"), [agents]);
   const yourPrivateAgents = useMemo(
     () => agents.filter((a) => a.visibility === "private" && a.managerId === memberId),
@@ -113,12 +174,6 @@ export function TeamPage() {
     () => agents.filter((a) => a.visibility === "private" && a.managerId !== memberId),
     [agents, memberId],
   );
-
-  const subtitle = [
-    `${members.length} ${plural(members.length, "human")} (${adminCount} ${plural(adminCount, "admin")})`,
-    `${sharedAgents.length} shared ${plural(sharedAgents.length, "agent")}`,
-    `${yourPrivateAgents.length} of your private`,
-  ].join(" · ");
 
   const updateMemberMut = useMutation({
     mutationFn: async (vars: { id: string; patch: { displayName?: string; role?: "admin" | "member" } }) =>
@@ -150,6 +205,11 @@ export function TeamPage() {
     mutationFn: reactivateAgent,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agents"] }),
   });
+  const setDelegateMut = useMutation({
+    mutationFn: async (vars: { humanAgentId: string; delegateMention: string | null }) =>
+      updateAgent(vars.humanAgentId, { delegateMention: vars.delegateMention }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agents"] }),
+  });
 
   const search = query.trim().toLowerCase();
   const groups = useMemo(
@@ -164,15 +224,34 @@ export function TeamPage() {
         yourPrivateAgents,
         otherPrivateAgents,
         resolveMember,
+        agentByUuid,
+        openDelegate: (humanAgentId, humanDisplayName) =>
+          setDelegateTarget({
+            humanAgentId,
+            humanDisplayName,
+            currentDelegate: agentByUuid.get(humanAgentId)?.delegateMention ?? null,
+          }),
       }),
-    [filter, search, isAdmin, memberId, members, sharedAgents, yourPrivateAgents, otherPrivateAgents, resolveMember],
+    [
+      filter,
+      search,
+      isAdmin,
+      memberId,
+      members,
+      sharedAgents,
+      yourPrivateAgents,
+      otherPrivateAgents,
+      resolveMember,
+      agentByUuid,
+    ],
   );
 
   function getHumanActions(row: HumanRow): RowAction[] {
     const actions: RowAction[] = [];
-    // PATCH /orgs/:orgId/members/:id is admin-only (server gates with
-    // requireOrgAdmin). Surfacing "Edit profile" to non-admin self would
-    // produce a guaranteed 403 on submit — match the server's rule.
+    // Delegate edits live inline in the Manager · Delegate column (see
+    // HumanDelegateCell) — no kebab entry needed. PATCH /orgs/:orgId/members/:id
+    // is admin-only (server gates with requireOrgAdmin), so "Edit profile"
+    // only appears for admins; surfacing it to non-admin self would 403.
     if (isAdmin) {
       actions.push({
         key: "edit",
@@ -238,7 +317,6 @@ export function TeamPage() {
     <>
       <PageHeader
         title="Team"
-        subtitle={subtitle}
         right={
           <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
             <Button size="xs" onClick={() => setCreateOpen(true)}>
@@ -271,7 +349,6 @@ export function TeamPage() {
             humans: members.length,
             shared: sharedAgents.length,
             private: yourPrivateAgents.length,
-            admins: adminCount,
           }}
         />
 
@@ -287,6 +364,7 @@ export function TeamPage() {
           <TeamTable
             groups={groups}
             runtimeMap={runtimeMap}
+            clientHostMap={clientHostMap}
             onAgentClick={(uuid) => navigate(`/agents/${encodeURIComponent(uuid)}`)}
             getHumanActions={getHumanActions}
             getAgentActions={getAgentActions}
@@ -324,12 +402,20 @@ export function TeamPage() {
           setEditTarget(null);
         }}
       />
+
+      <SetDelegateDialog
+        target={delegateTarget}
+        candidates={selectDelegateCandidates(allAgents)}
+        isSaving={setDelegateMut.isPending}
+        onClose={() => setDelegateTarget(null)}
+        onSave={async (delegateMention) => {
+          if (!delegateTarget) return;
+          await setDelegateMut.mutateAsync({ humanAgentId: delegateTarget.humanAgentId, delegateMention });
+          setDelegateTarget(null);
+        }}
+      />
     </>
   );
-}
-
-function plural(n: number, word: string): string {
-  return n === 1 ? word : `${word}s`;
 }
 
 function formatError(err: unknown): string {
@@ -347,14 +433,17 @@ function FilterBar({
   onFilter: (k: FilterKey) => void;
   query: string;
   onQuery: (q: string) => void;
-  counts: { humans: number; shared: number; private: number; admins: number };
+  counts: { humans: number; shared: number; private: number };
 }) {
+  // Admins-only filter was dropped: role governance is not a primary
+  // browsing mode for this roster. Role remains editable in the profile
+  // dialog, but the main scan surface stays focused on identity, delegate,
+  // manager, runtime, and status.
   const chips: Array<{ key: FilterKey; label: string; count?: number }> = [
     { key: "all", label: "All" },
     { key: "humans", label: "Humans", count: counts.humans },
     { key: "shared", label: "Shared agents", count: counts.shared },
     { key: "private", label: "Your private", count: counts.private },
-    { key: "admins", label: "Admins", count: counts.admins },
   ];
   return (
     <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
@@ -365,13 +454,19 @@ function FilterBar({
           </FilterPill>
         ))}
       </div>
-      <div className="flex-1 relative" style={{ minWidth: 180, maxWidth: 320 }}>
+      {/* Search input is sized to match the FilterPill rhythm (short
+          height, text-caption, tiny corner radius) rather than the default
+          Input atom (h-9, text-body, larger radius) — that way the filter
+          row reads as one homogenous chip strip instead of a tall input
+          sitting beside short pills. The radius matches FilterPill's
+          inline `borderRadius: 3` so the two atoms read as siblings. */}
+      <div className="relative" style={{ width: 220 }}>
         <Search
           aria-hidden
           className="h-3.5 w-3.5"
           style={{
             position: "absolute",
-            left: "var(--sp-2)",
+            left: "var(--sp-1_5)",
             top: "50%",
             transform: "translateY(-50%)",
             color: "var(--fg-4)",
@@ -381,15 +476,16 @@ function FilterBar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder="Search name or @handle"
-          style={{ paddingLeft: "var(--sp-7)" }}
           aria-label="Search team"
+          className="h-7 text-caption"
+          style={{ paddingLeft: "var(--sp-5)", borderRadius: 3 }}
         />
       </div>
     </div>
   );
 }
 
-function buildGroups(args: {
+export function buildGroups(args: {
   filter: FilterKey;
   search: string;
   isAdmin: boolean;
@@ -399,32 +495,66 @@ function buildGroups(args: {
   yourPrivateAgents: Agent[];
   otherPrivateAgents: Agent[];
   resolveMember: (id: string) => string;
+  agentByUuid: Map<string, Agent>;
+  openDelegate: (humanAgentId: string, humanDisplayName: string) => void;
 }): TeamGroup[] {
-  const { filter, search, isAdmin, selfMemberId, members, sharedAgents, yourPrivateAgents, otherPrivateAgents } = args;
+  const {
+    filter,
+    search,
+    isAdmin,
+    selfMemberId,
+    members,
+    sharedAgents,
+    yourPrivateAgents,
+    otherPrivateAgents,
+    agentByUuid,
+    openDelegate,
+  } = args;
+
+  // Returns the resolved identity of the human's delegate agent, or null
+  // if no delegate is configured / the target agent isn't in the loaded
+  // page (e.g. soft-deleted, beyond the 100-row cap).
+  const resolveDelegate = (humanAgentId: string): { name: string | null; displayName: string } | null => {
+    const human = agentByUuid.get(humanAgentId);
+    if (!human?.delegateMention) return null;
+    const d = agentByUuid.get(human.delegateMention);
+    if (!d) return null;
+    return { name: d.name, displayName: d.displayName };
+  };
 
   const matchHuman = (m: MemberListItem) =>
     !search || m.displayName.toLowerCase().includes(search) || m.username.toLowerCase().includes(search);
   const matchAgent = (a: Agent) =>
     !search || a.displayName.toLowerCase().includes(search) || (a.name ?? "").toLowerCase().includes(search);
 
-  const adminOnly = filter === "admins";
-  const showHumans = filter === "all" || filter === "humans" || filter === "admins";
+  const showHumans = filter === "all" || filter === "humans";
   const showShared = filter === "all" || filter === "shared";
   const showPrivate = filter === "all" || filter === "private";
   const showOtherPrivate = isAdmin && filter === "all";
 
   const humanRows: HumanRow[] = members
     .filter(matchHuman)
-    .filter((m) => !adminOnly || m.role === "admin")
-    .map((m) => ({
-      kind: "human",
-      id: m.id,
-      username: m.username,
-      displayName: m.displayName,
-      role: m.role,
-      createdAt: m.createdAt,
-      isSelf: selfMemberId === m.id,
-    }));
+    .map((m): HumanRow => {
+      const isSelf = selfMemberId === m.id;
+      return {
+        kind: "human",
+        id: m.id,
+        agentId: m.agentId,
+        username: m.username,
+        displayName: m.displayName,
+        role: m.role,
+        createdAt: m.createdAt,
+        isSelf,
+        delegate: resolveDelegate(m.agentId),
+        canEditDelegate: isSelf || isAdmin,
+        onEditDelegate: () => openDelegate(m.agentId, m.displayName),
+      };
+    })
+    // Pin (you) to the top of the Humans section — when scanning a roster the
+    // viewer almost always wants their own row first, and it's where the
+    // "Set delegate →" inline CTA lives. Stable sort keeps backend order for
+    // the rest.
+    .sort((a, b) => Number(b.isSelf) - Number(a.isSelf));
 
   const toAgentRow = (agent: Agent): AgentRow => ({
     kind: "agent",
@@ -439,12 +569,9 @@ function buildGroups(args: {
 
   const groups: TeamGroup[] = [];
   if (showHumans) {
-    // Distinct key per filter so a future collapsible-Humans group doesn't
-    // leak its open/closed state across "all" ↔ "admins" toggles (React
-    // reconciles GroupBody by key).
     groups.push({
-      key: adminOnly ? "admins" : "humans",
-      title: adminOnly ? "Admins" : "Humans",
+      key: "humans",
+      title: "Humans",
       count: humanRows.length,
       rows: humanRows,
       emptyMessage: search ? "No humans match this search." : undefined,
@@ -480,6 +607,10 @@ function buildGroups(args: {
     });
   }
   return groups;
+}
+
+export function selectDelegateCandidates(agents: Agent[]): Agent[] {
+  return agents.filter((a) => a.type === "personal_assistant" && a.status === "active");
 }
 
 const roleValues = Object.values(MEMBER_ROLES);
@@ -577,6 +708,107 @@ function EditMemberDialog({
                 </p>
               </div>
             )}
+            {error && (
+              <p className="text-body" style={{ color: "var(--state-error)" }}>
+                {error}
+              </p>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={onClose} disabled={isSaving}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSaving}>
+                {isSaving ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Focused dialog for the "configure my delegate" flow. The full identity
+ * editor (display name + visibility + delegate) lives on the agent-detail
+ * page, but the Team page surfaces this single decision directly so a
+ * non-admin self has a one-click path that doesn't require visiting their
+ * mirror agent's detail page.
+ *
+ * The candidate list mirrors what the identity-section editor uses:
+ * active `personal_assistant` agents from the Team page's fully-paginated
+ * agent query. Admins receive the all-agent source so private assistants
+ * owned by other members remain selectable when editing another human.
+ */
+function SetDelegateDialog({
+  target,
+  candidates,
+  isSaving,
+  onClose,
+  onSave,
+}: {
+  target: DelegateTarget | null;
+  candidates: Agent[];
+  isSaving: boolean;
+  onClose: () => void;
+  onSave: (delegateMention: string | null) => Promise<void>;
+}) {
+  const [delegate, setDelegate] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (target) {
+      setDelegate(target.currentDelegate ?? "");
+      setError(null);
+    }
+  }, [target]);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!target) return;
+    setError(null);
+    try {
+      await onSave(delegate || null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  const open = target !== null;
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Set delegate</DialogTitle>
+        </DialogHeader>
+        {target && (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <p className="text-body" style={{ color: "var(--fg-2)" }}>
+              Pick a personal assistant to act on behalf of <strong>{target.humanDisplayName}</strong>. When teammates
+              @mention this human, the assistant receives the message and can reply in their place.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="set-delegate-pick">Delegate</Label>
+              <select
+                id="set-delegate-pick"
+                value={delegate}
+                onChange={(e) => setDelegate(e.target.value)}
+                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="">None — no delegate</option>
+                {candidates.map((a) => (
+                  <option key={a.uuid} value={a.uuid}>
+                    {a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid}
+                  </option>
+                ))}
+              </select>
+              {candidates.length === 0 && (
+                <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+                  No personal assistants available. Create one from the <em>New agent</em> button above first.
+                </p>
+              )}
+            </div>
             {error && (
               <p className="text-body" style={{ color: "var(--state-error)" }}>
                 {error}
