@@ -7,10 +7,11 @@ import type {
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
 import { AlertTriangle, CheckCircle2, ChevronRight, Copy, FolderTree, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ContextTreeWindow, getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
+import { FilterPill } from "../components/ui/filter-pill.js";
 import { Markdown } from "../components/ui/markdown.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody, PanelHeader, PanelTitle } from "../components/ui/panel.js";
@@ -56,42 +57,108 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
     setSelectedUpdateId(snapshot.updates[0]?.id ?? null);
   }, [selectedUpdateId, snapshot]);
 
+  // Note: no negative `-m-6` wrapper here. The shared <Layout> already
+  // centres content inside a max-width container with `p-6` padding; the
+  // Context page lives inside that, matching the Team tab's geometry. The
+  // inner padding below matches Team's `var(--sp-2) var(--sp-5) var(--sp-7)`
+  // so the two pages align edge-for-edge.
   return (
-    <div className="-m-6">
+    <>
       <PageHeader title="Context" subtitle="Team context available to agents, and how it is changing" />
-      <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
+      <div
+        style={{
+          padding: "var(--sp-2) var(--sp-5) var(--sp-7)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "var(--sp-3)",
+        }}
+      >
         {!preview && query.isLoading ? <LoadingState /> : null}
         {!preview && query.error ? (
           <ErrorState message={query.error instanceof Error ? query.error.message : "Failed to load"} />
         ) : null}
         {snapshot && (preview || !query.isLoading) ? (
-          <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-            {snapshot.snapshotStatus === "unavailable" ? (
-              <UnavailableState snapshot={snapshot} />
-            ) : (
-              <>
-                <ContextStatus snapshot={snapshot} window={window} onWindowChange={setWindow} />
-                <UpdatesView
-                  snapshot={snapshot}
-                  selectedUpdate={selectedUpdate}
-                  selectedUpdateNode={selectedUpdateNode}
-                  selectedOverviewNodeId={selectedOverviewNode}
-                  onSelectUpdate={(update) => {
-                    setSelectedUpdateId(update.id);
-                    setSelectedOverviewNodeId(update.nodeId);
-                  }}
-                  onSelectOverviewNode={setSelectedOverviewNodeId}
-                />
-              </>
-            )}
-          </div>
+          snapshot.snapshotStatus === "unavailable" ? (
+            <UnavailableState snapshot={snapshot} />
+          ) : (
+            <>
+              <ContextStatus snapshot={snapshot} />
+              <ContextFilterBar snapshot={snapshot} window={window} onWindowChange={setWindow} />
+              <UpdatesView
+                snapshot={snapshot}
+                selectedUpdate={selectedUpdate}
+                selectedUpdateNode={selectedUpdateNode}
+                selectedOverviewNodeId={selectedOverviewNode}
+                onSelectUpdate={(update) => {
+                  setSelectedUpdateId(update.id);
+                  setSelectedOverviewNodeId(update.nodeId);
+                }}
+                onSelectOverviewNode={setSelectedOverviewNodeId}
+              />
+            </>
+          )
         ) : null}
       </div>
-    </div>
+    </>
   );
 }
 
-function ContextStatus({
+function ContextStatus({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const statusIcon =
+    snapshot.contextStatus.severity === "ok" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />;
+  const statusTitle = snapshot.contextStatus.label;
+  const revisionLabel = contextRevisionLabel(snapshot);
+  return (
+    <Panel>
+      <PanelBody style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
+        <div className="flex items-start" style={{ gap: "var(--sp-2)", minWidth: 0 }}>
+          <span
+            style={{
+              color: severityColor(snapshot.contextStatus.severity),
+              flex: "0 0 auto",
+              marginTop: "var(--sp-0_5)",
+            }}
+          >
+            {statusIcon}
+          </span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div className="flex flex-wrap items-baseline" style={{ gap: "var(--sp-2)" }}>
+              <div className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
+                {statusTitle}
+              </div>
+              {revisionLabel ? (
+                <div className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
+                  {revisionLabel}
+                </div>
+              ) : null}
+            </div>
+            <div
+              className="text-label"
+              style={{
+                color: "var(--fg-3)",
+                marginTop: "var(--sp-0_5)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {snapshot.contextStatus.detail ?? "Agents have a synced team context snapshot available."}
+            </div>
+          </div>
+        </div>
+      </PanelBody>
+    </Panel>
+  );
+}
+
+/**
+ * Filter row matching the Team tab rhythm: chip-style window selector on the
+ * left, inline metric counts on the right. Replaces the metric-+-button strip
+ * that used to live inside the status banner — that mixed status (an info
+ * surface) with controls (an action surface) and overloaded the banner. Now
+ * status reads as status, and filtering lives in a dedicated row of pills.
+ */
+function ContextFilterBar({
   snapshot,
   window,
   onWindowChange,
@@ -100,68 +167,24 @@ function ContextStatus({
   window: ContextTreeWindow;
   onWindowChange: (window: ContextTreeWindow) => void;
 }) {
-  const statusIcon =
-    snapshot.contextStatus.severity === "ok" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />;
   const currentWindow = windowSummary(window);
-  const statusTitle = snapshot.contextStatus.label;
-  const revisionLabel = contextRevisionLabel(snapshot);
   return (
-    <Panel>
-      <PanelBody style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
-        <div className="flex flex-wrap items-center justify-between" style={{ gap: "var(--sp-3)" }}>
-          <div className="flex items-center" style={{ gap: "var(--sp-2)", minWidth: 0 }}>
-            <span style={{ color: severityColor(snapshot.contextStatus.severity), flex: "0 0 auto" }}>
-              {statusIcon}
-            </span>
-            <div style={{ minWidth: 0 }}>
-              <div className="flex flex-wrap items-baseline" style={{ gap: "var(--sp-2)" }}>
-                <div className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
-                  {statusTitle}
-                </div>
-                {revisionLabel ? (
-                  <div className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
-                    {revisionLabel}
-                  </div>
-                ) : null}
-              </div>
-              <div
-                className="text-label"
-                style={{
-                  color: "var(--fg-3)",
-                  marginTop: "var(--sp-0_5)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {snapshot.contextStatus.detail ?? "Agents have a synced team context snapshot available."}
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center justify-end" style={{ gap: "var(--sp-3)" }}>
-            <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
-              <StatusMetric value={snapshot.summary.changedNodeCount} label={`updates in the ${currentWindow}`} />
-              <StatusMetric value={snapshot.summary.addedCount} label="added" tone="added" />
-              <StatusMetric value={snapshot.summary.editedCount} label="edited" tone="edited" />
-              <StatusMetric value={snapshot.summary.removedCount} label="removed" tone="removed" />
-            </div>
-            <fieldset className="flex flex-wrap" style={{ gap: "var(--sp-1)" }}>
-              <legend className="sr-only">Context update window</legend>
-              {CONTEXT_WINDOWS.map((option) => (
-                <Button
-                  key={option.value}
-                  variant={option.value === window ? "default" : "outline"}
-                  size="xs"
-                  onClick={() => onWindowChange(option.value)}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </fieldset>
-          </div>
-        </div>
-      </PanelBody>
-    </Panel>
+    <div className="flex flex-wrap items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+      <fieldset className="flex flex-wrap items-center" style={{ gap: "var(--sp-1)" }}>
+        <legend className="sr-only">Context update window</legend>
+        {CONTEXT_WINDOWS.map((option) => (
+          <FilterPill key={option.value} active={option.value === window} onClick={() => onWindowChange(option.value)}>
+            {option.label}
+          </FilterPill>
+        ))}
+      </fieldset>
+      <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
+        <StatusMetric value={snapshot.summary.changedNodeCount} label={`updates in the ${currentWindow}`} />
+        <StatusMetric value={snapshot.summary.addedCount} label="added" tone="added" />
+        <StatusMetric value={snapshot.summary.editedCount} label="edited" tone="edited" />
+        <StatusMetric value={snapshot.summary.removedCount} label="removed" tone="removed" />
+      </div>
+    </div>
   );
 }
 
@@ -189,42 +212,42 @@ function UpdatesView({
   };
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+      {/* Master-detail grid. Both panels share a `maxHeight: min(52vh, 30rem)`
+          (≈ 480 px on most desktops) — this matches the height the Updates
+          list used to be hard-pinned at, but is now applied as a *ceiling*
+          instead of a fixed value. Behaviour:
+            • Short content (few updates, short detail): both panels hug
+              their natural height. No wasted empty space below either card.
+            • Long content (many updates, or very long detail): the panel
+              caps at the ceiling and scrolls internally — page-level scroll
+              isn't dragged into oblivion, and Tree Overview stays visible
+              above the fold on first screen.
+          The grid's `alignItems: stretch` keeps the two cards equal-height
+          regardless of which side has more content. */}
       <div
         className="grid grid-cols-1 xl:grid-cols-[minmax(26rem,1fr)_minmax(0,1fr)]"
-        style={{ gap: "var(--sp-4)", alignItems: "stretch" }}
+        style={{ gap: "var(--sp-3)", alignItems: "stretch" }}
       >
-        <Panel className="flex h-full flex-col">
+        <Panel className="flex h-full flex-col" style={{ maxHeight: "min(52vh, 30rem)" }}>
           <PanelHeader>
-            <div className="flex flex-col">
-              <PanelTitle>Context Updates</PanelTitle>
-              <span className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-                {snapshot.updates.length} team context changes agents may use
-              </span>
-            </div>
+            <PanelTitle>Context Updates</PanelTitle>
           </PanelHeader>
-          <PanelBody className="flex-1">
+          <PanelBody className="flex-1" style={{ padding: 0, overflow: "auto" }}>
             {snapshot.updates.length === 0 ? (
-              <EmptyChanges />
-            ) : (
-              <div
-                className="flex flex-col"
-                style={{
-                  gap: "var(--sp-1_5)",
-                  height: "min(52vh, 30rem)",
-                  overflow: "auto",
-                  paddingRight: "var(--sp-0_5)",
-                }}
-              >
-                {snapshot.updates.map((update) => (
-                  <UpdateCard
-                    key={update.id}
-                    update={update}
-                    selected={update.id === selectedUpdate?.id}
-                    onClick={() => onSelectUpdate(update)}
-                  />
-                ))}
+              <div style={{ padding: "var(--sp-3) var(--sp-3_5)" }}>
+                <EmptyChanges />
               </div>
+            ) : (
+              snapshot.updates.map((update, index) => (
+                <UpdateRow
+                  key={update.id}
+                  update={update}
+                  selected={update.id === selectedUpdate?.id}
+                  isLast={index === snapshot.updates.length - 1}
+                  onClick={() => onSelectUpdate(update)}
+                />
+              ))
             )}
           </PanelBody>
         </Panel>
@@ -240,34 +263,45 @@ function UpdatesView({
   );
 }
 
-function UpdateCard({
+/**
+ * Row-style update list item. Previously each update was a self-contained
+ * card with its own border, radius, and accent-on-selected outline — i.e. a
+ * card-inside-a-panel. That nesting gave the Updates list a "boxes in boxes"
+ * feel that clashed with the rest of the dashboard's flat aesthetic.
+ *
+ * The row form drops the inner shell entirely: hairline-bottom only (skipped
+ * on the last row to keep the panel edge clean), `--bg-sunken` on selection.
+ * It reads as one continuous list — the Panel still groups the items, but
+ * inside the panel the rows behave like a Team-tab DenseTable.
+ */
+function UpdateRow({
   update,
   selected,
+  isLast,
   onClick,
 }: {
   update: ContextTreeUpdate;
   selected: boolean;
+  isLast: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full text-left transition-colors"
+      className="block w-full text-left transition-colors"
       style={{
-        border: "var(--hairline) solid var(--border)",
-        borderColor: selected ? "var(--accent)" : "var(--border)",
-        borderRadius: "var(--radius-panel)",
-        background: selected ? "var(--bg-sunken)" : "var(--bg)",
-        padding: "var(--sp-2_5)",
+        background: selected ? "var(--bg-sunken)" : "transparent",
+        borderBottom: isLast ? "none" : "var(--hairline) solid var(--border-faint)",
+        padding: "var(--sp-2) var(--sp-3_5)",
       }}
     >
-      <div className="flex items-start justify-between" style={{ gap: "var(--sp-2)" }}>
-        <div style={{ minWidth: 0 }}>
+      <div className="flex items-start" style={{ gap: "var(--sp-2)", minWidth: 0 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
             <ChangePill type={update.changeType} />
             <span
-              className="text-body font-semibold"
+              className="text-body font-medium"
               style={{
                 color: "var(--fg)",
                 display: "-webkit-box",
@@ -283,22 +317,16 @@ function UpdateCard({
             className="text-label"
             style={{
               color: "var(--fg-3)",
-              marginTop: "var(--sp-2)",
+              marginTop: "var(--sp-1)",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
             }}
           >
-            In {pathLabel(update.path)}
+            In {pathLabel(update.path)} · {ownerLine(update.owners)}
+            {update.relatedNodeIds.length > 0 ? ` · ${relatedText(update.relatedNodeIds.length)}` : ""}
           </div>
         </div>
-      </div>
-      <div
-        className="flex flex-wrap text-label"
-        style={{ color: "var(--fg-3)", gap: "var(--sp-2)", marginTop: "var(--sp-2)" }}
-      >
-        <span>{ownerLine(update.owners)}</span>
-        {update.relatedNodeIds.length > 0 ? <span>{relatedText(update.relatedNodeIds.length)}</span> : null}
       </div>
     </button>
   );
@@ -325,21 +353,23 @@ function UpdateDetail({
   const contextArea = update ? areaLabel(update.path) || pathLabel(update.path) : "root";
 
   return (
-    <Panel className="flex h-full flex-col">
+    <Panel className="flex h-full flex-col" style={{ maxHeight: "min(52vh, 30rem)" }}>
       <PanelHeader>
-        <div>
-          <PanelTitle>Selected Change</PanelTitle>
-          <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Summary and source context
-          </div>
-        </div>
+        <PanelTitle>Selected Change</PanelTitle>
         {update ? <ChangePill type={update.changeType} /> : null}
       </PanelHeader>
-      <PanelBody className="flex-1">
+      <PanelBody className="flex-1" style={{ overflow: "auto" }}>
         {!update ? (
           <EmptyChanges />
         ) : (
-          <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+          // The three sub-blocks (header / summary / reference) used to be
+          // separated by manual border-top + paddingTop strokes inside the
+          // panel. That double-divided the content: the panel already draws a
+          // header divider, so the inner strokes were a second layer of
+          // structure competing with it. Spacing alone (`var(--sp-4)` gap)
+          // does the same job — and each sub-block already starts with its
+          // own bold label, so the section break reads without any rule.
+          <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
             <div>
               <div className="text-title font-semibold" style={{ color: "var(--fg)" }}>
                 {update.title}
@@ -369,34 +399,18 @@ function UpdateDetail({
                 {update.path}
               </div>
             </div>
-
-            <div
-              style={{
-                borderTop: "var(--hairline) solid var(--border-faint)",
-                paddingTop: "var(--sp-3)",
+            <SummaryBlock value={updateDetailActivity(update)} impact={updateDetailMeaning(update)} />
+            <ReferenceBlock
+              commit={sourceCommit}
+              linkedContextItems={linkedContextItems}
+              owner={ownership}
+              path={sourcePath ?? update.path}
+              preview={node?.preview ?? null}
+              sourceExpanded={sourceExpanded}
+              onTogglePreview={() => {
+                setSourceExpanded((value) => !value);
               }}
-            >
-              <SummaryBlock value={updateDetailActivity(update)} impact={updateDetailMeaning(update)} />
-            </div>
-
-            <div
-              style={{
-                borderTop: "var(--hairline) solid var(--border-faint)",
-                paddingTop: "var(--sp-3)",
-              }}
-            >
-              <ReferenceBlock
-                commit={sourceCommit}
-                linkedContextItems={linkedContextItems}
-                owner={ownership}
-                path={sourcePath ?? update.path}
-                preview={node?.preview ?? null}
-                sourceExpanded={sourceExpanded}
-                onTogglePreview={() => {
-                  setSourceExpanded((value) => !value);
-                }}
-              />
-            </div>
+            />
           </div>
         )}
       </PanelBody>
@@ -420,11 +434,34 @@ function TreeOverview({
     [selectedNodeId, snapshot.nodes, counts, expandedParents],
   );
 
+  // Tree's own scrollable container — we ref it so the auto-scroll below can
+  // be scoped to *just* this element. Plain `Element.scrollIntoView` walks
+  // every scrollable ancestor up to the document, so a selection driven from
+  // the Updates list (which sits above this tree) used to scroll the whole
+  // page upward to bring the selected tree node into view. That looked like a
+  // surprise jump to the user — fix is to scroll only the tree container.
+  const treeScrollRef = useRef<HTMLDivElement | null>(null);
+
   // Callback ref attached only to the currently selected node's button. Fires
-  // when the selected button mounts (after a selection change) so it scrolls
-  // into view if it was off-screen — no separate effect / dep dance.
+  // when the selected button mounts (after a selection change). If the node
+  // is already visible inside the tree's scroll viewport, do nothing. If it's
+  // off-screen *within the tree*, scroll only that container (never the page)
+  // so the rest of the layout stays put.
   const scrollSelectedIntoView = useCallback((el: HTMLButtonElement | null) => {
-    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!el) return;
+    const container = treeScrollRef.current;
+    if (!container) return;
+    const elRect = el.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    if (elRect.top >= containerRect.top && elRect.bottom <= containerRect.bottom) {
+      // Already visible — nothing to do.
+      return;
+    }
+    // Centre the node within the tree viewport, but only by scrolling this
+    // container, not its ancestors. `scrollBy` on the container is the
+    // surgical move; `scrollIntoView` would propagate.
+    const offset = elRect.top - containerRect.top - (containerRect.height - elRect.height) / 2;
+    container.scrollBy({ top: offset });
   }, []);
 
   const toggleAggregate = useCallback((parentId: string) => {
@@ -488,6 +525,7 @@ function TreeOverview({
               </div>
             </div>
             <div
+              ref={treeScrollRef}
               style={{
                 overflow: overflowsCap ? "auto" : "hidden",
                 maxHeight: overflowsCap ? `${SOFT_HEIGHT_CAP}px` : undefined,
@@ -501,8 +539,18 @@ function TreeOverview({
                 preserveAspectRatio="xMinYMin meet"
                 style={{ display: "block", width: "100%", height: `${naturalHeight}px` }}
               >
-                {visibleNodes.map((node) =>
-                  node.parent ? (
+                {visibleNodes.map((node) => {
+                  // Drop the edge from parent → "Show less" toggle in the
+                  // expanded state. While collapsed, the edge carries real
+                  // information — it's the visual anchor saying "this parent
+                  // has hidden branches". Once expanded, the real children
+                  // each draw their own edge and the toggle becomes a pure
+                  // control affordance (a chevron + label); an edge to it
+                  // would just be visual noise placing the control on the
+                  // same hierarchy plane as the actual data nodes.
+                  if (!node.parent) return null;
+                  if (node.isSummary && node.isExpanded) return null;
+                  return (
                     <line
                       key={`edge:${node.id}`}
                       x1={node.parent.x}
@@ -513,8 +561,8 @@ function TreeOverview({
                       strokeOpacity={node.muted ? 0.34 : node.selectedPath ? 0.72 : 0.56}
                       strokeWidth={node.selectedPath && node.parent.selectedPath ? 1.6 : 1}
                     />
-                  ) : null,
-                )}
+                  );
+                })}
                 {visibleNodes.map((node) => {
                   const interactive = node.isSummary || node.sourceNodeId !== null;
                   const handleClick = () => {
@@ -671,6 +719,14 @@ function SummaryBlock({ value, impact }: { value: string; impact: string }) {
   );
 }
 
+/**
+ * Inline reference line. Previously a `dl/dt/dd` 2-column grid (Owner /
+ * Linked / Source / Commit, each with bold label + value). The grid was
+ * visually heavier than the rest of the Selected Change body and broke the
+ * single-line `·`-separated rhythm used by the update row sub-line. Now the
+ * fields collapse to one wrapping line so the whole detail panel reads in
+ * the same prose-y register as the update list.
+ */
 function ReferenceBlock({
   path,
   commit,
@@ -697,21 +753,20 @@ function ReferenceBlock({
 
   return (
     <div>
-      <div className="text-label font-semibold" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
+      <div className="text-label font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-1)" }}>
         Reference
       </div>
-      <dl className="grid grid-cols-1 md:grid-cols-2" style={{ columnGap: "var(--sp-4)", rowGap: "var(--sp-2)" }}>
-        {items.map((item) => (
-          <div
-            key={item.label}
-            className="grid"
-            style={{ gridTemplateColumns: "4rem minmax(0,1fr)", gap: "var(--sp-2)" }}
-          >
-            <dt className="text-label font-semibold" style={{ color: "var(--fg-3)" }}>
-              {item.label}
-            </dt>
-            <dd
-              className={`text-label ${item.mono ? "font-mono" : "font-medium"}`}
+      <div className="flex flex-wrap text-label" style={{ color: "var(--fg-2)", gap: "var(--sp-2)" }}>
+        {items.map((item, index) => (
+          <span key={item.label} className="inline-flex items-baseline" style={{ gap: "var(--sp-1)", minWidth: 0 }}>
+            {index > 0 ? (
+              <span aria-hidden="true" style={{ color: "var(--fg-4)" }}>
+                ·
+              </span>
+            ) : null}
+            <span style={{ color: "var(--fg-3)" }}>{item.label}</span>
+            <span
+              className={item.mono ? "font-mono" : "font-medium"}
               style={{
                 color: "var(--fg-2)",
                 minWidth: 0,
@@ -721,11 +776,11 @@ function ReferenceBlock({
               }}
             >
               {item.value}
-            </dd>
-          </div>
+            </span>
+          </span>
         ))}
-      </dl>
-      <div className="flex flex-wrap" style={{ gap: "var(--sp-1)", marginTop: "var(--sp-3)" }}>
+      </div>
+      <div className="flex flex-wrap" style={{ gap: "var(--sp-1)", marginTop: "var(--sp-2_5)" }}>
         <Button variant="outline" size="xs" onClick={onTogglePreview}>
           {sourceExpanded ? "Hide source" : "Preview source"}
         </Button>
@@ -735,13 +790,7 @@ function ReferenceBlock({
         </Button>
       </div>
       {sourceExpanded ? (
-        <div
-          style={{
-            borderTop: "var(--hairline) solid var(--border-faint)",
-            marginTop: "var(--sp-3)",
-            paddingTop: "var(--sp-3)",
-          }}
-        >
+        <div style={{ marginTop: "var(--sp-3)" }}>
           {preview ? (
             <Markdown>{preview}</Markdown>
           ) : (
@@ -873,7 +922,16 @@ export function layoutTree(
     .id((node) => node.id)
     .parentId((node) => node.parentId)(overviewNodes)
     .sort((a, b) => {
-      if (a.data.isSummary !== b.data.isSummary) return a.data.isSummary ? 1 : -1;
+      // Summary toggles sort *first* (top of their siblings) so the click
+      // target stays put when toggled. If summary were last (the old
+      // behaviour), clicking "Show N more" at the bottom of the sibling
+      // group caused new children to expand *above* it — the toggle was
+      // shoved down by inserted rows, and the new content appeared upward
+      // from the user's mouse position. With summary on top, the toggle
+      // stays at the same y-coordinate across collapse/expand and new rows
+      // unfold *below* it, matching the mental model of every other
+      // expand/collapse affordance in the product.
+      if (a.data.isSummary !== b.data.isSummary) return a.data.isSummary ? -1 : 1;
       return a.data.path.localeCompare(b.data.path);
     });
   const pointRoot = tree<OverviewDatum>().nodeSize([30, 170])(root);
@@ -925,6 +983,27 @@ export function buildOverviewNodes(
     }
   }
 
+  // Singleton-hidden promotion. A "Show 1 more" toggle costs the same vertical
+  // slot as the row it would unfold, so folding a single hidden child is
+  // wasted UI — promote it to visible directly. Iterate until no further
+  // promotions happen so we keep climbing only-child chains (e.g. Members
+  // → Yuezengwu → Notebook with no siblings at any level surfaces all three,
+  // rather than leaving a cascade of single-item toggles behind).
+  let promotedSomething = true;
+  while (promotedSomething) {
+    promotedSomething = false;
+    for (const parentId of [...compactVisibleIds]) {
+      const hiddenChildren = (childrenByParent.get(parentId) ?? []).filter((child) => !compactVisibleIds.has(child.id));
+      if (hiddenChildren.length === 1) {
+        const only = hiddenChildren[0];
+        if (only) {
+          compactVisibleIds.add(only.id);
+          promotedSomething = true;
+        }
+      }
+    }
+  }
+
   const visibleIds = new Set(compactVisibleIds);
   for (const parentId of expandedParents) {
     if (!visibleIds.has(parentId)) continue;
@@ -966,9 +1045,7 @@ export function buildOverviewNodes(
       id: `summary:${node.id}`,
       parentId: node.id,
       sourceNodeId: null,
-      title: isExpanded
-        ? `Hide ${naturallyHidden.length} quiet area${naturallyHidden.length === 1 ? "" : "s"}`
-        : summaryTitle(naturallyHidden.length, changedHiddenCount),
+      title: isExpanded ? "Show less" : summaryTitle(naturallyHidden.length, changedHiddenCount),
       path: `${node.path}/~summary`,
       changeType: null,
       updateCount: changedHiddenCount,
@@ -1035,11 +1112,21 @@ function nodeDepth(node: ContextTreeNode, byId: Map<string, ContextTreeNode>, de
   return depth;
 }
 
+/**
+ * Collapsed-state label for the "hidden quiet branches" toggle.
+ *
+ * Old copy ("5 hidden quiet areas" / "5 hidden · 2 updated") leaned on the
+ * internal term "quiet area" (= a tree node with no changes in the current
+ * window) and read as a static status string — not as something you could
+ * click. The new copy uses the standard "Show N more" affordance verb so
+ * it reads as an action, and surfaces the changed-count tail only when it
+ * matters (≥1 hidden node has its own change in-window).
+ */
 function summaryTitle(hiddenCount: number, changedHiddenCount: number): string {
   if (changedHiddenCount > 0) {
-    return `${hiddenCount} hidden · ${changedHiddenCount} updated`;
+    return `Show ${hiddenCount} more · ${changedHiddenCount} changed`;
   }
-  return `${hiddenCount} hidden quiet area${hiddenCount === 1 ? "" : "s"}`;
+  return `Show ${hiddenCount} more`;
 }
 
 function changedCounts(nodes: ContextTreeNode[]): Map<string, number> {
