@@ -15,6 +15,7 @@ import {
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
+import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
 
 /**
@@ -56,6 +57,11 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seededDefaultRef = useRef(false);
   const pickerContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-grow the textarea up to the CSS `max-height` cap (10.5rem ≈ 8
+  // visible lines). Re-measure on every keystroke so paste and delete
+  // both adjust instantly; past the cap content scrolls inside.
+  useAutoResizeTextarea(textareaRef, draft);
 
   const { data: activity } = useQuery({
     queryKey: ["activity"],
@@ -269,6 +275,12 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                   padding: "var(--sp-2) var(--sp-3)",
                   background: "transparent",
                   border: "none",
+                  // `rows={1}` sets the initial height; useAutoResizeTextarea
+                  // expands it on each keystroke. Cap at 10.5rem (~8 visible
+                  // lines) so long pastes scroll inside the textarea instead
+                  // of pushing the send button off-screen.
+                  maxHeight: "10.5rem",
+                  overflowY: "auto",
                   resize: "none",
                   color: "var(--fg)",
                 }}

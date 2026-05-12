@@ -48,6 +48,7 @@ import {
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 
@@ -612,6 +613,11 @@ export function ChatView({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
+  // visible lines). Same hook as the new-chat composer for a consistent
+  // typing experience across both entry points.
+  useAutoResizeTextarea(textareaRef, draft);
   /** Once-per-chat guard for the focus auto-prime: after the user has
    * focused the input even once, we don't keep slapping `@` back into an
    * empty draft. Reset when switching chats. */
@@ -1400,6 +1406,19 @@ export function ChatView({
                       padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                       background: "transparent",
                       border: "none",
+                      // `rows={2}` alone won't survive the auto-resize hook:
+                      // useLayoutEffect immediately sets `height = scrollHeight`,
+                      // which collapses an empty textarea to ~1 line and
+                      // breaks chat-view's pre-auto-grow 2-line contract.
+                      // CSS `min-height` is a hard floor that wins over the
+                      // hook's inline `height`, so we restate the 2-line
+                      // starting size here: 2 line-heights + top + bottom
+                      // padding. Cap at 10.5rem (~8 visible lines) so long
+                      // pastes scroll inside instead of pushing the footer
+                      // toolbar off-screen.
+                      minHeight: "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
+                      maxHeight: "10.5rem",
+                      overflowY: "auto",
                       resize: "none",
                       color: "var(--fg)",
                     }}
