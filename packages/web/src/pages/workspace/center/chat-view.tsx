@@ -5,7 +5,7 @@ import {
   type QuestionMessageContent,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, AtSign, Check, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
+import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getActivityOverview } from "../../../api/activity.js";
 import {
@@ -544,6 +544,35 @@ type PendingImage = {
 type TimelineItem =
   | { kind: "message"; at: string; key: string; data: MessageWithDelivery }
   | { kind: "event"; at: string; key: string; data: SessionEventRow };
+
+/**
+ * Renders a small "↗ View on GitHub" link beside the chat title when the chat
+ * was created by the GitHub webhook router. Reads `metadata.entityUrl` (set by
+ * `services/github-entity-chat.ts::createEntityChat`); shows nothing if the
+ * chat has no entity metadata or the URL is missing.
+ *
+ * Defensive parsing: `metadata` is typed `Record<string, unknown>` on the
+ * wire, so we narrow inline rather than trust the shape. A schema parse would
+ * be ideologically purer but the cost of pulling Zod into a render path for a
+ * 2-field check isn't worth it.
+ */
+function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefined }) {
+  if (!metadata || metadata.source !== "github") return null;
+  const url = typeof metadata.entityUrl === "string" ? metadata.entityUrl : null;
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="View on GitHub"
+      className="inline-flex items-center"
+      style={{ color: "var(--fg-3)", padding: "0 var(--sp-1)", textDecoration: "none" }}
+    >
+      <ExternalLink className="h-3.5 w-3.5" />
+    </a>
+  );
+}
 
 export function ChatView({
   agentId,
@@ -1088,6 +1117,7 @@ export function ChatView({
                 {chatDetail?.title ?? "…"}
               </button>
             )}
+            <EntityLink metadata={chatDetail?.metadata} />
           </div>
           {/* Audience — chips + add button. Right-anchored. Includes
               the viewer's own agent: in chat-first the user is a real

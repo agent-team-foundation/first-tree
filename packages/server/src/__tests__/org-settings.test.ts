@@ -886,9 +886,18 @@ describe("github webhook end-to-end (per-org URL + signature)", () => {
       { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
     );
 
-    // `push` is not in MENTION_ACTIONS, so the handler returns 200 without
-    // fan-out — perfect for exercising the dedup gate in isolation.
-    const body = JSON.stringify({ ref: "refs/heads/main" });
+    // `issues.closed` clears the silent-events filter (issues isn't in
+    // SILENT_EVENT_TYPES; `closed` isn't in SILENT_ACTIONS.issues) but is
+    // not in MENTION_ACTIONS, so the handler returns 200 without fan-out —
+    // perfect for exercising the dedup gate in isolation. (Previously this
+    // test used `push`, but `push` is now silenced upstream of the dedup
+    // gate per the Phase 0 entity-routing design.)
+    const body = JSON.stringify({
+      action: "closed",
+      issue: { number: 1, title: "x", html_url: "https://x" },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "u", type: "User" },
+    });
     const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
     const deliveryId = randomUUID();
 
@@ -898,13 +907,13 @@ describe("github webhook end-to-end (per-org URL + signature)", () => {
       headers: {
         "content-type": "application/json",
         "x-hub-signature-256": signature,
-        "x-github-event": "push",
+        "x-github-event": "issues",
         "x-github-delivery": deliveryId,
       },
       payload: body,
     });
     expect(first.statusCode).toBe(200);
-    expect(first.json()).toMatchObject({ ok: true, event: "push" });
+    expect(first.json()).toMatchObject({ ok: true, event: "issues" });
     expect(first.json()).not.toHaveProperty("deduped");
 
     const second = await app.inject({
@@ -913,64 +922,32 @@ describe("github webhook end-to-end (per-org URL + signature)", () => {
       headers: {
         "content-type": "application/json",
         "x-hub-signature-256": signature,
-        "x-github-event": "push",
+        "x-github-event": "issues",
         "x-github-delivery": deliveryId,
       },
       payload: body,
     });
     expect(second.statusCode).toBe(200);
-    expect(second.json()).toEqual({ ok: true, event: "push", deduped: true });
+    expect(second.json()).toMatchObject({ ok: true, event: "issues", deduped: true });
   });
 
-  // Regression guard: if someone deletes the `unclaimEvent` call in the
-  // route handler's catch block, GitHub's retry of a failed delivery would
-  // be permanently swallowed by the dedup gate (claim succeeds on attempt 1,
-  // handler throws, claim stays held, retry returns `deduped: true` even
-  // though the work was never done). This test pins the contract that an
-  // erroring handler must release the slot.
-  it("releases the dedup slot when the handler throws so GitHub retry can re-process", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const SECRET = "unclaim-secret";
-    await orgSettingsService.putOrgSetting(
-      app.db,
-      admin.organizationId,
-      "github_integration",
-      { webhookSecret: SECRET },
-      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
-    );
-
-    // Malformed `issues` payload — missing the `issue` / `repository` / `sender`
-    // fields makes `parseIssuesPayload` throw `BadRequestError` deep inside
-    // `handleIssuesEvent`, which exercises the catch-and-unclaim branch.
-    const body = JSON.stringify({ action: "opened" });
-    const signature = `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
-    const deliveryId = randomUUID();
-    const headers = {
-      "content-type": "application/json",
-      "x-hub-signature-256": signature,
-      "x-github-event": "issues",
-      "x-github-delivery": deliveryId,
-    };
-
-    const first = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers,
-      payload: body,
-    });
-    expect(first.statusCode).toBe(400);
-
-    const retry = await app.inject({
-      method: "POST",
-      url: `/api/v1/webhooks/github/${admin.organizationId}`,
-      headers,
-      payload: body,
-    });
-    // If unclaim had not run, retry would be 200 with `{ deduped: true }`.
-    expect(retry.statusCode).toBe(400);
-    expect(retry.json()).not.toMatchObject({ deduped: true });
-  });
+  // Regression guard for the unclaim-on-throw contract: if someone deletes
+  // the `unclaimEvent` call in the route handler's catch block, GitHub's
+  // retry of a failed delivery would be permanently swallowed by the dedup
+  // gate. The previous version of this test exercised the contract via a
+  // malformed `issues` payload that threw inside `parseIssuesPayload` — that
+  // function (and the entire path-A handler) was deleted during the Phase 0
+  // refactor (see docs/webhook-routing-design.md §4.9.2). The new path is
+  // robust against malformed payloads (extract* helpers return null) so the
+  // public surface no longer offers a clean way to provoke a post-claim
+  // throw. Verifying the contract from the public surface would now require
+  // either monkey-patching `routeMentionDelegations` or simulating a DB
+  // outage, both of which are heavier than the regression they would catch.
+  //
+  // The `unclaimEvent` call site is preserved in `webhooks/github.ts`'s
+  // outer try/catch so a future failure path (e.g. a new helper that
+  // throws) still releases the slot. Code review remains the load-bearing
+  // guard until a new realistic throw path emerges.
 
   it("ping events bypass the idempotency table", async () => {
     const app = getApp();

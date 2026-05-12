@@ -1,0 +1,218 @@
+import type { GithubEntityType } from "@agent-team-foundation/first-tree-hub-shared";
+
+/**
+ * GitHub entity model — the unit of clustering for webhook → chat routing.
+ * Two events share a chat iff their (type, key) match (or are linked via
+ * `Fixes #N`). See docs/webhook-routing-design.md §4.2.
+ */
+export type GithubEntity = {
+  type: GithubEntityType;
+  /** Stable string id, e.g. `"owner/repo#42"` or `"owner/repo@<sha>"`. */
+  key: string;
+  /** Human label, e.g. `"Refactor inbox dispatcher"`. Optional — falls back to key. */
+  title?: string;
+  /** Canonical URL back to the GitHub UI. */
+  url?: string;
+};
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Pull `repository.full_name` ("owner/repo") from a webhook payload, or null. */
+function repoFullName(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  const repo = isRecord(payload.repository) ? payload.repository : null;
+  return typeof repo?.full_name === "string" && repo.full_name.length > 0 ? repo.full_name : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Resolve the entity that a GitHub webhook event belongs to.
+ *
+ * Returns `null` when the event isn't a clustering candidate (event type
+ * outside the §4.1 "core" list, malformed payload). Caller is expected to
+ * skip such events.
+ *
+ * Notes
+ * - `commit_comment` falls back to a `commit` entity keyed on `<repo>@<sha>`
+ *   when no associated PR is in the payload — the design hedges on "optionally
+ *   resolve to a PR", but doing so requires an extra GitHub API call which we
+ *   defer to Phase 1+.
+ */
+export function extractEventEntity(eventType: string, payload: unknown): GithubEntity | null {
+  if (!isRecord(payload)) return null;
+  const repo = repoFullName(payload);
+  if (!repo) return null;
+
+  switch (eventType) {
+    case "issues":
+    case "issue_comment": {
+      const issue = isRecord(payload.issue) ? payload.issue : null;
+      const number = readNumber(issue?.number);
+      if (number === null) return null;
+      return {
+        type: "issue",
+        key: `${repo}#${number}`,
+        title: readString(issue?.title) ?? undefined,
+        url: readString(issue?.html_url) ?? undefined,
+      };
+    }
+    case "pull_request":
+    case "pull_request_review":
+    case "pull_request_review_comment": {
+      const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+      const number = readNumber(pr?.number);
+      if (number === null) return null;
+      return {
+        type: "pull_request",
+        key: `${repo}#${number}`,
+        title: readString(pr?.title) ?? undefined,
+        url: readString(pr?.html_url) ?? undefined,
+      };
+    }
+    case "discussion":
+    case "discussion_comment": {
+      const disc = isRecord(payload.discussion) ? payload.discussion : null;
+      const number = readNumber(disc?.number);
+      if (number === null) return null;
+      return {
+        type: "discussion",
+        key: `${repo}#discussion-${number}`,
+        title: readString(disc?.title) ?? undefined,
+        url: readString(disc?.html_url) ?? undefined,
+      };
+    }
+    case "commit_comment": {
+      const comment = isRecord(payload.comment) ? payload.comment : null;
+      const sha = readString(comment?.commit_id);
+      if (!sha) return null;
+      return {
+        type: "commit",
+        key: `${repo}@${sha}`,
+        url: readString(comment?.html_url) ?? undefined,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Closing-keyword regex from
+ * https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
+ * — `close[sd]? | fix(es|ed)? | resolve[sd]?`. Cross-repo `org/repo#N` is
+ * deliberately excluded (out of scope for Phase 0; see §4.5).
+ */
+const FIXES_KEYWORDS_RE = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)\b/gi;
+
+/**
+ * Parse `Fixes #N` / `Closes #N` / `Resolves #N` references out of a PR body.
+ * Returns ordered, deduplicated entity references for issues in the same repo
+ * (cross-repo refs ignored per §4.5).
+ *
+ * Caller is expected to pass `repoFullName` so we can build the entity key.
+ */
+export function parseFixesRefs(text: string | null | undefined, repoFullName: string): GithubEntity[] {
+  if (!text) return [];
+  const seen = new Set<string>();
+  const out: GithubEntity[] = [];
+  for (const match of text.matchAll(FIXES_KEYWORDS_RE)) {
+    const num = match[1];
+    if (!num) continue;
+    const key = `${repoFullName}#${num}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ type: "issue", key });
+  }
+  return out;
+}
+
+/**
+ * Render a chat topic from an entity. Used as the chat title; kept short so
+ * the chat-list row doesn't truncate aggressively.
+ *
+ *   { type: "issue", key: "owner/repo#42", title: "Refactor inbox" }
+ *     → "Issue owner/repo#42: Refactor inbox"
+ */
+export function formatEntityTitle(entity: GithubEntity): string {
+  const prefix = (() => {
+    switch (entity.type) {
+      case "issue":
+        return "Issue";
+      case "pull_request":
+        return "PR";
+      case "discussion":
+        return "Discussion";
+      case "commit":
+        return "Commit";
+    }
+  })();
+  const head = `${prefix} ${entity.key}`;
+  if (entity.title && entity.title.length > 0) {
+    return `${head}: ${entity.title}`;
+  }
+  return head;
+}
+
+// ── Silent-events filter (§4.8) ───────────────────────────────────────
+
+const SILENT_EVENT_TYPES = new Set<string>([
+  "workflow_run",
+  "workflow_job",
+  "check_run",
+  "check_suite",
+  "status",
+  "push",
+  "create",
+  "delete",
+  "fork",
+  "watch",
+  "release",
+  "label",
+  "label_created",
+  "label_deleted",
+  // Reaction events — `*_reaction` actions don't exist; reactions arrive as
+  // `reaction` events. Listed here for clarity.
+  "reaction",
+  // Membership / org / team / project — irrelevant to webhook routing.
+  "member",
+  "membership",
+  "team",
+  "team_add",
+  "organization",
+  "org_block",
+  "project",
+  "project_card",
+  "project_column",
+]);
+
+/**
+ * Per-event-type action-level filters. Frequent low-signal actions that would
+ * otherwise spam an entity chat. `synchronize` (PR branch push) is the most
+ * common offender — it fires on every commit push to a PR branch and never
+ * carries new conversation.
+ */
+const SILENT_ACTIONS: Record<string, ReadonlySet<string>> = {
+  issues: new Set(["labeled", "unlabeled", "milestoned", "demilestoned", "pinned", "unpinned"]),
+  pull_request: new Set(["labeled", "unlabeled", "auto_merge_enabled", "auto_merge_disabled", "synchronize"]),
+};
+
+/** True iff the event should be silently 200-OKed without further routing. */
+export function shouldSilent(eventType: string, payload: unknown): boolean {
+  if (SILENT_EVENT_TYPES.has(eventType)) return true;
+  if (!isRecord(payload)) return false;
+  const sender = isRecord(payload.sender) ? payload.sender : null;
+  if (readString(sender?.type) === "Bot") return true;
+  const action = readString(payload.action);
+  if (!action) return false;
+  const actions = SILENT_ACTIONS[eventType];
+  return actions?.has(action) ?? false;
+}
