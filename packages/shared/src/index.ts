@@ -209,6 +209,24 @@ export {
   contextTreeUpdateSchema,
 } from "./schemas/context-tree.js";
 export {
+  GITHUB_ACCOUNT_TYPES,
+  GITHUB_PERMISSION_LEVELS,
+  type GithubAccountType,
+  type GithubAppInstallationClaimBody,
+  type GithubAppInstallationEvents,
+  type GithubAppInstallationOutput,
+  type GithubAppInstallationPermissions,
+  type GithubAppUserTokenMetadata,
+  type GithubPermissionLevel,
+  githubAccountTypeSchema,
+  githubAppInstallationClaimBodySchema,
+  githubAppInstallationEventsSchema,
+  githubAppInstallationOutputSchema,
+  githubAppInstallationPermissionsSchema,
+  githubAppUserTokenMetadataSchema,
+  githubPermissionLevelSchema,
+} from "./schemas/github-app.js";
+export {
   IMAGE_MIME_TO_EXT,
   type ImageInlineContent,
   type ImagePayloadFrame,
