@@ -210,6 +210,24 @@ export async function pickPrimaryMembership(db: Database, userId: string) {
 }
 
 /**
+ * Look up a user's ACTIVE membership in a specific org. Returns null when
+ * the user isn't a member there (or their row is soft-deleted `left`).
+ *
+ * Used by the OAuth callback to re-check that a `targetOrganizationId`
+ * carried in the signed state still names an org the user can administer
+ * before binding a GitHub App installation to it (codex P1-3) — the state
+ * JWT lives ~10min, long enough for a membership to be revoked.
+ */
+export async function findActiveMembership(db: Database, userId: string, organizationId: string) {
+  const [row] = await db
+    .select({ memberId: members.id, role: members.role })
+    .from(members)
+    .where(and(eq(members.userId, userId), eq(members.organizationId, organizationId), eq(members.status, "active")))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
  * Mark `members.status='left'` for the given member. v1 simplification:
  * no "must transfer admin" check — the proposal accepts the trade-off
  * (last admin allowed to leave, leaves an orphan team) and the cleanup is
