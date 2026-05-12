@@ -491,15 +491,32 @@ export async function leaveMeChat(db: Database, chatId: string, humanAgentId: st
 // ---------------------------------------------------------------------------
 
 /**
- * Used by future bell-badge / list-pill counts. Single-table count
- * over `chat_user_state` — much cheaper than the legacy UNION because
- * the partial index `idx_user_state_unread` bounds the scan by the
- * unread row count alone.
+ * Used by future bell-badge / list-pill counts. The partial index
+ * `idx_user_state_unread WHERE unread_mention_count > 0` bounds the
+ * driving scan; we then join `chat_membership` + `chats` so the badge
+ * stays consistent with `listMeChats`.
+ *
+ * Why the joins (not just a single-table count): per §11.4 a user's
+ * `chat_user_state` row is **preserved on detach** so read state
+ * survives a leave/rejoin cycle. Without the membership join, any
+ * preserved row with `unread_mention_count > 0` would keep
+ * contributing to the badge even though the chat no longer appears in
+ * the list. The `chats` join applies the same org-scoping +
+ * `parent_chat_id IS NULL` filter as `listMeChats` so the two counts
+ * cannot drift in the cross-org pollution or thread-chat cases either.
  */
-export async function countUnreadMeChats(db: Database, humanAgentId: string): Promise<number> {
+export async function countUnreadMeChats(db: Database, humanAgentId: string, organizationId: string): Promise<number> {
   const rows = await db.execute<{ count: number }>(sql`
-    SELECT count(*)::int AS count FROM chat_user_state
-     WHERE agent_id = ${humanAgentId} AND unread_mention_count > 0
+    SELECT count(*)::int AS count
+      FROM chat_user_state cus
+      JOIN chat_membership cm
+        ON cm.chat_id = cus.chat_id AND cm.agent_id = cus.agent_id
+      JOIN chats c
+        ON c.id = cus.chat_id
+     WHERE cus.agent_id = ${humanAgentId}
+       AND cus.unread_mention_count > 0
+       AND c.parent_chat_id IS NULL
+       AND c.organization_id = ${organizationId}
   `);
   return rows[0]?.count ?? 0;
 }
