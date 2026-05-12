@@ -292,6 +292,15 @@ function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boo
             // Pull the chevron to the left of the icon column. sp-3 ≈ 12,
             // enough clearance to read it as a separate glyph without
             // running into the icon glyph.
+            //
+            // IMPLICIT CONTRACT: this only renders cleanly because the
+            // TeamPage container around the table has `padding-left: sp-5`
+            // (see packages/web/src/pages/team/index.tsx — the wrapper
+            // `<div>` with `padding: var(--sp-2) var(--sp-5) var(--sp-7)`).
+            // sp-3 overhang fits inside the sp-5 padding with sp-2 to
+            // spare. If that outer padding ever shrinks below sp-3 the
+            // chevron will clip against the page chrome — revisit either
+            // the outer padding or switch this back to an in-flow slot.
             left: "calc(-1 * var(--sp-3))",
             top: "50%",
             transform: "translateY(-50%)",
@@ -425,10 +434,7 @@ function HumanDelegateCell({ row }: { row: HumanRow }) {
       <AgentChip name={row.delegate.name} displayName={row.delegate.displayName} />
     </span>
   ) : (
-    // Shorter placeholder ("Set →" instead of "Set delegate →") so the
-    // CTA fits comfortably at the Delegate column width with the
-    // tooltip carrying the full label.
-    <span style={{ color: "var(--accent-dim)" }}>Set →</span>
+    <span style={{ color: "var(--accent-dim)" }}>Set delegate →</span>
   );
 
   const tooltip = row.delegate ? (row.canEditDelegate ? `Change delegate · ${fullLabel}` : fullLabel) : "Set delegate";

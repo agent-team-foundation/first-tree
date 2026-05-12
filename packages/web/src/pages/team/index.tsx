@@ -581,15 +581,24 @@ export function buildGroups(args: {
 
   // "Your agents" mixes shared + private rows, so each row carries an
   // inline visibility chip so the viewer can tell them apart at a glance.
-  // Sorted so private agents (the more sensitive ones) appear first inside
-  // the section — that's where governance attention belongs.
+  // Sort:
+  //   1. Private agents first (governance attention belongs on the more
+  //      sensitive rows).
+  //   2. Tiebreaker on displayName so order stays deterministic across
+  //      paginated fetches and refetches — the source `yourAgents` array
+  //      arrives in whatever order /agents pages return, and without a
+  //      stable secondary key the section would visibly reshuffle when
+  //      the list refreshes.
   const yourRows: AgentRow[] = yourAgents
     .filter(matchAgent)
     .map((a) => toAgentRow(a, { showVisibilityChip: true }))
     .sort((a, b) => {
       const aPriv = a.agent.visibility === "private" ? 0 : 1;
       const bPriv = b.agent.visibility === "private" ? 0 : 1;
-      return aPriv - bPriv;
+      if (aPriv !== bPriv) return aPriv - bPriv;
+      // Case-insensitive locale-aware compare so "Coder" and "coder" sort
+      // adjacent rather than splitting by ASCII code point.
+      return a.agent.displayName.localeCompare(b.agent.displayName, undefined, { sensitivity: "base" });
     });
   // Team / Other-private rows are homogeneous in visibility (shared / private
   // respectively); the section title already encodes that, so no chip.

@@ -152,6 +152,62 @@ describe("Team page grouping", () => {
     expect(teamFirst.showVisibilityChip).toBe(false);
   });
 
+  it("sorts Your agents deterministically: private first, then displayName tiebreaker", () => {
+    // Deliberately scrambled input order — without a stable secondary
+    // sort key the rendered order would follow this scramble and reshuffle
+    // visibly across refetches. The sort should pin private to the top
+    // and break ties alphabetically (case-insensitive).
+    const sharedZeta = agent({
+      uuid: "shared-z",
+      type: "personal_assistant",
+      displayName: "Zeta",
+      visibility: "organization",
+      managerId: "member-1",
+    });
+    const sharedAlpha = agent({
+      uuid: "shared-a",
+      type: "personal_assistant",
+      displayName: "alpha",
+      visibility: "organization",
+      managerId: "member-1",
+    });
+    const privateBeta = agent({
+      uuid: "private-b",
+      type: "personal_assistant",
+      displayName: "Beta",
+      visibility: "private",
+      managerId: "member-1",
+    });
+    const privateGamma = agent({
+      uuid: "private-g",
+      type: "personal_assistant",
+      displayName: "gamma",
+      visibility: "private",
+      managerId: "member-1",
+    });
+
+    const groups = buildGroups({
+      filter: "all",
+      search: "",
+      isAdmin: false,
+      selfMemberId: "member-1",
+      members: [],
+      // Order: shared, private, shared, private — guarantees the test
+      // exercises both the visibility partition and the alpha tiebreaker.
+      yourAgents: [sharedZeta, privateBeta, sharedAlpha, privateGamma],
+      teamAgents: [],
+      otherPrivateAgents: [],
+      resolveMember: (id) => id,
+      agentByUuid: new Map(),
+      openDelegate: () => {},
+    });
+
+    const yoursGroup = groups.find((g) => g.key === "yours");
+    if (!yoursGroup) throw new Error("expected yours group");
+    const uuids = yoursGroup.rows.map((r) => (r.kind === "agent" ? r.agent.uuid : "?"));
+    expect(uuids).toEqual(["private-b", "private-g", "shared-a", "shared-z"]);
+  });
+
   it("shows Other members' private agents collapsibly for admins only", () => {
     const theirPrivate = agent({
       uuid: "their-private",

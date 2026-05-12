@@ -694,6 +694,14 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
             the surrounding form stays put. Empty `0 computers` and N-radio
             states can still grow taller — that's fine, the jump is only
             from the *initial detection* states which were the visible bug.
+
+            `minHeight: 168` is hand-calibrated to the steady-state height
+            of `SingleComputerCard` (border + 2-line content + p-3) plus
+            the `<Label>` + a single-line "Powered by" + a runtime chip
+            row. KEEP IN SYNC with `SingleComputerCard` /
+            `ComputerCardSkeleton` / `RuntimeChipsSkeleton` below — if any
+            of those grows or shrinks its padding / line count, the value
+            here must move with it or the dialog will jump again.
           */}
           <div className="space-y-3" style={{ minHeight: 168 }}>
             <Label>Where it runs</Label>
@@ -850,6 +858,13 @@ function ZeroComputerBlock({
  * Single-computer card. Used in the common case where the user only has
  * one computer connected — no radio, just a visual confirmation of where
  * the agent will live.
+ *
+ * Layout note: the "Where it runs" wrapper above reserves a `minHeight`
+ * calibrated to this card's steady-state dimensions plus the runtime
+ * chip row, so the dialog doesn't jump during async load. If you change
+ * this card's padding, border, or line count, also revisit `minHeight`
+ * in the wrapper (and `ComputerCardSkeleton` / `RuntimeChipsSkeleton`
+ * below, which mirror this card's dimensions).
  */
 function SingleComputerCard({ client }: { client: HubClient | undefined }) {
   if (!client) return null;
