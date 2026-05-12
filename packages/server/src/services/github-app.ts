@@ -51,6 +51,7 @@ const OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const USER_API_URL = "https://api.github.com/user";
 const USER_EMAILS_API_URL = "https://api.github.com/user/emails";
+const USER_INSTALLATIONS_API_URL = "https://api.github.com/user/installations";
 
 /**
  * Errors from any GitHub API call this module makes. Carries the HTTP
@@ -158,6 +159,59 @@ export async function fetchInstallation(
     events: body.events ?? [],
     suspendedAt: body.suspended_at ?? null,
   };
+}
+
+/**
+ * List the installation IDs the authenticated GitHub user can administer.
+ * Wraps `GET /user/installations` — GitHub's documented "what installs is
+ * this user allowed to touch" endpoint. Covers both User-type installs
+ * (the user owns the personal account) and Organization-type installs
+ * (the user has admin rights on the org).
+ *
+ * Critical security primitive: the OAuth callback uses this to verify
+ * that an `installation_id` query parameter — which arrives over an
+ * insecure channel (the user's browser address bar) — actually belongs
+ * to the authenticated user. Without this check, any signed-in user
+ * could attach an arbitrary installation_id to their callback URL and
+ * bind another team's installation to their own Hub org (installation
+ * IDs are NOT secrets — they appear in webhook URLs, GitHub-side
+ * Settings pages, and the install dialog's post-install redirect).
+ *
+ * Returns the bare ID set so callers can do O(1) membership checks. The
+ * full installation metadata is fetched separately via `fetchInstallation`
+ * once authorization has cleared.
+ */
+export async function listUserAccessibleInstallationIds(
+  userAccessToken: string,
+  opts: { fetcher?: typeof fetch; perPage?: number; maxPages?: number } = {},
+): Promise<Set<number>> {
+  const fetcher = opts.fetcher ?? fetch;
+  const perPage = opts.perPage ?? 100;
+  const maxPages = opts.maxPages ?? 5;
+  const out = new Set<number>();
+  for (let page = 1; page <= maxPages; page++) {
+    const url = `${USER_INSTALLATIONS_API_URL}?per_page=${perPage}&page=${page}`;
+    const res = await fetcher(url, {
+      headers: {
+        Authorization: `Bearer ${userAccessToken}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+    if (!res.ok) {
+      throw new GithubAppApiError(res.status, `GitHub /user/installations failed (${res.status})`);
+    }
+    const body = (await res.json()) as {
+      total_count?: number;
+      installations?: Array<{ id: number }>;
+    };
+    const installs = body.installations ?? [];
+    for (const inst of installs) {
+      if (typeof inst.id === "number") out.add(inst.id);
+    }
+    if (installs.length < perPage) break;
+  }
+  return out;
 }
 
 export type InstallationToken = {

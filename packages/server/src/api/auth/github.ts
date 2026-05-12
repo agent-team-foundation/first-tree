@@ -17,6 +17,7 @@ import {
   createAppJwt,
   exchangeCodeForAppUserProfile,
   fetchInstallation,
+  listUserAccessibleInstallationIds,
 } from "../../services/github-app.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
@@ -115,6 +116,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
     let profile: GithubProfile;
     let tokens: GithubTokenBundle;
+    let plaintextUserAccessToken: string;
     let installationId: number | null = null;
     try {
       const result = await exchangeCodeForAppUserProfile({
@@ -125,6 +127,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         installationId: installationIdRaw ? Number(installationIdRaw) : null,
       });
       profile = result.profile;
+      plaintextUserAccessToken = result.accessToken;
       tokens = {
         encryptedAccessToken: encryptValue(result.accessToken, app.config.secrets.encryptionKey),
         accessTokenExpiresAt: result.accessTokenExpiresAt,
@@ -136,6 +139,46 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       const msg = err instanceof Error ? err.message : "GitHub exchange failed";
       app.log.warn({ err }, "github sign-in code exchange failed");
       return reply.status(401).send({ error: msg });
+    }
+
+    // SECURITY (codex P0-2): the `installation_id` query parameter
+    // arrives over the user's browser address bar — it is NOT a secret
+    // and NOT signed. Without authorization, any signed-in user could
+    // append `?installation_id=<some-other-org's-id>` and bind that
+    // installation to their own Hub team (the App JWT has read access
+    // to every installation, so `fetchInstallation` would succeed).
+    //
+    // Verify the authenticated user actually has access to this
+    // installation via GitHub's `/user/installations` endpoint, which
+    // lists installations the user-access-token holder can administer
+    // (User-type they own + Organization-type they admin). If the
+    // claim doesn't check out, drop the installation_id and continue
+    // sign-in — the user is still authenticated, but no install row
+    // gets fetched or bound to their team.
+    if (installationId !== null) {
+      try {
+        const allowedIds = await listUserAccessibleInstallationIds(plaintextUserAccessToken);
+        if (!allowedIds.has(installationId)) {
+          app.log.warn(
+            {
+              event: "github_app.installation_id_unauthorized",
+              installationId,
+              githubId: profile.githubId,
+              allowedCount: allowedIds.size,
+            },
+            "callback installation_id is not in /user/installations — refusing to bind (attempted hijack?)",
+          );
+          installationId = null;
+        }
+      } catch (err) {
+        // Failing closed: if we can't verify access, don't bind. User
+        // still signs in; install can be re-attempted on next visit.
+        app.log.warn(
+          { err, installationId, githubId: profile.githubId },
+          "github app /user/installations check failed — refusing to bind to be safe",
+        );
+        installationId = null;
+      }
     }
 
     // Fetch + UPSERT the installation row when the user just installed
@@ -153,9 +196,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         const installation = await fetchInstallation(appJwt, installationId);
         await upsertInstallationFromMetadata(app.db, { installation });
       } catch (err) {
-        // Log + continue. The webhook handler (commit 7) will land the
-        // same row on its own; degrading gracefully here means the user
-        // still gets signed in even if GitHub's App API is briefly down.
+        // Log + continue. The webhook handler will land the same row on
+        // its own; degrading gracefully here means the user still gets
+        // signed in even if GitHub's App API is briefly down.
         app.log.warn(
           { err, installationId, githubId: profile.githubId },
           "github app install fetch/upsert failed — webhook will reconcile",

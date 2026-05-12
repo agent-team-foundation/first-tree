@@ -7,6 +7,7 @@ import {
   exchangeCodeForAppUserProfile,
   fetchInstallation,
   GithubAppApiError,
+  listUserAccessibleInstallationIds,
   mintInstallationToken,
   refreshAppUserToken,
 } from "../services/github-app.js";
@@ -201,6 +202,84 @@ describe("services/github-app", () => {
         name: "GithubAppApiError",
         status: 404,
       });
+    });
+  });
+
+  describe("listUserAccessibleInstallationIds (P0-2 authz primitive)", () => {
+    it("returns the set of installation IDs from a single-page /user/installations", async () => {
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      const fakeFetch: typeof fetch = async (url, init) => {
+        calls.push({ url: String(url), init });
+        return new Response(
+          JSON.stringify({
+            total_count: 2,
+            installations: [{ id: 1001 }, { id: 1002 }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      };
+      const ids = await listUserAccessibleInstallationIds("ghu_token", { fetcher: fakeFetch });
+      expect(ids).toEqual(new Set([1001, 1002]));
+      expect(calls).toHaveLength(1);
+      const headers = new Headers(calls[0]?.init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer ghu_token");
+      expect(headers.get("x-github-api-version")).toBe("2022-11-28");
+      expect(calls[0]?.url).toContain("/user/installations?per_page=");
+    });
+
+    it("paginates until a short page is seen", async () => {
+      const pages = [
+        // Page 1: full
+        Array.from({ length: 100 }, (_, i) => ({ id: 5000 + i })),
+        // Page 2: partial (terminates the loop)
+        [{ id: 6001 }, { id: 6002 }],
+      ];
+      let pageIdx = 0;
+      const fakeFetch: typeof fetch = async () => {
+        const installations = pages[pageIdx++] ?? [];
+        return new Response(JSON.stringify({ installations }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      const ids = await listUserAccessibleInstallationIds("t", { fetcher: fakeFetch, perPage: 100 });
+      expect(ids.size).toBe(102);
+      expect(ids.has(5000)).toBe(true);
+      expect(ids.has(6002)).toBe(true);
+    });
+
+    it("returns an empty set when the user has no installations", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ total_count: 0, installations: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const ids = await listUserAccessibleInstallationIds("t", { fetcher: fakeFetch });
+      expect(ids.size).toBe(0);
+    });
+
+    it("throws GithubAppApiError on 401 (stale or revoked user token)", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 });
+      await expect(listUserAccessibleInstallationIds("stale", { fetcher: fakeFetch })).rejects.toMatchObject({
+        name: "GithubAppApiError",
+        status: 401,
+      });
+    });
+
+    it("authz semantics: hostile installation_id not in the set is correctly excluded", async () => {
+      // Models the P0-2 hijack attempt — user passes installation_id of an
+      // org they don't admin. /user/installations returns only the orgs
+      // they actually admin, so the .has(hostileId) check returns false
+      // and the OAuth callback drops the install rather than binding it.
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ installations: [{ id: 100 }, { id: 200 }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const ids = await listUserAccessibleInstallationIds("t", { fetcher: fakeFetch });
+      expect(ids.has(100)).toBe(true);
+      expect(ids.has(9999_999)).toBe(false); // attacker's installation_id
     });
   });
 
