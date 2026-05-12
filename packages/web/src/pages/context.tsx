@@ -481,8 +481,10 @@ function TreeOverview({
               </div>
               <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
                 <OverviewLegendItem color="var(--accent)" label="Selected path" />
-                <OverviewLegendItem color="var(--accent-bg)" label="Updated" />
-                <OverviewLegendItem color="var(--bg-raised)" label="Quiet / hidden" />
+                <OverviewLegendItem color="var(--ok)" label="Added" />
+                <OverviewLegendItem color="var(--warn)" label="Edited" />
+                <OverviewLegendItem color="var(--danger)" label="Removed" />
+                <OverviewLegendItem color="var(--bg-raised)" label="Quiet" />
               </div>
             </div>
             <div
@@ -528,6 +530,7 @@ function TreeOverview({
                         ref={node.selected ? scrollSelectedIntoView : undefined}
                         type="button"
                         disabled={!interactive}
+                        aria-expanded={node.isSummary ? node.isExpanded : undefined}
                         onClick={handleClick}
                         className="flex w-full items-center text-left text-label transition-colors"
                         style={{
@@ -857,7 +860,7 @@ type LayoutNode = OverviewDatum & {
   parent: LayoutNode | null;
 };
 
-function layoutTree(
+export function layoutTree(
   nodes: ContextTreeNode[],
   selectedNodeId: string | null,
   counts: Map<string, number>,
@@ -889,7 +892,7 @@ function layoutTree(
   }));
 }
 
-function buildOverviewNodes(
+export function buildOverviewNodes(
   nodes: ContextTreeNode[],
   selectedNodeId: string | null,
   counts: Map<string, number>,
