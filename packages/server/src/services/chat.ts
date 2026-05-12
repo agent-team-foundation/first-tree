@@ -597,19 +597,17 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
   }
   const orgId = agentA.organizationId;
 
-  // Find existing direct chat between the two agents (speaker rows only).
-  const aChats = await db
+  // Find chats where BOTH agents are speakers. Single grouped query —
+  // `HAVING COUNT(DISTINCT agent_id) = 2` keeps us from matching chats that
+  // happen to have one of the two agents twice somehow (defensive; the
+  // (chat_id, agent_id) PK prevents that, but the DISTINCT costs nothing).
+  const commonRows = await db
     .select({ chatId: chatMembership.chatId })
     .from(chatMembership)
-    .where(and(eq(chatMembership.agentId, agentAId), eq(chatMembership.accessMode, "speaker")));
-
-  const bChats = await db
-    .select({ chatId: chatMembership.chatId })
-    .from(chatMembership)
-    .where(and(eq(chatMembership.agentId, agentBId), eq(chatMembership.accessMode, "speaker")));
-
-  const bChatIds = new Set(bChats.map((r) => r.chatId));
-  const commonChatIds = aChats.map((r) => r.chatId).filter((id) => bChatIds.has(id));
+    .where(and(inArray(chatMembership.agentId, [agentAId, agentBId]), eq(chatMembership.accessMode, "speaker")))
+    .groupBy(chatMembership.chatId)
+    .having(sql`COUNT(DISTINCT ${chatMembership.agentId}) = 2`);
+  const commonChatIds = commonRows.map((r) => r.chatId);
 
   if (commonChatIds.length > 0) {
     // Order by `created_at` for determinism across webhook re-deliveries

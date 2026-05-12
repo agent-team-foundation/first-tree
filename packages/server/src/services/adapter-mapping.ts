@@ -6,8 +6,8 @@ import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterChatMappings } from "../db/schema/adapter-chat-mappings.js";
 import { adapterMessageReferences } from "../db/schema/adapter-message-references.js";
 import { agents } from "../db/schema/agents.js";
-import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { ensureParticipant } from "./chat.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { addChatParticipants } from "./participant-mode.js";
 
@@ -240,25 +240,6 @@ export async function findOrCreateChatForChannel(
 
     return chatId;
   });
-}
-
-/**
- * Ensure an agent is a speaker of a chat (no-op if already). Mode is
- * derived via the canonical entrypoint — pre-fix this hardcoded
- * `mode: 'full'`, which is wrong for non-human agents in a group chat
- * (the bug §1.1 of the Phase 1 design doc fixes). `upgradeWatcherToSpeaker`
- * promotes a pre-existing watcher row in place; chat_user_state is
- * structurally separate so read state survives untouched.
- */
-async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
-  const [exists] = await db
-    .select({ accessMode: chatMembership.accessMode })
-    .from(chatMembership)
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, agentId)))
-    .limit(1);
-
-  if (exists?.accessMode === "speaker") return;
-  await addChatParticipants(db, chatId, [{ agentId, role: "member" }], { upgradeWatcherToSpeaker: true });
 }
 
 // ── Message references ──────────────────────────────────────────────
