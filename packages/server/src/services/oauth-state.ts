@@ -28,16 +28,37 @@ type StatePayload = {
   nonce: string;
   /** Pre-validated relative path the SPA navigates to after consuming the fragment. */
   next: string;
+  /**
+   * Hub org the resulting GitHub App installation should bind to. Set when
+   * the flow was kicked off from an org's Settings → GitHub panel (codex
+   * P1-3) — without it the callback would bind to the user's *primary*
+   * org, which is wrong when an admin of org B installs the App. Absent on
+   * the plain `/auth/github/start` sign-in flow.
+   */
+  targetOrganizationId?: string;
+};
+
+export type SignOAuthStateOptions = {
+  /** See `StatePayload.targetOrganizationId`. */
+  targetOrganizationId?: string;
 };
 
 /**
  * Sign a fresh state token + return the matching cookie nonce. Caller is
  * responsible for setting the cookie (HttpOnly + Secure in prod).
  */
-export async function signOAuthState(jwtSecret: string, next: string): Promise<{ token: string; nonce: string }> {
+export async function signOAuthState(
+  jwtSecret: string,
+  next: string,
+  opts: SignOAuthStateOptions = {},
+): Promise<{ token: string; nonce: string }> {
   const nonce = randomBytes(NONCE_BYTES).toString("base64url");
   const secret = new TextEncoder().encode(jwtSecret);
-  const token = await new SignJWT({ nonce, next })
+  const claims: StatePayload = { nonce, next };
+  if (opts.targetOrganizationId) {
+    claims.targetOrganizationId = opts.targetOrganizationId;
+  }
+  const token = await new SignJWT({ ...claims })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(STATE_EXPIRY)
@@ -59,7 +80,7 @@ export async function verifyOAuthState(
   jwtSecret: string,
   token: string,
   cookieNonce: string | null,
-): Promise<{ next: string }> {
+): Promise<{ next: string; targetOrganizationId?: string }> {
   const secret = new TextEncoder().encode(jwtSecret);
   let payload: StatePayload;
   try {
@@ -72,10 +93,16 @@ export async function verifyOAuthState(
   if (typeof payload.nonce !== "string" || typeof payload.next !== "string") {
     throw new Error("OAuth state payload malformed");
   }
+  if (payload.targetOrganizationId !== undefined && typeof payload.targetOrganizationId !== "string") {
+    throw new Error("OAuth state payload malformed");
+  }
 
   if (!cookieNonce || cookieNonce !== payload.nonce) {
     throw new Error("OAuth state nonce / cookie mismatch");
   }
 
-  return { next: payload.next };
+  return {
+    next: payload.next,
+    ...(payload.targetOrganizationId ? { targetOrganizationId: payload.targetOrganizationId } : {}),
+  };
 }

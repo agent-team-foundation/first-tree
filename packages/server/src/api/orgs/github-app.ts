@@ -81,8 +81,8 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   //      JWT — same double-submit defense as `/auth/github/start`. A
   //      static `<a href>` can't do that.
   //   3. The signed state encodes which org the install should bind to
-  //      — that decision is the admin caller's identity, which only the
-  //      server can authenticate. (Wired through in C.9.)
+  //      (`targetOrganizationId`) — that decision is the admin caller's
+  //      identity, which only the server can authenticate.
   //
   // The SPA fetches this (with its bearer token), gets `{ installUrl }`
   // back plus a `Set-Cookie`, then does `window.location = installUrl`.
@@ -90,9 +90,8 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`,
   // and the callback verifies the state cookie + binds the install.
   app.get<{ Params: { orgId: string } }>("/install-url", async (request, reply) => {
-    // Admin-gated: the resolved scope is the org the install will be
-    // bound to once C.9 threads `targetOrganizationId` through the state.
-    await requireOrgAdmin(request, app.db);
+    // Admin-gated: the resolved scope is the org the install binds to.
+    const scope = await requireOrgAdmin(request, app.db);
     const appCfg = app.config.oauth?.githubApp;
     if (!appCfg?.slug) {
       // The App may be configured for sign-in/webhooks but missing the
@@ -104,7 +103,14 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_HUB_GITHUB_APP_SLUG is not configured." });
     }
 
-    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, POST_INSTALL_NEXT);
+    // `targetOrganizationId` rides inside the signed state so the OAuth
+    // callback binds the install to *this* org rather than the caller's
+    // primary org (codex P1-3) — an admin in org B installing the App must
+    // end up bound to org B. The callback re-checks the caller is still an
+    // admin of that org before honoring it.
+    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, POST_INSTALL_NEXT, {
+      targetOrganizationId: scope.organizationId,
+    });
     reply.header(
       "Set-Cookie",
       buildCookie({

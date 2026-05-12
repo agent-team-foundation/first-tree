@@ -21,7 +21,12 @@ import {
 } from "../../services/github-app.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
-import { createPersonalTeam, ensureMembership, pickPrimaryMembership } from "../../services/membership.js";
+import {
+  createPersonalTeam,
+  ensureMembership,
+  findActiveMembership,
+  pickPrimaryMembership,
+} from "../../services/membership.js";
 import {
   OAUTH_STATE_COOKIE,
   OAUTH_STATE_COOKIE_MAX_AGE_S,
@@ -94,9 +99,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
 
     let next: string;
+    let targetOrganizationId: string | null = null;
     try {
       const verified = await verifyOAuthState(app.config.secrets.jwtSecret, state, cookieNonce);
       next = verified.next;
+      targetOrganizationId = verified.targetOrganizationId ?? null;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "OAuth state rejected";
       return reply.status(401).send({ error: msg });
@@ -206,7 +213,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    return completeOauthFlow(app, request, reply, profile, next, tokens, installationId);
+    return completeOauthFlow(app, request, reply, profile, next, tokens, installationId, targetOrganizationId);
   });
 
   app.get("/dev-callback", async (request, reply) => {
@@ -305,7 +312,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId);
+    // Dev bypass never carries a `targetOrganizationId` — the install
+    // stub binds to whatever team the dev session resolves into.
+    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null);
   });
 }
 
@@ -328,6 +337,15 @@ async function completeOauthFlow(
    * installation row to the user's Hub team.
    */
   installationId: number | null,
+  /**
+   * Hub org the install should bind to, carried in the signed state when
+   * the flow was kicked off from an org's Settings panel (codex P1-3).
+   * The user MUST be an active admin of it (re-checked here against the
+   * live `members` row — the state JWT outlives a membership revoke).
+   * Overridden by invite-redemption: if `next` is an `/invite/<token>`
+   * path, that org wins regardless. Null on the plain sign-in flow.
+   */
+  targetOrganizationId: string | null,
 ) {
   const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
 
@@ -369,6 +387,20 @@ async function completeOauthFlow(
     // Drop the now-consumed invite path; land on the team dashboard so the
     // onboarding modal can layer on top.
     next = "/";
+  } else if (targetOrganizationId) {
+    // App-install flow: the org was chosen on a Settings page and rode in
+    // the signed state (codex P1-3). Re-check the user is still an active
+    // admin of it — the state JWT outlives a membership revoke, so a stale
+    // token must not bind another team's install to an org the user no
+    // longer administers.
+    const membership = await findActiveMembership(app.db, userId, targetOrganizationId);
+    if (!membership || membership.role !== "admin") {
+      return reply.status(403).send({ error: "Not an admin of the organization this installation targets" });
+    }
+    resolved = true;
+    resolvedOrganizationId = targetOrganizationId;
+    // joinPath stays "returning"; keep caller's `next` (the Settings page)
+    // so the panel re-renders with the now-bound installation.
   } else {
     const primary = await pickPrimaryMembership(app.db, userId);
     if (primary) {
