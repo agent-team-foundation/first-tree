@@ -253,6 +253,13 @@
       "when": 1778457600000,
       "tag": "0035_drop_hub_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1778544000000,
+      "tag": "0036_github_entity_chat_mappings",
+      "breakpoints": true
     }
   ]
 }

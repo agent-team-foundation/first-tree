@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { chatMetadataSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
@@ -188,13 +189,24 @@ export async function findOrCreateChatForChannel(
 
     const orgId = botAgent?.organizationId ?? (await resolveDefaultOrgId(db));
 
+    // Validate metadata against the shared discriminated union BEFORE the
+    // raw INSERT. The feishu adapter is the only caller today and its shape
+    // matches the `feishu` variant of `chatMetadataSchema`; the parse here
+    // is the cheap defence against a future caller silently writing a
+    // colliding key (e.g. another writer's `source: "github"` would crash
+    // here instead of corrupting downstream readers). See design doc §4.11.
+    const metadata = chatMetadataSchema.parse({
+      source: data.platform,
+      externalChannelId: data.externalChannelId,
+    });
+
     await tx.insert(chats).values({
       id: chatId,
       organizationId: orgId,
       type: internalType,
       topic: data.topic ?? null,
       lifecyclePolicy: "adapter_managed",
-      metadata: { source: data.platform, externalChannelId: data.externalChannelId },
+      metadata,
     });
 
     // Add bot agent and sender as participants. External IM users
