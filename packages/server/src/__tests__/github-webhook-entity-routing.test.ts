@@ -271,7 +271,7 @@ describe("GitHub App webhook — entity-clustering routing (Phase 0)", () => {
     expect(mappings).toHaveLength(0);
   });
 
-  it("returns handled:false (action-level silence) for issues.labeled", async () => {
+  it("returns silent:true for issues.labeled (shouldSilent action-level filter)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const { reviewerLogin, delegateUuid } = await seedReviewerWithDelegate(app, admin);
@@ -290,7 +290,10 @@ describe("GitHub App webhook — entity-clustering routing (Phase 0)", () => {
       sender: { login: "another-engineer", type: "User" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, event: "issues", handled: false });
+    // `issues.labeled` matches the static silent filter (#304 §4.8) — the
+    // App webhook short-circuits BEFORE the binding lookup or any side
+    // effects. `silent: true` rather than `handled: false`.
+    expect(res.json()).toMatchObject({ ok: true, event: "issues", silent: true });
 
     const mappings = await app.db
       .select()
