@@ -74,9 +74,18 @@ export const updateChatSchema = z.object({
 });
 export type UpdateChat = z.infer<typeof updateChatSchema>;
 
+/**
+ * Public API body for `POST /api/v1/agent/chats/:chatId/participants`.
+ * Phase 1 removed the `mode` field: participant mode is derived server-side
+ * from `(chats.type, agents.type)` via `services/participant-mode.ts` and
+ * cannot be overridden by the caller. The handler still inspects the raw
+ * body and rejects with `400 MODE_FIELD_DEPRECATED` if `mode` is present,
+ * so an out-of-tree caller that still sends it gets a clear error and a
+ * telemetry counter increments — see `chat-participant-mode-fix-design.md`
+ * §3.2 / §6.
+ */
 export const addParticipantSchema = z.object({
   agentId: z.string().min(1),
-  mode: z.enum(["full", "mention_only"]).default("full"),
 });
 export type AddParticipant = z.infer<typeof addParticipantSchema>;
 

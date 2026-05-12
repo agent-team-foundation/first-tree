@@ -47,14 +47,19 @@ describe("chat upgrade — direct to group", () => {
     expect((await loadParticipant(chat.id, a1.agent.uuid))?.mode).toBe("mention_only");
     expect((await loadParticipant(chat.id, a2.uuid))?.mode).toBe("mention_only");
 
-    // Third autonomous agent joins.
-    await addParticipant(app.db, chat.id, a1.agent.uuid, { agentId: a3.uuid, mode: "full" });
+    // Third autonomous agent joins. Phase 1: caller no longer passes `mode`;
+    // server derives it from `(chats.type, agents.type)`. For a non-human
+    // agent landing in a (now) group chat the expected mode is
+    // `mention_only`.
+    await addParticipant(app.db, chat.id, a1.agent.uuid, { agentId: a3.uuid });
 
     expect(await loadChatType(chat.id)).toBe("group");
     expect((await loadParticipant(chat.id, a1.agent.uuid))?.mode).toBe("mention_only");
     expect((await loadParticipant(chat.id, a2.uuid))?.mode).toBe("mention_only");
-    // a3 keeps whatever was passed (default "full" in addParticipantSchema).
-    expect((await loadParticipant(chat.id, a3.uuid))?.mode).toBe("full");
+    // a3 is a non-human agent joining a group chat → server-derived
+    // mode = `mention_only` (this was `'full'` pre-Phase-1, the bug the
+    // refactor fixes).
+    expect((await loadParticipant(chat.id, a3.uuid))?.mode).toBe("mention_only");
   });
 
   it("upgrades the chat and keeps the joining human at full mode (Web-console join path)", async () => {
@@ -115,11 +120,14 @@ describe("chat upgrade — direct to group", () => {
       .set({ mode: "mention_only" })
       .where(and(eq(chatParticipants.chatId, chat.id), eq(chatParticipants.agentId, a2.uuid)));
 
-    await addParticipant(app.db, chat.id, a1.agent.uuid, { agentId: a4.uuid, mode: "full" });
+    await addParticipant(app.db, chat.id, a1.agent.uuid, { agentId: a4.uuid });
 
     expect(await loadChatType(chat.id)).toBe("group");
     expect((await loadParticipant(chat.id, a1.agent.uuid))?.mode).toBe("full");
     expect((await loadParticipant(chat.id, a2.uuid))?.mode).toBe("mention_only");
+    // a4 is a non-human agent joining a group chat → server-derived
+    // mode = `mention_only`.
+    expect((await loadParticipant(chat.id, a4.uuid))?.mode).toBe("mention_only");
   });
 
   it("upgrades when a third participant joins via ensureParticipant (web-UI auto-join path)", async () => {

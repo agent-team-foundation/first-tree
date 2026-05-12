@@ -81,6 +81,25 @@ jobs:
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      # Phase 1 invariant guard: `chat_participants` rows must be written
+      # exclusively through `services/participant-mode.ts` so the
+      # `(chats.type, agents.type) ⇒ mode` rule is enforced in one place.
+      # Tests under `src/__tests__/` are allowed to seed pathological rows
+      # for pollution-prevention tests; the production-code guard below
+      # excludes them. See chat-participant-mode-fix-design.md §3.3.3.
+      - name: Guard chat_participants writes
+        run: |
+          set -euo pipefail
+          MATCHES=$(grep -rn 'insert(chatParticipants)' \
+              packages/server/src \
+            | grep -v '/services/participant-mode.ts:' \
+            | grep -v '/__tests__/' \
+            || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Disallowed chat_participants write outside services/participant-mode.ts:"
+            echo "$MATCHES"
+            exit 1
+          fi
       - run: pnpm build
       - run: pnpm typecheck
 

@@ -41,22 +41,25 @@ describe("silent inbox + preceding context", () => {
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
+    // The full-mode control participant has to be a human — Phase 1's
+    // participant-mode invariant (chat-participant-mode-fix-design.md §2.1)
+    // forces every non-human in a group chat to `mention_only`, so a
+    // non-human peer would no longer give us the "still wakes on every
+    // message" baseline this suite needs as a control.
     const peer = await createAgent(app.db, {
       name: `si-peer-${uid}`,
-      type: "autonomous_agent",
+      type: "human",
       managerId: ctx.memberId,
-      clientId: ctx.clientId,
     });
     const chat = await createChat(app.db, human.uuid, {
       type: "group",
       participantIds: [observer.uuid, peer.uuid],
     });
-    // Force observer to mention_only; everyone else stays full so they receive
-    // every message and won't pollute these assertions.
-    await app.db
-      .update(chatParticipants)
-      .set({ mode: "mention_only" })
-      .where(and(eq(chatParticipants.chatId, chat.id), eq(chatParticipants.agentId, observer.uuid)));
+    // Phase 1 already seeds `observer` (non-human) as `mention_only` on
+    // creation, so the previous defensive `UPDATE chat_participants SET
+    // mode = 'mention_only' WHERE agent_id = observer` is no longer
+    // required. Keep the read-back contract: assert nothing here, the
+    // tests below read modes via inbox effects directly.
     return { human, observer, peer, chat };
   }
 
