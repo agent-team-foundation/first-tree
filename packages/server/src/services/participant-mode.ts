@@ -1,12 +1,27 @@
 /**
  * Single source of truth for writing `chat_participants`.
  *
+ * **This is the ONLY place in the codebase that may `INSERT` into the
+ * `chat_participants` table.** Do not call `tx.insert(chatParticipants)`
+ * or `db.insert(chatParticipants)` from anywhere else. The original bug
+ * (docs/chat-participant-mode-fix-design.md §1.1) was caused by ten
+ * scattered insert sites each re-deriving the `mode` rule, several of
+ * which violated `group + non-human ⇒ mention_only`. Re-introducing a
+ * second writer reopens that hole — please don't.
+ *
+ * Test fixtures under `src/__tests__/` that deliberately seed
+ * pathological rows (e.g. cross-org pollution tests) may bypass this
+ * rule; they are setting up "what bad data looks like" rather than
+ * exercising the production write path.
+ *
  * All callers that need to add a participant — `createChat`, `addParticipant`,
  * `ensureParticipant`, `joinChat`, `createMeChat`, `addMeChatParticipants`,
  * `findOrCreateDirectChat`, `findOrCreateChatForChannel`, `joinAsParticipant`,
  * … — go through `addChatParticipants`. The function performs ONE round-trip
  * to read `chats.type` + every involved `agents.type`, runs each row through
- * `defaultParticipantMode`, and inserts the result.
+ * `defaultParticipantMode`, and inserts the result. `agents.type` is parsed
+ * through the shared `agentTypeSchema` so schema drift surfaces loudly
+ * instead of silently coercing to a default.
  *
  * `changeChatType` complements it on the type-flip path: when a `direct`
  * chat is being upgraded to `group` by the very next participant insert, the
@@ -14,10 +29,6 @@
  * trigger an upgrade are expected to invoke `changeChatType` BEFORE
  * `addChatParticipants`, inside the same transaction, so the new row picks
  * up the post-upgrade `chats.type` and existing rows get re-graded together.
- *
- * Phase 1 invariant: a `tx.insert(chatParticipants)` outside this module is
- * a code-review violation. A CI grep (or ESLint rule, when Phase 2 lands)
- * pins this contract — see CI step in `.github/workflows/ci.yml`.
  */
 
 import { agentTypeSchema, defaultParticipantMode } from "@agent-team-foundation/first-tree-hub-shared";
