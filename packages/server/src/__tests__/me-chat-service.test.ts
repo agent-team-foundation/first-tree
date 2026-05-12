@@ -508,8 +508,8 @@ describe("chat-first workspace service layer", () => {
       VALUES ('thread-x', ${admin.organizationId}, 'thread', ${chatId})
     `);
     await app.db.execute(sql`
-      INSERT INTO chat_participants (chat_id, agent_id, role)
-      VALUES ('thread-x', ${admin.humanAgentUuid}, 'member')
+      INSERT INTO chat_membership (chat_id, agent_id, role, access_mode)
+      VALUES ('thread-x', ${admin.humanAgentUuid}, 'member', 'speaker')
     `);
 
     const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, { limit: 50, filter: "all" });

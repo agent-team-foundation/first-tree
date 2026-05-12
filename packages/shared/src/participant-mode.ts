@@ -3,9 +3,9 @@ import type { ChatType } from "./schemas/chat.js";
 import type { ParticipantMode } from "./schemas/message.js";
 
 /**
- * Derive the `chat_participants.mode` that a freshly inserted row MUST get,
- * given the chat's `type` and the joining agent's `type`. This is the single
- * authoritative rule for the invariant
+ * Derive the `chat_membership.mode` that a freshly inserted speaker row MUST
+ * get, given the chat's `type` and the joining agent's `type`. This is the
+ * single authoritative rule for the invariant
  *
  *   `(chat.type === 'group' && agent.type !== 'human') ⇒ mode === 'mention_only'`
  *
@@ -26,9 +26,9 @@ import type { ParticipantMode } from "./schemas/message.js";
  *         agent should listen to every message in this 1:1 line)
  *
  * `peerAgentTypes` is read only in the `direct` branch; callers may pass
- * an empty array (or omit it) for `group` chats — it's ignored. Watcher /
- * subscription-side `chat_subscriptions` rows are unaffected; the helper
- * only governs the "speaking" mode column.
+ * an empty array (or omit it) for `group` chats — it's ignored. Watcher
+ * rows (`chat_membership.access_mode = 'watcher'`) are unaffected; the
+ * helper only governs the "speaking" mode column.
  */
 export function defaultParticipantMode(
   chatType: ChatType,

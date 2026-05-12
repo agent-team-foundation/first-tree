@@ -2,7 +2,7 @@
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
-// -- Single source of truth for chat_participants.mode derivation --
+// -- Single source of truth for chat_membership.mode derivation --
 export { defaultParticipantMode } from "./participant-mode.js";
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
