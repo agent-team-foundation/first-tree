@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { AuthProvider } from "./auth/auth-context.js";
 import { RequireAuth } from "./auth/require-auth.js";
@@ -28,6 +29,10 @@ const queryClient = new QueryClient({
   },
 });
 
+const ContextPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/context-preview.js").then((module) => ({ default: module.ContextPreviewPage })))
+  : null;
+
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -41,6 +46,16 @@ export function App() {
               <Route path="/signup" element={<Navigate to="/login" replace />} />
               <Route path="/auth/github/complete" element={<OAuthCompletePage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
+              {ContextPreviewPage ? (
+                <Route
+                  path="/preview/context"
+                  element={
+                    <Suspense fallback={null}>
+                      <ContextPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
               {/* Auth-required pages. Onboarding is now an inline view inside
                 CenterPanel (OnboardingView) — no separate /welcome route, no
                 provider, no banner. */}
