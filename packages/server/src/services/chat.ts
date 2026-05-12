@@ -197,6 +197,20 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
   }
 }
 
+/**
+ * Non-throwing membership check. Used by routing logic that needs to fall
+ * back to a different chat when the candidate target isn't a member of the
+ * caller's current chat (see `sendToAgent`'s current-chat routing branch).
+ */
+export async function isParticipant(db: Database, chatId: string, agentId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ chatId: chatParticipants.chatId })
+    .from(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+    .limit(1);
+  return Boolean(row);
+}
+
 /** Ensure an agent is a participant of a chat. Silently adds them if not already. */
 export async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
   // Short-circuit if already a participant so we don't spuriously trigger the

@@ -336,7 +336,8 @@ function generateToolsDoc(): string {
 You are running inside **Agent Hub**, a messaging platform for agent teams.
 
 - Messages from other team members arrive as your prompt input
-- Each message includes a \`[From: sender-id]\` header so you know who sent it
+- Each message includes a \`[From: <agent-name>]\` header — that name is also
+  what you pass back to \`agent send\` to reply to or address that agent
 - **Your final text response is automatically delivered** to the chat — just respond normally
 - For **proactive communication** (sending to other agents, other chats, or structured data),
   use the \`first-tree-hub\` CLI below
@@ -351,8 +352,8 @@ These are injected automatically when the agent process starts:
 |----------|-------------|
 | \`FIRST_TREE_HUB_SERVER_URL\` | Server address for API calls |
 | \`FIRST_TREE_HUB_ACCESS_TOKEN\` | User member access JWT (short-lived) |
-| \`FIRST_TREE_HUB_AGENT_ID\` | Your agent UUID — send as \`X-Agent-Id\` |
-| \`FIRST_TREE_HUB_CHAT_ID\` | Current chat context ID |
+| \`FIRST_TREE_HUB_AGENT_ID\` | YOUR own agent UUID. The CLI reads it to identify you as the sender — never pass it as a \`send\` target. |
+| \`FIRST_TREE_HUB_CHAT_ID\` | The chat this session is currently bound to. The CLI uses it to route messages — you don't need to pass it manually. |
 
 The \`first-tree-hub\` CLI reads these automatically — no extra setup needed.
 
@@ -362,13 +363,18 @@ Use the \`first-tree-hub agent send\` CLI — it reads the env vars above and
 attaches the \`Authorization\` + \`X-Agent-Id\` headers automatically:
 
 \`\`\`bash
-# Send to another agent — target is the agent NAME, NOT a uuid.
-# Names are stable (set on creation, immutable, unique in the org).
+# Send to another agent — first positional argument is the recipient's NAME
+# (NOT a uuid; uuids in chat history / participant lists are not accepted).
 # Run \`first-tree-hub agent list\` to see available names.
+#
+# Routing: if the recipient is a participant of your current chat (typically
+# the case in a group chat where someone @-mentioned you to talk to them),
+# the message stays in that chat. Otherwise it falls back to a direct chat
+# between you and the recipient. You don't need to think about which.
 first-tree-hub agent send <agentName> "your message"
 
-# Send to a chat (target is a chat UUID; use this when replying into a
-# specific chat, e.g. a group where you were mentioned)
+# Send into a specific chat by id — use this only when you explicitly want
+# to address a chat your current session is NOT bound to.
 first-tree-hub agent send --chat <chatId> "your message"
 
 # Send markdown (default format is text)
