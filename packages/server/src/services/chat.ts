@@ -377,9 +377,8 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
   if (agentIds.length === 0) return [];
 
   // Find all chat participations (speaker rows) for these agents.
-  // Watcher rows are not surfaced through this admin endpoint — it's
-  // matching pre-refactor behaviour (chat_participants didn't include
-  // them either).
+  // Watcher rows are intentionally excluded — this admin endpoint
+  // surfaces "who is actively in the chat", not "who is observing".
   const participations = await db
     .select({
       chatId: chatMembership.chatId,

@@ -3,22 +3,22 @@
  *
  * Verifies the design's core invariants:
  *
- *   1. Watcher rows live in `chat_subscriptions` and never appear in
- *      `inbox_entries` even when a chat is messaged.
- *   2. Mention candidates resolve from `chat_participants` only — watchers
- *      cannot be `@`-mentioned.
+ *   1. Watcher rows (`chat_membership.access_mode = 'watcher'`) never
+ *      appear in `inbox_entries` even when a chat is messaged.
+ *   2. Mention candidates resolve from speaker rows only
+ *      (`access_mode = 'speaker'`) — watchers cannot be `@`-mentioned.
  *   3. Mention propagation increments the watcher's
- *      `unread_mention_count` when the watched managed agent is mentioned.
+ *      `chat_user_state.unread_mention_count` when the watched managed
+ *      agent is mentioned.
  *   4. `chats.last_message_at` / `last_message_preview` advance on each send.
- *   5. `joinAsParticipant` carries `last_read_at` + `unread_mention_count`
- *      from the watcher row.
+ *   5. `joinAsParticipant` preserves `chat_user_state` (last_read_at +
+ *      unread_mention_count survive the watcher → speaker flip).
  *   6. `leaveAsParticipant` returns the user to "watching" state if they
  *      still manage another participant; otherwise fully detaches.
- *   7. `markMeChatRead` clears the unread counter for both participant
- *      and subscription rows.
+ *   7. `markMeChatRead` clears `chat_user_state.unread_mention_count`.
  *   8. `direct → group` upgrade fires when add-participant brings the count
- *      to 3, and watcher rows are deleted for newly-joined speakers
- *      (mutual exclusion).
+ *      to 3, and watcher rows are flipped to speaker for newly-joined
+ *      speakers (orthogonal axes: role + access_mode).
  *
  * See docs/chat-first-workspace-product-design.md for the contract under test.
  */
