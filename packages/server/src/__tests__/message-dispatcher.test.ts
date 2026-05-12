@@ -152,8 +152,9 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
       clientId: ctx.clientId,
     });
     const chat = await createChat(app.db, a1.uuid, { type: "group", participantIds: [a2.uuid] });
-    // Add a3 explicitly in mention_only mode.
-    await addParticipant(app.db, chat.id, a1.uuid, { agentId: a3.uuid, mode: "mention_only" });
+    // Phase 1: server derives `mention_only` for any non-human agent in a
+    // group chat — no client-side override needed (or accepted).
+    await addParticipant(app.db, chat.id, a1.uuid, { agentId: a3.uuid });
 
     const built = await buildClientMessagePayload(
       app.db,
@@ -297,8 +298,9 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
       type: "group",
       participantIds: [a2.uuid],
     });
-    // Set a1 to mention_only in the group, then send one reply and one plain message.
-    await addParticipant(app.db, group.id, a2.uuid, { agentId: a1.uuid, mode: "mention_only" }).catch(() => void 0);
+    // Phase 1: a non-human agent (a1) joining a group chat is auto-set to
+    // `mention_only` by the server. No `mode` override needed (or accepted).
+    await addParticipant(app.db, group.id, a2.uuid, { agentId: a1.uuid }).catch(() => void 0);
     // a2 posts the "original" with replyTo routing
     const original = await sendMessage(app.db, group.id, a2.uuid, {
       format: "text",

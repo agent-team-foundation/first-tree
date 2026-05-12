@@ -5,7 +5,10 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
+import { createLogger } from "../../observability/index.js";
 import * as chatService from "../../services/chat.js";
+
+const log = createLogger("AgentChatsRoute");
 
 function serializeChat(chat: { createdAt: Date; updatedAt: Date; [key: string]: unknown }) {
   return {
@@ -75,6 +78,29 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   // Participant management
   app.post<{ Params: { chatId: string } }>("/:chatId/participants", async (request, reply) => {
     const identity = requireAgent(request);
+
+    // Reject the deprecated `mode` field early with a clear error. Phase 1
+    // moved participant mode to server-derived state; callers that still
+    // send `mode` would otherwise have it silently ignored, which is
+    // strictly worse than a loud 400. The log entry is the regression
+    // signal — operators can grep for `MODE_FIELD_DEPRECATED` to find any
+    // remaining caller that needs updating. See design doc §3.2.
+    if (request.body !== null && typeof request.body === "object" && "mode" in request.body) {
+      log.warn(
+        {
+          code: "MODE_FIELD_DEPRECATED",
+          chatId: request.params.chatId,
+          senderAgentId: identity.uuid,
+          userAgent: request.headers["user-agent"] ?? "unknown",
+        },
+        "Rejected: addParticipant body contains deprecated `mode` field",
+      );
+      return reply.status(400).send({
+        error:
+          "MODE_FIELD_DEPRECATED: the `mode` field is no longer accepted. Participant mode is derived server-side from chat type + agent type. Remove this field from your request.",
+      });
+    }
+
     const body = addParticipantSchema.parse(request.body);
     const participants = await chatService.addParticipant(app.db, request.params.chatId, identity.uuid, body);
     return reply.status(201).send(
