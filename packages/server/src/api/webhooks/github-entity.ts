@@ -136,26 +136,59 @@ export function parseFixesRefs(text: string | null | undefined, repoFullName: st
 }
 
 /**
+ * Pick a chat-title prefix from (entity, eventType, action).
+ *
+ * PR review-flow events (`pull_request.review_requested`,
+ * `pull_request_review.*`, `pull_request_review_comment.*`) collapse into a
+ * single "PR Review" prefix so a chat first-touched by a review event is
+ * visibly distinct from one first-touched by `pull_request.opened`. Everything
+ * else just renders the entity type.
+ *
+ * Note: chat titles are written once at chat creation (see
+ * `github-entity-chat.ts::createEntityChat`) — subsequent events for the same
+ * entity reuse the existing title even if their (event, action) maps to a
+ * different prefix. This matches the "entity is the container" semantic.
+ */
+function entityTitlePrefix(entity: GithubEntity, eventType: string, action: string): string {
+  if (eventType === "pull_request" && action === "review_requested") return "PR Review";
+  if (eventType === "pull_request_review") return "PR Review";
+  if (eventType === "pull_request_review_comment") return "PR Review";
+  switch (entity.type) {
+    case "issue":
+      return "Issue";
+    case "pull_request":
+      return "PR";
+    case "discussion":
+      return "Discussion";
+    case "commit":
+      return "Commit";
+  }
+}
+
+/**
+ * Strip the leading `owner/` segment from an entity key so the chat title
+ * stays compact. `owner/repo#42` → `repo#42`; `owner/repo@abc1234` →
+ * `repo@abc1234`. The full `owner/repo#N` form is still used as the
+ * clustering primary key (`github_entity_chat_mappings.entity_key`); only the
+ * display string is shortened.
+ */
+function shortEntityKey(key: string): string {
+  const slash = key.indexOf("/");
+  return slash === -1 ? key : key.slice(slash + 1);
+}
+
+/**
  * Render a chat topic from an entity. Used as the chat title; kept short so
  * the chat-list row doesn't truncate aggressively.
  *
- *   { type: "issue", key: "owner/repo#42", title: "Refactor inbox" }
- *     → "Issue owner/repo#42: Refactor inbox"
+ *   formatEntityTitle({ type: "pull_request", key: "owner/repo#307", title: "Improve overview" }, "pull_request", "opened")
+ *     → "PR repo#307: Improve overview"
+ *   formatEntityTitle(<same>, "pull_request", "review_requested")
+ *     → "PR Review repo#307: Improve overview"
  */
-export function formatEntityTitle(entity: GithubEntity): string {
-  const prefix = (() => {
-    switch (entity.type) {
-      case "issue":
-        return "Issue";
-      case "pull_request":
-        return "PR";
-      case "discussion":
-        return "Discussion";
-      case "commit":
-        return "Commit";
-    }
-  })();
-  const head = `${prefix} ${entity.key}`;
+export function formatEntityTitle(entity: GithubEntity, eventType: string, action: string): string {
+  const prefix = entityTitlePrefix(entity, eventType, action);
+  const head = `${prefix} ${shortEntityKey(entity.key)}`;
   if (entity.title && entity.title.length > 0) {
     return `${head}: ${entity.title}`;
   }
