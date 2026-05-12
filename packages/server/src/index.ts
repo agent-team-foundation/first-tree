@@ -19,27 +19,9 @@ async function main() {
     bridgeToSpanLevel: serverConfig.observability.logging.bridgeToSpanLevel,
   });
 
-  // Production hardening — `server.publicUrl` is what the connect-token
-  // `iss` claim and OAuth callback URL are built off of. Booting prod
-  // without it means the CLI's `connect <token>` form would have no
-  // anchor and OAuth would echo back to whatever the inbound proxy
-  // injected via Host headers (forgery risk). Fail closed instead.
-  if (process.env.NODE_ENV === "production" && !serverConfig.server.publicUrl) {
-    throw new Error("FIRST_TREE_HUB_PUBLIC_URL is required in production — set the public-facing hub URL.");
-  }
-  // Reject the half-configured OAuth shape: clientId without secret (or
-  // vice versa) almost always means the operator intended to enable OAuth
-  // but forgot half the env vars; surface that loudly rather than silently
-  // serving a 503 from `/auth/github/start`.
-  const oauthGh = serverConfig.oauth?.github;
-  if (oauthGh) {
-    const half = (oauthGh.clientId && !oauthGh.clientSecret) || (!oauthGh.clientId && oauthGh.clientSecret);
-    if (half) {
-      throw new Error(
-        "GitHub OAuth is half-configured — set BOTH FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID and ..._CLIENT_SECRET, or neither.",
-      );
-    }
-  }
+  // Boot-time config validation (publicUrl + GitHub App config shape)
+  // lives in `buildApp` / `boot-guards.ts` so the CLI server-start path
+  // also runs it. See codex P1-8 for the regression this fixes.
 
   const config: Config = {
     ...serverConfig,
