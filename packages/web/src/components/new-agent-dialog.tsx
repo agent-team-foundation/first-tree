@@ -148,7 +148,13 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [displayName, setDisplayName] = useState("");
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
-  const [visibility, setVisibility] = useState<AgentVisibility>("organization");
+  // Default is "private": the surfaced agent type is `personal_assistant`
+  // (literally "personal"), so the conservative default is "only I see it".
+  // Sharing with the team is an explicit decision the user opts into; the
+  // previous default ("organization") quietly published every onboarding
+  // agent into the team roster, which surprised users who expected
+  // personal-assistant to mean personal.
+  const [visibility, setVisibility] = useState<AgentVisibility>("private");
   const [runtime, setRuntime] = useState<RuntimeProvider>("claude-code");
   // The @handle editor is collapsed by default — 99% of users keep the
   // auto-derived slug. The preview line under "Display name" surfaces it
@@ -182,7 +188,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setDisplayName("");
       setName("");
       setNameDirty(false);
-      setVisibility("organization");
+      setVisibility("private");
       setRuntime("claude-code");
       setEditingHandle(false);
       setConnectedClients([]);
@@ -649,7 +655,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 <div>
                   <div className="text-body font-medium">Shared with team</div>
                   <div className="text-caption text-muted-foreground">
-                    Anyone in your org can @mention and chat with this agent. (default)
+                    Anyone in your org can @mention and chat with this agent.
                   </div>
                 </div>
               </label>
@@ -670,20 +676,40 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 <div>
                   <div className="text-body font-medium">Private to you</div>
                   <div className="text-caption text-muted-foreground">
-                    Only you can see this agent and chat with it. Others on the team won't see it listed.
+                    Only you can see this agent and chat with it. Others on the team won't see it listed. (default)
                   </div>
                 </div>
               </label>
             </div>
           </div>
 
-          <div className="space-y-3">
+          {/*
+            "Where it runs" block. Reserves a stable minHeight so the dialog
+            doesn't visibly jump as async data (listClients → capabilities)
+            streams in. Three asynchronous loads used to swap a short
+            placeholder paragraph for a tall card, shifting the modal's
+            vertical center on every state transition. The reserved space
+            below covers the common single-computer + runtime-chip case
+            so loading skeletons render *inside* a stable box and
+            the surrounding form stays put. Empty `0 computers` and N-radio
+            states can still grow taller — that's fine, the jump is only
+            from the *initial detection* states which were the visible bug.
+
+            `minHeight: 168` is hand-calibrated to the steady-state height
+            of `SingleComputerCard` (border + 2-line content + p-3) plus
+            the `<Label>` + a single-line "Powered by" + a runtime chip
+            row. KEEP IN SYNC with `SingleComputerCard` /
+            `ComputerCardSkeleton` / `RuntimeChipsSkeleton` below — if any
+            of those grows or shrinks its padding / line count, the value
+            here must move with it or the dialog will jump again.
+          */}
+          <div className="space-y-3" style={{ minHeight: 168 }}>
             <Label>Where it runs</Label>
 
             {/* Computer picker. 0 / 1 / N branches keep the most common
                 case (1 connected computer) free of radio-button noise. */}
             {!clientsLoaded ? (
-              <p className="text-caption text-muted-foreground">Detecting connected computers…</p>
+              <ComputerCardSkeleton label="Detecting connected computers…" />
             ) : connectedClients.length === 0 ? (
               <ZeroComputerBlock
                 command={connectCommand}
@@ -729,13 +755,17 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               </div>
             )}
 
-            {/* Runtime row — only when a computer is picked. The provider
-                list is filtered to whatever reports `ok` on that machine. */}
-            {pickedClientId && (
+            {/* Runtime row. Renders *whenever* a computer is picked OR while
+                we're still detecting computers — keeping a stable "Powered
+                by" slot below the computer card prevents the second jump
+                (skeleton paragraph being replaced by the runtime chip row).
+                Only the inner content swaps; the section header and a
+                skeleton chip row hold the space. */}
+            {(pickedClientId || !clientsLoaded) && (
               <div className="space-y-1.5">
                 <div className="text-caption text-muted-foreground">Powered by</div>
-                {activeCapabilities === null ? (
-                  <p className="text-caption text-muted-foreground">Detecting installed runtimes…</p>
+                {!pickedClientId || activeCapabilities === null ? (
+                  <RuntimeChipsSkeleton />
                 ) : okRuntimes.length === 0 ? (
                   <p className="text-caption text-destructive">
                     No runtime ready on this computer. Install Claude Code or Codex on it (and sign in), then come back.
@@ -828,6 +858,13 @@ function ZeroComputerBlock({
  * Single-computer card. Used in the common case where the user only has
  * one computer connected — no radio, just a visual confirmation of where
  * the agent will live.
+ *
+ * Layout note: the "Where it runs" wrapper above reserves a `minHeight`
+ * calibrated to this card's steady-state dimensions plus the runtime
+ * chip row, so the dialog doesn't jump during async load. If you change
+ * this card's padding, border, or line count, also revisit `minHeight`
+ * in the wrapper (and `ComputerCardSkeleton` / `RuntimeChipsSkeleton`
+ * below, which mirror this card's dimensions).
  */
 function SingleComputerCard({ client }: { client: HubClient | undefined }) {
   if (!client) return null;
@@ -837,6 +874,49 @@ function SingleComputerCard({ client }: { client: HubClient | undefined }) {
       <div className="text-caption text-muted-foreground">
         {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Loading placeholder that mirrors `SingleComputerCard`'s dimensions
+ * (border + 2-line content + same padding) so the surrounding form keeps
+ * a stable height while `listClients` is in flight. The previous
+ * placeholder was a single-line paragraph, which is what made the dialog
+ * visibly jump when the real card replaced it.
+ */
+function ComputerCardSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      className="rounded-md border border-border bg-muted/20 p-3"
+      role="status"
+      aria-live="polite"
+      aria-label={label}
+    >
+      <div className="text-body font-medium" style={{ color: "var(--fg-3)" }}>
+        {label}
+      </div>
+      <div className="text-caption text-muted-foreground">Looking for a machine running the Hub client…</div>
+    </div>
+  );
+}
+
+/**
+ * Loading placeholder for the runtime chip row. A single greyed chip-shaped
+ * box reserves the height the real chips will occupy. Pairs with
+ * `ComputerCardSkeleton` so the whole "Where it runs" block reaches its
+ * steady-state height on first paint — no second jump when capabilities
+ * resolve.
+ */
+function RuntimeChipsSkeleton() {
+  return (
+    <div className="flex flex-wrap gap-2" role="status" aria-live="polite" aria-label="Detecting installed runtimes">
+      <span
+        className="inline-flex items-center rounded-md border border-border bg-muted/30 px-3 py-1.5 text-body"
+        style={{ color: "var(--fg-4)" }}
+      >
+        Detecting installed runtimes…
+      </span>
     </div>
   );
 }
