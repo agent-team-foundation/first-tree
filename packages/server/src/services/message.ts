@@ -394,34 +394,49 @@ export async function sendToAgent(
 
   // Routing: if the caller is currently sitting in a chat (CLI auto-injects
   // FIRST_TREE_HUB_CHAT_ID into `replyToChat` via resolveReplyToFromEnv) AND
-  // the target is already a participant of that chat, deliver the message
-  // there instead of opening a parallel direct chat. This is what every
-  // observed group-chat flow wants: "agent A in group G calls `agent send B`"
-  // should land in G when B is a member.
+  // BOTH the sender and target are participants of that chat, deliver the
+  // message there instead of opening a parallel direct chat. This is what
+  // every observed group-chat flow wants: "agent A in group G calls
+  // `agent send B`" should land in G when B is a member.
+  //
+  // BOTH ends are checked because replyToChat is caller-supplied (env or
+  // explicit flag) and otherwise unconstrained. The /agent/chats/:id/messages
+  // path enforces sender membership via assertParticipant; this routing
+  // branch must hold the same invariant or it becomes a write-anywhere
+  // primitive — any agent who knows a chat id and one member's name could
+  // drop a message into a chat they aren't in. Concurrent because both
+  // checks are independent reads.
   //
   // Falls through to the direct-chat path when:
   //   - replyToChat is missing (caller isn't in a session)
-  //   - target isn't a participant of replyToChat (caller in unrelated chat,
-  //     wants a private DM with B)
-  //   - replyToChat doesn't exist anymore (isParticipant returns false)
-  if (data.replyToChat && (await isParticipant(db, data.replyToChat, target.uuid))) {
-    return sendMessage(
-      db,
-      data.replyToChat,
-      senderUuid,
-      {
-        format: data.format,
-        content: data.content,
-        metadata,
-        // The message lands in replyToChat itself, so the reply-routing
-        // envelope is redundant — strip it so future replies fan out via
-        // normal participant rules instead of self-referencing.
-        replyToInbox: undefined,
-        replyToChat: undefined,
-        source: data.source,
-      },
-      { normalizeMentionsInContent: true },
-    );
+  //   - target isn't a participant (caller in unrelated chat, wants a DM)
+  //   - sender isn't a participant (stale env, spoofing attempt, or the
+  //     caller left the chat between fetching the env and sending)
+  //   - replyToChat doesn't exist anymore (both isParticipant return false)
+  if (data.replyToChat) {
+    const [targetIsMember, senderIsMember] = await Promise.all([
+      isParticipant(db, data.replyToChat, target.uuid),
+      isParticipant(db, data.replyToChat, senderUuid),
+    ]);
+    if (targetIsMember && senderIsMember) {
+      return sendMessage(
+        db,
+        data.replyToChat,
+        senderUuid,
+        {
+          format: data.format,
+          content: data.content,
+          metadata,
+          // The message lands in replyToChat itself, so the reply-routing
+          // envelope is redundant — strip it so future replies fan out via
+          // normal participant rules instead of self-referencing.
+          replyToInbox: undefined,
+          replyToChat: undefined,
+          source: data.source,
+        },
+        { normalizeMentionsInContent: true },
+      );
+    }
   }
 
   // Direct-chat fallback: find or create the pair's direct chat.

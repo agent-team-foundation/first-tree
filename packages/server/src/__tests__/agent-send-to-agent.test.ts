@@ -188,5 +188,44 @@ describe("Agent Send-to-Agent API", () => {
       expect(msg.chatId).toBeDefined();
       expect(msg.content).toBe(`@${peer.name} no hint`);
     });
+
+    it("falls back when sender is NOT a participant (spoofing guard, even if target IS)", async () => {
+      // Without the sender-side participant check, this routing branch is a
+      // write-anywhere primitive — any agent who knows a chat id and one
+      // member's name (both readable from /agent/chats output for chats they
+      // ARE in, or guessable in adversarial scenarios) could drop a message
+      // into a chat they were never a member of. Pin the invariant here.
+      const app = getApp();
+      const spoofer = await createTestAgent(app, { name: "rtcr-spoof-s" });
+      const insiderA = await createTestAgent(app, { name: "rtcr-spoof-ia" });
+      const insiderB = await createTestAgent(app, { name: "rtcr-spoof-ib" });
+      // A chat containing insiderA + insiderB; spoofer is NOT a participant.
+      const insidersOnly = await createChat(app.db, insiderA.agent.uuid, {
+        type: "group",
+        participantIds: [insiderB.agent.uuid],
+      });
+
+      const res = await spoofer.request("POST", `/api/v1/agent/agents/${insiderB.agent.name}/messages`, {
+        format: "text",
+        content: "drop into a chat I'm not in",
+        // The target IS a participant of replyToChat — under the buggy
+        // sender-not-checked logic this would land inside `insidersOnly`.
+        replyToChat: insidersOnly.id,
+      });
+      expect(res.statusCode).toBe(201);
+      const msg = res.json();
+      // The fix routes to the spoofer↔insiderB direct chat instead.
+      expect(msg.chatId).not.toBe(insidersOnly.id);
+
+      // Belt-and-suspenders: poll insiderA's inbox and confirm nothing from
+      // spoofer landed in `insidersOnly` — direct DB read would also work
+      // but the inbox path mirrors what real recipients see.
+      const inboxA = await insiderA.request("GET", "/api/v1/agent/inbox");
+      const entriesA = inboxA.json() as Array<{ message: { chatId: string; senderId: string } }>;
+      const leakedToA = entriesA.some(
+        (e) => e.message.chatId === insidersOnly.id && e.message.senderId === spoofer.agent.uuid,
+      );
+      expect(leakedToA).toBe(false);
+    });
   });
 });
