@@ -2,6 +2,8 @@
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
+// -- Single source of truth for chat_participants.mode derivation --
+export { defaultParticipantMode } from "./participant-mode.js";
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
@@ -209,6 +211,24 @@ export {
   contextTreeUpdateSchema,
 } from "./schemas/context-tree.js";
 export {
+  GITHUB_ACCOUNT_TYPES,
+  GITHUB_PERMISSION_LEVELS,
+  type GithubAccountType,
+  type GithubAppInstallationClaimBody,
+  type GithubAppInstallationEvents,
+  type GithubAppInstallationOutput,
+  type GithubAppInstallationPermissions,
+  type GithubAppUserTokenMetadata,
+  type GithubPermissionLevel,
+  githubAccountTypeSchema,
+  githubAppInstallationClaimBodySchema,
+  githubAppInstallationEventsSchema,
+  githubAppInstallationOutputSchema,
+  githubAppInstallationPermissionsSchema,
+  githubAppUserTokenMetadataSchema,
+  githubPermissionLevelSchema,
+} from "./schemas/github-app.js";
+export {
   IMAGE_MIME_TO_EXT,
   type ImageInlineContent,
   type ImagePayloadFrame,
@@ -352,9 +372,6 @@ export {
   type OrgContextTreeInput,
   type OrgContextTreeOutput,
   type OrgContextTreeStorage,
-  type OrgGithubIntegrationInput,
-  type OrgGithubIntegrationOutput,
-  type OrgGithubIntegrationStorage,
   type OrgSettingInput,
   type OrgSettingNamespace,
   type OrgSettingOutput,
@@ -366,9 +383,6 @@ export {
   orgContextTreeInputSchema,
   orgContextTreeOutputSchema,
   orgContextTreeStorageSchema,
-  orgGithubIntegrationInputSchema,
-  orgGithubIntegrationOutputSchema,
-  orgGithubIntegrationStorageSchema,
   orgSettingNamespaceSchema,
   orgSourceReposInputSchema,
   orgSourceReposOutputSchema,

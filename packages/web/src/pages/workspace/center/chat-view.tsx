@@ -714,7 +714,8 @@ export function ChatView({
     // current chat is treated as both an address and an invitation. We add
     // them first so by the time the message is processed, the server's
     // `extractMentions` resolves successfully and direct-chats auto-upgrade
-    // to groups via `maybeUpgradeDirectToGroup`. Idempotent on the server.
+    // to groups via the server's `changeChatType` service. Idempotent on
+    // the server.
     if (draftOutsiders.length > 0) {
       try {
         await addMeChatParticipants(chatId, { participantIds: draftOutsiders });
@@ -939,7 +940,7 @@ export function ChatView({
   /** Mentions in the draft that point at agents NOT currently in the chat.
    * Sending a message that addresses these will first POST to
    * `/me/chats/:id/participants` to add them, which turns a direct chat
-   * into a group via the server's `maybeUpgradeDirectToGroup` helper. */
+   * into a group via the server's `changeChatType` service. */
   const draftOutsiders = useMemo(() => {
     if (chatParticipantIds.size === 0) return [];
     return draftMentions.filter((id) => !chatParticipantIds.has(id));

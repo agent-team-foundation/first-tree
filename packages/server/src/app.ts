@@ -44,6 +44,7 @@ import { orgAgentRoutes } from "./api/orgs/agents.js";
 import { orgChatRoutes } from "./api/orgs/chats.js";
 import { orgClientRoutes } from "./api/orgs/clients.js";
 import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
+import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
@@ -55,6 +56,7 @@ import { orgWsRoutes } from "./api/orgs/ws.js";
 import { sessionRoutes } from "./api/sessions.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
+import { assertBootConfigValid } from "./boot-guards.js";
 import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
 import { AppError } from "./errors.js";
@@ -138,6 +140,13 @@ export async function buildApp(config: Config) {
       `${msg} — check FIRST_TREE_HUB_AUTH_*_EXPIRY env vars (got access=${config.auth.accessTokenExpiry}, refresh=${config.auth.refreshTokenExpiry}, connect=${config.auth.connectTokenExpiry}).`,
     );
   }
+
+  // GitHub App config sanity (PEM header / blank-secret / half-config).
+  // Runs here so a misconfigured App env block fails the boot, not the
+  // first App JWT call hours later. Both server entry points (standalone
+  // bin and CLI `server start`) flow through buildApp, so this single
+  // check covers both — cheap, only fires when the App block is present.
+  assertBootConfigValid(config);
 
   applyLoggerConfig({
     level: config.observability.logging.level,
@@ -450,6 +459,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
           await scope.register(orgMemberRoutes, { prefix: "/members" });
           await scope.register(orgSettingsRoutes, { prefix: "/settings" });
+          await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
         }),
         { prefix: "/orgs/:orgId" },

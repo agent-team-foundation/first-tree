@@ -32,13 +32,13 @@
  * would obscure rather than clarify.
  */
 
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
-import { chats } from "../db/schema/chats.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { addChatParticipants, changeChatType, wouldUpgradeToGroup } from "./participant-mode.js";
 
 /**
  * Structural DB type that accepts both the top-level `Database` and a
@@ -151,36 +151,6 @@ export async function recomputeWatchersForMember(db: DbLike, memberId: string): 
 // chat_user_state rows for the (chat, agent) pair are not touched.
 // ---------------------------------------------------------------------------
 
-/**
- * Mirror of `services/chat.ts` `maybeUpgradeDirectToGroup`. Inlined
- * here so `joinAsParticipant` keeps the upgrade rule + the access
- * mode update in one transaction without depending on chat.ts
- * (avoids a circular import).
- */
-async function maybeUpgradeDirectToGroup(tx: DbLike, chatId: string, currentSpeakerCount: number): Promise<void> {
-  if (currentSpeakerCount + 1 < 3) return;
-  const [chat] = await tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1);
-  if (!chat || chat.type !== "direct") return;
-  await tx.update(chats).set({ type: "group", updatedAt: new Date() }).where(eq(chats.id, chatId));
-  if (currentSpeakerCount === 0) return;
-  const speakerRows = await tx
-    .select({ agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-  const speakerIds = speakerRows.map((r) => r.agentId);
-  if (speakerIds.length === 0) return;
-  const nonHumans = await tx
-    .select({ uuid: agents.uuid })
-    .from(agents)
-    .where(and(inArray(agents.uuid, speakerIds), ne(agents.type, "human")));
-  const ids = nonHumans.map((r) => r.uuid);
-  if (ids.length === 0) return;
-  await tx
-    .update(chatMembership)
-    .set({ mode: "mention_only" })
-    .where(and(eq(chatMembership.chatId, chatId), inArray(chatMembership.agentId, ids)));
-}
-
 export type JoinResult = {
   chatId: string;
   /** True when the call inserted a fresh `chat_membership` row (vs. UPDATE or no-op). */
@@ -220,34 +190,26 @@ export async function joinAsParticipant(db: Database, chatId: string, humanAgent
       return { chatId, inserted: false, carried: null };
     }
 
-    // Count current speakers for the direct → group upgrade rule.
-    // The about-to-be-added speaker is not yet in the count.
-    const result = (await tx.execute(sql`
-      SELECT COUNT(*)::int AS count FROM chat_membership
-       WHERE chat_id = ${chatId} AND access_mode = 'speaker'
-    `)) as unknown as Array<{ count: number }>;
-    const speakerCount = result[0]?.count ?? 0;
-    await maybeUpgradeDirectToGroup(tx, chatId, speakerCount);
-
-    if (existing) {
-      // Watcher → speaker: single-column UPDATE. chat_user_state untouched.
-      await tx
-        .update(chatMembership)
-        .set({ accessMode: "speaker", mode: "full", source: "manual" })
-        .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)));
-      return { chatId, inserted: false, carried: null };
+    const currentSpeakers = await tx
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
+    if (wouldUpgradeToGroup(currentSpeakers.length, 1)) {
+      await changeChatType(tx, chatId, "group");
     }
 
-    // No prior row; insert fresh.
-    await tx.insert(chatMembership).values({
-      chatId,
-      agentId: humanAgentId,
-      role: "member",
-      accessMode: "speaker",
-      mode: "full",
-      source: "manual",
+    // `/me/chats/:id/join` admits only the manager's human agent.
+    // `assertHuman: true` makes a non-human caller surface as a 400 rather
+    // than silently inserting with an inappropriate mode.
+    // `upgradeWatcherToSpeaker` promotes a pre-existing watcher row in place;
+    // chat_user_state is structurally separate so the user's read state
+    // survives untouched — no state-carry needed.
+    await addChatParticipants(tx, chatId, [{ agentId: humanAgentId, role: "member" }], {
+      assertHuman: true,
+      upgradeWatcherToSpeaker: true,
     });
-    return { chatId, inserted: true, carried: null };
+
+    return { chatId, inserted: !existing, carried: null };
   });
 }
 

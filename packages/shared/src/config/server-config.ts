@@ -80,17 +80,60 @@ export const serverConfigSchema = defineConfig({
   }),
   oauth: optional({
     /**
-     * GitHub OAuth App credentials for SaaS sign-in. The "half configured"
-     * shape (only one of clientId/clientSecret set) is rejected at boot so a
-     * misconfigured production instance can't accidentally expose the
-     * dev-callback bypass with no real OAuth wired up.
+     * GitHub App credentials — the sign-in surface introduced by PR 2/3 of
+     * the GitHub App migration split. A single App installation simultaneously
+     * unlocks user-OAuth, the webhook stream (PR 3/3), and installation-token
+     * minting. All five required fields must be set together; partial
+     * configuration is rejected at boot for the same reason as the legacy
+     * block — a half-wired App is worse than no App.
+     *
+     * Staging and prod each have a separate App with its own set of values;
+     * the env file selects which to load.
+     *
+     * `privateKeyPem` is the raw PKCS#8 PEM (multi-line, starts with
+     * `-----BEGIN PRIVATE KEY-----`). Self-hosters typically inline it via
+     * a `.env` file with `\n` escapes; SaaS operators should source it
+     * from their secret manager (a team-wide pattern is still TBD).
      */
-    github: optional({
-      clientId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID" }),
-      clientSecret: field(z.string(), {
-        env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET",
+    // `.min(1)` on every field: blank env values (empty string env
+    // sets that resolve to `""` after substitution) must NOT make the
+    // block resolve to a truthy object. The HMAC-empty-key forgery
+    // path codex flagged (P1-8) trips exactly when `webhookSecret`
+    // sneaks through as `""` — `createHmac("sha256", "")` is a valid
+    // hash any attacker can reproduce. Same defense applies to all
+    // five fields: empty appId would make App JWTs unverifiable
+    // upstream, empty clientId would let GitHub round-trip an
+    // anonymous OAuth, etc. Fail loud at Zod parse time.
+    githubApp: optional({
+      appId: field(z.string().min(1), { env: "FIRST_TREE_HUB_GITHUB_APP_ID" }),
+      clientId: field(z.string().min(1), { env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID" }),
+      clientSecret: field(z.string().min(1), {
+        env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET",
         secret: true,
       }),
+      privateKeyPem: field(z.string().min(1), {
+        env: "FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY",
+        secret: true,
+      }),
+      webhookSecret: field(z.string().min(1), {
+        env: "FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET",
+        secret: true,
+      }),
+      /**
+       * The App's URL slug — the last path segment of
+       * `https://github.com/apps/<slug>`. Used to build the
+       * `installations/new` URL that surfaces GitHub's install dialog
+       * (the OAuth `authorize` URL only triggers consent, never the
+       * install picker, for users who haven't installed the App yet —
+       * codex P1-1).
+       *
+       * Optional *within* the App block (unlike the five fields above):
+       * the rest of the App surface — sign-in, webhook verification,
+       * installation-token minting — works without it. Only the
+       * "Install on GitHub" CTA in Settings needs the slug, and that
+       * endpoint returns 503 when it's unset rather than blocking boot.
+       */
+      slug: field(z.string().min(1).optional(), { env: "FIRST_TREE_HUB_GITHUB_APP_SLUG" }),
     }),
   }),
   cors: optional({

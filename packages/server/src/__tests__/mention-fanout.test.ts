@@ -194,10 +194,13 @@ describe("server mention resolution + fan-out filter", () => {
       content: "earlier chatter",
     });
 
-    // Add a new mention_only participant AFTER the message.
+    // Add a new participant AFTER the message. Phase 1 derives mode from
+    // `(chats.type, agents.type)`; a non-human agent joining a group chat
+    // lands in `mention_only` automatically, which is exactly what this
+    // test needs to assert.
     const { agent: late } = await createTestAgent(app, { name: `mf-late-${uid}` });
     await app.db.update(agents).set({ managerId: sender.memberId }).where(eq(agents.uuid, late.uuid));
-    await addParticipant(app.db, chat.id, sender.agent.uuid, { agentId: late.uuid, mode: "mention_only" });
+    await addParticipant(app.db, chat.id, sender.agent.uuid, { agentId: late.uuid });
 
     expect(await inboxEntriesFor(app, chat.id, late.uuid)).toHaveLength(0);
   });

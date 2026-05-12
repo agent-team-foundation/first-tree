@@ -1,7 +1,5 @@
-import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
-import { chatMembership } from "../db/schema/chat-membership.js";
 import { createChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -56,17 +54,29 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
   });
 
   it("group chat fan-out activates every notify=true participant (N1-B)", async () => {
+    // Phase 1 (chat-participant-mode-fix-design.md §2.1) seeds every
+    // non-human agent in a group as `mention_only`, so an unmentioned
+    // group message produces no `notify=true` rows. Make `sender` a human
+    // (group sender) and explicitly @-mention both peers in the body so
+    // they wake into `active` — the test's invariant ("every notify=true
+    // participant becomes active") is preserved.
     const app = getApp();
-    const { agent: sender } = await createTestAgent(app, { name: `g-snd-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: r1 } = await createTestAgent(app, { name: `g-r1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: r2 } = await createTestAgent(app, { name: `g-r2-${crypto.randomUUID().slice(0, 6)}` });
+    const uid = crypto.randomUUID().slice(0, 6);
+    const r1Name = `g-r1-${uid}`;
+    const r2Name = `g-r2-${uid}`;
+    const { agent: sender } = await createTestAgent(app, { name: `g-snd-${uid}`, type: "human" });
+    const { agent: r1 } = await createTestAgent(app, { name: r1Name });
+    const { agent: r2 } = await createTestAgent(app, { name: r2Name });
 
     const chat = await createChat(app.db, sender.uuid, {
       type: "group",
       participantIds: [r1.uuid, r2.uuid],
     });
 
-    await sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: "team!" });
+    await sendMessage(app.db, chat.id, sender.uuid, {
+      format: "text",
+      content: `team! @${r1Name} @${r2Name}`,
+    });
 
     expect(await readSessionState(app, r1.uuid, chat.id)).toBe("active");
     expect(await readSessionState(app, r2.uuid, chat.id)).toBe("active");
@@ -75,22 +85,21 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
   });
 
   it("silent context (mention_only without mention) does NOT create an active session", async () => {
+    // Phase 1: non-human agents in a group are seeded `mention_only`
+    // automatically — no UPDATE needed. We keep one human peer as the
+    // `full` control (humans in groups stay `full` by design), so the
+    // assertion still differentiates "wakes on every message" (full)
+    // from "silent unless mentioned" (mention_only).
     const app = getApp();
-    const { agent: sender } = await createTestAgent(app, { name: `s-snd-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: full } = await createTestAgent(app, { name: `s-full-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: silent } = await createTestAgent(app, { name: `s-mo-${crypto.randomUUID().slice(0, 6)}` });
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { agent: sender } = await createTestAgent(app, { name: `s-snd-${uid}`, type: "human" });
+    const { agent: full } = await createTestAgent(app, { name: `s-full-${uid}`, type: "human" });
+    const { agent: silent } = await createTestAgent(app, { name: `s-mo-${uid}` });
 
     const chat = await createChat(app.db, sender.uuid, {
       type: "group",
       participantIds: [full.uuid, silent.uuid],
     });
-
-    // Flip silent to mention_only mode: without an @mention the fan-out marks
-    // its row notify=false, so the predictive activation must skip it.
-    await app.db
-      .update(chatMembership)
-      .set({ mode: "mention_only" })
-      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, silent.uuid)));
 
     await sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: "hello team" });
 

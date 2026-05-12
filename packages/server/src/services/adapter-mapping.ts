@@ -9,6 +9,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { resolveDefaultOrgId } from "./organization.js";
+import { addChatParticipants } from "./participant-mode.js";
 
 // ── Event deduplication ─────────────────────────────────────────────
 
@@ -212,41 +213,21 @@ export async function findOrCreateChatForChannel(
 
     // Add bot agent and sender as participants. External IM users
     // (Feishu/Slack) always map to a `human` agent on the sender side, so
-    // these chats are inherently human↔agent and should stay `full` —
-    // pin the mode explicitly so a future schema-default change (or a new
-    // adapter that pairs two bots) can't silently drift into the agent↔agent
-    // `mention_only` rule from migration 0029 without an audit.
-    const participants =
+    // these chats are inherently human↔agent. `addChatParticipants` derives
+    // the right mode from `(chats.type, agents.type)` — for the IM adapter
+    // path: human sender stays `full`; bot agent in a `direct` chat with a
+    // human peer also resolves to `full` per `defaultParticipantMode`. Pre-
+    // fix this site hardcoded `mode: 'full'` for every row, which would
+    // silently break if an adapter ever paired two non-human agents (the
+    // anti-echo invariant from migration 0029 would not apply).
+    const specs =
       data.botAgentId === data.senderAgentId
-        ? [
-            {
-              chatId,
-              agentId: data.botAgentId,
-              role: "member" as const,
-              accessMode: "speaker" as const,
-              mode: "full" as const,
-              source: "manual" as const,
-            },
-          ]
+        ? [{ agentId: data.botAgentId, role: "member" as const }]
         : [
-            {
-              chatId,
-              agentId: data.botAgentId,
-              role: "member" as const,
-              accessMode: "speaker" as const,
-              mode: "full" as const,
-              source: "manual" as const,
-            },
-            {
-              chatId,
-              agentId: data.senderAgentId,
-              role: "member" as const,
-              accessMode: "speaker" as const,
-              mode: "full" as const,
-              source: "manual" as const,
-            },
+            { agentId: data.botAgentId, role: "member" as const },
+            { agentId: data.senderAgentId, role: "member" as const },
           ];
-    await tx.insert(chatMembership).values(participants);
+    await addChatParticipants(tx, chatId, specs);
 
     // Create mapping
     await tx.insert(adapterChatMappings).values({
@@ -261,7 +242,14 @@ export async function findOrCreateChatForChannel(
   });
 }
 
-/** Ensure an agent is a speaker of a chat (no-op if already). */
+/**
+ * Ensure an agent is a speaker of a chat (no-op if already). Mode is
+ * derived via the canonical entrypoint — pre-fix this hardcoded
+ * `mode: 'full'`, which is wrong for non-human agents in a group chat
+ * (the bug §1.1 of the Phase 1 design doc fixes). `upgradeWatcherToSpeaker`
+ * promotes a pre-existing watcher row in place; chat_user_state is
+ * structurally separate so read state survives untouched.
+ */
 async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
   const [exists] = await db
     .select({ accessMode: chatMembership.accessMode })
@@ -270,23 +258,7 @@ async function ensureParticipant(db: Database, chatId: string, agentId: string):
     .limit(1);
 
   if (exists?.accessMode === "speaker") return;
-
-  // Either no row yet or only a watcher row — UPSERT to speaker.
-  // chat_user_state (if any) is preserved untouched per proposal §8.4.
-  await db
-    .insert(chatMembership)
-    .values({
-      chatId,
-      agentId,
-      role: "member",
-      accessMode: "speaker",
-      mode: "full",
-      source: "manual",
-    })
-    .onConflictDoUpdate({
-      target: [chatMembership.chatId, chatMembership.agentId],
-      set: { accessMode: "speaker", mode: "full", source: "manual" },
-    });
+  await addChatParticipants(db, chatId, [{ agentId, role: "member" }], { upgradeWatcherToSpeaker: true });
 }
 
 // ── Message references ──────────────────────────────────────────────
