@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { optionalChatMetadataSchema } from "./chat-metadata.js";
 
 export const CHAT_TYPES = {
   DIRECT: "direct",
@@ -13,7 +14,7 @@ export const createChatSchema = z.object({
   type: chatTypeSchema,
   topic: z.string().max(500).optional(),
   participantIds: z.array(z.string()).min(1),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: optionalChatMetadataSchema.optional(),
 });
 export type CreateChat = z.infer<typeof createChatSchema>;
 
