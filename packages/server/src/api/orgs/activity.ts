@@ -20,6 +20,10 @@ export async function orgActivityRoutes(app: FastifyInstance): Promise<void> {
         totalSessions: a.totalSessions,
         runtimeUpdatedAt: a.runtimeUpdatedAt?.toISOString() ?? null,
         type: "type" in a ? a.type : null,
+        // Whether the caller's member personally manages this agent. Used by
+        // the workspace new-chat view to scope the default-seed agent to
+        // agents the caller manages (rather than any org-visible agent).
+        managedByMe: "managerId" in a ? a.managerId === scope.memberId : false,
       })),
     };
   });

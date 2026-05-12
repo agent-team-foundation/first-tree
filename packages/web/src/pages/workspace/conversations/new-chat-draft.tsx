@@ -461,15 +461,36 @@ function ParticipantChips({
 }
 
 /** Pick a default seed chip when the user opens an empty draft.
- *  Most-recently-active agent first, then any `personal_assistant`,
- *  then whatever sorts first in the candidate list. */
+ *
+ *  Scope: agents the caller **personally manages** — never another
+ *  member's agent (even if it's org-visible). Defaulting a new chat to
+ *  a coworker's agent is a footgun: the user might fire off a message
+ *  thinking it's their own assistant. When the caller manages no
+ *  agents, return `null` and let the user pick — better an empty chip
+ *  row than a wrong default.
+ *
+ *  Within the my-managed subset:
+ *    1. Most-recently-active (by `runtimeUpdatedAt`) — runtime presence
+ *       signal, not a true "last conversation" timestamp, but the only
+ *       MRU signal currently exposed by `/activity`.
+ *    2. Any `personal_assistant` — covers the case where my agents have
+ *       no runtime activity yet (fresh-install / cold-start).
+ *    3. First my-managed agent in the candidates list — final fallback
+ *       so we always seed something if I do manage at least one. */
 function pickDefault(candidates: MentionCandidate[], activity: RuntimeAgent[]): string | null {
   const ids = new Set(candidates.map((c) => c.agentId));
-  const mru = [...activity]
-    .filter((a) => ids.has(a.agentId) && a.runtimeUpdatedAt)
+  const mine = activity.filter((a) => ids.has(a.agentId) && a.managedByMe);
+  if (mine.length === 0) return null;
+
+  const mru = [...mine]
+    .filter((a) => a.runtimeUpdatedAt)
     .sort((a, b) => (b.runtimeUpdatedAt ?? "").localeCompare(a.runtimeUpdatedAt ?? ""))[0];
   if (mru) return mru.agentId;
-  const pa = activity.find((a) => ids.has(a.agentId) && a.type === "personal_assistant");
+
+  const pa = mine.find((a) => a.type === "personal_assistant");
   if (pa) return pa.agentId;
-  return candidates[0]?.agentId ?? null;
+
+  // Any my-managed agent — `mine` is already candidates ∩ managedByMe,
+  // so the first row is a valid seed without another candidates scan.
+  return mine[0]?.agentId ?? null;
 }

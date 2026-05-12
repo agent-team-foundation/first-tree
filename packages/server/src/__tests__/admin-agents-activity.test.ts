@@ -2,10 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
+import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import { bindAgent } from "../services/presence.js";
 import { uuidv7 } from "../uuid.js";
-import { createAdminContext, useTestApp } from "./helpers.js";
+import { createAdminContext, INVALID_BCRYPT_PLACEHOLDER, seedClient, useTestApp } from "./helpers.js";
 
 /**
  * Follow-up to #220. The `GET /admin/agents/activity` route used to read
@@ -122,5 +123,103 @@ describe("GET /admin/agents/activity org scoping", () => {
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+/**
+ * `managedByMe` powers the workspace new-chat view's default-seed logic
+ * (`pickDefault` in `new-chat-draft.tsx`): a fresh draft should only seed
+ * a chip from agents the caller personally manages, never another
+ * member's org-visible agent. The server is the only place that knows
+ * the join (agent.managerId === caller's memberId for the URL org), so
+ * the boolean is computed here and shipped on each row of `/activity`.
+ */
+describe("GET /orgs/:orgId/activity — managedByMe field", () => {
+  const getApp = useTestApp();
+
+  async function setup() {
+    const app = getApp();
+    // Alice (the caller) and Bob (another member of the same org), each
+    // owning one autonomous agent. Both agents are org-visible, so the
+    // visibility filter returns both rows to Alice — `managedByMe` is
+    // what differentiates them.
+    const alice = await createAdminContext(app);
+    const bobMemberId = uuidv7();
+    const bobUserId = uuidv7();
+    // Insert bob as a second member of alice's org. Same FK-cycle dance
+    // as createTestAdmin (helpers.ts): user → agent (with FK to member,
+    // deferred via migration 0019) → member (FK back to the agent), all
+    // in one transaction.
+    await app.db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id: bobUserId,
+        username: `bob-${crypto.randomUUID().slice(0, 8)}`,
+        passwordHash: INVALID_BCRYPT_PLACEHOLDER,
+        displayName: "Bob",
+      });
+      const bobHuman = await createAgent(tx as unknown as typeof app.db, {
+        name: `bob-h-${crypto.randomUUID().slice(0, 6)}`,
+        type: "human",
+        displayName: "Bob",
+        managerId: bobMemberId,
+        organizationId: alice.organizationId,
+      });
+      await tx.insert(members).values({
+        id: bobMemberId,
+        userId: bobUserId,
+        organizationId: alice.organizationId,
+        agentId: bobHuman.uuid,
+        role: "member",
+      });
+    });
+
+    // Each manager's agent must pin to a client owned by that manager's
+    // user (services/agent.ts::resolveAgentClient enforces this), so bob
+    // needs his own seeded client.
+    const bobClientId = await seedClient(app, bobUserId, alice.organizationId);
+
+    const aliceAgent = await createAgent(app.db, {
+      name: `mbm-a-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Alice bot",
+      managerId: alice.memberId,
+      clientId: alice.clientId,
+    });
+    const bobAgent = await createAgent(app.db, {
+      name: `mbm-b-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Bob bot",
+      managerId: bobMemberId,
+      clientId: bobClientId,
+    });
+
+    const instance = `inst-${crypto.randomUUID().slice(0, 6)}`;
+    await bindAgent(app.db, aliceAgent.uuid, {
+      clientId: alice.clientId,
+      instanceId: instance,
+      runtimeType: "claude-code",
+    });
+    await bindAgent(app.db, bobAgent.uuid, {
+      clientId: bobClientId,
+      instanceId: instance,
+      runtimeType: "claude-code",
+    });
+
+    return { app, alice, aliceAgent, bobAgent };
+  }
+
+  it("marks the caller's own agents as managedByMe=true and others' as false", async () => {
+    const { app, alice, aliceAgent, bobAgent } = await setup();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/activity`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const agents = res.json<{ agents: Array<{ agentId: string; managedByMe: boolean }> }>().agents;
+    const byId = new Map(agents.map((a) => [a.agentId, a.managedByMe]));
+    // Both agents are org-visible, so both reach the caller.
+    expect(byId.get(aliceAgent.uuid)).toBe(true);
+    expect(byId.get(bobAgent.uuid)).toBe(false);
   });
 });

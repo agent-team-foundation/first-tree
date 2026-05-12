@@ -163,6 +163,7 @@ export async function listAgentsWithRuntime(db: Database, scope?: OrgScope) {
       totalSessions: agentPresence.totalSessions,
       runtimeUpdatedAt: agentPresence.runtimeUpdatedAt,
       type: agents.type,
+      managerId: agents.managerId,
     })
     .from(agentPresence)
     .innerJoin(agents, eq(agentPresence.agentId, agents.uuid))
