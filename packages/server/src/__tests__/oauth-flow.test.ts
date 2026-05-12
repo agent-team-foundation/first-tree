@@ -99,6 +99,46 @@ describe("GitHub OAuth onboarding flow", () => {
     }
   });
 
+  it("rejects /dev-callback when FIRST_TREE_HUB_DEV_CALLBACK_ENABLED is unset (codex P1-9)", async () => {
+    // Models a misconfigured non-prod deploy where the operator just
+    // happens not to have NODE_ENV=production set (typo, fresh staging
+    // box, self-host first boot, etc.). The route used to be reachable
+    // in this state; after the hardening, it 404s unless explicitly
+    // opted-in via the env var.
+    const app = getApp();
+    const original = process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED;
+    delete process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED;
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/github/dev-callback?githubId=8&login=oops",
+      });
+      expect(res.statusCode).toBe(404);
+    } finally {
+      if (original !== undefined) process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED = original;
+    }
+  });
+
+  it("rejects /dev-callback when FIRST_TREE_HUB_DEV_CALLBACK_ENABLED is set to something other than '1' / 'true'", async () => {
+    const app = getApp();
+    const original = process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED;
+    // Truthy-looking but not in the allow-list (e.g. operator wrote "yes").
+    process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED = "yes";
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/github/dev-callback?githubId=9&login=yes",
+      });
+      expect(res.statusCode).toBe(404);
+    } finally {
+      if (original !== undefined) {
+        process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED = original;
+      } else {
+        delete process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED;
+      }
+    }
+  });
+
   it("partial unique index forbids a single user from holding two github identities", async () => {
     const app = getApp();
     // Sign in once to create a user + bind githubId=700.

@@ -210,12 +210,32 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/dev-callback", async (request, reply) => {
-    // dev-callback mints a stub GitHub identity without round-tripping to
-    // github.com. Always disabled in production — there's no flag to flip,
-    // so a misconfigured prod deploy can never accidentally expose it.
-    // In any non-production environment it's enabled unconditionally so dev
-    // can sign in with one click without standing up a real OAuth client.
+    // dev-callback mints a stub GitHub identity (and, post-PR-300, a
+    // stub GitHub App installation) without round-tripping to
+    // github.com. Two-gate access control to defeat the codex P1-9
+    // failure mode where a misconfigured staging deploy with `NODE_ENV`
+    // unset would leak this bypass:
+    //
+    //   Gate 1: NODE_ENV must not be 'production'. Same as before —
+    //           defense-in-depth, blocks the dumbest mistake.
+    //   Gate 2: FIRST_TREE_HUB_DEV_CALLBACK_ENABLED must be explicitly
+    //           "1" or "true". An unset env var defaults to disabled —
+    //           operators MUST opt in. Vitest's setup script
+    //           (`vitest.setup.ts`) sets this to "1" so the existing
+    //           dev-callback test suite keeps working without per-test
+    //           plumbing.
+    //
+    // Either gate failing → 404 (not 403 — we don't want to confirm the
+    // route exists at all to unauthenticated callers).
     if (process.env.NODE_ENV === "production") {
+      return reply.status(404).send({ error: "Not found" });
+    }
+    const devCallbackOptIn = process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED;
+    if (devCallbackOptIn !== "1" && devCallbackOptIn !== "true") {
+      app.log.info(
+        { url: request.url },
+        "dev-callback request refused — FIRST_TREE_HUB_DEV_CALLBACK_ENABLED is not set",
+      );
       return reply.status(404).send({ error: "Not found" });
     }
     const params = githubDevCallbackQuerySchema.parse(request.query);
