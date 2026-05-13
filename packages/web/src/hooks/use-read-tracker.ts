@@ -55,8 +55,12 @@ type UseReadTrackerOptions = {
    * `["chat-read-state", chatId]` in sync with what was just
    * persisted (otherwise a same-session A → B → A would read the
    * stale value).
+   *
+   * Both ids are passed: `bottomVisibleMessageId` drives the
+   * scroll anchor on next visit; `latestKnownMessageId` drives the
+   * UnreadDivider count.
    */
-  onWrite?: (chatId: string, bottomVisibleMessageId: string) => void;
+  onWrite?: (chatId: string, bottomVisibleMessageId: string, latestKnownMessageId: string) => void;
   /**
    * Fires every time the live bottom-visible message id changes
    * (during scrolling, or as poll-driven new messages shift the
@@ -102,6 +106,26 @@ function findBottomVisibleMessageId(container: HTMLElement): string | null {
   return lastVisible?.dataset.messageId ?? null;
 }
 
+/**
+ * Returns the id of the LAST `[data-message-id]` node in the
+ * container — i.e., the latest message by `createdAt` (since the
+ * timeline is sorted ascending). Distinct from
+ * `findBottomVisibleMessageId` — that one is gated by the
+ * viewport; this one always returns the chronologically-latest
+ * message regardless of whether the user has scrolled to see it.
+ *
+ * Used to capture `latestKnownMessageId` alongside the visual
+ * scroll position, so the UnreadDivider on the next visit can
+ * distinguish "messages new since last visit" from "messages that
+ * were there but below the user's viewport".
+ */
+function findLatestMessageId(container: HTMLElement): string | null {
+  const nodes = container.querySelectorAll<HTMLElement>("[data-message-id]");
+  if (nodes.length === 0) return null;
+  const last = nodes[nodes.length - 1];
+  return last?.dataset.messageId ?? null;
+}
+
 export function useReadTracker({
   containerRef,
   messages,
@@ -113,6 +137,12 @@ export function useReadTracker({
   // Latest computed bottom-visible id. Kept in a ref so write/flush
   // paths can read it without depending on React state churn.
   const bottomVisibleIdRef = useRef<string | null>(null);
+  // Latest message id in the DOM at the most recent recompute. Kept
+  // in a ref for the same reason. Distinct from bottomVisibleIdRef
+  // because the user's viewport bottom and the chat's latest
+  // message are usually different (the user is somewhere in
+  // history, not always at the latest).
+  const latestKnownIdRef = useRef<string | null>(null);
   // Debounced IDB write timer.
   const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -154,6 +184,7 @@ export function useReadTracker({
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; the body only touches refs.
   useEffect(() => {
     bottomVisibleIdRef.current = null;
+    latestKnownIdRef.current = null;
     if (writeTimerRef.current) {
       clearTimeout(writeTimerRef.current);
       writeTimerRef.current = null;
@@ -177,24 +208,29 @@ export function useReadTracker({
       // pollute bottomVisibleIdRef with a foreign message id.
       if (currentChatIdRef.current !== chatId) return;
 
-      const id = findBottomVisibleMessageId(container);
-      if (id === bottomVisibleIdRef.current) return;
-      bottomVisibleIdRef.current = id;
-      onBottomVisibleChangeRef.current?.(id);
+      const bottomVisible = findBottomVisibleMessageId(container);
+      const latestKnown = findLatestMessageId(container);
+      const bottomVisibleChanged = bottomVisible !== bottomVisibleIdRef.current;
+      const latestKnownChanged = latestKnown !== latestKnownIdRef.current;
+      if (!bottomVisibleChanged && !latestKnownChanged) return;
+      bottomVisibleIdRef.current = bottomVisible;
+      latestKnownIdRef.current = latestKnown;
+      if (bottomVisibleChanged) onBottomVisibleChangeRef.current?.(bottomVisible);
 
       // Schedule a debounced IDB write. The write captures whatever
-      // bottomVisibleIdRef holds at the moment the timer fires, not
-      // at the moment of scheduling — so back-to-back scroll events
-      // collapse into one write.
+      // bottomVisibleIdRef / latestKnownIdRef hold at the moment the
+      // timer fires, not at the moment of scheduling — so back-to-
+      // back scroll events collapse into one write.
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
       writeTimerRef.current = setTimeout(() => {
         writeTimerRef.current = null;
         // Same staleness guard at write time: a chat switch may
         // have happened between schedule and fire.
         if (currentChatIdRef.current !== chatId) return;
-        const latest = bottomVisibleIdRef.current;
-        if (!latest) return;
-        void setReadState(chatId, latest).then(() => onWriteRef.current?.(chatId, latest));
+        const bv = bottomVisibleIdRef.current;
+        const lk = latestKnownIdRef.current;
+        if (!bv || !lk) return;
+        void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
       }, writeDebounceMs);
     };
 
@@ -224,12 +260,13 @@ export function useReadTracker({
       // gets persisted to IDB — that's the legitimate purpose. The
       // pollution-source race is already prevented in the recompute
       // path above (which bails on stale chatId), so by the time
-      // flushNow runs, `bottomVisibleIdRef` still holds the OLD
-      // chat's pre-switch value and a write to setReadState(oldChat,
-      // value) is exactly what we want.
-      const latest = bottomVisibleIdRef.current;
-      if (!latest) return;
-      void setReadState(chatId, latest).then(() => onWriteRef.current?.(chatId, latest));
+      // flushNow runs, both refs still hold the OLD chat's
+      // pre-switch values and a write to setReadState(oldChat, ...)
+      // is exactly what we want.
+      const bv = bottomVisibleIdRef.current;
+      const lk = latestKnownIdRef.current;
+      if (!bv || !lk) return;
+      void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
     };
     const onVis = () => {
       if (document.visibilityState === "hidden") flushNow();

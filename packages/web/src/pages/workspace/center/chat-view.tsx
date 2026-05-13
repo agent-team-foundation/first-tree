@@ -952,12 +952,19 @@ export function ChatView({
     refetchOnWindowFocus: false,
   });
   const storedBottomVisibleId = readState?.bottomVisibleMessageId ?? null;
+  // The latest message id in the chat at the moment the user last
+  // left. Used to compute the UnreadDivider count — only messages
+  // strictly newer than this id count as "new since last visit"
+  // (Slack-style). Pre-fix snapshots lack this field; falling back
+  // to null means "no divider on first return after upgrade",
+  // which is harmless: the user just won't see a divider until
+  // they leave the chat again and the tracker writes both ids.
+  const storedLatestKnownId = readState?.latestKnownMessageId ?? null;
 
   // Resolve the stored bottom-visible id against the rendered set
-  // so we can decide (a) where to scroll on chat open and (b) how
-  // many messages sit below the anchor (the "unread" count). If the
-  // stored id is gone (deleted message, or just not in the current
-  // window), we fall back to first-time-open semantics.
+  // so we can decide where to scroll on chat open. If the stored
+  // id is gone (deleted message, or not in the current window),
+  // we fall back to first-time-open semantics.
   const bottomVisibleResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
     if (!storedBottomVisibleId || mergedMessages.length === 0) return null;
     const exact = mergedMessages.findIndex((m) => m.id === storedBottomVisibleId);
@@ -968,15 +975,37 @@ export function ChatView({
     return null;
   }, [storedBottomVisibleId, mergedMessages]);
 
-  // Unread divider count: messages strictly newer than the resolved
-  // anchor. This is the count of messages that exist below the
-  // scroll-position snapshot — agent replies that arrived while
-  // away, or content the user previously scrolled past without
-  // reaching.
+  // Resolve the stored latest-known id against the rendered set.
+  // Drives the UnreadDivider count (and anchor): the divider
+  // separates "messages that existed at last visit" from "messages
+  // that arrived since". If `storedLatestKnownId` is null (pre-fix
+  // snapshot, or first visit), no divider.
+  const latestKnownResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
+    if (!storedLatestKnownId || mergedMessages.length === 0) return null;
+    const exact = mergedMessages.findIndex((m) => m.id === storedLatestKnownId);
+    if (exact >= 0) {
+      const exactMsg = mergedMessages[exact];
+      if (exactMsg) return { anchorId: exactMsg.id, index: exact };
+    }
+    return null;
+  }, [storedLatestKnownId, mergedMessages]);
+
+  // Divider count = messages strictly newer than the latest-known
+  // anchor (Slack "new since last visit" semantics). If the user
+  // was at the bottom when they left, latestKnown == bottomVisible
+  // == the latest msg, and the count is 0 (no divider) unless new
+  // arrivals showed up. If the user was mid-chat, latestKnown is
+  // the latest at leave; new arrivals push the count up; messages
+  // the user merely scrolled past (which are below their viewport
+  // but were already there) do NOT count as new.
+  //
+  // Fixed in PR 286 manual sign-off rev 4 (the user observed that
+  // "messages I had already scrolled past but were below the
+  // viewport" were being labeled as 'new', which they weren't).
   const dividerUnreadCount = useMemo<number>(() => {
-    if (!bottomVisibleResolution) return 0;
-    return mergedMessages.length - 1 - bottomVisibleResolution.index;
-  }, [bottomVisibleResolution, mergedMessages]);
+    if (!latestKnownResolution) return 0;
+    return mergedMessages.length - 1 - latestKnownResolution.index;
+  }, [latestKnownResolution, mergedMessages]);
 
   // Live bottom-visible id during the current session. Driven by
   // useReadTracker's `onBottomVisibleChange` callback. Distinct
@@ -1055,10 +1084,11 @@ export function ChatView({
     containerRef: scrollContainerRef,
     messages: mergedMessages,
     chatId,
-    onWrite: (cid, bottomVisibleMessageId) => {
+    onWrite: (cid, bottomVisibleMessageId, latestKnownMessageId) => {
       queryClient.setQueryData<ReadState>(["chat-read-state", cid], {
         chatId: cid,
         bottomVisibleMessageId,
+        latestKnownMessageId,
         updatedAt: Date.now(),
       });
     },
@@ -1516,14 +1546,17 @@ export function ChatView({
               // server window.
               const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
               // Insert the unread divider immediately after the
-              // resolved bottom-visible anchor (M2). Skipped when
-              // there's nothing newer than the anchor, or when the
-              // user has never been to this chat.
+              // latest-known anchor — i.e., right after what was
+              // the most recent message at the user's last visit.
+              // Anything below the divider is truly new (arrived
+              // since they left). Skipped when there's no
+              // latestKnown snapshot (first visit / pre-fix) or
+              // when no messages newer than the snapshot exist.
               const isReadAnchor =
                 item.kind === "message" &&
-                bottomVisibleResolution !== null &&
+                latestKnownResolution !== null &&
                 dividerUnreadCount > 0 &&
-                item.data.id === bottomVisibleResolution.anchorId;
+                item.data.id === latestKnownResolution.anchorId;
               if (isGapAnchor && isReadAnchor) {
                 return [
                   node,

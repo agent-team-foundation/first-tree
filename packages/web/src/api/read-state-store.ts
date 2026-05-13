@@ -42,9 +42,29 @@ export type ReadState = {
   /**
    * The message that was at (or nearest to) the bottom edge of the
    * viewport when the user last left this chat. Not necessarily the
-   * latest message in the chat — that's the whole point.
+   * latest message in the chat — that's the whole point. Drives the
+   * `scrollToMessageImmediate` anchor on return: the user lands back
+   * at the visual position they left.
    */
   bottomVisibleMessageId: string;
+  /**
+   * The id of the latest message that existed in the chat at the
+   * moment of this snapshot. Distinct from `bottomVisibleMessageId`
+   * — the user might not have been visually at the bottom when they
+   * left, but the latest message at that point is still "known" to
+   * them (it was part of their session's data).
+   *
+   * Drives the UnreadDivider on return: divider count = messages
+   * strictly newer than this id (Slack "new since last visit"
+   * semantics). Without this field, the divider would count any
+   * message below the viewport as "new", which is wrong when the
+   * user just scrolled past content they had already seen.
+   *
+   * Optional for backward compatibility: rows written before this
+   * field existed (briefly, during the M2 model swap) lack it.
+   * Treat undefined as "no divider on first return after upgrade".
+   */
+  latestKnownMessageId?: string;
   /** Wall-clock when the snapshot was taken. Used for diagnostics. */
   updatedAt: number;
 };
@@ -98,11 +118,21 @@ export async function getReadState(chatId: string): Promise<ReadState | null> {
 }
 
 /**
- * Upsert the scroll-position snapshot for `chatId`. Fire-and-forget
- * at call sites: the write is best-effort, must never delay
- * rendering, and silently no-ops if IndexedDB is unavailable.
+ * Upsert the scroll-position snapshot for `chatId`. Captures both
+ * the visual position (`bottomVisibleMessageId`) and the freshness
+ * marker (`latestKnownMessageId` — the id of the latest message in
+ * the chat at the moment of this snapshot, used later to compute
+ * "new since last visit").
+ *
+ * Fire-and-forget at call sites: the write is best-effort, must
+ * never delay rendering, and silently no-ops if IndexedDB is
+ * unavailable.
  */
-export async function setReadState(chatId: string, bottomVisibleMessageId: string): Promise<void> {
+export async function setReadState(
+  chatId: string,
+  bottomVisibleMessageId: string,
+  latestKnownMessageId: string,
+): Promise<void> {
   const db = await openDb();
   if (!db) return;
   await new Promise<void>((resolve) => {
@@ -111,6 +141,7 @@ export async function setReadState(chatId: string, bottomVisibleMessageId: strin
     const entry: ReadState = {
       chatId,
       bottomVisibleMessageId,
+      latestKnownMessageId,
       updatedAt: Date.now(),
     };
     store.put(entry);
