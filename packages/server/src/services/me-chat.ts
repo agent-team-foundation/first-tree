@@ -160,7 +160,7 @@ export async function getCallerEngagement(
  *     (speaker → "participant" / watcher → "watching"); the user
  *     state row supplies the unread counter (COALESCE → 0 when
  *     row is missing).
- *   - Filter `parent_chat_id IS NULL` (threads excluded in v1).
+ *   - Filter `parent_chat_id IS NULL` (nested chats not surfaced in v1).
  *   - Filter `c.organization_id = ?` to defend against historical
  *     cross-org pollution rows that may still reference the caller
  *     (see fix/cross-org-direct-chat-pollution).
@@ -581,7 +581,7 @@ export async function leaveMeChat(db: Database, chatId: string, humanAgentId: st
  * contributing to the badge even though the chat no longer appears in
  * the list. The `chats` join applies the same org-scoping +
  * `parent_chat_id IS NULL` filter as `listMeChats` so the two counts
- * cannot drift in the cross-org pollution or thread-chat cases either.
+ * cannot drift in the cross-org pollution or nested-chat cases either.
  *
  * Engagement parity: deleted chats are excluded from `listMeChats`
  * (any `engagement` view), so the badge must exclude them too — otherwise

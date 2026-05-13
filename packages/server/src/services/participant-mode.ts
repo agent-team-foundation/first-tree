@@ -100,7 +100,7 @@ export type AddChatParticipantsOptions = {
  *   - for each row, `peerAgentTypes` is the type of every OTHER participant
  *     being inserted in the same call PLUS every EXISTING speaker of
  *     the chat. This matters only for `direct` chats; the helper ignores
- *     it for `group` / `thread`.
+ *     it for `group`.
  *
  * Writes one INSERT (multi-row) per call.
  *
@@ -123,7 +123,7 @@ export async function addChatParticipants(
   }
   // `chats.type` is `text` in the DB; narrow it to the discriminated
   // `ChatType` we accept. Any unknown value is a programming error.
-  if (chat.type !== "direct" && chat.type !== "group" && chat.type !== "thread") {
+  if (chat.type !== "direct" && chat.type !== "group") {
     throw new Error(`Unexpected chat type "${chat.type}" for chat "${chatId}"`);
   }
   const chatType = chat.type;
@@ -152,8 +152,8 @@ export async function addChatParticipants(
   }
 
   // For the `direct`-chat branch of `defaultParticipantMode`, peerAgentTypes
-  // is the set of EVERY OTHER active speaker on this chat. For `group`/
-  // `thread` it's ignored, so skip the lookup when we can.
+  // is the set of EVERY OTHER active speaker on this chat. For `group`
+  // it's ignored, so skip the lookup when we can.
   let existingAgentTypes: string[] = [];
   if (chatType === "direct") {
     existingAgentTypes = await loadExistingAgentTypes(tx, chatId, new Set(agentIds));
@@ -256,7 +256,7 @@ export async function changeChatType(tx: DbLike, chatId: string, newType: "group
   if (chat.type === newType) return;
   if (newType === "group" && chat.type !== "direct") {
     // Only `direct → group` is allowed in Phase 1. `group → direct` is
-    // ill-defined; `thread`-as-target isn't on the spec.
+    // ill-defined.
     throw new BadRequestError(`Cannot change chat type from "${chat.type}" to "${newType}"`);
   }
 
