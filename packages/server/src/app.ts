@@ -54,7 +54,6 @@ import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { sessionRoutes } from "./api/sessions.js";
-import { githubWebhookRoutes } from "./api/webhooks/github.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
 import { assertBootConfigValid } from "./boot-guards.js";
@@ -421,7 +420,6 @@ export async function buildApp(config: Config) {
     namePlugin("apiV1Scope", async (api) => {
       // ── Public routes ────────────────────────────────────────────────────
       await api.register(healthRoutes);
-      await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
       await api.register(githubAppWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
