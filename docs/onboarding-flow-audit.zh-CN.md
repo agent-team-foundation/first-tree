@@ -525,14 +525,21 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-9. Team tab 对 member "名不副实"
+#### P-9. Team tab 对 member "名不副实" ⏸ Pending P-10
 
 - **问题**：member 进入 Team tab 只看到 SourceReposSettingsPanel 一个只读 panel。tab 名 "Team" 但内容只有 source repos，找不到团队成员、自己的 role、加入时间。
 - **位置**：`org-settings.tsx`
-- **建议**：
-  - 给 member 加 "Team members" 只读列表
-  - 显示当前用户的 role 和加入时间
-  - 或改 tab 名为 "Team & Repos"
+- **关键事实**：codebase 里**已经存在独立的 `/team` 路由**（roster 页：humans + agents），是看团队成员的地方。所以严格说不是"功能缺失"，是 `/settings/team` 和 `/team` 都叫 Team，member 不知道在哪看人。
+- **决议（2026-05-13 讨论后）**：**挂起，跟 P-10 一起决定**。
+  - **首选 (A)**：等 P-10 的 Settings IA 改造时一并处理——P-10 会加 Profile / Members 等 tab，那时 `/settings/team` 定位会自然清晰（"团队配置" vs Members tab 的"团队成员"），P-9 的"名不副实"问题随之消解
+  - **备用 (B)**：如果 P-10 决定不动 Settings IA（比如只加 Profile），退化到"最小信息披露"——`/settings/team` 顶部加一行 member 视角的信息：
+    ```
+    Your role: Member · Joined Apr 12, 2026 · [View team roster →]
+    ```
+    ~15 分钟改动，前端拉 currentMembership 数据后渲染。即使 P-10 后续有改动这一行也容易删/挪
+- **替代方案（已否决）**：
+  - **把 `/team` 的 roster 嵌进 `/settings/team`**：和 `/team` 路由职责重叠，长期维护负担大
+  - **直接重命名 tab 为 "Team config"**：只换标签不解决信息缺失，是文字游戏
 
 ---
 
