@@ -31,6 +31,7 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
@@ -262,23 +263,35 @@ export async function listMeChats(
   const chatIds = pageRaw.map((r) => r.chat_id);
 
   // Lookup participants (speakers only — watchers do not appear in
-  // the conversation row's participant chip list).
+  // the conversation row's participant chip list). Also pick up each
+  // speaker's `agent_presence.runtime_state` so we can derive
+  // `workingAgentIds` per chat without a second query — `agent_presence`
+  // PK is `agent_id`, so the LEFT JOIN is a row-by-row PK lookup with
+  // no extra index needed.
   const participantRows = await db
     .select({
       chatId: chatMembership.chatId,
       agentId: chatMembership.agentId,
       displayName: agents.displayName,
       type: agents.type,
+      runtimeState: agentPresence.runtimeState,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .leftJoin(agentPresence, eq(agentPresence.agentId, chatMembership.agentId))
     .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker")));
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
+  const workingByChat = new Map<string, string[]>();
   for (const p of participantRows) {
     const list = participantsByChat.get(p.chatId) ?? [];
     list.push({ agentId: p.agentId, displayName: p.displayName, type: p.type });
     participantsByChat.set(p.chatId, list);
+    if (p.runtimeState === "working") {
+      const working = workingByChat.get(p.chatId) ?? [];
+      working.push(p.agentId);
+      workingByChat.set(p.chatId, working);
+    }
   }
 
   // First-message lookup for auto-title fallback. Mirrors
@@ -318,6 +331,7 @@ export async function listMeChats(
       unreadMentionCount: r.unread_mention_count,
       canReply: isSpeaker,
       engagementStatus: r.engagement_status,
+      workingAgentIds: workingByChat.get(r.chat_id) ?? [],
     };
   });
 
