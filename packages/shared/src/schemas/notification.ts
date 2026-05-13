@@ -8,7 +8,6 @@ export const NOTIFICATION_TYPES = {
   AGENT_NEEDS_DECISION: "agent_needs_decision",
   AGENT_BLOCKED: "agent_blocked",
   AGENT_STALE: "agent_stale",
-  AGENT_DISCONNECTED: "agent_disconnected",
   AGENT_CONNECTED: "agent_connected",
   SESSION_COMPLETED: "session_completed",
 } as const;
@@ -19,7 +18,6 @@ export const notificationTypeSchema = z.enum([
   "agent_needs_decision",
   "agent_blocked",
   "agent_stale",
-  "agent_disconnected",
   "agent_connected",
   "session_completed",
 ]);

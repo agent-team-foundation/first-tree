@@ -5,7 +5,7 @@ import {
   type NotificationSeverity,
   type NotificationType,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
@@ -149,32 +149,22 @@ export async function markRead(db: Database, notificationId: string, orgId: stri
 /** Mark all notifications visible to this member as read. */
 export async function markAllRead(db: Database, orgId: string, memberId: string) {
   const visible = await loadVisibleAgentIds(db, orgId, memberId);
+  const visibleIds = [...visible];
 
-  // Fetch unread rows (bounded: typical notification volume per org is small).
-  // Drizzle doesn't express "agentId IS NULL OR agentId IN (...)" cleanly over
-  // a potentially large id list, so we select then update by id. Cap the scan
-  // to avoid worst-case blowups.
-  const unread = await db
-    .select({ id: notifications.id, agentId: notifications.agentId })
-    .from(notifications)
-    .where(and(eq(notifications.organizationId, orgId), eq(notifications.read, false)))
-    .limit(1000);
+  // Single UPDATE covering every visible unread row in the org. Org-wide rows
+  // (agentId IS NULL) are always visible; agent-scoped rows are filtered to
+  // the member's visible agent set. Without this single-statement form a
+  // burst of notifications past the prior 1000-row select cap would leave
+  // unread rows behind, and the bell badge would never clear.
+  const visibilityCondition =
+    visibleIds.length > 0
+      ? or(isNull(notifications.agentId), inArray(notifications.agentId, visibleIds))
+      : isNull(notifications.agentId);
 
-  const idsToMark = unread.filter((n) => n.agentId === null || visible.has(n.agentId)).map((n) => n.id);
-
-  if (idsToMark.length === 0) return;
-
-  // Batch so query size stays bounded for the rare extreme tail.
-  const batchSize = 200;
-  for (let i = 0; i < idsToMark.length; i += batchSize) {
-    const batch = idsToMark.slice(i, i + batchSize);
-    await db
-      .update(notifications)
-      .set({ read: true })
-      .where(
-        and(eq(notifications.organizationId, orgId), eq(notifications.read, false), inArray(notifications.id, batch)),
-      );
-  }
+  await db
+    .update(notifications)
+    .set({ read: true })
+    .where(and(eq(notifications.organizationId, orgId), eq(notifications.read, false), visibilityCondition));
 }
 
 /**
@@ -267,8 +257,6 @@ function composeMessage(type: NotificationType, agentCtx: AgentContext, chatCtx:
       return chat ? `${chat} completed` : `${agent} completed a task`;
     case "session_error":
       return chat ? `${chat} hit an error` : `${agent} hit a session error`;
-    case "agent_disconnected":
-      return `Computer ${computer} disconnected`;
     case "agent_connected":
       return `Computer ${computer} reconnected`;
     case "agent_stale":
