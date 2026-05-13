@@ -71,6 +71,17 @@ type UseReadTrackerOptions = {
    * just on persisted snapshots.
    */
   onBottomVisibleChange?: (bottomVisibleMessageId: string | null) => void;
+  /**
+   * Resolves the id to persist as `latestKnownMessageId` at IDB
+   * write time. Designed for callers that maintain a session high
+   * watermark (advance with viewport-bottom over the visit,
+   * monotonic) and want THAT id persisted instead of "the latest
+   * DOM message at write time". When the callback returns `null`,
+   * the tracker falls back to `findLatestMessageId(container)` —
+   * i.e., the chronologically latest rendered message — which is
+   * the right default for callers that don't track a watermark.
+   */
+  getLatestKnownMessageId?: () => string | null;
   /** Settle time before a scroll triggers an IDB write. Default 600ms. */
   writeDebounceMs?: number;
 };
@@ -132,17 +143,12 @@ export function useReadTracker({
   chatId,
   onWrite,
   onBottomVisibleChange,
+  getLatestKnownMessageId,
   writeDebounceMs = 600,
 }: UseReadTrackerOptions): void {
   // Latest computed bottom-visible id. Kept in a ref so write/flush
   // paths can read it without depending on React state churn.
   const bottomVisibleIdRef = useRef<string | null>(null);
-  // Latest message id in the DOM at the most recent recompute. Kept
-  // in a ref for the same reason. Distinct from bottomVisibleIdRef
-  // because the user's viewport bottom and the chat's latest
-  // message are usually different (the user is somewhere in
-  // history, not always at the latest).
-  const latestKnownIdRef = useRef<string | null>(null);
   // Debounced IDB write timer.
   const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -172,19 +178,22 @@ export function useReadTracker({
   // without making the effects re-run on every render.
   const onWriteRef = useRef(onWrite);
   const onBottomVisibleChangeRef = useRef(onBottomVisibleChange);
+  const getLatestKnownMessageIdRef = useRef(getLatestKnownMessageId);
   useEffect(() => {
     onWriteRef.current = onWrite;
   }, [onWrite]);
   useEffect(() => {
     onBottomVisibleChangeRef.current = onBottomVisibleChange;
   }, [onBottomVisibleChange]);
+  useEffect(() => {
+    getLatestKnownMessageIdRef.current = getLatestKnownMessageId;
+  }, [getLatestKnownMessageId]);
 
   // Reset on chat switch — the previous chat's bottomVisibleId is
   // not meaningful for the new chat.
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; the body only touches refs.
   useEffect(() => {
     bottomVisibleIdRef.current = null;
-    latestKnownIdRef.current = null;
     if (writeTimerRef.current) {
       clearTimeout(writeTimerRef.current);
       writeTimerRef.current = null;
@@ -209,18 +218,16 @@ export function useReadTracker({
       if (currentChatIdRef.current !== chatId) return;
 
       const bottomVisible = findBottomVisibleMessageId(container);
-      const latestKnown = findLatestMessageId(container);
       const bottomVisibleChanged = bottomVisible !== bottomVisibleIdRef.current;
-      const latestKnownChanged = latestKnown !== latestKnownIdRef.current;
-      if (!bottomVisibleChanged && !latestKnownChanged) return;
+      if (!bottomVisibleChanged) return;
       bottomVisibleIdRef.current = bottomVisible;
-      latestKnownIdRef.current = latestKnown;
-      if (bottomVisibleChanged) onBottomVisibleChangeRef.current?.(bottomVisible);
+      onBottomVisibleChangeRef.current?.(bottomVisible);
 
       // Schedule a debounced IDB write. The write captures whatever
-      // bottomVisibleIdRef / latestKnownIdRef hold at the moment the
-      // timer fires, not at the moment of scheduling — so back-to-
-      // back scroll events collapse into one write.
+      // bottomVisibleIdRef + the caller's high-watermark callback
+      // hold at the moment the timer fires, not at the moment of
+      // scheduling — so back-to-back scroll events collapse into
+      // one write.
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
       writeTimerRef.current = setTimeout(() => {
         writeTimerRef.current = null;
@@ -228,8 +235,14 @@ export function useReadTracker({
         // have happened between schedule and fire.
         if (currentChatIdRef.current !== chatId) return;
         const bv = bottomVisibleIdRef.current;
-        const lk = latestKnownIdRef.current;
-        if (!bv || !lk) return;
+        if (!bv) return;
+        // `latestKnownMessageId` is sourced via the caller's
+        // callback (chat-view's session high watermark). If absent
+        // or null, fall back to the chronologically-latest DOM
+        // message — preserves the previous default behavior for
+        // callers that don't supply the callback.
+        const lk = getLatestKnownMessageIdRef.current?.() ?? findLatestMessageId(container);
+        if (!lk) return;
         void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
       }, writeDebounceMs);
     };
@@ -249,6 +262,7 @@ export function useReadTracker({
 
   // Flush on tab hide and on unmount so closing the tab / switching
   // chats does not drop the latest snapshot.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: containerRef.current is read live inside flushNow on purpose; ref values intentionally do not appear in dep arrays.
   useEffect(() => {
     const flushNow = () => {
       if (writeTimerRef.current) {
@@ -260,12 +274,19 @@ export function useReadTracker({
       // gets persisted to IDB — that's the legitimate purpose. The
       // pollution-source race is already prevented in the recompute
       // path above (which bails on stale chatId), so by the time
-      // flushNow runs, both refs still hold the OLD chat's
-      // pre-switch values and a write to setReadState(oldChat, ...)
-      // is exactly what we want.
+      // flushNow runs, the bottomVisible ref still holds the OLD
+      // chat's pre-switch value.
+      //
+      // The high-watermark callback is read live (not via ref) so
+      // it returns the OLD chat's session high water — at this
+      // point in cleanup, the chat-view's ref-sync useEffect for
+      // the NEW chat has not yet run, so the callback closure is
+      // still bound to the OLD chat's state.
       const bv = bottomVisibleIdRef.current;
-      const lk = latestKnownIdRef.current;
-      if (!bv || !lk) return;
+      if (!bv) return;
+      const container = containerRef.current;
+      const lk = getLatestKnownMessageIdRef.current?.() ?? (container ? findLatestMessageId(container) : null);
+      if (!lk) return;
       void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
     };
     const onVis = () => {

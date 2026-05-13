@@ -1008,23 +1008,73 @@ export function ChatView({
   }, [latestKnownResolution, mergedMessages]);
 
   // Live bottom-visible id during the current session. Driven by
-  // useReadTracker's `onBottomVisibleChange` callback. Distinct
-  // from `storedBottomVisibleId` (which is the IDB snapshot used
-  // for chat-open positioning) — `liveBottomVisibleId` reflects
-  // where the viewport bottom currently is, used by the pill to
-  // compute its count without round-tripping through IDB.
+  // useReadTracker's `onBottomVisibleChange` callback. Used as the
+  // signal that advances the session high watermark below.
   const [liveBottomVisibleId, setLiveBottomVisibleId] = useState<string | null>(null);
 
-  // Pill count: messages strictly newer than the live bottom-visible
-  // id. Hides (count = 0) whenever the user is at-bottom (the bottom-
-  // visible id equals the latest message id). Recomputes whenever
-  // mergedMessages or the live bottom-visible id change.
-  const pillCount = useMemo<number>(() => {
-    if (!liveBottomVisibleId || mergedMessages.length === 0) return 0;
+  // Session high watermark — the highest message index the user
+  // has reached (had at viewport bottom) at any point during the
+  // current chat session. Monotonic forward. Combined with the
+  // IDB-persisted `latestKnownMessageId` from the prior visit
+  // (`latestKnownResolution.index`), this is the "everything up to
+  // here is known to the user" pointer that drives the pill count.
+  //
+  // Why we need this on top of `liveBottomVisibleId`: the user's
+  // expectation is that "new" means "messages I have never seen".
+  // Without monotonicity, scrolling UP after having reached the
+  // bottom would re-trigger the pill for content the user has
+  // already viewed — caught in PR 286 manual sign-off rev 5.
+  //
+  // `sessionHighestRaw` holds only the IN-SESSION advancement;
+  // `sessionHighestIdx` (the effective value) takes the max with
+  // the IDB baseline so a re-visit immediately inherits the prior
+  // session's progress.
+  const [sessionHighestRaw, setSessionHighestRaw] = useState<number>(-1);
+  // Reset the raw counter on every chat switch.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; no other dep should reset this.
+  useEffect(() => {
+    setSessionHighestRaw(-1);
+  }, [chatId]);
+  // Advance the raw counter whenever the user's viewport bottom
+  // reaches a message later than the previous high water.
+  useEffect(() => {
+    if (!liveBottomVisibleId) return;
     const idx = mergedMessages.findIndex((m) => m.id === liveBottomVisibleId);
-    if (idx < 0) return 0;
-    return mergedMessages.length - 1 - idx;
-  }, [liveBottomVisibleId, mergedMessages]);
+    if (idx > sessionHighestRaw) setSessionHighestRaw(idx);
+  }, [liveBottomVisibleId, mergedMessages, sessionHighestRaw]);
+  // Effective high water: max of in-session advancement and IDB
+  // baseline. Either signal alone is incomplete — the IDB baseline
+  // covers re-visits without scrolling, the raw covers fresh first
+  // visits and forward progress within a session.
+  const sessionHighestIdx = useMemo<number>(() => {
+    const baseline = latestKnownResolution?.index ?? -1;
+    return Math.max(sessionHighestRaw, baseline);
+  }, [sessionHighestRaw, latestKnownResolution]);
+
+  // Pill count = messages strictly newer than the effective high
+  // watermark. Hides (count = 0) whenever the user has had every
+  // currently-rendered message at viewport bottom at some point
+  // (either this session or a prior one persisted in IDB).
+  const pillCount = useMemo<number>(() => {
+    if (mergedMessages.length === 0) return 0;
+    if (sessionHighestIdx < 0) return 0;
+    return Math.max(0, mergedMessages.length - 1 - sessionHighestIdx);
+  }, [mergedMessages, sessionHighestIdx]);
+
+  // Ref to the message id at `sessionHighestIdx`. Read by
+  // useReadTracker at IDB-write time so the persisted
+  // `latestKnownMessageId` reflects the user's high watermark
+  // rather than "the latest message in the DOM" (the previous
+  // default, which over-counted unread messages for users who
+  // never scrolled to the bottom).
+  const highWatermarkMessageIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (sessionHighestIdx >= 0 && sessionHighestIdx < mergedMessages.length) {
+      highWatermarkMessageIdRef.current = mergedMessages[sessionHighestIdx]?.id ?? null;
+    } else {
+      highWatermarkMessageIdRef.current = null;
+    }
+  }, [sessionHighestIdx, mergedMessages]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
@@ -1093,6 +1143,13 @@ export function ChatView({
       });
     },
     onBottomVisibleChange: setLiveBottomVisibleId,
+    // Persist the user's session high watermark as
+    // `latestKnownMessageId`, not "the latest msg in the DOM".
+    // Without this, leaving a chat mid-scroll (never reaching the
+    // bottom) would persist the chat's actual latest message, and
+    // the next return would show no divider for content the user
+    // never saw.
+    getLatestKnownMessageId: () => highWatermarkMessageIdRef.current,
   });
 
   // Pill click: jump to the bottom. As the scroll lands, the
