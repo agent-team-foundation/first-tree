@@ -894,9 +894,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           if (currentOwner === clientId) {
             try {
               await presenceService.unbindAgent(app.db, agentId);
-              if (shouldNotify(agentId, "agent_disconnected")) {
-                notificationService.notifyAgentEvent(app.db, agentId, "agent_disconnected", "medium").catch(() => {});
-              }
             } catch {
               // best-effort
             }
