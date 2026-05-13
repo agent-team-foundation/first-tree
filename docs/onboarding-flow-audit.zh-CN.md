@@ -424,11 +424,20 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-4. Admin 通过 invite 加入新 org 时跳过 Step 1
+#### P-4. Admin 通过 invite 加入新 org 时跳过 Step 1 ✅ Resolved by P-1
 
 - **问题**：Step 1 gate 是 `joinPath !== "invite" && canRenameTeam`。如果一个 admin 被邀请到新 org（少见但可能），会跳过 Step 1，即使他可能想给团队改名。
 - **位置**：`onboarding-view.tsx:69`
-- **建议**：把条件改成 "team 名是默认 auto-generated 且 role=admin" 才显示 Step 1，更稳健。
+- **决议（2026-05-13）**：**已被 P-1 的派生方案覆盖**，不需要单独投入。
+  - P-1 把 Step 1 gate 改为 `canRenameTeam && teamHasDefaultName && !step1Confirmed`，正好就是 P-4 建议的条件
+  - 各场景验证：
+    | 场景 | 行为 | 正确 |
+    |---|---|---|
+    | Admin invite 到已命名 team | 跳过 Step 1 | ✅（不需要改别人团队的名字） |
+    | Admin invite 到还未改名的 team（极罕见） | 显示 Step 1 | ✅（团队确实需要正经名字） |
+    | Solo admin 上次跳过 Step 1，今天回来 | 显示 Step 1 | ✅（给第二次机会，旧 gate 不会） |
+  - **澄清**：P-4 原始描述里"admin 可能想给团队改名"略微误导——admin invitee 加入的是已命名团队，onboarding 阶段不需要改名；想改可以后续去 Settings → Team
+- **排期影响**：从 P2 排期中移除，仅作为 P-1 的对照参考保留
 
 ---
 
@@ -569,7 +578,7 @@ Step 3 - InviteeStep3Body
 |---|---|
 | **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写、P-5 dev-callback 防护 |
 | **P1（下周）** | P-1 joinPath 持久化、P-6 invitee 等待回归、P-10 Profile + Members tab |
-| **P2** | P-4 admin invite 跳 Step 1、P-7 Step 2 后回归路径、P-11 owner role |
+| **P2** | P-7 Step 2 后回归路径、P-11 owner role（P-4 已被 P-1 覆盖，无需单独投入） |
 | **P3（清理）** | P-8 命名一致性、P-9 Team tab 信息丰富、P-12 Context Tree 拆分、P-13–17 文档与小修 |
 
 ---
