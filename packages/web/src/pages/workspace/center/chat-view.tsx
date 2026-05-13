@@ -6,7 +6,7 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { getActivityOverview } from "../../../api/activity.js";
 import {
   type FileMessageContent,
@@ -932,9 +932,15 @@ export function ChatView({
   });
   const lastReadMessageId = readState?.lastReadMessageId ?? null;
 
-  // Stable, ResizeObserver-driven scroll helper. Mirrors the
-  // useChatScroll pattern Kael's frontend has been running.
-  const { scrollToBottom, scrollToMessage } = useChatScroll(scrollContainerRef);
+  // Scroll helpers — two pairs:
+  //   *Immediate variants fire synchronously and are right for the
+  //     initial chat-open landing, called from a `useLayoutEffect`
+  //     below so the first paint already shows the correct position
+  //     (no top-then-bottom flash).
+  //   *Non-immediate variants debounce via ResizeObserver and are
+  //     reserved for "follow new message" scenarios (M3) where async
+  //     content (images, markdown) might still be rendering.
+  const { scrollToBottomImmediate, scrollToMessageImmediate } = useChatScroll(scrollContainerRef);
 
   // Resolve the last-read marker against the actual rendered set so we
   // can decide (a) where to jump to on chat open and (b) where to put
@@ -977,25 +983,37 @@ export function ChatView({
   // driven append), the ref matches and we bail — M3 will handle
   // "follow new message if at bottom".
   //
-  // Caught in PR 286 review (M2 round): Bug 1 — first chat open
-  // after hard reload landed at the top because the effect previously
-  // had `deps: [chatId]` and bailed on `itemCount === 0` without
-  // re-firing when items arrived.
+  // useLayoutEffect (not useEffect): fires synchronously after DOM
+  // commit but before paint, so the first frame the user sees is
+  // already at the right scroll position. Pairs with the *Immediate
+  // scroll variants below — no ResizeObserver debounce — so the
+  // scrollTop is set in the same paint as the message DOM. Without
+  // this, the user saw the top of the timeline for ~200ms before the
+  // ResizeObserver-stabilised scroll fired, then a visible jump to
+  // the bottom.
+  //
+  // Earlier rounds:
+  //  - PR 286 review M1 round → answersByCorrelationId source fix.
+  //  - PR 286 review M2 round → Bug 1 (hard reload landed at top
+  //    because deps were `[chatId]` only and bailed on itemCount=0).
+  //  - liuchao-001 manual sign-off → top-then-bottom flash on any
+  //    chat-switch; fixed by moving from useEffect to useLayoutEffect
+  //    + the *Immediate scroll variants.
   const landedForChatRef = useRef<string | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (itemCount === 0) return;
     if (landedForChatRef.current === chatId) return;
     landedForChatRef.current = chatId;
     if (lastReadResolution && unreadCount > 0) {
       // Land the last-read message at the bottom of the read zone so
       // the unread divider + new content are scrollable below.
-      scrollToMessage(lastReadResolution.anchorId, "end", "auto");
+      scrollToMessageImmediate(lastReadResolution.anchorId, "end", "auto");
     } else {
       // No prior reads, or everything is already read: preserve the
       // M1-era "open scrolls to bottom" behavior.
-      scrollToBottom("auto");
+      scrollToBottomImmediate("auto");
     }
-  }, [chatId, itemCount, lastReadResolution, unreadCount, scrollToMessage, scrollToBottom]);
+  }, [chatId, itemCount, lastReadResolution, unreadCount, scrollToMessageImmediate, scrollToBottomImmediate]);
 
   // Watches each message DOM via IntersectionObserver and persists the
   // newest-seen id (monotonic). Flushes on unmount + tab visibility-loss.

@@ -45,14 +45,31 @@ type ScrollPosition = "start" | "end";
 type UseChatScrollReturn = {
   /** True when the user's viewport bottom is within `bottomThreshold` of the container's scrollHeight. */
   isAtBottom: boolean;
-  /** Scroll the container so its bottom is in view, after height has stabilised. */
+  /**
+   * Scroll the container so its bottom is in view, AFTER container
+   * height has stabilised (ResizeObserver-debounced). Right for
+   * "follow new message arrival" where async content (images,
+   * markdown) might still be rendering.
+   */
   scrollToBottom: (behavior?: ScrollBehavior) => void;
   /**
+   * Like `scrollToBottom` but synchronous — fires the scroll
+   * immediately without waiting for height to stabilise. Right for
+   * initial chat-open landing called from a `useLayoutEffect`, so
+   * the first paint already shows the bottom (no top-then-bottom
+   * flash).
+   */
+  scrollToBottomImmediate: (behavior?: ScrollBehavior) => void;
+  /**
    * Scroll the container so the element with `data-message-id={id}`
-   * is in view at `position`. Returns true if the message was found
-   * in the DOM at scroll time, false otherwise.
+   * is in view at `position`, after height has stabilised.
    */
   scrollToMessage: (id: string, position?: ScrollPosition, behavior?: ScrollBehavior) => void;
+  /**
+   * Like `scrollToMessage` but synchronous — fires the scroll
+   * immediately. Right for initial chat-open landing.
+   */
+  scrollToMessageImmediate: (id: string, position?: ScrollPosition, behavior?: ScrollBehavior) => void;
 };
 
 export function useChatScroll(
@@ -128,6 +145,16 @@ export function useChatScroll(
     [containerRef, runAfterStable],
   );
 
+  const scrollToBottomImmediate = useCallback(
+    (behavior: ScrollBehavior = "auto") => {
+      const container = containerRef.current;
+      if (!container) return;
+      const top = Math.max(0, container.scrollHeight - container.clientHeight);
+      container.scrollTo({ top, behavior });
+    },
+    [containerRef],
+  );
+
   const scrollToMessage = useCallback(
     (id: string, position: ScrollPosition = "end", behavior: ScrollBehavior = "auto") => {
       runAfterStable(() => {
@@ -141,5 +168,16 @@ export function useChatScroll(
     [containerRef, runAfterStable],
   );
 
-  return { isAtBottom, scrollToBottom, scrollToMessage };
+  const scrollToMessageImmediate = useCallback(
+    (id: string, position: ScrollPosition = "end", behavior: ScrollBehavior = "auto") => {
+      const container = containerRef.current;
+      if (!container) return;
+      const target = container.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
+      if (!target) return;
+      target.scrollIntoView({ block: position, behavior });
+    },
+    [containerRef],
+  );
+
+  return { isAtBottom, scrollToBottom, scrollToBottomImmediate, scrollToMessage, scrollToMessageImmediate };
 }
