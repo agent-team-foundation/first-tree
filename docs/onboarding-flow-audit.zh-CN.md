@@ -345,11 +345,36 @@ Step 3 - InviteeStep3Body
 
 - **问题**：用户已完成 onboarding 多月后，删掉一台旧机器（`clients` 表条目删了），下次 `/me` 推断成 `connect`，stepper 重新出现。
 - **位置**：`packages/server/src/api/me.ts` `inferOnboardingStep()`
-- **风险**：UI 像出 bug；如果 `dismissed_at` 被 reset，整个 onboarding 会强制重弹。
-- **建议**：
-  - DB 加 `users.onboarding_max_step_reached`（单调递进，不回退）
-  - `inferOnboardingStep()` 取 `max(inferred, persisted)`
-  - 或：只在 `dismissed_at IS NULL` 且明确未完成过时推断
+- **风险**：UI 像出 bug；如果 `dismissed_at` 被 reset（例如用户点 Settings → Onboarding → Resume），整个 onboarding 会强制重弹，把已完成用户推回 Step 1。
+- **决议（2026-05-13 讨论后）**：加 `users.onboarding_completed_at` 单 timestamp 列，与现有 `onboarding_dismissed_at` 模式对称。
+  - **DB 改动**：
+    ```sql
+    ALTER TABLE users ADD COLUMN onboarding_completed_at TIMESTAMPTZ;
+    ```
+    Backfill：把目前推断为 `completed` 的用户全部打上 `now()`（或更精确地，查最近一次 client + agent 都齐全的时间）。
+  - **`inferOnboardingStep` 改造**：
+    ```ts
+    function inferOnboardingStep(userId) {
+      const user = users.findById(userId);
+      if (user.onboardingCompletedAt) return "completed";  // 一旦完成永不回退
+      
+      const step = !hasClient ? "connect" : !hasAgent ? "create_agent" : "completed";
+      
+      // 第一次到 completed 时落库
+      if (step === "completed" && !user.onboardingCompletedAt) {
+        users.update(userId, { onboardingCompletedAt: new Date() });
+      }
+      return step;
+    }
+    ```
+  - **关键 take**：只关心"completed → 倒退"这一个回归场景，因为：
+    - 中间态（connect ↔ create_agent）停留时间短（分钟级）
+    - 中间态如果用户真的删光所有 client/agent，引导他重接是合理的
+    - 一旦走到 completed，就是**永久事实**，不该被资源临时缺失推翻
+  - 副作用收益：这个 timestamp 后续做"完成后 7 天弹回访问卷"等运营功能时可直接复用
+- **替代方案（已否决）**：
+  - 加 `users.onboarding_max_step_reached` enum 列（单调递进）：颗粒度更细，但要维护 step 顺序比较函数；中间态精度对当前问题没有增量价值
+  - 只在 `dismissed_at IS NULL` 且未完成过时推断：根本不解决问题——一旦 Resume 让 `dismissed_at = null`，立刻又回到现算逻辑
 
 ---
 
