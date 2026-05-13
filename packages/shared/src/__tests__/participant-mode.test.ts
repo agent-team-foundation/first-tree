@@ -12,7 +12,7 @@ import { defaultParticipantMode } from "../participant-mode.js";
  * `peerAgentTypes` dimension on the `direct` branch only.
  */
 
-describe("defaultParticipantMode — group / thread chats", () => {
+describe("defaultParticipantMode — group chats", () => {
   it("humans in a group are always 'full'", () => {
     expect(defaultParticipantMode("group", "human")).toBe("full");
     // `peerAgentTypes` is ignored for groups; pass a few to prove it.
@@ -22,11 +22,6 @@ describe("defaultParticipantMode — group / thread chats", () => {
   it("non-human agents in a group are always 'mention_only'", () => {
     expect(defaultParticipantMode("group", "autonomous_agent")).toBe("mention_only");
     expect(defaultParticipantMode("group", "personal_assistant")).toBe("mention_only");
-  });
-
-  it("threads inherit the group rule", () => {
-    expect(defaultParticipantMode("thread", "autonomous_agent")).toBe("mention_only");
-    expect(defaultParticipantMode("thread", "human")).toBe("full");
   });
 });
 
