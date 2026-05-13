@@ -468,14 +468,19 @@ Step 3 - InviteeStep3Body
 
 ### 🟡 中严重性（影响体验 / 信息架构 / 功能缺失）
 
-#### P-6. InviteeWaitingBody 自动 dismiss 后无回归引导
+#### P-6. InviteeWaitingBody 自动 dismiss 后无回归引导 ⏸ Deferred
 
 - **问题**：member 进来时 admin 还没配好 → 自动 `dismissOnboarding()` + toast。当 admin 后来配好了，member 不会被通知，要自己去 Settings → Onboarding 点 Resume。
 - **位置**：`step3-intro-body.tsx:447–488`
-- **建议**：
-  - `/me` 响应中带上 `team_setup_pending: boolean`
-  - member 端订阅这个字段变化，从 `true` 变 `false` 时弹 toast: "Your team is ready! Want to bind your agent to the tree?"
-  - 或：不真正 dismiss，渲染 "waiting" 占位，配好后自动切换 Confirm
+- **决议（2026-05-13 讨论后）**：**暂不修复，等通知系统重构后用通知方案落地**。
+  - 讨论中评估了三类方案：
+    - **Option A（前端订阅 + 自动接上）**：让 `InviteeWaitingBody` 不真正 dismiss，server 暴露 `teamSetupComplete` flag，前端 polling 自动切到 Confirm。**否决理由**：状态机复杂、polling 机制要新建、admin 久不配会留下永久 waiting 卡片
+    - **Option B（dashboard banner）**：dismiss 不变，但用 banner 召回。**否决理由**：banner 又是一个新 UI surface，且 banner 漏看的概率不低于 toast
+    - **Option C+（通知系统）**：admin 完成 PUT context_tree 时 server 给未完成的 member 发通知，点击 deep link 回 Step 3 Confirm。**最优方案，但被 deferred**
+  - **为什么 defer**：现有通知系统正在规划重构，在旧通知系统上做这个事会做两遍——等新系统稳定后接入更合适
+  - **临时缓解**：当前的 toast + Settings → Onboarding 手动 Resume 路径已经存在，不阻塞 invitee 使用 agent（虽然他们的 agent 没绑团队 tree）
+- **触发重启信号**：notification 系统重构告一段落、新 notification type/deep-link 机制可用时，回来落地 Option C+
+- **排期影响**：从 P1 移除，进 backlog（依赖通知系统重构）
 
 ---
 
@@ -590,7 +595,7 @@ Step 3 - InviteeStep3Body
 | Sprint | 处理项 |
 |---|---|
 | **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写（P-5 复查后发现已解决，无需投入）|
-| **P1（下周）** | P-1 joinPath 持久化、P-6 invitee 等待回归、P-10 Profile + Members tab |
+| **P1（下周）** | P-1 joinPath 持久化、P-10 Profile + Members tab（P-6 deferred 至通知系统重构后）|
 | **P2** | P-7 Step 2 后回归路径、P-11 owner role（P-4 已被 P-1 覆盖，无需单独投入） |
 | **P3（清理）** | P-8 命名一致性、P-9 Team tab 信息丰富、P-12 Context Tree 拆分、P-13–17 文档与小修 |
 
