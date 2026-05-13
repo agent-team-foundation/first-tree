@@ -67,8 +67,6 @@ type SessionManagerConfig = {
   onRuntimeStateChange?: (state: RuntimeState) => void;
   /** Callback when a session emits a structured event (tool_call / error). */
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
-  /** Callback when a session query completes end-to-end. */
-  onSessionCompletion?: (chatId: string) => void;
 };
 
 /**
@@ -761,9 +759,6 @@ export class SessionManager {
       },
       emitEvent: (event) => {
         this.config.onSessionEvent?.(chatId, event);
-      },
-      reportSessionCompletion: () => {
-        this.config.onSessionCompletion?.(chatId);
       },
       forwardResult,
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),

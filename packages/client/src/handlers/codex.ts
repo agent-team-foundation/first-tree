@@ -404,12 +404,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
       kind: "turn_end",
       payload: { status: succeeded ? "success" : "error" },
     });
-    // Only signal session completion when the turn truly succeeded — mirrors
-    // claude-code's `result.subtype === "success"` gate so a partial-error
-    // turn doesn't trip downstream cooldown bookkeeping.
-    if (succeeded && accumulated.trim()) {
-      sessionCtx.reportSessionCompletion();
-    }
     sessionCtx.setRuntimeState("idle");
 
     // Drain queued messages — schedules at most one follow-up at a time so

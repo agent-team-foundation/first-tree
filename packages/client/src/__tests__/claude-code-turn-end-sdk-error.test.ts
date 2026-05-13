@@ -75,7 +75,6 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
   it("emits error event then turn_end:error when result subtype !== success", async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
-    const reportSessionCompletion = vi.fn();
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -96,7 +95,6 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
       touch: () => {},
       setRuntimeState: () => {},
       emitEvent: (e) => emitted.push(e),
-      reportSessionCompletion,
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
     };
 
@@ -109,7 +107,6 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
 
     // Success path was NOT taken.
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(reportSessionCompletion).not.toHaveBeenCalled();
 
     // Error event carries the SDK-reported cause.
     const errors = emitted.filter((e) => e.kind === "error");

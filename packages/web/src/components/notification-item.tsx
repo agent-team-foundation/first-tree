@@ -15,10 +15,8 @@ import { cn, formatDate } from "../lib/utils.js";
 
 const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   agent_error: "Error",
-  session_error: "Error",
   agent_blocked: "Blocked",
   agent_stale: "Stale",
-  session_completed: "Completed",
 };
 
 function severityColor(severity: string): string {
