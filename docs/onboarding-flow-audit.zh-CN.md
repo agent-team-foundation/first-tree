@@ -611,29 +611,161 @@ Step 3 - InviteeStep3Body
 
 ---
 
+#### P-19. Step 2 加 visibility 配置 + 默认 `organization` ✨ New (2026-05-13)
+
+- **问题**：
+  - Step 2 创建 agent 时**完全不暴露 visibility 配置**——用户不知道这个属性存在；走 server fallback `defaultVisibility(personal_assistant) = "private"`
+  - 但产品定位是 **agent team 协作**——agent 可以被团队其他 human 或 agent 协作访问是核心功能
+  - 默认 `private` **抑制了产品最核心的价值释放**：新成员加入团队看到 /team 空荡荡，找不到能协作的对象
+- **位置**：`packages/web/src/pages/workspace/center/onboarding/step2-body.tsx`
+- **决议（2026-05-13 讨论后）**：
+  - Step 2 加第三个 StepFrame：visibility 配置块（不是 hidden checkbox，是显式 radio block 跟其他 StepFrame 平级）
+  - **默认 `organization`**（Shared with team）——跟产品协作定位对齐
+  - 用户可显式切到 `private`
+  - **不动 NewAgentDialog**（默认仍 `private`）——其默认值是独立产品决策，跟本次 onboarding 改造解耦
+- **完整文案（最终版）**：
+  
+  顶部 heading 文案精简：
+  ```
+  [Invite 路径]
+  "You've joined {teamName}. Let's set up your first agent."
+  
+  [Solo 路径]
+  "Let's set up your first agent."
+  ```
+  
+  StepFrame 03（NEW）：
+  ```
+  Pick who can use it
+  
+  ◉ Shared with team     ← default（仅靠 radio 视觉选中传达，无 "(default)" 标签）
+     Anyone in your org can @mention and chat with this agent.
+  
+  ○ Private to you
+     Only you can see this agent and chat with it. 
+     Others on the team won't see it listed.
+  ```
+- **关键文案选择说明**：
+  - h2 用 `Pick who can use it`（祈使句 + 具体子句），跟 Step 3 `Pick source repos` 等 sub-step 风格一致——不用"Visibility"这类抽象词
+  - Radio 描述直接复制 NewAgentDialog 现有原文，**零 copy 漂移**
+  - 不主动声明"admin 可见性"——保留用户对 private 的常规预期
+- **替代方案（已否决）**：
+  - **改 `personal_assistant` 类型名 / 改 server `defaultVisibility`**：本次范围太大，前端显式传 `organization` 已经覆盖
+  - **同步改 NewAgentDialog 默认值**：是独立产品决策，不耦合到本次改造
+  - **加 "personal assistant" 强调措辞**：在 Step 2 时刻没有对照项，引入新概念反而困惑
+  - **加 hidden checkbox**：用户不知道在配置什么；显式 StepFrame 更合适
+- **实施工作量**：~30 分钟（StepFrame 03 UI + state + 传 visibility）
+
+---
+
+#### P-20. 待澄清产品决策（不在本次范围）✨ New (2026-05-13)
+
+讨论过程中识别出几个**不属于 audit 范畴的产品决策**，列在这里作为提醒——不需要立项，等产品 review 时主动决定。
+
+| 决策点 | 现状 | 待讨论 |
+|---|---|---|
+| **`personal_assistant` 类型名 vs 默认 organization-visible 的认知反差** | 类型名 "personal" 字面暗示私有/个人，但产品定位是默认团队协作 | 长期是否需要改 type 名（如 `member_assistant`），或 UI 文案完全避免 "personal" |
+| **NewAgentDialog 默认 visibility = `private`，与 Step 2（PR 3 之后默认 `organization`）不一致** | 首次 onboarding 偏向团队协作；后续 quick-add 偏向私有 | 是否应该统一两个创建路径的默认值——可以解释为"不同上下文不同默认"，也可以视作不一致 |
+| **Private agent 实际能被 admin 治理性查看（`/admin "All Agents" view`）** | UI 不主动声明 | 是否在 Private radio 描述里诚实地标注 "admins can still see it"——平衡"被发现后失望"vs"默认显得 less private" |
+| **`personal_assistant` server-side `defaultVisibility` 仍为 `private`** | PR 3 让前端总是显式传，fallback 用不到 | 是否同步改 server-side 默认，让数据层和 UI 层立场一致 |
+
+---
+
 ## Audit 整体反思
 
-讨论过程中累计出现 **3 次**"凭印象写错"或"过度推荐"的模式，需要在后续 audit 工作中警惕：
+讨论过程中累计出现 **4 次**"凭印象写错"或"过度推荐"的模式，需要在后续 audit 工作中警惕：
 
 | 案例 | 模式 |
 |---|---|
 | **P-5** | 没读现有代码就下结论"缺防护"，实际已有双闸 |
 | **P-10** | 没核实 `/team` 现有功能就列"缺 Members tab" |
-| **P-2** | 工程师本能（"显式状态化更稳"）覆盖了对实际用户路径的判断；做了反而 UX 更差 |
+| **P-2 第一次** | 工程师本能（"显式状态化更稳"）覆盖了对实际用户路径的判断；做了反而 UX 更差 |
+| **P-19 第一次（讨论中）** | 凭名字猜 visibility 是 "roster 可见"，实际是"交互权限"——直到读 NewAgentDialog UI 文案才纠正 |
 
-另一个反复出现的反模式：每次必要修复之上**叠一层"看起来更完善"的 polish**（P-1 加 DB 列、P-3 加事务、P-6 加前端订阅、P-7 加按钮文案动态化）——这些都被讨论否决。**默认推最小修复，附加项要明确论证 ROI 才提**。
+另一个反复出现的反模式：每次必要修复之上**叠一层"看起来更完善"的 polish**（P-1 加 DB 列、P-3 加事务、P-6 加前端订阅、P-7 加按钮文案动态化、P-19 推默认 visible 但没核实语义）——这些都被讨论否决。**默认推最小修复，附加项要明确论证 ROI 才提**。
+
+**讨论方法上的 take**：每次"语义/行为"假设都应该回读代码验证。grep 看 schema 不够——要看 UI 上实际的文案 / 用户能看到什么。代码注释和实际行为偶尔会脱节，UI 文案是更可靠的产品意图来源。
 
 ---
 
-## 整改优先级建议（2026-05-13 收尾后）
+## 整改优先级建议（2026-05-13 最终）
 
 | Sprint | 处理项 |
 |---|---|
-| **P0（这周）** | P-2 revised（建模 onboarding 终态）、P-3 非原子写（前端错误处理统一）|
-| **P1（下周）** | P-1 joinPath 持久化（纯派生，改 Step 1 + Step 2 gate）|
-| **P2** | P-7 toast 文案对齐 + P-18 default agent name（同一 PR）|
-| **触发式 backlog** | P-6（通知系统重构后）、P-8（新 integration 类型）、P-11（billing 立项）、P-12（设置项膨胀）、P-14 / P-16（用户反馈）、P-17（跟随 P-6）|
+| **P0（本周）** | **PR 1**: P-2 revised（建模 onboarding 终态——schema + UI gate）、**PR 2**: P-3 非原子写错误处理统一 |
+| **P1（下周）** | **PR 2**: P-1 joinPath 派生化（与 P-3 同 PR） |
+| **P2** | **PR 3**: P-7 toast 文案对齐 + P-18 default agent name + P-19 Step 2 visibility 配置（同一 PR） |
+| **触发式 backlog** | P-6（通知系统重构后）、P-8（新 integration 类型）、P-11（billing 立项）、P-12（设置项膨胀）、P-14 / P-16（用户反馈）、P-17（跟随 P-6） |
+| **待澄清产品决策** | P-20（personal_assistant 类型名 / NewAgentDialog 默认 / admin 可见性声明 / server defaultVisibility） |
 | **已 resolved / 失效** | P-4 已被 P-1 覆盖、P-5 已存在双闸防护、P-9 / P-10 / P-13 / P-15 audit 错误已移除 |
+
+---
+
+## PR 计划
+
+### PR 1: `feat(onboarding): model terminal state via onboarding_completed_at`
+- **包含**：P-2 revised
+- **改动**：
+  - DB migration：`ALTER TABLE users ADD COLUMN onboarding_completed_at TIMESTAMPTZ`
+  - Backfill：`dismissed_at IS NOT NULL` 的用户全部打上 `dismissed_at` 同值
+  - 新 endpoint：`POST /me/onboarding-completed`
+  - Step 3 admin `handleContinue` + invitee `handleConfirm` 调用 mark-completed
+  - `settings.tsx` 侧栏：`!user.onboardingCompletedAt && <SubNavLink ... />`
+  - `settings/onboarding.tsx` 页面：`if (user.onboardingCompletedAt) return <Navigate ... />`
+- **预估**：~1.5 小时实现 + ~30 分钟 review
+- **独立 PR 理由**：含 schema migration，单独走能让 migration 先稳
+
+### PR 2: `refactor(web): derive onboarding gates from team state; unify Step 3 admin errors`
+- **包含**：P-1 + P-3
+- **顺带解决**：P-4 自动 covered
+- **改动**：
+  - `onboarding-view.tsx`: Step 1 gate 改用 `canRenameTeam && teamHasDefaultName && !step1Confirmed`
+  - `step2-body.tsx`: invite-aware 文案触发条件改用 `orgHasOtherMembers`
+  - sessionStorage `joinPath` 保留作 telemetry tag，路由 gate 不再依赖
+  - `step3-intro-body.tsx` admin `handleContinue`: 三种 catch 统一阻塞流程 + 原地 retry
+- **预估**：~2-3 小时实现 + ~45 分钟 review
+
+### PR 3: `feat(web): Step 2 visibility config + personalized default name + toast copy alignment`
+- **包含**：P-7 + P-18 + P-19
+- **改动**：
+  - **Step 2 顶部 heading**（精简）：
+    - Invite: `"You've joined {teamName}. Let's set up your first agent."`
+    - Solo: `"Let's set up your first agent."`
+  - **Step 2 StepFrame 01 默认 name**: `"Assistant"` → `\`${login}'s assistant\``
+  - **Step 2 新增 StepFrame 03（Pick who can use it）**:
+    ```
+    Pick who can use it
+    
+    ◉ Shared with team     ← default
+       Anyone in your org can @mention and chat with this agent.
+    
+    ○ Private to you
+       Only you can see this agent and chat with it.
+       Others on the team won't see it listed.
+    ```
+  - **Step 2 创建 agent 时传** `visibility: "organization"`（默认）或用户选择
+  - **`buildSetupHiddenToast`** (`step3-intro-body.tsx:861`):
+    ```
+    description: "Your agent isn't bound to a source repo yet. Resume from Settings → Onboarding any time to finish."
+    action: { label: "Resume setup", onClick: () => navigate("/settings/onboarding") }
+    ```
+- **不动**：NewAgentDialog（默认 / 文案 / "(default)" 标签都不改）
+- **预估**：~45 分钟实现 + ~30 分钟 review
+
+### Merge 顺序
+```
+PR 1 (P-2 revised)  ←─ 先 merge，schema 稳一两天
+  ↓
+PR 2 (P-1 + P-3)    ←─ 流程稳健性
+  ↓
+PR 3 (P-7 + P-18 + P-19)  ←─ Step 2 UX 增强 + 文案
+```
+PR 2 / PR 3 改动文件无重叠，可并行开发（但 PR 3 别碰 `step3-intro-body.tsx` 的 admin handler）。
+
+### 总工作量
+- 实现：~5-6 小时
+- Review：~2 小时
+- 跨度（PR 2/3 并行）：**~4-5 个工作小时**
 
 ---
 
