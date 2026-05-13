@@ -116,6 +116,28 @@ export function useReadTracker({
   // Debounced IDB write timer.
   const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Live "which chat is the component currently rendering for".
+  // Mutated during render (not in a useEffect) so that any stale
+  // observer / effect-cleanup that runs across a chat boundary
+  // sees the new value immediately and can bail.
+  //
+  // Why: when chatId changes A → B and the destination chat is
+  // warm-cached, React re-renders with B's messages and DOM commits
+  // before the old chatId-A effect cleanup runs. The old effect's
+  // MutationObserver fires synchronously on that commit and
+  // recomputes the bottom-visible id from B's freshly-rendered
+  // rows, pasting a B-message id into the ref. Then the old flush
+  // cleanup runs flushNow with the chatId=A closure and writes the
+  // B id under A's IDB row — corrupting A's snapshot.
+  //
+  // Caught in PR 286 manual sign-off rev 3 (R5 fail). Reviewer
+  // suggested validating the id against the messages array; the
+  // root-cause fix is to drop the write entirely whenever the
+  // tracker is stale (chatId has moved on), which both recompute
+  // and flushNow guard against by reading this ref live.
+  const currentChatIdRef = useRef(chatId);
+  currentChatIdRef.current = chatId;
+
   // Keep latest callbacks reachable from inside effects below
   // without making the effects re-run on every render.
   const onWriteRef = useRef(onWrite);
@@ -148,6 +170,13 @@ export function useReadTracker({
     if (!container) return;
 
     const recompute = () => {
+      // Bail if this observer/effect is stale — i.e., chatId has
+      // moved on but the old MutationObserver fired between DOM
+      // commit and effect cleanup. Without this guard, the OLD
+      // closure's recompute would read the NEW chat's DOM and
+      // pollute bottomVisibleIdRef with a foreign message id.
+      if (currentChatIdRef.current !== chatId) return;
+
       const id = findBottomVisibleMessageId(container);
       if (id === bottomVisibleIdRef.current) return;
       bottomVisibleIdRef.current = id;
@@ -160,6 +189,9 @@ export function useReadTracker({
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
       writeTimerRef.current = setTimeout(() => {
         writeTimerRef.current = null;
+        // Same staleness guard at write time: a chat switch may
+        // have happened between schedule and fire.
+        if (currentChatIdRef.current !== chatId) return;
         const latest = bottomVisibleIdRef.current;
         if (!latest) return;
         void setReadState(chatId, latest).then(() => onWriteRef.current?.(chatId, latest));
@@ -187,6 +219,14 @@ export function useReadTracker({
         clearTimeout(writeTimerRef.current);
         writeTimerRef.current = null;
       }
+      // Deliberately no cross-chat-boundary guard here. flushNow
+      // runs at unmount precisely so the OLD chat's latest state
+      // gets persisted to IDB — that's the legitimate purpose. The
+      // pollution-source race is already prevented in the recompute
+      // path above (which bails on stale chatId), so by the time
+      // flushNow runs, `bottomVisibleIdRef` still holds the OLD
+      // chat's pre-switch value and a write to setReadState(oldChat,
+      // value) is exactly what we want.
       const latest = bottomVisibleIdRef.current;
       if (!latest) return;
       void setReadState(chatId, latest).then(() => onWriteRef.current?.(chatId, latest));

@@ -634,7 +634,8 @@ export function ChatView({
   // needs to call `scrollToBottom` — and sendMut is declared
   // shortly after this point. The hook only depends on
   // `scrollContainerRef`, which is just a ref.
-  const { scrollToBottomImmediate, scrollToMessageImmediate, scrollToBottom } = useChatScroll(scrollContainerRef);
+  const { scrollToBottomImmediate, scrollToMessageImmediate, scrollToBottom, isAtBottom } =
+    useChatScroll(scrollContainerRef);
 
   // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
   // visible lines). Same hook as the new-chat composer for a consistent
@@ -1071,6 +1072,50 @@ export function ChatView({
   const onPillClick = useCallback(() => {
     scrollToBottom("smooth");
   }, [scrollToBottom]);
+
+  // Thought-stream auto-follow. When the agent is actively
+  // working, its session_events (assistant_text / tool_call /
+  // thinking) arrive incrementally via 5s polling and render as
+  // "streaming" rows in the timeline. M1 followed every itemCount
+  // change to the bottom, which kept the viewport tracking the
+  // stream. M2's once-per-visit gate eliminated that, leaving the
+  // stream piling up off-screen for at-bottom users.
+  //
+  // Restore the behavior, narrowly: when items grow due to
+  // *events only* (not new messages) AND the user is at the
+  // bottom, smooth-scroll to follow. Final-message arrivals are
+  // still NOT followed — they surface via the pill, per the user
+  // spec ("agent's chunky reply shouldn't yank scroll, but the
+  // streaming thought process should").
+  //
+  // Once issue 130 lands WebSocket push for session_events, this
+  // path will fire at sub-second granularity instead of every 5s,
+  // and the same follow logic stays correct.
+  //
+  // Caught in PR 286 manual sign-off rev 3 — the prior M2 silently
+  // broke this behavior, the user flagged it.
+  const prevCountsRef = useRef<{ chatId: string; itemCount: number; messagesCount: number }>({
+    chatId: "",
+    itemCount: 0,
+    messagesCount: 0,
+  });
+  useEffect(() => {
+    const prev = prevCountsRef.current;
+    if (prev.chatId !== chatId) {
+      // Chat switched — establish a fresh baseline, no follow.
+      prevCountsRef.current = { chatId, itemCount, messagesCount: mergedMessages.length };
+      return;
+    }
+    const itemsGrew = itemCount > prev.itemCount;
+    const messagesGrew = mergedMessages.length > prev.messagesCount;
+    if (itemsGrew && !messagesGrew && isAtBottom) {
+      // Growth is event-only (a streaming thought / tool call /
+      // assistant_text row appeared); the user is currently at
+      // the bottom, so pull them along with the stream.
+      scrollToBottom("smooth");
+    }
+    prevCountsRef.current = { chatId, itemCount, messagesCount: mergedMessages.length };
+  }, [chatId, itemCount, mergedMessages.length, isAtBottom, scrollToBottom]);
 
   const displayName = agentName(agentId);
 
