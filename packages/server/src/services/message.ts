@@ -134,6 +134,23 @@ async function sendMessageInner(
     const mergedMentions = [...new Set([...explicitMentions, ...resolved])];
     const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
 
+    // Direct-chat auto-mention for the unread-counter projection (chat-first
+    // workspace). In a 1-on-1 the recipient is implicit, so the conversation
+    // list should red-dot every DM message — without this, `extractMentions`
+    // returns [] on plain text and `applyAfterFanOut` short-circuits the
+    // counter bump, leaving DM rows at zero unread.
+    //
+    // This list is **projection-only** — it deliberately does NOT join
+    // `mergedMentions`. Folding it in would make the auto-mention also
+    // drive fan-out (`notify=true` inbox), which would reintroduce the
+    // agent↔agent courtesy loop migration 0029 fixed: A's "ok thanks"
+    // would wake B in `mention_only` mode again. Keep the two lists
+    // separate so unread badges are correct without unmuting agent wakes.
+    const projectionMentions =
+      chatType === "direct"
+        ? [...new Set([...mergedMentions, ...participants.filter((p) => p.agentId !== senderId).map((p) => p.agentId)])]
+        : mergedMentions;
+
     // 2b. Group-chat receiver enforcement (agent-only). Stop a misuse where an
     //     agent calls `send --chat <id>` against a group without naming who
     //     should pick it up — every mention_only participant would silently
@@ -158,6 +175,7 @@ async function sendMessageInner(
     //
     //     Driven by its own opt-in flag (separate from enforceGroupMention) so
     //     admin/web and adapter paths can validate without mutating content.
+    //
     let outboundContent = data.content;
     if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
       const present = new Set(scanMentionTokens(outboundContent));
@@ -337,7 +355,7 @@ async function sendMessageInner(
       chatId,
       messageId: msg.id,
       senderId,
-      mentionedAgentIds: mergedMentions,
+      mentionedAgentIds: projectionMentions,
       contentPreview: previewText,
       messageCreatedAt: msg.createdAt,
     });
