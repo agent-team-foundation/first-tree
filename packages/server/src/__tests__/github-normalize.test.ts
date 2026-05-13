@@ -35,7 +35,7 @@ describe("extractMentions", () => {
 });
 
 describe("normalizeGithubEvent — pull_request", () => {
-  it("opened: kind=opened with mentions + requested_reviewers + assignees + relatedRefs", () => {
+  it("opened: kind=opened with mentions + assignees + relatedRefs (reviewers deliberately excluded; see review_requested)", () => {
     const event = normalize("pull_request", {
       action: "opened",
       sender: senderUser,
@@ -59,8 +59,10 @@ describe("normalizeGithubEvent — pull_request", () => {
       url: "https://github.com/owner/repo/pull/10",
     });
     expect(event.kind).toBe("opened");
+    // Reviewer (carol) is NOT in involves — GitHub emits a separate
+    // review_requested event per reviewer at PR creation, which is the
+    // canonical notification path. Collecting it here too would double-fire.
     expect(event.involves).toEqual([
-      { githubLogin: "carol", reason: "review_requested" },
       { githubLogin: "dave", reason: "assigned" },
       { githubLogin: "bob", reason: "mentioned" },
     ]);
@@ -122,34 +124,96 @@ describe("normalizeGithubEvent — pull_request", () => {
     ).toBeNull();
   });
 
-  it("closed (merged=true) → kind=merged", () => {
+  it("ready_for_review → kind=review_requested with all current reviewers as involves", () => {
     const event = normalize("pull_request", {
-      action: "closed",
+      action: "ready_for_review",
       sender: senderUser,
       repository,
       pull_request: {
         number: 10,
-        title: "X",
+        title: "Refactor",
         html_url: "https://github.com/owner/repo/pull/10",
-        merged: true,
+        body: "",
+        requested_reviewers: [{ login: "Carol" }, { login: "Erin" }],
       },
     });
-    expect(event?.kind).toBe("merged");
+    expect(event?.kind).toBe("review_requested");
+    expect(event?.involves).toEqual([
+      { githubLogin: "carol", reason: "review_requested" },
+      { githubLogin: "erin", reason: "review_requested" },
+    ]);
   });
 
-  it("closed (merged=false) → kind=closed", () => {
+  it("ready_for_review with no reviewers → involves=[]", () => {
     const event = normalize("pull_request", {
-      action: "closed",
+      action: "ready_for_review",
       sender: senderUser,
       repository,
       pull_request: {
         number: 10,
-        title: "X",
+        title: "Refactor",
         html_url: "https://github.com/owner/repo/pull/10",
-        merged: false,
+        body: "",
       },
     });
-    expect(event?.kind).toBe("closed");
+    expect(event?.kind).toBe("review_requested");
+    expect(event?.involves).toEqual([]);
+  });
+
+  it("assigned → kind=edited with the newly assigned login (post-creation only)", () => {
+    const event = normalize("pull_request", {
+      action: "assigned",
+      sender: senderUser,
+      repository,
+      pull_request: { number: 10, title: "Refactor", html_url: "https://github.com/owner/repo/pull/10" },
+      assignee: { login: "Dave" },
+    });
+    expect(event?.kind).toBe("edited");
+    expect(event?.involves).toEqual([{ githubLogin: "dave", reason: "assigned" }]);
+  });
+
+  it("closed (merged=true) → null (PR state machine, not code review concern)", () => {
+    expect(
+      normalize("pull_request", {
+        action: "closed",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10, merged: true },
+      }),
+    ).toBeNull();
+  });
+
+  it("closed (merged=false) → null", () => {
+    expect(
+      normalize("pull_request", {
+        action: "closed",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10, merged: false },
+      }),
+    ).toBeNull();
+  });
+
+  it("reopened → null", () => {
+    expect(
+      normalize("pull_request", {
+        action: "reopened",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10 },
+      }),
+    ).toBeNull();
+  });
+
+  it("converted_to_draft → null", () => {
+    expect(
+      normalize("pull_request", {
+        action: "converted_to_draft",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10 },
+      }),
+    ).toBeNull();
   });
 
   it("labeled → null", () => {

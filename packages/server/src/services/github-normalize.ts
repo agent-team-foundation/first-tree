@@ -187,14 +187,16 @@ function buildPullRequestRule(
 
   switch (action) {
     case "opened": {
-      const reviewerLogins = readStringArray(pr.requested_reviewers);
+      // Reviewer involvement is deliberately NOT collected here: GitHub also
+      // fires a separate `review_requested` webhook per reviewer at PR
+      // creation time, and that path handles reviewer notification. Doing
+      // both produces duplicate cards for the same reviewer.
       const assigneeLogins = readStringArray(pr.assignees);
       const mentionLogins = extractMentions(body);
       return {
         entity,
         kind: "opened",
         involves: buildInvolves([
-          { logins: reviewerLogins, reason: "review_requested" },
           { logins: assigneeLogins, reason: "assigned" },
           { logins: mentionLogins, reason: "mentioned" },
         ]),
@@ -227,6 +229,40 @@ function buildPullRequestRule(
         relatedRefs: [],
       };
     }
+    case "ready_for_review": {
+      // Draft → ready transition: fan out review_requested to every reviewer
+      // currently on the PR. GitHub DOES emit `review_requested` when a
+      // reviewer is added while the PR is still a draft, so a reviewer added
+      // during the draft phase will receive both that card and this one —
+      // accepted as a small-scale Bug-1 variant. Rationale: the draft-phase
+      // card is typically treated as informational ("PR is being prepared"),
+      // and the ready_for_review fan-out is the canonical actionable signal
+      // that review can actually begin. The duplication is bounded to draft
+      // PRs and not worth introducing per-(reviewer, PR) dedupe state to
+      // eliminate.
+      const reviewerLogins = readStringArray(pr.requested_reviewers);
+      return {
+        entity,
+        kind: "review_requested",
+        involves: buildInvolves([{ logins: reviewerLogins, reason: "review_requested" }]),
+        surface,
+        relatedRefs: [],
+      };
+    }
+    case "assigned": {
+      // Assignee added after PR creation. The `opened` payload already
+      // carries any initial assignees, so this only fires for later changes.
+      const assignee = isRecord(payload.assignee) ? payload.assignee : null;
+      const assigneeLogin = readString(assignee?.login);
+      const logins = assigneeLogin ? [assigneeLogin.toLowerCase()] : [];
+      return {
+        entity,
+        kind: "edited",
+        involves: buildInvolves([{ logins, reason: "assigned" }]),
+        surface,
+        relatedRefs: [],
+      };
+    }
     case "synchronize":
       return {
         entity,
@@ -235,26 +271,15 @@ function buildPullRequestRule(
         surface,
         relatedRefs: [],
       };
-    case "closed": {
-      const merged = pr.merged === true;
-      return {
-        entity,
-        kind: merged ? "merged" : "closed",
-        involves: [],
-        surface,
-        relatedRefs: [],
-      };
-    }
-    case "reopened":
-      return {
-        entity,
-        kind: "reopened",
-        involves: [],
-        surface,
-        relatedRefs: [],
-      };
     default:
-      // labeled / unlabeled / auto_merge_* / review_request_removed / etc.
+      // Deliberately dropped (return null):
+      //   - closed / reopened / converted_to_draft → PR state-machine
+      //     transitions unrelated to code review. They would only fan out
+      //     via the `subscribed` path, waking agents in already-bound chats
+      //     with no actionable content.
+      //   - labeled / unlabeled / milestoned / locked / auto_merge_* /
+      //     review_request_removed / unassigned / enqueued / dequeued →
+      //     metadata / merge-queue noise.
       return null;
   }
 }
@@ -380,6 +405,12 @@ function buildIssuesRule(action: string | null, payload: Record<string, unknown>
         relatedRefs: [],
       };
     }
+    // Unlike `buildPullRequestRule`, issue `closed` and `reopened` are kept
+    // — closing an issue typically signals the underlying problem is resolved
+    // (or re-surfaces), which is actionable context for any subscribed
+    // workflow agent. PR `closed`/`reopened`/`merged` are dropped because
+    // they're pure state-machine transitions on code-review artifacts and
+    // generate noise for already-subscribed chats. Asymmetry is intentional.
     case "closed":
       return {
         entity,
