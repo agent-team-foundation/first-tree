@@ -4,6 +4,13 @@ import { useMemo } from "react";
 import { cn } from "../../lib/utils.js";
 import { Markdown } from "../ui/markdown.js";
 
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A") {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
 /**
  * Single option inside a `<QuestionMessage />` — renders the SDK's
  * `{ label, description, preview }` shape as a clickable card.
