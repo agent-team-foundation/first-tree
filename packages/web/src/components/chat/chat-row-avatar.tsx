@@ -39,40 +39,36 @@ function initial(s: string): string {
 }
 
 /**
- * Per-agent fill colors. Eight perceptually-distinct hues at the same
- * OkLCH lightness/chroma so every avatar reads with the same visual
- * weight. White-ish text (handled by the rendering site via
- * `var(--bg-raised)` in light mode) carries enough contrast against
- * every entry; same palette works light + dark because OkLCH stays
- * perceptually stable across themes.
+ * Per-agent fill colors. References to the `--avatar-hue-0..7` tokens
+ * defined in `index.css`; this file holds the *selection* logic, not
+ * the colors themselves. Add or restyle hues in index.css.
+ *
+ * Initials are painted on top in `--fg-on-vivid` (a near-white token,
+ * also in index.css) so contrast holds in both themes without relying
+ * on `--bg-raised`, which inverts under `.dark`.
  */
-const AVATAR_HUES: ReadonlyArray<string> = [
-  "oklch(0.66 0.16 150)", // green (kept first so the default-fallback hash collision still looks neutral)
-  "oklch(0.62 0.17 250)", // blue
-  "oklch(0.6 0.18 295)", // purple
-  "oklch(0.65 0.2 0)", // pink
-  "oklch(0.68 0.16 50)", // orange
-  "oklch(0.65 0.13 200)", // teal
-  "oklch(0.72 0.15 90)", // amber
-  "oklch(0.55 0.17 270)", // indigo
-];
+const AVATAR_HUE_COUNT = 8;
+
+const FALLBACK_HUE = "var(--avatar-hue-0)";
 
 /**
  * Hash a stable seed (usually an agent's UUID; falls back to display
- * name if the UUID isn't around) into a fixed entry from `AVATAR_HUES`.
- * Same agent → same hue across direct chats, group composites, and
- * page reloads. Cheap djb2 variant; no allocations.
+ * name if the UUID isn't around) into a fixed entry from the
+ * `--avatar-hue-*` palette. Same agent → same hue across direct chats,
+ * group composites, and page reloads. Cheap djb2 variant; no
+ * allocations.
  *
- * Exported for unit testing the deterministic-mapping contract.
+ * Empty seed lands on `--avatar-hue-0` deterministically. Exported
+ * for unit testing the deterministic-mapping contract.
  */
 export function pickAvatarHue(seed: string): string {
-  if (seed.length === 0) return AVATAR_HUES[0] ?? "oklch(0.66 0.16 150)";
+  if (seed.length === 0) return FALLBACK_HUE;
   let hash = 5381;
   for (let i = 0; i < seed.length; i++) {
     hash = (hash * 33) ^ seed.charCodeAt(i);
   }
-  const idx = Math.abs(hash) % AVATAR_HUES.length;
-  return AVATAR_HUES[idx] ?? AVATAR_HUES[0] ?? "oklch(0.66 0.16 150)";
+  const idx = Math.abs(hash) % AVATAR_HUE_COUNT;
+  return `var(--avatar-hue-${idx})`;
 }
 
 /**
@@ -181,7 +177,7 @@ function SingleAvatar({ size, name, hueSeed }: { size: number; name: string; hue
         height: size,
         borderRadius: "50%",
         background: pickAvatarHue(hueSeed),
-        color: "oklch(0.985 0 0)",
+        color: "var(--fg-on-vivid)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -286,7 +282,7 @@ function Seg({
         alignItems: "center",
         justifyContent: "center",
         background: pickAvatarHue(hueSeed),
-        color: "oklch(0.985 0 0)",
+        color: "var(--fg-on-vivid)",
         fontSize,
         fontWeight: 700,
         lineHeight: 1,
@@ -360,7 +356,7 @@ function UnreadBadge({ count }: { count: number }) {
         padding: "0 var(--sp-1)",
         borderRadius: "var(--sp-2)",
         background: "var(--state-error)",
-        color: "oklch(0.985 0 0)",
+        color: "var(--fg-on-vivid)",
         fontSize: "var(--text-caption)",
         fontWeight: 700,
         lineHeight: "var(--sp-4)",

@@ -1,4 +1,5 @@
 import type { MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import { useEffect } from "react";
 import { ChatRowAvatar } from "../components/chat/chat-row-avatar.js";
 
 /**
@@ -171,9 +172,15 @@ export function ChatRowAvatarPreviewPage() {
   const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const freeze = params.get("freeze") === "1";
   const themeOverride = params.get("theme");
-  if (typeof document !== "undefined" && (themeOverride === "light" || themeOverride === "dark")) {
-    document.documentElement.classList.toggle("dark", themeOverride === "dark");
-  }
+  useEffect(() => {
+    // Push the `?theme=` override into `documentElement` so the page
+    // matches the param even when `localStorage.theme` says otherwise.
+    // Kept in an effect (not in render) so Strict Mode double-invokes
+    // and SSR don't trip the side effect.
+    if (themeOverride === "light" || themeOverride === "dark") {
+      document.documentElement.classList.toggle("dark", themeOverride === "dark");
+    }
+  }, [themeOverride]);
   return (
     <div
       className={freeze ? "chat-row-avatar-preview--freeze" : undefined}
