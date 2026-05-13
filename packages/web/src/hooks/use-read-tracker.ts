@@ -1,218 +1,195 @@
 /**
- * Watches the chat message DOM for which messages have actually been
- * seen by the user, then persists the newest-seen message id per
- * (chatId) into IndexedDB.
+ * Continuously tracks which message is at (or nearest to) the bottom
+ * edge of the chat viewport, then persists that id per-chat into
+ * IndexedDB. On chat open, the UI uses this stored value to scroll
+ * the same message back to the viewport bottom — so the user
+ * resumes visually where they left off, not "at the bottom of all
+ * current content" and not "at the highest message they've ever
+ * seen".
  *
- * Two definitions of "seen":
- *  - The DOM element with `data-message-id={id}` enters the viewport
- *    (via IntersectionObserver, threshold high enough to mean "the
- *    line is visible on screen").
- *  - That state lasts at least `visibleHoldMs` milliseconds — so
- *    fast scrolling past does NOT count, but pausing on a line does.
+ * The tracking signal is the actual scroll position, not visibility
+ * dwell time. Two reasons:
+ *  - It matches what the user means by "where I was reading"
+ *    (their viewport, not what they read).
+ *  - It is monotonically tied to their scroll actions — no
+ *    surprises from "I touched the bottom for half a second so the
+ *    marker jumped to the bottom forever".
  *
- * The persisted value is monotonic with respect to message creation
- * time (chronological order, ascending by createdAt). We never roll
- * back to an older id even if the user scrolls upward — the marker
- * means "you have seen everything up to this point", not "you are
- * currently looking at this point".
+ * Writes fire on three triggers:
+ *  - debounced scroll-settle (default 600ms after the last scroll
+ *    event), so a refresh mid-session preserves the current view
+ *  - `visibilitychange = "hidden"` so closing the tab does not lose
+ *    the latest snapshot
+ *  - component unmount (chat switch) for the same reason
  *
- * Writes are debounced and also flushed when the chat unmounts or the
- * tab becomes hidden, so that closing the tab does not lose the
- * latest seen marker.
- *
- * Origin: proposal `hub-chat-scroll-and-cache.20260509.md` (M2) — see
- * issue first-tree-all 120.
+ * Origin: proposal `hub-chat-scroll-and-cache.20260509.md` (M2),
+ * revised during PR 286 manual sign-off — see issue
+ * first-tree-all 120.
  */
 
 import { type RefObject, useEffect, useRef } from "react";
-import { setLastRead } from "../api/read-state-store.js";
+import { setReadState } from "../api/read-state-store.js";
 
 type Message = { id: string; createdAt: string };
 
 type UseReadTrackerOptions = {
   /**
-   * Container the message DOM lives inside. The IntersectionObserver
-   * uses this as its root so visibility is computed relative to the
-   * scrolling chat panel, not the browser viewport.
+   * Scrollable container the message DOM lives inside. Used both to
+   * read its scroll position and to query for the messages currently
+   * laid out within it.
    */
   containerRef: RefObject<HTMLElement | null>;
-  /** The current ordered list of messages (ascending by createdAt). */
+  /**
+   * The current ordered list of messages (ascending by `createdAt`).
+   * Used to map back from a DOM-resolved id to its index so we can
+   * also publish the live "bottom-visible index" to consumers via
+   * `onBottomVisibleChange` for pill-count calculations.
+   */
   messages: readonly Message[];
-  /** Chat the messages belong to. Read-state writes are keyed by this. */
+  /** Chat the messages belong to. IDB writes are keyed by this. */
   chatId: string;
   /**
-   * Fires immediately after every successful IDB write (both the
-   * debounced and the flush-on-hide paths). Callers use this to keep
-   * an in-memory cache (e.g. React Query) in sync with the IDB row
-   * — otherwise switching away and back within the same session
-   * would read the stale value.
-   *
-   * Caught in PR 286 review (M2 round): Bug 2 — same-session
-   * `A → B → A` didn't pick up new read-tracker writes because
-   * `useQuery` had `staleTime: Infinity` and was never invalidated.
+   * Fires after every successful IDB write — both the debounced
+   * scroll-settle path and the flush-on-hide / unmount path. The
+   * chat-view uses this to keep React Query's in-memory cache for
+   * `["chat-read-state", chatId]` in sync with what was just
+   * persisted (otherwise a same-session A → B → A would read the
+   * stale value).
    */
-  onWrite?: (chatId: string, lastReadMessageId: string) => void;
-  /** Hold time before a visible message counts as "seen". Default 500ms. */
-  visibleHoldMs?: number;
-  /** Debounce for IndexedDB writes during continuous scrolling. Default 1000ms. */
+  onWrite?: (chatId: string, bottomVisibleMessageId: string) => void;
+  /**
+   * Fires every time the live bottom-visible message id changes
+   * (during scrolling, or as poll-driven new messages shift the
+   * layout). The pill uses this to recompute its count without
+   * round-tripping through IDB.
+   *
+   * Distinct from `onWrite`: this fires on every transition, not
+   * just on persisted snapshots.
+   */
+  onBottomVisibleChange?: (bottomVisibleMessageId: string | null) => void;
+  /** Settle time before a scroll triggers an IDB write. Default 600ms. */
   writeDebounceMs?: number;
-  /** Visibility ratio threshold for "in view". Default 0.6 (60% visible). */
-  intersectionThreshold?: number;
 };
+
+/**
+ * Looks at the scroll container and returns the id of the message
+ * whose top edge is at or above the container's viewport-bottom, but
+ * whose bottom edge is below it (i.e. the message that visually
+ * "ends" the read region). Falls back to the closest above or below
+ * if no element straddles the boundary exactly. Returns `null` when
+ * the container has no measurable messages.
+ */
+function findBottomVisibleMessageId(container: HTMLElement): string | null {
+  const viewportBottom = container.scrollTop + container.clientHeight;
+  const nodes = container.querySelectorAll<HTMLElement>("[data-message-id]");
+  if (nodes.length === 0) return null;
+  // Walk from the bottom of the list upward so the first match is
+  // the bottom-most visible. Most chats render last-message at the
+  // end, so this is short-circuit-friendly.
+  let lastVisible: HTMLElement | null = null;
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const node = nodes[i];
+    if (!node) continue;
+    const top = node.offsetTop;
+    if (top <= viewportBottom) {
+      lastVisible = node;
+      break;
+    }
+  }
+  // Fallback: nothing visible above the bottom edge (e.g., container
+  // hasn't laid out yet) — return the first DOM message.
+  if (!lastVisible) lastVisible = nodes[0] ?? null;
+  return lastVisible?.dataset.messageId ?? null;
+}
 
 export function useReadTracker({
   containerRef,
   messages,
   chatId,
   onWrite,
-  visibleHoldMs = 500,
-  writeDebounceMs = 1000,
-  intersectionThreshold = 0.6,
+  onBottomVisibleChange,
+  writeDebounceMs = 600,
 }: UseReadTrackerOptions): void {
-  // Keep `onWrite` reachable from inside the effects below without
-  // putting the caller-supplied function in their dep arrays —
-  // otherwise the IntersectionObserver / visibilitychange listener
-  // would rebuild on every render that produces a new callback
-  // identity.
+  // Latest computed bottom-visible id. Kept in a ref so write/flush
+  // paths can read it without depending on React state churn.
+  const bottomVisibleIdRef = useRef<string | null>(null);
+  // Debounced IDB write timer.
+  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep latest callbacks reachable from inside effects below
+  // without making the effects re-run on every render.
   const onWriteRef = useRef(onWrite);
+  const onBottomVisibleChangeRef = useRef(onBottomVisibleChange);
   useEffect(() => {
     onWriteRef.current = onWrite;
   }, [onWrite]);
-  // The newest message id (by chronological position) we have ever
-  // observed as "seen" in this chat session. Monotonic — only moves
-  // forward through the messages list, never backward.
-  const seenSoFarRef = useRef<string | null>(null);
-  // Index in `messages` for the current seenSoFarRef, so monotonic
-  // comparisons are O(1) instead of O(n).
-  const seenIndexRef = useRef<number>(-1);
-  // Set of message ids currently sitting in viewport. They become
-  // "seen" only after `visibleHoldMs`.
-  const pendingHoldTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  // Debounce timer for the IDB write.
-  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Rebuild the chronological index every time `messages` identity
-  // changes. The order is treated as authoritative for monotonicity.
-  // Storing as a Map keeps the hot-path lookup O(1).
-  const indexByIdRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    const m = new Map<string, number>();
-    for (let i = 0; i < messages.length; i++) {
-      const message = messages[i];
-      if (message) m.set(message.id, i);
-    }
-    indexByIdRef.current = m;
-  }, [messages]);
+    onBottomVisibleChangeRef.current = onBottomVisibleChange;
+  }, [onBottomVisibleChange]);
 
-  // Reset state on chat switch — otherwise we'd carry over the previous
-  // chat's seen-pointer when the messages list flips. Note: we DO NOT
-  // try to load the previous lastRead from IDB into seenSoFarRef here;
-  // tracking is purely forward-looking from the moment the user opens
-  // this chat. Existing lastRead is read elsewhere (chat-view) to drive
-  // the initial jump-to-position, not to constrain tracking.
+  // Reset on chat switch — the previous chat's bottomVisibleId is
+  // not meaningful for the new chat.
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; the body only touches refs.
   useEffect(() => {
-    seenSoFarRef.current = null;
-    seenIndexRef.current = -1;
-    for (const t of pendingHoldTimersRef.current.values()) clearTimeout(t);
-    pendingHoldTimersRef.current.clear();
+    bottomVisibleIdRef.current = null;
+    if (writeTimerRef.current) {
+      clearTimeout(writeTimerRef.current);
+      writeTimerRef.current = null;
+    }
   }, [chatId]);
 
-  // Wire up the IntersectionObserver + hold-timer + debounced write.
-  // Re-runs when chatId changes or when the messages list identity
-  // changes (so the observer rebuilds against the new DOM nodes).
-  //
-  // All three helpers (considerSeen / scheduleWrite / flushNow) are
-  // declared inside this effect rather than at hook scope so their
-  // identity is stable across renders without needing useCallback
-  // gymnastics — Biome's exhaustive-deps lint is happy because the
-  // effect closes over them directly, and they only depend on refs.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `messages` keeps the observer in sync with newly-rendered rows; data flows in through indexByIdRef (updated in the effect above).
+  // Continuous scroll + content-mutation tracking. Reads the
+  // bottom-visible id, fires the live callback, and schedules a
+  // debounced IDB write. Re-runs when `messages` identity changes
+  // so newly-rendered rows show up in the DOM-query.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `messages` keeps the listener in sync with newly-rendered rows; data is read live via DOM, not from the closure.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    if (typeof IntersectionObserver === "undefined") return;
 
-    // Promote a message id to seen-state if it advances the monotonic
-    // counter; otherwise no-op. Returns true if the counter moved.
-    const considerSeen = (id: string): boolean => {
-      const idx = indexByIdRef.current.get(id);
-      if (idx === undefined) return false;
-      if (idx <= seenIndexRef.current) return false;
-      seenIndexRef.current = idx;
-      seenSoFarRef.current = id;
-      return true;
-    };
+    const recompute = () => {
+      const id = findBottomVisibleMessageId(container);
+      if (id === bottomVisibleIdRef.current) return;
+      bottomVisibleIdRef.current = id;
+      onBottomVisibleChangeRef.current?.(id);
 
-    // Schedule / cancel the debounced IDB write. At most one write in
-    // flight at a time per chatId. After the IDB write resolves, fire
-    // the optional `onWrite` callback so the chat-view can keep its
-    // React Query cache (`["chat-read-state", chatId]`) in sync with
-    // what was just persisted — otherwise an in-session re-visit
-    // would read the stale value from React Query's memory.
-    const scheduleWrite = () => {
+      // Schedule a debounced IDB write. The write captures whatever
+      // bottomVisibleIdRef holds at the moment the timer fires, not
+      // at the moment of scheduling — so back-to-back scroll events
+      // collapse into one write.
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
       writeTimerRef.current = setTimeout(() => {
         writeTimerRef.current = null;
-        const id = seenSoFarRef.current;
-        if (!id) return;
-        void setLastRead(chatId, id).then(() => onWriteRef.current?.(chatId, id));
+        const latest = bottomVisibleIdRef.current;
+        if (!latest) return;
+        void setReadState(chatId, latest).then(() => onWriteRef.current?.(chatId, latest));
       }, writeDebounceMs);
     };
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const id = (entry.target as HTMLElement).dataset.messageId;
-          if (!id) continue;
-
-          if (entry.isIntersecting) {
-            // Already pending? Leave the existing timer alone.
-            if (pendingHoldTimersRef.current.has(id)) continue;
-            const t = setTimeout(() => {
-              pendingHoldTimersRef.current.delete(id);
-              const moved = considerSeen(id);
-              if (moved) scheduleWrite();
-            }, visibleHoldMs);
-            pendingHoldTimersRef.current.set(id, t);
-          } else {
-            // Left viewport before the hold elapsed — cancel the timer
-            // so a quick scroll-past does not count as seen.
-            const t = pendingHoldTimersRef.current.get(id);
-            if (t) {
-              clearTimeout(t);
-              pendingHoldTimersRef.current.delete(id);
-            }
-          }
-        }
-      },
-      { root: container, threshold: intersectionThreshold },
-    );
-
-    const nodes = container.querySelectorAll<HTMLElement>("[data-message-id]");
-    for (const n of nodes) observer.observe(n);
+    container.addEventListener("scroll", recompute, { passive: true });
+    const mut = new MutationObserver(recompute);
+    mut.observe(container, { childList: true, subtree: true });
+    // Initial pass so consumers receive the starting value as soon
+    // as messages are in the DOM.
+    recompute();
 
     return () => {
-      observer.disconnect();
-      for (const t of pendingHoldTimersRef.current.values()) clearTimeout(t);
-      pendingHoldTimersRef.current.clear();
+      container.removeEventListener("scroll", recompute);
+      mut.disconnect();
     };
-    // `messages` in deps so newly-rendered rows get observed when the
-    // list grows (poll-driven appends).
-  }, [containerRef, chatId, messages, visibleHoldMs, intersectionThreshold, writeDebounceMs]);
+  }, [containerRef, chatId, messages, writeDebounceMs]);
 
-  // Flush on tab visibility-hide and on unmount so closing the tab
-  // does not drop the latest marker. Helper inlined for the same
-  // reason as above — stable closure, no useCallback noise.
+  // Flush on tab hide and on unmount so closing the tab / switching
+  // chats does not drop the latest snapshot.
   useEffect(() => {
     const flushNow = () => {
       if (writeTimerRef.current) {
         clearTimeout(writeTimerRef.current);
         writeTimerRef.current = null;
       }
-      const id = seenSoFarRef.current;
-      if (!id) return;
-      void setLastRead(chatId, id).then(() => onWriteRef.current?.(chatId, id));
+      const latest = bottomVisibleIdRef.current;
+      if (!latest) return;
+      void setReadState(chatId, latest).then(() => onWriteRef.current?.(chatId, latest));
     };
     const onVis = () => {
       if (document.visibilityState === "hidden") flushNow();

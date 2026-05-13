@@ -22,7 +22,7 @@ import {
 import { getImage, putImage } from "../../../api/image-store.js";
 import { addMeChatParticipants } from "../../../api/me-chats.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
-import { getLastRead, type ReadState } from "../../../api/read-state-store.js";
+import { getReadState, type ReadState } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -48,6 +48,7 @@ import {
   MentionLabel,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
+import { NewMessagesPill } from "../../../components/new-messages-pill.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
@@ -628,6 +629,13 @@ export function ChatView({
   // IntersectionObserver root).
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // useChatScroll is declared up here (rather than alongside the M2
+  // jump-to-position logic below) because `sendMut`'s onSuccess
+  // needs to call `scrollToBottom` — and sendMut is declared
+  // shortly after this point. The hook only depends on
+  // `scrollContainerRef`, which is just a ref.
+  const { scrollToBottomImmediate, scrollToMessageImmediate, scrollToBottom } = useChatScroll(scrollContainerRef);
+
   // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
   // visible lines). Same hook as the new-chat composer for a consistent
   // typing experience across both entry points.
@@ -719,6 +727,13 @@ export function ChatView({
       // wait up to 10s for the polling refetch. See M plan Step 3 in
       // docs/session-creation-on-first-message.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+      // When the user sends a message, scroll all the way to the
+      // bottom so they see their own send. ResizeObserver-debounced
+      // (non-immediate) variant so the scroll lands after the
+      // newly-arrived message has been rendered. Without this,
+      // M2's once-per-chat-visit gate would suppress any scroll
+      // and the user's just-sent message would arrive off-screen.
+      scrollToBottom("smooth");
     },
   });
 
@@ -805,6 +820,10 @@ export function ChatView({
         // up in the sidebar after we invalidate, otherwise the file-send path
         // for the first message in a new chat waits for 10s polling.
         queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+        // Same scroll-on-send as sendMut.onSuccess — the file-send
+        // path goes through a different code branch so we have to
+        // repeat the call here.
+        scrollToBottom("smooth");
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Failed to send image");
       } finally {
@@ -921,120 +940,137 @@ export function ChatView({
 
   const itemCount = items.length;
 
-  // M2: read-state — synchronous IndexedDB lookup of where the user
-  // last left off in this chat. Synonymous with React Query's cache
-  // after first hydration, so a chat re-open does not block on IDB.
+  // M2: scroll-position snapshot — synchronous IndexedDB lookup of
+  // where the user's viewport bottom was the last time they left
+  // this chat. React Query's cache holds it after first read so a
+  // chat re-open does not block on IDB.
   const { data: readState } = useQuery({
     queryKey: ["chat-read-state", chatId],
-    queryFn: () => getLastRead(chatId),
+    queryFn: () => getReadState(chatId),
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   });
-  const lastReadMessageId = readState?.lastReadMessageId ?? null;
+  const storedBottomVisibleId = readState?.bottomVisibleMessageId ?? null;
 
-  // Scroll helpers — two pairs:
-  //   *Immediate variants fire synchronously and are right for the
-  //     initial chat-open landing, called from a `useLayoutEffect`
-  //     below so the first paint already shows the correct position
-  //     (no top-then-bottom flash).
-  //   *Non-immediate variants debounce via ResizeObserver and are
-  //     reserved for "follow new message" scenarios (M3) where async
-  //     content (images, markdown) might still be rendering.
-  const { scrollToBottomImmediate, scrollToMessageImmediate } = useChatScroll(scrollContainerRef);
-
-  // Resolve the last-read marker against the actual rendered set so we
-  // can decide (a) where to jump to on chat open and (b) where to put
-  // the unread divider. If the stored id is gone (deleted), we fall
-  // back to the next-newest existing message at or before it, so the
-  // divider still lands somewhere reasonable instead of disappearing.
-  const lastReadResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
-    if (!lastReadMessageId || mergedMessages.length === 0) return null;
-    const exact = mergedMessages.findIndex((m) => m.id === lastReadMessageId);
+  // Resolve the stored bottom-visible id against the rendered set
+  // so we can decide (a) where to scroll on chat open and (b) how
+  // many messages sit below the anchor (the "unread" count). If the
+  // stored id is gone (deleted message, or just not in the current
+  // window), we fall back to first-time-open semantics.
+  const bottomVisibleResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
+    if (!storedBottomVisibleId || mergedMessages.length === 0) return null;
+    const exact = mergedMessages.findIndex((m) => m.id === storedBottomVisibleId);
     if (exact >= 0) {
       const exactMsg = mergedMessages[exact];
       if (exactMsg) return { anchorId: exactMsg.id, index: exact };
     }
-    // Best-effort fallback: pick the newest message whose createdAt is
-    // at or before the stored marker. We don't have a stored timestamp
-    // to compare against directly, so we use the position in the
-    // ordered list and walk backward. If no such anchor exists (every
-    // message in the list is newer than the deleted marker), return
-    // null and the open behaves like first-time.
     return null;
-  }, [lastReadMessageId, mergedMessages]);
+  }, [storedBottomVisibleId, mergedMessages]);
 
-  // Unread count = messages strictly newer than the resolved anchor.
-  // Only counts message rows, not session_events, because the
-  // "unread" framing is about chat content not work-trace events.
-  const unreadCount = useMemo<number>(() => {
-    if (!lastReadResolution) return 0;
-    return mergedMessages.length - 1 - lastReadResolution.index;
-  }, [lastReadResolution, mergedMessages]);
+  // Unread divider count: messages strictly newer than the resolved
+  // anchor. This is the count of messages that exist below the
+  // scroll-position snapshot — agent replies that arrived while
+  // away, or content the user previously scrolled past without
+  // reaching.
+  const dividerUnreadCount = useMemo<number>(() => {
+    if (!bottomVisibleResolution) return 0;
+    return mergedMessages.length - 1 - bottomVisibleResolution.index;
+  }, [bottomVisibleResolution, mergedMessages]);
 
-  // Decide where to land on chat open. Fires exactly once per
-  // chat-id visit, the first moment the timeline has items to scroll
+  // Live bottom-visible id during the current session. Driven by
+  // useReadTracker's `onBottomVisibleChange` callback. Distinct
+  // from `storedBottomVisibleId` (which is the IDB snapshot used
+  // for chat-open positioning) — `liveBottomVisibleId` reflects
+  // where the viewport bottom currently is, used by the pill to
+  // compute its count without round-tripping through IDB.
+  const [liveBottomVisibleId, setLiveBottomVisibleId] = useState<string | null>(null);
+
+  // Pill count: messages strictly newer than the live bottom-visible
+  // id. Hides (count = 0) whenever the user is at-bottom (the bottom-
+  // visible id equals the latest message id). Recomputes whenever
+  // mergedMessages or the live bottom-visible id change.
+  const pillCount = useMemo<number>(() => {
+    if (!liveBottomVisibleId || mergedMessages.length === 0) return 0;
+    const idx = mergedMessages.findIndex((m) => m.id === liveBottomVisibleId);
+    if (idx < 0) return 0;
+    return mergedMessages.length - 1 - idx;
+  }, [liveBottomVisibleId, mergedMessages]);
+
+  // Decide where to land on chat open. Fires exactly once per chat-
+  // id visit, the first moment the timeline has items to scroll
   // within — so a hard-reload that loads chatId before queries
   // hydrate still lands correctly when items arrive.
   //
-  // Gated by `landedForChatRef`, which records the chatId we already
-  // fired for. When the user navigates A → B → A, the ref's value
-  // differs from the current chatId on each visit, so we fire again.
-  // When the same chatId is in scope and items count grows (poll-
-  // driven append), the ref matches and we bail — M3 will handle
-  // "follow new message if at bottom".
+  // Gated by `landedForChatRef`. Subsequent itemCount changes
+  // (poll-driven append) are bailed; new-message handling falls to
+  // the pill instead.
   //
   // useLayoutEffect (not useEffect): fires synchronously after DOM
   // commit but before paint, so the first frame the user sees is
-  // already at the right scroll position. Pairs with the *Immediate
-  // scroll variants below — no ResizeObserver debounce — so the
-  // scrollTop is set in the same paint as the message DOM. Without
-  // this, the user saw the top of the timeline for ~200ms before the
-  // ResizeObserver-stabilised scroll fired, then a visible jump to
-  // the bottom.
+  // already at the right scroll position.
   //
   // Earlier rounds:
   //  - PR 286 review M1 round → answersByCorrelationId source fix.
   //  - PR 286 review M2 round → Bug 1 (hard reload landed at top
   //    because deps were `[chatId]` only and bailed on itemCount=0).
-  //  - liuchao-001 manual sign-off → top-then-bottom flash on any
-  //    chat-switch; fixed by moving from useEffect to useLayoutEffect
-  //    + the *Immediate scroll variants.
+  //  - liuchao-001 manual sign-off → top-then-bottom flash (fixed
+  //    by switching to useLayoutEffect + *Immediate variants).
+  //  - liuchao-001 manual sign-off → model swap from monotonic
+  //    "last-read marker" to "bottom-visible-on-leave snapshot",
+  //    so coming back to a chat lands you where you were visually,
+  //    not at "the bottom of all content I've ever seen here".
   const landedForChatRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (itemCount === 0) return;
     if (landedForChatRef.current === chatId) return;
     landedForChatRef.current = chatId;
-    if (lastReadResolution && unreadCount > 0) {
-      // Land the last-read message at the bottom of the read zone so
-      // the unread divider + new content are scrollable below.
-      scrollToMessageImmediate(lastReadResolution.anchorId, "end", "auto");
+    if (bottomVisibleResolution) {
+      // Land the stored anchor at the viewport bottom. Any messages
+      // newer than the anchor sit below the fold; the pill will
+      // surface them.
+      scrollToMessageImmediate(bottomVisibleResolution.anchorId, "end", "auto");
     } else {
-      // No prior reads, or everything is already read: preserve the
-      // M1-era "open scrolls to bottom" behavior.
+      // No prior snapshot (first-time visit, or the stored anchor
+      // is gone): preserve the M1-era "open scrolls to bottom"
+      // behavior.
       scrollToBottomImmediate("auto");
     }
-  }, [chatId, itemCount, lastReadResolution, unreadCount, scrollToMessageImmediate, scrollToBottomImmediate]);
+  }, [chatId, itemCount, bottomVisibleResolution, scrollToMessageImmediate, scrollToBottomImmediate]);
 
-  // Watches each message DOM via IntersectionObserver and persists the
-  // newest-seen id (monotonic). Flushes on unmount + tab visibility-loss.
+  // Watches the scroll position and persists the bottom-visible
+  // message id per chat. Distinct from the prior monotonic-marker
+  // model — the snapshot reflects where the viewport bottom WAS,
+  // not what the user has read.
   //
   // `onWrite` mirrors every IDB write into React Query's cache for
   // the `["chat-read-state", chatId]` key, so a same-session re-visit
-  // (A → B → A) picks up the latest marker even though the query has
-  // `staleTime: Infinity` and would otherwise return its first-mount
-  // value. Caught in PR 286 review (M2 round): Bug 2.
+  // (A → B → A) picks up the latest snapshot even though the query
+  // has `staleTime: Infinity`.
+  //
+  // `onBottomVisibleChange` publishes the live value so the pill
+  // can recompute its count on every scroll event without an IDB
+  // round-trip.
   useReadTracker({
     containerRef: scrollContainerRef,
     messages: mergedMessages,
     chatId,
-    onWrite: (cid, lastReadMessageId) => {
+    onWrite: (cid, bottomVisibleMessageId) => {
       queryClient.setQueryData<ReadState>(["chat-read-state", cid], {
         chatId: cid,
-        lastReadMessageId,
-        lastReadAt: Date.now(),
+        bottomVisibleMessageId,
+        updatedAt: Date.now(),
       });
     },
+    onBottomVisibleChange: setLiveBottomVisibleId,
   });
+
+  // Pill click: jump to the bottom. As the scroll lands, the
+  // tracker's scroll listener picks up the new bottom-visible id
+  // (the latest message), pillCount zeroes out, and the pill
+  // unmounts. No need to manually clear state.
+  const onPillClick = useCallback(() => {
+    scrollToBottom("smooth");
+  }, [scrollToBottom]);
 
   const displayName = agentName(agentId);
 
@@ -1435,32 +1471,38 @@ export function ChatView({
               // server window.
               const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
               // Insert the unread divider immediately after the
-              // resolved last-read anchor (M2). Skipped when there's
-              // nothing unread, or when the user has never been to
-              // this chat.
+              // resolved bottom-visible anchor (M2). Skipped when
+              // there's nothing newer than the anchor, or when the
+              // user has never been to this chat.
               const isReadAnchor =
                 item.kind === "message" &&
-                lastReadResolution !== null &&
-                unreadCount > 0 &&
-                item.data.id === lastReadResolution.anchorId;
+                bottomVisibleResolution !== null &&
+                dividerUnreadCount > 0 &&
+                item.data.id === bottomVisibleResolution.anchorId;
               if (isGapAnchor && isReadAnchor) {
                 return [
                   node,
                   <HistoryGapBanner key={`gap-after-${item.data.id}`} />,
-                  <UnreadDivider key={`unread-after-${item.data.id}`} count={unreadCount} />,
+                  <UnreadDivider key={`unread-after-${item.data.id}`} count={dividerUnreadCount} />,
                 ];
               }
               if (isGapAnchor) {
                 return [node, <HistoryGapBanner key={`gap-after-${item.data.id}`} />];
               }
               if (isReadAnchor) {
-                return [node, <UnreadDivider key={`unread-after-${item.data.id}`} count={unreadCount} />];
+                return [node, <UnreadDivider key={`unread-after-${item.data.id}`} count={dividerUnreadCount} />];
               }
               return node;
             })}
           </div>
           <div ref={messagesEndRef} />
         </div>
+        {/* Floating "↓ N new messages" pill — surfaces whenever there
+            are messages strictly newer than the bottom-visible
+            message id. Hides itself when the user is at-bottom
+            (pillCount = 0). Lives inside the scroll container so its
+            `absolute` positioning is relative to the chat panel. */}
+        {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
       </div>
 
       {/* Input. Outer band keeps full-width border-top + side padding so
