@@ -240,7 +240,13 @@ function buildPullRequestRule(
       // that review can actually begin. The duplication is bounded to draft
       // PRs and not worth introducing per-(reviewer, PR) dedupe state to
       // eliminate.
+      //
+      // No reviewers on the PR → drop the event. Subscribed-only delivery
+      // with empty involves is the exact "state-machine noise" pattern this
+      // module avoids; if no one has been asked to review, there's nothing
+      // actionable to announce.
       const reviewerLogins = readStringArray(pr.requested_reviewers);
+      if (reviewerLogins.length === 0) return null;
       return {
         entity,
         kind: "review_requested",
@@ -252,12 +258,15 @@ function buildPullRequestRule(
     case "assigned": {
       // Assignee added after PR creation. The `opened` payload already
       // carries any initial assignees, so this only fires for later changes.
+      // Malformed payload with no assignee → drop, avoiding a content-less
+      // card on the subscribed path.
       const assignee = isRecord(payload.assignee) ? payload.assignee : null;
       const assigneeLogin = readString(assignee?.login);
-      const logins = assigneeLogin ? [assigneeLogin.toLowerCase()] : [];
+      if (!assigneeLogin) return null;
+      const logins = [assigneeLogin.toLowerCase()];
       return {
         entity,
-        kind: "edited",
+        kind: "assigned",
         involves: buildInvolves([{ logins, reason: "assigned" }]),
         surface,
         relatedRefs: [],
@@ -394,12 +403,15 @@ function buildIssuesRule(action: string | null, payload: Record<string, unknown>
       };
     }
     case "assigned": {
+      // Mirrors `buildPullRequestRule.assigned`: drop content-less payloads
+      // and use the dedicated `assigned` kind for clean downstream rendering.
       const assignee = isRecord(payload.assignee) ? payload.assignee : null;
       const login = readString(assignee?.login);
-      const logins = login ? [login.toLowerCase()] : [];
+      if (!login) return null;
+      const logins = [login.toLowerCase()];
       return {
         entity,
-        kind: "edited",
+        kind: "assigned",
         involves: buildInvolves([{ logins, reason: "assigned" }]),
         surface: { title, body, url },
         relatedRefs: [],

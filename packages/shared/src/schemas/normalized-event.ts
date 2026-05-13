@@ -36,6 +36,7 @@ export const NORMALIZED_EVENT_KINDS = [
   "review_comment",
   "synchronized",
   "commit_commented",
+  "assigned",
   "other",
 ] as const;
 export const normalizedEventKindSchema = z.enum(NORMALIZED_EVENT_KINDS);

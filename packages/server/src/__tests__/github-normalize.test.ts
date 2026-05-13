@@ -144,23 +144,23 @@ describe("normalizeGithubEvent — pull_request", () => {
     ]);
   });
 
-  it("ready_for_review with no reviewers → involves=[]", () => {
-    const event = normalize("pull_request", {
-      action: "ready_for_review",
-      sender: senderUser,
-      repository,
-      pull_request: {
-        number: 10,
-        title: "Refactor",
-        html_url: "https://github.com/owner/repo/pull/10",
-        body: "",
-      },
-    });
-    expect(event?.kind).toBe("review_requested");
-    expect(event?.involves).toEqual([]);
+  it("ready_for_review with no reviewers → null (avoid content-less subscribed-path noise)", () => {
+    expect(
+      normalize("pull_request", {
+        action: "ready_for_review",
+        sender: senderUser,
+        repository,
+        pull_request: {
+          number: 10,
+          title: "Refactor",
+          html_url: "https://github.com/owner/repo/pull/10",
+          body: "",
+        },
+      }),
+    ).toBeNull();
   });
 
-  it("assigned → kind=edited with the newly assigned login (post-creation only)", () => {
+  it("assigned → kind=assigned with the newly assigned login (post-creation only)", () => {
     const event = normalize("pull_request", {
       action: "assigned",
       sender: senderUser,
@@ -168,8 +168,19 @@ describe("normalizeGithubEvent — pull_request", () => {
       pull_request: { number: 10, title: "Refactor", html_url: "https://github.com/owner/repo/pull/10" },
       assignee: { login: "Dave" },
     });
-    expect(event?.kind).toBe("edited");
+    expect(event?.kind).toBe("assigned");
     expect(event?.involves).toEqual([{ githubLogin: "dave", reason: "assigned" }]);
+  });
+
+  it("assigned with no assignee.login → null", () => {
+    expect(
+      normalize("pull_request", {
+        action: "assigned",
+        sender: senderUser,
+        repository,
+        pull_request: { number: 10, title: "Refactor", html_url: "https://github.com/owner/repo/pull/10" },
+      }),
+    ).toBeNull();
   });
 
   it("closed (merged=true) → null (PR state machine, not code review concern)", () => {
@@ -317,7 +328,7 @@ describe("normalizeGithubEvent — issues", () => {
     ]);
   });
 
-  it("assigned → kind=edited with assignee-only involves", () => {
+  it("assigned → kind=assigned with assignee-only involves", () => {
     const event = normalize("issues", {
       action: "assigned",
       sender: senderUser,
@@ -325,8 +336,19 @@ describe("normalizeGithubEvent — issues", () => {
       issue: { number: 42, title: "Bug X", html_url: "https://github.com/owner/repo/issues/42" },
       assignee: { login: "Dave" },
     });
-    expect(event?.kind).toBe("edited");
+    expect(event?.kind).toBe("assigned");
     expect(event?.involves).toEqual([{ githubLogin: "dave", reason: "assigned" }]);
+  });
+
+  it("assigned with no assignee.login → null", () => {
+    expect(
+      normalize("issues", {
+        action: "assigned",
+        sender: senderUser,
+        repository,
+        issue: { number: 42, title: "Bug X", html_url: "https://github.com/owner/repo/issues/42" },
+      }),
+    ).toBeNull();
   });
 
   it("labeled → null", () => {
