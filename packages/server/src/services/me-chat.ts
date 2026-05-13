@@ -17,16 +17,19 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type {
-  AddMeChatParticipants,
-  CreateMeChat,
-  ListMeChatsQuery,
-  ListMeChatsResponse,
-  MeChatLeaveResponse,
-  MeChatReadResponse,
-  MeChatRow,
+import {
+  type AddMeChatParticipants,
+  CHAT_ENGAGEMENT_STATUSES,
+  type ChatEngagementStatus,
+  type ChatEngagementView,
+  type CreateMeChat,
+  type ListMeChatsQuery,
+  type ListMeChatsResponse,
+  type MeChatLeaveResponse,
+  type MeChatReadResponse,
+  type MeChatRow,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -75,6 +78,76 @@ export function decodeCursor(cursor: string): { lastMessageAt: Date | null; chat
 }
 
 // ---------------------------------------------------------------------------
+// Engagement
+// ---------------------------------------------------------------------------
+//
+// `engagement_status` lives on `chat_user_state` alongside `last_read_at` and
+// `unread_mention_count` — all three are per-(chat, user) private state. Rows
+// are lazy-materialised: a missing row is interpreted as `'active'` (default
+// engagement, no unread, never marked read). All reads use
+// `COALESCE(engagement_status, 'active')` so callers see a defined value
+// regardless of whether the row exists.
+
+const { ACTIVE, ARCHIVED, DELETED } = CHAT_ENGAGEMENT_STATUSES;
+
+/**
+ * SQL predicate for each engagement view tab. `deleted` is never a valid view
+ * value — deleted rows are reachable only through `GET /chats/:chatId` + the
+ * Restore banner on the chat detail page.
+ */
+const ENGAGEMENT_VIEW_PREDICATE: Record<ChatEngagementView, SQL> = {
+  active: sql`COALESCE(cus.engagement_status, ${ACTIVE}) = ${ACTIVE}`,
+  archived: sql`COALESCE(cus.engagement_status, ${ACTIVE}) = ${ARCHIVED}`,
+  all: sql`COALESCE(cus.engagement_status, ${ACTIVE}) IN (${ACTIVE}, ${ARCHIVED})`,
+};
+
+/**
+ * Write the caller's engagement state for this chat. UPSERT into
+ * `chat_user_state` — the row may not yet exist (the user might not have
+ * marked-read or been @-mentioned), so an INSERT with the engagement value
+ * is the first write; subsequent transitions are UPDATEs.
+ *
+ * Idempotent. Mirrors the UPSERT shape used by `markMeChatRead`.
+ */
+export async function setChatEngagement(
+  db: Database,
+  chatId: string,
+  agentId: string,
+  status: ChatEngagementStatus,
+): Promise<void> {
+  await db
+    .insert(chatUserState)
+    .values({
+      chatId,
+      agentId,
+      unreadMentionCount: 0,
+      engagementStatus: status,
+    })
+    .onConflictDoUpdate({
+      target: [chatUserState.chatId, chatUserState.agentId],
+      set: { engagementStatus: status },
+    });
+}
+
+/**
+ * Read the caller's engagement state. Returns `'active'` when no
+ * `chat_user_state` row exists yet (lazy-materialised; matches the SQL
+ * `COALESCE(..., 'active')` used elsewhere).
+ */
+export async function getCallerEngagement(
+  db: Database,
+  chatId: string,
+  agentId: string,
+): Promise<ChatEngagementStatus> {
+  const [row] = await db
+    .select({ engagementStatus: chatUserState.engagementStatus })
+    .from(chatUserState)
+    .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, agentId)))
+    .limit(1);
+  return (row?.engagementStatus as ChatEngagementStatus) ?? ACTIVE;
+}
+
+// ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
 
@@ -109,6 +182,7 @@ export async function listMeChats(
 
   const filterUnreadOnly = query.filter === "unread";
   const filterWatchingOnly = query.filter === "watching";
+  const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
 
   // Cursor predicate (sort: last_message_at DESC NULLS LAST, chat_id DESC).
   // See the original commentary in git history for the case-by-case
@@ -140,7 +214,8 @@ export async function listMeChats(
       (SELECT count(*) FROM chat_membership
         WHERE chat_id = c.id AND access_mode = 'speaker') AS participant_count,
       cm.access_mode AS access_mode,
-      COALESCE(cus.unread_mention_count, 0) AS unread_mention_count
+      COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
+      COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status
       FROM chats c
       JOIN chat_membership cm
         ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
@@ -155,6 +230,7 @@ export async function listMeChats(
        AND c.organization_id = ${organizationId}
        AND (${!filterUnreadOnly}::bool OR COALESCE(cus.unread_mention_count, 0) > 0)
        AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
+       AND ${engagementPredicate}
        AND ${cursorPredicate}
      ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
      LIMIT ${limit + 1}
@@ -168,6 +244,7 @@ export async function listMeChats(
     participant_count: number | string;
     access_mode: "speaker" | "watcher";
     unread_mention_count: number;
+    engagement_status: ChatEngagementStatus;
   }>;
 
   const toDate = (v: Date | string | null): Date | null => {
@@ -240,6 +317,7 @@ export async function listMeChats(
       lastMessagePreview: r.last_message_preview,
       unreadMentionCount: r.unread_mention_count,
       canReply: isSpeaker,
+      engagementStatus: r.engagement_status,
     };
   });
 
@@ -504,6 +582,10 @@ export async function leaveMeChat(db: Database, chatId: string, humanAgentId: st
  * the list. The `chats` join applies the same org-scoping +
  * `parent_chat_id IS NULL` filter as `listMeChats` so the two counts
  * cannot drift in the cross-org pollution or thread-chat cases either.
+ *
+ * Engagement parity: deleted chats are excluded from `listMeChats`
+ * (any `engagement` view), so the badge must exclude them too — otherwise
+ * the user sees an unread red dot for a chat they've removed from view.
  */
 export async function countUnreadMeChats(db: Database, humanAgentId: string, organizationId: string): Promise<number> {
   const rows = await db.execute<{ count: number }>(sql`
@@ -515,6 +597,7 @@ export async function countUnreadMeChats(db: Database, humanAgentId: string, org
         ON c.id = cus.chat_id
      WHERE cus.agent_id = ${humanAgentId}
        AND cus.unread_mention_count > 0
+       AND COALESCE(cus.engagement_status, ${ACTIVE}) <> ${DELETED}
        AND c.parent_chat_id IS NULL
        AND c.organization_id = ${organizationId}
   `);

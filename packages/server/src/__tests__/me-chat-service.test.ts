@@ -34,6 +34,7 @@ import {
   leaveMeChat,
   listMeChats,
   markMeChatRead,
+  setChatEngagement,
 } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { recomputeChatWatchers } from "../services/watcher.js";
@@ -45,7 +46,11 @@ describe("chat-first workspace service layer", () => {
   it("listMeChats: empty when user has no participations", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, { limit: 50, filter: "all" });
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
     expect(res.rows).toEqual([]);
     expect(res.nextCursor).toBeNull();
   });
@@ -87,7 +92,11 @@ describe("chat-first workspace service layer", () => {
     });
 
     // admin (manager of `managed`) should now see this chat as a watcher
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, { limit: 50, filter: "all" });
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
     const row = list.rows.find((r) => r.chatId === result.chatId);
     expect(row).toBeDefined();
     expect(row?.membershipKind).toBe("watching");
@@ -163,7 +172,11 @@ describe("chat-first workspace service layer", () => {
     expect(projRow?.last_message_preview).toContain("Please review");
 
     // watcher counter incremented for admin (manager of `managed`)
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, { limit: 10, filter: "all" });
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 10,
+      filter: "all",
+      engagement: "all",
+    });
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row?.unreadMentionCount).toBeGreaterThanOrEqual(1);
     void applyAfterFanOut;
@@ -309,7 +322,11 @@ describe("chat-first workspace service layer", () => {
     const result = await leaveMeChat(app.db, chatId, admin.humanAgentUuid);
     expect(result.membershipKind).toBe("watching");
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, { limit: 50, filter: "all" });
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
     const row = list.rows.find((r) => r.chatId === chatId);
     expect(row?.membershipKind).toBe("watching");
   });
@@ -476,7 +493,11 @@ describe("chat-first workspace service layer", () => {
 
     // Page size 2: first page is [c1, one of c2/c3]; second page returns
     // exactly the missing one.
-    const page1 = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, { limit: 2, filter: "all" });
+    const page1 = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 2,
+      filter: "all",
+      engagement: "all",
+    });
     expect(page1.rows).toHaveLength(2);
     expect(page1.nextCursor).not.toBeNull();
     expect(page1.rows[0]?.chatId).toBe(c1.chatId); // most-recent message wins
@@ -484,6 +505,7 @@ describe("chat-first workspace service layer", () => {
     const page2 = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
       limit: 2,
       filter: "all",
+      engagement: "all",
       cursor: page1.nextCursor ?? undefined,
     });
     const seen = new Set([...page1.rows.map((r) => r.chatId), ...page2.rows.map((r) => r.chatId)]);
@@ -512,9 +534,158 @@ describe("chat-first workspace service layer", () => {
       VALUES ('thread-x', ${admin.humanAgentUuid}, 'member', 'speaker')
     `);
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, { limit: 50, filter: "all" });
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
     const ids = list.rows.map((r) => r.chatId);
     expect(ids).toContain(chatId);
     expect(ids).not.toContain("thread-x");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Engagement-status view filtering, auto-revive, lazy default
+  // ---------------------------------------------------------------------------
+
+  it("listMeChats default 'active' view hides archived and deleted rows", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "eng-svc-1" });
+
+    const stays = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    const hides = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    const gone = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await setChatEngagement(app.db, hides.chatId, admin.humanAgentUuid, "archived");
+    await setChatEngagement(app.db, gone.chatId, admin.humanAgentUuid, "deleted");
+
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "active",
+    });
+    const ids = res.rows.map((r) => r.chatId);
+    expect(ids).toContain(stays.chatId);
+    expect(ids).not.toContain(hides.chatId);
+    expect(ids).not.toContain(gone.chatId);
+  });
+
+  it("listMeChats ?engagement=archived shows only archived rows", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "eng-svc-2" });
+
+    const active = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    const archived = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await setChatEngagement(app.db, archived.chatId, admin.humanAgentUuid, "archived");
+
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "archived",
+    });
+    const ids = res.rows.map((r) => r.chatId);
+    expect(ids).toContain(archived.chatId);
+    expect(ids).not.toContain(active.chatId);
+  });
+
+  it("listMeChats ?engagement=all unions active+archived but excludes deleted", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "eng-svc-3" });
+
+    const active = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    const archived = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    const deleted = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await setChatEngagement(app.db, archived.chatId, admin.humanAgentUuid, "archived");
+    await setChatEngagement(app.db, deleted.chatId, admin.humanAgentUuid, "deleted");
+
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
+    const ids = res.rows.map((r) => r.chatId);
+    expect(ids).toContain(active.chatId);
+    expect(ids).toContain(archived.chatId);
+    expect(ids).not.toContain(deleted.chatId);
+  });
+
+  it("new message auto-revives archived → active (applyAfterFanOut)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "eng-svc-4" });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "archived");
+
+    await sendMessage(app.db, chatId, peer.agent.uuid, { format: "text", content: "ping" });
+
+    const [row] = await app.db.execute<{ engagement_status: string }>(
+      sql`SELECT engagement_status FROM chat_user_state
+           WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(row?.engagement_status).toBe("active");
+  });
+
+  it("new message does NOT revive deleted rows (deleted is sticky)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "eng-svc-5" });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "deleted");
+
+    await sendMessage(app.db, chatId, peer.agent.uuid, { format: "text", content: "ping" });
+
+    const [row] = await app.db.execute<{ engagement_status: string }>(
+      sql`SELECT engagement_status FROM chat_user_state
+           WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(row?.engagement_status).toBe("deleted");
+  });
+
+  it("lazy materialisation: a never-touched chat appears in 'active' view (no chat_user_state row needed)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "eng-svc-6" });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    // No markRead, no engagement write — chat_user_state row should be absent.
+    const stateRows = await app.db.execute<{ count: number }>(
+      sql`SELECT count(*)::int AS count FROM chat_user_state
+           WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(stateRows[0]?.count).toBe(0);
+
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "active",
+    });
+    expect(res.rows.find((r) => r.chatId === chatId)?.engagementStatus).toBe("active");
   });
 });

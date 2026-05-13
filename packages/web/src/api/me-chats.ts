@@ -17,13 +17,14 @@ import { api, withOrg } from "./client.js";
  * chat's UUID is enough for the server to resolve the owning org.
  */
 
-export type ListMeChatsParams = Partial<Pick<ListMeChatsQuery, "cursor" | "limit" | "filter">>;
+export type ListMeChatsParams = Partial<Pick<ListMeChatsQuery, "cursor" | "limit" | "filter" | "engagement">>;
 
 export function listMeChats(params?: ListMeChatsParams): Promise<ListMeChatsResponse> {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
   if (params?.filter) qs.set("filter", params.filter);
+  if (params?.engagement) qs.set("engagement", params.engagement);
   const query = qs.toString();
   return api.get<ListMeChatsResponse>(withOrg(`/chats${query ? `?${query}` : ""}`));
 }

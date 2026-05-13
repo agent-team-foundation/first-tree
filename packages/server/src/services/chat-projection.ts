@@ -3,17 +3,21 @@
  *
  * The single sanctioned extension point on the message hot path. Called
  * from `services/message.ts` AFTER existing fan-out completes, inside the
- * same transaction. Three responsibilities:
+ * same transaction. Four responsibilities:
  *
- *   1. Mention propagation: increment `unread_mention_count` for mentioned
- *      speaking participants AND for watcher rows whose managed agent was
- *      mentioned. Sender row is excluded.
- *
- *   2. Chats projection: roll forward `chats.last_message_at`,
+ *   1. Chats projection: roll forward `chats.last_message_at`,
  *      `chats.last_message_preview`. Powers the conversation list cursor +
  *      sort + preview.
  *
- *   3. Realtime kick: fire-and-forget `pg_notify('chat_message_events', …)`
+ *   2. Engagement auto-revive: flip `chat_user_state.engagement_status`
+ *      from `archived` → `active` for everyone watching this chat. `deleted`
+ *      rows are sticky and intentionally untouched.
+ *
+ *   3. Mention propagation: increment `unread_mention_count` for mentioned
+ *      speaking participants AND for watcher rows whose managed agent was
+ *      mentioned. Sender row is excluded.
+ *
+ *   4. Realtime kick: fire-and-forget `pg_notify('chat_message_events', …)`
  *      so admin WS sockets can translate it into a `chat:message` frame.
  *      Failure is swallowed — durable persistence is the correctness path.
  *
@@ -28,9 +32,12 @@
  *     watchers are not direct `@`-mention targets.
  */
 
+import { CHAT_ENGAGEMENT_STATUSES } from "@agent-team-foundation/first-tree-hub-shared";
 import { eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { chats } from "../db/schema/chats.js";
+
+const { ACTIVE, ARCHIVED } = CHAT_ENGAGEMENT_STATUSES;
 
 // biome-ignore lint/suspicious/noExplicitAny: cross-schema compatibility
 type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
@@ -107,9 +114,25 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
   // redundant write that may leave the value slightly behind real time.
   await tx.update(chats).set({ lastMessageAt: ts, lastMessagePreview: previewClipped }).where(eq(chats.id, chatId));
 
+  // 2. Engagement auto-revive: any participant whose `chat_user_state` row
+  // sits in `archived` flips back to `active` on a new message. `deleted`
+  // is sticky (only restorable via the chat detail page). Lazy-materialised
+  // rows that don't exist yet match zero — they remain implicitly `'active'`
+  // until first markRead / engagement transition / mention bump creates them.
+  //
+  // Includes the sender themselves: sending a message is a legitimate signal
+  // that the user re-engaged with the chat, so their own archived row revives
+  // (matches the original design intent in closed PR #316).
+  await tx.execute(sql`
+    UPDATE chat_user_state
+       SET engagement_status = ${ACTIVE}
+     WHERE chat_id = ${chatId}
+       AND engagement_status = ${ARCHIVED}
+  `);
+
   if (mentionedAgentIds.length === 0) return;
 
-  // 2. Mention counter propagation — single UPSERT into chat_user_state.
+  // 3. Mention counter propagation — single UPSERT into chat_user_state.
   //
   // The target set is built via a UNION of two disjoint queries
   // (access_mode='speaker' XOR access_mode='watcher' is enforced by the
