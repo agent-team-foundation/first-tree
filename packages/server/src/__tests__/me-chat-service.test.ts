@@ -688,4 +688,40 @@ describe("chat-first workspace service layer", () => {
     });
     expect(res.rows.find((r) => r.chatId === chatId)?.engagementStatus).toBe("active");
   });
+
+  /**
+   * Regression for #343 — the picker-source widening (#343) is only useful if
+   * the server's add-participant path also accepts human agents. The service
+   * already had no `type` filter, but a regression here would silently undo
+   * the picker fix. Lock the invariant: a human added via `addMeChatParticipants`
+   * lands as `access_mode = 'speaker'`, identical to adding an AI agent today.
+   *
+   * `createTestAdmin` lands every member in the shared default org, so the
+   * owner + invitee live in the same org without extra wiring.
+   */
+  it("addMeChatParticipants: accepts a human agent and inserts a speaker row (#343)", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const teammate = await createTestAdmin(app);
+    expect(teammate.organizationId).toBe(owner.organizationId);
+
+    // Seed a direct chat with one AI agent so owner is a speaker.
+    const aiAgent = await createTestAgent(app, { name: "agp-h-ai" });
+    const { chatId } = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [aiAgent.agent.uuid],
+    });
+
+    await addMeChatParticipants(app.db, chatId, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [teammate.humanAgentUuid],
+    });
+
+    // Raw SQL: `access_mode` isn't surfaced by any service-level read
+    // path (listMeChats etc. project it as `membershipKind`, not as the
+    // raw column). Going to the table directly is the cleanest way to
+    // assert what the writer produced.
+    const rows = await app.db.execute<{ access_mode: string }>(
+      sql`SELECT access_mode FROM chat_membership WHERE chat_id = ${chatId} AND agent_id = ${teammate.humanAgentUuid}`,
+    );
+    expect(rows[0]?.access_mode).toBe("speaker");
+  });
 });

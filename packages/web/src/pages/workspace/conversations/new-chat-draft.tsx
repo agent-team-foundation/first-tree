@@ -1,8 +1,9 @@
+import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
 import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
+import { listAgents } from "../../../api/agents.js";
 import { sendChatMessage } from "../../../api/chats.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
@@ -25,7 +26,9 @@ import { cn } from "../../../lib/utils.js";
  *   - Chip row at the top of the composer is the participants list for
  *     the chat being created. Independent of the textarea — adding a
  *     chip never injects text, removing one never strips an `@<name>`.
- *     Default state seeds a single MRU chip so 1:1 sends are zero-step.
+ *     Default state seeds a single chip (the caller's personal assistant
+ *     or any of their managed agents — see `pickDefault`) so the common
+ *     "ask my PA something" case is zero-step.
  *
  *   - Textarea carries the message content. For 1:1 (single chip), no
  *     `@` is required — server treats the chat as direct and skips
@@ -34,10 +37,14 @@ import { cn } from "../../../lib/utils.js";
  *     Send is gated client-side to mirror this.
  *
  *   - Typing `@` in the textarea opens the autocomplete (candidates =
- *     all org agents). Picking an agent that isn't in the chip row
- *     promotes them to a chip — "I want to address X" subsumes "X is
- *     in the room". This unifies entry points without making them
- *     mutually exclusive.
+ *     all org-addressable agents — humans + AI, post-issue 343). Picking an
+ *     agent that isn't in the chip row promotes them to a chip —
+ *     "I want to address X" subsumes "X is in the room". This unifies
+ *     entry points without making them mutually exclusive. Note: this
+ *     differs from the existing-chat composer (`chat-view.tsx`), which
+ *     scopes `@`-autocomplete to current participants only — because
+ *     here there's no "participant set" yet; the chips ARE the set
+ *     being constructed, and `@`-to-chip is how you build it.
  *
  * On send: createMeChat({participantIds: chips}) → sendChatMessage with
  * the verbatim body. Empty body with at least one chip is allowed.
@@ -45,7 +52,7 @@ import { cn } from "../../../lib/utils.js";
 
 export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => void }) {
   const queryClient = useQueryClient();
-  const { agentId: myAgentId } = useAuth();
+  const { agentId: myAgentId, memberId: myMemberId } = useAuth();
   const agentIdentity = useAgentIdentityMap();
 
   const [chips, setChips] = useState<string[]>([]);
@@ -63,38 +70,48 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   // both adjust instantly; past the cap content scrolls inside.
   useAutoResizeTextarea(textareaRef, draft);
 
-  const { data: activity } = useQuery({
-    queryKey: ["activity"],
-    queryFn: getActivityOverview,
-    refetchInterval: 15_000,
+  /** Candidate source: org-wide addressable agents (humans + AI), backed
+   *  by `GET /orgs/:orgId/agents` (see issue 343 for why not `/activity`).
+   *  `limit: 100` is the server's enforced cap in `paginationQuerySchema`;
+   *  orgs above that threshold need pagination here. */
+  const { data: orgAgentsPage } = useQuery({
+    queryKey: ["org-agents"],
+    queryFn: () => listAgents({ limit: 100 }),
+    refetchInterval: 30_000,
   });
 
   const candidates = useMemo<MentionCandidate[]>(() => {
-    const rows = activity?.agents ?? [];
     const out: MentionCandidate[] = [];
-    for (const row of rows) {
-      if (myAgentId && row.agentId === myAgentId) continue;
-      const ident = agentIdentity(row.agentId);
-      if (!ident || !ident.name) continue;
+    for (const a of orgAgentsPage?.items ?? []) {
+      if (myAgentId && a.uuid === myAgentId) continue;
+      if (!a.name) continue;
+      if (a.status === "suspended") continue;
+      const ident = agentIdentity(a.uuid);
+      // Prefer the shared identity map (kept fresh by other queries) but
+      // fall back to the agent row itself — `listAgents` is the only
+      // source that's guaranteed to return humans, so an identity-map
+      // miss for a never-seen human shouldn't drop them from the picker.
+      const name = ident?.name ?? a.name;
+      const displayName = ident?.displayName ?? a.displayName;
       out.push({
-        agentId: row.agentId,
-        name: ident.name,
-        displayName: ident.displayName,
-        managedByMe: row.managedByMe,
+        agentId: a.uuid,
+        name,
+        displayName,
+        managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
       });
     }
     return out;
-  }, [activity, agentIdentity, myAgentId]);
+  }, [orgAgentsPage, agentIdentity, myAgentId, myMemberId]);
 
   useEffect(() => {
     if (seededDefaultRef.current) return;
     if (chips.length > 0) return;
     if (candidates.length === 0) return;
-    const defaultId = pickDefault(candidates, activity?.agents ?? []);
+    const defaultId = pickDefault(orgAgentsPage?.items ?? [], myMemberId);
     if (!defaultId) return;
     setChips([defaultId]);
     seededDefaultRef.current = true;
-  }, [candidates, activity, chips.length]);
+  }, [candidates, orgAgentsPage, myMemberId, chips.length]);
 
   const bodyMentions = useMemo(() => {
     const ps: MentionParticipant[] = candidates.map((c) => ({ agentId: c.agentId, name: c.name }));
@@ -512,28 +529,34 @@ function ParticipantChips({
  *  agents, return `null` and let the user pick — better an empty chip
  *  row than a wrong default.
  *
- *  Within the my-managed subset:
- *    1. Most-recently-active (by `runtimeUpdatedAt`) — runtime presence
- *       signal, not a true "last conversation" timestamp, but the only
- *       MRU signal currently exposed by `/activity`.
- *    2. Any `personal_assistant` — covers the case where my agents have
- *       no runtime activity yet (fresh-install / cold-start).
- *    3. First my-managed agent in the candidates list — final fallback
- *       so we always seed something if I do manage at least one. */
-function pickDefault(candidates: MentionCandidate[], activity: RuntimeAgent[]): string | null {
-  const ids = new Set(candidates.map((c) => c.agentId));
-  const mine = activity.filter((a) => ids.has(a.agentId) && a.managedByMe);
+ *  Within the my-managed subset (in priority order):
+ *    1. Any `personal_assistant` — the user's primary AI representative.
+ *    2. First my-managed agent — final fallback so we always seed
+ *       something if I do manage at least one.
+ *
+ *  Humans never seed: `personal_assistant` filter eliminates them at
+ *  step 1, and step 2's "first my-managed" is keyed on the same
+ *  list — humans are mirrors of the caller themselves, defaulting to
+ *  self in a new chat is nonsense.
+ *
+ *  Pre-issue 343 there was also a "most-recently-active by
+ *  `runtimeUpdatedAt`" step 1, which made the default flip between
+ *  clicks whenever runtime presence shifted (see issue 342). Dropped
+ *  here — stability across clicks is more important than "show me my
+ *  busiest agent". A more deliberate default (e.g. the caller's
+ *  `delegateMention`) is tracked separately in issue 342. */
+/** Exported for `__tests__/pick-default.test.ts`. The signature accepts a
+ *  `Pick<Agent, ...>` slice rather than `Agent` so callers (and tests) can
+ *  pass minimal fixtures without inventing inboxIds, metadata, etc. */
+export type PickDefaultAgent = Pick<Agent, "uuid" | "type" | "managerId" | "status">;
+
+export function pickDefault(orgAgents: ReadonlyArray<PickDefaultAgent>, myMemberId: string | null): string | null {
+  if (!myMemberId) return null;
+  const mine = orgAgents.filter((a) => a.managerId === myMemberId && a.status !== "suspended" && a.type !== "human");
   if (mine.length === 0) return null;
 
-  const mru = [...mine]
-    .filter((a) => a.runtimeUpdatedAt)
-    .sort((a, b) => (b.runtimeUpdatedAt ?? "").localeCompare(a.runtimeUpdatedAt ?? ""))[0];
-  if (mru) return mru.agentId;
-
   const pa = mine.find((a) => a.type === "personal_assistant");
-  if (pa) return pa.agentId;
+  if (pa) return pa.uuid;
 
-  // Any my-managed agent — `mine` is already candidates ∩ managedByMe,
-  // so the first row is a valid seed without another candidates scan.
-  return mine[0]?.agentId ?? null;
+  return mine[0]?.uuid ?? null;
 }
