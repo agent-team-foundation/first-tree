@@ -12,7 +12,7 @@ import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { notifications } from "../db/schema/notifications.js";
 import { uuidv7 } from "../uuid.js";
-import { broadcastToAdmins } from "./admin-broadcast.js";
+import { broadcastAdminsCrossInstance } from "./admin-broadcast.js";
 
 export type CreateNotificationData = {
   organizationId: string;
@@ -312,7 +312,13 @@ function pushToAdminWs(notification: Record<string, unknown>): void {
   // can filter strictly (no `!orgId` fallback that silently fans out to every
   // org). `agentId` is also hoisted so the WS route can additionally scope by
   // per-member agent visibility before relaying to a given socket.
-  broadcastToAdmins({
+  //
+  // Cross-instance: the envelope goes onto the `admin_broadcast_envelopes`
+  // PG NOTIFY channel; every server instance LISTENs and feeds the envelope
+  // back into its local `broadcastToAdmins` fanout. With a single instance the
+  // round-trip is sub-millisecond; with multiple, every admin socket on every
+  // instance sees the same event without an extra delivery hop.
+  broadcastAdminsCrossInstance({
     type: "notification",
     organizationId: notification.organizationId as string,
     agentId: (notification.agentId as string | null) ?? null,
