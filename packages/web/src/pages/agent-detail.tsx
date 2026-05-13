@@ -143,6 +143,7 @@ export function AgentDetailPage() {
     },
     onSuccess: (next) => {
       queryClient.setQueryData(["agent-config", uuid], next);
+      draft.resetToConfig(next);
       setSaveError(null);
       setConflictMsg(null);
       setJustSaved(true);
@@ -169,11 +170,19 @@ export function AgentDetailPage() {
     if (draft.summary.anyDirty) setJustSaved(false);
   }, [draft.summary.anyDirty]);
 
-  const reloadRemote = useCallback(() => {
+  const reloadRemote = useCallback(async () => {
     setConflictMsg(null);
     setSaveError(null);
-    queryClient.invalidateQueries({ queryKey: ["agent-config", uuid] });
-    draft.resetAll();
+    try {
+      const latest = await queryClient.fetchQuery({
+        queryKey: ["agent-config", uuid],
+        queryFn: () => getAgentConfig(uuid),
+        staleTime: 0,
+      });
+      draft.resetToConfig(latest);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    }
   }, [queryClient, uuid, draft]);
 
   const jumpTo = useCallback((anchor: string) => {
@@ -746,8 +755,10 @@ export function AgentDetailPage() {
               if (!draft.summary.anyDirty) return;
               setDiscardDialogOpen(true);
             }}
-            onReloadRemote={reloadRemote}
-            onJumpTo={(section) => jumpTo(sectionAnchorId(section))}
+            onReloadRemote={() => {
+              void reloadRemote();
+            }}
+            onJumpTo={(section) => jumpTo(section === "model" ? SECTION_ANCHORS.setup : sectionAnchorId(section))}
           />
         )}
       </div>

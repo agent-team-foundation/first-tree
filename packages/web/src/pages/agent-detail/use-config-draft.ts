@@ -110,7 +110,7 @@ function makeListOps<T>(section: "mcp" | "env" | "git", mutate: Mutator) {
   };
 }
 
-function seedDraft(cfg: AgentRuntimeConfig): ConfigDraft {
+export function createConfigDraft(cfg: AgentRuntimeConfig): ConfigDraft {
   return {
     promptAppend: cfg.payload.prompt.append,
     model: cfg.payload.model,
@@ -142,11 +142,14 @@ export type UseConfigDraftResult = {
   deleteGit: (key: string) => void;
   undoDeleteGit: (key: string) => void;
   resetAll: () => void;
+  /** Replace the draft with a clean baseline from a known server config. */
+  resetToConfig: (next: AgentRuntimeConfig) => void;
   /** PATCH body (payload only — expectedVersion is added by caller). */
   buildPayloadPatch: () => Partial<AgentRuntimeConfigPayload>;
 };
 
 export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDraftResult {
+  const [baseline, setBaseline] = useState<AgentRuntimeConfig | null>(null);
   const [draft, setDraft] = useState<ConfigDraft | null>(null);
 
   // Seed the draft once the config loads, and re-seed ONLY when the draft
@@ -156,13 +159,16 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
   // ignore it and trust the caller to drop the draft when they want to pick
   // up server changes.
   useEffect(() => {
-    if (cfg && draft === null) setDraft(seedDraft(cfg));
+    if (cfg && draft === null) {
+      setBaseline(cfg);
+      setDraft(createConfigDraft(cfg));
+    }
   }, [cfg, draft]);
 
   const current: ConfigDraft = draft ?? { promptAppend: "", model: "", mcp: [], env: [], git: [] };
 
-  const baselinePrompt = cfg?.payload.prompt.append ?? "";
-  const baselineModel = cfg?.payload.model ?? "";
+  const baselinePrompt = baseline?.payload.prompt.append ?? "";
+  const baselineModel = baseline?.payload.model ?? "";
   const promptDirty = current.promptAppend !== baselinePrompt;
   const modelDirty = current.model !== baselineModel;
 
@@ -209,15 +215,20 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
   const gitOps = useMemo(() => makeListOps<GitRepo>("git", mutate), [mutate]);
 
   // Drop the draft — the useEffect above will re-seed on the next render
-  // with whatever cfg React Query delivers (most recent save response or
-  // refetched baseline). Works correctly whether cfg has already updated
-  // synchronously (setQueryData) or is mid-refetch (invalidateQueries).
+  // with whatever cfg React Query currently holds. Use resetToConfig when
+  // the caller already has the exact server config that should become the
+  // clean baseline (save success / explicit remote reload).
   const resetAll = useCallback(() => {
+    setBaseline(null);
     setDraft(null);
+  }, []);
+  const resetToConfig = useCallback((next: AgentRuntimeConfig) => {
+    setBaseline(next);
+    setDraft(createConfigDraft(next));
   }, []);
 
   const buildPayloadPatch = useCallback((): Partial<AgentRuntimeConfigPayload> => {
-    if (!draft || !cfg) return {};
+    if (!draft || !baseline) return {};
     const patch: Partial<AgentRuntimeConfigPayload> = {};
     if (promptDirty) patch.prompt = { append: draft.promptAppend };
     if (modelDirty) patch.model = draft.model;
@@ -238,7 +249,7 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
     }
     if (gitDirty) patch.gitRepos = draft.git.filter((i) => i.status !== "deleted").map((i) => i.value);
     return patch;
-  }, [draft, cfg, promptDirty, modelDirty, summary]);
+  }, [draft, baseline, promptDirty, modelDirty, summary]);
 
   return {
     draft: current,
@@ -262,6 +273,7 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
     deleteGit: gitOps.remove,
     undoDeleteGit: gitOps.undo,
     resetAll,
+    resetToConfig,
     buildPayloadPatch,
   };
 }
