@@ -5,7 +5,7 @@
  *
  *   1. Identity. Direct chats show a single initial; group chats use a
  *      Telegram-style split-disc composite (vertical bisection for 2,
- *      T-split for 3, 2x2 grid + "+N" for >=4).
+ *      T-split for 3, 2x2 for exactly 4, 3 + "+N" tile for >=5).
  *   2. Working state. ONLY for direct chats: when the peer's agent_id
  *      is present in `workingAgentIds`, an accent ring breathes around
  *      the avatar. Group rings are intentionally skipped — the source
@@ -21,6 +21,13 @@
  * > avatar (0). All overlays carry a hairline-bold `var(--bg-raised)`
  * border so they read clearly against the underlying avatar without
  * bleeding into adjacent rows.
+ *
+ * A11y: this span's `aria-label` carries the dynamic *state* only
+ * (`"working"`, `"3 unread"`). The enclosing chat-row button already
+ * renders the chat title as visible text — repeating it here would
+ * make screen readers announce the title twice. When the avatar has
+ * no state to surface, it goes fully `aria-hidden` so the row's
+ * accessible name is unchanged.
  */
 
 import type { MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
@@ -31,11 +38,43 @@ function initial(s: string): string {
   return s.trim()[0]?.toUpperCase() ?? "?";
 }
 
-function buildAriaLabel(opts: { type: string; title: string; peerWorking: boolean; unread: number }): string {
-  const parts: string[] = [opts.title];
+/**
+ * Composite-avatar layout key, exported for unit testing the branch
+ * decisions without rendering to a DOM. `"single"` is reserved for the
+ * non-composite path (1 peer or direct chats); `"n2"` / `"n3"` / `"n4"`
+ * / `"n5+"` map 1:1 to the composite's grid templates.
+ */
+export function pickCompositeShape(peerCount: number): "single" | "n2" | "n3" | "n4" | "n5+" {
+  if (peerCount <= 1) return "single";
+  if (peerCount === 2) return "n2";
+  if (peerCount === 3) return "n3";
+  if (peerCount === 4) return "n4";
+  return "n5+";
+}
+
+/**
+ * Unread badge label. Returns `null` to signal the badge should be
+ * omitted entirely (clearer than asking callers to also gate on
+ * `count > 0`). `>= 100` rolls over to `"99+"` so the badge stays
+ * single-digit width-stable.
+ */
+export function formatUnreadLabel(count: number): string | null {
+  if (count <= 0) return null;
+  if (count > 99) return "99+";
+  return String(count);
+}
+
+/**
+ * State-only aria-label. Returns `null` when the avatar should be
+ * fully `aria-hidden` (no dynamic state worth surfacing — title is
+ * already on the row button). When there is state, it's joined as
+ * `"working, N unread"`.
+ */
+export function buildAvatarAriaLabel(opts: { peerWorking: boolean; unread: number }): string | null {
+  const parts: string[] = [];
   if (opts.peerWorking) parts.push("working");
   if (opts.unread > 0) parts.push(`${opts.unread} unread`);
-  return parts.join(", ");
+  return parts.length > 0 ? parts.join(", ") : null;
 }
 
 export function ChatRowAvatar({
@@ -47,7 +86,7 @@ export function ChatRowAvatar({
   unreadCount,
   size = 36,
 }: {
-  /** Resolved chat title — used for the avatar's aria-label. */
+  /** Resolved chat title — used as a fallback initial when no peer exists. */
   title: string;
   /** `direct` | `group`. */
   type: string;
@@ -70,12 +109,13 @@ export function ChatRowAvatar({
   const peer = peers[0];
   const peerWorking = isDirect && peer !== undefined && workingAgentIds.includes(peer.agentId);
 
-  const ariaLabel = buildAriaLabel({ type, title, peerWorking, unread: unreadCount });
+  const ariaLabel = buildAvatarAriaLabel({ peerWorking, unread: unreadCount });
+  const a11yProps: { role?: string; "aria-label"?: string; "aria-hidden"?: boolean } =
+    ariaLabel === null ? { "aria-hidden": true } : { role: "img", "aria-label": ariaLabel };
 
   return (
     <span
-      role="img"
-      aria-label={ariaLabel}
+      {...a11yProps}
       style={{
         position: "relative",
         width: size,
@@ -121,25 +161,22 @@ function SingleAvatar({ size, name }: { size: number; name: string }) {
 }
 
 function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<Participant> }) {
-  // Layout decisions, mirroring the chat-status-icons design preview:
-  //   2 visible → vertical bisection
-  //   3 visible → T-split (top spans full width, bottom is 2 cells)
-  //   >=4 total → 2x2 grid where the last slot becomes a `+N` overflow tile
-  //
-  // The split is rendered via CSS grid with a hairline gap that lets the
-  // parent `--bg-raised` background show through as hairline separators —
-  // crisper than borders at this size and consistent with the rest of
-  // the design system's hairline tokens.
+  // Layout decision keyed off `pickCompositeShape` (see header docstring):
+  //   n2  → vertical bisection
+  //   n3  → T-split (top spans full width, bottom is 2 cells)
+  //   n4  → 2x2 grid, all four visible (matches conventional group UX)
+  //   n5+ → 2x2 grid, first three peers + "+N" overflow tile where N = n - 3
   const n = peers.length;
-  const visibleCount = n <= 3 ? n : 3;
-  const overflow = n - visibleCount;
+  const shape = pickCompositeShape(n);
 
   const fontSize = Math.round(size * (n === 2 ? 0.36 : 0.28));
   const fontSizeTop = Math.round(size * 0.32);
   const fontSizeMore = Math.round(size * 0.26);
 
   const gridTemplate =
-    n === 2 ? { gridTemplateColumns: "1fr 1fr" } : { gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr" };
+    shape === "n2"
+      ? { gridTemplateColumns: "1fr 1fr" }
+      : { gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr" };
 
   return (
     <div
@@ -156,25 +193,33 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
         ...gridTemplate,
       }}
     >
-      {n === 2 && (
+      {shape === "n2" && (
         <>
           <Seg name={peers[0]?.displayName ?? "?"} fontSize={fontSize} />
           <Seg name={peers[1]?.displayName ?? "?"} fontSize={fontSize} />
         </>
       )}
-      {n === 3 && (
+      {shape === "n3" && (
         <>
           <Seg name={peers[0]?.displayName ?? "?"} fontSize={fontSizeTop} fullWidth />
           <Seg name={peers[1]?.displayName ?? "?"} fontSize={fontSize} />
           <Seg name={peers[2]?.displayName ?? "?"} fontSize={fontSize} />
         </>
       )}
-      {n >= 4 && (
+      {shape === "n4" && (
         <>
           <Seg name={peers[0]?.displayName ?? "?"} fontSize={fontSize} />
           <Seg name={peers[1]?.displayName ?? "?"} fontSize={fontSize} />
           <Seg name={peers[2]?.displayName ?? "?"} fontSize={fontSize} />
-          <SegMore count={overflow + 1} fontSize={fontSizeMore} />
+          <Seg name={peers[3]?.displayName ?? "?"} fontSize={fontSize} />
+        </>
+      )}
+      {shape === "n5+" && (
+        <>
+          <Seg name={peers[0]?.displayName ?? "?"} fontSize={fontSize} />
+          <Seg name={peers[1]?.displayName ?? "?"} fontSize={fontSize} />
+          <Seg name={peers[2]?.displayName ?? "?"} fontSize={fontSize} />
+          <SegMore count={n - 3} fontSize={fontSizeMore} />
         </>
       )}
     </div>
@@ -244,7 +289,13 @@ function WorkingRing({ size }: { size: number }) {
 }
 
 function UnreadBadge({ count }: { count: number }) {
-  const label = count > 99 ? "99+" : String(count);
+  const label = formatUnreadLabel(count);
+  if (label === null) return null;
+  // Pinned at --sp-4 (16) x --sp-4 (16), --sp-2 (8) corner radius — the
+  // badge is a self-contained capsule and intentionally tighter than the
+  // generic content padding scale, so it reads as a discrete signal
+  // rather than a control. Offset by 3 outside the avatar so the
+  // hairline-bold border cuts cleanly through the working ring.
   return (
     <span
       aria-hidden="true"
@@ -252,13 +303,13 @@ function UnreadBadge({ count }: { count: number }) {
         position: "absolute",
         bottom: -3,
         right: -3,
-        minWidth: 16,
-        height: 16,
+        minWidth: "var(--sp-4)",
+        height: "var(--sp-4)",
         padding: "0 var(--sp-1)",
-        borderRadius: 8,
+        borderRadius: "var(--sp-2)",
         background: "var(--state-error)",
         color: "var(--bg-raised)",
-        fontSize: 10,
+        fontSize: "var(--text-caption)",
         fontWeight: 700,
         lineHeight: "var(--sp-4)",
         textAlign: "center",
