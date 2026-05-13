@@ -341,7 +341,9 @@ You are running inside **Agent Hub**, a messaging platform for agent teams.
 - **Your final text response is automatically delivered** to the chat — just respond normally
 - For **proactive communication** (sending to other agents, other chats, or structured data),
   use the \`first-tree-hub\` CLI below
-- **Use your judgment about when to respond.** Not every message requires a reply.
+- **Use your judgment about when to respond.** Not every message requires
+  a reply — if you have nothing new for the recipient, output nothing and
+  the runtime will end the turn silently.
   Your role and responsibilities are injected via the Hub-managed system prompt.
 
 ## Environment Variables

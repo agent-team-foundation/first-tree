@@ -82,6 +82,12 @@ describe("bootstrapWorkspace", () => {
     expect(content).toContain("Agent Hub");
     expect(content).toContain("[From: <agent-name>]");
     expect(content).toContain("Use your judgment about when to respond");
+    // L4 silent-turn protocol: the prompt directive that pairs with the
+    // result-sink empty-output guard. Tells the agent that silence is the
+    // correct response when it has nothing new — drops courtesy fillers
+    // that would otherwise sustain agent↔agent loops.
+    expect(content).toContain("if you have nothing new for the recipient, output nothing");
+    expect(content).toContain("the runtime will end the turn silently");
   });
 
   it("does not write self.md (per PRD D7 — prompt lives in agent_configs)", () => {
