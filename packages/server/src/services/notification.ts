@@ -27,13 +27,30 @@ export type CreateNotificationData = {
    */
   clientId?: string | null;
   message: string;
+  /**
+   * Optional dedup key. While a prior unread notification with the same
+   * `(organizationId, dedupKey)` exists, repeated inserts are suppressed at
+   * the DB layer (partial unique index `uq_notifications_org_dedup_unread`).
+   * After the user marks the prior row read, a new notification can fire.
+   * Producers without a dedup key get the legacy always-insert behaviour.
+   */
+  dedupKey?: string | null;
 };
 
-/** Create a notification, persist it, and fire-and-forget push to all channels. */
+/**
+ * Create a notification, persist it, and fire-and-forget push to all channels.
+ *
+ * Returns `null` when the insert was suppressed by the dedup partial unique
+ * index — i.e. an unread notification with the same `(orgId, dedupKey)`
+ * already exists and the producer should treat this call as a no-op.
+ */
 export async function createNotification(db: Database, data: CreateNotificationData) {
   const id = uuidv7();
 
-  const [row] = await db
+  // ON CONFLICT DO NOTHING on the partial unique index. The index only
+  // applies when read=false AND dedup_key IS NOT NULL, so producers without
+  // a dedup_key never collide and keep their always-insert semantics.
+  const inserted = await db
     .insert(notifications)
     .values({
       id,
@@ -43,10 +60,17 @@ export async function createNotification(db: Database, data: CreateNotificationD
       agentId: data.agentId ?? null,
       chatId: data.chatId ?? null,
       message: data.message,
+      dedupKey: data.dedupKey ?? null,
     })
+    .onConflictDoNothing({ target: [notifications.organizationId, notifications.dedupKey] })
     .returning();
 
-  if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
+  const row = inserted[0];
+  if (!row) {
+    // Dedup suppressed the insert. Callers should treat this as a no-op —
+    // the prior unread row is still in flight to the admin UI.
+    return null;
+  }
 
   const notification = {
     id: row.id,
@@ -271,8 +295,15 @@ function composeMessage(type: NotificationType, agentCtx: AgentContext, chatCtx:
 /**
  * Convenience: create a notification for an agent event, resolving org,
  * agent display name, computer hostname, and chat topic automatically.
- * Callers supply the event type and severity; the message text is generated
- * here so language/phrasing is centralized (see {@link composeMessage}).
+ * Callers supply the event type, severity, and (recommended) dedup_key; the
+ * message text is generated here so language/phrasing is centralized (see
+ * {@link composeMessage}).
+ *
+ * Default dedup_key when none is supplied: `agent:{agentId}:{type}` or, when
+ * a chatId is present, `chat:{chatId}:{type}`. This makes "burst of identical
+ * events for the same agent/chat surfaces a single unread row" the default
+ * behaviour rather than an opt-in — pass `dedupKey: null` if you want the
+ * legacy "every event creates a new row" semantics.
  *
  * Fire-and-forget — errors are swallowed so event producers never fail just
  * because the notification pipeline is unhealthy.
@@ -282,23 +313,32 @@ export async function notifyAgentEvent(
   agentId: string,
   type: NotificationType,
   severity: NotificationSeverity,
-  chatId?: string | null,
+  options: { chatId?: string | null; dedupKey?: string | null } = {},
 ): Promise<void> {
   try {
     const agentCtx = await resolveAgentContext(db, agentId);
     if (!agentCtx) return;
 
+    const chatId = options.chatId ?? null;
     const chatCtx = chatId ? await resolveChatContext(db, chatId) : null;
     const message = composeMessage(type, agentCtx, chatCtx);
+
+    const dedupKey =
+      options.dedupKey === undefined
+        ? chatId
+          ? `chat:${chatId}:${type}`
+          : `agent:${agentId}:${type}`
+        : options.dedupKey;
 
     await createNotification(db, {
       organizationId: agentCtx.organizationId,
       type,
       severity,
       agentId,
-      chatId: chatId ?? null,
+      chatId,
       clientId: agentCtx.clientId,
       message,
+      dedupKey,
     });
   } catch {
     // fire-and-forget
