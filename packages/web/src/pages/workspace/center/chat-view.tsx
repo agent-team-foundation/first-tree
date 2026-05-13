@@ -1030,10 +1030,22 @@ export function ChatView({
   // the IDB baseline so a re-visit immediately inherits the prior
   // session's progress.
   const [sessionHighestRaw, setSessionHighestRaw] = useState<number>(-1);
-  // Reset the raw counter on every chat switch.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; no other dep should reset this.
-  useEffect(() => {
+  // Reset the raw counter (and the live bottom-visible mirror) on
+  // every chat switch.
+  //
+  // useLayoutEffect (not useEffect): runs synchronously after DOM
+  // commit but before paint, and the `setState`s here trigger a
+  // synchronous re-render before paint as well. Without this, on
+  // A → B with B warm-cached the first paint of B would briefly
+  // render with A's stale `sessionHighestRaw`. If A's high water
+  // mapped to an in-range index in B's list, that paint would
+  // show a false "↓ N new messages" pill for a fraction of a
+  // second before useEffect cleared it. useLayoutEffect closes
+  // the window — the user never sees the stale state.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
+  useLayoutEffect(() => {
     setSessionHighestRaw(-1);
+    setLiveBottomVisibleId(null);
   }, [chatId]);
   // Advance the raw counter whenever the user's viewport bottom
   // reaches a message later than the previous high water.
