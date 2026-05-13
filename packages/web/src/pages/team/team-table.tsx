@@ -1,6 +1,6 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
-import { Bot, Lock, type LucideIcon, MoreHorizontal, User, Users } from "lucide-react";
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { Bot, Lock, type LucideIcon, User, Users } from "lucide-react";
+import { type CSSProperties, useState } from "react";
 import type { RuntimeAgent } from "../../api/activity.js";
 import { AgentChip } from "../../components/agent-chip.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
@@ -12,8 +12,11 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../../components/ui/dense-table.js";
+import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
 import { StateChip } from "../../components/ui/state-chip.js";
 import { formatDay } from "../../lib/utils.js";
+
+export type { RowAction };
 
 /**
  * Merged Team table — humans and agents share one column structure
@@ -73,14 +76,6 @@ export type TeamGroup = {
   emptyMessage?: string;
   /** When set, the group renders as a collapsible disclosure starting collapsed. */
   collapsible?: boolean;
-};
-
-export type RowAction = {
-  key: string;
-  label: string;
-  destructive?: boolean;
-  disabled?: boolean;
-  onSelect: () => void;
 };
 
 type Props = {
@@ -600,114 +595,5 @@ function VisibilityChip({ visibility }: { visibility: Agent["visibility"] }) {
       <Users className="h-2.5 w-2.5" aria-hidden style={{ marginRight: 3 }} />
       Shared
     </DenseBadge>
-  );
-}
-
-/**
- * Self-contained kebab menu. Click-outside / Escape close. Anchored to its
- * trigger button. Each call site supplies its own action list — keeps the
- * permission logic in the page and the menu purely presentational.
- *
- * Returns `null` when actions is empty so the cell stays clean instead of
- * dangling an icon that does nothing.
- */
-function RowActionsMenu({ actions, ariaLabel }: { actions: RowAction[]; ariaLabel: string }) {
-  const [open, setOpen] = useState(false);
-  // Flip direction up when the kebab is close to the viewport bottom and the
-  // estimated menu height would clip below. Approximating menu height as
-  // ITEM_HEIGHT_ESTIMATE * action count is close enough — pixel-perfect
-  // collision detection isn't worth the dependency on a positioning lib.
-  const [direction, setDirection] = useState<"down" | "up">("down");
-  const ref = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || !buttonRef.current) return;
-    const ITEM_HEIGHT_ESTIMATE = 32;
-    const MENU_PADDING = 8;
-    const rect = buttonRef.current.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const estimatedHeight = actions.length * ITEM_HEIGHT_ESTIMATE + MENU_PADDING;
-    setDirection(spaceBelow >= estimatedHeight ? "down" : "up");
-  }, [open, actions.length]);
-
-  if (actions.length === 0) return null;
-
-  return (
-    <div ref={ref} className="relative inline-flex">
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-label={ariaLabel}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        className="inline-flex items-center justify-center"
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 4,
-          background: "transparent",
-          color: "var(--fg-3)",
-          cursor: "pointer",
-          border: 0,
-        }}
-      >
-        <MoreHorizontal className="h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <div
-          role="menu"
-          className="absolute right-0 z-30 rounded-md border bg-popover shadow-md"
-          style={{
-            minWidth: 180,
-            borderColor: "var(--border)",
-            ...(direction === "up" ? { bottom: "100%", marginBottom: 4 } : { top: "100%", marginTop: 4 }),
-          }}
-        >
-          {actions.map((action) => (
-            <button
-              key={action.key}
-              type="button"
-              role="menuitem"
-              disabled={action.disabled}
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                action.onSelect();
-              }}
-              className="flex w-full items-center px-3 py-1.5 text-left text-body hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                color: action.destructive ? "var(--state-error)" : "var(--fg)",
-                background: "transparent",
-                border: 0,
-                cursor: action.disabled ? "not-allowed" : "pointer",
-              }}
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }

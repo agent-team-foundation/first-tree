@@ -1,4 +1,4 @@
-import type { Chat, ChatDetail, Message } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Chat, ChatDetail, ChatEngagementStatus, Message } from "@agent-team-foundation/first-tree-hub-shared";
 import { api, withOrg } from "./client.js";
 
 type PaginatedChats = {
@@ -29,6 +29,18 @@ export function getChat(chatId: string): Promise<ChatDetail> {
 
 export function renameChat(chatId: string, topic: string | null): Promise<Chat> {
   return api.patch<Chat>(`/chats/${encodeURIComponent(chatId)}`, { topic });
+}
+
+/**
+ * Set the caller's engagement state for this chat. Per-user — writes the
+ * caller's `chat_user_state` row only. All transitions are legal, including
+ * `deleted → active` (Restore from the chat detail view).
+ */
+export function patchChatEngagement(
+  chatId: string,
+  status: ChatEngagementStatus,
+): Promise<{ chatId: string; engagementStatus: ChatEngagementStatus }> {
+  return api.post(`/chats/${encodeURIComponent(chatId)}/engagement`, { status });
 }
 
 export function sendChatMessage(chatId: string, content: string): Promise<Message> {
