@@ -83,13 +83,6 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 **UUID v7 as Message ID:** Time-ordered; messages are immutable after creation.
 
-**Echo Loop Prevention:** Two non-human agents in the same chat can otherwise ping-pong forever on courtesy turns. Four cooperating layers, each catching cases the others miss:
-
-- **L1 — `mention_only` mode (server):** agent↔agent direct chats and agent-only group chats seed every non-human participant as `mention_only` (migration 0029 + `findOrCreateDirectChat` / `createChat`). Replies without an explicit `@` land as silent context rows (notify=false) instead of waking the peer. See `services/message.ts` fan-out filter and `__tests__/direct-chat-mention-mode.test.ts`.
-- **L2 — `shouldSuppressEcho` (client):** the runtime drops cross-chat replyTo echoes that would route a turn's own answer back through the original waiter's inbox. Lives in `runtime/session-manager.ts`.
-- **L3 — silent context rows (server):** mention_only participants who weren't @-named get notify=false inbox entries so they still see chat history on the next active delivery but aren't woken in the meantime. See `services/inbox.ts`.
-- **L4 — silent-turn protocol (client + server):** the agent prompt in `runtime/bootstrap.ts` instructs the agent to output nothing when it has nothing new for the recipient; `runtime/result-sink.ts` honors empty / whitespace output by skipping `sendMessage` and clearing the trigger so the turn ends silently. Decision lives in the agent (semantic, zero false-positive on real content), enforcement lives in code (the runtime never sends an empty message even if a downstream caller tries to). `services/message.ts` step 2e mirrors this form-guard on the server entry, so paths that bypass `result-sink` — the agent CLI `agent send`, `AskUserQuestion`, IM adapters, admin/web posts — get the same protection: empty content after stripping leading `@<name>` tokens writes the message row but emits `notify=false` for every fan-out recipient (including the `replyTo` cross-chat route, so the silent-send invariant holds end-to-end). Server `services/message.ts:observeLoopPattern` watches for the failure mode (4-message tight ping-pong window) and emits a structured warn log — pure observation, never blocks delivery; frequent triggers are a signal that prompt discipline is drifting.
-
 ## Coding Conventions
 
 - **No `any`**: Use `unknown` + type narrowing
