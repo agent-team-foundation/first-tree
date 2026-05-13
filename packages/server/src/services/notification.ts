@@ -1,6 +1,7 @@
 import {
   AGENT_STATUSES,
   AGENT_VISIBILITY,
+  NOTIFICATION_TYPES,
   type NotificationQuery,
   type NotificationSeverity,
   type NotificationType,
@@ -39,19 +40,29 @@ export type CreateNotificationData = {
 /**
  * Create a notification, persist it, and fire-and-forget push to all channels.
  *
- * Returns `null` when the insert was suppressed by the dedup partial unique
- * index — i.e. an unread notification with the same `(orgId, dedupKey)`
- * already exists and the producer should treat this call as a no-op.
+ * Dedup contract (when `dedupKey` is set and an unread row already exists):
+ *   - **severity escalates monotonically** — `high` never drops back to
+ *     `medium`, `medium` never drops back to `low`. Prevents the bell badge
+ *     from understating a degrading agent (stale=medium first, then
+ *     error=high arriving — the row sticks at high).
+ *   - **type and message take the latest event's values** — so the row
+ *     reflects the most recent observation in the UI ("entered error state"
+ *     replaces "is unresponsive" once the runtime starts reporting error).
+ *   - **createdAt is preserved** so the bell ordering still tracks "when did
+ *     this incident open" rather than "when was the last observation".
+ *
+ * Rows without a `dedupKey` never hit the partial unique index and keep the
+ * legacy always-insert behaviour.
  */
 export async function createNotification(db: Database, data: CreateNotificationData) {
   const id = uuidv7();
 
-  // ON CONFLICT DO NOTHING on the partial unique index. The `where` clause is
+  // ON CONFLICT DO UPDATE on the partial unique index. The `where` clause is
   // mandatory when the target index is partial — PG raises "there is no
   // unique or exclusion constraint matching the ON CONFLICT specification"
-  // unless the predicate matches the index definition exactly. Rows without
-  // a dedup_key never satisfy the predicate, so the conflict path never
-  // fires for them and they keep the legacy always-insert behaviour.
+  // unless the predicate matches the index definition exactly. The CASE on
+  // severity expresses GREATEST() across the three text values without
+  // depending on a PG enum or lookup table.
   const inserted = await db
     .insert(notifications)
     .values({
@@ -64,16 +75,27 @@ export async function createNotification(db: Database, data: CreateNotificationD
       message: data.message,
       dedupKey: data.dedupKey ?? null,
     })
-    .onConflictDoNothing({
+    .onConflictDoUpdate({
       target: [notifications.organizationId, notifications.dedupKey],
-      where: sql`${notifications.read} = false AND ${notifications.dedupKey} IS NOT NULL`,
+      set: {
+        severity: sql`CASE
+          WHEN ${notifications.severity} = 'high' OR excluded.severity = 'high' THEN 'high'
+          WHEN ${notifications.severity} = 'medium' OR excluded.severity = 'medium' THEN 'medium'
+          ELSE 'low'
+        END`,
+        type: sql`excluded.type`,
+        message: sql`excluded.message`,
+      },
+      targetWhere: sql`${notifications.read} = false AND ${notifications.dedupKey} IS NOT NULL`,
     })
     .returning();
 
   const row = inserted[0];
   if (!row) {
-    // Dedup suppressed the insert. Callers should treat this as a no-op —
-    // the prior unread row is still in flight to the admin UI.
+    // Defensive: ON CONFLICT DO UPDATE always returns a row when the
+    // predicate matches, but a producer who passes `dedupKey: null` and
+    // races with itself could still see this path on a hypothetical
+    // exclusion. Treat as a no-op so callers never crash on this.
     return null;
   }
 
@@ -374,7 +396,21 @@ export async function markAgentFaultsResolved(db: Database, agentId: string): Pr
     await db
       .update(notifications)
       .set({ read: true })
-      .where(and(eq(notifications.agentId, agentId), eq(notifications.read, false)));
+      .where(
+        and(
+          eq(notifications.agentId, agentId),
+          eq(notifications.read, false),
+          // Scoped to fault-scoped types — not just "all unread for agent".
+          // The recovery signal (rebind / state→healthy) closes incidents,
+          // not arbitrary future agent-scoped notifications (reminders,
+          // system messages, etc.) that a feature may add later.
+          inArray(notifications.type, [
+            NOTIFICATION_TYPES.AGENT_ERROR,
+            NOTIFICATION_TYPES.AGENT_BLOCKED,
+            NOTIFICATION_TYPES.AGENT_STALE,
+          ]),
+        ),
+      );
   } catch {
     // fire-and-forget
   }

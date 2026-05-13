@@ -44,7 +44,7 @@ export function NotificationBell() {
   const hasUnread = unreadCount > 0;
 
   const handleClickNotification = useCallback(
-    async (n: NotificationRow) => {
+    async (n: NotificationRow & { agentId: string | null }) => {
       if (!n.read) {
         markNotificationRead(n.id).catch(() => {});
         // Local optimism so the unread count + row background update before
@@ -53,10 +53,16 @@ export function NotificationBell() {
         queryClient.invalidateQueries({ queryKey: ["notifications"] });
       }
       setOpen(false);
-      // Workspace is chat-first: only `?c=<chatId>` is a real navigation
-      // target. Rows without a chatId are rendered non-clickable below, so
-      // this handler always gets one here.
+      // Two navigation targets, in priority order:
+      //   - `chatId` → the workspace chat the event happened in (currently
+      //     only `session_*` events, but the schema leaves room).
+      //   - `agentId` → the per-agent detail page. Fault-scoped events
+      //     (error / blocked / stale) carry only an agent id, so this is
+      //     where the user lands to triage.
+      // A row with neither is rendered non-clickable below, so the handler
+      // never sees that case.
       if (n.chatId) navigate(`/?c=${n.chatId}`);
+      else if (n.agentId) navigate(`/agents/${n.agentId}`);
     },
     [navigate, queryClient],
   );
@@ -162,7 +168,7 @@ export function NotificationBell() {
                   <NotificationItem
                     key={n.id}
                     notification={n}
-                    clickable={!!n.chatId}
+                    clickable={!!n.chatId || !!n.agentId}
                     onClick={() => handleClickNotification(n)}
                   />
                 ))
