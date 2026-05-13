@@ -1541,88 +1541,103 @@ export function ChatView({
         </div>
       </div>
 
-      {/* Timeline. Scroll viewport stays full-width so the scrollbar hugs
-          the panel's right edge — pushing it inward would float the column.
-          Reading column inside is capped via `maxWidth` and centered to
-          align with the composer below into one vertical thread. Side
-          padding (sp-6) prevents content from kissing the panel border on
-          narrow viewports. */}
-      <div
-        ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto relative"
-        style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
-      >
-        <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-          {itemCount === 0 && (
-            <div
-              className="flex flex-col items-center text-body"
-              style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
-            >
-              <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
-              {readOnly ? "No messages yet" : "Send a message to start the conversation"}
-            </div>
-          )}
-          <div className="flex flex-col" style={{ gap: 4 }}>
-            {items.flatMap((item) => {
-              let node: ReactNode = null;
-              if (item.kind === "event") {
-                const ev = item.data;
-                switch (ev.kind) {
-                  case "tool_call":
-                    node = <ToolCallStatusRow key={item.key} event={ev} />;
-                    break;
-                  case "assistant_text":
-                    node = <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
-                    break;
-                  case "thinking":
-                    node = <ThinkingRow key={item.key} event={ev} />;
-                    break;
-                  case "error":
-                    node = <ErrorRow key={item.key} event={ev} />;
-                    break;
-                  default:
-                    // turn_end is filtered upstream; any unknown kind is dropped.
-                    node = null;
-                }
-              } else {
-                const msg = item.data;
-                if (msg.format === "question" && isQuestionContent(msg.content)) {
-                  const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
-                  const status: QuestionStatus = answer ? "answered" : "pending";
-                  node = (
-                    <QuestionMessageRow
-                      key={item.key}
-                      msg={msg}
-                      chatId={chatId}
-                      content={msg.content}
-                      answer={answer}
-                      status={status}
-                      agentNameFn={agentName}
-                    />
-                  );
-                } else if (msg.format === "question_answer") {
-                  node = <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={agentName} />;
+      {/* Timeline region. Outer `relative flex-col` wrapper exists
+          solely as the containing block for the floating pill —
+          putting `position: relative` on the scroll container itself
+          let the pill drift mid-list in some browsers (PR 286 manual
+          sign-off rev 8). The wrapper sizes to the same bounds as
+          the scroll viewport (single `flex-1` child + own `min-h-0`),
+          so `absolute; bottom: var(--sp-3)` lands at the visible
+          bottom of the chat panel regardless of scroll position.
+
+          Scroll viewport stays full-width so the scrollbar hugs the
+          panel's right edge — pushing it inward would float the
+          column. Reading column inside is capped via `maxWidth` and
+          centered to align with the composer below into one vertical
+          thread. Side padding (sp-6) prevents content from kissing
+          the panel border on narrow viewports. */}
+      <div className="relative flex-1 flex flex-col min-h-0">
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 overflow-y-auto"
+          style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
+        >
+          <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+            {itemCount === 0 && (
+              <div
+                className="flex flex-col items-center text-body"
+                style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
+              >
+                <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
+                {readOnly ? "No messages yet" : "Send a message to start the conversation"}
+              </div>
+            )}
+            <div className="flex flex-col" style={{ gap: 4 }}>
+              {items.flatMap((item) => {
+                let node: ReactNode = null;
+                if (item.kind === "event") {
+                  const ev = item.data;
+                  switch (ev.kind) {
+                    case "tool_call":
+                      node = <ToolCallStatusRow key={item.key} event={ev} />;
+                      break;
+                    case "assistant_text":
+                      node = <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
+                      break;
+                    case "thinking":
+                      node = <ThinkingRow key={item.key} event={ev} />;
+                      break;
+                    case "error":
+                      node = <ErrorRow key={item.key} event={ev} />;
+                      break;
+                    default:
+                      // turn_end is filtered upstream; any unknown kind is dropped.
+                      node = null;
+                  }
                 } else {
-                  node = <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={agentName} />;
+                  const msg = item.data;
+                  if (msg.format === "question" && isQuestionContent(msg.content)) {
+                    const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
+                    const status: QuestionStatus = answer ? "answered" : "pending";
+                    node = (
+                      <QuestionMessageRow
+                        key={item.key}
+                        msg={msg}
+                        chatId={chatId}
+                        content={msg.content}
+                        answer={answer}
+                        status={status}
+                        agentNameFn={agentName}
+                      />
+                    );
+                  } else if (msg.format === "question_answer") {
+                    node = <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={agentName} />;
+                  } else {
+                    node = <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={agentName} />;
+                  }
                 }
-              }
-              // Insert the gap banner immediately after the last cached
-              // message when there's a known break between cache and the
-              // server window.
-              const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
-              if (isGapAnchor) {
-                return [node, <HistoryGapBanner key={`gap-after-${item.data.id}`} />];
-              }
-              return node;
-            })}
+                // Insert the gap banner immediately after the last cached
+                // message when there's a known break between cache and the
+                // server window.
+                const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
+                if (isGapAnchor) {
+                  return [node, <HistoryGapBanner key={`gap-after-${item.data.id}`} />];
+                }
+                return node;
+              })}
+            </div>
+            <div ref={messagesEndRef} />
           </div>
-          <div ref={messagesEndRef} />
         </div>
         {/* Floating "↓ N new messages" pill — surfaces whenever there
-            are messages strictly newer than the bottom-visible
-            message id. Hides itself when the user is at-bottom
-            (pillCount = 0). Lives inside the scroll container so its
-            `absolute` positioning is relative to the chat panel. */}
+            are messages newer than the user's session high watermark.
+            Hides itself when the user reaches the bottom
+            (pillCount = 0). Rendered as a sibling of the scroll
+            container, not a child, so its `absolute` positioning
+            anchors to the outer wrapper's visible bounds instead of
+            being affected by the scroll container's internal
+            `overflow-auto` + `position: relative` interaction
+            (PR 286 manual sign-off rev 8). */}
         {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
       </div>
 
