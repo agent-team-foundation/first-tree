@@ -993,56 +993,71 @@ export function ChatView({
   // signal that advances the session high watermark below.
   const [liveBottomVisibleId, setLiveBottomVisibleId] = useState<string | null>(null);
 
-  // Session high watermark — the highest message index the user
-  // has reached (had at viewport bottom) at any point during the
-  // current chat session. Monotonic forward. Combined with the
-  // IDB-persisted `latestKnownMessageId` from the prior visit
-  // (`latestKnownResolution.index`), this is the "everything up to
-  // here is known to the user" pointer that drives the pill count.
+  // Session high watermark — id of the latest message the user has
+  // reached (had at viewport bottom) at any point during the
+  // current chat session. Stored as a MESSAGE ID, not an index,
+  // because indices into `mergedMessages` are not stable across
+  // (a) polled window shifts (server may slide the visible window
+  // forward as new messages arrive — old indices then point to
+  // different messages) and (b) `scrollIntoView` boundary quirks.
+  // An id is content-addressed and resolves to the correct row
+  // regardless of how the underlying list moves.
   //
-  // Why we need this on top of `liveBottomVisibleId`: the user's
-  // expectation is that "new" means "messages I have never seen".
-  // Without monotonicity, scrolling UP after having reached the
-  // bottom would re-trigger the pill for content the user has
-  // already viewed — caught in PR 286 manual sign-off rev 5.
+  // Monotonic forward semantics: we only set this to a new id if
+  // that id is chronologically later than the current one (resolved
+  // via `findIndex` at advance time). Scrolling back UP after
+  // reaching a high water leaves the id unchanged.
   //
-  // `sessionHighestRaw` holds only the IN-SESSION advancement;
-  // `sessionHighestIdx` (the effective value) takes the max with
-  // the IDB baseline so a re-visit immediately inherits the prior
-  // session's progress.
-  const [sessionHighestRaw, setSessionHighestRaw] = useState<number>(-1);
-  // Reset the raw counter (and the live bottom-visible mirror) on
-  // every chat switch.
+  // Combined with the IDB-persisted `latestKnownMessageId` from the
+  // prior visit (`latestKnownResolution.index`), this is the
+  // "everything up to here is known to the user" pointer that
+  // drives the pill count.
+  //
+  // History: the previous implementation stored an integer
+  // `sessionHighestRaw` and caused the pill-never-shows bug
+  // liuchao-001 reported — when poll-driven window shift moved old
+  // messages off the top, `sessionHighestRaw=49` ended up pointing
+  // at a brand-new message the user had never seen, suppressing
+  // the pill. PR 286 manual sign-off rev 7 (code-reviewer's repro).
+  const [sessionHighestId, setSessionHighestId] = useState<string | null>(null);
+  // Reset the in-session watermark (and the live bottom-visible
+  // mirror) on every chat switch.
   //
   // useLayoutEffect (not useEffect): runs synchronously after DOM
   // commit but before paint, and the `setState`s here trigger a
   // synchronous re-render before paint as well. Without this, on
   // A → B with B warm-cached the first paint of B would briefly
-  // render with A's stale `sessionHighestRaw`. If A's high water
-  // mapped to an in-range index in B's list, that paint would
+  // render with A's stale `sessionHighestId`. If A's high water id
+  // resolved to an in-range index in B's list, that paint would
   // show a false "↓ N new messages" pill for a fraction of a
   // second before useEffect cleared it. useLayoutEffect closes
   // the window — the user never sees the stale state.
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
   useLayoutEffect(() => {
-    setSessionHighestRaw(-1);
+    setSessionHighestId(null);
     setLiveBottomVisibleId(null);
   }, [chatId]);
-  // Advance the raw counter whenever the user's viewport bottom
+  // Advance the watermark id whenever the user's viewport bottom
   // reaches a message later than the previous high water.
+  // Comparison goes through current `mergedMessages` so both ids
+  // are resolved against the live ordering — invariant to window
+  // shifts.
   useEffect(() => {
     if (!liveBottomVisibleId) return;
-    const idx = mergedMessages.findIndex((m) => m.id === liveBottomVisibleId);
-    if (idx > sessionHighestRaw) setSessionHighestRaw(idx);
-  }, [liveBottomVisibleId, mergedMessages, sessionHighestRaw]);
-  // Effective high water: max of in-session advancement and IDB
-  // baseline. Either signal alone is incomplete — the IDB baseline
-  // covers re-visits without scrolling, the raw covers fresh first
-  // visits and forward progress within a session.
+    const newIdx = mergedMessages.findIndex((m) => m.id === liveBottomVisibleId);
+    if (newIdx < 0) return;
+    const curIdx = sessionHighestId ? mergedMessages.findIndex((m) => m.id === sessionHighestId) : -1;
+    if (newIdx > curIdx) setSessionHighestId(liveBottomVisibleId);
+  }, [liveBottomVisibleId, mergedMessages, sessionHighestId]);
+  // Effective high water index, resolved from `sessionHighestId`
+  // against the live `mergedMessages`. Max with the IDB baseline
+  // covers the re-visit-without-scroll path (no in-session advance,
+  // but the persisted prior-visit high water still applies).
   const sessionHighestIdx = useMemo<number>(() => {
+    const sessionIdx = sessionHighestId ? mergedMessages.findIndex((m) => m.id === sessionHighestId) : -1;
     const baseline = latestKnownResolution?.index ?? -1;
-    return Math.max(sessionHighestRaw, baseline);
-  }, [sessionHighestRaw, latestKnownResolution]);
+    return Math.max(sessionIdx, baseline);
+  }, [sessionHighestId, mergedMessages, latestKnownResolution]);
 
   // Pill count = messages strictly newer than the effective high
   // watermark. Hides (count = 0) whenever the user has had every

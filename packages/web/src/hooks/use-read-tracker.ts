@@ -89,37 +89,50 @@ type UseReadTrackerOptions = {
 };
 
 /**
+ * Sub-pixel tolerance when comparing a node's bottom edge to the
+ * viewport bottom. Browser layout can produce fractional pixels
+ * (especially after `scrollIntoView({block:'end'})`) where a node
+ * the user clearly sees as fully visible has its `rect.bottom` at
+ * `viewportBottom + 0.4` due to rounding. A strict `<=` test would
+ * then exclude it and the tracker would walk past the correct
+ * anchor; an unbounded `<= viewportBottom + ε` invites the row
+ * BELOW the anchor (whose top is exactly at viewport bottom). A
+ * one-pixel epsilon splits the difference: tolerant of sub-pixel
+ * rounding, strict enough to never accept a row that isn't
+ * visually present.
+ */
+const VIEWPORT_BOTTOM_EPSILON_PX = 1;
+
+/**
  * Returns the id of the bottom-most message that is FULLY visible
  * inside the container's current viewport — i.e. the message whose
- * bottom edge is at or above `viewportBottom`. A message whose top
- * has entered the viewport bottom but whose bottom still extends
- * below the fold does NOT count as seen — the user hasn't actually
- * read it yet.
+ * bottom edge is at (or within sub-pixel rounding of) the viewport
+ * bottom. A message whose top has entered the viewport bottom but
+ * whose bottom still extends below the fold does NOT count as
+ * seen — the user hasn't actually read it yet.
  *
- * The bottom-edge criterion matters when new content appears below
- * a user sitting at scroll-bottom: with a `top <= viewportBottom`
- * test, the new message's top is exactly at the viewport edge, and
- * the tracker would prematurely advance the high water onto it.
- * That caused the user-reported bug where the pill never showed
- * after inserting new messages (the watermark immediately swallowed
- * the new content).
+ * Coordinate space: uses `getBoundingClientRect()` for both the
+ * container and each node so all positions are in viewport
+ * coordinates. The prior `offsetTop`/`offsetHeight` form depended
+ * on `offsetParent`, which is not necessarily the scroll container
+ * when intervening relative-positioned wrappers exist — that
+ * coordinate-space mismatch is what made the watermark advance
+ * past the visible row after `scrollIntoView({block:'end'})`
+ * (PR 286 manual sign-off rev 7, code-reviewer repro Test 4).
  *
  * Falls back to the first DOM message when nothing is fully visible
  * at the bottom (e.g., the container hasn't laid out yet, or the
  * first message is taller than the viewport).
  */
 function findBottomVisibleMessageId(container: HTMLElement): string | null {
-  const viewportBottom = container.scrollTop + container.clientHeight;
+  const containerBottom = container.getBoundingClientRect().bottom;
   const nodes = container.querySelectorAll<HTMLElement>("[data-message-id]");
   if (nodes.length === 0) return null;
-  // Walk from the last message backward; the first one whose bottom
-  // edge is at or above viewportBottom is the bottommost FULLY
-  // visible one.
   for (let i = nodes.length - 1; i >= 0; i--) {
     const node = nodes[i];
     if (!node) continue;
-    const bottom = node.offsetTop + node.offsetHeight;
-    if (bottom <= viewportBottom) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom <= containerBottom + VIEWPORT_BOTTOM_EPSILON_PX) {
       return node.dataset.messageId ?? null;
     }
   }
