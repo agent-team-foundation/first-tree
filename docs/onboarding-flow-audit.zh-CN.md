@@ -329,9 +329,15 @@ Step 3 - InviteeStep3Body
 - **问题**：`joinPath` 只在 OAuth 回调那个标签页存在；换标签、刷新清缓存、跨设备打开都会丢失。
 - **位置**：`packages/web/src/utils/onboarding-flags.ts` + `onboarding-view.tsx:44`
 - **风险**：admin 通过 invite 加入新 org（`joinPath="invite", role="admin"`）丢失 flag 后会被错误地走 solo admin 分支，跳过 invite-aware 的文案，可能误写团队设置。
-- **建议**：
-  - 把 `joinPath` 提升到 server 端，作为 membership 的属性（`members.joined_via`）
-  - 或者至少在 `/me` 响应里返回最近一次 join 的 path，前端用作 sessionStorage 兜底
+- **决议（2026-05-13 讨论后）**：走**纯派生方案**，不加 DB 列，不引入新的服务端字段。核心思路：`joinPath` 在概念上是 UI 派生信号，不是持久事实——用 team 状态 + 成员状态本身去推导更稳。
+  - **Step 1 gate** 改用 `canRenameTeam && teamHasDefaultName && !step1Confirmed`（移除对 `joinPath` 的依赖）
+    - 副作用收益：solo admin 上次跳过 Step 1，今天回来想改名，新 gate 会正确再次显示（旧 gate 不会）
+  - **Step 2 invite-aware 文案** 改用 `orgHasOtherMembers`（`COUNT(members) > 1`）
+  - **sessionStorage 里的 `joinPath` 保留作为 telemetry tag**（best-effort），但所有路由 gate 不再依赖它
+  - `teamHasDefaultName` 实现：直接做 pattern 匹配（`{login}'s team`）。如果未来默认 pattern 变更导致漏判再升级方案
+- **替代方案（已否决）**：
+  - 加 `members.joined_via` 列：分析维度其实已经在 telemetry 事件日志里有 `joinPath` attr，DB 列**无增量价值**；列加完之后除了 onboarding 几乎没人查
+  - 加 `organizations.auto_created` boolean：比 pattern 匹配稳，但当前 pattern 稳定，先不预付成本
 
 ---
 
