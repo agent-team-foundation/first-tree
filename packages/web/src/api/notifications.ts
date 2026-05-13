@@ -41,3 +41,7 @@ export function markNotificationRead(id: string): Promise<unknown> {
 export function markAllNotificationsRead(): Promise<unknown> {
   return api.post(withOrg("/notifications/read-all"));
 }
+
+export function getUnreadNotificationCount(): Promise<{ count: number }> {
+  return api.get<{ count: number }>(withOrg("/notifications/unread-count"));
+}

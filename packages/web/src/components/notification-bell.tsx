@@ -2,7 +2,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { listNotifications, markAllNotificationsRead, markNotificationRead } from "../api/notifications.js";
+import {
+  getUnreadNotificationCount,
+  listNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from "../api/notifications.js";
 import { NotificationItem, type NotificationRow } from "./notification-item.js";
 
 /**
@@ -17,19 +22,23 @@ export function NotificationBell() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  // Both queries refetch on demand only — the admin WS hook (wired into
+  // Layout) invalidates `["notifications", …]` on every inbound
+  // `notification` frame, which is what drives the bell to refresh. Polling
+  // was previously the safety net for an in-memory cross-instance fanout
+  // that could silently drop frames; with PG NOTIFY routing pushes across
+  // every server instance, polling adds nothing but network noise.
   const { data } = useQuery({
     queryKey: ["notifications", "bell"],
     queryFn: () => listNotifications({ limit: 8 }),
-    refetchInterval: 10_000,
   });
 
   const { data: unreadData } = useQuery({
     queryKey: ["notifications", "unread-count"],
-    queryFn: () => listNotifications({ read: false, limit: 100 }),
-    refetchInterval: 10_000,
+    queryFn: () => getUnreadNotificationCount(),
   });
 
-  const unreadCount = unreadData?.items?.length ?? 0;
+  const unreadCount = unreadData?.count ?? 0;
   const hasUnread = unreadCount > 0;
 
   const handleClickNotification = useCallback(
