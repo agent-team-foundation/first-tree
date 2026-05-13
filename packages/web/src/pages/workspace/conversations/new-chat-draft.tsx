@@ -263,6 +263,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                 }
                 rows={1}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
                   if (mention.handleKey(e)) return;
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();

@@ -1067,6 +1067,7 @@ export function ChatView({
                   value={renameDraft}
                   onChange={(e) => setRenameDraft(e.target.value)}
                   onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing) return;
                     if (e.key === "Enter") {
                       e.preventDefault();
                       commitRename();
@@ -1437,6 +1438,9 @@ export function ChatView({
                     }
                     rows={2}
                     onKeyDown={(e) => {
+                      // Skip while an IME is composing so Enter confirms the
+                      // candidate instead of sending / picking a mention.
+                      if (e.nativeEvent.isComposing) return;
                       // Mention autocomplete gets first crack at navigation keys so
                       // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
                       // sending or moving the cursor.
