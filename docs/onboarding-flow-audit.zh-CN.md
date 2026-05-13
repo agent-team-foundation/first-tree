@@ -341,40 +341,23 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-2. `onboardingStep` 按 DB 现算导致"倒退"
+#### P-2. `onboardingStep` 按 DB 现算导致"倒退" ✅ Won't fix
 
-- **问题**：用户已完成 onboarding 多月后，删掉一台旧机器（`clients` 表条目删了），下次 `/me` 推断成 `connect`，stepper 重新出现。
+- **问题**：用户已完成 onboarding 多月后，删掉一台旧机器（`clients` 表条目删了），下次 `/me` 推断成 `connect`。
 - **位置**：`packages/server/src/api/me.ts` `inferOnboardingStep()`
-- **风险**：UI 像出 bug；如果 `dismissed_at` 被 reset（例如用户点 Settings → Onboarding → Resume），整个 onboarding 会强制重弹，把已完成用户推回 Step 1。
-- **决议（2026-05-13 讨论后）**：加 `users.onboarding_completed_at` 单 timestamp 列，与现有 `onboarding_dismissed_at` 模式对称。
-  - **DB 改动**：
-    ```sql
-    ALTER TABLE users ADD COLUMN onboarding_completed_at TIMESTAMPTZ;
-    ```
-    Backfill：把目前推断为 `completed` 的用户全部打上 `now()`（或更精确地，查最近一次 client + agent 都齐全的时间）。
-  - **`inferOnboardingStep` 改造**：
-    ```ts
-    function inferOnboardingStep(userId) {
-      const user = users.findById(userId);
-      if (user.onboardingCompletedAt) return "completed";  // 一旦完成永不回退
-      
-      const step = !hasClient ? "connect" : !hasAgent ? "create_agent" : "completed";
-      
-      // 第一次到 completed 时落库
-      if (step === "completed" && !user.onboardingCompletedAt) {
-        users.update(userId, { onboardingCompletedAt: new Date() });
-      }
-      return step;
-    }
-    ```
-  - **关键 take**：只关心"completed → 倒退"这一个回归场景，因为：
-    - 中间态（connect ↔ create_agent）停留时间短（分钟级）
-    - 中间态如果用户真的删光所有 client/agent，引导他重接是合理的
-    - 一旦走到 completed，就是**永久事实**，不该被资源临时缺失推翻
-  - 副作用收益：这个 timestamp 后续做"完成后 7 天弹回访问卷"等运营功能时可直接复用
+- **决议（2026-05-13 二次审视后）**：**不修复**——重新分析后发现"倒退"不是真问题，做 P-2 反而会**让 UX 变差**。
+  - **bug 真实触发条件极窄**：要让用户实际看到 stepper 倒退，需要同时：
+    1. 用户已完成 onboarding（`dismissed_at` 已被 Step 3 dismissOnboarding 自动 set）
+    2. **且** `dismissed_at` 被清掉（只有用户主动点 Settings → Onboarding → Resume 才会发生）
+    3. **且** 当前没 client（删机器了）
+  - **倒退后的行为其实是合理引导**：用户主动 Resume 之后看到 Step 2（"接电脑"指引）——他**确实**没 client，给他 CLI 安装命令是有用的，不是 bug
+  - **P-1 落地后伤害进一步缩小**：P-1 把 Step 1 gate 改成 `teamHasDefaultName`，所以倒退**不会显示 Step 1**（团队已改名），只会显示 Step 2（合理）
+  - **做 P-2 反而坏**：会把"你没 client，这是装 client 的 CLI"这种贴心引导变成"完成态了，自己想办法"——用户主动 Resume 时却拿到 Step 3 review，但他没 client agent 跑不起来，**更困惑**
+- **审计反思**：又一次"工程师本能（显式 + 持久化更稳）"覆盖了对实际用户路径的判断。决策时要先问"bug 真的让用户看见了吗？"而不是"理论上不一致"
 - **替代方案（已否决）**：
-  - 加 `users.onboarding_max_step_reached` enum 列（单调递进）：颗粒度更细，但要维护 step 顺序比较函数；中间态精度对当前问题没有增量价值
-  - 只在 `dismissed_at IS NULL` 且未完成过时推断：根本不解决问题——一旦 Resume 让 `dismissed_at = null`，立刻又回到现算逻辑
+  - 加 `users.onboarding_completed_at`：见上述分析，做了反而 UX 更差
+  - 加 `users.onboarding_max_step_reached` enum 列（单调递进）：同上
+- **排期影响**：从 P0 移除
 
 ---
 
@@ -416,7 +399,6 @@ Step 3 - InviteeStep3Body
       // 不 navigate, 不 dismiss
     }
     ```
-  - **可选补强（可与 P-9 合并做）**：在 `OrgSettingsPage` / `Step3IntroBody` 加"不一致检测 banner"——`hasSourceRepos !== hasContextTree` 时显示 "Team setup is incomplete"。这个 banner 不需要新 schema，从已有状态推导即可
   - **关键 take**：PUT 的幂等性是这个方案能成立的基础——admin retry 一次系统就收敛，竞态窗口极小（几秒内 invitee 恰好进 Step 3 概率极低，且看到的也只是 UX 不 ideal，不是数据损坏）
 - **替代方案（已否决）**：
   - **Option A：服务端原子 endpoint** `PATCH .../settings/onboarding-bundle`：边际收益太低（只多解决"admin 立刻关浏览器跑路"这一种场景），不值得引入新接口的维护成本
@@ -560,57 +542,75 @@ Step 3 - InviteeStep3Body
 
 ### 🟢 低严重性（文档 / 小一致性 / 技术债）
 
-#### P-13. CLAUDE.md 里 "Set up your first agent" modal 实际不是 modal
+> P-13 / P-15 已从 audit 移除（详见各自反思）。剩余 P-14 / P-16 / P-17 为未来触发式 backlog。
 
-- **问题**：CLAUDE.md 提到一个 modal，但代码里实际是 Step 3 IntroBody（一个内联面板）。
-- **建议**：更新 CLAUDE.md，避免新人/agent 找错。
-
----
-
-#### P-14. `step1Confirmed` sessionStorage flag 永不清理
+#### P-14. `step1Confirmed` sessionStorage flag 永不清理 ⏸ Won't fix unless triggered
 
 - **问题**：写一次永久存在。理论上没事但有 flag 漂移风险。
 - **位置**：`onboarding-flags.ts`
-- **建议**：在 Step 3 dismiss 时一并清掉所有 `onboarding:*` flag。
+- **决议（2026-05-13）**：**won't fix unless triggered**。实际伤害极小（用户清缓存 / 浏览器换设备等场景下重新走 Step 1 也不算 bug），修复成本是 1 行代码（dismiss 时清 flag），但 ROI 几乎零。如果未来 flag 漂移真的导致问题再加。
 
 ---
 
-#### P-15. 错误处理 silent swallow 太多
-
-- **问题**：bootstrap message 失败时静默吞掉，用户进了空 chat 不知道为什么 agent 没动作：
-  ```ts
-  try { await sendChatMessage(chat.id, bootstrap); }
-  catch { /* intentionally non-fatal — user lands in the empty chat */ }
-  ```
-- **位置**：`step3-intro-body.tsx:200–202, 363–365, 642–644`
-- **建议**：失败时至少在 chat 里显示一条 system message 提示 "Bootstrap failed, please tell your agent: '请帮我初始化 context tree'"。
-
----
-
-#### P-16. `resolveOnboardingAgent()` fallback 可能选错 agent
+#### P-16. `resolveOnboardingAgent()` fallback 可能选错 agent ⏸ Won't fix unless reported
 
 - **问题**：用户清缓存后，stashed UUID 失效，回退到 "最近创建的非 human agent"——如果用户已手动建了别的 agent，可能选错。
 - **位置**：`step3-intro-body.tsx:847`
-- **建议**：把 onboardingAgent UUID 持久化到 server-side（如 `users.onboarding_agent_id`），不依赖 sessionStorage。
+- **决议（2026-05-13）**：**won't fix unless reported**。触发条件极窄（用户必须**已有多个 agent** + **清了缓存** + **正好回到 Step 3**），onboarding 阶段用户大概率只有 1 个 agent。等真有用户反馈"绑错 agent"再做（修复方案：持久化 onboardingAgent UUID 到 server-side）。
 
 ---
 
-#### P-17. `teamRepos` 的 useState 初始化只跑一次
+#### P-17. `teamRepos` 的 useState 初始化只跑一次 🔗 Bundled with P-6
 
 - **问题**：注释里已经标注："If that invariant ever changes, add a useEffect that reconciles chosenRepoUrls when teamRepos identity changes." 是已知技术债。
 - **位置**：`step3-intro-body.tsx:179`
-- **建议**：当未来 `InviteeStep3Body` 加上对 `team_setup_pending` 的实时订阅（参见 P-6），这里务必同步加 `useEffect` 协调。
+- **决议（2026-05-13）**：**作为 P-6 的子任务**。当 P-6（InviteeWaitingBody 通知系统集成）反激活、`InviteeStep3Body` 加上对 team_setup 的实时订阅时，必须同步在 `InviteeConfirmBody` 加 `useEffect` 协调 `chosenRepoUrls`，否则会出现选择不同步问题。
 
 ---
 
-## 整改优先级建议
+#### P-18. Step 2 default agent name 改用 `{login}'s assistant` ✨ New (2026-05-13)
+
+- **问题**：当前默认 name 是 `"Assistant"`，多人团队下每个用户的 agent 都叫 Assistant，chat / mention / 通知里**重名严重**。
+- **位置**：`step2-body.tsx:56`
+- **决议（2026-05-13 讨论后）**：默认改为 `{login}'s assistant`，跟现有 `{login}'s team` 命名约定对齐。
+  - 改动：
+    ```ts
+    // 当前
+    const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "Assistant");
+    
+    // 改后
+    const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? `${login}'s assistant`);
+    ```
+  - 用户已手动改过的不会被覆盖（`??` fallback 保护）
+  - **slugify 行为已验证**：`gandyxiong's assistant` → `gandyxiong-s-assistant`，functional 但稍粗糙；如有洁癖可以在 slugify 前先 strip apostrophe，但不阻塞
+- **关联讨论**：先讨论过"改 'personal assistant'"（已否决——在 Step 2 时刻没有对照项，引入新概念反而困惑）；最终落点是这条更聚焦"重名"问题
+- **跟 P-7 一起做**：都是 onboarding 文案精准化的小工作，1 个 PR 解决
+
+---
+
+## Audit 整体反思
+
+讨论过程中累计出现 **3 次**"凭印象写错"或"过度推荐"的模式，需要在后续 audit 工作中警惕：
+
+| 案例 | 模式 |
+|---|---|
+| **P-5** | 没读现有代码就下结论"缺防护"，实际已有双闸 |
+| **P-10** | 没核实 `/team` 现有功能就列"缺 Members tab" |
+| **P-2** | 工程师本能（"显式状态化更稳"）覆盖了对实际用户路径的判断；做了反而 UX 更差 |
+
+另一个反复出现的反模式：每次必要修复之上**叠一层"看起来更完善"的 polish**（P-1 加 DB 列、P-3 加事务、P-6 加前端订阅、P-7 加按钮文案动态化）——这些都被讨论否决。**默认推最小修复，附加项要明确论证 ROI 才提**。
+
+---
+
+## 整改优先级建议（2026-05-13 收尾后）
 
 | Sprint | 处理项 |
 |---|---|
-| **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写（P-5 复查后发现已解决，无需投入）|
-| **P1（下周）** | P-1 joinPath 持久化（P-6 deferred 至通知系统重构后）|
-| **P2** | P-7 toast 文案对齐（5 分钟改）（P-4 已被 P-1 覆盖；P-11 deferred 至 billing 立项或滥用反馈时）|
-| **P3（清理）** | P-13–17 文档与小修（P-8 / P-12 改为触发条件式 backlog）|
+| **P0（这周）** | P-3 非原子写（前端错误处理统一）|
+| **P1（下周）** | P-1 joinPath 持久化（纯派生，改 Step 1 + Step 2 gate）|
+| **P2** | P-7 toast 文案对齐 + P-18 default agent name（同一 PR）|
+| **触发式 backlog** | P-6（通知系统重构后）、P-8（新 integration 类型）、P-11（billing 立项）、P-12（设置项膨胀）、P-14 / P-16（用户反馈）、P-17（跟随 P-6）|
+| **已 resolved / 失效** | P-2 won't fix（重审后发现是过度修复）、P-4 已被 P-1 覆盖、P-5 已存在双闸防护、P-9 / P-10 / P-13 / P-15 audit 错误已移除 |
 
 ---
 
