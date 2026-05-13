@@ -410,6 +410,101 @@ describe("resolveAudience", () => {
     expect(audience[0]?.humanAgentId).toBe(otherHuman);
   });
 
+  it("keeps an involved-new row when actor self-mentions (explicit intent, not echo)", async () => {
+    // Regression test for #345: the legacy mention-driven webhook routed
+    // self-mentions to the actor's own delegate. The normalize → audience
+    // pipeline accidentally suppressed this because `identifyActor` classifies
+    // any actor with an agents-row as `kind: "agent"`, and the echo filter
+    // dropped all rows touching that agent — including the brand-new mention.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `self-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#108",
+        actorLogin: humanName,
+        involves: [{ githubLogin: humanName, reason: "mentioned" }],
+        kind: "commented",
+      }),
+      "first-tree-hub",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]).toMatchObject({
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "new",
+      involveReason: "mentioned",
+      involveLogin: humanName.toLowerCase(),
+    });
+  });
+
+  it("self-mention in an already-subscribed entity stays silent (existing dropped, new skipped by subscribedKeys)", async () => {
+    // Documents the interaction between two filters when actor self-targets
+    // an entity they already subscribe to:
+    //   - the `subscribedKeys` short-circuit (resolveAudience) skips adding a
+    //     `kind: "new"` row because (human, delegate) is already subscribed
+    //   - the actor-agent echo filter then drops the surviving `kind: "existing"`
+    //     row because the actor is on the human side
+    // Net result: audience is empty. This is *not* the explicit-intent path the
+    // sibling test covers — there's no new row to keep. Locking the behavior
+    // here so a future change that wants to nudge a subscribed delegate via
+    // self-mention has a clear anchor.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `self-sub-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#110",
+      chatId,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#110",
+        actorLogin: humanName,
+        involves: [{ githubLogin: humanName, reason: "mentioned" }],
+        kind: "commented",
+      }),
+      "first-tree-hub",
+    );
+
+    expect(audience).toEqual([]);
+  });
+
   it("skips an involve whose delegate target is inactive (suspended/deleted)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

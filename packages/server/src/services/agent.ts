@@ -9,6 +9,7 @@ import type {
 import {
   AGENT_NAME_REGEX,
   AGENT_STATUSES,
+  AGENT_TYPES,
   AGENT_VISIBILITY,
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
@@ -223,6 +224,28 @@ async function validateDelegateMentionTarget(db: Database, targetUuid: string, s
 }
 
 /**
+ * Service-layer guard: `delegateMention` is only available for `human` agents.
+ * Mirrors the Web UI in `identity-section.tsx`, which only renders the
+ * delegate-mention selector when `agent.type === "human"`. Without this
+ * server-side check, CLI / Admin API / internal scripts could write
+ * delegateMention onto non-human rows, silently re-enabling the
+ * autonomous-agent-self-mention path that resolveAudience would then fan
+ * out. Called from `createAgent` / `updateAgent` before
+ * `validateDelegateMentionTarget` so a wrong source type fails fast without
+ * the target lookup round-trip.
+ */
+function assertDelegateMentionAllowed(sourceType: string): void {
+  // Accepts `string` (not `AgentType`) because callers may forward the
+  // value from an `agents` row, whose `type` column is declared as `text`
+  // and therefore narrows to `string` after Drizzle inference. The guard
+  // only checks one bit — is it `human` — so widening the parameter is
+  // safe and avoids forcing an unsound `as AgentType` cast at the caller.
+  if (sourceType !== AGENT_TYPES.HUMAN) {
+    throw new BadRequestError("delegateMention can only be set on human agents");
+  }
+}
+
+/**
  * Pick the first admin member in the org for internal system agents. Throws
  * if the org has no admin — the caller should surface the error so an admin
  * is created before the system tries to register more agents.
@@ -316,6 +339,7 @@ export async function createAgent(
   await ensureClientSupportsRuntimeProvider(db, clientId, runtimeProvider, { force: options.force });
 
   if (data.delegateMention) {
+    assertDelegateMentionAllowed(data.type);
     await validateDelegateMentionTarget(db, data.delegateMention, orgId);
   }
 
@@ -636,10 +660,27 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   }
 
   const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
-  if (data.type !== undefined) updates.type = data.type;
+  if (data.type !== undefined) {
+    // Closes the type-flip leak: without this guard a PATCH like
+    // `{type: "autonomous_agent"}` on a human row with a non-null
+    // delegateMention would leave behind `type=autonomous_agent +
+    // delegateMention=<uuid>`, violating the invariant that only humans
+    // carry a delegate. The caller must either clear delegateMention in
+    // the same patch or flip type to human (no-op for the invariant).
+    if (data.type !== AGENT_TYPES.HUMAN && agent.delegateMention !== null && data.delegateMention !== null) {
+      throw new BadRequestError(
+        "Cannot change type away from `human` while delegateMention is set — clear delegateMention in the same patch.",
+      );
+    }
+    updates.type = data.type;
+  }
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.delegateMention !== undefined) {
     if (data.delegateMention !== null) {
+      // Effective type honors a same-patch `type` update; without this the
+      // guard would read the stale pre-update value when the caller flips
+      // type → "human" and sets delegateMention in one PATCH.
+      assertDelegateMentionAllowed(data.type ?? agent.type);
       await validateDelegateMentionTarget(db, data.delegateMention, agent.organizationId);
     }
     updates.delegateMention = data.delegateMention;
