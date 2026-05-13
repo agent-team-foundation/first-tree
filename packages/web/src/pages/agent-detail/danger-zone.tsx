@@ -15,6 +15,7 @@ export type DangerZoneProps = {
   suspendPending: boolean;
   reactivatePending: boolean;
   deletePending: boolean;
+  errorMessage?: string | null;
   onSuspend: () => void;
   onReactivate: () => void;
   onDelete: () => void;
@@ -26,6 +27,7 @@ export function DangerZone(props: DangerZoneProps) {
   const [suspendOpen, setSuspendOpen] = useState(false);
 
   const displayLabel = agent.displayName || agent.name || agent.uuid;
+  const canDelete = agent.status === "suspended";
 
   return (
     <section
@@ -66,15 +68,39 @@ export function DangerZone(props: DangerZoneProps) {
         )}
         <DangerRow
           title="Delete agent"
-          body="Permanent. Configuration, bindings, tokens, and session history are all dropped."
+          body={
+            canDelete
+              ? "Permanent. Configuration, bindings, tokens, and session history are all dropped."
+              : "Suspend this agent before deleting it."
+          }
           action={
-            <Button variant="destructive" size="xs" onClick={() => setDeleteOpen(true)} disabled={props.deletePending}>
+            <Button
+              variant="destructive"
+              size="xs"
+              onClick={() => {
+                if (canDelete) setDeleteOpen(true);
+              }}
+              disabled={props.deletePending || !canDelete}
+              title={canDelete ? undefined : "Suspend this agent before deleting it"}
+            >
               <Trash2 className="h-3 w-3" />
               Delete
             </Button>
           }
         />
       </div>
+      {props.errorMessage && (
+        <div
+          className="text-body"
+          style={{
+            padding: "var(--sp-2_5) var(--sp-3_5)",
+            borderTop: "var(--hairline) solid color-mix(in oklch, var(--state-error) 14%, transparent)",
+            color: "var(--state-error)",
+          }}
+        >
+          {props.errorMessage}
+        </div>
+      )}
 
       <SuspendConfirmDialog
         open={suspendOpen}
