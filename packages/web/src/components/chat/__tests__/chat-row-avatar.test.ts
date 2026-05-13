@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAvatarAriaLabel, formatUnreadLabel, pickCompositeShape } from "../chat-row-avatar.js";
+import { buildAvatarAriaLabel, formatUnreadLabel, pickAvatarHue, pickCompositeShape } from "../chat-row-avatar.js";
 
 /**
  * Pin the pure decision helpers exported by `ChatRowAvatar`. The
@@ -51,6 +51,44 @@ describe("formatUnreadLabel — badge text", () => {
   it(">=100 rolls over to '99+' so the badge stays width-stable", () => {
     expect(formatUnreadLabel(100)).toBe("99+");
     expect(formatUnreadLabel(9999)).toBe("99+");
+  });
+});
+
+describe("pickAvatarHue — deterministic per-agent fill color", () => {
+  it("returns an OkLCH string from the palette", () => {
+    const hue = pickAvatarHue("agent-1");
+    expect(hue).toMatch(/^oklch\(/);
+  });
+
+  it("same seed yields the same hue across calls (stable per agent)", () => {
+    // Pins the contract that powers consistent agent identity across
+    // direct chats, group composites, and page reloads.
+    const a = pickAvatarHue("019e20a6-287b-71f7-b9ba-cb954e7fa144");
+    const b = pickAvatarHue("019e20a6-287b-71f7-b9ba-cb954e7fa144");
+    expect(a).toBe(b);
+  });
+
+  it("different seeds reach more than one palette entry", () => {
+    // Sanity check that the palette is actually being used and the
+    // hash isn't degenerate. A handful of UUIDs should land on at
+    // least 2 distinct hues.
+    const seeds = [
+      "agent-kael",
+      "agent-design",
+      "agent-marketing",
+      "agent-research",
+      "agent-support",
+      "agent-platform",
+      "agent-zeta",
+      "agent-omega",
+    ];
+    const hues = new Set(seeds.map(pickAvatarHue));
+    expect(hues.size).toBeGreaterThan(1);
+  });
+
+  it("empty seed falls back to the first palette entry without throwing", () => {
+    expect(() => pickAvatarHue("")).not.toThrow();
+    expect(pickAvatarHue("")).toMatch(/^oklch\(/);
   });
 });
 

@@ -39,6 +39,43 @@ function initial(s: string): string {
 }
 
 /**
+ * Per-agent fill colors. Eight perceptually-distinct hues at the same
+ * OkLCH lightness/chroma so every avatar reads with the same visual
+ * weight. White-ish text (handled by the rendering site via
+ * `var(--bg-raised)` in light mode) carries enough contrast against
+ * every entry; same palette works light + dark because OkLCH stays
+ * perceptually stable across themes.
+ */
+const AVATAR_HUES: ReadonlyArray<string> = [
+  "oklch(0.66 0.16 150)", // green (kept first so the default-fallback hash collision still looks neutral)
+  "oklch(0.62 0.17 250)", // blue
+  "oklch(0.6 0.18 295)", // purple
+  "oklch(0.65 0.2 0)", // pink
+  "oklch(0.68 0.16 50)", // orange
+  "oklch(0.65 0.13 200)", // teal
+  "oklch(0.72 0.15 90)", // amber
+  "oklch(0.55 0.17 270)", // indigo
+];
+
+/**
+ * Hash a stable seed (usually an agent's UUID; falls back to display
+ * name if the UUID isn't around) into a fixed entry from `AVATAR_HUES`.
+ * Same agent → same hue across direct chats, group composites, and
+ * page reloads. Cheap djb2 variant; no allocations.
+ *
+ * Exported for unit testing the deterministic-mapping contract.
+ */
+export function pickAvatarHue(seed: string): string {
+  if (seed.length === 0) return AVATAR_HUES[0] ?? "oklch(0.66 0.16 150)";
+  let hash = 5381;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 33) ^ seed.charCodeAt(i);
+  }
+  const idx = Math.abs(hash) % AVATAR_HUES.length;
+  return AVATAR_HUES[idx] ?? AVATAR_HUES[0] ?? "oklch(0.66 0.16 150)";
+}
+
+/**
  * Composite-avatar layout key, exported for unit testing the branch
  * decisions without rendering to a DOM. `"single"` is reserved for the
  * non-composite path (1 peer or direct chats); `"n2"` / `"n3"` / `"n4"`
@@ -125,7 +162,7 @@ export function ChatRowAvatar({
       }}
     >
       {isDirect || peers.length <= 1 ? (
-        <SingleAvatar size={size} name={peer?.displayName ?? title} />
+        <SingleAvatar size={size} name={peer?.displayName ?? title} hueSeed={peer?.agentId ?? title} />
       ) : (
         <CompositeAvatar size={size} peers={peers} />
       )}
@@ -135,7 +172,7 @@ export function ChatRowAvatar({
   );
 }
 
-function SingleAvatar({ size, name }: { size: number; name: string }) {
+function SingleAvatar({ size, name, hueSeed }: { size: number; name: string; hueSeed: string }) {
   return (
     <span
       aria-hidden="true"
@@ -143,8 +180,8 @@ function SingleAvatar({ size, name }: { size: number; name: string }) {
         width: size,
         height: size,
         borderRadius: "50%",
-        background: "var(--accent)",
-        color: "var(--bg-raised)",
+        background: pickAvatarHue(hueSeed),
+        color: "oklch(0.985 0 0)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -195,30 +232,35 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
     >
       {shape === "n2" && (
         <>
-          <Seg name={peers[0]?.displayName ?? "?"} fontSize={fontSize} />
-          <Seg name={peers[1]?.displayName ?? "?"} fontSize={fontSize} />
+          <Seg name={peers[0]?.displayName ?? "?"} hueSeed={peers[0]?.agentId ?? "0"} fontSize={fontSize} />
+          <Seg name={peers[1]?.displayName ?? "?"} hueSeed={peers[1]?.agentId ?? "1"} fontSize={fontSize} />
         </>
       )}
       {shape === "n3" && (
         <>
-          <Seg name={peers[0]?.displayName ?? "?"} fontSize={fontSizeTop} fullWidth />
-          <Seg name={peers[1]?.displayName ?? "?"} fontSize={fontSize} />
-          <Seg name={peers[2]?.displayName ?? "?"} fontSize={fontSize} />
+          <Seg
+            name={peers[0]?.displayName ?? "?"}
+            hueSeed={peers[0]?.agentId ?? "0"}
+            fontSize={fontSizeTop}
+            fullWidth
+          />
+          <Seg name={peers[1]?.displayName ?? "?"} hueSeed={peers[1]?.agentId ?? "1"} fontSize={fontSize} />
+          <Seg name={peers[2]?.displayName ?? "?"} hueSeed={peers[2]?.agentId ?? "2"} fontSize={fontSize} />
         </>
       )}
       {shape === "n4" && (
         <>
-          <Seg name={peers[0]?.displayName ?? "?"} fontSize={fontSize} />
-          <Seg name={peers[1]?.displayName ?? "?"} fontSize={fontSize} />
-          <Seg name={peers[2]?.displayName ?? "?"} fontSize={fontSize} />
-          <Seg name={peers[3]?.displayName ?? "?"} fontSize={fontSize} />
+          <Seg name={peers[0]?.displayName ?? "?"} hueSeed={peers[0]?.agentId ?? "0"} fontSize={fontSize} />
+          <Seg name={peers[1]?.displayName ?? "?"} hueSeed={peers[1]?.agentId ?? "1"} fontSize={fontSize} />
+          <Seg name={peers[2]?.displayName ?? "?"} hueSeed={peers[2]?.agentId ?? "2"} fontSize={fontSize} />
+          <Seg name={peers[3]?.displayName ?? "?"} hueSeed={peers[3]?.agentId ?? "3"} fontSize={fontSize} />
         </>
       )}
       {shape === "n5+" && (
         <>
-          <Seg name={peers[0]?.displayName ?? "?"} fontSize={fontSize} />
-          <Seg name={peers[1]?.displayName ?? "?"} fontSize={fontSize} />
-          <Seg name={peers[2]?.displayName ?? "?"} fontSize={fontSize} />
+          <Seg name={peers[0]?.displayName ?? "?"} hueSeed={peers[0]?.agentId ?? "0"} fontSize={fontSize} />
+          <Seg name={peers[1]?.displayName ?? "?"} hueSeed={peers[1]?.agentId ?? "1"} fontSize={fontSize} />
+          <Seg name={peers[2]?.displayName ?? "?"} hueSeed={peers[2]?.agentId ?? "2"} fontSize={fontSize} />
           <SegMore count={n - 3} fontSize={fontSizeMore} />
         </>
       )}
@@ -226,15 +268,25 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
   );
 }
 
-function Seg({ name, fontSize, fullWidth }: { name: string; fontSize: number; fullWidth?: boolean }) {
+function Seg({
+  name,
+  hueSeed,
+  fontSize,
+  fullWidth,
+}: {
+  name: string;
+  hueSeed: string;
+  fontSize: number;
+  fullWidth?: boolean;
+}) {
   return (
     <span
       style={{
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "var(--accent)",
-        color: "var(--bg-raised)",
+        background: pickAvatarHue(hueSeed),
+        color: "oklch(0.985 0 0)",
         fontSize,
         fontWeight: 700,
         lineHeight: 1,
@@ -308,7 +360,7 @@ function UnreadBadge({ count }: { count: number }) {
         padding: "0 var(--sp-1)",
         borderRadius: "var(--sp-2)",
         background: "var(--state-error)",
-        color: "var(--bg-raised)",
+        color: "oklch(0.985 0 0)",
         fontSize: "var(--text-caption)",
         fontWeight: 700,
         lineHeight: "var(--sp-4)",
