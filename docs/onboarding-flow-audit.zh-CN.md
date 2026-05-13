@@ -543,11 +543,18 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-12. Context Tree 设置嵌在 Team tab 内（已讨论，暂不改）
+#### P-12. Context Tree 设置嵌在 Team tab 内 ⏸ Deferred until triggered
 
-- **现状**：是 Team tab 的一个 panel，不是独立 sub-tab。
+- **现状**：是 Team tab 的一个 panel（`org-settings.tsx` 里的 `ContextTreeSettingsPanel`），不是独立 sub-tab。admin-only。
 - **观察**：当前有 4 个并行 worktree 在做 context tree（`context-tab` / `context-tree-remote-sync` / `context-overview-map` / `context-ui`），暗示这块在膨胀。
-- **建议**：当 Context Tree 设置项数量增长（多 tree 管理、sync 状态、历史等），拆成独立 `/settings/context-tree` sub-tab，admin-only gate 复用 GitHub tab 的双保险模式。
+- **决议（2026-05-13 讨论后）**：**暂不拆**，等设置项数量真的增长再做。
+  - 当前作为 Team tab 内一个 panel 是合理的临时状态——内容少时拆 sub-tab 反而稀释 Settings 侧栏密度
+  - 触发条件：设置项扩展到 panel 容不下（多 tree 管理、sync 状态可视化、历史记录等）
+- **触发后的实施方案**：
+  - `settings.tsx` 侧栏加 `<SubNavLink to="/settings/context-tree" />`
+  - `app.tsx` 路由表加一行
+  - 把 `ContextTreeSettingsPanel` 从 `org-settings.tsx` 移走，包成独立 page
+  - admin-only gate 复用 GitHub tab 的双保险模式（侧栏隐藏 + 页面 `<Navigate>` 守卫）
 
 ---
 
@@ -603,7 +610,7 @@ Step 3 - InviteeStep3Body
 | **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写（P-5 复查后发现已解决，无需投入）|
 | **P1（下周）** | P-1 joinPath 持久化（P-6 deferred 至通知系统重构后）|
 | **P2** | P-7 toast 文案对齐（5 分钟改）（P-4 已被 P-1 覆盖；P-11 deferred 至 billing 立项或滥用反馈时）|
-| **P3（清理）** | P-12 Context Tree 拆分、P-13–17 文档与小修（P-8 改为触发条件式 backlog）|
+| **P3（清理）** | P-13–17 文档与小修（P-8 / P-12 改为触发条件式 backlog）|
 
 ---
 
