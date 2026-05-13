@@ -44,7 +44,7 @@ export function NotificationBell() {
   const hasUnread = unreadCount > 0;
 
   const handleClickNotification = useCallback(
-    async (n: NotificationRow & { agentId: string | null }) => {
+    async (n: NotificationRow) => {
       if (!n.read) {
         markNotificationRead(n.id).catch(() => {});
         // Local optimism so the unread count + row background update before
@@ -53,11 +53,10 @@ export function NotificationBell() {
         queryClient.invalidateQueries({ queryKey: ["notifications"] });
       }
       setOpen(false);
-      if (n.agentId && n.chatId) {
-        navigate(`/?a=${n.agentId}&c=${n.chatId}`);
-      } else if (n.agentId) {
-        navigate(`/?a=${n.agentId}`);
-      }
+      // Workspace is chat-first: only `?c=<chatId>` is a real navigation
+      // target. Rows without a chatId are rendered non-clickable below, so
+      // this handler always gets one here.
+      if (n.chatId) navigate(`/?c=${n.chatId}`);
     },
     [navigate, queryClient],
   );
@@ -163,7 +162,7 @@ export function NotificationBell() {
                   <NotificationItem
                     key={n.id}
                     notification={n}
-                    clickable={!!n.agentId}
+                    clickable={!!n.chatId}
                     onClick={() => handleClickNotification(n)}
                   />
                 ))

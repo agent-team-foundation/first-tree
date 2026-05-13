@@ -104,7 +104,6 @@ function buildSessionCtx(chatId: string, sentMessages: SentMessage[]): SessionCo
     touch: () => {},
     setRuntimeState: () => {},
     emitEvent: () => {},
-    reportSessionCompletion: () => {},
     ...mockCtxPlumbing({ sendMessage }, chatId),
   };
 }
@@ -233,7 +232,6 @@ describe("claude-code canUseTool bridge", () => {
       touch: () => {},
       setRuntimeState: () => {},
       emitEvent: () => {},
-      reportSessionCompletion: () => {},
       ...mockCtxPlumbing({ sendMessage }, "chat-codex-defense"),
     };
     await handler.start(

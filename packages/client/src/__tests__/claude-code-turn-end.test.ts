@@ -94,7 +94,6 @@ describe("claude-code handler — turn_end emission", () => {
       setRuntimeState: () => {},
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
       emitEvent: (e) => emitted.push(e),
-      reportSessionCompletion: () => {},
     };
 
     await handler.start(
@@ -109,7 +108,6 @@ describe("claude-code handler — turn_end emission", () => {
 
   it("emits a turn_end success event AFTER the result forwards", async () => {
     const emitted: SessionEvent[] = [];
-    const reportSessionCompletion = vi.fn();
     // Track call order so we can assert turn_end follows the sendMessage resolution.
     const order: string[] = [];
     const sendMessage = vi.fn().mockImplementation(async () => {
@@ -139,10 +137,6 @@ describe("claude-code handler — turn_end emission", () => {
         if (e.kind === "turn_end") order.push(`turn_end:${e.payload.status}`);
         emitted.push(e);
       },
-      reportSessionCompletion: () => {
-        order.push("reportSessionCompletion");
-        reportSessionCompletion();
-      },
     };
 
     await handler.start(
@@ -155,7 +149,6 @@ describe("claude-code handler — turn_end emission", () => {
     await new Promise((r) => setImmediate(r));
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(reportSessionCompletion).toHaveBeenCalledTimes(1);
 
     const turnEndEvents = emitted.filter((e) => e.kind === "turn_end");
     expect(turnEndEvents).toHaveLength(1);
@@ -166,6 +159,6 @@ describe("claude-code handler — turn_end emission", () => {
     // Crucial: turn_end must fire AFTER the result message is persisted — otherwise
     // the frontend's "hide completed-turn events" filter could briefly show an
     // empty timeline.
-    expect(order).toEqual(["sendMessage", "reportSessionCompletion", "turn_end:success"]);
+    expect(order).toEqual(["sendMessage", "turn_end:success"]);
   });
 });

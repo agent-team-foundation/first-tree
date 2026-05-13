@@ -44,11 +44,6 @@ export type SessionContext = HandlerContext & {
    * Assistant text does NOT go through here — it flows via `forwardResult`.
    */
   emitEvent: (event: SessionEvent) => void;
-  /**
-   * Signal that a query completed end-to-end — fires the per-chat
-   * `session_completed` notification on the server (5-min cooldown).
-   */
-  reportSessionCompletion: () => void;
 
   /**
    * Forward the handler's final text to the chat. Runtime handles mention

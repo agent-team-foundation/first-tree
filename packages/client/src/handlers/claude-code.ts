@@ -729,7 +729,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // handler shares one code path — see runtime/result-sink.ts.
                     await sessionCtx.forwardResult(resultText);
                     sessionCtx.log("Result forwarded to chat");
-                    sessionCtx.reportSessionCompletion();
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                   } catch (err) {
                     const reason = err instanceof Error ? err.message : String(err);
