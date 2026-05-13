@@ -525,10 +525,21 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-11. role 是二元（admin/member），没有 owner
+#### P-11. role 是二元（admin/member），没有 owner ⏸ Deferred until triggered
 
 - **问题**：org 创建者和后续 promote 的 admin 没有区分。如果原 admin 离开，谁来 transfer ownership？billing 责任人是谁？
-- **建议**：加 `owner` role（exactly 1 per org），admin 是 owner 之外可扩展的管理角色。Settings → Members 支持 transfer ownership。
+- **决议（2026-05-13 讨论后）**：**暂不做**，等触发条件出现再立项。
+  - **理由**：
+    - 产品仍在早期，"owner 离职"实际频率约为 0
+    - Owner role 的主要价值（billing contract holder、防 admin 互踢、所有权转移）目前都未踩到
+    - Option A（加 owner role）成本不小：DB migration + 权限检查全面 refactor + UI transfer 流程 + 测试重做
+    - 真要做时应根据 billing 设计反推 owner 的具体语义（contract holder vs 数据 owner vs 操作 owner），现在做语义模糊
+  - **触发重启信号**（任一）：
+    - Billing / 付费版立项
+    - 用户反馈 admin 滥用 / 互踢
+    - Org 数到达"原 owner 离职"成为定期事件的频率
+- **替代方案（已否决）**：
+  - **Option C：加 `organizations.owner_user_id` 单字段不改 role enum**：既然 owner 没有立刻要用的语义，加空字段是技术债
 
 ---
 
@@ -591,7 +602,7 @@ Step 3 - InviteeStep3Body
 |---|---|
 | **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写（P-5 复查后发现已解决，无需投入）|
 | **P1（下周）** | P-1 joinPath 持久化（P-6 deferred 至通知系统重构后）|
-| **P2** | P-7 toast 文案对齐（5 分钟改）、P-11 owner role（P-4 已被 P-1 覆盖，无需单独投入） |
+| **P2** | P-7 toast 文案对齐（5 分钟改）（P-4 已被 P-1 覆盖；P-11 deferred 至 billing 立项或滥用反馈时）|
 | **P3（清理）** | P-12 Context Tree 拆分、P-13–17 文档与小修（P-8 改为触发条件式 backlog）|
 
 ---
