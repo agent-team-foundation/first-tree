@@ -525,32 +525,6 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-9. Team tab 对 member "名不副实" ✅ Won't fix
-
-- **问题**：member 进入 Team tab 只看到 SourceReposSettingsPanel 一个只读 panel。tab 名 "Team" 但内容只有 source repos，找不到团队成员、自己的 role、加入时间。
-- **位置**：`org-settings.tsx`
-- **关键事实**：codebase 里**已经存在独立的 `/team` 路由**（roster 页：humans + agents），是看团队成员的地方。所以严格说不是"功能缺失"，是 `/settings/team` 和 `/team` 都叫 Team。
-- **决议（2026-05-13 讨论后）**：**不修复**。member 想看团队成员可以去 `/team` 页，当前 `/settings/team` 对 member 来说就是只读的 source repos 视图，名不副实问题不算痛点。
-- **触发重启信号**：未来如果有用户反馈"在 Settings 找不到团队成员"，再加 1 行 disclosure（Option B：`Your role · Joined · View team roster →`，~15 分钟工作）
-
----
-
-#### P-10. 缺失核心 Settings tab ⚠️ Audit error — most features already exist
-
-| 我之前列的"缺失" | 实际情况（核实后） |
-|---|---|
-| ~~Profile~~ | 用户身份完全 GitHub-sourced（display name / avatar / email / 无密码）。**无可编辑字段**，加 tab 没意义 |
-| ~~Members / Invites~~ | **已完整存在**于 `/team` 页：`InviteLinkPanel` 提供 admin 邀请管理（一个 active link/org、TTL 过期、Rotate 按钮），`members.ts` API 提供完整 CRUD（delete/update/role 修改） |
-| ~~Notifications~~ | 通知系统正在重构（与 P-6 同进度），届时再考虑 |
-| ~~API tokens~~ | 不在 roadmap |
-| ~~Billing~~ | 长期，暂不需要 |
-
-- **决议（2026-05-13 复查后）**：**整条 P-10 失效**——这是 audit 凭印象写错的（同 P-5 模式）。当前架构下 Settings tab 没有真正"缺失"的核心功能。
-- **审计反思**：再次出现"没核实代码就下结论缺失"的错误。P-5 是高估了 dev-callback 风险，P-10 是低估了 `/team` 的功能覆盖范围。这影响 audit 整体可信度——其他条目的"严重性"分类、排期都可能有类似漏洞，需要在收尾时做整体校准
-- **未来触发**：如果产品决定支持用户 override GitHub display name / avatar，再单独立项加 Profile tab
-
----
-
 #### P-11. role 是二元（admin/member），没有 owner
 
 - **问题**：org 创建者和后续 promote 的 admin 没有区分。如果原 admin 离开，谁来 transfer ownership？billing 责任人是谁？
@@ -616,9 +590,9 @@ Step 3 - InviteeStep3Body
 | Sprint | 处理项 |
 |---|---|
 | **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写（P-5 复查后发现已解决，无需投入）|
-| **P1（下周）** | P-1 joinPath 持久化（P-6 deferred 至通知系统重构后；P-10 复查后失效，无需投入）|
+| **P1（下周）** | P-1 joinPath 持久化（P-6 deferred 至通知系统重构后）|
 | **P2** | P-7 toast 文案对齐（5 分钟改）、P-11 owner role（P-4 已被 P-1 覆盖，无需单独投入） |
-| **P3（清理）** | P-12 Context Tree 拆分、P-13–17 文档与小修（P-8 / P-9 改为触发条件式 backlog）|
+| **P3（清理）** | P-12 Context Tree 拆分、P-13–17 文档与小修（P-8 改为触发条件式 backlog）|
 
 ---
 
