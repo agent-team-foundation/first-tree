@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractEventEntity, formatEntityTitle, parseFixesRefs, shouldSilent } from "../api/webhooks/github-entity.js";
+import { extractEventEntity, formatEntityTitle, parseFixesRefs } from "../api/webhooks/github-entity.js";
 
 describe("extractEventEntity", () => {
   it("derives issue entity from issues event", () => {
@@ -22,6 +22,26 @@ describe("extractEventEntity", () => {
     });
     expect(entity?.type).toBe("issue");
     expect(entity?.key).toBe("owner/repo#7");
+  });
+
+  it("derives pull_request entity from issue_comment on a PR (issue.pull_request set)", () => {
+    const entity = extractEventEntity("issue_comment", {
+      issue: {
+        number: 316,
+        title: "Improve onboarding flow",
+        html_url: "https://github.com/owner/repo/issues/316",
+        pull_request: {
+          html_url: "https://github.com/owner/repo/pull/316",
+        },
+      },
+      repository: { full_name: "owner/repo" },
+    });
+    expect(entity).toEqual({
+      type: "pull_request",
+      key: "owner/repo#316",
+      title: "Improve onboarding flow",
+      url: "https://github.com/owner/repo/pull/316",
+    });
   });
 
   it("derives pull_request entity from pull_request event", () => {
@@ -213,38 +233,5 @@ describe("formatEntityTitle", () => {
     // Defensive — entity keys are always `owner/repo...` in practice, but the
     // helper shouldn't choke if a future caller drops the slash.
     expect(formatEntityTitle({ type: "issue", key: "repo#42" }, "issues", "opened")).toBe("Issue repo#42");
-  });
-});
-
-describe("shouldSilent", () => {
-  it("silences workflow_run / check_run / push / release etc.", () => {
-    expect(shouldSilent("workflow_run", { action: "completed" })).toBe(true);
-    expect(shouldSilent("check_run", { action: "completed" })).toBe(true);
-    expect(shouldSilent("push", {})).toBe(true);
-    expect(shouldSilent("release", { action: "published" })).toBe(true);
-  });
-
-  it("silences Bot senders regardless of event type", () => {
-    expect(shouldSilent("issues", { action: "opened", sender: { type: "Bot" } })).toBe(true);
-  });
-
-  it("silences pull_request.synchronize (branch push to PR)", () => {
-    expect(shouldSilent("pull_request", { action: "synchronize" })).toBe(true);
-  });
-
-  it("silences issues label-noise actions", () => {
-    expect(shouldSilent("issues", { action: "labeled" })).toBe(true);
-    expect(shouldSilent("issues", { action: "milestoned" })).toBe(true);
-  });
-
-  it("does NOT silence the core conversation actions", () => {
-    expect(shouldSilent("issues", { action: "opened", sender: { type: "User" } })).toBe(false);
-    expect(shouldSilent("issue_comment", { action: "created", sender: { type: "User" } })).toBe(false);
-    expect(shouldSilent("pull_request", { action: "opened", sender: { type: "User" } })).toBe(false);
-    expect(shouldSilent("pull_request", { action: "review_requested", sender: { type: "User" } })).toBe(false);
-  });
-
-  it("does NOT silence pull_request.opened when sender type is missing", () => {
-    expect(shouldSilent("pull_request", { action: "opened" })).toBe(false);
   });
 });

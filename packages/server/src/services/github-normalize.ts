@@ -1,0 +1,502 @@
+import type {
+  InvolveReason,
+  NormalizedEvent,
+  NormalizedEventKind,
+  WebhookSource,
+} from "@agent-team-foundation/first-tree-hub-shared";
+import { extractEventEntity, type GithubEntity, isRecord, parseFixesRefs } from "../api/webhooks/github-entity.js";
+
+const MENTION_REGEX = /(?<!\w)@([a-zA-Z0-9][\w-]*)(\/)?/g;
+
+/** Lower-cased unique @mention logins from free-form text. Skips team
+ * mentions (`@org/team`) to match the agent-name lookup downstream
+ * (`agents.name` doesn't carry slashes). */
+export function extractMentions(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const names = new Set<string>();
+  for (const m of text.matchAll(MENTION_REGEX)) {
+    if (m[2]) continue;
+    const login = m[1];
+    if (!login) continue;
+    names.add(login.toLowerCase());
+  }
+  return [...names];
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (isRecord(item)) {
+      const login = readString(item.login);
+      if (login) out.push(login.toLowerCase());
+    }
+  }
+  return out;
+}
+
+type InvolveItem = { githubLogin: string; reason: InvolveReason };
+
+function buildInvolves(items: ReadonlyArray<{ logins: string[]; reason: InvolveReason }>): InvolveItem[] {
+  // First-occurrence wins per (lowercased) login. Callers should list
+  // structural reasons (review_requested, assigned) before textual ones
+  // (mentioned) so a participant cited via both routes keeps the more
+  // specific reason in the audience card.
+  const seen = new Set<string>();
+  const out: InvolveItem[] = [];
+  for (const group of items) {
+    for (const login of group.logins) {
+      const key = login.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ githubLogin: key, reason: group.reason });
+    }
+  }
+  return out;
+}
+
+function entitySurfacePrefix(entity: GithubEntity): string {
+  switch (entity.type) {
+    case "pull_request":
+      return "PR";
+    case "issue":
+      return "Issue";
+    case "discussion":
+      return "Discussion";
+    case "commit":
+      return "Commit";
+  }
+}
+
+function entitySurfaceTitle(entity: GithubEntity, number: number | null): string {
+  const prefix = entitySurfacePrefix(entity);
+  const head = number !== null ? `${prefix} #${number}` : prefix;
+  return entity.title ? `${head}: ${entity.title}` : head;
+}
+
+type RuleOutcome = {
+  entity: GithubEntity;
+  kind: NormalizedEventKind;
+  involves: InvolveItem[];
+  surface: { title: string; body: string; url: string };
+  relatedRefs: { type: "issue"; key: string }[];
+};
+
+/**
+ * Stage 1 — pure normalization. Returns the structured event for downstream
+ * audience + delivery, or `null` for events we deliberately drop (silent /
+ * out-of-scope event types and actions, malformed payloads, …).
+ *
+ * Pure function: no DB, no chat, no network. Caller is expected to hand the
+ * raw payload, the wire event type from `x-github-event`, and the source +
+ * deliveryId already resolved by the route handler.
+ */
+export function normalizeGithubEvent(
+  eventType: string,
+  payload: unknown,
+  source: WebhookSource,
+  deliveryId: string | null,
+): NormalizedEvent | null {
+  if (!isRecord(payload)) return null;
+
+  const senderRec = isRecord(payload.sender) ? payload.sender : null;
+  const senderLogin = readString(senderRec?.login);
+  if (!senderLogin) return null;
+  const senderIsBot = readString(senderRec?.type) === "Bot";
+
+  const repoRec = isRecord(payload.repository) ? payload.repository : null;
+  const repo = readString(repoRec?.full_name);
+  if (!repo) return null;
+
+  const action = readString(payload.action);
+  const rule = buildRule(eventType, action, payload, repo);
+  if (!rule) return null;
+
+  return {
+    source,
+    deliveryId,
+    rawEventType: eventType,
+    rawAction: action,
+    entity: {
+      type: rule.entity.type,
+      repo,
+      key: rule.entity.key,
+      title: rule.entity.title,
+      url: rule.entity.url,
+    },
+    actor: { githubLogin: senderLogin, isBot: senderIsBot },
+    kind: rule.kind,
+    involves: rule.involves,
+    surface: rule.surface,
+    relatedRefs: rule.relatedRefs,
+  };
+}
+
+function buildRule(
+  eventType: string,
+  action: string | null,
+  payload: Record<string, unknown>,
+  repo: string,
+): RuleOutcome | null {
+  switch (eventType) {
+    case "pull_request":
+      return buildPullRequestRule(action, payload, repo);
+    case "pull_request_review":
+      return buildPullRequestReviewRule(action, payload);
+    case "pull_request_review_comment":
+      return buildPullRequestReviewCommentRule(action, payload);
+    case "issue_comment":
+      return buildIssueCommentRule(action, payload);
+    case "issues":
+      return buildIssuesRule(action, payload);
+    case "discussion":
+      return buildDiscussionRule(action, payload);
+    case "discussion_comment":
+      return buildDiscussionCommentRule(action, payload);
+    case "commit_comment":
+      return buildCommitCommentRule(action, payload);
+    default:
+      return null;
+  }
+}
+
+function buildPullRequestRule(
+  action: string | null,
+  payload: Record<string, unknown>,
+  repo: string,
+): RuleOutcome | null {
+  const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+  if (!pr) return null;
+  const entity = extractEventEntity("pull_request", payload);
+  if (!entity) return null;
+  const number = readNumber(pr.number);
+  const body = readString(pr.body) ?? "";
+  const surface = {
+    title: entitySurfaceTitle(entity, number),
+    body,
+    url: readString(pr.html_url) ?? "",
+  };
+
+  switch (action) {
+    case "opened": {
+      const reviewerLogins = readStringArray(pr.requested_reviewers);
+      const assigneeLogins = readStringArray(pr.assignees);
+      const mentionLogins = extractMentions(body);
+      return {
+        entity,
+        kind: "opened",
+        involves: buildInvolves([
+          { logins: reviewerLogins, reason: "review_requested" },
+          { logins: assigneeLogins, reason: "assigned" },
+          { logins: mentionLogins, reason: "mentioned" },
+        ]),
+        surface,
+        relatedRefs: parseFixesRefs(body, repo).map((ref) => ({ type: "issue", key: ref.key })),
+      };
+    }
+    case "edited": {
+      const mentionLogins = extractMentions(body);
+      return {
+        entity,
+        kind: "edited",
+        involves: buildInvolves([{ logins: mentionLogins, reason: "mentioned" }]),
+        surface,
+        relatedRefs: [],
+      };
+    }
+    case "review_requested": {
+      const reviewer = isRecord(payload.requested_reviewer) ? payload.requested_reviewer : null;
+      const reviewerLogin = readString(reviewer?.login);
+      // `requested_team` requests are deliberately skipped — team mentions
+      // don't map to individual agents and would force `extractMentions`
+      // semantics to diverge.
+      const logins = reviewerLogin ? [reviewerLogin.toLowerCase()] : [];
+      return {
+        entity,
+        kind: "review_requested",
+        involves: buildInvolves([{ logins, reason: "review_requested" }]),
+        surface,
+        relatedRefs: [],
+      };
+    }
+    case "synchronize":
+      return {
+        entity,
+        kind: "synchronized",
+        involves: [],
+        surface,
+        relatedRefs: [],
+      };
+    case "closed": {
+      const merged = pr.merged === true;
+      return {
+        entity,
+        kind: merged ? "merged" : "closed",
+        involves: [],
+        surface,
+        relatedRefs: [],
+      };
+    }
+    case "reopened":
+      return {
+        entity,
+        kind: "reopened",
+        involves: [],
+        surface,
+        relatedRefs: [],
+      };
+    default:
+      // labeled / unlabeled / auto_merge_* / review_request_removed / etc.
+      return null;
+  }
+}
+
+function buildPullRequestReviewRule(action: string | null, payload: Record<string, unknown>): RuleOutcome | null {
+  if (action !== "submitted" && action !== "dismissed" && action !== "edited") return null;
+  const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+  const review = isRecord(payload.review) ? payload.review : null;
+  if (!pr || !review) return null;
+  const entity = extractEventEntity("pull_request_review", payload);
+  if (!entity) return null;
+  const number = readNumber(pr.number);
+  const body = readString(review.body) ?? "";
+  return {
+    entity,
+    kind: "reviewed",
+    involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
+    surface: {
+      title: entitySurfaceTitle(entity, number),
+      body,
+      url: readString(review.html_url) ?? "",
+    },
+    relatedRefs: [],
+  };
+}
+
+function buildPullRequestReviewCommentRule(
+  action: string | null,
+  payload: Record<string, unknown>,
+): RuleOutcome | null {
+  if (action !== "created" && action !== "edited") return null;
+  const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+  const comment = isRecord(payload.comment) ? payload.comment : null;
+  if (!pr || !comment) return null;
+  const entity = extractEventEntity("pull_request_review_comment", payload);
+  if (!entity) return null;
+  const number = readNumber(pr.number);
+  const body = readString(comment.body) ?? "";
+  return {
+    entity,
+    kind: "review_comment",
+    involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
+    surface: {
+      title: entitySurfaceTitle(entity, number),
+      body,
+      url: readString(comment.html_url) ?? "",
+    },
+    relatedRefs: [],
+  };
+}
+
+function buildIssueCommentRule(action: string | null, payload: Record<string, unknown>): RuleOutcome | null {
+  if (action !== "created" && action !== "edited") return null;
+  const issue = isRecord(payload.issue) ? payload.issue : null;
+  const comment = isRecord(payload.comment) ? payload.comment : null;
+  if (!issue || !comment) return null;
+  // `extractEventEntity` handles the Bug 3 split: when `issue.pull_request`
+  // is set, the entity comes out as a `pull_request`, not an `issue`. The
+  // surface title is keyed off the resolved entity, so a PR comment
+  // renders as "PR #N: ..." even though the wire eventType is
+  // `issue_comment`.
+  const entity = extractEventEntity("issue_comment", payload);
+  if (!entity) return null;
+  const number = readNumber(issue.number);
+  const body = readString(comment.body) ?? "";
+  return {
+    entity,
+    kind: "commented",
+    involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
+    surface: {
+      title: entitySurfaceTitle(entity, number),
+      body,
+      url: readString(comment.html_url) ?? "",
+    },
+    relatedRefs: [],
+  };
+}
+
+function buildIssuesRule(action: string | null, payload: Record<string, unknown>): RuleOutcome | null {
+  const issue = isRecord(payload.issue) ? payload.issue : null;
+  if (!issue) return null;
+  const entity = extractEventEntity("issues", payload);
+  if (!entity) return null;
+  const number = readNumber(issue.number);
+  const body = readString(issue.body) ?? "";
+  const url = readString(issue.html_url) ?? "";
+  const title = entitySurfaceTitle(entity, number);
+
+  switch (action) {
+    case "opened": {
+      const assigneeLogins = readStringArray(issue.assignees);
+      const mentionLogins = extractMentions(body);
+      return {
+        entity,
+        kind: "opened",
+        involves: buildInvolves([
+          { logins: assigneeLogins, reason: "assigned" },
+          { logins: mentionLogins, reason: "mentioned" },
+        ]),
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    }
+    case "edited": {
+      const mentionLogins = extractMentions(body);
+      return {
+        entity,
+        kind: "edited",
+        involves: buildInvolves([{ logins: mentionLogins, reason: "mentioned" }]),
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    }
+    case "assigned": {
+      const assignee = isRecord(payload.assignee) ? payload.assignee : null;
+      const login = readString(assignee?.login);
+      const logins = login ? [login.toLowerCase()] : [];
+      return {
+        entity,
+        kind: "edited",
+        involves: buildInvolves([{ logins, reason: "assigned" }]),
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    }
+    case "closed":
+      return {
+        entity,
+        kind: "closed",
+        involves: [],
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    case "reopened":
+      return {
+        entity,
+        kind: "reopened",
+        involves: [],
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    default:
+      // labeled / unlabeled / milestoned / demilestoned / pinned / unpinned / unassigned
+      return null;
+  }
+}
+
+function buildDiscussionRule(action: string | null, payload: Record<string, unknown>): RuleOutcome | null {
+  const disc = isRecord(payload.discussion) ? payload.discussion : null;
+  if (!disc) return null;
+  const entity = extractEventEntity("discussion", payload);
+  if (!entity) return null;
+  const number = readNumber(disc.number);
+  const body = readString(disc.body) ?? "";
+  const url = readString(disc.html_url) ?? "";
+  const title = entitySurfaceTitle(entity, number);
+
+  switch (action) {
+    case "created":
+      return {
+        entity,
+        kind: "opened",
+        involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    case "edited":
+      return {
+        entity,
+        kind: "edited",
+        involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    case "closed":
+      return {
+        entity,
+        kind: "closed",
+        involves: [],
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    case "reopened":
+      return {
+        entity,
+        kind: "reopened",
+        involves: [],
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    case "answered":
+    case "unanswered":
+      return {
+        entity,
+        kind: "other",
+        involves: [],
+        surface: { title, body, url },
+        relatedRefs: [],
+      };
+    default:
+      return null;
+  }
+}
+
+function buildDiscussionCommentRule(action: string | null, payload: Record<string, unknown>): RuleOutcome | null {
+  if (action !== "created" && action !== "edited") return null;
+  const disc = isRecord(payload.discussion) ? payload.discussion : null;
+  const comment = isRecord(payload.comment) ? payload.comment : null;
+  if (!disc || !comment) return null;
+  const entity = extractEventEntity("discussion_comment", payload);
+  if (!entity) return null;
+  const number = readNumber(disc.number);
+  const body = readString(comment.body) ?? "";
+  return {
+    entity,
+    kind: "commented",
+    involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
+    surface: {
+      title: entitySurfaceTitle(entity, number),
+      body,
+      url: readString(comment.html_url) ?? "",
+    },
+    relatedRefs: [],
+  };
+}
+
+function buildCommitCommentRule(action: string | null, payload: Record<string, unknown>): RuleOutcome | null {
+  if (action !== "created") return null;
+  const comment = isRecord(payload.comment) ? payload.comment : null;
+  if (!comment) return null;
+  const entity = extractEventEntity("commit_comment", payload);
+  if (!entity) return null;
+  const body = readString(comment.body) ?? "";
+  return {
+    entity,
+    kind: "commit_commented",
+    involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
+    surface: {
+      title: entitySurfaceTitle(entity, null),
+      body,
+      url: readString(comment.html_url) ?? "",
+    },
+    relatedRefs: [],
+  };
+}

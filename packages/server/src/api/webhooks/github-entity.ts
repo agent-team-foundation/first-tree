@@ -53,11 +53,34 @@ export function extractEventEntity(eventType: string, payload: unknown): GithubE
   if (!repo) return null;
 
   switch (eventType) {
-    case "issues":
+    case "issues": {
+      const issue = isRecord(payload.issue) ? payload.issue : null;
+      const number = readNumber(issue?.number);
+      if (number === null) return null;
+      return {
+        type: "issue",
+        key: `${repo}#${number}`,
+        title: readString(issue?.title) ?? undefined,
+        url: readString(issue?.html_url) ?? undefined,
+      };
+    }
     case "issue_comment": {
       const issue = isRecord(payload.issue) ? payload.issue : null;
       const number = readNumber(issue?.number);
       if (number === null) return null;
+      // GitHub delivers PR comments as `issue_comment` events with
+      // `issue.pull_request` populated. Without this branch the comment
+      // clusters into an Issue chat rather than the existing PR chat —
+      // the long-standing "PR comment opens an Issue chat" bug.
+      const prInfo = isRecord(issue?.pull_request) ? issue.pull_request : null;
+      if (prInfo) {
+        return {
+          type: "pull_request",
+          key: `${repo}#${number}`,
+          title: readString(issue?.title) ?? undefined,
+          url: readString(prInfo.html_url) ?? readString(issue?.html_url) ?? undefined,
+        };
+      }
       return {
         type: "issue",
         key: `${repo}#${number}`,
@@ -193,59 +216,4 @@ export function formatEntityTitle(entity: GithubEntity, eventType: string, actio
     return `${head}: ${entity.title}`;
   }
   return head;
-}
-
-// ── Silent-events filter (§4.8) ───────────────────────────────────────
-
-const SILENT_EVENT_TYPES = new Set<string>([
-  "workflow_run",
-  "workflow_job",
-  "check_run",
-  "check_suite",
-  "status",
-  "push",
-  "create",
-  "delete",
-  "fork",
-  "watch",
-  "release",
-  "label",
-  "label_created",
-  "label_deleted",
-  // Reaction events — `*_reaction` actions don't exist; reactions arrive as
-  // `reaction` events. Listed here for clarity.
-  "reaction",
-  // Membership / org / team / project — irrelevant to webhook routing.
-  "member",
-  "membership",
-  "team",
-  "team_add",
-  "organization",
-  "org_block",
-  "project",
-  "project_card",
-  "project_column",
-]);
-
-/**
- * Per-event-type action-level filters. Frequent low-signal actions that would
- * otherwise spam an entity chat. `synchronize` (PR branch push) is the most
- * common offender — it fires on every commit push to a PR branch and never
- * carries new conversation.
- */
-const SILENT_ACTIONS: Record<string, ReadonlySet<string>> = {
-  issues: new Set(["labeled", "unlabeled", "milestoned", "demilestoned", "pinned", "unpinned"]),
-  pull_request: new Set(["labeled", "unlabeled", "auto_merge_enabled", "auto_merge_disabled", "synchronize"]),
-};
-
-/** True iff the event should be silently 200-OKed without further routing. */
-export function shouldSilent(eventType: string, payload: unknown): boolean {
-  if (SILENT_EVENT_TYPES.has(eventType)) return true;
-  if (!isRecord(payload)) return false;
-  const sender = isRecord(payload.sender) ? payload.sender : null;
-  if (readString(sender?.type) === "Bot") return true;
-  const action = readString(payload.action);
-  if (!action) return false;
-  const actions = SILENT_ACTIONS[eventType];
-  return actions?.has(action) ?? false;
 }
