@@ -1,9 +1,12 @@
 import type {
+  AgentRuntimeConfigPayload,
+  GitRepo,
   InboxEntryWithMessage,
   RuntimeState,
   SessionEvent,
   SessionState,
 } from "@agent-team-foundation/first-tree-hub-shared";
+import { deriveRepoLocalPath } from "@agent-team-foundation/first-tree-hub-shared";
 import { tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
@@ -37,6 +40,18 @@ type PendingMessage = {
   chatId: string;
   entryId: number;
 };
+
+function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload): string | null {
+  if (payload.gitRepos.length !== 1) return null;
+  const repo = payload.gitRepos[0];
+  if (!repo) return null;
+  const localPath = repoLocalPath(repo).trim();
+  return localPath.length > 0 ? localPath : null;
+}
+
+function repoLocalPath(repo: GitRepo): string {
+  return repo.localPath ?? deriveRepoLocalPath(repo.url);
+}
 
 type SessionManagerConfig = {
   session: SessionConfig;
@@ -741,6 +756,7 @@ export class SessionManager {
       },
       log,
       participants,
+      getDocumentBasePath: () => this.resolveDocumentBasePath(log),
     });
 
     const envCtx = { sdk: this.config.sdk, agent: this.config.agentIdentity, chatId };
@@ -770,6 +786,17 @@ export class SessionManager {
       formatInboundContent: (message) => formatInboundContent(message, participants),
       resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),
     };
+  }
+
+  private async resolveDocumentBasePath(log: (msg: string) => void): Promise<string | null> {
+    if (!this.config.agentConfigCache) return null;
+    try {
+      const { payload } = await this.config.agentConfigCache.refresh(this.config.agentIdentity.agentId);
+      return documentBasePathFromRuntimeConfig(payload);
+    } catch (err) {
+      log(`document preview base path unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
   }
 
   /** Update per-session runtime state and recompute aggregate. Only active sessions may update. */

@@ -303,6 +303,14 @@ export {
   meChatRowSchema,
 } from "./schemas/me-chat.js";
 export {
+  type GetMeDoc,
+  type GetMeDocResponse,
+  getMeDocResponseSchema,
+  getMeDocSchema,
+  type WorkspaceDocRef,
+  workspaceDocRefSchema,
+} from "./schemas/me-doc.js";
+export {
   type CreateOrgFromMe,
   createOrgFromMeSchema,
   type MeMembership,
