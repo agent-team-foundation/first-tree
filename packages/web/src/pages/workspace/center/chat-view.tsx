@@ -715,6 +715,28 @@ export function ChatView({
     refetchInterval: 15_000,
   });
 
+  // Suppress the "↓ N new messages" pill during the smooth-scroll
+  // that follows the user's OWN send. Without this, the user briefly
+  // sees "1 new message" between (a) their new message landing in
+  // mergedMessages and (b) the smooth-scroll reaching it — caught in
+  // PR 286 manual sign-off rev 9. Cleared either when the scroll
+  // reaches the bottom (`isAtBottom` flips true, see effect below) or
+  // after a hard timeout, whichever comes first — the timeout covers
+  // the case where the user manually scrolls up mid-animation, so
+  // `isAtBottom` never settles.
+  const [isOwnSendAutoScrolling, setIsOwnSendAutoScrolling] = useState(false);
+  const ownSendSuppressTimeoutRef = useRef<number | null>(null);
+  const markOwnSendBegin = useCallback(() => {
+    setIsOwnSendAutoScrolling(true);
+    if (ownSendSuppressTimeoutRef.current !== null) {
+      window.clearTimeout(ownSendSuppressTimeoutRef.current);
+    }
+    ownSendSuppressTimeoutRef.current = window.setTimeout(() => {
+      setIsOwnSendAutoScrolling(false);
+      ownSendSuppressTimeoutRef.current = null;
+    }, 1000);
+  }, []);
+
   const sendMut = useMutation({
     mutationFn: (content: string) => sendChatMessage(chatId, content),
     onSuccess: () => {
@@ -733,6 +755,9 @@ export function ChatView({
       // newly-arrived message has been rendered. Without this,
       // M2's once-per-chat-visit gate would suppress any scroll
       // and the user's just-sent message would arrive off-screen.
+      // markOwnSendBegin precedes the scroll so the pill is already
+      // suppressed by the time the new message commits to the DOM.
+      markOwnSendBegin();
       scrollToBottom("smooth");
     },
   });
@@ -822,7 +847,10 @@ export function ChatView({
         queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
         // Same scroll-on-send as sendMut.onSuccess — the file-send
         // path goes through a different code branch so we have to
-        // repeat the call here.
+        // repeat the call here. markOwnSendBegin suppresses the
+        // pill across the smooth-scroll window for the same reason
+        // as in sendMut.onSuccess.
+        markOwnSendBegin();
         scrollToBottom("smooth");
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Failed to send image");
@@ -1036,7 +1064,38 @@ export function ChatView({
   useLayoutEffect(() => {
     setSessionHighestId(null);
     setLiveBottomVisibleId(null);
+    // Clear any in-flight own-send pill suppression so the new
+    // chat's pill state isn't gated by the prior chat's send.
+    setIsOwnSendAutoScrolling(false);
+    if (ownSendSuppressTimeoutRef.current !== null) {
+      window.clearTimeout(ownSendSuppressTimeoutRef.current);
+      ownSendSuppressTimeoutRef.current = null;
+    }
   }, [chatId]);
+  // Lift the own-send pill suppression the moment the scroll settles
+  // at the bottom. Distinct from the 1000ms hard timeout in
+  // `markOwnSendBegin`: the timeout is the fallback when the user
+  // manually scrolls up mid-animation; this effect handles the
+  // normal "smooth-scroll reaches bottom" path so the pill becomes
+  // re-eligible to display as soon as the user has caught up.
+  useEffect(() => {
+    if (!isOwnSendAutoScrolling) return;
+    if (!isAtBottom) return;
+    setIsOwnSendAutoScrolling(false);
+    if (ownSendSuppressTimeoutRef.current !== null) {
+      window.clearTimeout(ownSendSuppressTimeoutRef.current);
+      ownSendSuppressTimeoutRef.current = null;
+    }
+  }, [isOwnSendAutoScrolling, isAtBottom]);
+  // Cleanup on unmount: drop the pending timeout if any.
+  useEffect(() => {
+    return () => {
+      if (ownSendSuppressTimeoutRef.current !== null) {
+        window.clearTimeout(ownSendSuppressTimeoutRef.current);
+        ownSendSuppressTimeoutRef.current = null;
+      }
+    };
+  }, []);
   // Advance the watermark id whenever the user's viewport bottom
   // reaches a message later than the previous high water.
   // Comparison goes through current `mergedMessages` so both ids
@@ -1630,15 +1689,17 @@ export function ChatView({
           </div>
         </div>
         {/* Floating "↓ N new messages" pill — surfaces whenever there
-            are messages newer than the user's session high watermark.
-            Hides itself when the user reaches the bottom
-            (pillCount = 0). Rendered as a sibling of the scroll
-            container, not a child, so its `absolute` positioning
-            anchors to the outer wrapper's visible bounds instead of
-            being affected by the scroll container's internal
-            `overflow-auto` + `position: relative` interaction
-            (PR 286 manual sign-off rev 8). */}
-        {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
+            are messages newer than the user's session high watermark
+            AND the user is not in the middle of their own-send
+            auto-scroll. Hides when pillCount = 0 (user caught up) or
+            when `isOwnSendAutoScrolling` is set (own send in flight —
+            see `markOwnSendBegin` for rationale). Rendered as a
+            sibling of the scroll container, not a child, so its
+            `absolute` positioning anchors to the outer wrapper's
+            visible bounds instead of being affected by the scroll
+            container's internal `overflow-auto` + `position: relative`
+            interaction (PR 286 manual sign-off rev 8). */}
+        {pillCount > 0 && !isOwnSendAutoScrolling ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
       </div>
 
       {/* Input. Outer band keeps full-width border-top + side padding so
