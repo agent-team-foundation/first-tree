@@ -441,15 +441,28 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-5. dev-callback 路径需要严格 production 防护
+#### P-5. dev-callback 路径需要严格 production 防护 ✅ Already resolved
 
-- **问题**：`/api/v1/auth/github/dev-callback` 接受任意 `githubId` 和 `login`，绕过 OAuth。
-- **位置**：`packages/server/src/api/auth/github.ts`
-- **风险**：误装在 production 是严重安全漏洞。
-- **建议**：
-  - `if (process.env.NODE_ENV === "production") return 404`
-  - 或编译时 flag 完全摘除
-  - 至少 startup log 警告
+- **审计原始描述**：`/api/v1/auth/github/dev-callback` 接受任意 `githubId` 和 `login` 绕过 OAuth；担心误装在 production 是严重安全漏洞。
+- **位置**：`packages/server/src/api/auth/github.ts:231`
+- **决议（2026-05-13 复查后）**：**已被现有代码完整覆盖，无需任何改动**。
+  - 现有实现采用**双闸防护**：
+    ```ts
+    // Gate 1: NODE_ENV 不能是 production
+    if (process.env.NODE_ENV === "production") return 404;
+    // Gate 2: 必须显式 opt-in
+    if (FIRST_TREE_HUB_DEV_CALLBACK_ENABLED !== "1" && !== "true") return 404;
+    ```
+  - 比 audit 原本"建议"的更严密：
+    - 返回 404 而非 403（不确认路由存在）
+    - 显式 opt-in 防御 `NODE_ENV` 漂移（注释里点明针对 codex P1-9 失败模式）
+    - refuse 时 `log.info` 留痕
+  - **审计反思**：P-5 是凭印象写的，没读现有代码就下了结论。下次 audit 要先确认代码现状
+- **可选进一步加固（暂不推荐做）**：
+  - Startup 时 enabled 状态打 loud warning
+  - 强制 opt-in 仅在 `NODE_ENV` 显式为 `development` 或 `test` 时生效
+  - 现有两闸覆盖主要风险面，剩下都是"操作员同时犯两个错"的复合场景，靠流程比靠代码更合适
+- **排期影响**：从 P0 移除
 
 ---
 
@@ -576,7 +589,7 @@ Step 3 - InviteeStep3Body
 
 | Sprint | 处理项 |
 |---|---|
-| **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写、P-5 dev-callback 防护 |
+| **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写（P-5 复查后发现已解决，无需投入）|
 | **P1（下周）** | P-1 joinPath 持久化、P-6 invitee 等待回归、P-10 Profile + Members tab |
 | **P2** | P-7 Step 2 后回归路径、P-11 owner role（P-4 已被 P-1 覆盖，无需单独投入） |
 | **P3（清理）** | P-8 命名一致性、P-9 Team tab 信息丰富、P-12 Context Tree 拆分、P-13–17 文档与小修 |
