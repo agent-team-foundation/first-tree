@@ -145,6 +145,28 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
     expect(await loadMessageContent(chatId)).toBe("plain hi");
   });
 
+  it("silent-send DM (text = '@peer' only) does NOT bump the peer's counter", async () => {
+    // Silent-send invariant (services/message.ts step 2e): a message whose
+    // text is purely `@<name>` tokens with no body is recorded for history
+    // but every fan-out row gets `notify=false`. The badge must respect
+    // the same intent — bumping `unread_mention_count` would contradict
+    // the "no user-visible signal" guarantee that callers (agent runtime
+    // `result-sink`, AskUserQuestion, etc.) rely on for silent turns.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `dmslnt-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      format: "text",
+      content: `@${peer.agent.name}`,
+    });
+
+    expect(await loadUnread(chatId, peer.agent.uuid, peer.organizationId)).toBe(0);
+  });
+
   it("group chat: plain text still produces zero counter bumps (no auto-mention)", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);

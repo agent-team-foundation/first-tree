@@ -146,7 +146,12 @@ async function sendMessageInner(
     // agent↔agent courtesy loop migration 0029 fixed: A's "ok thanks"
     // would wake B in `mention_only` mode again. Keep the two lists
     // separate so unread badges are correct without unmuting agent wakes.
-    const projectionMentions =
+    //
+    // Silent-send (step 2e) overrides this back to [] so the badge stays
+    // off — a silent turn whose entire text is `@<name>` tokens is meant
+    // to land in history without bothering anyone; bumping unread
+    // contradicts that intent.
+    const dmAutoProjection: string[] =
       chatType === "direct"
         ? [...new Set([...mergedMentions, ...participants.filter((p) => p.agentId !== senderId).map((p) => p.agentId)])]
         : mergedMentions;
@@ -175,7 +180,6 @@ async function sendMessageInner(
     //
     //     Driven by its own opt-in flag (separate from enforceGroupMention) so
     //     admin/web and adapter paths can validate without mutating content.
-    //
     let outboundContent = data.content;
     if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
       const present = new Set(scanMentionTokens(outboundContent));
@@ -225,6 +229,12 @@ async function sendMessageInner(
         "silent send: empty content after mention strip — no fan-out wake-up",
       );
     }
+
+    // Silent-send overrides the direct-chat auto-mention projection: a
+    // silent turn is "this exists in history but nobody needs to know",
+    // so the recipient's red-dot badge stays off too. Mirrors the
+    // fan-out `notify=false` guarantee at step 4 below.
+    const projectionMentions: string[] = isSilentSend ? [] : dmAutoProjection;
 
     // 3. Store the message (with merged metadata + normalised content).
     const messageId = randomUUID();
