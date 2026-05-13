@@ -176,6 +176,93 @@ describe("createResultSink — forwardResult enrichment", () => {
     expect(logs.some((l) => l.includes("listChatParticipants failed"))).toBe(true);
   });
 
+  describe("L4 silent-turn protocol — empty output skips delivery", () => {
+    // The agent prompt in bootstrap.ts tells agents: "if you have nothing
+    // new for the recipient, output nothing and the runtime will end the
+    // turn silently". This block is the matching code-side enforcement —
+    // empty/whitespace output is the agent's explicit "I choose silent
+    // turn" signal and the runtime must honor it without firing
+    // sendMessage. Decision-vs-execution split: only purely empty output
+    // is treated as silence; non-empty content is never length-filtered.
+
+    it("skips sendMessage when the agent produces an empty string", async () => {
+      const { sink, sendMessage, logs } = buildSink({
+        trigger: { messageId: "m-silent", senderId: "agent-peer" },
+        participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
+      });
+
+      await sink("");
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(logs.some((l) => l.includes("silent turn"))).toBe(true);
+    });
+
+    it("skips sendMessage when the agent produces whitespace-only output", async () => {
+      const { sink, sendMessage, logs } = buildSink({
+        trigger: { messageId: "m-ws", senderId: "agent-peer" },
+        participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
+      });
+
+      await sink("   \n\t  ");
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(logs.some((l) => l.includes("silent turn"))).toBe(true);
+    });
+
+    it("does NOT skip when the agent produces any non-empty content (no length filtering)", async () => {
+      // Single-character replies, short statuses, and any non-empty content
+      // must pass through untouched — the runtime never evaluates "is this
+      // meaningful?". That's the agent's call (via prompt), not code's.
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m-short", senderId: "agent-peer" },
+        participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
+      });
+
+      await sink(".");
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears the trigger on silent turn so the next inbound message isn't accidentally still bound", async () => {
+      let trigger: Trigger | null = { messageId: "m-clear", senderId: "agent-peer" };
+      const observedTrigger: (Trigger | null)[] = [];
+      const sdk = {
+        serverUrl: "http://test",
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        listChatParticipants: vi.fn().mockResolvedValue([mkParticipant(ME, "me")]),
+      } as unknown as FirstTreeHubSDK;
+      const sink = createResultSink({
+        sdk,
+        agent: {
+          agentId: ME,
+          inboxId: "inbox-me",
+          displayName: "test-agent",
+          type: "autonomous_agent",
+          delegateMention: null,
+          metadata: {},
+        },
+        chatId: "chat-1",
+        getTrigger: () => trigger,
+        clearTrigger: () => {
+          observedTrigger.push(trigger);
+          trigger = null;
+        },
+        log: () => {},
+        participants: createParticipantCache(sdk, "chat-1", () => {}),
+      });
+
+      await sink("");
+
+      // The trigger was cleared while it still held the silent-turn's
+      // originating message — observed exactly once. After the call the
+      // runtime sees a clean slate, so any next injection starts fresh
+      // rather than re-using m-clear's senderId for the next reply.
+      expect(observedTrigger).toHaveLength(1);
+      expect(observedTrigger[0]?.messageId).toBe("m-clear");
+      expect(trigger).toBeNull();
+    });
+  });
+
   it("clears the trigger before awaiting sendMessage so a concurrent inject-driven trigger isn't consumed", async () => {
     // Regression for the race the handler used to guard. The sink's
     // `clearTrigger` must fire synchronously before the async transport, so
