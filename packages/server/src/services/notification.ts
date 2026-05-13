@@ -47,9 +47,12 @@ export type CreateNotificationData = {
 export async function createNotification(db: Database, data: CreateNotificationData) {
   const id = uuidv7();
 
-  // ON CONFLICT DO NOTHING on the partial unique index. The index only
-  // applies when read=false AND dedup_key IS NOT NULL, so producers without
-  // a dedup_key never collide and keep their always-insert semantics.
+  // ON CONFLICT DO NOTHING on the partial unique index. The `where` clause is
+  // mandatory when the target index is partial — PG raises "there is no
+  // unique or exclusion constraint matching the ON CONFLICT specification"
+  // unless the predicate matches the index definition exactly. Rows without
+  // a dedup_key never satisfy the predicate, so the conflict path never
+  // fires for them and they keep the legacy always-insert behaviour.
   const inserted = await db
     .insert(notifications)
     .values({
@@ -62,7 +65,10 @@ export async function createNotification(db: Database, data: CreateNotificationD
       message: data.message,
       dedupKey: data.dedupKey ?? null,
     })
-    .onConflictDoNothing({ target: [notifications.organizationId, notifications.dedupKey] })
+    .onConflictDoNothing({
+      target: [notifications.organizationId, notifications.dedupKey],
+      where: sql`${notifications.read} = false AND ${notifications.dedupKey} IS NOT NULL`,
+    })
     .returning();
 
   const row = inserted[0];
