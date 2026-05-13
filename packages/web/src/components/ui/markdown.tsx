@@ -33,7 +33,14 @@ export function Markdown({ children, className }: MarkdownProps) {
         className,
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{children}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={{
+          a: ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />,
+        }}
+      >
+        {children}
+      </ReactMarkdown>
     </div>
   );
 }
