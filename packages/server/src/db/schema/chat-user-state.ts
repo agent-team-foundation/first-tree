@@ -12,15 +12,22 @@ import { index, integer, pgTable, primaryKey, text, timestamp } from "drizzle-or
  * user-private state — physical separation makes that an invariant
  * rather than a service-layer discipline.
  *
- * This PR seeds the table with only the two columns that already
- * exist on both legacy tables today (`last_read_at`,
- * `unread_mention_count`); future PRs will introduce additional
- * fields here — engagement_status, pinned, mute_until, draft,
- * custom_title, last_seen_at, ... — each as a separate change.
+ * Columns evolve incrementally as new per-user state is needed.
+ * Currently:
+ *   - `last_read_at`, `unread_mention_count` — seeded by PR-A from
+ *     the legacy `chat_participants` / `chat_subscriptions` columns.
+ *   - `engagement_status` — added in 0040; per-(chat, user) view
+ *     state (active / archived / deleted). Auto-revives archived →
+ *     active on new message; deleted is sticky (only the user can
+ *     restore from the chat detail page).
+ *
+ * Future fields slated for this table: pinned, mute_until, draft,
+ * custom_title, last_seen_at — each as a separate change.
  *
  * Rows are lazy-upserted on first user write (markRead / mention
- * counter bump). Reads use COALESCE for defaults. Service-layer
- * integrity (no FK / CHECK / trigger).
+ * counter bump / engagement transition). Reads use COALESCE for
+ * defaults so callers see `'active'` etc. even when no row exists.
+ * Service-layer integrity (no FK / CHECK / trigger).
  *
  * See proposals/chat-data-model-restructure.20260512.md §8.6.
  */
@@ -31,6 +38,12 @@ export const chatUserState = pgTable(
     agentId: text("agent_id").notNull(),
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
     unreadMentionCount: integer("unread_mention_count").notNull().default(0),
+    /**
+     * Per-(chat, user) view state. See `CHAT_ENGAGEMENT_STATUSES` in
+     * shared for the legal values and semantics. Lazy default `'active'`
+     * matches what `COALESCE(..., 'active')` returns for missing rows.
+     */
+    engagementStatus: text("engagement_status").notNull().default("active"),
   },
   (table) => [
     primaryKey({ columns: [table.chatId, table.agentId] }),

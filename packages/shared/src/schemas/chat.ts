@@ -10,6 +10,30 @@ export const CHAT_TYPES = {
 export const chatTypeSchema = z.enum(["direct", "group", "thread"]);
 export type ChatType = z.infer<typeof chatTypeSchema>;
 
+/**
+ * Per-(chat, user) engagement state. Stored on `chat_user_state` so each
+ * user manages their own view independently of structural membership.
+ *
+ *   active   — default; chat is in the user's active conversation list.
+ *   archived — user-snoozed; auto-revives to `active` when a new message
+ *              lands in the chat (see `services/chat-projection.ts`).
+ *   deleted  — user-removed; never auto-revives. Restorable only by the
+ *              user from the chat detail page.
+ */
+export const CHAT_ENGAGEMENT_STATUSES = {
+  ACTIVE: "active",
+  ARCHIVED: "archived",
+  DELETED: "deleted",
+} as const;
+
+export const chatEngagementStatusSchema = z.enum(["active", "archived", "deleted"]);
+export type ChatEngagementStatus = z.infer<typeof chatEngagementStatusSchema>;
+
+export const patchChatEngagementSchema = z.object({
+  status: chatEngagementStatusSchema,
+});
+export type PatchChatEngagement = z.infer<typeof patchChatEngagementSchema>;
+
 export const createChatSchema = z.object({
   type: chatTypeSchema,
   topic: z.string().max(500).optional(),
@@ -66,6 +90,10 @@ export const chatDetailSchema = chatSchema.extend({
    *  with no `text` field). Exposed alongside the resolved `title` so
    *  callers can use it for tooltips / hover descriptions. */
   firstMessagePreview: z.string().nullable(),
+  /** Caller's engagement state for this chat. Server-side COALESCE bridges
+   *  the lazy-materialised `chat_user_state` row so the value is always
+   *  defined (defaults to `active`); the schema is non-nullable on purpose. */
+  engagementStatus: chatEngagementStatusSchema,
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
 

@@ -281,6 +281,13 @@
       "when": 1779148800000,
       "tag": "0039_drop_chat_participants_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1779235200000,
+      "tag": "0040_chat_user_state_engagement",
+      "breakpoints": true
     }
   ]
 }

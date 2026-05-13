@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { chatEngagementStatusSchema } from "./chat.js";
 
 /**
  * Member-facing chat APIs (`/me/chats*`) for the chat-first workspace.
@@ -15,10 +16,21 @@ export const ME_CHAT_MAX_LIMIT = 200;
 export const meChatMembershipKindSchema = z.enum(["participant", "watching"]);
 export type MeChatMembershipKind = z.infer<typeof meChatMembershipKindSchema>;
 
+/**
+ * Conversation-list engagement view. `active` (default) and `archived`
+ * map to the eponymous tabs; `all` shows their union. `deleted` is never
+ * a valid view value — deleted rows are reachable only through the chat
+ * detail page (`GET /chats/:chatId` + Restore button).
+ */
+export const CHAT_ENGAGEMENT_VIEWS = ["active", "archived", "all"] as const;
+export const chatEngagementViewSchema = z.enum(CHAT_ENGAGEMENT_VIEWS);
+export type ChatEngagementView = z.infer<typeof chatEngagementViewSchema>;
+
 export const listMeChatsQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(ME_CHAT_MAX_LIMIT).default(ME_CHAT_DEFAULT_LIMIT),
   filter: meChatFilterSchema.default("all"),
+  engagement: chatEngagementViewSchema.default("active"),
 });
 export type ListMeChatsQuery = z.infer<typeof listMeChatsQuerySchema>;
 
@@ -41,6 +53,7 @@ export const meChatRowSchema = z.object({
   lastMessagePreview: z.string().nullable(),
   unreadMentionCount: z.number().int(),
   canReply: z.boolean(),
+  engagementStatus: chatEngagementStatusSchema,
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
