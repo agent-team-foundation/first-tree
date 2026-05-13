@@ -5,14 +5,14 @@ import {
   type NotificationSeverity,
   type NotificationType,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { notifications } from "../db/schema/notifications.js";
 import { uuidv7 } from "../uuid.js";
-import { broadcastToAdmins } from "./admin-broadcast.js";
+import { broadcastAdminsCrossInstance } from "./admin-broadcast.js";
 
 export type CreateNotificationData = {
   organizationId: string;
@@ -27,13 +27,33 @@ export type CreateNotificationData = {
    */
   clientId?: string | null;
   message: string;
+  /**
+   * Optional dedup key. While a prior unread notification with the same
+   * `(organizationId, dedupKey)` exists, repeated inserts are suppressed at
+   * the DB layer (partial unique index `uq_notifications_org_dedup_unread`).
+   * After the user marks the prior row read, a new notification can fire.
+   * Producers without a dedup key get the legacy always-insert behaviour.
+   */
+  dedupKey?: string | null;
 };
 
-/** Create a notification, persist it, and fire-and-forget push to all channels. */
+/**
+ * Create a notification, persist it, and fire-and-forget push to all channels.
+ *
+ * Returns `null` when the insert was suppressed by the dedup partial unique
+ * index — i.e. an unread notification with the same `(orgId, dedupKey)`
+ * already exists and the producer should treat this call as a no-op.
+ */
 export async function createNotification(db: Database, data: CreateNotificationData) {
   const id = uuidv7();
 
-  const [row] = await db
+  // ON CONFLICT DO NOTHING on the partial unique index. The `where` clause is
+  // mandatory when the target index is partial — PG raises "there is no
+  // unique or exclusion constraint matching the ON CONFLICT specification"
+  // unless the predicate matches the index definition exactly. Rows without
+  // a dedup_key never satisfy the predicate, so the conflict path never
+  // fires for them and they keep the legacy always-insert behaviour.
+  const inserted = await db
     .insert(notifications)
     .values({
       id,
@@ -43,10 +63,20 @@ export async function createNotification(db: Database, data: CreateNotificationD
       agentId: data.agentId ?? null,
       chatId: data.chatId ?? null,
       message: data.message,
+      dedupKey: data.dedupKey ?? null,
+    })
+    .onConflictDoNothing({
+      target: [notifications.organizationId, notifications.dedupKey],
+      where: sql`${notifications.read} = false AND ${notifications.dedupKey} IS NOT NULL`,
     })
     .returning();
 
-  if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
+  const row = inserted[0];
+  if (!row) {
+    // Dedup suppressed the insert. Callers should treat this as a no-op —
+    // the prior unread row is still in flight to the admin UI.
+    return null;
+  }
 
   const notification = {
     id: row.id,
@@ -87,31 +117,28 @@ export async function listNotifications(db: Database, orgId: string, memberId: s
     return { items: [], nextCursor: null };
   }
 
-  const conditions = [eq(notifications.organizationId, orgId)];
+  const targetLimit = query.limit;
+
+  const conditions = [eq(notifications.organizationId, orgId), buildVisibilityCondition([...visibleAgents])];
   if (query.cursor) conditions.push(lt(notifications.createdAt, new Date(query.cursor)));
   if (query.severity) conditions.push(eq(notifications.severity, query.severity));
   if (query.read !== undefined) conditions.push(eq(notifications.read, query.read));
   if (query.agentId) conditions.push(eq(notifications.agentId, query.agentId));
 
-  const where = and(...conditions);
-
-  // Overscan to absorb rows discarded by the visibility post-filter. Without
-  // overscan, a page containing many invisible-agent rows could silently
-  // return an empty payload even when more visible rows exist past the cursor.
-  const overscanFactor = 4;
-  const targetLimit = query.limit;
-  const rawLimit = Math.min(targetLimit * overscanFactor + 1, 400);
-
+  // Visibility is now part of the SQL predicate (`agent_id IS NULL OR
+  // agent_id IN visible`) instead of an in-Node post-filter, so we fetch
+  // exactly `limit + 1` rows and rely on the DB to discard invisible rows.
+  // This eliminates the 400-row overscan ceiling that previously made
+  // long-tail visible rows invisible when invisible-agent noise dominated.
   const rows = await db
     .select()
     .from(notifications)
-    .where(where)
+    .where(and(...conditions))
     .orderBy(desc(notifications.createdAt))
-    .limit(rawLimit);
+    .limit(targetLimit + 1);
 
-  const visible = rows.filter((n) => n.agentId === null || visibleAgents.has(n.agentId));
-  const hasMore = visible.length > targetLimit;
-  const items = hasMore ? visible.slice(0, targetLimit) : visible;
+  const hasMore = rows.length > targetLimit;
+  const items = hasMore ? rows.slice(0, targetLimit) : rows;
   const last = items[items.length - 1];
   const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
 
@@ -122,6 +149,32 @@ export async function listNotifications(db: Database, orgId: string, memberId: s
     })),
     nextCursor,
   };
+}
+
+/**
+ * Return the unread notification count for this member's visible agents.
+ * Single `SELECT COUNT(*)` — no row fetch — so the topbar bell badge can
+ * surface an accurate number (>100) without paying for a list query.
+ */
+export async function unreadCount(db: Database, orgId: string, memberId: string): Promise<number> {
+  const visibleAgents = await loadVisibleAgentIds(db, orgId, memberId);
+
+  // count(*) is `bigint` in PG. postgres-js returns bigint as string by
+  // default, so we tell TS to expect a string and parse it through Number(),
+  // which is safe up to 2^53. Casting to int in SQL would overflow past
+  // 2.1B rows; the string path is bounded by JS's safe integer range
+  // instead and matches the on-the-wire shape.
+  const [row] = await db
+    .select({ count: sql<string>`count(*)` })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.organizationId, orgId),
+        eq(notifications.read, false),
+        buildVisibilityCondition([...visibleAgents]),
+      ),
+    );
+  return Number(row?.count ?? "0");
 }
 
 /** Mark a single notification as read, scoped to organization + visible agents. */
@@ -149,22 +202,32 @@ export async function markRead(db: Database, notificationId: string, orgId: stri
 /** Mark all notifications visible to this member as read. */
 export async function markAllRead(db: Database, orgId: string, memberId: string) {
   const visible = await loadVisibleAgentIds(db, orgId, memberId);
-  const visibleIds = [...visible];
 
   // Single UPDATE covering every visible unread row in the org. Org-wide rows
   // (agentId IS NULL) are always visible; agent-scoped rows are filtered to
-  // the member's visible agent set. Without this single-statement form a
-  // burst of notifications past the prior 1000-row select cap would leave
-  // unread rows behind, and the bell badge would never clear.
-  const visibilityCondition =
-    visibleIds.length > 0
-      ? or(isNull(notifications.agentId), inArray(notifications.agentId, visibleIds))
-      : isNull(notifications.agentId);
-
+  // the member's visible agent set. The same visibility predicate is reused
+  // by listNotifications and unreadCount so the three surfaces agree.
   await db
     .update(notifications)
     .set({ read: true })
-    .where(and(eq(notifications.organizationId, orgId), eq(notifications.read, false), visibilityCondition));
+    .where(
+      and(
+        eq(notifications.organizationId, orgId),
+        eq(notifications.read, false),
+        buildVisibilityCondition([...visible]),
+      ),
+    );
+}
+
+/**
+ * SQL fragment matching every notification visible to a member: org-wide
+ * (`agent_id IS NULL`) plus rows tied to an agent in the member's visible
+ * set. Centralised so listNotifications, markAllRead, and unreadCount can
+ * never drift apart.
+ */
+function buildVisibilityCondition(visibleAgentIds: string[]) {
+  if (visibleAgentIds.length === 0) return isNull(notifications.agentId);
+  return or(isNull(notifications.agentId), inArray(notifications.agentId, visibleAgentIds));
 }
 
 /**
@@ -257,16 +320,12 @@ function composeMessage(type: NotificationType, agentCtx: AgentContext, chatCtx:
       return chat ? `${chat} completed` : `${agent} completed a task`;
     case "session_error":
       return chat ? `${chat} hit an error` : `${agent} hit a session error`;
-    case "agent_connected":
-      return `Computer ${computer} reconnected`;
     case "agent_stale":
       return `Computer ${computer} is unresponsive`;
     case "agent_error":
       return `${agent} entered error state`;
     case "agent_blocked":
       return `${agent} is blocked`;
-    case "agent_needs_decision":
-      return chat ? `${agent} needs a decision in ${chat}` : `${agent} needs a decision`;
     default:
       return `${agent} event`;
   }
@@ -275,8 +334,15 @@ function composeMessage(type: NotificationType, agentCtx: AgentContext, chatCtx:
 /**
  * Convenience: create a notification for an agent event, resolving org,
  * agent display name, computer hostname, and chat topic automatically.
- * Callers supply the event type and severity; the message text is generated
- * here so language/phrasing is centralized (see {@link composeMessage}).
+ * Callers supply the event type, severity, and (recommended) dedup_key; the
+ * message text is generated here so language/phrasing is centralized (see
+ * {@link composeMessage}).
+ *
+ * Default dedup_key when none is supplied: `agent:{agentId}:{type}` or, when
+ * a chatId is present, `chat:{chatId}:{type}`. This makes "burst of identical
+ * events for the same agent/chat surfaces a single unread row" the default
+ * behaviour rather than an opt-in — pass `dedupKey: null` if you want the
+ * legacy "every event creates a new row" semantics.
  *
  * Fire-and-forget — errors are swallowed so event producers never fail just
  * because the notification pipeline is unhealthy.
@@ -286,23 +352,32 @@ export async function notifyAgentEvent(
   agentId: string,
   type: NotificationType,
   severity: NotificationSeverity,
-  chatId?: string | null,
+  options: { chatId?: string | null; dedupKey?: string | null } = {},
 ): Promise<void> {
   try {
     const agentCtx = await resolveAgentContext(db, agentId);
     if (!agentCtx) return;
 
+    const chatId = options.chatId ?? null;
     const chatCtx = chatId ? await resolveChatContext(db, chatId) : null;
     const message = composeMessage(type, agentCtx, chatCtx);
+
+    const dedupKey =
+      options.dedupKey === undefined
+        ? chatId
+          ? `chat:${chatId}:${type}`
+          : `agent:${agentId}:${type}`
+        : options.dedupKey;
 
     await createNotification(db, {
       organizationId: agentCtx.organizationId,
       type,
       severity,
       agentId,
-      chatId: chatId ?? null,
+      chatId,
       clientId: agentCtx.clientId,
       message,
+      dedupKey,
     });
   } catch {
     // fire-and-forget
@@ -316,7 +391,13 @@ function pushToAdminWs(notification: Record<string, unknown>): void {
   // can filter strictly (no `!orgId` fallback that silently fans out to every
   // org). `agentId` is also hoisted so the WS route can additionally scope by
   // per-member agent visibility before relaying to a given socket.
-  broadcastToAdmins({
+  //
+  // Cross-instance: the envelope goes onto the `admin_broadcast_envelopes`
+  // PG NOTIFY channel; every server instance LISTENs and feeds the envelope
+  // back into its local `broadcastToAdmins` fanout. With a single instance the
+  // round-trip is sub-millisecond; with multiple, every admin socket on every
+  // instance sees the same event without an extra delivery hop.
+  broadcastAdminsCrossInstance({
     type: "notification",
     organizationId: notification.organizationId as string,
     agentId: (notification.agentId as string | null) ?? null,

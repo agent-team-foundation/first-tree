@@ -74,7 +74,7 @@ import {
   rootLogger,
 } from "./observability/index.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
-import { broadcastToAdmins } from "./services/admin-broadcast.js";
+import { broadcastToAdmins, registerCrossInstanceBroadcaster } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
@@ -285,6 +285,21 @@ export async function buildApp(config: Config) {
   // Notifier: dedicated PG connection for LISTEN/NOTIFY
   const listenClient = postgres(config.database.url, { max: 1, ...sslOptions(config.database.url) });
   const notifier = createNotifier(listenClient);
+
+  // Cross-instance admin-broadcast wiring. Producers call
+  // `broadcastAdminsCrossInstance` which routes through pg_notify; every
+  // server instance LISTENs and feeds the envelope back into its own
+  // per-instance fanout (`broadcastToAdmins`). Registering both ends here
+  // keeps the bootstrap ordering obvious — producer -> NOTIFY -> LISTEN ->
+  // local fanout — without scattering wiring across services.
+  registerCrossInstanceBroadcaster((payload) => {
+    notifier.notifyAdminBroadcast(payload).catch(() => {
+      // fire-and-forget: admin UI tolerates an occasional dropped frame
+    });
+  });
+  notifier.onAdminBroadcast((payload) => {
+    broadcastToAdmins(payload);
+  });
 
   // WebSocket plugin. `maxPayload` caps a single inbound frame so a hostile
   // or buggy client cannot OOM the server with one giant message. Frames in

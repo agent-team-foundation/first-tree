@@ -50,7 +50,7 @@ describe("agent service — delegateMention cross-org guard", () => {
     await expect(
       createAgent(app.db, {
         name: `src-${randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "human",
         displayName: "Source",
         managerId: admin.memberId,
         delegateMention: foreign.agentUuid,
@@ -65,7 +65,7 @@ describe("agent service — delegateMention cross-org guard", () => {
     await expect(
       createAgent(app.db, {
         name: `src-${randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "human",
         displayName: "Source",
         managerId: admin.memberId,
         delegateMention: randomUUID(),
@@ -90,7 +90,7 @@ describe("agent service — delegateMention cross-org guard", () => {
 
     const created = await createAgent(app.db, {
       name: `src-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "human",
       displayName: "Source",
       managerId: admin.memberId,
       delegateMention: targetUuid,
