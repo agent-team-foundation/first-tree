@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAvatarAriaLabel, formatUnreadLabel, pickCompositeShape } from "../chat-row-avatar.js";
+import { buildAvatarAriaLabel, formatUnreadLabel, pickAvatarHue, pickCompositeShape } from "../chat-row-avatar.js";
 
 /**
  * Pin the pure decision helpers exported by `ChatRowAvatar`. The
@@ -51,6 +51,49 @@ describe("formatUnreadLabel — badge text", () => {
   it(">=100 rolls over to '99+' so the badge stays width-stable", () => {
     expect(formatUnreadLabel(100)).toBe("99+");
     expect(formatUnreadLabel(9999)).toBe("99+");
+  });
+});
+
+describe("pickAvatarHue — deterministic per-agent fill color", () => {
+  it("returns a `var(--avatar-hue-N)` token reference", () => {
+    // Pins the contract that the helper hands back a CSS-token
+    // reference rather than a raw `oklch(...)` literal — index.css is
+    // the single source of palette truth.
+    expect(pickAvatarHue("agent-1")).toMatch(/^var\(--avatar-hue-[0-7]\)$/);
+  });
+
+  it("same seed yields the same hue across calls (stable per agent)", () => {
+    // Pins the contract that powers consistent agent identity across
+    // direct chats, group composites, and page reloads.
+    const a = pickAvatarHue("019e20a6-287b-71f7-b9ba-cb954e7fa144");
+    const b = pickAvatarHue("019e20a6-287b-71f7-b9ba-cb954e7fa144");
+    expect(a).toBe(b);
+  });
+
+  it("spreads 8 realistic UUIDv7 seeds across at least 4 different hues", () => {
+    // Tighter than "more than one" — a regression that collapses
+    // 8 sample seeds onto 2 hues would pass the looser check. The
+    // seeds below are realistic-shape UUIDv7s (high-entropy random
+    // tail) rather than agent slugs with a common prefix; this
+    // matches production data, which is what the hash actually has
+    // to spread.
+    const seeds = [
+      "019e20a6-287b-71f7-b9ba-cb954e7fa144",
+      "019e3f12-91ac-7891-92e1-d2b3f5a8c192",
+      "019e5b78-12cd-7456-a7d4-e6f2c91b3856",
+      "019e7d92-45f1-7c23-8b9e-f1a4d5e89321",
+      "019ea1b3-78de-7e45-9c12-3b6d2f7a4c98",
+      "019ec5d4-aabb-7f67-bd34-5e8a9c1b2d65",
+      "019ee9f5-ccdd-7090-cf45-7a9b8d2c3e76",
+      "019f0d16-eeff-7211-e056-8c9bad3e4f87",
+    ];
+    const hues = new Set(seeds.map(pickAvatarHue));
+    expect(hues.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it("empty seed falls back to `--avatar-hue-0` without throwing", () => {
+    expect(() => pickAvatarHue("")).not.toThrow();
+    expect(pickAvatarHue("")).toBe("var(--avatar-hue-0)");
   });
 });
 
