@@ -54,6 +54,17 @@ export const meChatRowSchema = z.object({
   unreadMentionCount: z.number().int(),
   canReply: z.boolean(),
   engagementStatus: chatEngagementStatusSchema,
+  /**
+   * Speakers in this chat whose `agent_presence.runtime_state === 'working'`.
+   * Derived from the global presence table — NOT per-chat — so an agent
+   * running in any chat appears here for every chat they speak in. The web
+   * client only renders the working ring for `type === "direct"` and
+   * defers group-chat working signals to a future per-chat data source.
+   *
+   * Always returned, possibly empty. No schema migration required: this
+   * field is derived at query time from existing tables.
+   */
+  workingAgentIds: z.array(z.string()),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
