@@ -184,6 +184,30 @@ async function sendMessageInner(
       await assertSenderMayEmitQuestion(tx, senderId);
     }
 
+    // 2e. L4 silent-send form guard — mirror of the client-side result-sink
+    //     silent-turn (runtime/result-sink.ts). Covers any path that reaches
+    //     sendMessage without going through result-sink: the agent CLI
+    //     `agent send`, AskUserQuestion, external IM adapters, admin/web
+    //     posts. Form-only check on the FINAL outbound text (after
+    //     normalizeMentionsInContent has had its turn): if everything that
+    //     remains after stripping leading `@<name>` tokens is empty, the
+    //     send becomes silent — the message row is still written so chat
+    //     history stays complete, but fan-out emits notify=false for every
+    //     recipient (silent context rows; L3 behavior).
+    //
+    //     NO content language evaluation. Non-empty filler like "." or
+    //     "(待命中)" still wakes the recipient; the agent prompt + silent-
+    //     turn protocol is responsible for those. Non-string content
+    //     (e.g. structured question payloads) bypasses the guard entirely.
+    const isSilentSend =
+      typeof outboundContent === "string" && outboundContent.replace(/^(@\S+\s*)+/, "").trim().length === 0;
+    if (isSilentSend) {
+      log.info(
+        { chatId, senderId, source: data.source ?? null },
+        "silent send: empty content after mention strip — no fan-out wake-up",
+      );
+    }
+
     // 3. Store the message (with merged metadata + normalised content).
     const messageId = randomUUID();
     const [msg] = await tx
@@ -240,7 +264,10 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        notify: p.mode !== "mention_only" || mentionSet.has(p.agentId),
+        // Silent-send (step 2e) forces every fan-out row to notify=false
+        // regardless of mode/mentions. Inbox entries are still written so
+        // history replay still works; nobody is woken.
+        notify: !isSilentSend && (p.mode !== "mention_only" || mentionSet.has(p.agentId)),
       }));
 
     if (fanout.length > 0) {
@@ -272,17 +299,25 @@ async function sendMessageInner(
         .limit(1);
 
       if (original?.replyToInbox && original?.replyToChat) {
+        // Mirror silent-send (§2e) into the replyTo cross-chat route — when
+        // the main fan-out is silenced, the replyTo recipient must NOT be
+        // woken either, or the silent-send invariant ("any silent-send
+        // message has zero notify=true inbox rows") leaks through this
+        // back-channel. We still write the row so the original requester
+        // sees the reply when their session next picks it up.
         await tx
           .insert(inboxEntries)
           .values({
             inboxId: original.replyToInbox,
             messageId,
             chatId: original.replyToChat,
+            notify: !isSilentSend,
           })
           .onConflictDoNothing();
 
-        // Include replyTo recipient for notification
-        if (!recipients.includes(original.replyToInbox)) {
+        // Only surface as a wake-up target when not silenced — `recipients`
+        // is what the route layer turns into PG NOTIFY wake-ups.
+        if (!isSilentSend && !recipients.includes(original.replyToInbox)) {
           recipients.push(original.replyToInbox);
         }
       }
@@ -344,7 +379,126 @@ async function sendMessageInner(
   // wake-up otherwise). Failure is dropped; web reconnect refetches.
   fireChatMessageKick(chatId, txResult.message.id);
 
+  // L4 echo-loop observation: scan the just-tail of this chat for the
+  // ping-pong pattern that L1 (mention_only) + L4 (silent-turn) are meant
+  // to prevent. We emit a structured warn-log only — `notify` is never
+  // mutated here. Frequent triggers signal client-side prompt drift and
+  // a need to revisit the agent template. Fire-and-forget so the hot send
+  // path is unaffected; failures are logged but never propagated.
+  void observeLoopPattern(db, chatId).catch((err) => {
+    log.error({ err, chatId }, "loop pattern observation failed");
+  });
+
   return { message: txResult.message, recipients: txResult.recipients };
+}
+
+export const LOOP_OBSERVATION_WINDOW = 4;
+export const LOOP_OBSERVATION_SHORT_CHARS = 10;
+export const LOOP_OBSERVATION_TIME_WINDOW_MS = 30_000;
+
+function stripMentionPrefix(content: string): string {
+  return content.replace(/^(@\S+\s*)+/, "").trim();
+}
+
+/**
+ * Reporting hook: what to do when a loop pattern is detected. Production
+ * default goes through pino's structured `warn`; tests pass a fake so they
+ * can assert on detection without raising the test app's log level (helpers
+ * pin level=error for noise reduction).
+ */
+export type LoopPatternObserver = (data: {
+  chatId: string;
+  recentMessageIds: string[];
+  windowSpanMs: number;
+  contentLengths: number[];
+}) => void;
+
+const defaultLoopObserver: LoopPatternObserver = (data) => {
+  log.warn(
+    { metric: "loop_pattern_observed_total", ...data },
+    "loop pattern observed (not blocked) — prompt discipline may be drifting",
+  );
+};
+
+/**
+ * Pure observation: detect short, fast, two-agent ping-pong reply chains and
+ * surface them via a structured log line. Does NOT modify the `notify` flag
+ * or otherwise interfere with delivery — loop *prevention* lives client-side
+ * (prompt + silent-turn protocol in `result-sink`). Six conjunctive
+ * conditions (see design `agent-reply-loop-prevention-design.md` §3.4) so
+ * normal multi-agent collaboration is never flagged:
+ *
+ *   C1 — every message is `format=text`
+ *   C2 — no human sender in the window (any human reply resets the chain)
+ *   C3 — exactly two senders, perfectly alternating
+ *   C4 — strict `inReplyTo` chain across the whole window
+ *   C5 — every message body (after stripping leading `@<name>` tokens) is
+ *        ≤ `LOOP_OBSERVATION_SHORT_CHARS` characters
+ *   C6 — the whole window spans ≤ `LOOP_OBSERVATION_TIME_WINDOW_MS` ms
+ *
+ * Exported for direct test coverage of the detection logic; the `sendMessage`
+ * call site uses the default observer.
+ */
+export async function observeLoopPattern(
+  db: Database,
+  chatId: string,
+  observer: LoopPatternObserver = defaultLoopObserver,
+): Promise<void> {
+  const window = await db
+    .select({
+      id: messages.id,
+      senderId: messages.senderId,
+      content: messages.content,
+      inReplyTo: messages.inReplyTo,
+      createdAt: messages.createdAt,
+      format: messages.format,
+      senderType: agents.type,
+    })
+    .from(messages)
+    .innerJoin(agents, eq(messages.senderId, agents.uuid))
+    .where(eq(messages.chatId, chatId))
+    .orderBy(desc(messages.createdAt))
+    .limit(LOOP_OBSERVATION_WINDOW);
+
+  if (window.length < LOOP_OBSERVATION_WINDOW) return;
+
+  // C1: all text format
+  if (window.some((m) => m.format !== "text")) return;
+  // C2: no human sender (any human turn naturally breaks the chain)
+  if (window.some((m) => m.senderType === "human")) return;
+  // C3: exactly two distinct senders, strictly alternating
+  if (new Set(window.map((m) => m.senderId)).size !== 2) return;
+  for (let i = 0; i < window.length - 1; i++) {
+    if (window[i]?.senderId === window[i + 1]?.senderId) return;
+  }
+  // C4: strict reply chain — each newer message replies to the one beneath it
+  for (let i = 0; i < window.length - 1; i++) {
+    if (window[i]?.inReplyTo !== window[i + 1]?.id) return;
+  }
+  // C5: every body short after stripping mention prefix. Non-string contents
+  //     (markdown JSON, file/card payloads, etc.) can't be classified by a
+  //     simple char count, so we bail rather than guess.
+  const lens: number[] = [];
+  for (const m of window) {
+    const text = typeof m.content === "string" ? m.content : null;
+    if (text === null) return;
+    const len = stripMentionPrefix(text).length;
+    if (len > LOOP_OBSERVATION_SHORT_CHARS) return;
+    lens.push(len);
+  }
+  // C6: tight time window across the whole tail
+  const newest = window[0];
+  const oldest = window[window.length - 1];
+  if (!newest || !oldest) return;
+  const spanMs = newest.createdAt.getTime() - oldest.createdAt.getTime();
+  if (spanMs > LOOP_OBSERVATION_TIME_WINDOW_MS) return;
+
+  observer({
+    chatId,
+    recentMessageIds: window.map((m) => m.id),
+    windowSpanMs: spanMs,
+    contentLengths: lens,
+  });
 }
 
 export async function sendToAgent(

@@ -70,6 +70,17 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
   }
 
   return async function forwardResult(text: string): Promise<void> {
+    // Silent-turn protocol: an empty / whitespace-only output is the agent's
+    // explicit signal that it has nothing new for the recipient. Skip
+    // delivery and free the turn. The runtime does NOT evaluate content
+    // length or "meaningfulness" — that's the agent's semantic decision.
+    // The matching prompt directive lives in bootstrap.ts generateToolsDoc.
+    if (text.trim().length === 0) {
+      deps.clearTrigger();
+      deps.log("silent turn: agent produced empty output, skipping delivery");
+      return;
+    }
+
     const trigger = deps.getTrigger();
     // Clear BEFORE the await so a concurrent inject() setting a new trigger
     // isn't accidentally attached to this outbound reply.
