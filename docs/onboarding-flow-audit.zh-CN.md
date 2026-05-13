@@ -507,13 +507,21 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-8. Settings 里 "Messaging" 名称 vs `/integrations` 路径不一致
+#### P-8. Settings 里 "Messaging" 名称 vs `/integrations` 路径不一致 ⏸ Won't fix unless triggered
 
-- **问题**：路由 `integrations`（更通用），label `Messaging`（只覆盖 IM）。GitHub 集成又被搬出去了。暗示历史命名遗留，未来加非 IM integration 会混乱。
-- **位置**：`settings.tsx:39`
-- **建议**：
-  - 改成 `/settings/messaging` 路由+label 统一
-  - 或保留 `/integrations` 但 label 改 "Integrations"，把 GitHub 也搬回来
+- **核实后的事实**：
+  - 文件 / 路由 / 组件：`integrations.tsx` / `/settings/integrations` / `IntegrationsPage`
+  - 用户可见 label / header：**Messaging**（侧栏、页面 header 都是）
+  - 实际内容：纯 Feishu / Slack adapter CRUD（GitHub 已搬至 `/settings/github`，注释明确说明）
+- **用户实际影响**：**0**——侧栏、header、内容三处用户可见的标识完全一致，不一致仅在代码内部
+- **决议（2026-05-13 讨论后）**：**won't fix unless triggered**——只在添加新 integration 类型时（如 Discord IM、Linear/Jira 非 IM）一并梳理路由命名
+  - **理由**：
+    - 用户体感 0 影响
+    - 修复成本（rename + redirect + 改 imports）大于零，不是 5 分钟工作
+    - settings 信息架构正在演化（P-9 / P-10 / P-12），现在改可能下次又改
+    - 真正触发改名的时机是被迫做"按类别拆 vs 塞回一个 tab"的设计决策时——到那时一起决定
+- **触发重启信号**：当下一个非纯 IM 的 integration 进来时，连同那个 PR 一起处理
+- **排期影响**：从 P3（清理）移除，改为 backlog 触发条件式
 
 ---
 
@@ -609,7 +617,7 @@ Step 3 - InviteeStep3Body
 | **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写（P-5 复查后发现已解决，无需投入）|
 | **P1（下周）** | P-1 joinPath 持久化、P-10 Profile + Members tab（P-6 deferred 至通知系统重构后）|
 | **P2** | P-7 toast 文案对齐（5 分钟改）、P-11 owner role（P-4 已被 P-1 覆盖，无需单独投入） |
-| **P3（清理）** | P-8 命名一致性、P-9 Team tab 信息丰富、P-12 Context Tree 拆分、P-13–17 文档与小修 |
+| **P3（清理）** | P-9 Team tab 信息丰富、P-12 Context Tree 拆分、P-13–17 文档与小修（P-8 改为触发条件式 backlog）|
 
 ---
 
