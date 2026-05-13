@@ -397,9 +397,30 @@ Step 3 - InviteeStep3Body
   - 出现 "repos 写了，tree 没写" 不一致状态——后续 invitee 进 `InviteePickerBody`（重选 repos）而非 `InviteeConfirmBody`，体验差异大
   - `source_repos` 失败完全无 UI 反馈
   - 即使 toast 弹了，用户错过就再也看不到
-- **建议**：
-  - server 加 `PATCH /organizations/{id}/settings/onboarding-bundle` 原子接口
-  - 或：失败状态记录到 `users.onboarding_pending_writes`，下次进 Settings 显示"setup 未完成"banner
+- **决议（2026-05-13 讨论后）**：走**纯前端错误处理统一**（Option C），不加服务端事务接口。核心判断：PUT 幂等 + retry 已经覆盖 99.9% 场景，剩下的极少数 admin 放弃场景影响小到不值得为它做事务。
+  - **必做**：把三种不一致的 catch 统一——任何团队级写失败都阻塞流程（不进 chat、不 dismiss），让 admin 在原地看错误并 retry：
+    ```ts
+    try {
+      await updateAgentConfig(agent.uuid, { gitRepos: repoEntries });
+      await putSourceReposSetting(orgId, { repos: repoEntries });   // 失败抛
+      if (treeMode === "existing") {
+        await putContextTreeSetting(orgId, { repo: trimmedTreeUrl }); // 失败抛
+      }
+      const chat = await createAgentChat(agent.uuid);
+      try { await sendChatMessage(chat.id, bootstrap); } catch { /* 真·non-fatal */ }
+      void dismissOnboarding();
+      navigate(`/?c=${chat.id}`);
+    } catch (err) {
+      setError(`Couldn't save team setup: ${err.message}. Please retry.`);
+      setBusy(false);
+      // 不 navigate, 不 dismiss
+    }
+    ```
+  - **可选补强（可与 P-9 合并做）**：在 `OrgSettingsPage` / `Step3IntroBody` 加"不一致检测 banner"——`hasSourceRepos !== hasContextTree` 时显示 "Team setup is incomplete"。这个 banner 不需要新 schema，从已有状态推导即可
+  - **关键 take**：PUT 的幂等性是这个方案能成立的基础——admin retry 一次系统就收敛，竞态窗口极小（几秒内 invitee 恰好进 Step 3 概率极低，且看到的也只是 UX 不 ideal，不是数据损坏）
+- **替代方案（已否决）**：
+  - **Option A：服务端原子 endpoint** `PATCH .../settings/onboarding-bundle`：边际收益太低（只多解决"admin 立刻关浏览器跑路"这一种场景），不值得引入新接口的维护成本
+  - **Option B：`users.onboarding_pending_writes` 状态机**：状态清理逻辑复杂，且不一致状态本身可以从已有数据推导，不需要专门的列
 
 ---
 
