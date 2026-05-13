@@ -1,20 +1,6 @@
-# GitHub App Migration: As-Built Design (PR-322 + PR-323 + deferred webhook PR)
+# GitHub App Migration: As-Built Design
 
-**Originally written for the monolithic PR #300.** PR #300 has since been **closed and split into three smaller PRs** (decision: 2026-05-12). The auth + UI portion shipped as **PR-322 + PR-323**; the webhook portion is **deferred to a separate PR with a different owner**.
-
-| PR | Scope | Status |
-|----|-------|--------|
-| [#322](https://github.com/agent-team-foundation/first-tree-hub/pull/322) | Foundation — schema (`github_app_installations`), service primitives (`services/github-app.ts`, `services/github-app-installations.ts`, `services/oauth-state.ts`), boot guard, env config | **✅ Merged** |
-| [#323](https://github.com/agent-team-foundation/first-tree-hub/pull/323) | OAuth flow rewrite + Settings UI + admin API + auth-side D3 cut (delete legacy OAuth client) | **⏳ Open** (review in progress) |
-| Webhook PR (TBD) | `/api/v1/webhooks/github` App endpoint + dispatch + webhook-side D3 cut (delete legacy `/webhooks/github/:orgId` + drop `github_integration` namespace) + mention-only routing alignment with #304 | **⏸ Deferred** — different owner picks this up |
-
-**Audience:** senior architect / engineering lead reviewing the auth + UI work for production approval, plus the eventual webhook PR's reviewer who will use this doc as the design context.
-
-**How to read this doc:**
-- Sections **without** an explicit "deferred" marker describe the auth + UI work that lands in PR-322 + PR-323. That code is the source of truth — the `file:line` references resolve on the merged main (after PR-322) or on `feat/github-app/02-oauth-and-ui` (PR-323).
-- Sections marked **🔮 deferred to webhook PR** describe the design intent for the as-yet-unstarted webhook work. Code references in those sections will resolve only after the webhook PR lands; until then they are aspirational, drawn from the original PR-300 rollup branch (`ship/pr-300-rollup`) where the design was first prototyped.
-
-References to "design doc §X" mean `docs/github-app-design-zh.md` (the upstream proposal on PR #295) — kept as historical context.
+> **🔮 = deferred to the webhook PR** (a separate owner). Everything else shipped in **PR-322** (foundation) + **PR-323** (sign-in + UI); §2 has the per-decision / per-subsystem breakdown. References to "design doc §X" mean `docs/github-app-design-zh.md` (the upstream proposal on PR #295).
 
 ---
 
@@ -211,6 +197,8 @@ D3 cut — split across the two-stage rollout:
 
 ### 4.a Authentication / sign-in flow
 
+**Status:** ✅ shipped — route rewrite in PR-323; underlying `oauth-state.ts` / `github-app.ts` primitives in PR-322.
+
 **Entry:** `packages/server/src/api/auth/github.ts:59-323`.
 
 The flow is the standard OAuth dance with one twist: the *same* GitHub redirect can deliver an
@@ -279,6 +267,8 @@ URL the proxy or referrer log can capture.
 
 ### 4.b Installation lifecycle
 
+**Status:** ✅ shipped — the state-machine primitives in `services/github-app-installations.ts` (PR-322). The webhook handler that *invokes* them on `installation:*` events is 🔮 webhook PR.
+
 **State machine (`services/github-app-installations.ts`):**
 
 | Event | Operation | DB effect |
@@ -310,41 +300,22 @@ arriving after a newer `suspend` is filtered by `< unsuspendedAt`. Documented li
 `suspend` arriving after that point would re-suspend. Real-world risk is low — suspend/unsuspend are
 human actions minutes apart, well outside any realistic reorder window.
 
-**Delete handling (`services/github-app-installations.ts:300-302`):**
-
-The earlier 60-second grace window (intended to absorb a delayed `delete` event) was reverted
-after a codex challenge surfaced a worse failure: a real install + immediate uninstall (within 60
-seconds) would persist forever — the handler returned 200 (so GitHub never redelivered) and the
-Hub-side row was never cleaned up. The current implementation is a hard DELETE with no grace.
-
-The original race the grace window was meant to solve doesn't actually exist: GitHub mints a
-fresh `installation.id` per install, so a delayed `deleted` for id N cannot wipe a fresh
-re-install (which carries id M ≠ N). Same-id replays are handled by `processed_events` dedup.
-
-A residual hole — stale `created` after `deleted` resurrects the row — is acknowledged in the
-jsdoc and tracked as follow-up #314.
+**Delete handling (`services/github-app-installations.ts:300-302`):** hard DELETE by `installation_id`,
+no grace window — see D15 for why the earlier 60-second `createdAt`-based grace was reverted. Residual
+hole (stale `created` after `deleted` resurrects the row) is tracked as follow-up #314.
 
 ### 4.c Installation binding model (1:1 hub_org ↔ install)
 
+**Status:** ✅ shipped — schema + `bindInstallationToOrg` in PR-322; the OAuth callback that calls it in PR-323.
+
 **Binding invariant** (D2): each `installation_id` binds to at most one `hub_organization_id`, and
-each `hub_organization_id` holds at most one installation.
+each `hub_organization_id` holds at most one installation. Three enforcement layers:
 
-**Three layers of enforcement:**
-
-1. **`UNIQUE(installation_id)`** — duplicate webhook deliveries can't insert a second row for the
-   same install.
-2. **`UNIQUE(hub_organization_id)` (NULLs distinct)** — a Hub team can have only one bound install.
-   Postgres treats NULLs as distinct so multiple unbound rows can coexist (orphan-reclaim path).
-3. **Race-safe `bindInstallationToOrg`** — conditional UPDATE serialized via row-lock.
+1. **`UNIQUE(installation_id)`** — duplicate webhook deliveries can't insert a second row for the same install.
+2. **`UNIQUE(hub_organization_id)` (NULLs distinct)** — a Hub team can have only one bound install; Postgres' NULL-distinct semantics lets multiple unbound rows coexist (orphan-reclaim path).
+3. **Race-safe `bindInstallationToOrg`** — a conditional UPDATE serialized via row-lock (replaced the original TOCTOU-prone SELECT-then-UPDATE; codex P0-3, with H2 adding the inverse case).
 
 **Race-safe bind (`services/github-app-installations.ts:145-213`):**
-
-The original implementation was SELECT-then-UPDATE: read the row, validate "still null or already
-mine", UPDATE. Two concurrent callbacks for the same unbound installation but different Hub orgs
-would both see `hub_organization_id IS NULL`, both validate, and the second UPDATE would silently
-overwrite. Codex P0-3 flagged this; H2 added the inverse case.
-
-Current shape:
 
 ```ts
 const result = await db
@@ -382,14 +353,11 @@ Idempotent re-bind (same install → same org) is allowed and treated as a no-op
 > File references in this section resolve only on the original `ship/pr-300-rollup` branch (preserved for design reference; not a maintained branch). The webhook PR may rewrite specifics but should preserve decisions D3 / D4 / D5 / D6 / D7 / D15 from the table above.
 
 **Endpoint:** `POST /api/v1/webhooks/github` (single URL, deployment-wide).
-**Implementation:** `packages/server/src/api/webhooks/github-app.ts`.
-
-**HMAC verification** reuses `verifyGithubWebhookSignature` from `webhooks/github.ts:19-31` — same
-algorithm as the legacy per-org endpoint, only the secret source differs. The compare uses
-`timingSafeEqual` over equally-sized buffers; the failure path throws `UnauthorizedError`.
-
-**Body parsing:** scoped `application/json` content-type parser (`buffer` mode) so the raw body
-is preserved for HMAC. Same pattern as the legacy endpoint.
+**Implementation:** `packages/server/src/api/webhooks/github-app.ts`. HMAC verify reuses
+`verifyGithubWebhookSignature` (`timingSafeEqual` over equal-length buffers; `UnauthorizedError` on
+mismatch); body parsing uses a scoped `buffer`-mode JSON content-type parser to preserve the raw
+bytes for HMAC — both the same pattern as the legacy per-org endpoint, only the secret source
+differs.
 
 **Dispatch order (`api/webhooks/github-app.ts:69-217`):**
 
@@ -457,14 +425,15 @@ review_requested` uses `extractStructuralMentions` because the reviewer is in
 }
 ```
 
-**Dedup table:** `processed_events(event_id, platform)`. The `claimEvent` helper uses
-`INSERT ... ON CONFLICT DO NOTHING RETURNING event_id` — claim succeeds iff no prior delivery
-under the same `x-github-delivery` GUID + platform `"github-app"` was processed. Pre-existing
-infrastructure; this PR reuses it as-is.
+**Dedup table:** `processed_events(event_id, platform)` — pre-existing infra, reused as-is.
+`claimEvent` does `INSERT ... ON CONFLICT DO NOTHING RETURNING event_id`; claim succeeds iff no
+prior delivery under the same `x-github-delivery` GUID + platform `"github-app"` was processed.
 
 ### 4.e Token model
 
-The PR introduces three distinct GitHub credentials — only the user-OAuth pair lives on the row.
+**Status:** ✅ shipped — minting / refresh primitives in `services/github-app.ts` (PR-322); the OAuth callback's use of the user-token pair + the `/me/github/repos` refresh wiring in PR-323. (The installation token has no request-path consumer yet — Phase 4.)
+
+The migration introduces three distinct GitHub credentials — only the user-OAuth pair lives on the row.
 
 | Token | Lifetime | Storage | Purpose |
 |---|---|---|---|
@@ -537,6 +506,8 @@ Legacy rows (no expiry fields) skip refresh entirely — never-expiring OAuth-Ap
 GitHub call surfaces a 401 which the route maps to "sign in again, then retry".
 
 ### 4.f Schema changes
+
+**Status:** ✅ shipped — `github_app_installations` table (`0037`) + `auth_identities.metadata` shape in PR-322; the `0038` `github_integration`-drop migration is 🔮 webhook PR.
 
 #### 4.f.1 `github_app_installations` (new)
 
@@ -631,6 +602,8 @@ needed new timestamps strictly above the prior PR-300 max.)
 > **`0038` numbering caveat:** this doc refers to the `github_integration`-drop migration as `0038` for continuity with the original PR-300 plan. After the split, `0038` on `main` was taken by an unrelated change (`0038_chat_membership_user_state`). The webhook PR will create the drop migration with whatever the next free index is at that time — treat every "`0038`" in this doc as a placeholder name for "the webhook-side `github_integration`-namespace-drop migration", not a literal file number.
 
 ### 4.g Configuration surface
+
+**Status:** ✅ shipped — env-var block + boot guard in PR-322.
 
 **Six new environment variables** (`packages/shared/src/config/server-config.ts:108-138`):
 
