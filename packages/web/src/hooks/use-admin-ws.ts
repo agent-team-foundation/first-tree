@@ -43,6 +43,12 @@ function broadcast(msg: WsMessage) {
     } else if (msg.type === "session:state") {
       latestQc.invalidateQueries({ queryKey: ["activity"] });
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
+      // `MeChatRow.workingAgentIds` is derived from `agent_presence.runtime_state`,
+      // which is mutated by the same `session:state` event upstream. Invalidate
+      // the conversation-list query so the working ring switches on / off in
+      // real time without waiting for the 15s `refetchInterval`. Cheap: the
+      // query is page-scoped (50 rows) and already React-Query-deduped.
+      latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
       // carries `{ type, chatId }` (see shared/me-chat.ts:chatMessageFrameSchema);
