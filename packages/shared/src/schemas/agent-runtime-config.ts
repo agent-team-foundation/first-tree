@@ -17,6 +17,7 @@ import type { runtimeProviderSchema } from "./runtime-provider.js";
 const PROMPT_APPEND_MAX_LENGTH = 32_000;
 const MCP_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const ENV_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:/;
 
 export const promptConfigSchema = z.object({
   append: z.string().max(PROMPT_APPEND_MAX_LENGTH).default(""),
@@ -61,11 +62,55 @@ export const envEntrySchema = z.object({
 });
 export type EnvEntry = z.infer<typeof envEntrySchema>;
 
+function hasControlCharacters(value: string): boolean {
+  for (let idx = 0; idx < value.length; idx++) {
+    const code = value.charCodeAt(idx);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+export function getRepoLocalPathSafetyError(localPath: string): string | null {
+  if (localPath.length === 0) return "Git repo local path must not be empty";
+  if (localPath.trim() !== localPath) return "Git repo local path must not have leading or trailing whitespace";
+  if (hasControlCharacters(localPath)) return "Git repo local path must not contain control characters";
+  if (localPath.includes("\\")) return "Git repo local path must use forward slashes";
+  if (localPath.startsWith("/") || WINDOWS_DRIVE_PATH_PATTERN.test(localPath)) {
+    return "Git repo local path must be relative";
+  }
+
+  const segments = localPath.split("/");
+  for (const segment of segments) {
+    if (!segment) return "Git repo local path must not contain empty path segments";
+    if (segment === "." || segment === "..") return "Git repo local path must not contain dot segments";
+    if (segment.trim() !== segment) {
+      return "Git repo local path segments must not have leading or trailing whitespace";
+    }
+  }
+
+  return null;
+}
+
+export function isSafeRepoLocalPath(localPath: string): boolean {
+  return getRepoLocalPathSafetyError(localPath) === null;
+}
+
 export const gitRepoSchema = z.object({
   url: z.string().min(1),
   ref: z.string().min(1).optional(),
   /** Path relative to the session working directory; if omitted, derive from repo name. */
-  localPath: z.string().min(1).optional(),
+  localPath: z
+    .string()
+    .min(1)
+    .superRefine((localPath, ctx) => {
+      const safetyError = getRepoLocalPathSafetyError(localPath);
+      if (!safetyError) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: safetyError,
+      });
+    })
+    .optional(),
 });
 export type GitRepo = z.infer<typeof gitRepoSchema>;
 
