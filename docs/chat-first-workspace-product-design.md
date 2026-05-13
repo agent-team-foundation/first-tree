@@ -632,8 +632,6 @@ Notification bell
 ├─ agent_error
 ├─ agent_blocked
 ├─ agent_stale
-├─ agent_disconnected
-├─ agent_connected
 ├─ session_error
 ├─ session_completed
 └─ computer / system / organisation events

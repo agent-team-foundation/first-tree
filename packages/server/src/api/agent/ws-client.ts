@@ -85,24 +85,6 @@ const wsMessageSchema = z.object({
  * SDK can refresh and reconnect without silently half-opening the socket.
  */
 
-/** Notification cooldown: prevents duplicate notifications for same (agentId, type) within window. */
-const NOTIFICATION_COOLDOWN_MS = 300_000; // 5 minutes
-const notificationCooldowns = new Map<string, number>();
-
-function shouldNotify(agentId: string, notificationType: string): boolean {
-  const key = `${agentId}:${notificationType}`;
-  const now = Date.now();
-  const lastSent = notificationCooldowns.get(key);
-  if (lastSent && now - lastSent < NOTIFICATION_COOLDOWN_MS) return false;
-  notificationCooldowns.set(key, now);
-  if (notificationCooldowns.size > 1000) {
-    for (const [k, ts] of notificationCooldowns) {
-      if (now - ts > NOTIFICATION_COOLDOWN_MS) notificationCooldowns.delete(k);
-    }
-  }
-  return true;
-}
-
 /**
  * Authenticated WS session state.
  *
@@ -788,9 +770,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 notifier,
               });
 
-              if (payload.runtimeState === "error" && shouldNotify(agentId, "agent_error")) {
+              // Dedup happens at the DB layer via the default agent:{id}:{type}
+              // dedup_key — repeated runtime-state errors for the same agent
+              // collapse to a single unread row until the user acks.
+              if (payload.runtimeState === "error") {
                 notificationService.notifyAgentEvent(app.db, agentId, "agent_error", "high").catch(() => {});
-              } else if (payload.runtimeState === "blocked" && shouldNotify(agentId, "agent_blocked")) {
+              } else if (payload.runtimeState === "blocked") {
                 notificationService.notifyAgentEvent(app.db, agentId, "agent_blocked", "medium").catch(() => {});
               }
             } else if (type === "session:event") {
@@ -822,11 +807,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               const payload = sessionCompletionMessageSchema.parse(msg);
 
-              if (shouldNotify(agentId, `session_completed:${payload.chatId}`)) {
-                notificationService
-                  .notifyAgentEvent(app.db, agentId, "session_completed", "low", payload.chatId)
-                  .catch(() => {});
-              }
+              // Dedup happens at the DB layer via the default
+              // chat:{chatId}:session_completed key — a noisy reconcile loop
+              // can't produce N rows for the same chat completion.
+              notificationService
+                .notifyAgentEvent(app.db, agentId, "session_completed", "low", { chatId: payload.chatId })
+                .catch(() => {});
             } else if (type === "inbox:ack") {
               const payloadResult = inboxAckFrameSchema.safeParse(msg);
               if (!payloadResult.success) {

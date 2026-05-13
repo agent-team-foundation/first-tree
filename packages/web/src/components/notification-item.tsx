@@ -18,8 +18,6 @@ const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   session_error: "Error",
   agent_blocked: "Blocked",
   agent_stale: "Stale",
-  agent_connected: "Connected",
-  agent_needs_decision: "Decision",
   session_completed: "Completed",
 };
 
