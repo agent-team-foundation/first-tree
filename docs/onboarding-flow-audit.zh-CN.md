@@ -484,14 +484,26 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-7. Step 2 完成后 `gitRepos: []`，"later" 后无明显回归路径
+#### P-7. Step 3 dismiss 后 toast 指向不一致
 
-- **问题**：toast 说 "add one in Agent settings when ready"——但 Settings tab 里没有 Agent 子页（只有 Team / Computers / GitHub / Messaging / Onboarding），用户得点工作区某处的 agent 才能找到。
-- **位置**：`step3-intro-body.tsx:861` + Settings 信息架构
-- **建议**：
-  - toast 给具体 deep link 而非泛泛 "Agent settings"
-  - Settings 加 "Agents" sub-tab 集中管理用户名下的 agent
-  - dashboard 加明显的 "Your agent isn't bound to any repo" 提示卡片
+- **重新审视后的问题描述**（2026-05-13）：原 audit 把"agent 没绑 repo"框架成"Agent settings 缺失"是错的。**Step 3 的核心目的就是给 agent 绑 repo**，所以"I'll do it later"等于跳过 onboarding 最关键的一步，唯一的恢复路径就是 Settings → Onboarding → Resume → 重回 Step 3。
+- **真正的 bug**：当前 `buildSetupHiddenToast` 的**文案和 action button 指向不一致**：
+  ```ts
+  description: "...add one in Agent settings when ready."  // 指向"Agent settings"（不存在）
+  action: { label: "Open settings", → /settings/onboarding } // 实际跳 Settings → Onboarding（对的）
+  ```
+- **位置**：`step3-intro-body.tsx:861` `buildSetupHiddenToast`
+- **决议（2026-05-13 讨论后）**：**仅修文案对齐**，不做附加 UI。
+  - 改 `buildSetupHiddenToast`：
+    ```ts
+    description: "Your agent isn't bound to a source repo yet. Resume from Settings → Onboarding any time to finish.",
+    action: { label: "Resume setup", onClick: () => navigate("/settings/onboarding") },
+    ```
+  - 5 分钟改完，文案与 action 一致，用户去 Settings → Onboarding 点 Resume 后会回到 Step 3，那里页面本身就会告诉他要 "Pick source repos"——按钮文案再优化的边际价值约为 0
+- **替代方案（已否决）**：
+  - **按 agent 状态动态切 Resume 按钮文案（如 "Bind your agent to a source repo"）**：差量价值只是按钮多 5 个字，但 Settings → Onboarding 页面要拉 agent config、多 loading state、多 agent 时按钮文案逻辑要再想，**ROI 不正**
+  - **Dashboard 加 "Agent isn't bound" banner**：用户主动点了 later 是有意识地推迟，dashboard 上常驻提示反而干扰；他们去 Settings 找的时候能找到就行
+  - **加 Settings → Agents sub-tab**：与 P-10 关联讨论时一并撤掉——这会把"绑 repo 这件事"从 onboarding 语义里拆出来，反而让用户困惑应该走 onboarding 还是 Agents tab
 
 ---
 
@@ -596,7 +608,7 @@ Step 3 - InviteeStep3Body
 |---|---|
 | **P0（这周）** | P-2 onboardingStep 倒退、P-3 非原子写（P-5 复查后发现已解决，无需投入）|
 | **P1（下周）** | P-1 joinPath 持久化、P-10 Profile + Members tab（P-6 deferred 至通知系统重构后）|
-| **P2** | P-7 Step 2 后回归路径、P-11 owner role（P-4 已被 P-1 覆盖，无需单独投入） |
+| **P2** | P-7 toast 文案对齐（5 分钟改）、P-11 owner role（P-4 已被 P-1 覆盖，无需单独投入） |
 | **P3（清理）** | P-8 命名一致性、P-9 Team tab 信息丰富、P-12 Context Tree 拆分、P-13–17 文档与小修 |
 
 ---
