@@ -341,23 +341,46 @@ Step 3 - InviteeStep3Body
 
 ---
 
-#### P-2. `onboardingStep` 按 DB 现算导致"倒退" ✅ Won't fix
+#### P-2. 建模 onboarding 终态（revised）
 
-- **问题**：用户已完成 onboarding 多月后，删掉一台旧机器（`clients` 表条目删了），下次 `/me` 推断成 `connect`。
-- **位置**：`packages/server/src/api/me.ts` `inferOnboardingStep()`
-- **决议（2026-05-13 二次审视后）**：**不修复**——重新分析后发现"倒退"不是真问题，做 P-2 反而会**让 UX 变差**。
-  - **bug 真实触发条件极窄**：要让用户实际看到 stepper 倒退，需要同时：
-    1. 用户已完成 onboarding（`dismissed_at` 已被 Step 3 dismissOnboarding 自动 set）
-    2. **且** `dismissed_at` 被清掉（只有用户主动点 Settings → Onboarding → Resume 才会发生）
-    3. **且** 当前没 client（删机器了）
-  - **倒退后的行为其实是合理引导**：用户主动 Resume 之后看到 Step 2（"接电脑"指引）——他**确实**没 client，给他 CLI 安装命令是有用的，不是 bug
-  - **P-1 落地后伤害进一步缩小**：P-1 把 Step 1 gate 改成 `teamHasDefaultName`，所以倒退**不会显示 Step 1**（团队已改名），只会显示 Step 2（合理）
-  - **做 P-2 反而坏**：会把"你没 client，这是装 client 的 CLI"这种贴心引导变成"完成态了，自己想办法"——用户主动 Resume 时却拿到 Step 3 review，但他没 client agent 跑不起来，**更困惑**
-- **审计反思**：又一次"工程师本能（显式 + 持久化更稳）"覆盖了对实际用户路径的判断。决策时要先问"bug 真的让用户看见了吗？"而不是"理论上不一致"
-- **替代方案（已否决）**：
-  - 加 `users.onboarding_completed_at`：见上述分析，做了反而 UX 更差
-  - 加 `users.onboarding_max_step_reached` enum 列（单调递进）：同上
-- **排期影响**：从 P0 移除
+- **真正的问题**（2026-05-13 三次审视后澄清）：当前系统**没有 onboarding 终态**——`onboardingStep` 永远返回值、`dismissed_at` 只表达"暂时隐藏 UI"、没有"setup 已完成"的语义层。导致：
+  1. Settings → Onboarding tab 永远存在，老用户也看得到
+  2. "Resume onboarding" 按钮永远可用，但点了之后行为模糊
+  3. Step 3 完成的用户点 Resume → 又看到 Step 3 IntroBody（已做完的事重看一遍）
+  4. 没有"毕业"反馈，跟"3 个一次性首次配置 Step"的设计意图脱节
+- **位置**：`packages/server/src/api/me.ts` + `packages/web/src/pages/settings.tsx` + `packages/web/src/pages/settings/onboarding.tsx` + Step 3 两处 handler
+- **决议（2026-05-13 讨论后）**：加 `users.onboarding_completed_at` 字段，**用作 UI surface gate**（而不是改 `inferOnboardingStep`）。这样 Resume 入口本身消失，wizard 重入路径被关闭，onboarding 真正"结束"。
+  - **DB 改动**：
+    ```sql
+    ALTER TABLE users ADD COLUMN onboarding_completed_at TIMESTAMPTZ;
+    ```
+    Backfill：把 `dismissed_at IS NOT NULL` 的用户全部打上 `dismissed_at` 同值（保守做法，最坏是个别早期 dismiss 的用户失去 onboarding tab 入口，但他们本来也不用）
+  - **Step 3 success 处写入**（admin 的 `handleContinue` + invitee 的 `handleConfirm`）：
+    ```ts
+    await markOnboardingCompleted();  // PATCH /me/onboarding-completed → set users.onboarding_completed_at = now()
+    ```
+  - **Settings 侧栏 gate**（`settings.tsx`）：
+    ```tsx
+    {!user.onboardingCompletedAt && (
+      <SubNavLink to="/settings/onboarding" label="Onboarding" />
+    )}
+    ```
+  - **Settings → Onboarding 页面守卫**（`settings/onboarding.tsx`）：
+    ```ts
+    if (user.onboardingCompletedAt) return <Navigate to="/settings/team" replace />;
+    ```
+  - **`inferOnboardingStep` 不改动**——保留它"基于当前资源状态"的语义，但**它不再决定 Settings 入口的可见性**
+- **效果**：
+  - 完成 Step 3 → `completed_at` 落库 → Settings 侧栏的 "Onboarding" 入口消失，Resume 路径消失
+  - 用户想改 team / agent / repos → 走专门的 Settings → Team / Computers / `/agents/:uuid`
+  - 没完成的用户行为不变（保留 Resume 路径作为恢复入口）
+- **关键 take**：这条修复跟之前一次 won't-fix 决议看似矛盾，其实方案变了——
+  - **当时 P-2**：改 `inferOnboardingStep` 让 step 一旦 completed 永不回退（影响 wizard 行为）→ 会让 Resume + 没 client 的用户体验变差
+  - **现在 P-2 revised**：不动 `inferOnboardingStep`，只用 `completed_at` 关 UI 入口 → Resume 路径整个消失，谈不上"Resume 后看哪个 Step"的问题
+- **备份路径**（万一未来需要）：
+  - Hidden URL `?onboarding=replay` 给运营或客服用
+  - 或在 Settings → Team 加不显眼的 "Re-run setup guide" link
+- **实施工作量**：~1.5 小时（DB migration + Step 3 两处 handler 写入 + Settings 两处 gate + 测试）
 
 ---
 
@@ -606,11 +629,11 @@ Step 3 - InviteeStep3Body
 
 | Sprint | 处理项 |
 |---|---|
-| **P0（这周）** | P-3 非原子写（前端错误处理统一）|
+| **P0（这周）** | P-2 revised（建模 onboarding 终态）、P-3 非原子写（前端错误处理统一）|
 | **P1（下周）** | P-1 joinPath 持久化（纯派生，改 Step 1 + Step 2 gate）|
 | **P2** | P-7 toast 文案对齐 + P-18 default agent name（同一 PR）|
 | **触发式 backlog** | P-6（通知系统重构后）、P-8（新 integration 类型）、P-11（billing 立项）、P-12（设置项膨胀）、P-14 / P-16（用户反馈）、P-17（跟随 P-6）|
-| **已 resolved / 失效** | P-2 won't fix（重审后发现是过度修复）、P-4 已被 P-1 覆盖、P-5 已存在双闸防护、P-9 / P-10 / P-13 / P-15 audit 错误已移除 |
+| **已 resolved / 失效** | P-4 已被 P-1 覆盖、P-5 已存在双闸防护、P-9 / P-10 / P-13 / P-15 audit 错误已移除 |
 
 ---
 
