@@ -354,6 +354,21 @@ export {
   sendToAgentSchema,
 } from "./schemas/message.js";
 export {
+  GITHUB_EVENT_CARD_REASONS,
+  type GithubEventCard,
+  type GithubEventCardReason,
+  githubEventCardReasonSchema,
+  githubEventCardSchema,
+  INVOLVE_REASONS,
+  type InvolveReason,
+  involveReasonSchema,
+  NORMALIZED_EVENT_KINDS,
+  type NormalizedEvent,
+  type NormalizedEventKind,
+  normalizedEventKindSchema,
+  normalizedEventSchema,
+} from "./schemas/normalized-event.js";
+export {
   NOTIFICATION_SEVERITIES,
   NOTIFICATION_TYPES,
   type Notification,
@@ -506,6 +521,7 @@ export {
   userSchema,
   userStatusSchema,
 } from "./schemas/user.js";
+export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
 export type { ServerCapabilities, ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
 // -- WebSocket handshake frames --
 export {

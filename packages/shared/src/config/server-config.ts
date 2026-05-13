@@ -151,8 +151,15 @@ export const serverConfigSchema = defineConfig({
     max: field(z.number().default(100), { env: "FIRST_TREE_HUB_RATE_LIMIT_MAX" }),
     /** Cap on `/auth/login`, `/auth/connect-token`, and other token-issuing paths. */
     loginMax: field(z.number().default(5), { env: "FIRST_TREE_HUB_RATE_LIMIT_LOGIN_MAX" }),
-    /** Cap on `/webhooks/github`. */
-    webhookMax: field(z.number().default(60), { env: "FIRST_TREE_HUB_RATE_LIMIT_WEBHOOK_MAX" }),
+    /**
+     * Cap on `/webhooks/github-app` (the GitHub App ingestion endpoint).
+     * Sized for SaaS-wide aggregate traffic (single endpoint serves every
+     * installation): typical busy repos burst ~5–10 events/s, and the
+     * `pull_request.synchronize` events that now flow through (Bug 1
+     * fix — no longer silenced) only add to the total. 600/min leaves
+     * headroom for multi-org onboarding without per-installation tuning.
+     */
+    webhookMax: field(z.number().default(600), { env: "FIRST_TREE_HUB_RATE_LIMIT_WEBHOOK_MAX" }),
     /** Cap on Context Tree snapshot reads. */
     contextTreeSnapshotMax: field(z.number().default(6), {
       env: "FIRST_TREE_HUB_RATE_LIMIT_CONTEXT_TREE_SNAPSHOT_MAX",

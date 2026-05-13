@@ -24,6 +24,26 @@ describe("extractEventEntity", () => {
     expect(entity?.key).toBe("owner/repo#7");
   });
 
+  it("derives pull_request entity from issue_comment on a PR (issue.pull_request set)", () => {
+    const entity = extractEventEntity("issue_comment", {
+      issue: {
+        number: 316,
+        title: "Improve onboarding flow",
+        html_url: "https://github.com/owner/repo/issues/316",
+        pull_request: {
+          html_url: "https://github.com/owner/repo/pull/316",
+        },
+      },
+      repository: { full_name: "owner/repo" },
+    });
+    expect(entity).toEqual({
+      type: "pull_request",
+      key: "owner/repo#316",
+      title: "Improve onboarding flow",
+      url: "https://github.com/owner/repo/pull/316",
+    });
+  });
+
   it("derives pull_request entity from pull_request event", () => {
     const entity = extractEventEntity("pull_request", {
       pull_request: { number: 50, title: "Implement refactor", html_url: "https://github.com/owner/repo/pull/50" },

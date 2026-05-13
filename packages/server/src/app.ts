@@ -54,8 +54,9 @@ import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { sessionRoutes } from "./api/sessions.js";
-// Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
+// Public agent discovery removed — visibility is now handled via agent.visibility field
+import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
 import { assertBootConfigValid } from "./boot-guards.js";
 import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
@@ -421,6 +422,7 @@ export async function buildApp(config: Config) {
       // ── Public routes ────────────────────────────────────────────────────
       await api.register(healthRoutes);
       await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
+      await api.register(githubAppWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });

@@ -53,11 +53,34 @@ export function extractEventEntity(eventType: string, payload: unknown): GithubE
   if (!repo) return null;
 
   switch (eventType) {
-    case "issues":
+    case "issues": {
+      const issue = isRecord(payload.issue) ? payload.issue : null;
+      const number = readNumber(issue?.number);
+      if (number === null) return null;
+      return {
+        type: "issue",
+        key: `${repo}#${number}`,
+        title: readString(issue?.title) ?? undefined,
+        url: readString(issue?.html_url) ?? undefined,
+      };
+    }
     case "issue_comment": {
       const issue = isRecord(payload.issue) ? payload.issue : null;
       const number = readNumber(issue?.number);
       if (number === null) return null;
+      // GitHub delivers PR comments as `issue_comment` events with
+      // `issue.pull_request` populated. Without this branch the comment
+      // clusters into an Issue chat rather than the existing PR chat —
+      // the long-standing "PR comment opens an Issue chat" bug.
+      const prInfo = isRecord(issue?.pull_request) ? issue.pull_request : null;
+      if (prInfo) {
+        return {
+          type: "pull_request",
+          key: `${repo}#${number}`,
+          title: readString(issue?.title) ?? undefined,
+          url: readString(prInfo.html_url) ?? readString(issue?.html_url) ?? undefined,
+        };
+      }
       return {
         type: "issue",
         key: `${repo}#${number}`,

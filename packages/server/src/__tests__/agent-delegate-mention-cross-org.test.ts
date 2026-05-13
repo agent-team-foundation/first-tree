@@ -9,7 +9,7 @@ import { createTestAdmin, useTestApp } from "./helpers.js";
 /**
  * Service-layer guards on `delegateMention` writes (plan A).
  *
- * The webhook router (plan B in api/webhooks/github.ts) already filters
+ * The audience resolver (plan B in services/github-audience.ts) already filters
  * cross-org delegate targets at fan-out time. These tests pin down the
  * source-side guard so the column can never accumulate dangling or cross-org
  * uuids in the first place — keeping the data clean and giving admins an
