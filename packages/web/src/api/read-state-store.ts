@@ -22,13 +22,12 @@
  * new semantics. The store name (`read-state`) and surrounding code
  * still use the historical "read state" vocabulary because the
  * concept is, externally, "where to drop the user back into the
- * chat" — and the rest of the codebase (UnreadDivider, unread count)
- * still talks about reads even though the underlying signal is
- * scroll-position-on-leave.
+ * chat".
  *
  * Origin: proposal `hub-chat-scroll-and-cache.20260509.md` (M2),
- * revised during PR 286 manual sign-off — see issue
- * first-tree-all 120.
+ * revised through PR 286 manual sign-off — the dedicated unread
+ * divider was dropped in the final round in favor of a pill-only
+ * UX (Lark-style). See issue first-tree-all 120.
  */
 
 const DB_NAME = "first-tree-hub-chat-cache";
@@ -48,21 +47,22 @@ export type ReadState = {
    */
   bottomVisibleMessageId: string;
   /**
-   * The id of the latest message that existed in the chat at the
-   * moment of this snapshot. Distinct from `bottomVisibleMessageId`
-   * — the user might not have been visually at the bottom when they
-   * left, but the latest message at that point is still "known" to
-   * them (it was part of their session's data).
+   * The highest message id the user had reached (had at viewport
+   * bottom) by the time they left this chat. Distinct from
+   * `bottomVisibleMessageId` — the user may have scrolled back up
+   * before leaving, in which case the bottom-visible id sits behind
+   * the watermark. Both ids are recorded.
    *
-   * Drives the UnreadDivider on return: divider count = messages
-   * strictly newer than this id (Slack "new since last visit"
-   * semantics). Without this field, the divider would count any
-   * message below the viewport as "new", which is wrong when the
-   * user just scrolled past content they had already seen.
+   * Drives the pill's baseline on return: pill count = messages
+   * strictly newer than this id (so the user does not see "↓ N new"
+   * for content they already passed in a prior visit). Without this
+   * field, the pill would flash on every re-open of a chat with
+   * any messages below the scroll-restore anchor.
    *
    * Optional for backward compatibility: rows written before this
    * field existed (briefly, during the M2 model swap) lack it.
-   * Treat undefined as "no divider on first return after upgrade".
+   * Treat undefined as "session-only watermark on first return after
+   * upgrade".
    */
   latestKnownMessageId?: string;
   /** Wall-clock when the snapshot was taken. Used for diagnostics. */

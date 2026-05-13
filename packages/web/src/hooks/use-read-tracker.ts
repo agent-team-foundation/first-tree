@@ -57,8 +57,10 @@ type UseReadTrackerOptions = {
    * stale value).
    *
    * Both ids are passed: `bottomVisibleMessageId` drives the
-   * scroll anchor on next visit; `latestKnownMessageId` drives the
-   * UnreadDivider count.
+   * scroll anchor on next visit; `latestKnownMessageId` is the
+   * persisted session watermark that seeds the pill baseline on
+   * re-open (so the pill does not flash "↓ N new" for content the
+   * user already passed in the prior visit).
    */
   onWrite?: (chatId: string, bottomVisibleMessageId: string, latestKnownMessageId: string) => void;
   /**
@@ -135,10 +137,10 @@ function findBottomVisibleMessageId(container: HTMLElement): string | null {
  * viewport; this one always returns the chronologically-latest
  * message regardless of whether the user has scrolled to see it.
  *
- * Used to capture `latestKnownMessageId` alongside the visual
- * scroll position, so the UnreadDivider on the next visit can
- * distinguish "messages new since last visit" from "messages that
- * were there but below the user's viewport".
+ * Used as a fallback for `latestKnownMessageId` when the caller
+ * does not supply a session-watermark resolver — the persisted
+ * baseline still needs *some* id, and "latest in DOM at write time"
+ * is the right default for that case.
  */
 function findLatestMessageId(container: HTMLElement): string | null {
   const nodes = container.querySelectorAll<HTMLElement>("[data-message-id]");

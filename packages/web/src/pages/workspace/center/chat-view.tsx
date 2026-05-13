@@ -51,7 +51,6 @@ import {
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
-import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -952,13 +951,12 @@ export function ChatView({
     refetchOnWindowFocus: false,
   });
   const storedBottomVisibleId = readState?.bottomVisibleMessageId ?? null;
-  // The latest message id in the chat at the moment the user last
-  // left. Used to compute the UnreadDivider count — only messages
-  // strictly newer than this id count as "new since last visit"
-  // (Slack-style). Pre-fix snapshots lack this field; falling back
-  // to null means "no divider on first return after upgrade",
-  // which is harmless: the user just won't see a divider until
-  // they leave the chat again and the tracker writes both ids.
+  // Highest message id the user had reached on a prior visit (their
+  // persisted session watermark). The pill uses this as a baseline
+  // so a re-visit without scrolling does not flash "↓ N new" for
+  // content the user already passed. Pre-fix snapshots lack this
+  // field — `latestKnownResolution` resolves to null and the
+  // session-only watermark takes over.
   const storedLatestKnownId = readState?.latestKnownMessageId ?? null;
 
   // Resolve the stored bottom-visible id against the rendered set
@@ -975,13 +973,11 @@ export function ChatView({
     return null;
   }, [storedBottomVisibleId, mergedMessages]);
 
-  // `latestKnownResolution` resolves the LIVE `storedLatestKnownId`
-  // against the rendered set. Used as the baseline for the pill's
-  // session high watermark below (which intentionally tracks live
-  // state — pill reflects the user's actual progress through the
-  // session). NOT used for the divider — the divider has its own
-  // openSnapshot below, so it can stay visually stable through a
-  // visit even as the tracker writes update IDB.
+  // `latestKnownResolution` resolves `storedLatestKnownId` against
+  // the rendered set. It is the IDB-persisted baseline for the
+  // pill's session high watermark below — re-visits inherit the
+  // prior session's progress immediately, so the pill does not
+  // flash "↓ N new" for messages the user has already passed.
   const latestKnownResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
     if (!storedLatestKnownId || mergedMessages.length === 0) return null;
     const exact = mergedMessages.findIndex((m) => m.id === storedLatestKnownId);
@@ -991,45 +987,6 @@ export function ChatView({
     }
     return null;
   }, [storedLatestKnownId, mergedMessages]);
-
-  // Open-time snapshot of `storedLatestKnownId`. Captured once per
-  // chat visit (on the first render where it transitions from
-  // null → non-null) and frozen for the rest of the visit. Drives
-  // the UnreadDivider's anchor message — without freezing, the
-  // tracker's debounced IDB writes during the visit would move the
-  // anchor forward, causing the divider to visibly hop down and
-  // the count to decrement as the user scrolled — caught in PR 286
-  // manual sign-off rev 6 ("don't want a flaky UI").
-  const [openSnapshotLatestKnownId, setOpenSnapshotLatestKnownId] = useState<string | null>(null);
-  // Snapshot capture: first non-null storedLatestKnownId after a
-  // chat switch becomes the divider anchor for this visit.
-  useEffect(() => {
-    if (openSnapshotLatestKnownId === null && storedLatestKnownId !== null) {
-      setOpenSnapshotLatestKnownId(storedLatestKnownId);
-    }
-  }, [storedLatestKnownId, openSnapshotLatestKnownId]);
-
-  // Divider anchor resolved from the snapshot. Does not change
-  // during the visit even if the tracker writes new IDB rows.
-  const dividerAnchorResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
-    if (!openSnapshotLatestKnownId || mergedMessages.length === 0) return null;
-    const exact = mergedMessages.findIndex((m) => m.id === openSnapshotLatestKnownId);
-    if (exact >= 0) {
-      const exactMsg = mergedMessages[exact];
-      if (exactMsg) return { anchorId: exactMsg.id, index: exact };
-    }
-    return null;
-  }, [openSnapshotLatestKnownId, mergedMessages]);
-
-  // Divider count = messages strictly newer than the snapshot
-  // anchor. Anchor is fixed for the visit, so this only changes if
-  // mergedMessages grows (poll-driven new arrivals) — i.e., the
-  // count only goes UP, never DOWN, until the next visit refreshes
-  // the snapshot.
-  const dividerUnreadCount = useMemo<number>(() => {
-    if (!dividerAnchorResolution) return 0;
-    return mergedMessages.length - 1 - dividerAnchorResolution.index;
-  }, [dividerAnchorResolution, mergedMessages]);
 
   // Live bottom-visible id during the current session. Driven by
   // useReadTracker's `onBottomVisibleChange` callback. Used as the
@@ -1070,9 +1027,6 @@ export function ChatView({
   useLayoutEffect(() => {
     setSessionHighestRaw(-1);
     setLiveBottomVisibleId(null);
-    // Clear the divider's open-time snapshot so a fresh one gets
-    // captured on the new chat's first non-null storedLatestKnownId.
-    setOpenSnapshotLatestKnownId(null);
   }, [chatId]);
   // Advance the raw counter whenever the user's viewport bottom
   // reaches a message later than the previous high water.
@@ -1641,31 +1595,8 @@ export function ChatView({
               // message when there's a known break between cache and the
               // server window.
               const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
-              // Insert the unread divider immediately after the
-              // open-time snapshot anchor. The snapshot is captured
-              // once per visit and frozen, so the divider's
-              // position stays stable through the visit even when
-              // the tracker writes new IDB rows mid-session.
-              // Skipped when no snapshot was captured (first
-              // visit / pre-fix) or when no messages newer than the
-              // snapshot exist.
-              const isReadAnchor =
-                item.kind === "message" &&
-                dividerAnchorResolution !== null &&
-                dividerUnreadCount > 0 &&
-                item.data.id === dividerAnchorResolution.anchorId;
-              if (isGapAnchor && isReadAnchor) {
-                return [
-                  node,
-                  <HistoryGapBanner key={`gap-after-${item.data.id}`} />,
-                  <UnreadDivider key={`unread-after-${item.data.id}`} count={dividerUnreadCount} />,
-                ];
-              }
               if (isGapAnchor) {
                 return [node, <HistoryGapBanner key={`gap-after-${item.data.id}`} />];
-              }
-              if (isReadAnchor) {
-                return [node, <UnreadDivider key={`unread-after-${item.data.id}`} count={dividerUnreadCount} />];
               }
               return node;
             })}
