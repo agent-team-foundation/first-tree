@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   agentConfigSchema,
@@ -60,6 +60,20 @@ import {
 import { print } from "../core/output.js";
 import { registerConnectCommand } from "./connect.js";
 
+// WSL2 + WSLg over-mounts a mode=755 tmpfs onto /run/user/$UID, hiding the
+// systemd user-bus socket beneath. `systemctl --user` then fails with
+// "Failed to connect to bus: No such file or directory" even though the
+// user manager is happily running. See docs/wsl2-troubleshooting.md.
+function isWslDbusOvermount(reason: string): boolean {
+  if (process.platform !== "linux") return false;
+  if (!/failed to connect to bus/i.test(reason)) return false;
+  try {
+    return /microsoft/i.test(readFileSync("/proc/version", "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 export function registerClientCommands(program: Command): void {
   const client = program.command("client").description("Client runtime — connect agents to the server");
 
@@ -99,6 +113,32 @@ export function registerClientCommands(program: Command): void {
             const res = startClientService();
             if (!res.ok) {
               print.line(`\n  Failed to start service: ${res.reason}\n`);
+              if (isWslDbusOvermount(res.reason)) {
+                print.line("\n");
+                print.line("  WSL2 detected — WSLg has over-mounted /run/user/$UID and is hiding\n");
+                print.line("  the user dbus socket. The systemd user manager is fine; the bus\n");
+                print.line("  socket just isn't reachable from your shell.\n\n");
+                print.line("  Quick fix (one-shot, lost on reboot):\n");
+                print.line("      sudo umount -l /run/user/$(id -u)\n\n");
+                print.line("  Permanent fix — install a boot-time helper, then update wsl.conf:\n\n");
+                print.line("      sudo tee /usr/local/bin/strip-wslg-overlay.sh >/dev/null <<'EOF'\n");
+                print.line("      #!/bin/sh\n");
+                print.line("      for d in /run/user/*; do\n");
+                print.line('        uid=$(basename "$d")\n');
+                print.line('        case "$uid" in ""|*[!0-9]*) continue ;; esac\n');
+                print.line("        for i in $(seq 1 30); do\n");
+                print.line('          if mount | grep -q "tmpfs on $d .*mode=755"; then\n');
+                print.line('            umount -l "$d"; break\n');
+                print.line("          fi\n");
+                print.line("          sleep 1\n");
+                print.line("        done\n");
+                print.line("      done\n");
+                print.line("      EOF\n");
+                print.line("      sudo chmod +x /usr/local/bin/strip-wslg-overlay.sh\n\n");
+                print.line("  Then add to /etc/wsl.conf under [boot]:\n");
+                print.line("      command=/usr/local/bin/strip-wslg-overlay.sh\n\n");
+                print.line("  Then run `wsl --shutdown` in Windows PowerShell and reopen the shell.\n");
+              }
               print.line("  Try `--foreground` to run inline instead.\n\n");
               process.exit(1);
             }
