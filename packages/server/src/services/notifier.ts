@@ -205,17 +205,31 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
     },
 
     async notifyAdminBroadcast(payload: Record<string, unknown>) {
+      let encoded: string;
       try {
-        const encoded = JSON.stringify(payload);
-        // PG NOTIFY payload limit is ~8000 bytes. Notification envelopes are
-        // ~600 bytes worst-case; refuse to emit anything larger so a buggy
-        // producer surfaces loudly instead of silently truncating.
-        if (encoded.length > 7500) {
-          throw new Error(`admin broadcast payload too large: ${encoded.length} bytes`);
-        }
+        encoded = JSON.stringify(payload);
+      } catch {
+        // Non-serialisable producer payload — nothing useful to forward.
+        return;
+      }
+      // PG NOTIFY payload limit is ~8000 bytes. Notification envelopes are
+      // ~600 bytes in practice; anything over 7500 means a producer bug
+      // (e.g. someone stuffing message bodies / attachments into the
+      // envelope). Log loudly via console — the rest of `notifier.ts` is
+      // intentionally logger-free to keep the module portable, but a
+      // truncated NOTIFY would silently break admin UI fan-out, which is
+      // exactly the kind of failure we don't want fire-and-forget'd into
+      // the void.
+      if (encoded.length > 7500) {
+        console.error(`[notifier] admin broadcast payload too large (${encoded.length} bytes); refusing to NOTIFY`);
+        return;
+      }
+      try {
         await listenClient`SELECT pg_notify(${ADMIN_BROADCAST_CHANNEL}, ${encoded})`;
       } catch {
-        // fire-and-forget — admin UI tolerates an occasional dropped frame
+        // Transient PG errors are best-effort; admin UI tolerates a
+        // dropped frame, and the next reconnect-time catch-up will
+        // re-sync via REST.
       }
     },
 

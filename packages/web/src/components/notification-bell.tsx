@@ -22,12 +22,14 @@ export function NotificationBell() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Both queries refetch on demand only — the admin WS hook (wired into
-  // Layout) invalidates `["notifications", …]` on every inbound
-  // `notification` frame, which is what drives the bell to refresh. Polling
-  // was previously the safety net for an in-memory cross-instance fanout
-  // that could silently drop frames; with PG NOTIFY routing pushes across
-  // every server instance, polling adds nothing but network noise.
+  // Both queries refetch on demand only — the admin WS hook (mounted by
+  // `PulseProvider` at the auth-shell root) invalidates `["notifications",
+  // …]` on every inbound `notification` frame, which is what drives the
+  // bell to refresh. Polling was previously the safety net for an in-memory
+  // cross-instance fanout that could silently drop frames; with PG NOTIFY
+  // routing pushes across every server instance, polling adds nothing but
+  // network noise. Reconnect-time catch-up (sleep/wake, network partition)
+  // is handled by `use-admin-ws.ts` invalidating the same key on `onopen`.
   const { data } = useQuery({
     queryKey: ["notifications", "bell"],
     queryFn: () => listNotifications({ limit: 8 }),

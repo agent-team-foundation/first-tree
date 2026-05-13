@@ -159,8 +159,13 @@ export async function listNotifications(db: Database, orgId: string, memberId: s
 export async function unreadCount(db: Database, orgId: string, memberId: string): Promise<number> {
   const visibleAgents = await loadVisibleAgentIds(db, orgId, memberId);
 
+  // count(*) is `bigint` in PG. postgres-js returns bigint as string by
+  // default, so we tell TS to expect a string and parse it through Number(),
+  // which is safe up to 2^53. Casting to int in SQL would overflow past
+  // 2.1B rows; the string path is bounded by JS's safe integer range
+  // instead and matches the on-the-wire shape.
   const [row] = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<string>`count(*)` })
     .from(notifications)
     .where(
       and(
@@ -169,7 +174,7 @@ export async function unreadCount(db: Database, orgId: string, memberId: string)
         buildVisibilityCondition([...visibleAgents]),
       ),
     );
-  return row?.count ?? 0;
+  return Number(row?.count ?? "0");
 }
 
 /** Mark a single notification as read, scoped to organization + visible agents. */

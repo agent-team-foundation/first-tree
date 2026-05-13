@@ -1,7 +1,6 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
-import { useAdminWs } from "../hooks/use-admin-ws.js";
 import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
@@ -22,13 +21,6 @@ export function Layout() {
 
   const location = useLocation();
   const isWorkspace = location.pathname === "/" || location.search.includes("a=");
-
-  // The topbar bell renders on every page that uses this layout, but the
-  // admin WS connection was previously only opened by the workspace page.
-  // Move it up here so the bell receives notification pushes everywhere it
-  // is visible — without this, the bell would silently stale once polling
-  // was removed.
-  useAdminWs();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
