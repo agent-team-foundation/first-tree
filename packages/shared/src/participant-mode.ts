@@ -36,9 +36,7 @@ export function defaultParticipantMode(
   peerAgentTypes: ReadonlyArray<AgentType> = [],
 ): ParticipantMode {
   if (agentType === "human") return "full";
-  // Threads are nested under a parent chat and behave like group chats for
-  // fan-out purposes — treat them the same.
-  if (chatType === "group" || chatType === "thread") return "mention_only";
+  if (chatType === "group") return "mention_only";
   // chatType === 'direct' + agent non-human:
   const allAgent = peerAgentTypes.every((t) => t !== "human");
   return allAgent ? "mention_only" : "full";

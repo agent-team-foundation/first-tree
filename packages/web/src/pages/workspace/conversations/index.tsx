@@ -1,6 +1,6 @@
 import type { ChatEngagementView, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listMeChats } from "../../../api/me-chats.js";
 import { FilterPill } from "../../../components/ui/filter-pill.js";
@@ -79,7 +79,6 @@ export function ConversationList({
   onEngagementChange: (view: ChatEngagementView) => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
-  const [query, setQuery] = useState("");
   const [extraPages, setExtraPages] = useState<MeChatRow[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
@@ -90,7 +89,7 @@ export function ConversationList({
     refetchInterval: 15_000,
   });
 
-  // Reset paginated tail when filter / engagement / query change so we don't
+  // Reset paginated tail when filter / engagement change so we don't
   // bleed rows from a different view into the current one.
   const resetExtras = (): void => {
     if (extraPages.length > 0) setExtraPages([]);
@@ -99,19 +98,6 @@ export function ConversationList({
 
   const baseRows = data?.rows ?? [];
   const allRows = useMemo(() => [...baseRows, ...extraPages], [baseRows, extraPages]);
-
-  const filteredRows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return allRows;
-    return allRows.filter((row) => {
-      const t = row.title.toLowerCase();
-      if (t.includes(q)) return true;
-      const p = (row.lastMessagePreview ?? "").toLowerCase();
-      if (p.includes(q)) return true;
-      const names = row.participants.map((x) => x.displayName.toLowerCase()).join(" ");
-      return names.includes(q);
-    });
-  }, [allRows, query]);
 
   const handleLoadMore = async (): Promise<void> => {
     if (loadingMore) return;
@@ -157,12 +143,9 @@ export function ConversationList({
       {/* Header. Two stacked rows by semantic grouping:
           (1) creation action — `+ New chat`, gets a full-width hero
               button so its primacy is signaled by position and width.
-          (2) list-manipulation controls — filter pills (left) + ghost
-              search input (right). Both operate on the existing list,
-              so they share a row. Search is whisper-quiet (no border,
-              no fill, caption-sized) so the filter pills remain the
-              row's visual anchor. Filter pills auto-hide when they
-              have nothing to count. */}
+          (2) engagement tabs + filter pills. Search lives in the
+              unified topbar `Jump to…` palette, not here. Filter
+              pills auto-hide when they have nothing to count. */}
       <div
         className="shrink-0 flex flex-col"
         style={{
@@ -210,76 +193,46 @@ export function ConversationList({
             </FilterPill>
           ))}
         </div>
-        <div className="flex items-center" style={{ gap: 8 }}>
-          {/* Filter pills. Only `unread` is exposed: `all` is the
-              default state (no UI affordance needed) and `watching`
-              is a niche power-user concept that's better surfaced
-              implicitly through the row's `Watching · ...` subtitle.
-              The unread pill itself only shows up when there's
-              something to filter to — clicking the active pill
-              toggles back to `all`. */}
-          <div className="flex gap-1 shrink-0">
-            {totalUnread > 0 && (
-              <FilterPill
-                active={filter === "unread"}
-                count={totalUnread}
-                onClick={() => {
-                  setFilter(filter === "unread" ? "all" : "unread");
-                  resetExtras();
-                }}
-              >
-                unread
-              </FilterPill>
-            )}
-          </div>
-          <div className="relative" style={{ flex: 1, minWidth: 0 }}>
-            <Search
-              className="h-3 w-3 absolute pointer-events-none"
-              style={{
-                left: 4,
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--fg-4)",
+        {/* Filter pills. Only `unread` is exposed: `all` is the
+            default state (no UI affordance needed) and `watching`
+            is a niche power-user concept that's better surfaced
+            implicitly through the row's `Watching · ...` subtitle.
+            The unread pill itself only shows up when there's
+            something to filter to — clicking the active pill
+            toggles back to `all`. The whole row collapses when
+            there's nothing to show. */}
+        {totalUnread > 0 && (
+          <div className="flex items-center gap-1 shrink-0">
+            <FilterPill
+              active={filter === "unread"}
+              count={totalUnread}
+              onClick={() => {
+                setFilter(filter === "unread" ? "all" : "unread");
+                resetExtras();
               }}
-            />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search…"
-              className="w-full outline-none text-caption"
-              style={{
-                padding: "var(--sp-0_5) var(--sp-1) var(--sp-0_5) var(--sp-5)",
-                background: "transparent",
-                border: "none",
-                color: "var(--fg-2)",
-              }}
-            />
+            >
+              unread
+            </FilterPill>
           </div>
-        </div>
+        )}
       </div>
 
       {/* List */}
       <div className="flex-1 overflow-y-auto">
-        {isLoading && filteredRows.length === 0 && (
+        {isLoading && allRows.length === 0 && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
             Loading…
           </div>
         )}
-        {!isLoading && filteredRows.length === 0 && (
+        {!isLoading && allRows.length === 0 && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
-            {query ? (
-              "No matches"
-            ) : (
-              <>
-                <p style={{ margin: 0 }}>No conversations yet.</p>
-                <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
-                  Start with New chat.
-                </p>
-              </>
-            )}
+            <p style={{ margin: 0 }}>No conversations yet.</p>
+            <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
+              Start with New chat.
+            </p>
           </div>
         )}
-        {filteredRows.map((row) => {
+        {allRows.map((row) => {
           const isSelected = selectedChatId === row.chatId;
           const rawSubtitle = buildSubtitle(row);
           // 1-message chats have `firstMessagePreview === lastMessagePreview`,
@@ -364,7 +317,7 @@ export function ConversationList({
             </div>
           );
         })}
-        {nextCursor && filteredRows.length > 0 && (
+        {nextCursor && allRows.length > 0 && (
           <div style={{ padding: "var(--sp-2) var(--sp-3)" }}>
             <button
               type="button"

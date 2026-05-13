@@ -456,18 +456,6 @@
   .tnum {
     font-variant-numeric: tabular-nums;
   }
-  .kbd {
-    font-family: var(--font-mono-stack);
-    font-size: var(--text-eyebrow);
-    padding: 1px 5px;
-    border: 1px solid var(--border);
-    border-bottom-width: 2px;
-    border-radius: var(--radius-chip);
-    background: var(--bg-sunken);
-    color: var(--fg-2);
-    line-height: 1;
-    display: inline-block;
-  }
 
   /* Surface utilities — consolidate Panel / PageHeader / Tab containers.
      Prefer these over hand-rolled background/border/radius combinations. */

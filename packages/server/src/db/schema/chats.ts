@@ -10,11 +10,15 @@ export const chats = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organizations.id),
-    /** "direct" | "group" | "thread" */
+    /** "direct" | "group" */
     type: text("type").notNull().default("direct"),
     topic: text("topic"),
     lifecyclePolicy: text("lifecycle_policy").default("persistent"),
-    /** Parent chat ID for thread (sub-discussion) scenarios */
+    /**
+     * Anchor for nested chats. Currently unused at the product level — listMeChats
+     * filters `parent_chat_id IS NULL`, so any non-null row is hidden from the
+     * conversation list. Reserved as scaffolding for a future nested-chat model.
+     */
     parentChatId: text("parent_chat_id"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     /**

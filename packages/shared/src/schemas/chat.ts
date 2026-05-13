@@ -4,10 +4,9 @@ import { optionalChatMetadataSchema } from "./chat-metadata.js";
 export const CHAT_TYPES = {
   DIRECT: "direct",
   GROUP: "group",
-  THREAD: "thread",
 } as const;
 
-export const chatTypeSchema = z.enum(["direct", "group", "thread"]);
+export const chatTypeSchema = z.enum(["direct", "group"]);
 export type ChatType = z.infer<typeof chatTypeSchema>;
 
 /**
