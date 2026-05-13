@@ -257,16 +257,12 @@ function composeMessage(type: NotificationType, agentCtx: AgentContext, chatCtx:
       return chat ? `${chat} completed` : `${agent} completed a task`;
     case "session_error":
       return chat ? `${chat} hit an error` : `${agent} hit a session error`;
-    case "agent_connected":
-      return `Computer ${computer} reconnected`;
     case "agent_stale":
       return `Computer ${computer} is unresponsive`;
     case "agent_error":
       return `${agent} entered error state`;
     case "agent_blocked":
       return `${agent} is blocked`;
-    case "agent_needs_decision":
-      return chat ? `${agent} needs a decision in ${chat}` : `${agent} needs a decision`;
     default:
       return `${agent} event`;
   }
