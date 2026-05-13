@@ -179,7 +179,6 @@ function buildSessionCtx(chatId: string, sent: CapturedSend[], events: CapturedE
     emitEvent: (event) => {
       events.push(event);
     },
-    reportSessionCompletion: () => {},
     ...mockCtxPlumbing({ sendMessage }, chatId),
   };
 }

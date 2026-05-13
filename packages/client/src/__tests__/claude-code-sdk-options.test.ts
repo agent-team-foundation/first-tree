@@ -88,7 +88,6 @@ function buildSessionCtx(chatId: string): SessionContext {
     touch: () => {},
     setRuntimeState: () => {},
     emitEvent: () => {},
-    reportSessionCompletion: () => {},
     ...mockCtxPlumbing({ sendMessage }, chatId),
   };
 }

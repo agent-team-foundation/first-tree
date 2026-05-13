@@ -564,6 +564,28 @@
   }
 }
 
+/* Chat-row avatar working ring — steady breathe to signal "agent is
+   responding now" without the urgency of a flash. opacity-only so the
+   animation stays GPU-cheap on long conversation lists. */
+@keyframes chat-row-avatar-working-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.chat-row-avatar__working-ring {
+  animation: chat-row-avatar-working-breathe 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-row-avatar__working-ring {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 .fade-in {
   animation: subtle-fade 180ms ease-out;
 }

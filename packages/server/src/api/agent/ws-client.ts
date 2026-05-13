@@ -8,7 +8,6 @@ import {
   inboxAckFrameSchema,
   inboxDeliverFrameSchema,
   runtimeStateMessageSchema,
-  sessionCompletionMessageSchema,
   sessionEventMessageSchema,
   sessionReconcileRequestSchema,
   sessionStateMessageSchema,
@@ -78,7 +77,7 @@ const wsMessageSchema = z.object({
  *      Failure ⇒ server sends `auth:rejected` and closes (code 4401).
  *   2. `client:register` — bind the client_id to the authenticated user.
  *   3. `agent:bind` — run Rule R-RUN (no token); populate presence.
- *   4. `session:state` / `runtime:state` / `session:event` / `session:completion` / `heartbeat`.
+ *   4. `session:state` / `runtime:state` / `session:event` / `heartbeat`.
  *   5. `agent:unbind` — stop multiplexing for a specific agent.
  *
  * When the JWT is about to expire the server sends `auth:expired` so the
@@ -630,6 +629,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 runtimeVersion: bindRequest.runtimeVersion,
               });
 
+              // An agent that just rebound has, by definition, recovered from
+              // whatever fault (stale / error / blocked) was last reported —
+              // close any open unread fault row so the bell badge clears
+              // instead of lingering across the offline gap.
+              notificationService.markAgentFaultsResolved(app.db, agent.id).catch(() => {});
+
               connectionManager.bindAgentToClient(clientId, agent.id);
               boundAgents.set(agent.id, {
                 agentId: agent.id,
@@ -770,13 +775,17 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 notifier,
               });
 
-              // Dedup happens at the DB layer via the default agent:{id}:{type}
-              // dedup_key — repeated runtime-state errors for the same agent
-              // collapse to a single unread row until the user acks.
+              // All three fault types share one dedup key (`agent:{id}:fault`),
+              // so a noisy reconcile loop — or a runtime that flips error →
+              // blocked → error — collapses to a single unread row. Healthy
+              // states close that row so the badge doesn't linger after the
+              // agent has already recovered.
               if (payload.runtimeState === "error") {
                 notificationService.notifyAgentEvent(app.db, agentId, "agent_error", "high").catch(() => {});
               } else if (payload.runtimeState === "blocked") {
                 notificationService.notifyAgentEvent(app.db, agentId, "agent_blocked", "medium").catch(() => {});
+              } else if (payload.runtimeState === "idle" || payload.runtimeState === "working") {
+                notificationService.markAgentFaultsResolved(app.db, agentId).catch(() => {});
               }
             } else if (type === "session:event") {
               const agentId = parsed.data.agentId;
@@ -798,21 +807,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   );
                 }
               });
-            } else if (type === "session:completion") {
-              const agentId = parsed.data.agentId;
-              if (!agentId || !boundAgents.has(agentId)) {
-                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
-                return;
-              }
-
-              const payload = sessionCompletionMessageSchema.parse(msg);
-
-              // Dedup happens at the DB layer via the default
-              // chat:{chatId}:session_completed key — a noisy reconcile loop
-              // can't produce N rows for the same chat completion.
-              notificationService
-                .notifyAgentEvent(app.db, agentId, "session_completed", "low", { chatId: payload.chatId })
-                .catch(() => {});
             } else if (type === "inbox:ack") {
               const payloadResult = inboxAckFrameSchema.safeParse(msg);
               if (!payloadResult.success) {

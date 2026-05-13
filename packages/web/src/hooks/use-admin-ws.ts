@@ -29,6 +29,34 @@ const subscribers = new Set<Subscriber>();
 let latestQc: QC | null = null;
 let refCount = 0;
 
+// `session:state` frames can burst when an agent ticks through tool
+// calls — every frame would otherwise force a `me/chats` refetch and the
+// React-Query default (`staleTime: 0`) wouldn't dedupe. Leading-edge fire
+// keeps the working ring snappy; a 500ms trailing window collapses the
+// burst into at most one extra round-trip after it ends. Tuned to be
+// shorter than typical observed gaps between tool calls (~1s) but long
+// enough to fold a 10+ frame storm into a single follow-up.
+const ME_CHATS_INVALIDATE_THROTTLE_MS = 500;
+let meChatsLastInvalidatedAt = 0;
+let meChatsTrailingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function invalidateMeChatsThrottled(qc: QC) {
+  const now = Date.now();
+  const elapsed = now - meChatsLastInvalidatedAt;
+  if (elapsed >= ME_CHATS_INVALIDATE_THROTTLE_MS) {
+    meChatsLastInvalidatedAt = now;
+    qc.invalidateQueries({ queryKey: ["me", "chats"] });
+    return;
+  }
+  if (meChatsTrailingTimer === null) {
+    meChatsTrailingTimer = setTimeout(() => {
+      meChatsTrailingTimer = null;
+      meChatsLastInvalidatedAt = Date.now();
+      if (latestQc) latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
+    }, ME_CHATS_INVALIDATE_THROTTLE_MS - elapsed);
+  }
+}
+
 function broadcast(msg: WsMessage) {
   for (const sub of subscribers) {
     try {
@@ -43,6 +71,13 @@ function broadcast(msg: WsMessage) {
     } else if (msg.type === "session:state") {
       latestQc.invalidateQueries({ queryKey: ["activity"] });
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
+      // `MeChatRow.workingAgentIds` is derived from `agent_presence.runtime_state`,
+      // which is mutated by the same `session:state` event upstream. Invalidate
+      // the conversation-list query so the working ring switches on / off in
+      // real time without waiting for the 15s `refetchInterval`. Throttled
+      // because the upstream frames can burst tool-call-fast — see the
+      // helper's banner comment.
+      invalidateMeChatsThrottled(latestQc);
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
       // carries `{ type, chatId }` (see shared/me-chat.ts:chatMessageFrameSchema);
@@ -152,6 +187,10 @@ function teardown() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
+  }
+  if (meChatsTrailingTimer) {
+    clearTimeout(meChatsTrailingTimer);
+    meChatsTrailingTimer = null;
   }
   if (ws) {
     ws.close(1000, "unmount");

@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listMeChats } from "../../../api/me-chats.js";
+import { useAuth } from "../../../auth/auth-context.js";
+import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { FilterPill } from "../../../components/ui/filter-pill.js";
 import { cn } from "../../../lib/utils.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
@@ -78,6 +80,7 @@ export function ConversationList({
   engagement: ChatEngagementView;
   onEngagementChange: (view: ChatEngagementView) => void;
 }) {
+  const { agentId: selfAgentId } = useAuth();
   const [filter, setFilter] = useState<Filter>("all");
   const [extraPages, setExtraPages] = useState<MeChatRow[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -251,58 +254,55 @@ export function ConversationList({
               <button
                 type="button"
                 onClick={() => onSelectChat(row.chatId)}
-                className={cn("w-full text-left transition-colors flex flex-col", "hover:bg-[var(--bg-hover)]")}
+                className={cn("w-full text-left transition-colors flex items-center", "hover:bg-[var(--bg-hover)]")}
                 style={{
                   padding: "var(--sp-2) var(--sp-3)",
+                  gap: "var(--sp-2_5)",
                   background: isSelected ? "var(--bg-active)" : "transparent",
                   borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--accent)" : "transparent"}`,
                 }}
               >
-                <div className="flex items-baseline" style={{ gap: 6 }}>
-                  {hasUnread && (
+                <ChatRowAvatar
+                  title={row.title}
+                  type={row.type}
+                  participants={row.participants}
+                  selfAgentId={selfAgentId ?? ""}
+                  workingAgentIds={row.workingAgentIds}
+                  unreadCount={row.unreadMentionCount}
+                />
+                <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
+                  <div className="flex items-baseline" style={{ gap: 6 }}>
                     <span
-                      aria-label={`${row.unreadMentionCount} unread mentions`}
-                      role="status"
+                      className="truncate text-subtitle"
                       style={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: "50%",
-                        background: "var(--state-error)",
-                        flexShrink: 0,
-                        alignSelf: "center",
+                        color: hasUnread ? "var(--fg)" : "var(--fg-2)",
+                        fontWeight: hasUnread ? 700 : 500,
+                        flex: 1,
+                        minWidth: 0,
                       }}
-                    />
-                  )}
-                  <span
-                    className="truncate text-subtitle"
+                    >
+                      {row.title}
+                    </span>
+                    {row.lastMessageAt && (
+                      // Time vacates its right-anchor slot so the ⋯ trigger can
+                      // take over on hover or while the menu is open (Gmail-style swap).
+                      <span
+                        className="mono text-caption shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
+                        style={{ color: "var(--fg-4)" }}
+                      >
+                        {formatRowTime(row.lastMessageAt)}
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    className="truncate text-body"
                     style={{
-                      color: hasUnread ? "var(--fg)" : "var(--fg-2)",
-                      fontWeight: hasUnread ? 700 : 500,
-                      flex: 1,
-                      minWidth: 0,
+                      color: hasUnread ? "var(--fg-2)" : "var(--fg-3)",
+                      marginTop: 2,
                     }}
                   >
-                    {row.title}
-                  </span>
-                  {row.lastMessageAt && (
-                    // Time vacates its right-anchor slot so the ⋯ trigger can
-                    // take over on hover or while the menu is open (Gmail-style swap).
-                    <span
-                      className="mono text-caption shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
-                      style={{ color: "var(--fg-4)" }}
-                    >
-                      {formatRowTime(row.lastMessageAt)}
-                    </span>
-                  )}
-                </div>
-                <div
-                  className="truncate text-body"
-                  style={{
-                    color: hasUnread ? "var(--fg-2)" : "var(--fg-3)",
-                    marginTop: 2,
-                  }}
-                >
-                  {subtitle || "—"}
+                    {subtitle || "—"}
+                  </div>
                 </div>
               </button>
               <div
