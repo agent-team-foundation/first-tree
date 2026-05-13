@@ -87,34 +87,44 @@ type UseReadTrackerOptions = {
 };
 
 /**
- * Looks at the scroll container and returns the id of the message
- * whose top edge is at or above the container's viewport-bottom, but
- * whose bottom edge is below it (i.e. the message that visually
- * "ends" the read region). Falls back to the closest above or below
- * if no element straddles the boundary exactly. Returns `null` when
- * the container has no measurable messages.
+ * Returns the id of the bottom-most message that is FULLY visible
+ * inside the container's current viewport — i.e. the message whose
+ * bottom edge is at or above `viewportBottom`. A message whose top
+ * has entered the viewport bottom but whose bottom still extends
+ * below the fold does NOT count as seen — the user hasn't actually
+ * read it yet.
+ *
+ * The bottom-edge criterion matters when new content appears below
+ * a user sitting at scroll-bottom: with a `top <= viewportBottom`
+ * test, the new message's top is exactly at the viewport edge, and
+ * the tracker would prematurely advance the high water onto it.
+ * That caused the user-reported bug where the pill never showed
+ * after inserting new messages (the watermark immediately swallowed
+ * the new content).
+ *
+ * Falls back to the first DOM message when nothing is fully visible
+ * at the bottom (e.g., the container hasn't laid out yet, or the
+ * first message is taller than the viewport).
  */
 function findBottomVisibleMessageId(container: HTMLElement): string | null {
   const viewportBottom = container.scrollTop + container.clientHeight;
   const nodes = container.querySelectorAll<HTMLElement>("[data-message-id]");
   if (nodes.length === 0) return null;
-  // Walk from the bottom of the list upward so the first match is
-  // the bottom-most visible. Most chats render last-message at the
-  // end, so this is short-circuit-friendly.
-  let lastVisible: HTMLElement | null = null;
+  // Walk from the last message backward; the first one whose bottom
+  // edge is at or above viewportBottom is the bottommost FULLY
+  // visible one.
   for (let i = nodes.length - 1; i >= 0; i--) {
     const node = nodes[i];
     if (!node) continue;
-    const top = node.offsetTop;
-    if (top <= viewportBottom) {
-      lastVisible = node;
-      break;
+    const bottom = node.offsetTop + node.offsetHeight;
+    if (bottom <= viewportBottom) {
+      return node.dataset.messageId ?? null;
     }
   }
-  // Fallback: nothing visible above the bottom edge (e.g., container
-  // hasn't laid out yet) — return the first DOM message.
-  if (!lastVisible) lastVisible = nodes[0] ?? null;
-  return lastVisible?.dataset.messageId ?? null;
+  // Fallback: nothing fully visible (container not laid out, or the
+  // first message is taller than the viewport). Return the first
+  // DOM message so consumers have something to anchor against.
+  return nodes[0]?.dataset.messageId ?? null;
 }
 
 /**

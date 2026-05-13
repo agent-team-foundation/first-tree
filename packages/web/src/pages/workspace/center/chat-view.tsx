@@ -975,11 +975,13 @@ export function ChatView({
     return null;
   }, [storedBottomVisibleId, mergedMessages]);
 
-  // Resolve the stored latest-known id against the rendered set.
-  // Drives the UnreadDivider count (and anchor): the divider
-  // separates "messages that existed at last visit" from "messages
-  // that arrived since". If `storedLatestKnownId` is null (pre-fix
-  // snapshot, or first visit), no divider.
+  // `latestKnownResolution` resolves the LIVE `storedLatestKnownId`
+  // against the rendered set. Used as the baseline for the pill's
+  // session high watermark below (which intentionally tracks live
+  // state — pill reflects the user's actual progress through the
+  // session). NOT used for the divider — the divider has its own
+  // openSnapshot below, so it can stay visually stable through a
+  // visit even as the tracker writes update IDB.
   const latestKnownResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
     if (!storedLatestKnownId || mergedMessages.length === 0) return null;
     const exact = mergedMessages.findIndex((m) => m.id === storedLatestKnownId);
@@ -990,22 +992,44 @@ export function ChatView({
     return null;
   }, [storedLatestKnownId, mergedMessages]);
 
-  // Divider count = messages strictly newer than the latest-known
-  // anchor (Slack "new since last visit" semantics). If the user
-  // was at the bottom when they left, latestKnown == bottomVisible
-  // == the latest msg, and the count is 0 (no divider) unless new
-  // arrivals showed up. If the user was mid-chat, latestKnown is
-  // the latest at leave; new arrivals push the count up; messages
-  // the user merely scrolled past (which are below their viewport
-  // but were already there) do NOT count as new.
-  //
-  // Fixed in PR 286 manual sign-off rev 4 (the user observed that
-  // "messages I had already scrolled past but were below the
-  // viewport" were being labeled as 'new', which they weren't).
+  // Open-time snapshot of `storedLatestKnownId`. Captured once per
+  // chat visit (on the first render where it transitions from
+  // null → non-null) and frozen for the rest of the visit. Drives
+  // the UnreadDivider's anchor message — without freezing, the
+  // tracker's debounced IDB writes during the visit would move the
+  // anchor forward, causing the divider to visibly hop down and
+  // the count to decrement as the user scrolled — caught in PR 286
+  // manual sign-off rev 6 ("don't want a flaky UI").
+  const [openSnapshotLatestKnownId, setOpenSnapshotLatestKnownId] = useState<string | null>(null);
+  // Snapshot capture: first non-null storedLatestKnownId after a
+  // chat switch becomes the divider anchor for this visit.
+  useEffect(() => {
+    if (openSnapshotLatestKnownId === null && storedLatestKnownId !== null) {
+      setOpenSnapshotLatestKnownId(storedLatestKnownId);
+    }
+  }, [storedLatestKnownId, openSnapshotLatestKnownId]);
+
+  // Divider anchor resolved from the snapshot. Does not change
+  // during the visit even if the tracker writes new IDB rows.
+  const dividerAnchorResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
+    if (!openSnapshotLatestKnownId || mergedMessages.length === 0) return null;
+    const exact = mergedMessages.findIndex((m) => m.id === openSnapshotLatestKnownId);
+    if (exact >= 0) {
+      const exactMsg = mergedMessages[exact];
+      if (exactMsg) return { anchorId: exactMsg.id, index: exact };
+    }
+    return null;
+  }, [openSnapshotLatestKnownId, mergedMessages]);
+
+  // Divider count = messages strictly newer than the snapshot
+  // anchor. Anchor is fixed for the visit, so this only changes if
+  // mergedMessages grows (poll-driven new arrivals) — i.e., the
+  // count only goes UP, never DOWN, until the next visit refreshes
+  // the snapshot.
   const dividerUnreadCount = useMemo<number>(() => {
-    if (!latestKnownResolution) return 0;
-    return mergedMessages.length - 1 - latestKnownResolution.index;
-  }, [latestKnownResolution, mergedMessages]);
+    if (!dividerAnchorResolution) return 0;
+    return mergedMessages.length - 1 - dividerAnchorResolution.index;
+  }, [dividerAnchorResolution, mergedMessages]);
 
   // Live bottom-visible id during the current session. Driven by
   // useReadTracker's `onBottomVisibleChange` callback. Used as the
@@ -1046,6 +1070,9 @@ export function ChatView({
   useLayoutEffect(() => {
     setSessionHighestRaw(-1);
     setLiveBottomVisibleId(null);
+    // Clear the divider's open-time snapshot so a fresh one gets
+    // captured on the new chat's first non-null storedLatestKnownId.
+    setOpenSnapshotLatestKnownId(null);
   }, [chatId]);
   // Advance the raw counter whenever the user's viewport bottom
   // reaches a message later than the previous high water.
@@ -1615,17 +1642,18 @@ export function ChatView({
               // server window.
               const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
               // Insert the unread divider immediately after the
-              // latest-known anchor — i.e., right after what was
-              // the most recent message at the user's last visit.
-              // Anything below the divider is truly new (arrived
-              // since they left). Skipped when there's no
-              // latestKnown snapshot (first visit / pre-fix) or
-              // when no messages newer than the snapshot exist.
+              // open-time snapshot anchor. The snapshot is captured
+              // once per visit and frozen, so the divider's
+              // position stays stable through the visit even when
+              // the tracker writes new IDB rows mid-session.
+              // Skipped when no snapshot was captured (first
+              // visit / pre-fix) or when no messages newer than the
+              // snapshot exist.
               const isReadAnchor =
                 item.kind === "message" &&
-                latestKnownResolution !== null &&
+                dividerAnchorResolution !== null &&
                 dividerUnreadCount > 0 &&
-                item.data.id === latestKnownResolution.anchorId;
+                item.data.id === dividerAnchorResolution.anchorId;
               if (isGapAnchor && isReadAnchor) {
                 return [
                   node,
