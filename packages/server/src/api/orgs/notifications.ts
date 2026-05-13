@@ -12,6 +12,12 @@ export async function orgNotificationRoutes(app: FastifyInstance): Promise<void>
     return notificationService.listNotifications(app.db, scope.organizationId, scope.memberId, query);
   });
 
+  app.get<{ Params: { orgId: string } }>("/unread-count", async (request) => {
+    const scope = await requireOrgMembership(request, app.db);
+    const count = await notificationService.unreadCount(app.db, scope.organizationId, scope.memberId);
+    return { count };
+  });
+
   app.post<{ Params: { orgId: string; id: string } }>("/:id/read", async (request) => {
     const scope = await requireOrgMembership(request, app.db);
     const result = await notificationService.markRead(app.db, request.params.id, scope.organizationId, scope.memberId);

@@ -5,7 +5,7 @@ import {
   type NotificationSeverity,
   type NotificationType,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
@@ -111,31 +111,28 @@ export async function listNotifications(db: Database, orgId: string, memberId: s
     return { items: [], nextCursor: null };
   }
 
-  const conditions = [eq(notifications.organizationId, orgId)];
+  const targetLimit = query.limit;
+
+  const conditions = [eq(notifications.organizationId, orgId), buildVisibilityCondition([...visibleAgents])];
   if (query.cursor) conditions.push(lt(notifications.createdAt, new Date(query.cursor)));
   if (query.severity) conditions.push(eq(notifications.severity, query.severity));
   if (query.read !== undefined) conditions.push(eq(notifications.read, query.read));
   if (query.agentId) conditions.push(eq(notifications.agentId, query.agentId));
 
-  const where = and(...conditions);
-
-  // Overscan to absorb rows discarded by the visibility post-filter. Without
-  // overscan, a page containing many invisible-agent rows could silently
-  // return an empty payload even when more visible rows exist past the cursor.
-  const overscanFactor = 4;
-  const targetLimit = query.limit;
-  const rawLimit = Math.min(targetLimit * overscanFactor + 1, 400);
-
+  // Visibility is now part of the SQL predicate (`agent_id IS NULL OR
+  // agent_id IN visible`) instead of an in-Node post-filter, so we fetch
+  // exactly `limit + 1` rows and rely on the DB to discard invisible rows.
+  // This eliminates the 400-row overscan ceiling that previously made
+  // long-tail visible rows invisible when invisible-agent noise dominated.
   const rows = await db
     .select()
     .from(notifications)
-    .where(where)
+    .where(and(...conditions))
     .orderBy(desc(notifications.createdAt))
-    .limit(rawLimit);
+    .limit(targetLimit + 1);
 
-  const visible = rows.filter((n) => n.agentId === null || visibleAgents.has(n.agentId));
-  const hasMore = visible.length > targetLimit;
-  const items = hasMore ? visible.slice(0, targetLimit) : visible;
+  const hasMore = rows.length > targetLimit;
+  const items = hasMore ? rows.slice(0, targetLimit) : rows;
   const last = items[items.length - 1];
   const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
 
@@ -146,6 +143,27 @@ export async function listNotifications(db: Database, orgId: string, memberId: s
     })),
     nextCursor,
   };
+}
+
+/**
+ * Return the unread notification count for this member's visible agents.
+ * Single `SELECT COUNT(*)` — no row fetch — so the topbar bell badge can
+ * surface an accurate number (>100) without paying for a list query.
+ */
+export async function unreadCount(db: Database, orgId: string, memberId: string): Promise<number> {
+  const visibleAgents = await loadVisibleAgentIds(db, orgId, memberId);
+
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.organizationId, orgId),
+        eq(notifications.read, false),
+        buildVisibilityCondition([...visibleAgents]),
+      ),
+    );
+  return row?.count ?? 0;
 }
 
 /** Mark a single notification as read, scoped to organization + visible agents. */
@@ -173,22 +191,32 @@ export async function markRead(db: Database, notificationId: string, orgId: stri
 /** Mark all notifications visible to this member as read. */
 export async function markAllRead(db: Database, orgId: string, memberId: string) {
   const visible = await loadVisibleAgentIds(db, orgId, memberId);
-  const visibleIds = [...visible];
 
   // Single UPDATE covering every visible unread row in the org. Org-wide rows
   // (agentId IS NULL) are always visible; agent-scoped rows are filtered to
-  // the member's visible agent set. Without this single-statement form a
-  // burst of notifications past the prior 1000-row select cap would leave
-  // unread rows behind, and the bell badge would never clear.
-  const visibilityCondition =
-    visibleIds.length > 0
-      ? or(isNull(notifications.agentId), inArray(notifications.agentId, visibleIds))
-      : isNull(notifications.agentId);
-
+  // the member's visible agent set. The same visibility predicate is reused
+  // by listNotifications and unreadCount so the three surfaces agree.
   await db
     .update(notifications)
     .set({ read: true })
-    .where(and(eq(notifications.organizationId, orgId), eq(notifications.read, false), visibilityCondition));
+    .where(
+      and(
+        eq(notifications.organizationId, orgId),
+        eq(notifications.read, false),
+        buildVisibilityCondition([...visible]),
+      ),
+    );
+}
+
+/**
+ * SQL fragment matching every notification visible to a member: org-wide
+ * (`agent_id IS NULL`) plus rows tied to an agent in the member's visible
+ * set. Centralised so listNotifications, markAllRead, and unreadCount can
+ * never drift apart.
+ */
+function buildVisibilityCondition(visibleAgentIds: string[]) {
+  if (visibleAgentIds.length === 0) return isNull(notifications.agentId);
+  return or(isNull(notifications.agentId), inArray(notifications.agentId, visibleAgentIds));
 }
 
 /**
