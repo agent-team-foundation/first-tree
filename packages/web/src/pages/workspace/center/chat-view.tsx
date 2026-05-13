@@ -715,31 +715,34 @@ export function ChatView({
     refetchInterval: 15_000,
   });
 
-  // Suppress the "↓ N new messages" pill during the smooth-scroll
-  // that follows the user's OWN send. Without this, the user briefly
-  // sees "1 new message" between (a) their new message landing in
-  // mergedMessages and (b) the smooth-scroll reaching it — caught in
-  // PR 286 manual sign-off rev 9. Cleared either when the scroll
-  // reaches the bottom (`isAtBottom` flips true, see effect below) or
-  // after a hard timeout, whichever comes first — the timeout covers
-  // the case where the user manually scrolls up mid-animation, so
-  // `isAtBottom` never settles.
-  const [isOwnSendAutoScrolling, setIsOwnSendAutoScrolling] = useState(false);
-  const ownSendSuppressTimeoutRef = useRef<number | null>(null);
-  const markOwnSendBegin = useCallback(() => {
-    setIsOwnSendAutoScrolling(true);
-    if (ownSendSuppressTimeoutRef.current !== null) {
-      window.clearTimeout(ownSendSuppressTimeoutRef.current);
-    }
-    ownSendSuppressTimeoutRef.current = window.setTimeout(() => {
-      setIsOwnSendAutoScrolling(false);
-      ownSendSuppressTimeoutRef.current = null;
-    }, 1000);
-  }, []);
+  // Pre-advance target for the session high water: the id of a
+  // message the USER just sent (text-only or file path). The actual
+  // `setSessionHighestId` call happens in an effect further down,
+  // because `setSessionHighestId` is declared below this point with
+  // the rest of the tracker/pill state — both paths surface a
+  // pending advance here, the effect drains it.
+  //
+  // Why pre-advance is the right mechanism: without it, after the
+  // server returns the new message and `mergedMessages` grows, the
+  // tracker still reports the PREVIOUS last-visible message as the
+  // bottom-visible until the smooth-scroll animation reaches the
+  // new row. During that ~300ms window, `pillCount = 1` and the
+  // pill flashes "↓ 1 new message" for the user's own send. By
+  // bumping `sessionHighestId` to the new message's id immediately
+  // on `onSuccess`, `pillCount` stays 0 from the very first render
+  // that contains the new message — no flash possible.
+  //
+  // The `chatId` is tracked alongside the message id so a send
+  // whose response arrives AFTER the user has switched chats
+  // doesn't pollute the new chat's watermark. Per PR 286 manual
+  // sign-off rev 10 (reviewer's option C).
+  const [pendingHighWaterAdvance, setPendingHighWaterAdvance] = useState<{ chatId: string; messageId: string } | null>(
+    null,
+  );
 
   const sendMut = useMutation({
     mutationFn: (content: string) => sendChatMessage(chatId, content),
-    onSuccess: () => {
+    onSuccess: (sentMessage) => {
       setDraft("");
       queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
       // Refresh the workspace sidebar the moment the message is durable —
@@ -749,15 +752,18 @@ export function ChatView({
       // wait up to 10s for the polling refetch. See M plan Step 3 in
       // docs/session-creation-on-first-message.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+      // Pre-advance the high water to the new message id BEFORE
+      // initiating the smooth scroll. By the time the new message
+      // commits to `mergedMessages`, `sessionHighestIdx` already
+      // resolves to the new last index → `pillCount = 0` → pill
+      // never flashes for the user's own send.
+      setPendingHighWaterAdvance({ chatId, messageId: sentMessage.id });
       // When the user sends a message, scroll all the way to the
       // bottom so they see their own send. ResizeObserver-debounced
       // (non-immediate) variant so the scroll lands after the
       // newly-arrived message has been rendered. Without this,
       // M2's once-per-chat-visit gate would suppress any scroll
       // and the user's just-sent message would arrive off-screen.
-      // markOwnSendBegin precedes the scroll so the pill is already
-      // suppressed by the time the new message commits to the DOM.
-      markOwnSendBegin();
       scrollToBottom("smooth");
     },
   });
@@ -821,6 +827,12 @@ export function ChatView({
       setUploading(true);
       setUploadError(null);
       try {
+        // Track the latest server-returned message id across the
+        // sequence of file POSTs (and the optional trailing text
+        // POST) so we can pre-advance the high water in one shot
+        // after the whole batch lands. See `pendingHighWaterAdvance`
+        // for rationale.
+        let lastSentMessageId: string | null = null;
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
           const imageId = crypto.randomUUID();
@@ -828,29 +840,36 @@ export function ChatView({
           // its own message via the imageRef shape immediately on refetch,
           // even if the server write races ahead of the response.
           await putImage({ imageId, base64: data, mimeType: img.file.type });
-          await sendFileMessage(chatId, {
+          const fileMsg = await sendFileMessage(chatId, {
             data,
             mimeType: img.file.type,
             filename: img.file.name,
             size: img.file.size,
             imageId,
           });
+          lastSentMessageId = fileMsg.id;
           URL.revokeObjectURL(img.previewUrl);
         }
         setPendingImages([]);
-        if (text) await sendChatMessage(chatId, text);
+        if (text) {
+          const textMsg = await sendChatMessage(chatId, text);
+          lastSentMessageId = textMsg.id;
+        }
         setDraft("");
         queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
         // Mirror sendMut.onSuccess: predictive session-activation only shows
         // up in the sidebar after we invalidate, otherwise the file-send path
         // for the first message in a new chat waits for 10s polling.
         queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+        // Pre-advance the high water before the smooth scroll for
+        // the same reason as in sendMut.onSuccess — pill never
+        // flashes for the user's own send.
+        if (lastSentMessageId) {
+          setPendingHighWaterAdvance({ chatId, messageId: lastSentMessageId });
+        }
         // Same scroll-on-send as sendMut.onSuccess — the file-send
         // path goes through a different code branch so we have to
-        // repeat the call here. markOwnSendBegin suppresses the
-        // pill across the smooth-scroll window for the same reason
-        // as in sendMut.onSuccess.
-        markOwnSendBegin();
+        // repeat the call here.
         scrollToBottom("smooth");
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Failed to send image");
@@ -1064,49 +1083,59 @@ export function ChatView({
   useLayoutEffect(() => {
     setSessionHighestId(null);
     setLiveBottomVisibleId(null);
-    // Clear any in-flight own-send pill suppression so the new
-    // chat's pill state isn't gated by the prior chat's send.
-    setIsOwnSendAutoScrolling(false);
-    if (ownSendSuppressTimeoutRef.current !== null) {
-      window.clearTimeout(ownSendSuppressTimeoutRef.current);
-      ownSendSuppressTimeoutRef.current = null;
-    }
+    // Drop any pending own-send pre-advance from the previous
+    // chat — the new chat's watermark should not inherit the
+    // outgoing chat's last sent message.
+    setPendingHighWaterAdvance(null);
   }, [chatId]);
-  // Lift the own-send pill suppression the moment the scroll settles
-  // at the bottom. Distinct from the 1000ms hard timeout in
-  // `markOwnSendBegin`: the timeout is the fallback when the user
-  // manually scrolls up mid-animation; this effect handles the
-  // normal "smooth-scroll reaches bottom" path so the pill becomes
-  // re-eligible to display as soon as the user has caught up.
+  // Drain `pendingHighWaterAdvance` into `sessionHighestId`. Lives
+  // here (not directly inside `sendMut.onSuccess` / the file-send
+  // path) because `setSessionHighestId` is declared in this block —
+  // a useEffect lets the setter signal flow forward without a
+  // forward reference. The `chatId` check protects against the
+  // race where a send's response arrives AFTER the user has
+  // switched to a different chat.
   useEffect(() => {
-    if (!isOwnSendAutoScrolling) return;
-    if (!isAtBottom) return;
-    setIsOwnSendAutoScrolling(false);
-    if (ownSendSuppressTimeoutRef.current !== null) {
-      window.clearTimeout(ownSendSuppressTimeoutRef.current);
-      ownSendSuppressTimeoutRef.current = null;
+    if (!pendingHighWaterAdvance) return;
+    if (pendingHighWaterAdvance.chatId !== chatId) {
+      setPendingHighWaterAdvance(null);
+      return;
     }
-  }, [isOwnSendAutoScrolling, isAtBottom]);
-  // Cleanup on unmount: drop the pending timeout if any.
-  useEffect(() => {
-    return () => {
-      if (ownSendSuppressTimeoutRef.current !== null) {
-        window.clearTimeout(ownSendSuppressTimeoutRef.current);
-        ownSendSuppressTimeoutRef.current = null;
-      }
-    };
-  }, []);
+    setSessionHighestId(pendingHighWaterAdvance.messageId);
+    setPendingHighWaterAdvance(null);
+  }, [pendingHighWaterAdvance, chatId]);
   // Advance the watermark id whenever the user's viewport bottom
   // reaches a message later than the previous high water.
   // Comparison goes through current `mergedMessages` so both ids
   // are resolved against the live ordering — invariant to window
   // shifts.
+  //
+  // Regression guard: if `sessionHighestId` is set but currently
+  // unresolvable in `mergedMessages` (i.e., the id doesn't appear
+  // in the rendered list yet), bail without advancing. This covers
+  // two cases:
+  //   1. Pre-advance: `sendMut.onSuccess` just set `sessionHighestId`
+  //      to the brand-new server-returned id, but the cache
+  //      invalidation+refetch hasn't landed yet, so the new msg
+  //      isn't in `mergedMessages`. Without this guard the advance
+  //      effect would observe the OLD last-visible id and overwrite
+  //      the pre-advance, re-opening the own-send flash window.
+  //   2. Window-shift drop-off: a previously valid high-water id
+  //      that has fallen out of the polling window. In that case
+  //      "the user has already seen everything older than the
+  //      current window" is the conservative interpretation, but
+  //      regressing to the new bottom-visible would be wrong — wait
+  //      until the next forward advance instead.
   useEffect(() => {
     if (!liveBottomVisibleId) return;
     const newIdx = mergedMessages.findIndex((m) => m.id === liveBottomVisibleId);
     if (newIdx < 0) return;
-    const curIdx = sessionHighestId ? mergedMessages.findIndex((m) => m.id === sessionHighestId) : -1;
-    if (newIdx > curIdx) setSessionHighestId(liveBottomVisibleId);
+    if (sessionHighestId !== null) {
+      const curIdx = mergedMessages.findIndex((m) => m.id === sessionHighestId);
+      if (curIdx < 0) return;
+      if (newIdx <= curIdx) return;
+    }
+    setSessionHighestId(liveBottomVisibleId);
   }, [liveBottomVisibleId, mergedMessages, sessionHighestId]);
   // Effective high water index, resolved from `sessionHighestId`
   // against the live `mergedMessages`. Max with the IDB baseline
@@ -1688,18 +1717,19 @@ export function ChatView({
             <div ref={messagesEndRef} />
           </div>
         </div>
-        {/* Floating "↓ N new messages" pill — surfaces whenever there
-            are messages newer than the user's session high watermark
-            AND the user is not in the middle of their own-send
-            auto-scroll. Hides when pillCount = 0 (user caught up) or
-            when `isOwnSendAutoScrolling` is set (own send in flight —
-            see `markOwnSendBegin` for rationale). Rendered as a
-            sibling of the scroll container, not a child, so its
+        {/* Floating "↓ N new messages" pill — surfaces whenever
+            there are messages newer than the user's session high
+            watermark. Own sends never trigger the pill because
+            `sendMut.onSuccess` / the file-send path pre-advance the
+            watermark to the new message's id before initiating the
+            smooth scroll, so `pillCount` stays 0 throughout the
+            animation (PR 286 manual sign-off rev 10). Rendered as
+            a sibling of the scroll container, not a child, so its
             `absolute` positioning anchors to the outer wrapper's
             visible bounds instead of being affected by the scroll
             container's internal `overflow-auto` + `position: relative`
-            interaction (PR 286 manual sign-off rev 8). */}
-        {pillCount > 0 && !isOwnSendAutoScrolling ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
+            interaction (rev 8). */}
+        {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
       </div>
 
       {/* Input. Outer band keeps full-width border-top + side padding so
