@@ -188,6 +188,10 @@ function teardown() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  if (meChatsTrailingTimer) {
+    clearTimeout(meChatsTrailingTimer);
+    meChatsTrailingTimer = null;
+  }
   if (ws) {
     ws.close(1000, "unmount");
     ws = null;
