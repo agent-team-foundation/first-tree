@@ -516,22 +516,24 @@ describe("chat-first workspace service layer", () => {
     expect(seen.size).toBe(3);
   });
 
-  it("listMeChats threads filter: parent_chat_id IS NOT NULL is excluded in v1", async () => {
+  it("listMeChats nested-chat filter: parent_chat_id IS NOT NULL is excluded", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const peer = await createTestAgent(app, { name: "peer-th" });
+    const peer = await createTestAgent(app, { name: "peer-nested" });
 
     const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [peer.agent.uuid],
     });
-    // forge a thread row anchored to the parent chat
+    // Forge a nested chat row anchored to the parent. `parent_chat_id` is
+    // currently unused at the product level but the listMeChats filter
+    // keeps nested rows out of the conversation list.
     await app.db.execute(sql`
       INSERT INTO chats (id, organization_id, type, parent_chat_id)
-      VALUES ('thread-x', ${admin.organizationId}, 'thread', ${chatId})
+      VALUES ('nested-x', ${admin.organizationId}, 'group', ${chatId})
     `);
     await app.db.execute(sql`
       INSERT INTO chat_membership (chat_id, agent_id, role, access_mode)
-      VALUES ('thread-x', ${admin.humanAgentUuid}, 'member', 'speaker')
+      VALUES ('nested-x', ${admin.humanAgentUuid}, 'member', 'speaker')
     `);
 
     const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
@@ -541,7 +543,7 @@ describe("chat-first workspace service layer", () => {
     });
     const ids = list.rows.map((r) => r.chatId);
     expect(ids).toContain(chatId);
-    expect(ids).not.toContain("thread-x");
+    expect(ids).not.toContain("nested-x");
   });
 
   // ---------------------------------------------------------------------------
