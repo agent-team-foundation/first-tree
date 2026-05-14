@@ -415,7 +415,7 @@ export function AgentDetailPage() {
     sessions: totalSessions ?? "—",
     active: activeSessions,
     runtime: runtimeType ?? (isHuman ? "human" : "—"),
-    model: !isHuman && !canManageAgent ? "restricted" : cfgQuery.data?.payload.model?.trim() || "—",
+    model: cfgQuery.data?.payload.model?.trim() || "—",
   };
 
   // Resolve the bound client's display name (hostname, fallback to id) for the
@@ -426,7 +426,7 @@ export function AgentDetailPage() {
   const boundClient: HubClient | null = boundClientId
     ? (allClientsQuery.data?.find((c) => c.id === boundClientId) ?? null)
     : null;
-  const boundClientLabel: string | null = boundClientId ? (boundClient?.hostname ?? boundClientId) : null;
+  const boundClientLabel: string | null = boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
 
   // Runtime provider label for the Setup "Where it runs" card. The agent
   // schema carries the authoritative `runtimeProvider` field post-0026; the
