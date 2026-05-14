@@ -9,6 +9,7 @@ import {
   setApiSelectedOrganizationId,
   setStoredTokens,
 } from "../api/client.js";
+import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
@@ -26,6 +27,12 @@ type MeResponse = {
     step: "connect" | "create_agent" | "completed";
     /** ISO timestamp when the user dismissed the onboarding stepper, else null. */
     dismissedAt?: string | null;
+    /**
+     * ISO timestamp when the user walked Step 3 to success. Distinct from
+     * `dismissedAt` (which only hides the stepper UI). Once set, the
+     * Settings → Onboarding entry point disappears permanently.
+     */
+    completedAt?: string | null;
   };
 };
 
@@ -60,6 +67,15 @@ type AuthContextValue = {
    */
   onboardingDismissedAt: string | null;
   /**
+   * ISO timestamp when the user walked Step 3 to terminal success. Once
+   * non-null, the Settings → Onboarding sidebar entry and Resume button
+   * disappear permanently — subsequent config edits go through Settings →
+   * Team and the per-agent settings pages. `null` while setup is still
+   * incomplete OR while the user has only dismissed (not completed) the
+   * wizard.
+   */
+  onboardingCompletedAt: string | null;
+  /**
    * PATCH `/me/onboarding { dismissed: true }`. Optimistically flips
    * `onboardingDismissedAt` so the stepper unmounts immediately.
    */
@@ -70,6 +86,14 @@ type AuthContextValue = {
    * Settings → Setup "Resume setup" toggle.
    */
   restoreOnboarding: () => Promise<void>;
+  /**
+   * POST `/me/onboarding-completed`. Optimistically stamps
+   * `onboardingCompletedAt` so the Settings → Onboarding sidebar entry
+   * unmounts immediately and `/settings/onboarding` redirects on the next
+   * render. Idempotent server-side. Called at Step 3 terminal-success
+   * points (admin Continue, invitee Confirm / Continue).
+   */
+  markOnboardingCompleted: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   /**
    * Adopt a token pair handed in from a non-login surface (OAuth fragment
@@ -125,6 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const [onboardingStep, setOnboardingStep] = useState<"connect" | "create_agent" | "completed" | null>(null);
   const [onboardingDismissedAt, setOnboardingDismissedAt] = useState<string | null>(null);
+  const [onboardingCompletedAt, setOnboardingCompletedAt] = useState<string | null>(null);
   // Stays false until the first fetchMe settles. Unauthenticated visitors
   // never need /me, so the gate also flips for them via the unauth branch
   // below — RequireAuth only blocks the loading frame when the user IS
@@ -147,6 +172,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSelectedOrgId(null);
     setOnboardingStep(null);
     setOnboardingDismissedAt(null);
+    setOnboardingCompletedAt(null);
     setMeLoaded(false);
   }, [queryClient]);
 
@@ -159,6 +185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const nextStep = data.onboarding?.step ?? null;
       setOnboardingStep(nextStep);
       setOnboardingDismissedAt(data.onboarding?.dismissedAt ?? null);
+      setOnboardingCompletedAt(data.onboarding?.completedAt ?? null);
       // Drop the join-path flag once onboarding is complete so a later
       // incomplete state (e.g. user deletes their client) doesn't reuse a
       // stale "you've joined {team}" headline that no longer fits.
@@ -257,6 +284,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const markOnboardingCompleted = useCallback(async () => {
+    // Optimistic: stamp immediately so the Settings sidebar gate and the
+    // /settings/onboarding redirect read the new state on the very next
+    // render. Server stamp is canonical but it's not echoed back — the next
+    // /me fetch will reconcile if the value somehow drifts (e.g. /me was
+    // refetched mid-flight before the optimistic write landed). We don't
+    // roll back on error: the user has already finished Step 3 and is
+    // navigating away, so a network blip here just means the sidebar entry
+    // lingers until the next /me — strictly less wrong than briefly
+    // un-completing the user.
+    setOnboardingCompletedAt((prev) => prev ?? new Date().toISOString());
+    await postOnboardingCompleted();
+  }, []);
+
   // Fetch member info on initial load if already authenticated
   useEffect(() => {
     if (isAuthenticated && !user) {
@@ -291,8 +332,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         agentId: currentMembership?.agentId ?? null,
         onboardingStep,
         onboardingDismissedAt,
+        onboardingCompletedAt,
         dismissOnboarding,
         restoreOnboarding,
+        markOnboardingCompleted,
         login,
         adoptTokens,
         selectOrganization,

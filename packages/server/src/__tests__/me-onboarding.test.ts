@@ -303,9 +303,12 @@ describe("/me onboarding payload", () => {
       headers: { authorization: `Bearer ${access}` },
     });
     expect(me.statusCode).toBe(200);
-    const body = me.json<{ onboarding: { step: string; dismissedAt: string | null } }>();
+    const body = me.json<{
+      onboarding: { step: string; dismissedAt: string | null; completedAt: string | null };
+    }>();
     expect(body.onboarding.step).toBe("connect");
     expect(body.onboarding.dismissedAt).toBeNull();
+    expect(body.onboarding.completedAt).toBeNull();
   });
 
   it("includes onboarding.dismissedAt as a timestamp once the user dismisses", async () => {
@@ -323,5 +326,116 @@ describe("/me onboarding payload", () => {
     });
     const dismissedAt = me.json<{ onboarding: { dismissedAt: string | null } }>().onboarding.dismissedAt;
     expect(dismissedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe("POST /me/onboarding-completed", () => {
+  const getApp = useTestApp();
+
+  it("stamps onboarding_completed_at and /me reflects it", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const before = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(before.json<{ onboarding: { completedAt: string | null } }>().onboarding.completedAt).toBeNull();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding-completed",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ ok: boolean }>().ok).toBe(true);
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(after.json<{ onboarding: { completedAt: string | null } }>().onboarding.completedAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}T/,
+    );
+  });
+
+  it("is idempotent — second call leaves the original timestamp", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding-completed",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {},
+    });
+    const firstMe = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    const firstStamp = firstMe.json<{ onboarding: { completedAt: string } }>().onboarding.completedAt;
+
+    // Sleep a tick so server-side NOW() would advance if the second POST
+    // re-stamped the column.
+    await new Promise((r) => setTimeout(r, 10));
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding-completed",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {},
+    });
+    const secondMe = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(secondMe.json<{ onboarding: { completedAt: string } }>().onboarding.completedAt).toBe(firstStamp);
+  });
+
+  it("does NOT touch onboarding_dismissed_at — the two stamps are orthogonal", async () => {
+    // Terminal completion and stepper-✕ are decoupled by design: dismiss
+    // = "hide the stepper UI" (reversible), completed = "setup done"
+    // (permanent). The POST must not double-stamp the dismiss column;
+    // otherwise a user who completed Step 3 without ever clicking ✕
+    // would surface as dismissed=true to other UI surfaces that still
+    // read that field.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const before = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(before.json<{ onboarding: { dismissedAt: string | null } }>().onboarding.dismissedAt).toBeNull();
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding-completed",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {},
+    });
+
+    const after = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(after.json<{ onboarding: { dismissedAt: string | null } }>().onboarding.dismissedAt).toBeNull();
+  });
+
+  it("rejects unauthenticated callers", async () => {
+    const app = getApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding-completed",
+      payload: {},
+    });
+    expect(res.statusCode).toBe(401);
   });
 });

@@ -50,6 +50,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         displayName: users.displayName,
         avatarUrl: users.avatarUrl,
         onboardingDismissedAt: users.onboardingDismissedAt,
+        onboardingCompletedAt: users.onboardingCompletedAt,
       })
       .from(users)
       .where(eq(users.id, userId))
@@ -90,6 +91,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       onboarding: {
         step: onboardingStep,
         dismissedAt: user?.onboardingDismissedAt ? user.onboardingDismissedAt.toISOString() : null,
+        completedAt: user?.onboardingCompletedAt ? user.onboardingCompletedAt.toISOString() : null,
       },
       inviteUrl,
     };
@@ -130,6 +132,30 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({
       dismissedAt: u?.onboardingDismissedAt ? u.onboardingDismissedAt.toISOString() : null,
     });
+  });
+
+  /**
+   * POST /me/onboarding-completed — stamp the terminal-state column when
+   * the user walks Step 3 to success (admin Continue, invitee Confirm /
+   * Continue). Distinct from PATCH /me/onboarding { dismissed: true },
+   * which only hides the stepper UI. Once stamped, the web sidebar drops
+   * the Settings → Onboarding entry point and /settings/onboarding
+   * redirects, so the wizard cannot re-enter.
+   *
+   * Idempotent: only writes when the column is still NULL — re-calling on
+   * an already-completed user is a no-op rather than resetting the stamp.
+   */
+  app.post("/me/onboarding-completed", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const result = await app.db
+      .update(users)
+      .set({ onboardingCompletedAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.onboardingCompletedAt)))
+      .returning({ id: users.id });
+    if (result.length > 0) {
+      app.log.info({ event: "onboarding.completed", userId }, "onboarding funnel: setup completed");
+    }
+    return reply.status(200).send({ ok: true });
   });
 
   /**
