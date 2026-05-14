@@ -9,6 +9,8 @@
  *   the user navigates between app tabs before creating their first agent.
  */
 
+import type { AgentVisibility } from "@agent-team-foundation/first-tree-hub-shared";
+
 const JOIN_PATH_KEY = "onboarding:joinPath";
 const DRAFT_KEY_PREFIX = "onboarding:draft";
 const STEP1_CONFIRMED_KEY = "onboarding:step1Confirmed";
@@ -55,6 +57,12 @@ export type OnboardingDraft = {
   selectedRuntime: string | null;
   connectToken: string | null;
   connectTokenExpiresAt: number | null;
+  /**
+   * Selected agent visibility for the Step 2 sub-step. `null` for drafts
+   * written before this field existed — readers should fall back to the
+   * step's own default ("organization") in that case.
+   */
+  visibility: AgentVisibility | null;
 };
 
 /**
@@ -100,11 +108,17 @@ function parseOnboardingDraft(value: unknown): OnboardingDraft | null {
   if (connectToken !== null && typeof connectToken !== "string") return null;
   const connectTokenExpiresAt = "connectTokenExpiresAt" in value ? value.connectTokenExpiresAt : null;
   if (connectTokenExpiresAt !== null && typeof connectTokenExpiresAt !== "number") return null;
+  // Tolerate drafts written before the visibility field existed: treat
+  // anything that isn't a known literal as `null`, never reject the whole
+  // draft. Step 2 falls back to its own default when this is null.
+  const rawVisibility = "visibility" in value ? value.visibility : null;
+  const visibility = rawVisibility === "private" || rawVisibility === "organization" ? rawVisibility : null;
   return {
     displayName: value.displayName,
     selectedRuntime,
     connectToken,
     connectTokenExpiresAt,
+    visibility,
   };
 }
 
