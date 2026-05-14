@@ -254,30 +254,24 @@ describe("conversation-list source tags", () => {
   it("source filter composes with filter=unread", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const [, prUnread, _issueUnread] = await seedChats(
-      app,
-      admin.organizationId,
-      admin.memberId,
-      admin.humanAgentUuid,
-      [
-        {
-          metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#20" },
-          topic: "pr-read",
-        },
-        {
-          metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#21" },
-          topic: "pr-unread",
-        },
-        {
-          metadata: { source: "github", entityType: "issue", entityKey: "o/r#22" },
-          topic: "issue-unread",
-        },
-      ],
-    );
+    const [, prUnread, issueUnread] = await seedChats(app, admin.organizationId, admin.memberId, admin.humanAgentUuid, [
+      {
+        metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#20" },
+        topic: "pr-read",
+      },
+      {
+        metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#21" },
+        topic: "pr-unread",
+      },
+      {
+        metadata: { source: "github", entityType: "issue", entityKey: "o/r#22" },
+        topic: "issue-unread",
+      },
+    ]);
 
     await app.db.insert(chatUserState).values([
       { chatId: prUnread, agentId: admin.humanAgentUuid, unreadMentionCount: 1 },
-      { chatId: _issueUnread, agentId: admin.humanAgentUuid, unreadMentionCount: 1 },
+      { chatId: issueUnread, agentId: admin.humanAgentUuid, unreadMentionCount: 1 },
     ]);
 
     const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
@@ -334,5 +328,71 @@ describe("conversation-list source tags", () => {
       source: "github_pull_request",
     });
     expect(archivedList.rows.map((r) => r.chatId)).toEqual([prChatId]);
+  });
+
+  /**
+   * Watcher rows participate in `listMeChats` (a manager who supervises a
+   * non-human participant sees the chat as `membershipKind: 'watching'`), so
+   * the source tag bar must include them in both the per-tab list and the
+   * per-source count — otherwise a manager's PR-tag badge could disappear
+   * while the chat is still reachable via `?filter=watching`.
+   */
+  it("watcher rows count toward source counts and surface in source-filtered list", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    // A non-human agent that admin manages; another human (peer) creates
+    // the PR chat with that managed agent. The result: admin gets a
+    // watcher row on the chat (no speaker grant), mirroring the
+    // github-entity-chat resolver's behavior for non-direct managers.
+    const { createAgent } = await import("../services/agent.js");
+    const managed = await createAgent(app.db, {
+      name: `mgr-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Managed Agent",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId: undefined,
+    });
+    const peer = await createAgent(app.db, {
+      name: `peer-${crypto.randomUUID().slice(0, 6)}`,
+      type: "human",
+      displayName: "Peer Human",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+    });
+
+    const chatId = uuidv7();
+    const { recomputeChatWatchers } = await import("../services/watcher.js");
+    await app.db.transaction(async (tx) => {
+      await tx.insert(chats).values({
+        id: chatId,
+        organizationId: admin.organizationId,
+        type: "direct",
+        topic: "watcher-pr",
+        metadata: { source: "github", entityType: "pull_request", entityKey: "o/r#watch" },
+      });
+      await addChatParticipants(tx, chatId, [
+        { agentId: peer.uuid, role: "owner" },
+        { agentId: managed.uuid, role: "member" },
+      ]);
+      await recomputeChatWatchers(tx, chatId);
+    });
+
+    // Admin watches via `managed`, so the PR chat appears in counts.
+    const { counts } = await listMeChatSourceCounts(app.db, admin.humanAgentUuid, admin.organizationId, {
+      engagement: "active",
+    });
+    expect(counts.github_pull_request).toEqual({ chatCount: 1, unreadChatCount: 0 });
+
+    // Filtering by source AND `filter=watching` surfaces the watcher row.
+    const watchingPr = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+      limit: 50,
+      filter: "watching",
+      engagement: "active",
+      source: "github_pull_request",
+    });
+    expect(watchingPr.rows.map((r) => r.chatId)).toEqual([chatId]);
+    expect(watchingPr.rows[0]?.membershipKind).toBe("watching");
   });
 });

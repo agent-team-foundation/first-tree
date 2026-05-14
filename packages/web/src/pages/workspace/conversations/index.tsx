@@ -131,17 +131,17 @@ export function ConversationList({
     setMoreError(null);
   };
 
-  // `resetExtras` covers in-component tab clicks, but `source` and
+  // `resetExtras` covers in-component tab clicks, but both `source` and
   // `engagement` can also flip via the URL (browser back/forward, deep link,
-  // parent-driven `setSource`). Mirror the reset in an effect so a URL-only
-  // change can't bleed previous-tab rows into the new list. The body
-  // doesn't read `source` (only its identity drives the effect), so we
-  // suppress biome's exhaustive-deps complaint here.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: source is the trigger, not a read
+  // parent-driven `setSource`/`setEngagement`). Mirror the reset in an
+  // effect so a URL-only change can't bleed previous-tab rows into the new
+  // list. The body doesn't read either value (only their identities drive
+  // the effect), so we suppress biome's exhaustive-deps complaint here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: source/engagement are triggers, not reads
   useEffect(() => {
     setExtraPages((prev) => (prev.length > 0 ? [] : prev));
     setMoreError(null);
-  }, [source]);
+  }, [source, engagement]);
 
   const baseRows = data?.rows ?? [];
   const allRows = useMemo(() => [...baseRows, ...extraPages], [baseRows, extraPages]);

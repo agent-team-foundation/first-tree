@@ -24,6 +24,7 @@ import {
   type ChatEngagementView,
   type ChatSource,
   type CreateMeChat,
+  GITHUB_ENTITY_TYPES,
   LIVE_ACTIVITY_STALE_MS,
   type ListMeChatSourceCountsQuery,
   type ListMeChatsQuery,
@@ -159,44 +160,44 @@ export async function getCallerEngagement(
 // ---------------------------------------------------------------------------
 //
 // The conversation-list tag bar splits chats by source — Manual / GitHub PR /
-// GitHub Issue / etc — using `chats.metadata`. Two helpers live here so the
-// list query, the per-source aggregate query, and the SQL `CASE` projection
-// stay in sync:
+// GitHub Issue / etc — using `chats.metadata`. All SQL below derives from
+// `GITHUB_ENTITY_TYPES` (the single source of truth for "which github
+// entities get their own tag"), so adding a new entity type means editing
+// `shared/src/schemas/chat-metadata.ts` once and not chasing literals across
+// three places. `ChatSource` follows the `github_{entityType}` naming
+// convention; the TypeScript switch over `ChatSource` is exhaustive so any
+// drift between the enum and the filter is a compile error.
 //
-//   - `sourceFilterSql(source)` — WHERE predicate restricting the result set
-//     to a single tag (used by `listMeChats`).
-//   - `chatSourceSqlExpression` — `CASE` that emits the flat ChatSource string
-//     directly from the row's metadata (used by the aggregate `GROUP BY`).
+//   - `sourceFilterSql(source)` — WHERE predicate for `listMeChats`.
+//   - `chatSourceSqlExpression` — CASE for the aggregate `GROUP BY` in
+//     `listMeChatSourceCounts`.
 //
-// Both mirror the `deriveChatSource` helper in `@first-tree-hub-shared`. If
-// you add a metadata variant there, extend both arms here.
+// Invariant: every github row covered by `chatSourceSqlExpression` MUST also
+// match `sourceFilterSql` for the same ChatSource, and vice versa — a
+// malformed row (e.g. `{source:"github", entityType:"some-new-thing"}`) goes
+// into `manual` consistently in both the count and the list. Pinned by the
+// "malformed github metadata falls into manual" test.
 
-/**
- * Per-source predicates. The four known github entity types are enumerated
- * explicitly; anything else — null metadata, empty `{}`, a future github
- * entityType we don't yet have a tag for, a writer that wrote `source` but
- * skipped the rest — is bucketed into `manual` so the default tab can't
- * silently hide a chat.
- *
- * The `chatSourceSqlExpression` CASE (used by the `GROUP BY` in
- * `listMeChatSourceCounts`) and `sourceFilterSql` (used by the WHERE in
- * `listMeChats`) MUST agree about which row falls into which bucket. Both
- * derive from `KNOWN_NON_MANUAL_PREDICATE` so a malformed-metadata row
- * (e.g. `{source:"github", entityType:"some-new-thing"}`) is counted as
- * `manual` in the aggregate AND surfaced when the user clicks the Manual
- * tag, instead of being invisible in the list with a misleading "1" badge.
- */
+const githubEntityList = sql.join(
+  GITHUB_ENTITY_TYPES.map((t) => sql`${t}`),
+  sql.raw(", "),
+);
+
 const KNOWN_NON_MANUAL_PREDICATE = sql`(
-     (c.metadata->>'source' = 'github' AND c.metadata->>'entityType' IN ('issue', 'pull_request', 'discussion', 'commit'))
+     (c.metadata->>'source' = 'github' AND c.metadata->>'entityType' IN (${githubEntityList}))
   OR c.metadata->>'source' = 'feishu'
 )`;
 
+const githubCaseArms = sql.join(
+  GITHUB_ENTITY_TYPES.map(
+    (t) => sql`WHEN c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = ${t} THEN ${`github_${t}`}`,
+  ),
+  sql.raw("\n    "),
+);
+
 const chatSourceSqlExpression = sql`CASE
-    WHEN c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'issue'         THEN 'github_issue'
-    WHEN c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'pull_request'  THEN 'github_pull_request'
-    WHEN c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'discussion'    THEN 'github_discussion'
-    WHEN c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'commit'        THEN 'github_commit'
-    WHEN c.metadata->>'source' = 'feishu'                                                 THEN 'feishu'
+    ${githubCaseArms}
+    WHEN c.metadata->>'source' = 'feishu' THEN 'feishu'
     ELSE 'manual'
   END`;
 
@@ -840,12 +841,13 @@ export async function listMeChatSourceCounts(
 ): Promise<MeChatSourceCounts> {
   const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
 
-  // GROUP BY repeats the full CASE expression rather than the `source` alias:
-  // when the alias collides with a real column name on any joined table (here
-  // `agents.source` lives on a sibling table and trips the lexer), PG resolves
-  // the GROUP BY identifier as the column reference and reports the
-  // un-grouped `c.metadata` it sees inside the CASE. Repeating the expression
-  // is the simplest fix that keeps the query a single statement.
+  // GROUP BY 1 (select-list position) instead of the `source` alias or the
+  // full CASE: `GROUP BY <alias>` doesn't transitively treat columns inside
+  // the aliased expression as grouped (PG reports `c.metadata` un-grouped),
+  // and `GROUP BY <CASE>` fails when the CASE arms are parameterised — the
+  // ungrouped-column analyser treats two textually-different parameter
+  // bindings as distinct expressions even when they reduce to the same
+  // value. Ordinal position works in both cases.
   // Aggregate semantics:
   //   - chat_count: COUNT of rows in the membership join (matches what the
   //     paginated list would return for this source).
@@ -870,7 +872,7 @@ export async function listMeChatSourceCounts(
      WHERE c.parent_chat_id IS NULL
        AND c.organization_id = ${organizationId}
        AND ${engagementPredicate}
-     GROUP BY ${chatSourceSqlExpression}
+     GROUP BY 1
   `)) as unknown as Array<{
     source: ChatSource;
     chat_count: number;
