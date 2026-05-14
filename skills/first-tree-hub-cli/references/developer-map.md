@@ -12,13 +12,12 @@
 ## CLI Source Map
 
 - `packages/command/src/cli/index.ts` — top-level Commander program and command registration.
-- `packages/command/src/commands/server.ts` — `server start/stop/status/doctor/db:migrate/admin:create`.
-- `packages/command/src/commands/client.ts` — `client start/stop/status/doctor` and the Hub-side `client hub-list/hub-disconnect` commands. Delegates `client connect` registration to `commands/connect.ts`. The background service has no dedicated subgroup — its lifecycle is folded into `client connect` (auto-install, [connect.ts:263](packages/command/src/commands/connect.ts:263)) and `client doctor` (state, via `checkBackgroundService`).
-- `packages/command/src/commands/connect.ts` — `client connect <server-url>`: writes `server.url`, authenticates via connect token or interactive login, persists `credentials.json`, installs the background service by default.
-- `packages/command/src/commands/agent.ts` — local aliases (`add/remove/list`), `create`, `claim`, `workspace clean`, `bind client/bot/user`, messaging (`send/chats/history/register/pull`), runtime status (`status/reset/sessions/session/chat`). Delegates `agent config` registration to `commands/agent-config.ts`.
-- `packages/command/src/commands/agent-config.ts` — `agent config get/set-model/append-prompt/add-mcp/set-env/add-repo/dry-run`, all thin wrappers over `/api/v1/admin/agents/:id/config`.
-- `packages/command/src/commands/config.ts` — scope-aware `config setup/set/get/list` for `server.yaml`, `client.yaml`, and `agents/<name>/agent.yaml`.
-- `packages/command/src/commands/status.ts` — top-level overview command.
+- `packages/command/src/commands/server.ts` — `server start/stop/status/doctor/migrate` and `server admin create`.
+- `packages/command/src/commands/client.ts` — `client start/stop/restart/status/doctor`, the Hub-side `client list / disconnect` commands, `client claim`, and the `client config show/set/get` subgroup for editing `client.yaml`. The background service has no dedicated subgroup — its lifecycle is folded into top-level `connect <token>` (auto-install) and `client doctor` (state, via `checkBackgroundService`).
+- `packages/command/src/commands/saas-connect.ts` — top-level `connect <token>`: decodes the token's `iss` claim to derive the hub URL, persists `credentials.json`, writes `server.url` into `client.yaml`, and installs the background service by default.
+- `packages/command/src/commands/agent.ts` — local aliases (`add/remove/prune/list`), `create`, `claim`, `workspace clean`, `bind client/bot/user`, runtime status (`status/reset`), `agent session list/suspend/terminate`, and the hidden `agent debug register/pull` debug subgroup. Delegates `agent config` registration to `commands/agent-config.ts`.
+- `packages/command/src/commands/agent-config.ts` — `agent config show/set-model/append-prompt/add-mcp/set-env/add-repo/dry-run`, all thin wrappers over `/api/v1/admin/agents/:id/config`.
+- `packages/command/src/commands/chat.ts` — `chat send/list/history/open`. The day-to-day messaging surface (sender is the agent matching `--agent <name>` or the only one configured locally).
 - `packages/command/src/commands/onboard.ts` — guided onboarding, argument-shape only.
 
 ## Reusable Core Logic
@@ -27,7 +26,7 @@
 - `packages/command/src/core/onboard.ts` — agent creation via Admin API, optional assistant creation, optional Feishu binding; provides `onboardCheck` / `onboardCreate` / `formatCheckReport` / `loadOnboardState` / `saveOnboardState`.
 - `packages/command/src/core/bootstrap.ts` — credential persistence (`saveCredentials`, `loadCredentials`) and token freshness (`resolveAccessToken`, `ensureFreshAccessToken`), plus `resolveServerUrl` and `saveAgentConfig`. `ensureFreshAdminToken` is a back-compat alias of `ensureFreshAccessToken`.
 - `packages/command/src/core/service-install.ts` — `installClientService`, `uninstallClientService`, `getClientServiceStatus`, `isServiceSupported`, `resolveCliInvocation`. Handles launchd (macOS) and `systemd --user` (Linux); marks other platforms as `unsupported`. Logs go to `~/.first-tree/hub/logs/`.
-- `packages/command/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `client start` and `client connect --no-service`. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
+- `packages/command/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `client start` and `connect <token> --no-service`. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
 - `packages/command/src/core/doctor.ts` — readiness checks used by `server doctor` and `client doctor`: `checkNodeVersion`, `checkDocker`, `checkServerConfig`, `checkDatabase`, `checkServerHealth`, `checkServerReachable`, `checkClientConfig`, `checkAgentConfigs`, `checkWebSocket`, `checkBackgroundService`.
 - `packages/command/src/core/feishu.ts` — `bindFeishuBot`, `bindFeishuUser`.
 - `packages/command/src/core/docker-postgres.ts` — `ensurePostgres`, `isDockerAvailable`, `stopPostgres` (CLI-managed Docker Postgres container).
@@ -55,7 +54,7 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 - `packages/client/src/runtime/bootstrap.ts` — optional Context Tree clone sync and `.agent/` workspace bootstrap.
 - `packages/client/src/runtime/session-manager.ts` — session lifecycle and dedup-sensitive message dispatch.
 - `packages/server/src/app.ts` — server wiring, route registration, background jobs.
-- `packages/server/src/api/auth/` — login, connect-token, refresh endpoints consumed by `client connect` and `ensureFreshAccessToken`.
+- `packages/server/src/api/auth/` — connect-token, refresh endpoints consumed by `connect <token>` and `ensureFreshAccessToken`.
 - `packages/server/src/api/admin/` — agent admin, agent config, session, and client endpoints that the CLI calls.
 - `packages/server/src/services/inbox.ts` — inbox poll/ack/renew behavior.
 
@@ -72,7 +71,7 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 ### Change the credential / auth surface
 
 1. Changes to login or refresh behavior touch `core/bootstrap.ts` and the `/api/v1/auth/*` routes.
-2. Changes to `client connect` flow touch `commands/connect.ts` and (usually) `core/service-install.ts`.
+2. Changes to `connect <token>` flow touch `commands/saas-connect.ts` and (usually) `core/service-install.ts`.
 3. Any change that adds or removes an auth env var must update `docs/cli-reference.md` and `references/command-surface.md` in this skill.
 
 ### Change onboarding behavior
@@ -85,7 +84,7 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 ### Change the background service
 
 1. `core/service-install.ts` for platform-specific logic (launchd plist, systemd unit, log paths, CLI invocation resolution).
-2. `commands/connect.ts` for the install-on-connect behavior — there is no dedicated `client service ...` CLI subcommand; lifecycle is bundled into `client connect`.
+2. `commands/saas-connect.ts` for the install-on-connect behavior — there is no dedicated `client service ...` CLI subcommand; lifecycle is bundled into top-level `connect <token>`.
 3. `core/doctor.ts` (`checkBackgroundService`) for what `client doctor` reports about service state.
 
 ### Change config behavior

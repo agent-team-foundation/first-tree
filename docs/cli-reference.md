@@ -8,47 +8,64 @@ first-tree-hub --version
 ```
 
 - Node.js `>= 22.16`
-- `gh` authenticated when using `onboard` or `agent token bootstrap`
+- `gh` authenticated when using `onboard`
 
 ## Commands
 
 ```
 first-tree-hub
-├── connect <token>
-│   └── [--no-service]
+├── connect <token> [--no-service]
 ├── server
 │   ├── start [--port] [--host] [--database-url] [--no-interactive]
 │   ├── stop
 │   ├── status
 │   ├── doctor
-│   ├── db:migrate
-│   └── admin:create [-u <username>] [-p <password>]
+│   ├── migrate
+│   └── admin create [-u <username>] [-n <name>] [-o <org>] [-p <password>]
 ├── client
-│   ├── connect <server-url> [--token <token>] [--no-service]   (legacy/self-host)
 │   ├── start [--no-interactive] [--foreground]
 │   ├── stop
 │   ├── restart
 │   ├── status
-│   └── doctor
-├── agent
-│   ├── add [name] [--token]
-│   ├── remove <name>
+│   ├── doctor
 │   ├── list
-│   ├── workspace clean [agent-name] [--ttl <days>]
-│   ├── token bootstrap <agentId> [--save-to] [--server]
-│   ├── bind bot --platform feishu --app-id <id> --app-secret <s>
-│   ├── bind user <humanAgentId> --platform feishu --feishu-id <id>
-│   ├── send <target> [message] [-f format] [--chat] [--metadata]
-│   │   [--reply-to] [--reply-to-inbox] [--reply-to-chat]
-│   ├── chats [-l <limit>] [--cursor]
-│   ├── history <chatId> [-l <limit>] [--cursor]
-│   ├── register
-│   └── pull [-l <limit>] [-a]
-├── config
-│   ├── setup [-s|-c]
-│   ├── set [-s|-c|-a <name>] <key> <value>
-│   ├── get [-s|-c|-a <name>] <key> [--show-secrets]
-│   └── list [-s|-c|-a <name>] [--show-secrets]
+│   ├── disconnect <clientId>
+│   ├── claim [--confirm]
+│   └── config
+│       ├── show [key] [--show-secrets]
+│       ├── set <key> <value>
+│       └── get <key> [--show-secrets]
+├── agent
+│   ├── add [--agent-id <uuid>]
+│   ├── remove <name>
+│   ├── prune [--yes] [--dry-run] [--server]
+│   ├── list [--remote] [--org <id>]
+│   ├── create <name> --type <t> --client-id <id> [--runtime] [--display-name] [--org] [--server]
+│   ├── claim <agentName>
+│   ├── status [name]
+│   ├── reset <name>
+│   ├── session list <agent-name> [--state]
+│   ├── session suspend <agent-name> <chat-id>
+│   ├── session terminate <agent-name> <chat-id>
+│   ├── config show <agent>
+│   ├── config set-model <agent> <model>
+│   ├── config append-prompt <agent> [-f <file>]
+│   ├── config add-mcp <agent> --name --transport [--command --args | --url]
+│   ├── config set-env <agent> <KEY=VALUE> [--sensitive]
+│   ├── config add-repo <agent> <url> [--ref] [--path]
+│   ├── config dry-run <agent> -f <patch.json>
+│   ├── bind client <agentName> --client-id
+│   ├── bind bot --platform feishu --app-id --app-secret
+│   ├── bind user <humanAgentId> --platform feishu --feishu-id
+│   └── workspace clean [agent-name] [--ttl]
+├── chat
+│   ├── list [-l <limit>] [--cursor] [--agent]
+│   ├── history <chatId> [-l <limit>] [--cursor] [--agent]
+│   ├── send <target> [message] [-f format] [--chat] [-m <json>]
+│   │     [--reply-to] [--reply-to-inbox] [--reply-to-chat] [--agent]
+│   └── open <agent-name> [--server]
+├── org
+│   └── bind-tree <url> [--org]
 ├── onboard [--check] [--continue]
 │   [--id] [--type] [--display-name] [--role] [--domains]
 │   [--delegate-mention]
@@ -58,9 +75,9 @@ first-tree-hub
 
 ## connect
 
-Top-level shortcut for SaaS users. Paste the connect token your Hub web
-console shows in *Connect your computer*; the CLI decodes the token's
-`iss` claim to derive the hub URL — no `--server-url` argument needed.
+Single entry point. Paste the connect token your Hub web console shows
+in *Connect your computer*; the CLI decodes the token's `iss` claim to
+derive the hub URL — no `--server-url` argument needed.
 
 ```bash
 first-tree-hub connect eyJhbGciOi...           # default: install background service
@@ -69,9 +86,7 @@ first-tree-hub connect eyJhbGciOi... --no-service   # run inline until Ctrl+C
 
 Hard-fails (no fallback) when the token is missing an `iss` claim or the
 claim is not an `http(s)` URL — that prevents stale tokens from one
-environment from accidentally re-targeting another. The legacy
-`first-tree-hub client connect <url> --token <token>` form is still
-available for self-host users who need the explicit URL.
+environment from accidentally re-targeting another.
 
 ## server
 
@@ -94,24 +109,22 @@ first-tree-hub server status
 first-tree-hub server doctor
 
 # Database migrations
-first-tree-hub server db:migrate
+first-tree-hub server migrate
 
 # Admin user management
-first-tree-hub server admin:create
-first-tree-hub server admin:create -u admin -p mypassword
+first-tree-hub server admin create
+first-tree-hub server admin create -u admin -p mypassword
 ```
 
 `--no-interactive` or no-TTY environments (Docker/CI) skip interactive prompts. Missing required config exits with error listing what's needed and the corresponding environment variable names.
 
 ## client
 
-Client runtime — connects all configured agents to the server.
+Client runtime — connects all configured agents to the server. First-time
+setup happens via the top-level `first-tree-hub connect <token>` (see
+above); the commands below cover ongoing operation.
 
 ```bash
-# First-time setup: authenticate and start (use the command shown in the web
-# "Connect a machine" dialog, which includes a one-time token)
-first-tree-hub client connect <server-url> --token <token>
-
 # Service lifecycle (delegates to systemd / launchd when a service is installed)
 first-tree-hub client start          # Start the background service
 first-tree-hub client start --foreground   # Run inline instead (debug / no-service users)
@@ -124,6 +137,15 @@ first-tree-hub client doctor
 # One-screen overview: CLI version, service state, hub URL, configured agents
 first-tree-hub client status
 
+# Hub-side client inventory and administration
+first-tree-hub client list
+first-tree-hub client disconnect <clientId>
+
+# View / modify this machine's client.yaml
+first-tree-hub client config show
+first-tree-hub client config show update.policy
+first-tree-hub client config set update.policy auto
+
 # Transfer ownership of this machine's client.yaml to the currently
 # logged-in user (run after a 4403 CLIENT_USER_MISMATCH on `client start`).
 # Unpins the previous owner's agents from this machine in a single
@@ -131,7 +153,7 @@ first-tree-hub client status
 first-tree-hub client claim --confirm
 ```
 
-`client connect` automatically installs a background service on macOS (launchd) and Linux (`systemd --user`) so the computer stays online across reboots. Use `--no-service` to skip this and run inline (Ctrl+C to stop). Windows is not supported — `client connect` falls back to inline mode.
+`connect <token>` automatically installs a background service on macOS (launchd) and Linux (`systemd --user`) so the computer stays online across reboots. Use `--no-service` to skip this and run inline (Ctrl+C to stop). Windows is not supported — `connect` falls back to inline mode.
 
 ### Sharing a machine across users (`client claim`)
 
@@ -152,7 +174,7 @@ mandatory so a typo doesn't strip the previous owner's machine. See
 
 ### Manual service operations
 
-`client start / stop / restart` cover day-to-day service control. Install happens during `client connect`; uninstall is a manual OS-level step (see *Decommission* below). `client status` and `client doctor` report state.
+`client start / stop / restart` cover day-to-day service control. Install happens during `first-tree-hub connect <token>`; uninstall is a manual OS-level step (see *Decommission* below). `client status` and `client doctor` report state.
 
 **Tail logs:**
 
@@ -185,9 +207,9 @@ systemctl --user daemon-reload
 rm -rf ~/.first-tree/hub
 ```
 
-To force-disconnect a client from the server side, use `client hub-disconnect <clientId>`.
+To force-disconnect a client from the server side, use `client disconnect <clientId>`.
 
-**Repair after Node upgrade or binary move** (plist still points at the old path): re-run `first-tree-hub client connect <url>` — re-authentication is required, but it re-writes the unit file with the current binary path.
+**Repair after Node upgrade or binary move** (plist still points at the old path): re-run `first-tree-hub connect <token>` — re-authentication is required (paste a fresh connect token from the Hub web console), but the command rewrites the unit file with the current binary path.
 
 ## agent
 
@@ -218,14 +240,6 @@ first-tree-hub agent workspace clean my-agent      # specific agent
 first-tree-hub agent workspace clean --ttl 14       # custom TTL (days)
 ```
 
-### Token Management
-
-```bash
-# Bootstrap a token using GitHub identity
-first-tree-hub agent token bootstrap <agentId>
-first-tree-hub agent token bootstrap <agentId> --server http://localhost:8000
-```
-
 ### Bindings (Feishu)
 
 ```bash
@@ -236,30 +250,12 @@ first-tree-hub agent bind bot --platform feishu --app-id <id> --app-secret <secr
 first-tree-hub agent bind user <humanAgentId> --platform feishu --feishu-id <ou_xxx>
 ```
 
-### Messaging (debugging)
+### Messaging — see the `chat` command group
 
-```bash
-# Send message to agent or chat
-first-tree-hub agent send <agentId> "hello"
-first-tree-hub agent send <chatId> "hello" --chat
-echo "piped message" | first-tree-hub agent send <agentId>
-
-# Attach metadata or reply routing
-first-tree-hub agent send <agentId> "hello" --metadata '{"priority":"high"}'
-first-tree-hub agent send <chatId> "follow-up" --chat --reply-to <messageId>
-first-tree-hub agent send <agentId> "continue there" --reply-to-inbox <inboxId> --reply-to-chat <chatId>
-
-# List chats / view history
-first-tree-hub agent chats
-first-tree-hub agent history <chatId>
-
-# Low-level SDK debugging
-first-tree-hub agent register
-first-tree-hub agent pull
-first-tree-hub agent pull --ack
-```
-
-Messaging commands require an agent token (see Agent env vars below). Use `FIRST_TREE_HUB_SERVER_URL` to override the server URL for these low-level agent commands.
+Day-to-day messaging lives under `first-tree-hub chat`. See the
+[chat](#chat) section below. Low-level SDK debugging (`register` / `pull`)
+moved to the hidden `agent debug` subgroup; run `first-tree-hub agent
+debug --help` to list those.
 
 ### Agent → user structured questions (Claude runtime)
 
@@ -268,28 +264,58 @@ Claude-runtime agents can pause execution mid-turn and prompt the operator with 
 - **Activation**: automatic for any agent on `runtimeProvider: claude-code` — no CLI flag.
 - **UI**: the question renders inline in the chat timeline as a card with three states (pending / answered / superseded).
 - **Lifecycle**: a pending question is auto-superseded when the chat session is archived (`agent session terminate`) or when the owning client is reclaimed by a different user (`first-tree-hub client claim`). The agent receives a clean deny in either case.
+
+## chat
+
+Day-to-day messaging — send messages, list chats, view history, open an interactive REPL.
+
+```bash
+# Send a message to an agent (positional is the agent name)
+first-tree-hub chat send <agentName> "hello"
+echo "piped message" | first-tree-hub chat send <agentName>
+
+# Send into an existing chat by id
+first-tree-hub chat send <chatId> "hello" --chat
+
+# Attach metadata or reply routing
+first-tree-hub chat send <agentName> "hello" -m '{"priority":"high"}'
+first-tree-hub chat send <chatId> "follow-up" --chat --reply-to <messageId>
+first-tree-hub chat send <agentName> "continue there" \
+  --reply-to-inbox <inboxId> --reply-to-chat <chatId>
+
+# List chats / view history
+first-tree-hub chat list
+first-tree-hub chat history <chatId>
+
+# Open an interactive REPL chat with an agent (creates a DM, polls)
+first-tree-hub chat open <agent-name>
+```
+
+`--agent <name>` selects the SENDER when multiple agents are configured
+locally (single-agent installs can omit it). The recipient is always the
+positional argument.
 - **Codex runtime**: not supported. The Codex SDK has no ask-user surface; codex-runtime agents that try to emit a question are rejected with HTTP 403 by the server (`assertSenderMayEmitQuestion`).
 
 No CLI command is required to use the feature — it shows up automatically when a Claude-runtime agent calls `AskUserQuestion` during a turn.
 
-## config
+## client config
+
+Read / write the local `client.yaml` for this machine. Scope is implicit
+(this client's YAML at `~/.first-tree/hub/config/client.yaml`).
 
 ```bash
-# Interactive configuration wizard
-first-tree-hub config setup -s          # Server
-first-tree-hub config setup -c          # Client
-
-# Command-line operations
-first-tree-hub config set -s server.port 9000
-first-tree-hub config get -s server.port
-first-tree-hub config list -s
-first-tree-hub config list -s --show-secrets
-
-# Scope flags
-#   -s / --server    → ~/.first-tree/hub/config/server.yaml
-#   -c / --client    → ~/.first-tree/hub/config/client.yaml
-#   -a <name>        → ~/.first-tree/hub/config/agents/<name>/agent.yaml
+first-tree-hub client config show                    # print every key/value
+first-tree-hub client config show update.policy      # print a single dotted key
+first-tree-hub client config show --show-secrets     # un-mask secret fields
+first-tree-hub client config set update.policy auto
+first-tree-hub client config get update.policy       # alias for `show <key>`
 ```
+
+Server-side configuration (`server.yaml`) is set via env vars or by
+hand-editing the file under `~/.first-tree/hub/config/server.yaml`;
+agent-side runtime configuration (model / prompt / MCP / env / repos)
+lives in `first-tree-hub agent config ...` and mutates the Hub database
+via the admin API.
 
 ## onboard
 
@@ -357,17 +383,21 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 
 ### Agent (messaging commands)
 
+Auth is the signed-in member's JWT — no per-agent token env vars. The
+runtime injects these so an agent process can talk to the Hub without
+extra setup:
+
 | Variable | Purpose |
 |---------|------|
-| `FIRST_TREE_HUB_AGENT_TOKEN` | Agent bearer token. Highest priority. Injected automatically when running inside a Hub agent runtime. |
-| `FIRST_TREE_HUB_AGENT` | Agent name. CLI looks up the token from `~/.first-tree/hub/agents/<name>/agent.yaml`. Used when token is not set explicitly. |
-| `FIRST_TREE_HUB_SERVER_URL` | Server URL override for messaging commands. Falls back to client config. |
+| `FIRST_TREE_HUB_ACCESS_TOKEN` | User member access JWT (short-lived). Injected by the runtime. |
+| `FIRST_TREE_HUB_AGENT_ID` | The agent's own UUID — the CLI uses it to identify the SENDER. |
+| `FIRST_TREE_HUB_CHAT_ID` | The chat the agent session is bound to. |
+| `FIRST_TREE_HUB_SERVER_URL` | Server URL override for `chat send` / `chat list` / `chat history`. Falls back to client config. |
 
-Resolution order for the agent token:
-
-1. `FIRST_TREE_HUB_AGENT_TOKEN` — explicit value
-2. `FIRST_TREE_HUB_AGENT` → lookup in `~/.first-tree/hub/agents/<name>/agent.yaml`
-3. Error
+The legacy `FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` env vars
+and `agent token bootstrap` are gone — connecting a machine writes a
+member JWT to `credentials.json` and every agent on that machine
+authenticates as the signed-in member.
 
 ### Onboard
 

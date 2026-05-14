@@ -26,7 +26,7 @@ don't have to remember either.
 
 ```bash
 # from repo root, first-time use
-./scripts/dev-cli.sh --rebuild client connect <hub-url> --token <t>
+./scripts/dev-cli.sh --rebuild connect <connect-token>
 
 # day-to-day
 ./scripts/dev-cli.sh client status
@@ -68,7 +68,7 @@ a CLI upgrade to silently rename people's prod service.
 ## When to use which knob
 
 - **`scripts/dev-cli.sh` with default home** — most testing, including
-  end-to-end `client connect` / `start` / `stop` / `restart` / `update`.
+  end-to-end `connect` / `client start` / `stop` / `restart` / `update`.
   Coexists with prod.
 - **Custom dev home via `FIRST_TREE_HUB_DEV_HOME=$HOME/.first-tree/hub-foo`**
   — when you want a second parallel dev install (e.g. one per branch).

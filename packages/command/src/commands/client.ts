@@ -6,11 +6,13 @@ import {
   DEFAULT_CONFIG_DIR,
   DEFAULT_DATA_DIR,
   DEFAULT_HOME_DIR,
+  getConfigValue,
   initConfig,
   loadAgents,
   readConfigFile,
   resetConfig,
   resetConfigMeta,
+  setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import {
   applyClientLoggerConfig,
@@ -58,7 +60,6 @@ import {
   uploadClientCapabilities,
 } from "../core/index.js";
 import { print } from "../core/output.js";
-import { registerConnectCommand } from "./connect.js";
 
 // WSL2 + WSLg over-mounts a mode=755 tmpfs onto /run/user/$UID, hiding the
 // systemd user-bus socket beneath. `systemctl --user` then fails with
@@ -76,11 +77,6 @@ function isWslDbusOvermount(reason: string): boolean {
 
 export function registerClientCommands(program: Command): void {
   const client = program.command("client").description("Client runtime — connect agents to the server");
-
-  // `client connect` — first-time setup: configure server URL, authenticate,
-  // and start the runtime. Registered here so all machine-level commands live
-  // under a single `client` subcommand group.
-  registerConnectCommand(client);
 
   client
     .command("start")
@@ -395,7 +391,7 @@ export function registerClientCommands(program: Command): void {
       const svc = getClientServiceStatus();
       if (svc.state === "not-installed") {
         print.line("\n  No background service installed.\n");
-        print.line("  Run `first-tree-hub client connect <url>` first.\n\n");
+        print.line("  Run `first-tree-hub connect <token>` first.\n\n");
         process.exit(1);
       }
       const res = restartClientService();
@@ -428,7 +424,7 @@ export function registerClientCommands(program: Command): void {
         } else if (svc.state === "inactive") {
           print.line(`  Service:  ✗ stopped (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})\n`);
         } else if (svc.state === "not-installed") {
-          print.line("  Service:  not installed — run `first-tree-hub client connect <url>`\n");
+          print.line("  Service:  not installed — run `first-tree-hub connect <token>`\n");
         } else {
           print.line(`  Service:  unknown (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})\n`);
         }
@@ -451,7 +447,7 @@ export function registerClientCommands(program: Command): void {
           print.line(`  Hub:      (could not read ${clientYaml}: ${msg.slice(0, 60)})\n`);
         }
       } else {
-        print.line("  Hub:      (not configured — run `first-tree-hub client connect <url>`)\n");
+        print.line("  Hub:      (not configured — run `first-tree-hub connect <token>`)\n");
       }
 
       // Auth health — local-only check on the persisted refresh token's `exp`
@@ -478,7 +474,7 @@ export function registerClientCommands(program: Command): void {
           }
         }
       } else {
-        print.line("  Auth:     (no credentials — run `first-tree-hub client connect <url>`)\n");
+        print.line("  Auth:     (no credentials — run `first-tree-hub connect <token>`)\n");
       }
 
       // Agents.
@@ -502,7 +498,7 @@ export function registerClientCommands(program: Command): void {
   // ── M1: Hub-level client management ────────────────────────────────
 
   client
-    .command("hub-list")
+    .command("list")
     .description("List clients on the Hub server")
     .option("--server <url>", "Hub server URL")
     .action(async (options: { server?: string }) => {
@@ -699,7 +695,7 @@ export function registerClientCommands(program: Command): void {
     });
 
   client
-    .command("hub-disconnect <clientId>")
+    .command("disconnect <clientId>")
     .description("Force-disconnect a client from the Hub server")
     .option("--server <url>", "Hub server URL")
     .action(async (clientId: string, options: { server?: string }) => {
@@ -720,6 +716,111 @@ export function registerClientCommands(program: Command): void {
         fail("DISCONNECT_ERROR", msg);
       }
     });
+
+  // ── client config — view / modify this machine's client.yaml ────────
+
+  const config = client.command("config").description("View and modify this machine's client.yaml");
+  const clientYamlPath = (): string => join(DEFAULT_CONFIG_DIR, "client.yaml");
+  const clientSchema = clientConfigSchema as Record<string, unknown>;
+
+  config
+    .command("show [key]")
+    .description("Show client.yaml — print all values, or a single key with dot-notation")
+    .option("--show-secrets", "Show secret values in plaintext")
+    .action((key: string | undefined, flags: { showSecrets?: boolean }) => {
+      const path = clientYamlPath();
+      if (key) {
+        const value = getConfigValue(path, key);
+        if (value === undefined) {
+          print.line(`  ${key}: (not set)\n`);
+          return;
+        }
+        const isSecret = isSecretField(clientSchema, key) && !flags.showSecrets;
+        const display = isSecret ? "***" : String(value);
+        print.line(`  ${key}: ${display}\n`);
+        return;
+      }
+      const values = readConfigFile(path);
+      if (Object.keys(values).length === 0) {
+        print.line(`  No config found at ${path}\n`);
+        return;
+      }
+      print.line(`\n  Config: ${path}\n\n`);
+      printFlat(values, clientSchema, "", flags.showSecrets ?? false);
+      print.line("\n");
+    });
+
+  config
+    .command("set <key> <value>")
+    .description("Set a value in client.yaml (dot-notation)")
+    .action((key: string, value: string) => {
+      let parsed: unknown = value;
+      if (value === "true") parsed = true;
+      else if (value === "false") parsed = false;
+      else if (/^\d+$/.test(value)) parsed = Number(value);
+      const path = clientYamlPath();
+      setConfigValue(path, key, parsed);
+      print.line(`  Set ${key} in ${path}\n`);
+    });
+
+  // `get` exists alongside `show` for scripts that previously called
+  // `first-tree-hub config get -c <key>` — same semantics as `show <key>`.
+  config
+    .command("get <key>")
+    .description("Get a value from client.yaml (alias for `show <key>`)")
+    .option("--show-secrets", "Show secret values in plaintext")
+    .action((key: string, flags: { showSecrets?: boolean }) => {
+      const path = clientYamlPath();
+      const value = getConfigValue(path, key);
+      if (value === undefined) {
+        print.line(`  ${key}: (not set)\n`);
+        return;
+      }
+      const isSecret = isSecretField(clientSchema, key) && !flags.showSecrets;
+      const display = isSecret ? "***" : String(value);
+      print.line(`  ${key}: ${display}\n`);
+    });
+}
+
+function printFlat(
+  obj: Record<string, unknown>,
+  schema: Record<string, unknown>,
+  prefix: string,
+  showSecrets: boolean,
+): void {
+  for (const [key, value] of Object.entries(obj)) {
+    const fullKey = prefix ? `${prefix}.${key}` : key;
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      printFlat(value as Record<string, unknown>, schema, fullKey, showSecrets);
+    } else {
+      const secret = isSecretField(schema, fullKey) && !showSecrets;
+      const display = secret ? "***" : String(value);
+      print.line(`  ${fullKey.padEnd(30)} ${display}\n`);
+    }
+  }
+}
+
+function isSecretField(schema: Record<string, unknown>, dotPath: string): boolean {
+  const parts = dotPath.split(".");
+  let current: unknown = schema;
+  for (const part of parts) {
+    if (current === null || current === undefined || typeof current !== "object") return false;
+    const obj = current as Record<string, unknown>;
+    if (obj._tag === "optional") {
+      current = (obj.shape as Record<string, unknown>)[part];
+    } else if (obj._tag === "field") {
+      return false;
+    } else {
+      current = obj[part];
+    }
+  }
+  if (typeof current === "object" && current !== null && "_tag" in current) {
+    const field = current as { _tag: string; options?: { secret?: boolean } };
+    if (field._tag === "field") {
+      return field.options?.secret ?? false;
+    }
+  }
+  return false;
 }
 
 function timeSince(isoDate: string): string {

@@ -39,7 +39,7 @@ export const declineUpdate: UpdatePromptFn = async () => false;
  * relaunch picks up the new binary.
  *
  * `managed=false` means the process is running standalone (e.g. manual
- * `client start`, `client connect --no-service`, CI without a supervisor).
+ * `client start`, `connect <token> --no-service`, CI without a supervisor).
  * Exiting in that mode would leave the client offline until an operator
  * noticed — so the callback instead prints a restart hint, returns
  * `{ installed: true }`, and the UpdateManager stops retrying until the

@@ -186,7 +186,7 @@ export function buildZodSchema(shape: Record<string, unknown>): z.ZodType {
   return z.object(zodShape);
 }
 
-// ── Config metadata (for `config list`) ──────────────────────────────
+// ── Config metadata (for `client config show`) ───────────────────────
 
 export type ConfigMeta = Map<string, ResolvedFieldInfo>;
 

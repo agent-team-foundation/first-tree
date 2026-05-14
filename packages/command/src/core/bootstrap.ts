@@ -35,7 +35,7 @@ export function resolveServerUrl(flagValue?: string): string {
   throw new Error(
     "Server URL not configured.\n" +
       "  Provide via: --server <url>, FIRST_TREE_HUB_SERVER_URL env var, or\n" +
-      "  first-tree-hub config set -c server.url <url>",
+      "  first-tree-hub client config set server.url <url>",
   );
 }
 
@@ -43,14 +43,14 @@ export function resolveServerUrl(flagValue?: string): string {
  * Resolve the current member access JWT from persisted credentials.
  *
  * Unified-user-token milestone: the CLI has a single credential store and a
- * single onboarding path (`first-tree-hub client connect`). The legacy
+ * single onboarding path (`first-tree-hub connect <token>`). The legacy
  * `FIRST_TREE_HUB_TOKEN` env var is no longer read — callers get a clear
- * error pointing at `client connect` instead.
+ * error pointing at `connect <token>` instead.
  */
 export function resolveAccessToken(): string {
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error("No credentials found. Run `first-tree-hub client connect <server-url>` to sign in.");
+    throw new Error("No credentials found. Run `first-tree-hub connect <token>` to sign in.");
   }
   return creds.accessToken;
 }
@@ -139,7 +139,7 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
   const minValidityMs = opts?.minValidityMs ?? DEFAULT_MIN_VALIDITY_MS;
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error("No credentials found. Run `first-tree-hub client connect <server-url>` to sign in.");
+    throw new Error("No credentials found. Run `first-tree-hub connect <token>` to sign in.");
   }
 
   if (!isTokenStale(creds.accessToken, minValidityMs)) {
@@ -211,7 +211,7 @@ function isTokenStale(token: string, minValidityMs: number): boolean {
  * calls the file is empty, and a concurrent `loadCredentials()` (e.g. a
  * background daemon refreshing while the user runs a foreground CLI command)
  * reads "" → `JSON.parse` throws → we fall back to "no credentials" and
- * surface a misleading "run `client connect` again" error. write-to-temp +
+ * surface a misleading "run `connect <token>` again" error. write-to-temp +
  * rename gives readers an all-or-nothing view: they see the old file or the
  * new file, never a half-written one. Server-side the sliding-window design
  * already accepts last-writer-wins semantics for the refresh token itself

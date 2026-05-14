@@ -53,7 +53,7 @@ export function rotateClientIdWithBackup(configDir: string): {
 
 /**
  * Shared handler for `CLIENT_ORG_MISMATCH` across CLI entry points
- * (`client start` and `client connect --no-service`). Prompts interactively,
+ * (`client start` and `connect <token> --no-service`). Prompts interactively,
  * rotates the local clientId, and always exits the current process — the
  * runtime is already poisoned (wrong clientId in memory), so continuing
  * in-band is not safe. Service-supervised (managed) runs skip the prompt and

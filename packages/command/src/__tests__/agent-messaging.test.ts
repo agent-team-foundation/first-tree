@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveReplyToFromEnv, resolveSenderName } from "../core/agent-messaging.js";
 
 /**
- * Pins the env-based `replyTo` inference used by `agent send`. The rule has
+ * Pins the env-based `replyTo` inference used by `chat send`. The rule has
  * three axes (env complete? override present? explicit vs fallback?) — each
  * test pins one. See proposals/hub-agent-messaging-reply-and-mentions §3.2.
  */
@@ -52,7 +52,7 @@ describe("resolveReplyToFromEnv", () => {
 });
 
 /**
- * Pins sender resolution for `agent send` (and every other agent-scoped CLI
+ * Pins sender resolution for `chat send` (and every other agent-scoped CLI
  * command) on a multi-agent client. Issue #192: when a single machine runs
  * more than one agent, the agent sub-process used to have to thread
  * `--agent <name>` into every CLI call, which trips up LLMs that don't
