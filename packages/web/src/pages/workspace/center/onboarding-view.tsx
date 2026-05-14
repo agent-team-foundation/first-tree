@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useAuth } from "../../../auth/auth-context.js";
 import { readStep1Confirmed, writeStep1Confirmed } from "../../../utils/onboarding-flags.js";
+import { isAutoNamedTeam } from "../../../utils/onboarding-team-name.js";
 import { Step1Body } from "./onboarding/step1-body.js";
 import { Step2Body } from "./onboarding/step2-body.js";
 import { Step3IntroBody } from "./onboarding/step3-intro-body.js";
@@ -72,14 +73,16 @@ export function OnboardingView() {
   // doesn't apply.
   const canRenameTeam = role === "admin";
 
-  // Auto-generated default produced by `completeOauthFlow` for a fresh solo
-  // signup is `${profile.login}'s team`. The web `/me` user.username mirrors
-  // `profile.login` for the first user from a given GitHub login; later
-  // collisions get a hex suffix and would not match here — that's the
-  // intended fallthrough (rare collision case skips Step 1 silently rather
-  // than nagging the user about a team they didn't auto-create themselves).
+  // Auto-generated default produced by `completeOauthFlow` for a fresh
+  // signup is `` `${profile.login}'s team` `` (original GitHub casing).
+  // `users.username` is normalized to lowercase though, so the compare
+  // happens case-insensitively — see `isAutoNamedTeam` for the full
+  // rationale (the lowercase/casing skew is what matters for the typical
+  // mixed-case GitHub login; the hex-suffix collision branch is a known
+  // accepted false negative). PR #377 review caught the case-sensitivity
+  // regression.
   const login = user?.username ?? null;
-  const teamHasDefaultName = !!login && !!teamDisplayName && teamDisplayName === `${login}'s team`;
+  const teamHasDefaultName = isAutoNamedTeam(teamDisplayName, login);
 
   const body = useMemo<ResolvedBody>(() => {
     if (stepOverride === "team" && canRenameTeam) return "step1";
