@@ -14,22 +14,20 @@ type EngagementActionsArgs = {
 };
 
 function actionsFor({ status, hasUnread, runEngagement, runMarkUnread }: EngagementActionsArgs): RowAction[] {
-  const markUnread: RowAction = {
-    key: "mark-unread",
-    label: "Mark as unread",
-    disabled: hasUnread,
-    onSelect: runMarkUnread,
-  };
   if (status === ACTIVE) {
     return [
-      markUnread,
+      // Mark-as-unread is only offered on ACTIVE rows. ARCHIVED rows intentionally
+      // omit it: re-surfacing an archived chat is the Unarchive action's job, and
+      // a silent "unread but still hidden under Archived" state would diverge from
+      // the existing fan-out path that auto-revives archived → active on a new
+      // message.
+      { key: "mark-unread", label: "Mark as unread", disabled: hasUnread, onSelect: runMarkUnread },
       { key: "archive", label: "Archive", onSelect: () => runEngagement(ARCHIVED) },
       { key: "delete", label: "Delete", destructive: true, onSelect: () => runEngagement(DELETED) },
     ];
   }
   if (status === ARCHIVED) {
     return [
-      markUnread,
       { key: "unarchive", label: "Unarchive", onSelect: () => runEngagement(ACTIVE) },
       { key: "delete", label: "Delete", destructive: true, onSelect: () => runEngagement(DELETED) },
     ];

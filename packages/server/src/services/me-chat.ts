@@ -800,6 +800,15 @@ export async function markMeChatRead(db: Database, chatId: string, humanAgentId:
  * if the row already has a positive count, it stays as-is. `last_read_at`
  * is intentionally untouched — this is a UI affordance, not a "rewind the
  * read cursor" operation.
+ *
+ * Contract note — semantic overload: the column is named `unread_mention_count`
+ * but is co-opted here as a generic "manual unread" flag. Every existing
+ * consumer (conversation list bold styling, `?filter=unread`, source-counts,
+ * the bell badge) only checks `> 0`, so the exact value carries no meaning
+ * for callers. If a future feature ever renders the literal mention count
+ * (e.g. a "N mentions" pill), it must NOT read this column directly — it
+ * needs a separate mention-only counter, otherwise a manually-marked-unread
+ * chat would show a fictitious "1 mention".
  */
 export async function markMeChatUnread(
   db: Database,
