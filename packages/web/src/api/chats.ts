@@ -80,10 +80,24 @@ export type ImageRefContent = {
  */
 type SendFileMessageBody = FileMessageContent & { imageId?: string };
 
-export function sendFileMessage(chatId: string, content: SendFileMessageBody): Promise<Message> {
+/**
+ * Optional message metadata for a file send. Today only `mentions` is wired
+ * — it lets a multi-image send carry the @-mentions parsed from the user's
+ * accompanying text so the server's group-chat mention guard accepts each
+ * image POST. Without this, the image messages arrive with no addressees and
+ * are rejected before the text is sent (issue 387).
+ */
+export type SendFileMessageMetadata = { mentions?: string[] };
+
+export function sendFileMessage(
+  chatId: string,
+  content: SendFileMessageBody,
+  metadata?: SendFileMessageMetadata,
+): Promise<Message> {
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "file",
     content,
+    ...(metadata?.mentions && metadata.mentions.length > 0 ? { metadata } : {}),
   });
 }
 
