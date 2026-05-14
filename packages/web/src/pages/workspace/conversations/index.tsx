@@ -477,7 +477,7 @@ export function ConversationList({
                   right: "var(--sp-3)",
                 }}
               >
-                <RowEngagementMenu chatId={row.chatId} status={row.engagementStatus} />
+                <RowEngagementMenu chatId={row.chatId} status={row.engagementStatus} hasUnread={hasUnread} />
               </div>
             </div>
           );
