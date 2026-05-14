@@ -208,10 +208,11 @@ chatDetailSchema = chatSchema.extend({
 
 #### 4.4.3 从 chat 移除 agent
 
-| 被移除 agent 的 space | 谁能移除 |
-|---|---|
-| `personal` | 仅 owner；或在 owner 已退出该 chat 后，chat 内任何成员可移除该 personal agent（避免僵尸成员） |
-| `team` | chat admin / agent 自移除 |
+> **(V2 / Out of Scope)** V1 范围**不支持任何 chat membership 的实际移除** —— 包括 agent 自移除、human 离开、admin 移除、owner 移除自己的 personal agent。
+>
+> 这是一个有意识的范围收窄：当前 `chat_engagement` 的 `active / archived / deleted` 是 **per-user 视图状态**（每个用户独立隐藏 / 归档 chat），不删 `chat_membership` 记录。真正的 membership 移除是 V2 议题。
+>
+> **产品风险记录**：参与者移除是 §4.5 "邀请即同意" 中 **Revocable** 性质的载体。V1 不支持意味着 owner 一旦把 personal agent 拉进群就**没有撤回通道**，新用户上手会犹豫。V2 路线图应优先排期。
 
 #### 4.4.4 Promote（personal → team）
 - 仅 owner 可执行
@@ -219,12 +220,13 @@ chatDetailSchema = chatSchema.extend({
 - UI 必须显式提示行为后果：
   > "Publishing makes this agent discoverable to all organization members. Anyone will be able to find it, search it, and add it to chats."
 - 幂等
+- **Publish 不影响已有 chat membership**；但 publish 后该 agent 立即对所有 org 成员可发现（roster / picker / search 都会出现）。其他 chat 成员可能在自己的 team agent 列表里"突然"看到它 —— 这是预期行为，对应 §4.4.1 "publish 是一次显式的产品决策"
 
 #### 4.4.5 Demote（team → personal）
 - 仅 owner 可执行
-- **前置条件**：该 agent 当前不在任何 group chat 中
-  - 若不满足：要求 owner 先决定 (a) 一键退出所有 group chat 再 demote；或 (b) 取消操作
-- 1:1 chat **不阻塞** demote —— 已建立的 1:1 不会因为对方 demote 而失效，仍是双方私有对话
+- 不需要团队审批
+- 1:1 chat 不阻塞 demote
+- **Demote 不回溯已有 group chat membership** —— agent 仍以当前 membership 停留在那些 chat 中，chat 内成员继续按 membership 渲染 identity（核心不变量满足）。但 demote 之后任何**新增** chat 仍受 §4.4.2 owner-exclusive 约束，其他人不能再把它拉进新 chat
 
 ### 4.5 信任边界："邀请即同意"
 
@@ -237,11 +239,13 @@ chatDetailSchema = chatSchema.extend({
 | 性质 | 含义 |
 |---|---|
 | **Scoped** | 同意仅限被邀请进的那个 chat —— **不**意味着对组织全员公开 |
-| **Revocable** | Owner 可随时把它移出 chat，"撤回同意" |
+| **Revocable** *(V2 — V1 暂不支持)* | Owner 可随时把它移出 chat，"撤回同意"。**V1 不实现**（参见 §4.4.3）—— 暴露后不可撤回。V2 单独 RFC 补 |
 | **Owner-exclusive** | 别人无法替 owner 做这个决定 —— 他们在 picker 里都看不到这个 personal agent，服务端校验也会拒绝 |
 | **Non-transitive** | A chat 内的其他成员**不能**把这个 personal agent "转邀请"进 B chat —— 邀请权始终归 owner |
 
 这条原则把"暴露范围"的控制权**完全锁在 owner 手里**，同时不阻碍 "manager 拉自己 agent 进群" 这种最自然的用法。
+
+> **V1 范围提醒**：Revocable 缺位意味着 owner 邀请 = **一次性、不可撤销** 的暴露动作。UI 应在 add-participant 时显式提示："Bringing this agent into the chat is final in V1 — you can't remove it later." 这是 V1 的产品代价，V2 必须补齐。
 
 ### 4.6 默认值的选择：`personal`
 
@@ -260,12 +264,12 @@ chatDetailSchema = chatSchema.extend({
 | Personal agent 在群里：对所有人可见 vs 仅对 owner 可见？ | **对所有 chat 成员可见**（identity = membership 的派生）；这是 "邀请即同意" 的直接含义 |
 | Personal agent 主动 outbound DM 给陌生人 | **禁止**（Out-of-scope，后续 RFC）—— Personal agent 只能在 owner 已在场的 chat 内发言，或回应已发起的会话；主动联系陌生人破坏 personal 的语义边界 |
 | Team admin 能看到其他成员的 personal agent 列表吗？ | **不能**。Admin 是治理/运维角色，不是隐私豁免角色。审计需求走独立的 audit log 子系统，不污染 discovery filter |
-| Personal agent 历史消息中的名字（agent 后来被移除/删除）| **Snapshot at message time** —— 消息体内存储发送时的 `displayName` 快照，不依赖事后 lookup |
-| Owner 离职 / 账户失效 | Personal agent 进入"孤儿"状态。运维操作：管理员可一键 transfer ownership 或归档；UI 在 chat 内继续显示该 agent 但 disable 配置入口 |
-| Personal agent 跨 owner 转让 | `space` 不变（仍是 personal），换 `managerId`；现有 chat 关系不动 |
-| Owner 从 chat 退出 | **他带进来的 personal agent 一起退出**（personal 是 owner 的延伸；owner 不在场，他的 personal agent 不应留下） |
-| Owner 退出但其他人想留下他的 personal agent | 不允许 —— 想留下，先 promote 成 team |
-| 团队解散 / 组织删除 | Personal agent 跟随 owner 转出（如果支持跨 org 转移），否则一并删除 |
+| Personal agent 历史消息中的名字（agent 后来被移除/删除）*(V2)* | **Snapshot at message time** —— 消息体内存储发送时的 `displayName` 快照，不依赖事后 lookup。V1 由 identity map 兜底渲染 |
+| Owner 离职 / 账户失效 *(V2)* | Personal agent 进入"孤儿"状态。运维操作：管理员可一键 transfer ownership 或归档；UI 在 chat 内继续显示该 agent 但 disable 配置入口。V1 因不支持 membership 移除，孤儿 personal agent 仍以历史 membership 留在群里 |
+| Personal agent 跨 owner 转让 *(V2)* | `space` 不变（仍是 personal），换 `managerId`；现有 chat 关系不动 |
+| Owner 从 chat 退出 *(V2)* | 设计上 owner 退出 chat 应级联带走他的 personal agent（owner 不在场，他的 personal agent 不应留下）。**V1 不支持 chat membership 移除**，所以此场景在 V1 不可达 —— 待 V2 实现 leave/remove 后补 hook |
+| Owner 退出但其他人想留下他的 personal agent *(V2)* | 不允许 —— 想留下，先 promote 成 team。同上 V2 议题 |
+| 团队解散 / 组织删除 *(V2)* | Personal agent 跟随 owner 转出（如果支持跨 org 转移），否则一并删除 |
 | 1:1 chat 中对方是其他人的 personal agent | 合法 —— 1:1 是已建立的私有通道；与 group 的 "邀请即同意" 等价（owner 发起 1:1 = 同意暴露给对方） |
 
 ### 4.8 验证 ① — 不变量与"不可表达的坏状态"
@@ -279,8 +283,8 @@ chatDetailSchema = chatSchema.extend({
 | "看不见的 agent 在静默读群消息" | 进 chat 触发 system message + 出现在 participants header；没有"隐身参与者"概念 |
 | "别人替我把我的 personal agent 拉进群" | 他们在 picker 里都看不到我的 personal agent；服务端校验同时拒绝 |
 | "Personal agent 出现在某人的 team roster" | `space` 字段直接驱动 discovery query；team roster 仅查 `space='team'` |
-| "我离开了 chat，但我的 personal agent 留在群里继续发言" | Owner-leaves-chat hook 自动级联移除其 personal agents |
-| "Demote 一个还在 group chat 里的 team agent，结果它瞬间不可见" | Demote 前置条件校验拒绝；UI 强制用户先决定退群 |
+| "我离开了 chat，但我的 personal agent 留在群里继续发言" *(V2)* | V2 落地 leave/remove 后由 owner-leaves-chat hook 自动级联移除。**V1**：因不支持 membership 移除，此场景在 V1 也不可达（owner 进了就出不去），暂不构成 bug —— 但 V2 必须同时落地 leave + hook |
+| "Demote 一个还在 group chat 里的 team agent，结果它瞬间不可见" | Demote 不回溯已有 membership（参见 §4.4.5）—— chat 内 identity 仍按 membership 渲染，agent 仍在群里；只是不能被新成员发现/添加进新 chat。无"瞬间不可见"问题 |
 
 ### 4.9 验证 ② — 与现实直觉的对齐
 
@@ -302,19 +306,22 @@ chatDetailSchema = chatSchema.extend({
 | 服务端 `extractMentions(content, participants)` 用 `chat_membership`、不查 visibility | **已经符合本模型** —— 服务端信任边界本来就对，bug 只在前端 |
 | `chatParticipantDetailSchema` 已存在，注释明确为 mention 服务 | **设计意图本来就是本模型** —— 只是 `chatDetailSchema.participants` 没正确使用它 |
 | `agentVisibilityCondition` 用于 `/agents`、`/activity` | **正确，保留** —— 它本来就该只服务于 discovery，文档化这个约束即可（改名为 `agentDiscoveryScope` 更准确） |
-| 前端 `useAgentIdentityMap` 走 visibility-filtered `/agents` | **保留作兜底**（覆盖非 chat 上下文：自己、历史成员、跨 org agent）；主路径改为读 `participants[i].name/displayName` |
+| 前端 `useAgentIdentityMap` 走 visibility-filtered `/agents` | **保留作兜底**，覆盖：(a) 自己；(b) 历史消息中 sender 已不在当前 chat membership 的情况（最终方案是 §4.7 的 displayName snapshot，在 P2 落地之前由 identity map 兜底）；(c) 跨 org agent。主路径改为读 `participants[i].name/displayName` |
 | `managerId` 字段 | **保留**，含义不变（owner） |
 | `chat_membership` 表结构 | **保留**，不动 |
 | `ParticipantsHeader` UUID 兜底逻辑（`id.slice(0, 8)`）| **删除** —— 本模型下不会发生 `ident === null` 的情况 |
 
 > 现有代码的多个独立片段都隐含地实现了本模型的局部，只是没系统化。**这次设计是把"服务端已经有的信任边界"补全到前端，并清理 visibility 字段被滥用的多重职责。**
 
-### 4.11 Out of Scope
+### 4.11 Out of Scope / V2 议题
 
 以下需求本 RFC 显式**不解**，后续单独议：
 
-| 议题 | 为什么不在本 RFC 内 |
+| 议题 | 为什么不在本 RFC 内 / V1 内 |
 |---|---|
+| **🔴 Chat membership 实际移除**（agent leave / human leave / admin remove / owner remove）**[V2 高优]** | V1 范围决定不做。当前 `chat_engagement` 只支持 per-user 视图状态（active/archived/deleted），不删 `chat_membership` 记录。这是 §4.5 Revocable 性质的载体 —— V2 必须优先排期补 |
+| **Message displayName snapshot**（消息体内嵌发件人名快照） | §4.7 标 V2；在 P2 落地之前由 identity map 兜底渲染历史 sender |
+| **Owner 离职 / 孤儿 personal agent 处理** | 依赖 membership 移除能力落地；V2 一并补 |
 | **真·机密级 agent**（连进 chat 都需要审批/受限） | 是另一条正交轴，建议加独立 `confidential` flag，不与 `space` 混 |
 | **Personal agent 跨 owner 的 P2P 通信** | 涉及 personal 语义边界的扩展，需独立隐私设计 RFC |
 | **Multi-owner / coManagers** | 涉及 `managerId` → `managers[]` 重构，独立 RFC |
@@ -333,8 +340,8 @@ chatDetailSchema = chatSchema.extend({
 - [ ] **server 测试**：补一个 case —— 群内有 private agent 且 caller 不是其 manager 时，`GET /chats/:id` 返回的 participants 包含其完整 name/displayName
 - [ ] **web `chat-view.tsx:873-904`**：autocomplete 候选构造时，对 `chatDetail.participants` 直接读 `p.name / p.displayName`，不再过 `agentIdentity()`；只对 `activity.agents` 段继续用 identity map
 - [ ] **web `chat-view.tsx:1670-1692`** `ParticipantsHeader`：渲染 chip 时优先用 participant 自带的 name；identity map 仅做"自己 / 历史成员"兜底
-- [ ] **web 测试**：autocomplete + ParticipantsHeader 各加一个集成测试，覆盖"群里有不归我管的 private agent"
-- [ ] **回归测试**：消息列表里 sender 是别人 private agent 时显示真名（是否同源问题待验，可能要扩到 message schema）
+- [ ] **web 消息列表 sender 名（同源 bug，明确 P0）**：`TextRow` / 消息列表里 `senderName = agentNameFn(msg.senderId)` 当前走 visibility-filtered `useAgentNameMap`；需要改为优先读 chat-scoped 的 `chatDetail.participants[i].displayName`（同 ParticipantsHeader 的修法），identity map 退到兜底。**修 #372 必须同步修这条**，否则 autocomplete + chip 修好后，群消息列表里 sender 仍可能显示 UUID — 修了一半的体验
+- [ ] **web 测试**：autocomplete + ParticipantsHeader + 消息列表 sender 三处各加集成测试，覆盖"群里有不归我管的 private agent"
 
 ### P1 — 落地 discovery 侧 + 改名澄清语义
 
@@ -342,9 +349,7 @@ chatDetailSchema = chatSchema.extend({
 - [ ] **shared schemas / types**：`AGENT_VISIBILITY` → `AGENT_SPACE`；导出名同步更新（注意保留旧导出别名一段时间方便迁移）
 - [ ] **server `access-control.ts`**：`agentVisibilityCondition` 改名 `agentDiscoveryScope`，语义保持（`space=team OR ownerId=me`），但**明确文档：只用于 discovery，不应用于 chat-scoped queries**
 - [ ] **server add-participant API**：`POST /chats/:id/participants` 新增校验 —— 如果被加入 agent 的 `space=personal`，必须由其 owner 添加；否则 403
-- [ ] **server remove-participant API**：personal agent 仅 owner 可移除（admin 例外可选）
-- [ ] **server owner-leaves-chat hook**：owner 退出 chat 时级联移除其 personal agents
-- [ ] **server demote 前置校验**：`PATCH /agents/:id` 把 `space=team` 改 `space=personal` 时拒绝（若该 agent 仍在 group chat 中），返回需要处理的 chat 列表
+- [ ] **web add-participant 提示文案（V1 一次性暴露提醒）**：UI 在拉 personal agent 进群时显式提示 "Bringing this agent into the chat is final in V1 — you can't remove it later"（对应 §4.5 Revocable V1 缺位）
 - [ ] **web agent 设置 UI**：toggle 文案改为 "Space: Personal / Team"，加 helper text：
   > Personal: only you can find and address this agent. You can bring it into any chat you're part of — everyone in that chat will see it normally.
   > Team: discoverable to everyone in your organization.
@@ -353,16 +358,24 @@ chatDetailSchema = chatSchema.extend({
 
 ### P2 — 修补遗留与边界
 
-- [ ] **历史消息 name 显示**：评估是否把 message 里的 sender displayName snapshot 进消息体（避免移除后历史 UUID 化）
-- [ ] **agent 详情页加 "Visible in chats" 反向列表**：让 owner 直观看到自己 personal agent 被暴露在哪些 chat 里
-- [ ] **现有 leak 状态盘点**：扫一遍当前 production 数据，是否有 `visibility=private` 的 agent 在 group chat 里 + 群里有非 manager 成员的情况；列清单，给对应 manager 弹一次 "你之前把 X 加进了 Y 群，是否要 Publish to team / Remove from chat" 的决策卡片
-- [ ] **Confidential flag（如果有需求）**：独立于 space 的额外 flag，启用后即使 owner 也不能拉进任何含非授权成员的 chat（模型预留接口，不做实现）
+- [ ] **agent 详情页加 "Visible in chats" 反向列表**：让 owner 直观看到自己 personal agent 被暴露在哪些 chat 里（也是 V2 撤回功能的入口前置）
+- [ ] **现有 leak 状态盘点（read-only）**：扫一遍当前 production 数据，统计有多少 `visibility=private` 的 agent 在 group chat 里 + 群里有非 manager 成员；产出报表。**V1 不发决策卡片** —— 因为没有 Remove from chat 通道。V2 落地 remove 后再做用户侧决策卡片
 
 ### P3 — 文档与传达
 
 - [ ] **写一段 `docs/concepts/agent-space.md`** 解释 personal / team / membership 三件事的关系
 - [ ] **回 Issue #372**：贴出本 RFC 链接，cc yuezengwu / serena 一起 review
 - [ ] **changelog 提示**：visibility → space 迁移对 API 消费者（CLI、外部脚本）的影响清单
+
+### V2 Backlog（V1 不做，但 RFC 已明确路径）
+
+- [ ] **🔴 Chat membership 实际移除**（agent leave / human leave / admin remove / owner remove）—— **§4.5 Revocable 性质的载体，V2 高优先级**
+- [ ] **Owner-leaves-chat hook**：owner 退出 chat 时级联移除其 personal agents（依赖上一项落地）
+- [ ] **Remove-participant API personal 校验**：personal agent 仅 owner 可移除（admin 例外可选；依赖上一项落地）
+- [ ] **Message displayName snapshot**：消息体内嵌发件人名快照，让历史消息 sender 渲染不依赖事后 lookup（§4.7 / §4.10 兜底的最终方案）
+- [ ] **Confidential flag**：独立于 space 的额外 flag（如果产品有需求）
+- [ ] **Owner 离职 / 账户失效流程**：personal agent 孤儿化的运维处理（依赖 membership 移除能力落地）
+- [ ] **现有 leak 决策卡片**：基于 V2 落地的 remove 通道，给历史 leak 的 manager 发"Publish / Remove"决策卡（依赖 P2 read-only 报表 + V2 remove API）
 
 ---
 
