@@ -9,6 +9,11 @@ export const workspaceDocRefSchema = z.object({
 });
 export type WorkspaceDocRef = z.infer<typeof workspaceDocRefSchema>;
 
+export const documentContextSchema = z.object({
+  basePath: z.string().trim().min(1),
+});
+export type DocumentContext = z.infer<typeof documentContextSchema>;
+
 export const getMeDocSchema = z.object({
   agentId: z.string().trim().min(1),
   basePath: z.string().trim().optional(),

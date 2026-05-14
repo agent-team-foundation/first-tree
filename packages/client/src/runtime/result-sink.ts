@@ -1,3 +1,4 @@
+import { documentContextSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { ParticipantCache } from "./agent-io.js";
 import type { AgentIdentity } from "./handler.js";
@@ -62,7 +63,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     const metadata: Record<string, unknown> = {};
     const documentBasePath = await deps.getDocumentBasePath?.();
     if (documentBasePath) {
-      metadata.documentContext = { basePath: documentBasePath };
+      metadata.documentContext = documentContextSchema.parse({ basePath: documentBasePath });
     }
 
     // Default-mention the trigger sender so the server's fan-out wakes them

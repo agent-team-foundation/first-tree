@@ -42,6 +42,8 @@ type PendingMessage = {
 };
 
 function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload): string | null {
+  // A single repo has an unambiguous markdown-link root. Multi-repo workspaces
+  // need path-prefix matching before we can safely choose a base path.
   if (payload.gitRepos.length !== 1) return null;
   const repo = payload.gitRepos[0];
   if (!repo) return null;
@@ -786,7 +788,7 @@ export class SessionManager {
   private async resolveDocumentBasePath(log: (msg: string) => void): Promise<string | null> {
     if (!this.config.agentConfigCache) return null;
     try {
-      const { payload } = await this.config.agentConfigCache.refresh(this.config.agentIdentity.agentId);
+      const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
       return documentBasePathFromRuntimeConfig(payload);
     } catch (err) {
       log(`document preview base path unavailable: ${err instanceof Error ? err.message : String(err)}`);

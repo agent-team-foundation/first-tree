@@ -1,5 +1,6 @@
 import {
   CHAT_ENGAGEMENT_STATUSES,
+  documentContextSchema,
   extractMentions,
   type MentionParticipant,
   type QuestionAnswerMessageContent,
@@ -355,7 +356,6 @@ function TextRow({
 
           event.preventDefault();
           const next = new URLSearchParams(searchParams);
-          next.delete("doc");
           next.set("docChat", msg.chatId);
           next.set("docAgent", msg.senderId);
           next.set("docPath", docPath);
@@ -368,7 +368,7 @@ function TextRow({
         };
 
         return (
-          <a {...props} href={href} onClick={onClick}>
+          <a {...props} href={href} onClick={onClick} target="_blank" rel="noopener noreferrer">
             {children}
           </a>
         );
@@ -444,10 +444,8 @@ function TextRow({
 }
 
 function documentBasePathFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
-  const context = metadata?.documentContext;
-  if (!context || typeof context !== "object") return undefined;
-  const basePath = (context as { basePath?: unknown }).basePath;
-  return typeof basePath === "string" && basePath.trim().length > 0 ? basePath.trim() : undefined;
+  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
+  return parsed.success ? parsed.data.basePath : undefined;
 }
 
 function isInlineImageContent(content: unknown): content is FileMessageContent {

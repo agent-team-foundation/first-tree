@@ -8,6 +8,10 @@ import { requireChatAccess } from "../scope/require-resource.js";
 import { getMeDocPreview } from "../services/me-doc.js";
 
 export type MeDocsRouteOptions = {
+  /**
+   * Must point at the same workspaces directory used by agent runtimes; local
+   * file preview is unavailable when server and runtime storage diverge.
+   */
   workspacesRoot?: string;
 };
 

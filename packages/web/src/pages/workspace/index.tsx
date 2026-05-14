@@ -121,7 +121,6 @@ export function WorkspacePage() {
 }
 
 function clearDocPreviewParams(params: URLSearchParams): void {
-  params.delete("doc");
   params.delete("docChat");
   params.delete("docAgent");
   params.delete("docPath");

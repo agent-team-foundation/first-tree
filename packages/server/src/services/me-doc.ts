@@ -1,5 +1,5 @@
 import { readFile, realpath, stat } from "node:fs/promises";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { AppError, ForbiddenError, NotFoundError } from "../errors.js";
 
@@ -80,7 +80,7 @@ async function realpathOrNotFound(path: string): Promise<string> {
 
 function assertInsideWorkspace(workspaceRoot: string, target: string): string {
   const rel = relative(workspaceRoot, target);
-  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || resolve(rel) === rel) {
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new ForbiddenError("Document path must stay inside the agent workspace");
   }
   return rel.split(sep).join("/");

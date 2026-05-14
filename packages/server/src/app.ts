@@ -454,7 +454,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
-          await scope.register(meDocsRoutes);
+          await scope.register(meDocsRoutes, { workspacesRoot: config.workspace.root });
         }),
         { prefix: "" },
       );

@@ -1,5 +1,7 @@
+import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
+import { DEFAULT_DATA_DIR } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
@@ -34,6 +36,11 @@ export const serverConfigSchema = defineConfig({
      * `NODE_ENV === 'production'`.
      */
     publicUrl: field(z.string().optional(), { env: "FIRST_TREE_HUB_PUBLIC_URL" }),
+  },
+  workspace: {
+    root: field(z.string().default(join(DEFAULT_DATA_DIR, "workspaces")), {
+      env: "FIRST_TREE_HUB_WORKSPACES_ROOT",
+    }),
   },
   secrets: {
     jwtSecret: field(z.string(), {

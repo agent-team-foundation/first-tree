@@ -319,6 +319,8 @@ export {
   meChatSourceCountsSchema,
 } from "./schemas/me-chat.js";
 export {
+  type DocumentContext,
+  documentContextSchema,
   type GetMeDoc,
   type GetMeDocResponse,
   getMeDocResponseSchema,

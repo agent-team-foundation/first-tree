@@ -67,7 +67,6 @@ export function DocPreviewDrawer() {
 
   const close = useCallback(() => {
     const next = new URLSearchParams(searchParams);
-    next.delete("doc");
     next.delete("docChat");
     next.delete("docAgent");
     next.delete("docPath");
@@ -147,7 +146,7 @@ export function DocPreviewDrawer() {
         };
 
         return (
-          <a {...props} href={href} onClick={onClick}>
+          <a {...props} href={href} onClick={onClick} target="_blank" rel="noopener noreferrer">
             {children}
           </a>
         );
