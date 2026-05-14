@@ -30,7 +30,6 @@ import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
   asErrorPayload,
-  asToolCallPayload,
   listSessionEvents,
   type SessionEventRow,
 } from "../../../api/sessions.js";
@@ -41,6 +40,7 @@ import {
   QuestionMessage,
   type QuestionStatus,
 } from "../../../components/chat/question-message.js";
+import { WorkingBubble } from "../../../components/chat/working-bubble.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import {
   ambiguousDisplayNames,
@@ -71,21 +71,6 @@ function formatClockTime(iso: string): string {
   return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
 }
 
-function formatDuration(ms: number): string {
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${ms}ms`;
-}
-
-function previewArgs(args: unknown): string {
-  if (args === undefined || args === null) return "";
-  if (typeof args === "string") return args;
-  try {
-    return JSON.stringify(args);
-  } catch {
-    return "…";
-  }
-}
-
 function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: string | null }) {
   if (!myAgentId || msg.senderId !== myAgentId) return null;
   const status = msg.deliveryStatus ?? "sent";
@@ -107,77 +92,6 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
     <span className="mono text-caption" style={{ color: "var(--fg-4)" }} title="Sent">
       ✓ sent
     </span>
-  );
-}
-
-/**
- * Compact, single-line "status indicator" for a tool call. Per the chat-view
- * design, we don't show the tool's full args/result — only a "Using <name>…"
- * pulse while the turn is in progress. When the turn ends, the whole row is
- * hidden by the turn-grouping filter (see `activeSince` below).
- */
-function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
-  const payload = asToolCallPayload(event.payload);
-  if (!payload) return null;
-  const isErr = payload.status === "error";
-  const isPending = payload.status === "pending";
-  const color = isErr ? "var(--state-error)" : isPending ? "var(--state-blocked)" : "var(--fg-3)";
-  const verb = isErr ? "failed" : isPending ? "using" : "used";
-  return (
-    <div
-      className="mono flex items-center text-label"
-      style={{
-        gap: 8,
-        padding: "var(--sp-0_5) var(--sp-2)",
-        color: "var(--fg-3)",
-      }}
-    >
-      {isPending ? (
-        <span
-          aria-hidden
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            background: color,
-            animation: "heartbeat-pulse 1.2s ease-in-out infinite",
-            flexShrink: 0,
-            marginTop: 5,
-          }}
-        />
-      ) : (
-        <span aria-hidden style={{ color, flexShrink: 0 }}>
-          {isErr ? "⚠" : "↳"}
-        </span>
-      )}
-      <span
-        className="flex items-baseline"
-        style={{ color: "var(--fg-3)", minWidth: 0, flex: 1 }}
-        title={payload.args !== undefined && payload.args !== null ? previewArgs(payload.args) : undefined}
-      >
-        <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
-          {verb} <span style={{ color: "var(--fg-2)" }}>{payload.name}</span>
-        </span>
-        {payload.args !== undefined && payload.args !== null ? (
-          <span className="truncate" style={{ color: "var(--fg-4)", minWidth: 0, flex: 1 }}>
-            ({previewArgs(payload.args)})
-          </span>
-        ) : null}
-        {payload.durationMs !== undefined && !isPending ? (
-          <span
-            className="text-caption"
-            style={{
-              color: "var(--fg-4)",
-              marginLeft: 6,
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            · {formatDuration(payload.durationMs)}
-          </span>
-        ) : null}
-      </span>
-    </div>
   );
 }
 
@@ -232,40 +146,6 @@ function AssistantTextRow({
           {payload.text}
         </div>
       </div>
-    </div>
-  );
-}
-
-/**
- * Lightweight "Thinking…" pulse. The actual thinking content is never
- * transmitted — the backend emits a bare marker and we surface it as a
- * single-line status. Hidden once the turn ends.
- */
-function ThinkingRow({ event }: { event: SessionEventRow }) {
-  return (
-    <div
-      className="mono flex items-center text-label"
-      style={{
-        gap: 8,
-        padding: "var(--sp-0_5) var(--sp-2)",
-        color: "var(--fg-3)",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: "var(--accent)",
-          animation: "heartbeat-pulse 1.2s ease-in-out infinite",
-          flexShrink: 0,
-        }}
-      />
-      <span style={{ color: "var(--fg-3)" }}>thinking…</span>
-      <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-        {formatClockTime(event.createdAt)}
-      </span>
     </div>
   );
 }
@@ -601,7 +481,8 @@ type PendingImage = {
 
 type TimelineItem =
   | { kind: "message"; at: string; key: string; data: MessageWithDelivery }
-  | { kind: "event"; at: string; key: string; data: SessionEventRow };
+  | { kind: "event"; at: string; key: string; data: SessionEventRow }
+  | { kind: "workgroup"; at: string; key: string; events: SessionEventRow[] };
 
 /**
  * Renders a small "↗ View on GitHub" link beside the chat title when the chat
@@ -891,17 +772,41 @@ export function ChatView({
    * final result) are always visible; transient events go through the
    * turn-grouping filter so completed turns collapse to just their result
    * message. See `filterEventsForTimeline` for the full rules.
+   *
+   * Second pass collapses adjacent `tool_call` + `thinking` rows into a
+   * single `workgroup` entry — these become the inline WorkingBubble. Any
+   * non-bubble item (message, assistant_text, error) flushes the current
+   * bucket, so intermediate streamed text stays visible as its own row
+   * even when surrounded by tool calls.
    */
   const items: TimelineItem[] = useMemo(() => {
     const msgs = messagesData?.items ?? [];
     const visibleEvents = filterEventsForTimeline(eventsData?.items ?? []);
 
-    const out: TimelineItem[] = [
+    const flat: TimelineItem[] = [
       ...msgs.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
       ...visibleEvents.map((e) => ({ kind: "event" as const, at: e.createdAt, key: `e-${e.id}`, data: e })),
     ];
-    out.sort((a, b) => a.at.localeCompare(b.at));
-    return out;
+    flat.sort((a, b) => a.at.localeCompare(b.at));
+
+    const grouped: TimelineItem[] = [];
+    let bucket: SessionEventRow[] = [];
+    const flushBucket = () => {
+      const first = bucket[0];
+      if (!first) return;
+      grouped.push({ kind: "workgroup", at: first.createdAt, key: `wg-${first.id}`, events: bucket });
+      bucket = [];
+    };
+    for (const item of flat) {
+      if (item.kind === "event" && (item.data.kind === "tool_call" || item.data.kind === "thinking")) {
+        bucket.push(item.data);
+        continue;
+      }
+      flushBucket();
+      grouped.push(item);
+    }
+    flushBucket();
+    return grouped;
   }, [messagesData, eventsData]);
 
   /**
@@ -1313,19 +1218,19 @@ export function ChatView({
           )}
           <div className="flex flex-col" style={{ gap: 4 }}>
             {items.map((item) => {
+              if (item.kind === "workgroup") {
+                return <WorkingBubble key={item.key} events={item.events} defaultOpen={chatDetail?.type !== "group"} />;
+              }
               if (item.kind === "event") {
                 const ev = item.data;
                 switch (ev.kind) {
-                  case "tool_call":
-                    return <ToolCallStatusRow key={item.key} event={ev} />;
                   case "assistant_text":
                     return <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
-                  case "thinking":
-                    return <ThinkingRow key={item.key} event={ev} />;
                   case "error":
                     return <ErrorRow key={item.key} event={ev} />;
                   default:
-                    // turn_end is filtered upstream; any unknown kind is dropped.
+                    // tool_call / thinking are folded into the workgroup above;
+                    // turn_end is filtered upstream; anything else is dropped.
                     return null;
                 }
               }
