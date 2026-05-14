@@ -104,7 +104,9 @@ export function McpSection(props: McpSectionProps) {
 
 function describeMcp(m: McpServer): string {
   if (m.transport === "stdio") {
-    const args = m.args?.length ? ` ${m.args.map((arg) => JSON.stringify(arg)).join(" ")}` : "";
+    const args = m.args?.length
+      ? ` ${m.args.map((arg) => (/[\s"']/.test(arg) ? JSON.stringify(arg) : arg)).join(" ")}`
+      : "";
     return `${m.command}${args}`;
   }
   return m.url;
@@ -283,6 +285,9 @@ function McpDialog({ open, onOpenChange, initial, forbiddenNames, onSubmit }: Mc
               </div>
               <div className="space-y-2">
                 <Label htmlFor="mcp-args">Args (JSON array, optional)</Label>
+                <p className="text-caption text-muted-foreground">
+                  Each arg as a separate JSON string. Use this when an arg contains spaces or quotes.
+                </p>
                 <textarea
                   id="mcp-args"
                   value={argsText}
@@ -306,6 +311,9 @@ function McpDialog({ open, onOpenChange, initial, forbiddenNames, onSubmit }: Mc
               </div>
               <div className="space-y-2">
                 <Label htmlFor="mcp-headers">Headers (JSON object, optional)</Label>
+                <p className="text-caption text-muted-foreground">
+                  JSON object of request headers, for example auth headers required by the MCP server.
+                </p>
                 <textarea
                   id="mcp-headers"
                   value={headersText}
