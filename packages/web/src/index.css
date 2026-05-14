@@ -245,6 +245,11 @@
   --state-blocked: oklch(0.82 0.18 75);
   --state-error: oklch(0.68 0.22 25);
   --state-offline: oklch(0.5 0 0);
+  /* Unread / attention semantic. Aliased to --state-error today because
+     the two hues happen to coincide, but kept as a separate identifier so
+     "this is a notification" stays distinguishable from "this is a
+     destructive-action warning" at the consumer site. */
+  --state-unread: var(--state-error);
 
   --ok: oklch(0.72 0.17 150);
   --warn: oklch(0.82 0.18 75);
