@@ -33,6 +33,7 @@ import { StateChip } from "./../components/ui/state-chip.js";
 import { Tile } from "./../components/ui/tile.js";
 import { cn, formatDate } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
+import { getAgentTestActionState, isBindableClient } from "./agent-detail/action-state.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import { DangerZone } from "./agent-detail/danger-zone.js";
 import { EnvSection } from "./agent-detail/env-section.js";
@@ -146,6 +147,7 @@ export function AgentDetailPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflictMsg, setConflictMsg] = useState<string | null>(null);
   const [dangerError, setDangerError] = useState<string | null>(null);
+  const [remoteReloading, setRemoteReloading] = useState(false);
   // Flash an inline "Saved" check in the SaveBar for a short window after a
   // successful save. Cleared by any subsequent edit, error, or timer.
   const [justSaved, setJustSaved] = useState(false);
@@ -187,8 +189,8 @@ export function AgentDetailPage() {
 
   const resetDraftToConfig = draft.resetToConfig;
   const reloadRemote = useCallback(async () => {
-    setConflictMsg(null);
     setSaveError(null);
+    setRemoteReloading(true);
     try {
       const latest = await queryClient.fetchQuery({
         queryKey: ["agent-config", uuid],
@@ -198,6 +200,9 @@ export function AgentDetailPage() {
       resetDraftToConfig(latest);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRemoteReloading(false);
+      setConflictMsg(null);
     }
   }, [queryClient, uuid, resetDraftToConfig]);
 
@@ -387,8 +392,21 @@ export function AgentDetailPage() {
 
   const clientStatus: ClientStatusInfo | undefined = clientStatusQuery.data;
   const activeSessions = sessionsQuery.data?.length ?? 0;
-  const isUnclaimed = !isHuman && !clientStatus?.clientId;
+  const clientStatusInitialLoading = !isHuman && !clientStatus && clientStatusQuery.isLoading;
+  const clientStatusError =
+    clientStatusQuery.error instanceof Error
+      ? clientStatusQuery.error.message
+      : clientStatusQuery.error
+        ? "Unknown"
+        : null;
+  const isUnclaimed = !isHuman && clientStatusQuery.isSuccess && !clientStatus?.clientId;
   const isOffline = !isHuman && clientStatus ? !clientStatus.online && !!clientStatus.clientId : false;
+  const testAction = getAgentTestActionState({
+    agentStatus: agent.status,
+    clientStatus,
+    clientStatusLoading: clientStatusInitialLoading,
+    testPending: testMutation.isPending,
+  });
 
   const runtimeExt = agent as Record<string, unknown>;
   const runtimeState = (runtimeExt.runtimeState as string | null) ?? null;
@@ -546,7 +564,8 @@ export function AgentDetailPage() {
                     testMutation.reset();
                     testMutation.mutate();
                   }}
-                  disabled={testMutation.isPending}
+                  disabled={testAction.disabled}
+                  title={testAction.title}
                 >
                   <Play className="h-3 w-3" />
                   {testMutation.isPending ? "Testing…" : "Test"}
@@ -650,6 +669,8 @@ export function AgentDetailPage() {
                   <SetupSection
                     runtimeProvider={setupRuntimeProvider}
                     computerLabel={boundClientLabel}
+                    computerStatusLoading={clientStatusInitialLoading}
+                    computerStatusError={clientStatusError}
                     canBindComputer={isUnclaimed && agent.status === "active"}
                     bindComputerPending={bindClientMutation.isPending}
                     onBindComputer={() => setBindClientOpen(true)}
@@ -785,6 +806,7 @@ export function AgentDetailPage() {
             conflictMessage={conflictMsg}
             errorMessage={saveError}
             saving={saveMutation.isPending}
+            reloadingRemote={remoteReloading}
             justSaved={justSaved}
             onSave={() => saveMutation.mutate()}
             onDiscard={() => {
@@ -1018,7 +1040,7 @@ function BindClientList({
   selected: string;
   onSelect: (id: string) => void;
 }) {
-  const bindable = clients.filter((c) => c.status === "connected");
+  const bindable = clients.filter(isBindableClient);
   if (bindable.length === 0) {
     return (
       <div
@@ -1050,7 +1072,6 @@ function BindClientList({
     >
       {bindable.map((c) => {
         const picked = c.id === selected;
-        const online = c.status === "online" || c.status === "active";
         return (
           <li key={c.id} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
             <button
@@ -1066,7 +1087,7 @@ function BindClientList({
             >
               <span
                 className={cn("inline-block h-2 w-2 rounded-full shrink-0")}
-                style={{ background: online ? "var(--state-idle)" : "var(--fg-4)" }}
+                style={{ background: isBindableClient(c) ? "var(--state-idle)" : "var(--fg-4)" }}
                 aria-hidden
               />
               <span className="flex-1 min-w-0">

@@ -15,6 +15,8 @@ export type SetupSectionProps = {
   runtimeProvider: RuntimeProvider;
   /** Display label of the bound computer; null when no computer is bound yet. */
   computerLabel: string | null;
+  computerStatusLoading?: boolean;
+  computerStatusError?: string | null;
   /** Whether the "Bind computer" CTA should be shown (only when no client is bound and agent is active). */
   canBindComputer: boolean;
   bindComputerPending?: boolean;
@@ -45,6 +47,8 @@ export function SetupSection(props: SetupSectionProps) {
 
       <ComputerCard
         computerLabel={props.computerLabel}
+        statusLoading={props.computerStatusLoading ?? false}
+        statusError={props.computerStatusError ?? null}
         canBindComputer={props.canBindComputer}
         bindPending={props.bindComputerPending ?? false}
         onBindComputer={props.onBindComputer}
@@ -87,31 +91,48 @@ function RuntimeCard({ name, caption, locked }: { name: string; caption: string;
 
 function ComputerCard(props: {
   computerLabel: string | null;
+  statusLoading: boolean;
+  statusError: string | null;
   canBindComputer: boolean;
   bindPending: boolean;
   onBindComputer: (() => void) | undefined;
   onRebind: (() => void) | undefined;
 }) {
   const bound = !!props.computerLabel;
+  const canShowActions = !props.statusLoading && !props.statusError;
   return (
     <Panel>
       <PanelHeader>
         <PanelTitle>Bound computer</PanelTitle>
-        {props.canBindComputer && props.onBindComputer && !bound && (
-          <Button size="xs" variant="outline" onClick={props.onBindComputer} disabled={props.bindPending}>
+        {canShowActions && props.canBindComputer && props.onBindComputer && !bound && (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={props.onBindComputer}
+            disabled={props.bindPending}
+            title={props.bindPending ? "Binding computer…" : "Pick a connected computer for this agent"}
+          >
             <Link2 className="h-3 w-3" />
             {props.bindPending ? "Binding…" : "Bind computer"}
           </Button>
         )}
-        {bound && props.onRebind && (
-          <Button size="xs" variant="outline" onClick={props.onRebind}>
+        {canShowActions && bound && props.onRebind && (
+          <Button size="xs" variant="outline" onClick={props.onRebind} title="Move this agent to another computer">
             <Link2 className="h-3 w-3" />
             Re-bind
           </Button>
         )}
       </PanelHeader>
       <PanelBody className="text-body">
-        {bound ? (
+        {props.statusLoading ? (
+          <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+            Checking computer binding…
+          </p>
+        ) : props.statusError ? (
+          <p className="text-caption" style={{ color: "var(--state-error)" }}>
+            Could not verify computer binding: {props.statusError}
+          </p>
+        ) : bound ? (
           <div className="mono" style={{ color: "var(--fg-2)" }}>
             {props.computerLabel}
           </div>
