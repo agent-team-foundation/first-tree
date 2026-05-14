@@ -1,5 +1,6 @@
 import {
   CHAT_ENGAGEMENT_STATUSES,
+  documentContextSchema,
   extractMentions,
   type MentionParticipant,
   type QuestionAnswerMessageContent,
@@ -7,7 +8,9 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Components } from "react-markdown";
+import { useSearchParams } from "react-router";
 import { getActivityOverview } from "../../../api/activity.js";
 import {
   type FileMessageContent,
@@ -49,6 +52,7 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
+import { docPreviewPathFromHref } from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
@@ -327,8 +331,51 @@ function TextRow({
   myAgentId: string | null;
   agentNameFn: (id: string) => string;
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const senderName = agentNameFn(msg.senderId);
   const isSelf = myAgentId === msg.senderId;
+  const docBasePath = documentBasePathFromMetadata(msg.metadata);
+  const markdownComponents = useMemo<Components>(
+    () => ({
+      a({ href, children, ...props }) {
+        const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+          if (
+            !href ||
+            event.defaultPrevented ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.shiftKey
+          ) {
+            return;
+          }
+
+          const docPath = docPreviewPathFromHref(href);
+          if (!docPath) return;
+
+          event.preventDefault();
+          const next = new URLSearchParams(searchParams);
+          next.set("docChat", msg.chatId);
+          next.set("docAgent", msg.senderId);
+          next.set("docPath", docPath);
+          if (docBasePath) {
+            next.set("docBase", docBasePath);
+          } else {
+            next.delete("docBase");
+          }
+          setSearchParams(next);
+        };
+
+        return (
+          <a {...props} href={href} onClick={onClick} target="_blank" rel="noopener noreferrer">
+            {children}
+          </a>
+        );
+      },
+    }),
+    [docBasePath, msg.chatId, msg.senderId, searchParams, setSearchParams],
+  );
 
   return (
     <div
@@ -372,8 +419,10 @@ function TextRow({
             />
           ) : msg.format === "file" && isImageRefContent(msg.content) ? (
             <ImageFromRef content={msg.content} />
-          ) : msg.format === "text" ? (
-            <Markdown>{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}</Markdown>
+          ) : msg.format === "text" || msg.format === "markdown" ? (
+            <Markdown components={markdownComponents}>
+              {typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}
+            </Markdown>
           ) : (
             <pre
               className="mono text-label"
@@ -392,6 +441,11 @@ function TextRow({
       </div>
     </div>
   );
+}
+
+function documentBasePathFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
+  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
+  return parsed.success ? parsed.data.basePath : undefined;
 }
 
 function isInlineImageContent(content: unknown): content is FileMessageContent {

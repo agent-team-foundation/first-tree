@@ -36,6 +36,7 @@ import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
 import { meRoutes } from "./api/me.js";
+import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
 import { orgAdapterMappingRoutes } from "./api/orgs/adapter-mappings.js";
 import { orgAdapterStatusRoutes } from "./api/orgs/adapter-status.js";
@@ -457,6 +458,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
+          await scope.register(meDocsRoutes, { workspacesRoot: config.workspace.root });
         }),
         { prefix: "" },
       );

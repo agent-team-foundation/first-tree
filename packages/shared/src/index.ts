@@ -322,6 +322,16 @@ export {
   meChatSourceCountsSchema,
 } from "./schemas/me-chat.js";
 export {
+  type DocumentContext,
+  documentContextSchema,
+  type GetMeDoc,
+  type GetMeDocResponse,
+  getMeDocResponseSchema,
+  getMeDocSchema,
+  type WorkspaceDocRef,
+  workspaceDocRefSchema,
+} from "./schemas/me-doc.js";
+export {
   type CreateOrgFromMe,
   createOrgFromMeSchema,
   type MeMembership,

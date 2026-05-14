@@ -1,3 +1,4 @@
+import { documentContextSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { ParticipantCache } from "./agent-io.js";
 import type { AgentIdentity } from "./handler.js";
@@ -47,12 +48,24 @@ export type ResultSinkDeps = {
    * and "what's the sender's name?" questions share one round-trip.
    */
   participants: ParticipantCache;
+  /**
+   * Optional repo-local base path for markdown document links emitted by the
+   * handler. When present, web preview resolves `docs/foo.md` inside that
+   * worktree instead of the per-chat workspace root.
+   */
+  getDocumentBasePath?: () => Promise<string | null>;
 };
 
 export type ResultSink = (text: string) => Promise<void>;
 
 export function createResultSink(deps: ResultSinkDeps): ResultSink {
   async function buildMetadata(trigger: Trigger | null): Promise<Record<string, unknown> | undefined> {
+    const metadata: Record<string, unknown> = {};
+    const documentBasePath = await deps.getDocumentBasePath?.();
+    if (documentBasePath) {
+      metadata.documentContext = documentContextSchema.parse({ basePath: documentBasePath });
+    }
+
     // Default-mention the trigger sender so the server's fan-out wakes them
     // regardless of whether the handler text contains an explicit `@`. Skip
     // when the peer is `full` AND we're 1:1: the message reaches them
@@ -60,13 +73,19 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // human↔agent direct chat). In groups we always emit the @ — it's the
     // visual cue that says "this reply is for X" and the routing guarantee
     // for any `mention_only` participant who happens to be the trigger.
-    if (!trigger || trigger.senderId === deps.agent.agentId) return undefined;
-    const participants = await deps.participants.get();
-    if (participants.length <= 2) {
-      const peer = participants.find((p) => p.agentId === trigger.senderId);
-      if (peer && peer.mode !== "mention_only") return undefined;
+    if (trigger && trigger.senderId !== deps.agent.agentId) {
+      const participants = await deps.participants.get();
+      if (participants.length <= 2) {
+        const peer = participants.find((p) => p.agentId === trigger.senderId);
+        if (!peer || peer.mode === "mention_only") {
+          metadata.mentions = [trigger.senderId];
+        }
+      } else {
+        metadata.mentions = [trigger.senderId];
+      }
     }
-    return { mentions: [trigger.senderId] };
+
+    return Object.keys(metadata).length > 0 ? metadata : undefined;
   }
 
   return async function forwardResult(text: string): Promise<void> {

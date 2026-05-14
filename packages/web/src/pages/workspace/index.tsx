@@ -6,6 +6,7 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
+import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { CenterPanel } from "./center/index.js";
 import { OnboardingStepper } from "./center/onboarding-stepper.js";
@@ -38,14 +39,20 @@ export function WorkspacePage() {
   useEffect(() => {
     if (legacyAgentId && selectedChatId) {
       // `?a=&c=` → `?c=` — drop the agent hint, keep the chat.
-      setSearchParams({ c: selectedChatId }, { replace: true });
+      const next = new URLSearchParams(searchParams);
+      next.delete("a");
+      next.set("c", selectedChatId);
+      setSearchParams(next, { replace: true });
       return;
     }
     if (legacyAgentId && !selectedChatId) {
       // `?a=` alone → `/` — agents aren't navigation targets.
-      setSearchParams({}, { replace: true });
+      const next = new URLSearchParams(searchParams);
+      next.delete("a");
+      next.delete("c");
+      setSearchParams(next, { replace: true });
     }
-  }, [legacyAgentId, selectedChatId, setSearchParams]);
+  }, [legacyAgentId, searchParams, selectedChatId, setSearchParams]);
 
   const selectChat = useCallback(
     (chatId: string) => {
@@ -53,6 +60,7 @@ export function WorkspacePage() {
       // switching chats doesn't reset the user's filter context.
       const next = new URLSearchParams(searchParams);
       next.set("c", chatId);
+      clearDocPreviewParams(next);
       setSearchParams(next);
     },
     [searchParams, setSearchParams],
@@ -61,6 +69,7 @@ export function WorkspacePage() {
   const openDraft = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.set("c", DRAFT_CHAT_ID);
+    clearDocPreviewParams(next);
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
 
@@ -106,6 +115,14 @@ export function WorkspacePage() {
         <OnboardingStepper />
         <CenterPanel selectedChatId={selectedChatId} onSelectChat={selectChat} />
       </main>
+      <DocPreviewDrawer />
     </div>
   );
+}
+
+function clearDocPreviewParams(params: URLSearchParams): void {
+  params.delete("docChat");
+  params.delete("docAgent");
+  params.delete("docPath");
+  params.delete("docBase");
 }
