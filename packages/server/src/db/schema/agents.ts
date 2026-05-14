@@ -1,6 +1,16 @@
-import { index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { customType, index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { clients } from "./clients.js";
 import { organizations } from "./organizations.js";
+
+/**
+ * `bytea` column type — Drizzle ships pg primitives but not bytea out of the
+ * box. Reads come back as Node `Buffer` (postgres-js); writes accept any
+ * `Uint8Array`. Used for the small inline avatar image blob; no streaming
+ * needed at this size (≤ ~50 KB after client-side resize).
+ */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
 // NOTE: members FK is deferred — added via raw SQL in migration to avoid circular import
 
 /** Agent registration. Each agent owns a unique inboxId for message delivery. */
@@ -48,6 +58,27 @@ export const agents = pgTable(
      * rows created before 0026.
      */
     runtimeProvider: text("runtime_provider").notNull().default("claude-code"),
+    /**
+     * Manager-selected avatar color token. One of "hue-0".."hue-7"
+     * (matching --avatar-hue-* CSS tokens). NULL means "auto" — the web
+     * client falls back to the deterministic djb2 hash of `uuid`.
+     */
+    avatarColorToken: text("avatar_color_token"),
+    /**
+     * Inline avatar image bytes. Stored as `bytea` directly (no object
+     * storage) since the client always pre-resizes to 256×256 WEBP
+     * (typically < 50 KB). NULL when the manager hasn't uploaded one;
+     * the renderer falls back to color + initial.
+     */
+    avatarImageData: bytea("avatar_image_data"),
+    /** Mime type for `avatar_image_data` — e.g. "image/webp". NULL iff data is NULL. */
+    avatarImageMime: text("avatar_image_mime"),
+    /**
+     * Last time the avatar image was uploaded. Used as a cache-busting
+     * suffix on the public image URL so the browser refetches after an
+     * edit. NULL iff data is NULL.
+     */
+    avatarImageUpdatedAt: timestamp("avatar_image_updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

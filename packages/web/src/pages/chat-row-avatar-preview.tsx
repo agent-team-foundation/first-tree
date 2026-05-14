@@ -39,7 +39,13 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
 }
 
 function participant(name: string, agentId?: string): MeChatRow["participants"][number] {
-  return { agentId: agentId ?? `agent-${name.toLowerCase()}`, displayName: name, type: "autonomous_agent" };
+  return {
+    agentId: agentId ?? `agent-${name.toLowerCase()}`,
+    displayName: name,
+    type: "autonomous_agent",
+    avatarColorToken: null,
+    avatarImageUrl: null,
+  };
 }
 
 const KAEL = participant("kael", "agent-kael");
