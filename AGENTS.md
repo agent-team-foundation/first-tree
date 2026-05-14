@@ -45,7 +45,7 @@ If your work touches HTTP routes, JWT auth, scope helpers, or anything multi-org
 Use `scripts/dev-cli.sh` to run the in-tree CLI against an isolated home — it sets `FIRST_TREE_HUB_HOME` and (via the home-derived service-suffix logic) gives the dev build its own systemd unit / launchd label, so it coexists with whatever prod install you already have running.
 
 ```bash
-./scripts/dev-cli.sh client connect <hub-url> --token <t>
+./scripts/dev-cli.sh connect <connect-token>
 ./scripts/dev-cli.sh client status
 ```
 

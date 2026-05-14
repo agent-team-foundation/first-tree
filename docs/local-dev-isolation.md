@@ -26,7 +26,7 @@ don't have to remember either.
 
 ```bash
 # from repo root, first-time use
-./scripts/dev-cli.sh --rebuild client connect <hub-url> --token <t>
+./scripts/dev-cli.sh --rebuild connect <connect-token>
 
 # day-to-day
 ./scripts/dev-cli.sh client status
