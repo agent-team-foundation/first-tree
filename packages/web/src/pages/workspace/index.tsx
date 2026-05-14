@@ -75,23 +75,14 @@ export function WorkspacePage() {
 
   const setEngagement = useCallback(
     (view: ChatEngagementView) => {
-      const next = new URLSearchParams(searchParams);
-      // Default value omitted from URL so the canonical home page stays `/`.
-      if (view === "active") next.delete("engagement");
-      else next.set("engagement", view);
-      setSearchParams(next, { replace: true });
+      setSearchParams(nextParamsForEngagement(searchParams, view), { replace: true });
     },
     [searchParams, setSearchParams],
   );
 
   const setSource = useCallback(
     (next: ChatSource) => {
-      const params = new URLSearchParams(searchParams);
-      // Default `manual` is the implicit value — keep it out of the URL so
-      // `/` stays the canonical workspace entrypoint.
-      if (next === "manual") params.delete("source");
-      else params.set("source", next);
-      setSearchParams(params, { replace: true });
+      setSearchParams(nextParamsForSource(searchParams, next), { replace: true });
     },
     [searchParams, setSearchParams],
   );
@@ -125,4 +116,40 @@ function clearDocPreviewParams(params: URLSearchParams): void {
   params.delete("docAgent");
   params.delete("docPath");
   params.delete("docBase");
+}
+
+/**
+ * Pure URL transition for the engagement tab. Exported for unit tests.
+ *
+ * Switching engagement can hide the currently-selected chat (e.g. flipping
+ * Active → Archived while viewing an active chat). Leaving `?c=` set would
+ * keep the previously-selected chat on the right pane and invite misrouted
+ * input, so we drop the selection (and any doc-preview overlay) here.
+ */
+export function nextParamsForEngagement(current: URLSearchParams, view: ChatEngagementView): URLSearchParams {
+  const next = new URLSearchParams(current);
+  // Default value omitted from URL so the canonical home page stays `/`.
+  if (view === "active") next.delete("engagement");
+  else next.set("engagement", view);
+  next.delete("c");
+  clearDocPreviewParams(next);
+  return next;
+}
+
+/**
+ * Pure URL transition for the source tab. Exported for unit tests.
+ *
+ * A chat belongs to exactly one source, so switching source always hides
+ * the currently-selected chat from the rail — clear `?c=` so the right
+ * pane mirrors the new tab and can't receive misrouted input.
+ */
+export function nextParamsForSource(current: URLSearchParams, source: ChatSource): URLSearchParams {
+  const next = new URLSearchParams(current);
+  // Default `manual` is the implicit value — keep it out of the URL so
+  // `/` stays the canonical workspace entrypoint.
+  if (source === "manual") next.delete("source");
+  else next.set("source", source);
+  next.delete("c");
+  clearDocPreviewParams(next);
+  return next;
 }
