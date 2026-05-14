@@ -68,10 +68,17 @@ const SECTION_ANCHORS = {
 } as const;
 
 function sectionToAnchor(section: DraftSectionName): string {
-  if (section === "model") return SECTION_ANCHORS.setup;
-  if (section === "mcp") return SECTION_ANCHORS.tools;
-  if (section === "env" || section === "git") return SECTION_ANCHORS.advanced;
-  return SECTION_ANCHORS.prompt;
+  switch (section) {
+    case "prompt":
+      return SECTION_ANCHORS.prompt;
+    case "model":
+      return SECTION_ANCHORS.setup;
+    case "mcp":
+      return SECTION_ANCHORS.tools;
+    case "env":
+    case "git":
+      return SECTION_ANCHORS.advanced;
+  }
 }
 
 /**
