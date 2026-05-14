@@ -157,6 +157,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return sessionCtx.formatInboundContent(message).then((text) => text);
   }
 
+  function emitContextTreeUsage(sessionCtx: SessionContext): void {
+    if (!contextTreePath) return;
+    sessionCtx.emitEvent({
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: contextTreeRepoUrl },
+    });
+  }
+
   async function prepareGitWorktrees(
     payload: AgentRuntimeConfigPayload,
     workspaceCwd: string,
@@ -321,6 +329,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
     const abort = new AbortController();
     currentAbort = abort;
+    emitContextTreeUsage(sessionCtx);
     sessionCtx.setRuntimeState("working");
 
     // Emit exactly one `turn_end` per turn, after `forwardResult` resolves —

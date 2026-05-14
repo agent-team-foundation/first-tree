@@ -2,38 +2,27 @@ import type {
   ContextTreeChangeType,
   ContextTreeNode,
   ContextTreeSnapshot,
-  ContextTreeUpdate,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
-import { AlertTriangle, CheckCircle2, ChevronRight, Copy, FolderTree, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type ContextTreeWindow, getContextTreeSnapshot } from "../api/context-tree.js";
+import { AlertTriangle, Network, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
-import { Button } from "../components/ui/button.js";
-import { FilterPill } from "../components/ui/filter-pill.js";
-import { Markdown } from "../components/ui/markdown.js";
-import { PageHeader } from "../components/ui/page-header.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../components/ui/panel.js";
+import { Panel, PanelBody } from "../components/ui/panel.js";
 
-const CONTEXT_WINDOWS: Array<{ value: ContextTreeWindow; label: string; summary: string }> = [
-  { value: "1d", label: "1 day", summary: "last 1 day" },
-  { value: "7d", label: "7 days", summary: "last 7 days" },
-  { value: "30d", label: "30 days", summary: "last 30 days" },
-];
+const CONTEXT_WINDOW = "7d";
 
 export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTreeSnapshot } = {}) {
   const { organizationId } = useAuth();
-  const [window, setWindow] = useState<ContextTreeWindow>("7d");
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
-  const [selectedOverviewNodeId, setSelectedOverviewNodeId] = useState<string | null>(null);
   const preview = previewSnapshot !== undefined;
 
   const query = useQuery({
-    queryKey: ["context-tree-snapshot", organizationId, window, preview],
+    queryKey: ["context-tree-snapshot", organizationId, CONTEXT_WINDOW, preview],
     queryFn: () => {
       if (!organizationId) throw new Error("No organization selected");
-      return getContextTreeSnapshot(organizationId, window);
+      return getContextTreeSnapshot(organizationId, CONTEXT_WINDOW);
     },
     enabled: !preview && !!organizationId,
   });
@@ -43,13 +32,7 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
     if (!snapshot) return null;
     return snapshot.updates.find((update) => update.id === selectedUpdateId) ?? snapshot.updates[0] ?? null;
   }, [selectedUpdateId, snapshot]);
-
-  const selectedUpdateNode = useMemo(() => {
-    if (!snapshot) return null;
-    return selectedUpdate?.nodeId ? (snapshot.nodes.find((node) => node.id === selectedUpdate.nodeId) ?? null) : null;
-  }, [selectedUpdate, snapshot]);
-
-  const selectedOverviewNode = selectedOverviewNodeId ?? selectedUpdate?.nodeId ?? selectedUpdateNode?.id ?? null;
+  const selectedNodeId = selectedUpdate?.nodeId ?? null;
 
   useEffect(() => {
     if (!snapshot) return;
@@ -57,368 +40,69 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
     setSelectedUpdateId(snapshot.updates[0]?.id ?? null);
   }, [selectedUpdateId, snapshot]);
 
-  // Note: no negative `-m-6` wrapper here. The shared <Layout> already
-  // centres content inside a max-width container with `p-6` padding; the
-  // Context page lives inside that, matching the Team tab's geometry. The
-  // inner padding below matches Team's `var(--sp-2) var(--sp-5) var(--sp-7)`
-  // so the two pages align edge-for-edge.
   return (
-    <>
-      <PageHeader title="Context" subtitle="Team context available to agents, and how it is changing" />
-      <div
-        style={{
-          padding: "var(--sp-2) var(--sp-5) var(--sp-7)",
-          display: "flex",
-          flexDirection: "column",
-          gap: "var(--sp-3)",
-        }}
-      >
-        {!preview && query.isLoading ? <LoadingState /> : null}
-        {!preview && query.error ? (
-          <ErrorState message={query.error instanceof Error ? query.error.message : "Failed to load"} />
-        ) : null}
-        {snapshot && (preview || !query.isLoading) ? (
-          snapshot.snapshotStatus === "unavailable" ? (
-            <UnavailableState snapshot={snapshot} />
-          ) : (
-            <>
-              <ContextStatus snapshot={snapshot} />
-              <ContextFilterBar snapshot={snapshot} window={window} onWindowChange={setWindow} />
-              <UpdatesView
-                snapshot={snapshot}
-                selectedUpdate={selectedUpdate}
-                selectedUpdateNode={selectedUpdateNode}
-                selectedOverviewNodeId={selectedOverviewNode}
-                onSelectUpdate={(update) => {
-                  setSelectedUpdateId(update.id);
-                  setSelectedOverviewNodeId(update.nodeId);
-                }}
-                onSelectOverviewNode={setSelectedOverviewNodeId}
-              />
-            </>
-          )
-        ) : null}
-      </div>
-    </>
-  );
-}
-
-function ContextStatus({ snapshot }: { snapshot: ContextTreeSnapshot }) {
-  const statusIcon =
-    snapshot.contextStatus.severity === "ok" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />;
-  const statusTitle = snapshot.contextStatus.label;
-  const revisionLabel = contextRevisionLabel(snapshot);
-  return (
-    <Panel>
-      <PanelBody style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
-        <div className="flex items-start" style={{ gap: "var(--sp-2)", minWidth: 0 }}>
-          <span
-            style={{
-              color: severityColor(snapshot.contextStatus.severity),
-              flex: "0 0 auto",
-              marginTop: "var(--sp-0_5)",
-            }}
-          >
-            {statusIcon}
-          </span>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div className="flex flex-wrap items-baseline" style={{ gap: "var(--sp-2)" }}>
-              <div className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
-                {statusTitle}
-              </div>
-              {revisionLabel ? (
-                <div className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
-                  {revisionLabel}
-                </div>
-              ) : null}
-            </div>
-            <div
-              className="text-label"
-              style={{
-                color: "var(--fg-3)",
-                marginTop: "var(--sp-0_5)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {snapshot.contextStatus.detail ?? "Agents have a synced team context snapshot available."}
-            </div>
-          </div>
-        </div>
-      </PanelBody>
-    </Panel>
-  );
-}
-
-/**
- * Filter row matching the Team tab rhythm: chip-style window selector on the
- * left, inline metric counts on the right. Replaces the metric-+-button strip
- * that used to live inside the status banner — that mixed status (an info
- * surface) with controls (an action surface) and overloaded the banner. Now
- * status reads as status, and filtering lives in a dedicated row of pills.
- */
-function ContextFilterBar({
-  snapshot,
-  window,
-  onWindowChange,
-}: {
-  snapshot: ContextTreeSnapshot;
-  window: ContextTreeWindow;
-  onWindowChange: (window: ContextTreeWindow) => void;
-}) {
-  const currentWindow = windowSummary(window);
-  return (
-    <div className="flex flex-wrap items-center justify-between" style={{ gap: "var(--sp-3)" }}>
-      <fieldset className="flex flex-wrap items-center" style={{ gap: "var(--sp-1)" }}>
-        <legend className="sr-only">Context update window</legend>
-        {CONTEXT_WINDOWS.map((option) => (
-          <FilterPill key={option.value} active={option.value === window} onClick={() => onWindowChange(option.value)}>
-            {option.label}
-          </FilterPill>
-        ))}
-      </fieldset>
-      <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
-        <StatusMetric value={snapshot.summary.changedNodeCount} label={`updates in the ${currentWindow}`} />
-        <StatusMetric value={snapshot.summary.addedCount} label="added" tone="added" />
-        <StatusMetric value={snapshot.summary.editedCount} label="edited" tone="edited" />
-        <StatusMetric value={snapshot.summary.removedCount} label="removed" tone="removed" />
-      </div>
-    </div>
-  );
-}
-
-function UpdatesView({
-  snapshot,
-  selectedUpdate,
-  selectedUpdateNode,
-  selectedOverviewNodeId,
-  onSelectUpdate,
-  onSelectOverviewNode,
-}: {
-  snapshot: ContextTreeSnapshot;
-  selectedUpdate: ContextTreeUpdate | null;
-  selectedUpdateNode: ContextTreeNode | null;
-  selectedOverviewNodeId: string | null;
-  onSelectUpdate: (update: ContextTreeUpdate) => void;
-  onSelectOverviewNode: (nodeId: string) => void;
-}) {
-  const handleSelectNode = (nodeId: string) => {
-    onSelectOverviewNode(nodeId);
-    const matchingUpdate = snapshot.updates.find((update) => update.nodeId === nodeId);
-    if (matchingUpdate) {
-      onSelectUpdate(matchingUpdate);
-    }
-  };
-
-  return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-      {/* Master-detail grid. Both panels share a `maxHeight: min(52vh, 30rem)`
-          (≈ 480 px on most desktops) — this matches the height the Updates
-          list used to be hard-pinned at, but is now applied as a *ceiling*
-          instead of a fixed value. Behaviour:
-            • Short content (few updates, short detail): both panels hug
-              their natural height. No wasted empty space below either card.
-            • Long content (many updates, or very long detail): the panel
-              caps at the ceiling and scrolls internally — page-level scroll
-              isn't dragged into oblivion, and Tree Overview stays visible
-              above the fold on first screen.
-          The grid's `alignItems: stretch` keeps the two cards equal-height
-          regardless of which side has more content. */}
-      <div
-        className="grid grid-cols-1 xl:grid-cols-[minmax(26rem,1fr)_minmax(0,1fr)]"
-        style={{ gap: "var(--sp-3)", alignItems: "stretch" }}
-      >
-        <Panel className="flex h-full flex-col" style={{ maxHeight: "min(52vh, 30rem)" }}>
-          <PanelHeader>
-            <PanelTitle>Context Updates</PanelTitle>
-          </PanelHeader>
-          <PanelBody className="flex-1" style={{ padding: 0, overflow: "auto" }}>
-            {snapshot.updates.length === 0 ? (
-              <div style={{ padding: "var(--sp-3) var(--sp-3_5)" }}>
-                <EmptyChanges />
-              </div>
-            ) : (
-              snapshot.updates.map((update, index) => (
-                <UpdateRow
-                  key={update.id}
-                  update={update}
-                  selected={update.id === selectedUpdate?.id}
-                  isLast={index === snapshot.updates.length - 1}
-                  onClick={() => onSelectUpdate(update)}
-                />
-              ))
-            )}
-          </PanelBody>
-        </Panel>
-        <UpdateDetail
-          key={selectedUpdate?.id ?? "empty"}
-          update={selectedUpdate}
-          node={selectedUpdateNode}
-          snapshot={snapshot}
-        />
-      </div>
-      <TreeOverview snapshot={snapshot} selectedNodeId={selectedOverviewNodeId} onSelectNode={handleSelectNode} />
-    </div>
-  );
-}
-
-/**
- * Row-style update list item. Previously each update was a self-contained
- * card with its own border, radius, and accent-on-selected outline — i.e. a
- * card-inside-a-panel. That nesting gave the Updates list a "boxes in boxes"
- * feel that clashed with the rest of the dashboard's flat aesthetic.
- *
- * The row form drops the inner shell entirely: hairline-bottom only (skipped
- * on the last row to keep the panel edge clean), `--bg-sunken` on selection.
- * It reads as one continuous list — the Panel still groups the items, but
- * inside the panel the rows behave like a Team-tab DenseTable.
- */
-function UpdateRow({
-  update,
-  selected,
-  isLast,
-  onClick,
-}: {
-  update: ContextTreeUpdate;
-  selected: boolean;
-  isLast: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="block w-full text-left transition-colors"
+    <div
+      className="context-live-page"
       style={{
-        background: selected ? "var(--bg-sunken)" : "transparent",
-        borderBottom: isLast ? "none" : "var(--hairline) solid var(--border-faint)",
-        padding: "var(--sp-2) var(--sp-3_5)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "var(--sp-10)",
       }}
     >
-      <div className="flex items-start" style={{ gap: "var(--sp-2)", minWidth: 0 }}>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
-            <ChangePill type={update.changeType} />
-            <span
-              className="text-body font-medium"
-              style={{
-                color: "var(--fg)",
-                display: "-webkit-box",
-                WebkitBoxOrient: "vertical",
-                WebkitLineClamp: 2,
-                overflow: "hidden",
-              }}
-            >
-              {updateCardHeadline(update)}
-            </span>
-          </div>
-          <div
-            className="text-label"
-            style={{
-              color: "var(--fg-3)",
-              marginTop: "var(--sp-1)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            In {pathLabel(update.path)} · {ownerLine(update.owners)}
-            {update.relatedNodeIds.length > 0 ? ` · ${relatedText(update.relatedNodeIds.length)}` : ""}
-          </div>
-        </div>
-      </div>
-    </button>
-  );
-}
-
-function UpdateDetail({
-  update,
-  node,
-  snapshot,
-}: {
-  update: ContextTreeUpdate | null;
-  node: ContextTreeNode | null;
-  snapshot: ContextTreeSnapshot;
-}) {
-  const [sourceExpanded, setSourceExpanded] = useState(false);
-  const related = node?.relatedNodeIds
-    .map((id) => snapshot.nodes.find((candidate) => candidate.id === id))
-    .filter((candidate): candidate is ContextTreeNode => Boolean(candidate));
-  const sourcePath = node?.sourcePath ?? update?.path ?? null;
-  const sourceCommit = update?.sourceCommit ? update.sourceCommit.slice(0, 7) : "no commit";
-  const ownership = update ? ownerText(update.owners) : "No owner";
-  const linkedContextItems =
-    related && related.length > 0 ? related.map((item) => item.title || item.path || "root") : [];
-  const contextArea = update ? areaLabel(update.path) || pathLabel(update.path) : "root";
-
-  return (
-    <Panel className="flex h-full flex-col" style={{ maxHeight: "min(52vh, 30rem)" }}>
-      <PanelHeader>
-        <PanelTitle>Selected Change</PanelTitle>
-        {update ? <ChangePill type={update.changeType} /> : null}
-      </PanelHeader>
-      <PanelBody className="flex-1" style={{ overflow: "auto" }}>
-        {!update ? (
-          <EmptyChanges />
+      {!preview && query.isLoading ? <LoadingState /> : null}
+      {!preview && query.error ? (
+        <ErrorState message={query.error instanceof Error ? query.error.message : "Failed to load"} />
+      ) : null}
+      {snapshot && (preview || !query.isLoading) ? (
+        snapshot.snapshotStatus === "unavailable" ? (
+          <UnavailableState snapshot={snapshot} />
         ) : (
-          // The three sub-blocks (header / summary / reference) used to be
-          // separated by manual border-top + paddingTop strokes inside the
-          // panel. That double-divided the content: the panel already draws a
-          // header divider, so the inner strokes were a second layer of
-          // structure competing with it. Spacing alone (`var(--sp-4)` gap)
-          // does the same job — and each sub-block already starts with its
-          // own bold label, so the section break reads without any rule.
-          <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-            <div>
-              <div className="text-title font-semibold" style={{ color: "var(--fg)" }}>
-                {update.title}
-              </div>
-              <div
-                className="text-label"
-                style={{
-                  color: "var(--fg-3)",
-                  marginTop: "var(--sp-1)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {changedByLabel(update)} · {changeTypeLabel(update.changeType)} · {contextArea}
-              </div>
-              <div
-                className="text-label font-mono"
-                style={{
-                  color: "var(--fg-4)",
-                  marginTop: "var(--sp-0_5)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {update.path}
-              </div>
-            </div>
-            <SummaryBlock value={updateDetailActivity(update)} impact={updateDetailMeaning(update)} />
-            <ReferenceBlock
-              commit={sourceCommit}
-              linkedContextItems={linkedContextItems}
-              owner={ownership}
-              path={sourcePath ?? update.path}
-              preview={node?.preview ?? null}
-              sourceExpanded={sourceExpanded}
-              onTogglePreview={() => {
-                setSourceExpanded((value) => !value);
+          <>
+            <LiveContextHero snapshot={snapshot} />
+            <ChangeMap
+              snapshot={snapshot}
+              selectedNodeId={selectedNodeId}
+              onSelectNode={(nodeId) => {
+                const matchingUpdate = snapshot.updates.find((update) => update.nodeId === nodeId);
+                setSelectedUpdateId(matchingUpdate?.id ?? null);
               }}
             />
-          </div>
-        )}
-      </PanelBody>
-    </Panel>
+            <ContextSignal snapshot={snapshot} />
+          </>
+        )
+      ) : null}
+    </div>
   );
 }
 
-function TreeOverview({
+function LiveContextHero({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const lastUpdated = exactTimeLabel(snapshot.syncedAt) ?? "sync time unknown";
+  const statusTone = severityColor(snapshot.contextStatus.severity);
+  const statusDetail =
+    snapshot.contextStatus.severity === "ok" ? null : (snapshot.contextStatus.detail ?? snapshot.contextStatus.label);
+
+  return (
+    <section className="context-live-hero" aria-label={snapshot.contextStatus.label}>
+      <div className="context-live-title-row">
+        <span
+          aria-hidden="true"
+          className="context-live-dot"
+          style={{
+            background: statusTone,
+            ["--context-live-dot-color" as string]: statusTone,
+          }}
+        />
+        <h2 className="m-0 context-live-title">Context tree is live</h2>
+      </div>
+      <div className="text-lead context-live-subtitle">
+        Last updated at <strong>{lastUpdated}</strong>
+      </div>
+      {statusDetail ? <div className="text-body context-live-status-detail">{statusDetail}</div> : null}
+    </section>
+  );
+}
+
+function ChangeMap({
   snapshot,
   selectedNodeId,
   onSelectNode,
@@ -427,379 +111,103 @@ function TreeOverview({
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string) => void;
 }) {
-  const [expandedParents, setExpandedParents] = useState<Set<string>>(() => new Set());
-  const counts = useMemo(() => changedCounts(snapshot.nodes), [snapshot.nodes]);
-  const visibleNodes = useMemo(
-    () => layoutTree(snapshot.nodes, selectedNodeId, counts, expandedParents),
-    [selectedNodeId, snapshot.nodes, counts, expandedParents],
+  const groups = useMemo(() => changeGroups(snapshot.nodes), [snapshot.nodes]);
+  const selectedGroupId = useMemo(
+    () => selectedChangeGroupId(snapshot.nodes, selectedNodeId),
+    [snapshot.nodes, selectedNodeId],
   );
-
-  // Tree's own scrollable container — we ref it so the auto-scroll below can
-  // be scoped to *just* this element. Plain `Element.scrollIntoView` walks
-  // every scrollable ancestor up to the document, so a selection driven from
-  // the Updates list (which sits above this tree) used to scroll the whole
-  // page upward to bring the selected tree node into view. That looked like a
-  // surprise jump to the user — fix is to scroll only the tree container.
-  const treeScrollRef = useRef<HTMLDivElement | null>(null);
-
-  // Callback ref attached only to the currently selected node's button. Fires
-  // when the selected button mounts (after a selection change). If the node
-  // is already visible inside the tree's scroll viewport, do nothing. If it's
-  // off-screen *within the tree*, scroll only that container (never the page)
-  // so the rest of the layout stays put.
-  const scrollSelectedIntoView = useCallback((el: HTMLButtonElement | null) => {
-    if (!el) return;
-    const container = treeScrollRef.current;
-    if (!container) return;
-    const elRect = el.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    if (elRect.top >= containerRect.top && elRect.bottom <= containerRect.bottom) {
-      // Already visible — nothing to do.
-      return;
-    }
-    // Centre the node within the tree viewport, but only by scrolling this
-    // container, not its ancestors. `scrollBy` on the container is the
-    // surgical move; `scrollIntoView` would propagate.
-    const offset = elRect.top - containerRect.top - (containerRect.height - elRect.height) / 2;
-    container.scrollBy({ top: offset });
-  }, []);
-
-  const toggleAggregate = useCallback((parentId: string) => {
-    setExpandedParents((prev) => {
-      const next = new Set(prev);
-      if (next.has(parentId)) next.delete(parentId);
-      else next.add(parentId);
-      return next;
-    });
-  }, []);
-  const width = Math.max(760, ...visibleNodes.map((node) => node.x + 280));
-  const height = Math.max(280, ...visibleNodes.map((node) => node.y + 48));
-  // Render the SVG at its natural pixel height so nodes never get squished by
-  // `preserveAspectRatio="meet"`. When the tree is taller than the soft cap, the
-  // container scrolls instead — keeps small trees compact, big trees readable.
-  const naturalHeight = height + 24;
-  const SOFT_HEIGHT_CAP = 560;
-  const overflowsCap = naturalHeight > SOFT_HEIGHT_CAP;
-  const selectedPath = overviewSelectedPath(snapshot.nodes, selectedNodeId);
+  const placedGroups = useMemo(() => placeChangeGroups(groups, selectedGroupId), [groups, selectedGroupId]);
+  const summaryUpdateCount = Math.max(snapshot.summary.changedNodeCount, snapshot.updates.length);
 
   return (
-    <Panel>
-      <PanelHeader>
-        <div>
-          <PanelTitle>
-            <FolderTree size={17} />
-            Where Context Changed
-          </PanelTitle>
-          <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Numbers = updated areas under each branch.
-          </div>
-        </div>
-      </PanelHeader>
-      <PanelBody>
-        {visibleNodes.length === 0 ? (
-          <UnavailableState snapshot={snapshot} />
+    <section className="context-map-section" aria-label="Context Tree update change map">
+      <div className="text-label context-map-kicker">Past 7 days · Top updated domains</div>
+      <div className="context-map-frame">
+        {placedGroups.length === 0 ? (
+          <EmptyChanges />
         ) : (
-          <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-            <div
-              className="flex flex-wrap items-center"
-              style={{
-                columnGap: "var(--sp-4)",
-                rowGap: "var(--sp-1_5)",
-              }}
-            >
-              <div
-                className="flex flex-wrap items-center text-label"
-                style={{ color: "var(--fg-3)", gap: "var(--sp-1_5)" }}
-              >
-                <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
-                  Selected
+          <svg
+            viewBox="0 0 920 420"
+            role="img"
+            aria-label="Recent Context Tree update branches"
+            preserveAspectRatio="xMidYMid meet"
+            className="context-network-svg"
+          >
+            <title>Update Change Map</title>
+            <circle className="context-network-live-halo" cx="460" cy="210" r="104" />
+            {placedGroups.map((group) => (
+              <path
+                key={`path:${group.id}`}
+                d={connectionPath(group)}
+                fill="none"
+                stroke={group.selected ? "var(--ok)" : "var(--border-strong)"}
+                strokeDasharray="5 8"
+                strokeLinecap="round"
+                strokeOpacity={group.selected ? 0.7 : 0.36}
+                strokeWidth={group.selected ? 2 : 1.4}
+              />
+            ))}
+            <foreignObject x="338" y="122" width="244" height="176" className="context-network-card-wrap">
+              <div className="context-network-summary-card">
+                <span className="context-network-summary-icon" aria-hidden="true">
+                  <Network size={30} strokeWidth={2.3} />
                 </span>
-                <span>{selectedPath ?? "No update selected"}</span>
+                <span className="context-network-summary-title">Context Tree</span>
+                <span className="context-network-summary-scale">
+                  {formatNumber(snapshot.nodes.length)}
+                  <span>total nodes</span>
+                </span>
+                <span className="text-body context-network-summary-badge">
+                  +{formatNumber(summaryUpdateCount)} updates
+                </span>
               </div>
-              <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
-                <OverviewLegendItem color="var(--accent)" label="Selected path" />
-                <OverviewLegendItem color="var(--ok)" label="Added" />
-                <OverviewLegendItem color="var(--warn)" label="Edited" />
-                <OverviewLegendItem color="var(--danger)" label="Removed" />
-                <OverviewLegendItem color="var(--bg-raised)" label="Quiet" />
-              </div>
-            </div>
-            <div
-              ref={treeScrollRef}
-              style={{
-                overflow: overflowsCap ? "auto" : "hidden",
-                maxHeight: overflowsCap ? `${SOFT_HEIGHT_CAP}px` : undefined,
-                minHeight: `${Math.min(naturalHeight, SOFT_HEIGHT_CAP)}px`,
-              }}
-            >
-              <svg
-                viewBox={`0 0 ${width} ${height}`}
-                role="img"
-                aria-label="Context Tree overview"
-                preserveAspectRatio="xMinYMin meet"
-                style={{ display: "block", width: "100%", height: `${naturalHeight}px` }}
+            </foreignObject>
+            {placedGroups.map((group) => (
+              <foreignObject
+                key={group.id}
+                x={group.x}
+                y={group.y}
+                width={group.width}
+                height={group.height}
+                className="context-network-card-wrap"
               >
-                {visibleNodes.map((node) => {
-                  // Drop the edge from parent → "Show less" toggle in the
-                  // expanded state. While collapsed, the edge carries real
-                  // information — it's the visual anchor saying "this parent
-                  // has hidden branches". Once expanded, the real children
-                  // each draw their own edge and the toggle becomes a pure
-                  // control affordance (a chevron + label); an edge to it
-                  // would just be visual noise placing the control on the
-                  // same hierarchy plane as the actual data nodes.
-                  if (!node.parent) return null;
-                  if (node.isSummary && node.isExpanded) return null;
-                  return (
-                    <line
-                      key={`edge:${node.id}`}
-                      x1={node.parent.x}
-                      y1={node.parent.y}
-                      x2={node.x}
-                      y2={node.y}
-                      stroke={node.selectedPath && node.parent.selectedPath ? "var(--accent)" : "var(--border)"}
-                      strokeOpacity={node.muted ? 0.34 : node.selectedPath ? 0.72 : 0.56}
-                      strokeWidth={node.selectedPath && node.parent.selectedPath ? 1.6 : 1}
-                    />
-                  );
-                })}
-                {visibleNodes.map((node) => {
-                  const interactive = node.isSummary || node.sourceNodeId !== null;
-                  const handleClick = () => {
-                    if (node.isSummary && node.parentId) {
-                      toggleAggregate(node.parentId);
-                    } else if (node.sourceNodeId) {
-                      onSelectNode(node.sourceNodeId);
-                    }
-                  };
-                  return (
-                    <foreignObject key={node.id} x={node.x - 10} y={node.y - 15} width={width - node.x - 8} height={30}>
-                      <button
-                        ref={node.selected ? scrollSelectedIntoView : undefined}
-                        type="button"
-                        disabled={!interactive}
-                        aria-expanded={node.isSummary ? node.isExpanded : undefined}
-                        onClick={handleClick}
-                        className="flex w-full items-center text-left text-label transition-colors"
-                        style={{
-                          background: "transparent",
-                          color: node.muted ? "var(--fg-3)" : "var(--fg)",
-                          cursor: interactive ? "pointer" : "default",
-                          gap: "var(--sp-2)",
-                          opacity: node.muted ? 0.66 : 1,
-                          padding: "0 var(--sp-1)",
-                        }}
-                        onMouseEnter={(event) => {
-                          if (interactive) event.currentTarget.style.background = "var(--bg-sunken)";
-                        }}
-                        onMouseLeave={(event) => {
-                          event.currentTarget.style.background = "transparent";
-                        }}
-                      >
-                        {node.isSummary ? (
-                          <ChevronRight
-                            size={12}
-                            style={{
-                              color: "var(--fg-4)",
-                              flex: "0 0 auto",
-                              transform: node.isExpanded ? "rotate(90deg)" : undefined,
-                              transition: "transform 120ms",
-                            }}
-                          />
-                        ) : (
-                          <span
-                            aria-hidden="true"
-                            style={{
-                              width: node.selected ? "var(--sp-4)" : "var(--sp-3)",
-                              height: node.selected ? "var(--sp-4)" : "var(--sp-3)",
-                              borderRadius: "50%",
-                              background: overviewNodeColor(node),
-                              border: `${node.selected ? "var(--hairline-bold)" : "var(--hairline)"} solid ${
-                                node.selected ? "var(--accent)" : overviewNodeBorder(node)
-                              }`,
-                              flex: "0 0 auto",
-                            }}
-                          />
-                        )}
-                        <span
-                          className={node.selectedPath ? "font-semibold" : "font-medium"}
-                          style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                        >
-                          {node.title}
-                        </span>
-                        {node.updateCount > 0 && !node.isSummary ? (
-                          <span
-                            className="font-semibold"
-                            style={{
-                              background: "var(--accent-bg)",
-                              border: "var(--hairline) solid var(--border-faint)",
-                              borderRadius: "var(--radius-chip)",
-                              color: "var(--fg-2)",
-                              flex: "0 0 auto",
-                              padding: "0 var(--sp-1)",
-                            }}
-                          >
-                            {node.updateCount}
-                          </span>
-                        ) : null}
-                      </button>
-                    </foreignObject>
-                  );
-                })}
-              </svg>
-            </div>
-          </div>
+                <button
+                  type="button"
+                  className={group.selected ? "context-network-card is-live" : "context-network-card"}
+                  onClick={() => onSelectNode(group.representativeNodeId)}
+                >
+                  <span className="context-network-pin" aria-hidden="true" />
+                  <span className="text-subtitle context-network-title">{group.title}</span>
+                  <span className="context-change-breakdown">
+                    {changeBreakdownParts(group.changeCounts).map((part) => (
+                      <span key={part.type} data-change-type={part.type}>
+                        {formatNumber(part.count)} {part.label}
+                      </span>
+                    ))}
+                  </span>
+                </button>
+              </foreignObject>
+            ))}
+          </svg>
         )}
-      </PanelBody>
-    </Panel>
+      </div>
+    </section>
   );
 }
 
-function OverviewLegendItem({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="inline-flex items-center text-label" style={{ color: "var(--fg-3)", gap: "var(--sp-1)" }}>
-      <span
-        aria-hidden="true"
-        style={{
-          background: color,
-          border: "var(--hairline) solid var(--border-strong)",
-          borderRadius: "50%",
-          height: "var(--sp-2)",
-          width: "var(--sp-2)",
-        }}
-      />
-      <span>{label}</span>
-    </span>
-  );
-}
+function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const windowText = snapshot.usage.windowDays === 1 ? "1 day" : `${snapshot.usage.windowDays} days`;
+  const agentText = snapshot.usage.agentCount === 1 ? "1 agent" : `${snapshot.usage.agentCount} agents`;
+  const usageText = snapshot.usage.usageCount === 1 ? "1 time" : `${snapshot.usage.usageCount} times`;
 
-function StatusMetric({ value, label, tone }: { value: number; label: string; tone?: ContextTreeChangeType }) {
   return (
-    <span className="inline-flex items-baseline text-label" style={{ color: "var(--fg-3)", gap: "var(--sp-1)" }}>
-      <span className="font-semibold" style={{ color: tone ? changeColor(tone) : "var(--fg)" }}>
-        {value}
+    <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
+      <span>
+        In the last {windowText}, <mark>{agentText}</mark>
       </span>
-      <span>{label}</span>
-    </span>
-  );
-}
-
-function SummaryPill({ label, tone, strong }: { label: string; tone?: ContextTreeChangeType; strong?: boolean }) {
-  return (
-    <span
-      className={`text-label ${strong ? "font-semibold" : "font-medium"}`}
-      style={{
-        color: tone ? changeColor(tone) : "var(--fg)",
-        background: tone ? "var(--accent-bg)" : "var(--bg-sunken)",
-        border: "var(--hairline) solid var(--border-faint)",
-        borderRadius: "var(--radius-chip)",
-        padding: "var(--sp-0_5) var(--sp-1_5)",
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
-function ChangePill({ type }: { type: ContextTreeChangeType }) {
-  return <SummaryPill label={changeBadgeLabel(type)} tone={type} />;
-}
-
-function SummaryBlock({ value, impact }: { value: string; impact: string }) {
-  return (
-    <div style={{ color: "var(--fg-2)" }}>
-      <div className="text-label font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-1)" }}>
-        Change summary
-      </div>
-      <div className="text-body">{value}</div>
-      <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
-        Impact: {impact}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Inline reference line. Previously a `dl/dt/dd` 2-column grid (Owner /
- * Linked / Source / Commit, each with bold label + value). The grid was
- * visually heavier than the rest of the Selected Change body and broke the
- * single-line `·`-separated rhythm used by the update row sub-line. Now the
- * fields collapse to one wrapping line so the whole detail panel reads in
- * the same prose-y register as the update list.
- */
-function ReferenceBlock({
-  path,
-  commit,
-  linkedContextItems,
-  owner,
-  preview,
-  sourceExpanded,
-  onTogglePreview,
-}: {
-  path: string;
-  commit: string;
-  linkedContextItems: string[];
-  owner: string;
-  preview: string | null;
-  sourceExpanded: boolean;
-  onTogglePreview: () => void;
-}) {
-  const items: Array<{ label: string; value: string; mono?: boolean }> = [
-    { label: "Owner", value: owner },
-    ...(linkedContextItems.length > 0 ? [{ label: "Linked", value: linkedContextItems.join(", ") }] : []),
-    { label: "Source", value: path, mono: true },
-    { label: "Commit", value: commit, mono: true },
-  ];
-
-  return (
-    <div>
-      <div className="text-label font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-1)" }}>
-        Reference
-      </div>
-      <div className="flex flex-wrap text-label" style={{ color: "var(--fg-2)", gap: "var(--sp-2)" }}>
-        {items.map((item, index) => (
-          <span key={item.label} className="inline-flex items-baseline" style={{ gap: "var(--sp-1)", minWidth: 0 }}>
-            {index > 0 ? (
-              <span aria-hidden="true" style={{ color: "var(--fg-4)" }}>
-                ·
-              </span>
-            ) : null}
-            <span style={{ color: "var(--fg-3)" }}>{item.label}</span>
-            <span
-              className={item.mono ? "font-mono" : "font-medium"}
-              style={{
-                color: "var(--fg-2)",
-                minWidth: 0,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {item.value}
-            </span>
-          </span>
-        ))}
-      </div>
-      <div className="flex flex-wrap" style={{ gap: "var(--sp-1)", marginTop: "var(--sp-2_5)" }}>
-        <Button variant="outline" size="xs" onClick={onTogglePreview}>
-          {sourceExpanded ? "Hide source" : "Preview source"}
-        </Button>
-        <Button variant="ghost" size="xs" onClick={() => void navigator.clipboard.writeText(path)}>
-          <Copy size={14} />
-          Copy path
-        </Button>
-      </div>
-      {sourceExpanded ? (
-        <div style={{ marginTop: "var(--sp-3)" }}>
-          {preview ? (
-            <Markdown>{preview}</Markdown>
-          ) : (
-            <div className="text-body" style={{ color: "var(--fg-3)" }}>
-              No source preview available.
-            </div>
-          )}
-        </div>
-      ) : null}
+      <span>
+        used the tree <mark>{usageText}</mark> to make design decisions.
+      </span>
     </div>
   );
 }
@@ -866,22 +274,14 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   );
 }
 
-function redactRepoForDisplay(repo: string): string {
-  return repo.replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@");
-}
-
 function EmptyChanges() {
   return (
     <div className="text-body" style={{ color: "var(--fg-3)" }}>
-      No context updates in this time window.
+      No context updates in the past 7 days.
     </div>
   );
 }
 
-// Always show root + top-level branches. Anything deeper only shows when it
-// actually has activity (own changes or descendants with changes) or sits on
-// the selected lineage. Keeps the overview focused on "where things changed"
-// instead of flooding the canvas with quiet L2 children.
 const OVERVIEW_DEFAULT_DEPTH = 1;
 const OVERVIEW_CHANGED_BRANCH_DEPTH = 3;
 
@@ -894,9 +294,6 @@ type OverviewDatum = {
   changeType: ContextTreeChangeType | null;
   updateCount: number;
   isSummary: boolean;
-  // For summary aggregates only: whether the parent is currently expanded
-  // (children that would normally be hidden are showing). Drives chevron
-  // orientation and click semantics (toggle off vs toggle on).
   isExpanded: boolean;
   selected: boolean;
   selectedPath: boolean;
@@ -907,6 +304,31 @@ type LayoutNode = OverviewDatum & {
   x: number;
   y: number;
   parent: LayoutNode | null;
+};
+
+type ChangeCounts = {
+  added: number;
+  edited: number;
+  removed: number;
+};
+
+type ChangeGroup = {
+  id: string;
+  title: string;
+  path: string;
+  representativeNodeId: string;
+  updateCount: number;
+  changeCounts: ChangeCounts;
+};
+
+type PlacedChangeGroup = ChangeGroup & {
+  selected: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  anchorX: number;
+  anchorY: number;
 };
 
 export function layoutTree(
@@ -922,15 +344,6 @@ export function layoutTree(
     .id((node) => node.id)
     .parentId((node) => node.parentId)(overviewNodes)
     .sort((a, b) => {
-      // Summary toggles sort *first* (top of their siblings) so the click
-      // target stays put when toggled. If summary were last (the old
-      // behaviour), clicking "Show N more" at the bottom of the sibling
-      // group caused new children to expand *above* it — the toggle was
-      // shoved down by inserted rows, and the new content appeared upward
-      // from the user's mouse position. With summary on top, the toggle
-      // stays at the same y-coordinate across collapse/expand and new rows
-      // unfold *below* it, matching the mental model of every other
-      // expand/collapse affordance in the product.
       if (a.data.isSummary !== b.data.isSummary) return a.data.isSummary ? -1 : 1;
       return a.data.path.localeCompare(b.data.path);
     });
@@ -964,10 +377,6 @@ export function buildOverviewNodes(
 
   const childrenByParent = childMap(validNodes);
   const selectedPath = selectedPathIds(selectedNodeId, byId);
-  // compactVisibleIds = what the default depth/changed-branch rule shows. We
-  // track this separately from visibleIds so the "X hidden quiet areas"
-  // summary stays as a *toggle* even after the user expands a parent —
-  // otherwise expanding hides the only way to collapse again.
   const compactVisibleIds = new Set<string>();
   const depthById = new Map<string, number>();
 
@@ -983,12 +392,6 @@ export function buildOverviewNodes(
     }
   }
 
-  // Singleton-hidden promotion. A "Show 1 more" toggle costs the same vertical
-  // slot as the row it would unfold, so folding a single hidden child is
-  // wasted UI — promote it to visible directly. Iterate until no further
-  // promotions happen so we keep climbing only-child chains (e.g. Members
-  // → Yuezengwu → Notebook with no siblings at any level surfaces all three,
-  // rather than leaving a cascade of single-item toggles behind).
   let promotedSomething = true;
   while (promotedSomething) {
     promotedSomething = false;
@@ -1060,6 +463,120 @@ export function buildOverviewNodes(
   return [...realNodes, ...summaryNodes];
 }
 
+function updateChangeNodes(nodes: ContextTreeNode[]): ContextTreeNode[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const ids = new Set<string>();
+  for (const node of nodes) {
+    if (!node.changeType) continue;
+    addWithAncestors(node.id, byId, ids);
+  }
+  return nodes.filter((node) => ids.has(node.id));
+}
+
+function changeGroups(nodes: ContextTreeNode[]): ChangeGroup[] {
+  const changedNodes = updateChangeNodes(nodes).filter((node) => node.changeType);
+  if (changedNodes.length === 0) return [];
+
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const grouped = new Map<string, ChangeGroup>();
+
+  for (const node of changedNodes) {
+    const branch = topLevelBranch(node, byId);
+    const existing = grouped.get(branch.id);
+    if (existing) {
+      grouped.set(branch.id, {
+        ...existing,
+        updateCount: existing.updateCount + 1,
+        changeCounts: incrementChangeCount(existing.changeCounts, node.changeType),
+        representativeNodeId: existing.representativeNodeId === branch.id ? node.id : existing.representativeNodeId,
+      });
+      continue;
+    }
+
+    grouped.set(branch.id, {
+      id: branch.id,
+      title: branch.title,
+      path: branch.path,
+      representativeNodeId: node.id,
+      updateCount: 1,
+      changeCounts: incrementChangeCount(emptyChangeCounts(), node.changeType),
+    });
+  }
+
+  return [...grouped.values()]
+    .sort((a, b) => b.updateCount - a.updateCount || a.path.localeCompare(b.path))
+    .slice(0, 4);
+}
+
+function emptyChangeCounts(): ChangeCounts {
+  return { added: 0, edited: 0, removed: 0 };
+}
+
+function incrementChangeCount(counts: ChangeCounts, type: ContextTreeChangeType | null): ChangeCounts {
+  if (type === "added") return { ...counts, added: counts.added + 1 };
+  if (type === "edited") return { ...counts, edited: counts.edited + 1 };
+  if (type === "removed") return { ...counts, removed: counts.removed + 1 };
+  return counts;
+}
+
+function changeBreakdownParts(
+  counts: ChangeCounts,
+): Array<{ type: ContextTreeChangeType; label: string; count: number }> {
+  const parts: Array<{ type: ContextTreeChangeType; label: string; count: number }> = [];
+  if (counts.added > 0) parts.push({ type: "added", label: "added", count: counts.added });
+  if (counts.edited > 0) parts.push({ type: "edited", label: "edited", count: counts.edited });
+  if (counts.removed > 0) parts.push({ type: "removed", label: "removed", count: counts.removed });
+  return parts;
+}
+
+function selectedChangeGroupId(nodes: ContextTreeNode[], selectedNodeId: string | null): string | null {
+  if (!selectedNodeId) return null;
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const selectedNode = byId.get(selectedNodeId);
+  return selectedNode ? topLevelBranch(selectedNode, byId).id : null;
+}
+
+function placeChangeGroups(groups: ChangeGroup[], selectedGroupId: string | null): PlacedChangeGroup[] {
+  const slots: Array<Pick<PlacedChangeGroup, "x" | "y" | "width" | "height" | "anchorX" | "anchorY">> = [
+    { x: 96, y: 34, width: 196, height: 98, anchorX: 292, anchorY: 83 },
+    { x: 628, y: 34, width: 196, height: 98, anchorX: 628, anchorY: 83 },
+    { x: 96, y: 286, width: 196, height: 98, anchorX: 292, anchorY: 335 },
+    { x: 628, y: 286, width: 196, height: 98, anchorX: 628, anchorY: 335 },
+  ];
+  const fallbackSlot = slots[slots.length - 1];
+  if (!fallbackSlot) return [];
+
+  return groups.map((group, index) => {
+    const slot = slots[index] ?? fallbackSlot;
+    return {
+      ...group,
+      ...slot,
+      selected: group.id === selectedGroupId || (selectedGroupId === null && index === 0),
+    };
+  });
+}
+
+function connectionPath(group: PlacedChangeGroup): string {
+  const centerX = 460;
+  const centerY = 210;
+  const direction = group.anchorX < centerX ? -1 : 1;
+  const startX = centerX + direction * 124;
+  const startY = centerY + (group.anchorY > centerY ? 48 : -48);
+  const controlX = (startX + group.anchorX) / 2;
+  const controlY = group.anchorY > centerY ? startY + 62 : startY - 62;
+  return `M ${startX} ${startY} Q ${controlX} ${controlY} ${group.anchorX} ${group.anchorY}`;
+}
+
+function topLevelBranch(node: ContextTreeNode, byId: Map<string, ContextTreeNode>): ContextTreeNode {
+  let current = node;
+  let parent = current.parentId ? byId.get(current.parentId) : undefined;
+  while (parent && parent.parentId !== null) {
+    current = parent;
+    parent = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return current;
+}
+
 function childMap(nodes: ContextTreeNode[]): Map<string, ContextTreeNode[]> {
   const childrenByParent = new Map<string, ContextTreeNode[]>();
   for (const node of nodes) {
@@ -1084,17 +601,6 @@ function selectedPathIds(selectedNodeId: string | null, byId: Map<string, Contex
   return pathIds;
 }
 
-function overviewSelectedPath(nodes: ContextTreeNode[], selectedNodeId: string | null): string | null {
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const path: string[] = [];
-  let current = selectedNodeId ? byId.get(selectedNodeId) : undefined;
-  while (current) {
-    path.unshift(current.title);
-    current = current.parentId ? byId.get(current.parentId) : undefined;
-  }
-  return path.length > 0 ? path.join(" / ") : null;
-}
-
 function addWithAncestors(nodeId: string, byId: Map<string, ContextTreeNode>, visibleIds: Set<string>): void {
   let current = byId.get(nodeId);
   while (current) {
@@ -1112,39 +618,11 @@ function nodeDepth(node: ContextTreeNode, byId: Map<string, ContextTreeNode>, de
   return depth;
 }
 
-/**
- * Collapsed-state label for the "hidden quiet branches" toggle.
- *
- * Old copy ("5 hidden quiet areas" / "5 hidden · 2 updated") leaned on the
- * internal term "quiet area" (= a tree node with no changes in the current
- * window) and read as a static status string — not as something you could
- * click. The new copy uses the standard "Show N more" affordance verb so
- * it reads as an action, and surfaces the changed-count tail only when it
- * matters (≥1 hidden node has its own change in-window).
- */
 function summaryTitle(hiddenCount: number, changedHiddenCount: number): string {
   if (changedHiddenCount > 0) {
     return `Show ${hiddenCount} more · ${changedHiddenCount} changed`;
   }
   return `Show ${hiddenCount} more`;
-}
-
-function changedCounts(nodes: ContextTreeNode[]): Map<string, number> {
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const counts = new Map<string, number>();
-  for (const node of nodes) {
-    if (!node.changeType) continue;
-    let current: ContextTreeNode | undefined = node;
-    while (current) {
-      counts.set(current.id, (counts.get(current.id) ?? 0) + 1);
-      current = current.parentId ? byId.get(current.parentId) : undefined;
-    }
-  }
-  return counts;
-}
-
-function windowSummary(window: ContextTreeWindow): string {
-  return CONTEXT_WINDOWS.find((option) => option.value === window)?.summary ?? "last 7 days";
 }
 
 function severityColor(severity: ContextTreeSnapshot["contextStatus"]["severity"]): string {
@@ -1153,119 +631,22 @@ function severityColor(severity: ContextTreeSnapshot["contextStatus"]["severity"
   return "var(--danger)";
 }
 
-function contextRevisionLabel(snapshot: ContextTreeSnapshot): string | null {
-  const shortCommit = snapshot.headCommit?.slice(0, 7) ?? null;
-  if (snapshot.branch && shortCommit) return `Source: ${snapshot.branch} @ ${shortCommit}`;
-  if (snapshot.branch) return `Branch: ${snapshot.branch}`;
-  if (shortCommit) return `Commit: ${shortCommit}`;
-  return null;
+function redactRepoForDisplay(repo: string): string {
+  return repo.replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@");
 }
 
-function changeBadgeLabel(type: ContextTreeChangeType): string {
-  if (type === "added") return "New";
-  if (type === "removed") return "Removed";
-  return "Updated";
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
 }
 
-function changeTypeLabel(type: ContextTreeChangeType): string {
-  if (type === "added") return "New knowledge";
-  if (type === "removed") return "Removed knowledge";
-  return "Updated knowledge";
-}
-
-function updateDetailMeaning(update: ContextTreeUpdate): string {
-  if (update.changeType === "added") {
-    return `Agents can use new team knowledge when working on ${update.affectedContextArea}.`;
-  }
-  if (update.changeType === "removed") {
-    return `Agents should stop using the old team knowledge for ${update.affectedContextArea}.`;
-  }
-  return `Agents can use updated team knowledge when working on ${update.affectedContextArea}.`;
-}
-
-function updateCardHeadline(update: ContextTreeUpdate): string {
-  const actor = update.changedBy ?? "Someone";
-  const action = update.changeType === "added" ? "added" : update.changeType === "removed" ? "removed" : "updated";
-  return `${actor} ${action} ${update.title}`;
-}
-
-function changedByLabel(update: ContextTreeUpdate): string {
-  const actor = update.changedBy ?? "Someone";
-  const action = update.changeType === "added" ? "Added" : update.changeType === "removed" ? "Removed" : "Updated";
-  return `${action} by ${actor}`;
-}
-
-function updateDetailActivity(update: ContextTreeUpdate): string {
-  const actor = update.changedBy ?? "Someone";
-  const action = update.changeType === "added" ? "added" : update.changeType === "removed" ? "removed" : "updated";
-  const summary = usefulSummary(update);
-  return summary ? `${actor} ${action} ${update.title}: ${summary}` : `${actor} ${action} ${update.title}.`;
-}
-
-function summaryText(update: ContextTreeUpdate): string {
-  return update.summary.replace(/^updated:\s*/i, "");
-}
-
-function usefulSummary(update: ContextTreeUpdate): string | null {
-  const summary = summaryText(update);
-  const generic = new Set(["updated this team knowledge", "added this team knowledge", "removed this team knowledge"]);
-  if (generic.has(summary.toLowerCase())) return null;
-  if (summary.length < 12) return null;
-  if (/[,;:]$/.test(summary)) return null;
-  return summary;
-}
-
-function ownerText(owners: string[]): string {
-  if (owners.length === 0) return "No owner";
-  if (owners.length === 1) return owners[0] ?? "No owner";
-  return owners.join(", ");
-}
-
-function ownerLine(owners: string[]): string {
-  if (owners.length === 0) return "Owner not set";
-  if (owners.length === 1) return `Owner: ${owners[0] ?? "Unknown"}`;
-  return `Owners: ${owners.join(", ")}`;
-}
-
-function relatedText(count: number): string {
-  return `${count} linked context${count === 1 ? "" : "s"}`;
-}
-
-function areaLabel(path: string): string | null {
-  const parts = path.split("/").filter(Boolean);
-  if (parts.length <= 1) return null;
-  return parts.slice(0, -1).map(titleFromPathSegment).join(" / ");
-}
-
-function pathLabel(path: string): string {
-  return path.split("/").filter(Boolean).map(titleFromPathSegment).join(" / ") || "root";
-}
-
-function titleFromPathSegment(segment: string): string {
-  return segment
-    .replace(/[-_]+/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase())
-    .trim();
-}
-
-function changeColor(type: ContextTreeChangeType): string {
-  if (type === "added") return "var(--ok)";
-  if (type === "edited") return "var(--warn)";
-  return "var(--danger)";
-}
-
-function overviewNodeColor(node: LayoutNode): string {
-  if (node.isSummary) return "var(--bg-sunken)";
-  if (node.selected) return "var(--accent)";
-  // Nodes with their own change-type get severity color (added=ok / edited=warn /
-  // removed=danger) so the map surfaces *what kind* of change happened, not just
-  // that something changed. Pure rollup branches stay neutral accent-bg.
-  if (node.changeType) return changeColor(node.changeType);
-  if (node.updateCount > 0) return "var(--accent-bg)";
-  return "var(--bg-raised)";
-}
-
-function overviewNodeBorder(node: LayoutNode): string {
-  if (node.changeType) return changeColor(node.changeType);
-  return "var(--border-strong)";
+function exactTimeLabel(value: string | null): string | null {
+  if (!value) return null;
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
 }

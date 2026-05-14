@@ -349,6 +349,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     sessionCtx: SessionContext,
     sessionId: string,
   ): Promise<SDKUserMessage> {
+    emitContextTreeUsage(sessionCtx);
+
     // Image messages — two supported shapes:
     //   1. imageRef: `{imageId, mimeType, filename, size}` — new path. Bytes
     //      live on local disk, delivered via the `image_payload` WS push.
@@ -423,6 +425,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       parent_tool_use_id: null,
       session_id: sessionId,
     };
+  }
+
+  function emitContextTreeUsage(sessionCtx: SessionContext): void {
+    if (!contextTreePath) return;
+    sessionCtx.emitEvent({
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: contextTreeRepoUrl },
+    });
   }
 
   /**

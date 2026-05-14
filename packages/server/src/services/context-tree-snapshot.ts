@@ -13,6 +13,7 @@ import type {
   ContextTreeSnapshot,
   ContextTreeSummary,
   ContextTreeUpdate,
+  ContextTreeUsageSummary,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import matter from "gray-matter";
@@ -45,6 +46,10 @@ const WINDOW_DAYS: Record<ContextTreeSnapshotWindow, number> = {
   "7d": 7,
   "30d": 30,
 };
+
+export function contextTreeSnapshotWindowDays(window: ContextTreeSnapshotWindow): number {
+  return WINDOW_DAYS[window];
+}
 
 type ParsedMarkdown = {
   content: string;
@@ -179,6 +184,7 @@ export async function getContextTreeSnapshot(
       snapshotStatus: statusWarning?.stale ? "stale" : "active",
       contextStatus: contextStatus(statusWarning),
       summary,
+      usage: emptyUsageSummary(window),
       updates,
       nodes: nodesWithGhosts,
       edges: tree.edges,
@@ -454,6 +460,10 @@ function withSnapshotStatus(
   };
 }
 
+function emptyUsageSummary(window: ContextTreeSnapshotWindow): ContextTreeUsageSummary {
+  return { windowDays: WINDOW_DAYS[window], agentCount: 0, usageCount: 0 };
+}
+
 function isSafeBranchName(branch: string): boolean {
   if (branch.startsWith("-")) return false;
   if (branch.includes("..") || branch.includes("@{") || branch.includes("\\")) return false;
@@ -485,6 +495,7 @@ function unavailableSnapshot(repo: string | null, branch: string | null, detail:
       severity: "error",
     },
     summary: { addedCount: 0, editedCount: 0, removedCount: 0, changedNodeCount: 0 },
+    usage: emptyUsageSummary(CONTEXT_TREE_SNAPSHOT_WINDOWS.SEVEN_DAYS),
     updates: [],
     nodes: [],
     edges: [],

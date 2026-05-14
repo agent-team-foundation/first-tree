@@ -1,7 +1,12 @@
-import type { SessionEvent, SessionEventKind } from "@agent-team-foundation/first-tree-hub-shared";
+import type {
+  ContextTreeUsageSummary,
+  SessionEvent,
+  SessionEventKind,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { sessionEventSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { uuidv7 } from "../uuid.js";
 
@@ -138,4 +143,32 @@ export async function listEvents(
 /** Delete all events for a session — called on eviction / termination. */
 export async function clearEvents(db: Database, agentId: string, chatId: string): Promise<void> {
   await db.delete(sessionEvents).where(and(eq(sessionEvents.agentId, agentId), eq(sessionEvents.chatId, chatId)));
+}
+
+export async function summarizeContextTreeUsage(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+): Promise<ContextTreeUsageSummary> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const [row] = await db
+    .select({
+      agentCount: sql<number>`count(distinct ${sessionEvents.agentId})::int`,
+      usageCount: sql<number>`count(*)::int`,
+    })
+    .from(sessionEvents)
+    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+    .where(
+      and(
+        eq(agents.organizationId, organizationId),
+        eq(sessionEvents.kind, "context_tree_usage"),
+        gte(sessionEvents.createdAt, since),
+      ),
+    );
+
+  return {
+    windowDays,
+    agentCount: row?.agentCount ?? 0,
+    usageCount: row?.usageCount ?? 0,
+  };
 }

@@ -54,7 +54,13 @@ export type TurnEndEventPayload = {
   status: "success" | "error";
 };
 
-export type SessionEventKind = "tool_call" | "error" | "assistant_text" | "thinking" | "turn_end";
+export type SessionEventKind =
+  | "tool_call"
+  | "error"
+  | "assistant_text"
+  | "thinking"
+  | "turn_end"
+  | "context_tree_usage";
 
 export type SessionEventRow = {
   id: string;

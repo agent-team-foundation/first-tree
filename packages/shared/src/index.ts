@@ -209,6 +209,7 @@ export {
   type ContextTreeStatusSeverity,
   type ContextTreeSummary,
   type ContextTreeUpdate,
+  type ContextTreeUsageSummary,
   contextTreeChangeSchema,
   contextTreeChangeTypeSchema,
   contextTreeEdgeKindSchema,
@@ -222,6 +223,7 @@ export {
   contextTreeStatusSeveritySchema,
   contextTreeSummarySchema,
   contextTreeUpdateSchema,
+  contextTreeUsageSummarySchema,
 } from "./schemas/context-tree.js";
 export {
   GITHUB_ACCOUNT_TYPES,
@@ -508,6 +510,8 @@ export {
 export {
   type AssistantTextEventPayload,
   assistantTextEventPayload,
+  type ContextTreeUsageEventPayload,
+  contextTreeUsageEventPayload,
   type ErrorEventPayload,
   errorEventPayload,
   type SessionEvent,

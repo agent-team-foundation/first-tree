@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-export const sessionEventKind = z.enum(["tool_call", "error", "assistant_text", "thinking", "turn_end"]);
+export const sessionEventKind = z.enum([
+  "tool_call",
+  "error",
+  "assistant_text",
+  "thinking",
+  "turn_end",
+  "context_tree_usage",
+]);
 export type SessionEventKind = z.infer<typeof sessionEventKind>;
 
 export const toolCallEventPayload = z.object({
@@ -49,12 +56,19 @@ export const turnEndEventPayload = z.object({
 });
 export type TurnEndEventPayload = z.infer<typeof turnEndEventPayload>;
 
+export const contextTreeUsageEventPayload = z.object({
+  purpose: z.literal("design_decision"),
+  treeRepoUrl: z.string().nullable(),
+});
+export type ContextTreeUsageEventPayload = z.infer<typeof contextTreeUsageEventPayload>;
+
 export const sessionEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tool_call"), payload: toolCallEventPayload }),
   z.object({ kind: z.literal("error"), payload: errorEventPayload }),
   z.object({ kind: z.literal("assistant_text"), payload: assistantTextEventPayload }),
   z.object({ kind: z.literal("thinking"), payload: thinkingEventPayload }),
   z.object({ kind: z.literal("turn_end"), payload: turnEndEventPayload }),
+  z.object({ kind: z.literal("context_tree_usage"), payload: contextTreeUsageEventPayload }),
 ]);
 export type SessionEvent = z.infer<typeof sessionEventSchema>;
 
@@ -71,6 +85,7 @@ export const sessionEventRowSchema = z.object({
     assistantTextEventPayload,
     thinkingEventPayload,
     turnEndEventPayload,
+    contextTreeUsageEventPayload,
   ]),
   createdAt: z.string(),
 });
