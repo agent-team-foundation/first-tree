@@ -40,6 +40,22 @@ import { recomputeWatchersForAgent } from "./watcher.js";
 const RESERVED_AGENT_NAME_PREFIX = "__";
 
 /**
+ * Derive the relative URL clients should use to fetch a manager-uploaded
+ * avatar image. Returns `null` when no image is set. Embeds the upload
+ * timestamp as `?v=<epoch>` so a fresh upload busts any browser cache
+ * that may have memoised the previous version.
+ *
+ * Auth: the image route is intentionally public read — the URL leaks no
+ * more than the agent's UUID, which is already required to address it.
+ * Keeping it unauthenticated lets `<img src>` render without bespoke
+ * fetch-and-blob plumbing.
+ */
+export function agentAvatarImageUrl(uuid: string, updatedAt: Date | null | undefined): string | null {
+  if (!updatedAt) return null;
+  return `/api/v1/agents/${uuid}/avatar?v=${updatedAt.getTime()}`;
+}
+
+/**
  * True iff `clients.metadata.capabilities` is a non-empty object — i.e. the
  * client has reported at least one runtime probe result. Used to distinguish
  * "we don't know what's installed yet" (empty / never reported) from
@@ -514,6 +530,8 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -565,6 +583,8 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -619,6 +639,8 @@ export async function listAgentsForMember(
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -687,6 +709,9 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   }
   if (data.visibility !== undefined) updates.visibility = data.visibility;
   if (data.metadata !== undefined) updates.metadata = data.metadata;
+  // Explicit null clears the override (renderer falls back to djb2 hash).
+  // Omitting the field leaves the column untouched.
+  if (data.avatarColorToken !== undefined) updates.avatarColorToken = data.avatarColorToken;
 
   if (data.managerId !== undefined) {
     if (data.managerId === null) {
@@ -852,4 +877,87 @@ export async function deleteAgent(db: Database, uuid: string) {
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return agent;
+}
+
+/**
+ * Supported avatar-image MIME types. The web client always uploads WEBP after
+ * its own resize step; we accept PNG/JPEG too so a caller using the raw HTTP
+ * API (curl, scripts) doesn't have to re-encode. Anything else is rejected at
+ * the boundary — we never store an unknown content type.
+ */
+export const SUPPORTED_AVATAR_IMAGE_MIMES = ["image/webp", "image/png", "image/jpeg"] as const;
+export type SupportedAvatarImageMime = (typeof SUPPORTED_AVATAR_IMAGE_MIMES)[number];
+
+/** Hard server-side ceiling for the stored bytea blob. Client pre-resizes to ~50KB. */
+export const MAX_AVATAR_IMAGE_BYTES = 512 * 1024;
+
+function isSupportedAvatarMime(mime: string): mime is SupportedAvatarImageMime {
+  return SUPPORTED_AVATAR_IMAGE_MIMES.find((m) => m === mime) !== undefined;
+}
+
+/**
+ * Fetch the avatar image blob for an agent. Returns `null` when no image
+ * is set (the column is NULL). The data + mime pair is always coherent
+ * (set/cleared together by the service writes below).
+ */
+export async function getAgentAvatarImage(
+  db: Database,
+  uuid: string,
+): Promise<{ data: Buffer; mime: string; updatedAt: Date } | null> {
+  const [row] = await db
+    .select({
+      data: agents.avatarImageData,
+      mime: agents.avatarImageMime,
+      updatedAt: agents.avatarImageUpdatedAt,
+    })
+    .from(agents)
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .limit(1);
+  if (!row || !row.data || !row.mime || !row.updatedAt) return null;
+  return { data: row.data, mime: row.mime, updatedAt: row.updatedAt };
+}
+
+/** Replace (or set) an agent's avatar image. Validates mime + size. */
+export async function setAgentAvatarImage(db: Database, uuid: string, data: Buffer, mime: string): Promise<Date> {
+  if (!isSupportedAvatarMime(mime)) {
+    throw new BadRequestError(`Unsupported avatar image type "${mime}". Use PNG, JPEG, or WEBP.`);
+  }
+  if (data.length === 0) {
+    throw new BadRequestError("Avatar image payload is empty.");
+  }
+  if (data.length > MAX_AVATAR_IMAGE_BYTES) {
+    throw new BadRequestError(`Avatar image is too large (${data.length} bytes; max ${MAX_AVATAR_IMAGE_BYTES}).`);
+  }
+  const now = new Date();
+  const result = await db
+    .update(agents)
+    .set({
+      avatarImageData: data,
+      avatarImageMime: mime,
+      avatarImageUpdatedAt: now,
+      updatedAt: now,
+    })
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .returning({ uuid: agents.uuid });
+  if (result.length === 0) {
+    throw new NotFoundError(`Agent "${uuid}" not found`);
+  }
+  return now;
+}
+
+/** Clear an agent's avatar image (falls back to color + initial). */
+export async function clearAgentAvatarImage(db: Database, uuid: string): Promise<void> {
+  const result = await db
+    .update(agents)
+    .set({
+      avatarImageData: null,
+      avatarImageMime: null,
+      avatarImageUpdatedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .returning({ uuid: agents.uuid });
+  if (result.length === 0) {
+    throw new NotFoundError(`Agent "${uuid}" not found`);
+  }
 }

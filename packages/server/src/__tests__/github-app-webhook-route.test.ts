@@ -1,7 +1,8 @@
 import { createHmac, randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
+import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
@@ -322,6 +323,117 @@ describe("POST /webhooks/github-app", () => {
       .from(githubEntityChatMappings)
       .where(eq(githubEntityChatMappings.entityType, "issue"));
     expect(issueMappings).toEqual([]);
+  });
+
+  it("pull_request.closed (merged=true) → auto-archives bound chats without delivering a message", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100030;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#820",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const res = await postWebhook(app, "pull_request", {
+      action: "closed",
+      pull_request: {
+        number: 820,
+        title: "Implement archive on merge",
+        html_url: "https://github.com/owner/repo/pull/820",
+        body: "",
+        merged: true,
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "merger", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // normalize still drops pull_request.closed → no audience/deliver run.
+    expect(res.json().handled).toBe(false);
+
+    const [stateRow] = await app.db
+      .select({ engagementStatus: chatUserState.engagementStatus })
+      .from(chatUserState)
+      .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, human)))
+      .limit(1);
+    expect(stateRow?.engagementStatus).toBe("archived");
+
+    const sent = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(sent).toHaveLength(0);
+  });
+
+  it("pull_request.closed without merge does not archive", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100031;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#821",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const res = await postWebhook(app, "pull_request", {
+      action: "closed",
+      pull_request: {
+        number: 821,
+        title: "Abandoned PR",
+        html_url: "https://github.com/owner/repo/pull/821",
+        body: "",
+        merged: false,
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "closer", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().handled).toBe(false);
+
+    const stateRows = await app.db
+      .select()
+      .from(chatUserState)
+      .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, human)));
+    expect(stateRows).toHaveLength(0);
   });
 
   it("duplicate delivery (same x-github-delivery) is deduped on the second call", async () => {

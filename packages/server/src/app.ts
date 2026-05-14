@@ -22,7 +22,7 @@ import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { agentActivityRoutes } from "./api/agent-activity.js";
-import { agentRoutes } from "./api/agents.js";
+import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
 import { agentConfigRoutes } from "./api/agents-config.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
@@ -36,6 +36,7 @@ import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
 import { meRoutes } from "./api/me.js";
+import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
 import { orgAdapterMappingRoutes } from "./api/orgs/adapter-mappings.js";
 import { orgAdapterStatusRoutes } from "./api/orgs/adapter-status.js";
@@ -440,6 +441,10 @@ export async function buildApp(config: Config) {
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
+      // Public read for manager-uploaded agent avatars — `<img src>` cannot
+      // attach the member-JWT, so the read path lives outside the auth scope.
+      // Writes (PUT/DELETE) stay inside `agentRoutes` and are JWT-gated.
+      await api.register(publicAgentAvatarRoutes, { prefix: "/agents" });
 
       // ── Class A — `/me`, `/auth` (user-scoped) ──────────────────────────
       await api.register(
@@ -453,6 +458,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
+          await scope.register(meDocsRoutes, { workspacesRoot: config.workspace.root });
         }),
         { prefix: "" },
       );

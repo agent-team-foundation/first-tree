@@ -31,6 +31,7 @@ type SinkFixtures = {
   participants: ChatParticipantDetail[];
   sendMessage?: ReturnType<typeof vi.fn>;
   listChatParticipants?: ReturnType<typeof vi.fn>;
+  getDocumentBasePath?: ReturnType<typeof vi.fn>;
 };
 
 function buildSink(fx: SinkFixtures) {
@@ -62,6 +63,7 @@ function buildSink(fx: SinkFixtures) {
     },
     log: (msg) => logs.push(msg),
     participants: createParticipantCache(sdk, "chat-1", (msg) => logs.push(msg)),
+    getDocumentBasePath: fx.getDocumentBasePath,
   });
 
   return { sink, sendMessage, listChatParticipants, logs };
@@ -92,6 +94,19 @@ describe("createResultSink — forwardResult enrichment", () => {
 
     const body = sendMessage.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(body.metadata).toBeUndefined();
+  });
+
+  it("attaches documentContext when a repo-local document base path is available", async () => {
+    const { sink, sendMessage } = buildSink({
+      trigger: { messageId: "m1", senderId: "agent-peer" },
+      participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
+      getDocumentBasePath: vi.fn().mockResolvedValue("first-tree-hub"),
+    });
+
+    await sink("see [design](docs/design.md)");
+
+    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { documentContext?: { basePath?: string } } };
+    expect(body.metadata?.documentContext).toEqual({ basePath: "first-tree-hub" });
   });
 
   it("emits default trigger mention in a 2-person direct chat when peer is mention_only (agent↔agent)", async () => {

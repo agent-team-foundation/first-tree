@@ -26,11 +26,11 @@ function repoFullName(payload: unknown): string | null {
   return typeof repo?.full_name === "string" && repo.full_name.length > 0 ? repo.full_name : null;
 }
 
-function readNumber(value: unknown): number | null {
+export function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function readString(value: unknown): string | null {
+export function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 

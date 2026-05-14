@@ -15,10 +15,11 @@ import {
   markInstallationUnsuspended,
   upsertInstallationFromMetadata,
 } from "../../services/github-app-installations.js";
+import { archiveChatsForMergedPr } from "../../services/github-archive-on-merge.js";
 import { resolveAudience } from "../../services/github-audience.js";
 import { deliverNormalizedEvent } from "../../services/github-delivery.js";
 import { normalizeGithubEvent } from "../../services/github-normalize.js";
-import { isRecord } from "./github-entity.js";
+import { isRecord, readNumber, readString } from "./github-entity.js";
 
 const log = createLogger("GithubAppWebhook");
 
@@ -203,6 +204,34 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
 
       const deliveryHeader = request.headers["x-github-delivery"];
       const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
+
+      // Bypass: PR merged → auto-archive every chat bound to this PR for the
+      // owning humans. Runs independently of the normalize/audience/deliver
+      // pipeline (which still drops pull_request.closed in Stage 1) so this
+      // never produces an inbox message. Idempotent under retries — sits
+      // before claimEvent on purpose so the archive does not get dropped on
+      // a retry whose normalized event was already claimed by a previous
+      // delivery attempt.
+      if (eventType === "pull_request" && isRecord(payload) && payload.action === "closed") {
+        const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+        const repo = isRecord(payload.repository) ? payload.repository : null;
+        const repoFullName = readString(repo?.full_name);
+        const prNumber = readNumber(pr?.number);
+        const isMerged = pr?.merged === true;
+        if (isMerged && repoFullName && prNumber !== null) {
+          try {
+            const stats = await archiveChatsForMergedPr(app.db, {
+              organizationId: installation.hubOrganizationId,
+              repoFullName,
+              prNumber,
+            });
+            log.info({ entityKey: `${repoFullName}#${prNumber}`, ...stats }, "auto-archived chats on PR merge");
+          } catch (err) {
+            // Best-effort: archive failure must not block normalize/deliver.
+            log.error({ err, repoFullName, prNumber }, "failed to auto-archive chats on PR merge");
+          }
+        }
+      }
 
       const event = normalizeGithubEvent(eventType, payload, source, deliveryId);
       if (!event) {

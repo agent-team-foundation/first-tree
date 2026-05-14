@@ -50,12 +50,15 @@ export {
   type AgentStatus,
   type AgentType,
   type AgentVisibility,
+  AVATAR_COLOR_TOKENS,
+  type AvatarColorToken,
   agentPinnedMessageSchema,
   agentSchema,
   agentSourceSchema,
   agentStatusSchema,
   agentTypeSchema,
   agentVisibilitySchema,
+  avatarColorTokenSchema,
   type ContextTreeInfo,
   type CreateAgent,
   contextTreeInfoSchema,
@@ -320,6 +323,16 @@ export {
   meChatRowSchema,
   meChatSourceCountsSchema,
 } from "./schemas/me-chat.js";
+export {
+  type DocumentContext,
+  documentContextSchema,
+  type GetMeDoc,
+  type GetMeDocResponse,
+  getMeDocResponseSchema,
+  getMeDocSchema,
+  type WorkspaceDocRef,
+  workspaceDocRefSchema,
+} from "./schemas/me-doc.js";
 export {
   type CreateOrgFromMe,
   createOrgFromMeSchema,

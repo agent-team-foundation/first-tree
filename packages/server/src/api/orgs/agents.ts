@@ -9,6 +9,7 @@ import { z } from "zod";
 import { ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import * as agentService from "../../services/agent.js";
+import { agentAvatarImageUrl } from "../../services/agent.js";
 import { sendToClient } from "../../services/connection-manager.js";
 
 /**
@@ -54,7 +55,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     const { type } = listAgentsFilterSchema.parse(request.query);
     const result = await agentService.listAgentsForMember(app.db, scope, query.limit, query.cursor, type);
     return {
-      items: result.items.map((a) => ({
+      items: result.items.map(({ avatarImageUpdatedAt, ...a }) => ({
         ...a,
         managerId: a.managerId ?? null,
         presenceStatus: a.presenceStatus ?? "offline",
@@ -64,6 +65,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
         runtimeType: a.runtimeType ?? null,
         runtimeState: a.runtimeState ?? null,
         activeSessions: a.activeSessions ?? null,
+        avatarImageUrl: agentAvatarImageUrl(a.uuid, avatarImageUpdatedAt),
       })),
       nextCursor: result.nextCursor,
     };
@@ -82,7 +84,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     const query = paginationQuerySchema.parse(request.query);
     const result = await agentService.listAgentsForAdmin(app.db, scope, query.limit, query.cursor);
     return {
-      items: result.items.map((a) => ({
+      items: result.items.map(({ avatarImageUpdatedAt, ...a }) => ({
         ...a,
         managerId: a.managerId ?? null,
         presenceStatus: a.presenceStatus ?? "offline",
@@ -92,6 +94,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
         runtimeType: a.runtimeType ?? null,
         runtimeState: a.runtimeState ?? null,
         activeSessions: a.activeSessions ?? null,
+        avatarImageUrl: agentAvatarImageUrl(a.uuid, avatarImageUpdatedAt),
       })),
       nextCursor: result.nextCursor,
     };

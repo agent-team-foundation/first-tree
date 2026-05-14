@@ -14,6 +14,7 @@ import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
+import { agentAvatarImageUrl } from "../services/agent.js";
 import { ensureParticipant, joinChat, leaveChat } from "../services/chat.js";
 import { prepareImageOutbound } from "../services/image-broadcast.js";
 import {
@@ -57,7 +58,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const agentRows =
       participantAgentIds.length > 0
         ? await app.db
-            .select({ agentId: agents.uuid, displayName: agents.displayName, type: agents.type })
+            .select({
+              agentId: agents.uuid,
+              displayName: agents.displayName,
+              type: agents.type,
+              avatarColorToken: agents.avatarColorToken,
+              avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+            })
             .from(agents)
             .where(inArray(agents.uuid, participantAgentIds))
         : [];
@@ -68,6 +75,8 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         agentId: p.agentId,
         displayName: meta?.displayName ?? p.agentId,
         type: meta?.type ?? "unknown",
+        avatarColorToken: meta?.avatarColorToken ?? null,
+        avatarImageUrl: agentAvatarImageUrl(p.agentId, meta?.avatarImageUpdatedAt ?? null),
       };
     });
     const title = resolveChatTitle(chat.topic, firstMessagePreview, participantsForTitle, scope.humanAgentId);
