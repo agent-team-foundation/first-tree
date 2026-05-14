@@ -94,7 +94,7 @@ async function sendMessageInner(
         .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"))),
       tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1),
       tx
-        .select({ inboxId: agents.inboxId, organizationId: agents.organizationId })
+        .select({ inboxId: agents.inboxId, organizationId: agents.organizationId, type: agents.type })
         .from(agents)
         .where(eq(agents.uuid, senderId))
         .limit(1),
@@ -102,6 +102,26 @@ async function sendMessageInner(
     const chatType = chatRow?.type ?? null;
     if (!senderRow) {
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
+    }
+
+    // 1b. Defensive: unwrap content that was JSON.stringify-ed once before the
+    //     agent passed it to the CLI / API. The bad shape is an outer `"..."`
+    //     wrapper + interior `\n` / `\"` escape sequences; the UI renders it
+    //     as a raw quoted line instead of markdown. See issue #389.
+    //
+    //     Guarded by sender type (human-typed quoted phrases never touched)
+    //     and by a strict structural match (see `maybeUnwrapDoubleEncoded`).
+    //     Non-string content (e.g. structured question payloads) is bypassed.
+    let effectiveContent: SendMessage["content"] = data.content;
+    if (senderRow.type !== "human" && typeof effectiveContent === "string") {
+      const unwrapped = maybeUnwrapDoubleEncoded(effectiveContent);
+      if (unwrapped !== null) {
+        log.warn(
+          { metric: "double_encoded_content_unwrapped_total", chatId, senderId },
+          "agent sent JSON-encoded string content — unwrapping to restore markdown rendering",
+        );
+        effectiveContent = unwrapped;
+      }
     }
 
     // `replyTo` is a sender-declared routing promise — the sender is saying
@@ -129,7 +149,7 @@ async function sendMessageInner(
     const explicitMentions = Array.isArray(explicitMentionsRaw)
       ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
       : [];
-    const contentText = typeof data.content === "string" ? data.content : "";
+    const contentText = typeof effectiveContent === "string" ? effectiveContent : "";
     const resolved = contentText ? extractMentions(contentText, participants) : [];
     const mergedMentions = [...new Set([...explicitMentions, ...resolved])];
     const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
@@ -180,7 +200,7 @@ async function sendMessageInner(
     //
     //     Driven by its own opt-in flag (separate from enforceGroupMention) so
     //     admin/web and adapter paths can validate without mutating content.
-    let outboundContent = data.content;
+    let outboundContent = effectiveContent;
     if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
       const present = new Set(scanMentionTokens(outboundContent));
       const missingNames: string[] = [];
@@ -418,6 +438,36 @@ async function sendMessageInner(
   });
 
   return { message: txResult.message, recipients: txResult.recipients };
+}
+
+/**
+ * Detect agent-sent content that was JSON.stringify-ed once before reaching
+ * the CLI / API. The bad shape is an outer `"..."` wrapper + interior `\n` /
+ * `\"` escape sequences, which the UI renders as a quoted literal instead of
+ * markdown (issue #389). Returns the unwrapped inner string on a confident
+ * match, or `null` to leave the content alone.
+ *
+ * Match conditions (all required) — kept strict so legitimate human content
+ * that happens to look like a quoted phrase is never touched. The caller is
+ * additionally responsible for restricting this to non-human senders.
+ *
+ *   - first and last char are `"`
+ *   - body contains at least one typical JSON escape sequence
+ *     (`\n`, `\r`, `\t`, `\"`, or `\\`)
+ *   - `JSON.parse` succeeds
+ *   - the parse result is a `string` (excludes `{...}`, `[...]`, numbers)
+ */
+export function maybeUnwrapDoubleEncoded(content: string): string | null {
+  if (content.length < 4) return null;
+  if (content.charCodeAt(0) !== 0x22 /* " */) return null;
+  if (content.charCodeAt(content.length - 1) !== 0x22 /* " */) return null;
+  if (!/\\[nrt"\\]/.test(content)) return null;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 export const LOOP_OBSERVATION_WINDOW = 4;

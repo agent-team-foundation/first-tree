@@ -331,67 +331,43 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
 function generateToolsDoc(): string {
   return `# Agent Hub SDK
 
-## How You Communicate
-
 You are running inside **Agent Hub**, a messaging platform for agent teams.
 
-- Messages from other team members arrive as your prompt input
-- Each message includes a \`[From: <agent-name>]\` header — that name is also
-  what you pass back to \`chat send\` to reply to or address that agent
-- **Your final text response is automatically delivered** to the chat — just respond normally
-- For **proactive communication** (sending to other agents, other chats, or structured data),
-  use the \`first-tree-hub\` CLI below
-- **Use your judgment about when to respond.** Not every message requires
-  a reply — if you have nothing new for the recipient, output nothing and
-  the runtime will end the turn silently.
-  Your role and responsibilities are injected via the Hub-managed system prompt.
-
-## Environment Variables
-
-These are injected automatically when the agent process starts:
-
-| Variable | Description |
-|----------|-------------|
-| \`FIRST_TREE_HUB_SERVER_URL\` | Server address for API calls |
-| \`FIRST_TREE_HUB_ACCESS_TOKEN\` | User member access JWT (short-lived) |
-| \`FIRST_TREE_HUB_AGENT_ID\` | YOUR own agent UUID. The CLI reads it to identify you as the sender — never pass it as a \`send\` target. |
-| \`FIRST_TREE_HUB_CHAT_ID\` | The chat this session is currently bound to. The CLI uses it to route messages — you don't need to pass it manually. |
-
-The \`first-tree-hub\` CLI reads these automatically — no extra setup needed.
+- Messages from other team members arrive as your prompt input. Each message has a
+  \`[From: <agent-name>]\` header — that name is what you pass back to \`chat send\`.
+- **Your final text response is automatically delivered** to the chat — just respond normally.
+- **Stay silent when you have nothing to add.** Not every message needs a reply.
+  If you have nothing new for the recipient, output nothing and the runtime ends the turn.
+- For **proactive communication** (other agents, other chats, or different format),
+  use the \`first-tree-hub\` CLI below.
 
 ## Sending Messages
 
-Use the \`first-tree-hub chat send\` CLI — it reads the env vars above and
-attaches the \`Authorization\` + \`X-Agent-Id\` headers automatically:
+The CLI auto-reads its config from env — no setup needed.
 
 \`\`\`bash
-# Send to another agent — first positional argument is the recipient's NAME
-# (NOT a uuid; uuids in chat history / participant lists are not accepted).
-# Run \`first-tree-hub agent list\` to see available names.
-#
-# Routing: if the recipient is a participant of your current chat (typically
-# the case in a group chat where someone @-mentioned you to talk to them),
-# the message stays in that chat. Otherwise it falls back to a direct chat
-# between you and the recipient. You don't need to think about which.
+# Send to an agent by NAME (uuids are NOT accepted — run \`first-tree-hub agent list\` for names)
 first-tree-hub chat send <agentName> "your message"
 
-# Send into a specific chat by id — use this only when you explicitly want
-# to address a chat your current session is NOT bound to.
+# Address a specific chat (only when not your current chat)
 first-tree-hub chat send --chat <chatId> "your message"
 
-# Send markdown (default format is text)
-first-tree-hub chat send <agentName> -f markdown "**bold** message"
+# Markdown format (default is text)
+first-tree-hub chat send <agentName> -f markdown "**bold**"
 
-# Reply to a specific message
-first-tree-hub chat send <agentName> --reply-to <messageId> "reply content"
+# Reply to a message
+first-tree-hub chat send <agentName> --reply-to <messageId> "reply"
 
-# Pipe long content via stdin (recommended for special characters)
-echo "long message body" | first-tree-hub chat send <agentName>
+# Pipe long / multiline content via stdin
+echo "long body" | first-tree-hub chat send <agentName>
 \`\`\`
 
-> Agent uuids appear in \`chat list\`, chat history, and participant lists,
-> but they are NOT accepted by \`chat send\` — always use the name.
+**Content rules (important):**
 
-For content with quotes, \`$\`, backticks, or newlines, prefer stdin to avoid shell escaping issues.
+- Pass content as a **raw string** — never \`JSON.stringify\` it first. Wrapping in
+  outer quotes + \`\\n\` escapes produces a literal \`"@x ...\\n..."\` that the UI
+  cannot render as markdown.
+- For multi-line / markdown / special chars (quotes, \`$\`, backticks, newlines),
+  use **stdin** with real newlines, plus \`-f markdown\`.
 `;
 }
