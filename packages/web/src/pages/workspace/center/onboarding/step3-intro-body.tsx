@@ -160,7 +160,7 @@ function InviteeLoadingBody() {
 
 function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos: OrgSourceReposOutput["repos"] }) {
   const navigate = useNavigate();
-  const { dismissOnboarding } = useAuth();
+  const { dismissOnboarding, markOnboardingCompleted } = useAuth();
   const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -208,12 +208,17 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
         joinPath: "invite",
       });
       void dismissOnboarding();
+      // Terminal state — Step 3 succeeded. Stamps `onboarding_completed_at`
+      // so Settings → Onboarding (sidebar entry + page) hides permanently.
+      // Distinct from dismissOnboarding above, which only hides the
+      // stepper UI and stays reversible via Resume.
+      void markOnboardingCompleted();
       navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start the chat");
       setBusy(false);
     }
-  }, [chosenRepoUrls, treeUrl, navigate, dismissOnboarding]);
+  }, [chosenRepoUrls, treeUrl, navigate, dismissOnboarding, markOnboardingCompleted]);
 
   const handleLater = useCallback(() => {
     void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite" });
@@ -313,7 +318,7 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
 
 function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
   const navigate = useNavigate();
-  const { dismissOnboarding } = useAuth();
+  const { dismissOnboarding, markOnboardingCompleted } = useAuth();
   const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -371,12 +376,15 @@ function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
         joinPath: "invite",
       });
       void dismissOnboarding();
+      // Terminal state — Step 3 succeeded. See InviteeConfirmBody for the
+      // dismissed-vs-completed distinction.
+      void markOnboardingCompleted();
       navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start the chat");
       setBusy(false);
     }
-  }, [selectedRepoUrls, treeUrl, navigate, dismissOnboarding]);
+  }, [selectedRepoUrls, treeUrl, navigate, dismissOnboarding, markOnboardingCompleted]);
 
   const handleLater = useCallback(() => {
     void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite" });
@@ -491,7 +499,7 @@ function InviteeWaitingBody() {
 
 function AdminBindCreateBody() {
   const navigate = useNavigate();
-  const { dismissOnboarding, organizationId } = useAuth();
+  const { dismissOnboarding, markOnboardingCompleted, organizationId } = useAuth();
   const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -650,6 +658,10 @@ function AdminBindCreateBody() {
       // Step 3 launched — auto-dismiss the stepper so it doesn't linger
       // above the user's first chat. No toast here (mid-success path).
       void dismissOnboarding();
+      // Terminal state — Step 3 succeeded. Stamps `onboarding_completed_at`
+      // so Settings → Onboarding hides permanently. Subsequent edits go
+      // through Settings → Team / per-agent settings instead of the wizard.
+      void markOnboardingCompleted();
       navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start the tree-init chat");
@@ -663,6 +675,7 @@ function AdminBindCreateBody() {
     organizationId,
     navigate,
     dismissOnboarding,
+    markOnboardingCompleted,
     addToast,
   ]);
 
