@@ -149,6 +149,12 @@ export const meChatReadResponseSchema = z.object({
 });
 export type MeChatReadResponse = z.infer<typeof meChatReadResponseSchema>;
 
+export const meChatUnreadResponseSchema = z.object({
+  chatId: z.string(),
+  unreadMentionCount: z.number().int(),
+});
+export type MeChatUnreadResponse = z.infer<typeof meChatUnreadResponseSchema>;
+
 export const meChatLeaveResponseSchema = z.object({
   chatId: z.string(),
   membershipKind: meChatMembershipKindSchema.nullable(),

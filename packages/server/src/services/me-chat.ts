@@ -34,6 +34,7 @@ import {
   type MeChatReadResponse,
   type MeChatRow,
   type MeChatSourceCounts,
+  type MeChatUnreadResponse,
   type ToolCallEventPayload,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
@@ -787,6 +788,45 @@ export async function markMeChatRead(db: Database, chatId: string, humanAgentId:
     });
 
   return { chatId, lastReadAt: now.toISOString(), unreadMentionCount: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Mark unread
+// ---------------------------------------------------------------------------
+
+/**
+ * Bump `unread_mention_count` to at least 1 so the chat shows up as unread
+ * in the conversation list (and is matched by `?filter=unread`). Idempotent:
+ * if the row already has a positive count, it stays as-is. `last_read_at`
+ * is intentionally untouched — this is a UI affordance, not a "rewind the
+ * read cursor" operation.
+ */
+export async function markMeChatUnread(
+  db: Database,
+  chatId: string,
+  humanAgentId: string,
+): Promise<MeChatUnreadResponse> {
+  await db
+    .insert(chatUserState)
+    .values({
+      chatId,
+      agentId: humanAgentId,
+      unreadMentionCount: 1,
+    })
+    .onConflictDoUpdate({
+      target: [chatUserState.chatId, chatUserState.agentId],
+      set: {
+        unreadMentionCount: sql`GREATEST(${chatUserState.unreadMentionCount}, 1)`,
+      },
+    });
+
+  const [row] = await db
+    .select({ unreadMentionCount: chatUserState.unreadMentionCount })
+    .from(chatUserState)
+    .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, humanAgentId)))
+    .limit(1);
+
+  return { chatId, unreadMentionCount: row?.unreadMentionCount ?? 1 };
 }
 
 // ---------------------------------------------------------------------------
