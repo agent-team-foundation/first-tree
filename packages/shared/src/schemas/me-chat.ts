@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { chatEngagementStatusSchema } from "./chat.js";
+import { chatSourceSchema } from "./chat-metadata.js";
 
 /**
  * Member-facing chat APIs (`/me/chats*`) for the chat-first workspace.
@@ -31,6 +32,12 @@ export const listMeChatsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(ME_CHAT_MAX_LIMIT).default(ME_CHAT_DEFAULT_LIMIT),
   filter: meChatFilterSchema.default("all"),
   engagement: chatEngagementViewSchema.default("active"),
+  /**
+   * Restrict the conversation list to a single source tag (Manual, GitHub PR,
+   * GitHub Issue, …). Omitted — i.e. unfiltered — returns every source the
+   * caller is in; the workspace UI defaults to `manual`.
+   */
+  source: chatSourceSchema.optional(),
 });
 export type ListMeChatsQuery = z.infer<typeof listMeChatsQuerySchema>;
 
@@ -140,3 +147,43 @@ export const chatMessageFrameSchema = z.object({
   chatId: z.string(),
 });
 export type ChatMessageFrame = z.infer<typeof chatMessageFrameSchema>;
+
+/**
+ * Per-source aggregate for the conversation-list tag bar.
+ *
+ *   - `chatCount` — number of chats the caller is in for this source. Used
+ *     to hide tags whose count is 0 ("don't render a PR tag if there are no
+ *     PRs").
+ *   - `unreadChatCount` — number of chats whose `unread_mention_count > 0`.
+ *     This is "chats with unread mentions", NOT "total mention count", so
+ *     the badge on each tag matches the semantics of the existing `unread`
+ *     filter pill (`totalUnread` in `pages/workspace/conversations`) — a
+ *     `2` on the PR tag means "2 PR chats have unread mentions", which is
+ *     what a user expects to click into.
+ *
+ * The map ALWAYS contains the `manual` key (the default tab is always
+ * available, even at zero counts); other keys are present only when the
+ * caller has at least one chat for that source.
+ */
+export const chatSourceCountSchema = z.object({
+  chatCount: z.number().int().nonnegative(),
+  unreadChatCount: z.number().int().nonnegative(),
+});
+export type ChatSourceCount = z.infer<typeof chatSourceCountSchema>;
+
+export const listMeChatSourceCountsQuerySchema = z.object({
+  engagement: chatEngagementViewSchema.default("active"),
+});
+export type ListMeChatSourceCountsQuery = z.infer<typeof listMeChatSourceCountsQuerySchema>;
+
+export const meChatSourceCountsSchema = z.object({
+  /**
+   * Map keyed by ChatSource. Keys absent from the map mean "no chats for that
+   * source"; the client must not render a tag for them. `manual` is always
+   * present. `partialRecord` (not `record`) so the union of optional keys is
+   * preserved on the TypeScript side — the server only emits keys whose
+   * `chatCount > 0` (plus `manual`).
+   */
+  counts: z.partialRecord(chatSourceSchema, chatSourceCountSchema),
+});
+export type MeChatSourceCounts = z.infer<typeof meChatSourceCountsSchema>;

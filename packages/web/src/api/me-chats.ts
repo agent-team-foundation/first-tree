@@ -1,10 +1,12 @@
 import type {
   AddMeChatParticipants,
+  ChatEngagementView,
   CreateMeChat,
   ListMeChatsQuery,
   ListMeChatsResponse,
   MeChatLeaveResponse,
   MeChatReadResponse,
+  MeChatSourceCounts,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { api, withOrg } from "./client.js";
 
@@ -17,7 +19,9 @@ import { api, withOrg } from "./client.js";
  * chat's UUID is enough for the server to resolve the owning org.
  */
 
-export type ListMeChatsParams = Partial<Pick<ListMeChatsQuery, "cursor" | "limit" | "filter" | "engagement">>;
+export type ListMeChatsParams = Partial<
+  Pick<ListMeChatsQuery, "cursor" | "limit" | "filter" | "engagement" | "source">
+>;
 
 export function listMeChats(params?: ListMeChatsParams): Promise<ListMeChatsResponse> {
   const qs = new URLSearchParams();
@@ -25,8 +29,16 @@ export function listMeChats(params?: ListMeChatsParams): Promise<ListMeChatsResp
   if (params?.cursor) qs.set("cursor", params.cursor);
   if (params?.filter) qs.set("filter", params.filter);
   if (params?.engagement) qs.set("engagement", params.engagement);
+  if (params?.source) qs.set("source", params.source);
   const query = qs.toString();
   return api.get<ListMeChatsResponse>(withOrg(`/chats${query ? `?${query}` : ""}`));
+}
+
+export function listMeChatSourceCounts(params?: { engagement?: ChatEngagementView }): Promise<MeChatSourceCounts> {
+  const qs = new URLSearchParams();
+  if (params?.engagement) qs.set("engagement", params.engagement);
+  const query = qs.toString();
+  return api.get<MeChatSourceCounts>(withOrg(`/chats/source-counts${query ? `?${query}` : ""}`));
 }
 
 export function createMeChat(body: CreateMeChat): Promise<{ chatId: string }> {
