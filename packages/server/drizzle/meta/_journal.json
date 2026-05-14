@@ -309,6 +309,20 @@
       "when": 1779494400000,
       "tag": "0043_onboarding_completed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1779580800000,
+      "tag": "0044_agent_avatar_color",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1779667200000,
+      "tag": "0045_agent_avatar_image",
+      "breakpoints": true
     }
   ]
 }

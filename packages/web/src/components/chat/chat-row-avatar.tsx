@@ -71,6 +71,18 @@ export function pickAvatarHue(seed: string): string {
 }
 
 /**
+ * Manager override → hue. Accepts the loose `string | null` shape that
+ * flows in from the API so unrecognised values quietly fall back to the
+ * deterministic hash on `seed`. Valid tokens are "hue-0".."hue-7".
+ */
+export function resolveAvatarHue(colorToken: string | null | undefined, seed: string): string {
+  if (typeof colorToken === "string" && /^hue-[0-7]$/.test(colorToken)) {
+    return `var(--avatar-${colorToken})`;
+  }
+  return pickAvatarHue(seed);
+}
+
+/**
  * Composite-avatar layout key, exported for unit testing the branch
  * decisions without rendering to a DOM. `"single"` is reserved for the
  * non-composite path (1 peer or direct chats); `"n2"` / `"n3"` / `"n4"`
@@ -158,7 +170,13 @@ export function ChatRowAvatar({
       }}
     >
       {isDirect || peers.length <= 1 ? (
-        <SingleAvatar size={size} name={peer?.displayName ?? title} hueSeed={peer?.agentId ?? title} />
+        <SingleAvatar
+          size={size}
+          name={peer?.displayName ?? title}
+          hueSeed={peer?.agentId ?? title}
+          colorToken={peer?.avatarColorToken ?? null}
+          imageUrl={peer?.avatarImageUrl ?? null}
+        />
       ) : (
         <CompositeAvatar size={size} peers={peers} />
       )}
@@ -168,7 +186,30 @@ export function ChatRowAvatar({
   );
 }
 
-function SingleAvatar({ size, name, hueSeed }: { size: number; name: string; hueSeed: string }) {
+function SingleAvatar({
+  size,
+  name,
+  hueSeed,
+  colorToken,
+  imageUrl,
+}: {
+  size: number;
+  name: string;
+  hueSeed: string;
+  colorToken?: string | null;
+  imageUrl?: string | null;
+}) {
+  if (imageUrl) {
+    return (
+      <img
+        src={imageUrl}
+        alt={name}
+        width={size}
+        height={size}
+        style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", display: "block" }}
+      />
+    );
+  }
   return (
     <span
       aria-hidden="true"
@@ -176,7 +217,7 @@ function SingleAvatar({ size, name, hueSeed }: { size: number; name: string; hue
         width: size,
         height: size,
         borderRadius: "50%",
-        background: pickAvatarHue(hueSeed),
+        background: resolveAvatarHue(colorToken, hueSeed),
         color: "var(--fg-on-vivid)",
         display: "flex",
         alignItems: "center",
@@ -228,8 +269,18 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
     >
       {shape === "n2" && (
         <>
-          <Seg name={peers[0]?.displayName ?? "?"} hueSeed={peers[0]?.agentId ?? "0"} fontSize={fontSize} />
-          <Seg name={peers[1]?.displayName ?? "?"} hueSeed={peers[1]?.agentId ?? "1"} fontSize={fontSize} />
+          <Seg
+            name={peers[0]?.displayName ?? "?"}
+            hueSeed={peers[0]?.agentId ?? "0"}
+            colorToken={peers[0]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
+          <Seg
+            name={peers[1]?.displayName ?? "?"}
+            hueSeed={peers[1]?.agentId ?? "1"}
+            colorToken={peers[1]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
         </>
       )}
       {shape === "n3" && (
@@ -237,26 +288,72 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
           <Seg
             name={peers[0]?.displayName ?? "?"}
             hueSeed={peers[0]?.agentId ?? "0"}
+            colorToken={peers[0]?.avatarColorToken ?? null}
             fontSize={fontSizeTop}
             fullWidth
           />
-          <Seg name={peers[1]?.displayName ?? "?"} hueSeed={peers[1]?.agentId ?? "1"} fontSize={fontSize} />
-          <Seg name={peers[2]?.displayName ?? "?"} hueSeed={peers[2]?.agentId ?? "2"} fontSize={fontSize} />
+          <Seg
+            name={peers[1]?.displayName ?? "?"}
+            hueSeed={peers[1]?.agentId ?? "1"}
+            colorToken={peers[1]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
+          <Seg
+            name={peers[2]?.displayName ?? "?"}
+            hueSeed={peers[2]?.agentId ?? "2"}
+            colorToken={peers[2]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
         </>
       )}
       {shape === "n4" && (
         <>
-          <Seg name={peers[0]?.displayName ?? "?"} hueSeed={peers[0]?.agentId ?? "0"} fontSize={fontSize} />
-          <Seg name={peers[1]?.displayName ?? "?"} hueSeed={peers[1]?.agentId ?? "1"} fontSize={fontSize} />
-          <Seg name={peers[2]?.displayName ?? "?"} hueSeed={peers[2]?.agentId ?? "2"} fontSize={fontSize} />
-          <Seg name={peers[3]?.displayName ?? "?"} hueSeed={peers[3]?.agentId ?? "3"} fontSize={fontSize} />
+          <Seg
+            name={peers[0]?.displayName ?? "?"}
+            hueSeed={peers[0]?.agentId ?? "0"}
+            colorToken={peers[0]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
+          <Seg
+            name={peers[1]?.displayName ?? "?"}
+            hueSeed={peers[1]?.agentId ?? "1"}
+            colorToken={peers[1]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
+          <Seg
+            name={peers[2]?.displayName ?? "?"}
+            hueSeed={peers[2]?.agentId ?? "2"}
+            colorToken={peers[2]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
+          <Seg
+            name={peers[3]?.displayName ?? "?"}
+            hueSeed={peers[3]?.agentId ?? "3"}
+            colorToken={peers[3]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
         </>
       )}
       {shape === "n5+" && (
         <>
-          <Seg name={peers[0]?.displayName ?? "?"} hueSeed={peers[0]?.agentId ?? "0"} fontSize={fontSize} />
-          <Seg name={peers[1]?.displayName ?? "?"} hueSeed={peers[1]?.agentId ?? "1"} fontSize={fontSize} />
-          <Seg name={peers[2]?.displayName ?? "?"} hueSeed={peers[2]?.agentId ?? "2"} fontSize={fontSize} />
+          <Seg
+            name={peers[0]?.displayName ?? "?"}
+            hueSeed={peers[0]?.agentId ?? "0"}
+            colorToken={peers[0]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
+          <Seg
+            name={peers[1]?.displayName ?? "?"}
+            hueSeed={peers[1]?.agentId ?? "1"}
+            colorToken={peers[1]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
+          <Seg
+            name={peers[2]?.displayName ?? "?"}
+            hueSeed={peers[2]?.agentId ?? "2"}
+            colorToken={peers[2]?.avatarColorToken ?? null}
+            fontSize={fontSize}
+          />
           <SegMore count={n - 3} fontSize={fontSizeMore} />
         </>
       )}
@@ -267,11 +364,13 @@ function CompositeAvatar({ size, peers }: { size: number; peers: ReadonlyArray<P
 function Seg({
   name,
   hueSeed,
+  colorToken,
   fontSize,
   fullWidth,
 }: {
   name: string;
   hueSeed: string;
+  colorToken?: string | null;
   fontSize: number;
   fullWidth?: boolean;
 }) {
@@ -281,7 +380,7 @@ function Seg({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: pickAvatarHue(hueSeed),
+        background: resolveAvatarHue(colorToken, hueSeed),
         color: "var(--fg-on-vivid)",
         fontSize,
         fontWeight: 700,

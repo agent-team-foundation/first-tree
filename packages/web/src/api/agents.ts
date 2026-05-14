@@ -1,5 +1,5 @@
 import type { Agent, CreateAgent, RebindAgent, UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
-import { api, withOrg } from "./client.js";
+import { ApiError, api, getStoredTokens, withOrg } from "./client.js";
 
 type PaginatedAgents = {
   items: Agent[];
@@ -95,6 +95,40 @@ export function rebindAgent(uuid: string, data: RebindAgent): Promise<Agent> {
 
 export function deleteAgent(uuid: string): Promise<void> {
   return api.delete<void>(`/agents/${encodeURIComponent(uuid)}`);
+}
+
+/**
+ * Upload a manager-selected avatar image for the agent. `blob` carries the
+ * raw bytes (the caller is responsible for resizing/encoding — typically a
+ * 256×256 WEBP produced via `<canvas>`). Sends `Content-Type: <mime>`
+ * directly, bypassing the JSON `api` helper.
+ */
+export async function uploadAgentAvatar(uuid: string, blob: Blob): Promise<{ avatarImageUrl: string }> {
+  const tokens = getStoredTokens();
+  const headers: Record<string, string> = { "Content-Type": blob.type || "application/octet-stream" };
+  if (tokens?.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`;
+  const res = await fetch(`/api/v1/agents/${encodeURIComponent(uuid)}/avatar`, {
+    method: "PUT",
+    headers,
+    body: blob,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text;
+    try {
+      const json = JSON.parse(text) as { error?: string };
+      if (json.error) message = json.error;
+    } catch {
+      // fall through with raw text
+    }
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as { avatarImageUrl: string };
+}
+
+/** Clear an agent's avatar image (falls back to color + initial). */
+export function deleteAgentAvatar(uuid: string): Promise<void> {
+  return api.delete<void>(`/agents/${encodeURIComponent(uuid)}/avatar`);
 }
 
 export function suspendAgent(uuid: string): Promise<Agent> {

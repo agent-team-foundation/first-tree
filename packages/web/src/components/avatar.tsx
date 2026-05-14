@@ -1,11 +1,14 @@
 /**
- * Avatar — circular user image with initials fallback.
+ * Avatar — circular avatar with initials fallback.
  *
- * Renders the GitHub avatar URL when present; otherwise falls back to
- * a single-color circle with the user's first initial. Color tokens
- * come from the design system (no per-user palette) — recognizability
- * comes from the initial itself.
+ * Renders an image URL when present (member GitHub avatar, agent custom
+ * upload). Falls back to a colored circle + initial. The fill color is
+ * resolved from `colorToken` when provided (manager-selected agent
+ * override), otherwise from the deterministic hash on `seed`. When
+ * neither is supplied, falls back to a neutral accent.
  */
+
+import { resolveAvatarHue } from "./chat/chat-row-avatar.js";
 
 function initial(name: string): string {
   const trimmed = name.trim();
@@ -18,9 +21,20 @@ type AvatarProps = {
   name: string;
   size?: number;
   className?: string;
+  /**
+   * Manager-selected color token (e.g. an agent's `avatarColorToken`).
+   * When omitted the fallback color is resolved from `seed`, then from
+   * `--accent` if neither is provided.
+   */
+  colorToken?: string | null;
+  /**
+   * Stable seed used to derive a deterministic fallback color (typically
+   * the agent's uuid). Only used when `colorToken` is absent.
+   */
+  seed?: string;
 };
 
-export function Avatar({ src, name, size = 28, className }: AvatarProps) {
+export function Avatar({ src, name, size = 28, className, colorToken, seed }: AvatarProps) {
   const dim = `${size}px`;
   if (src) {
     return (
@@ -40,6 +54,9 @@ export function Avatar({ src, name, size = 28, className }: AvatarProps) {
       />
     );
   }
+  const hasHueInput = (typeof colorToken === "string" && colorToken.length > 0) || (seed && seed.length > 0);
+  const background = hasHueInput ? resolveAvatarHue(colorToken, seed ?? "") : "var(--accent)";
+  const color = hasHueInput ? "var(--fg-on-vivid)" : "var(--bg-raised)";
   return (
     <span
       className={className}
@@ -49,8 +66,8 @@ export function Avatar({ src, name, size = 28, className }: AvatarProps) {
         width: dim,
         height: dim,
         borderRadius: "50%",
-        background: "var(--accent)",
-        color: "var(--bg-raised)",
+        background,
+        color,
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
