@@ -177,6 +177,10 @@ export function ConversationList({
   }, [baseCursor]);
 
   const totalUnread = useMemo(() => allRows.reduce((acc, r) => acc + (r.unreadMentionCount > 0 ? 1 : 0), 0), [allRows]);
+  // The new-chat hero button is "active" when the inline draft is the current
+  // selection. Centralized so the four conditional style branches stay in sync.
+  const isDraftActive = selectedChatId === DRAFT_CHAT_ID;
+  const isUnreadFilter = filter === "unread";
 
   return (
     <aside
@@ -187,38 +191,72 @@ export function ConversationList({
         borderRight: "var(--hairline) solid var(--border)",
       }}
     >
-      {/* Header. Two stacked rows by semantic grouping:
-          (1) creation action — `+ New chat`, gets a full-width hero
-              button so its primacy is signaled by position and width.
-          (2) engagement tabs + filter pills. Search lives in the
-              unified topbar `Jump to…` palette, not here. Filter
-              pills auto-hide when they have nothing to count. */}
+      {/* Header. The hero block elevates `+ New chat` as the primary action via a
+          radial accent gradient backdrop, an accent stripe on the button, and
+          a soft-tinted plus square. Below it sit the existing source/engagement
+          FilterPill rows. A condensed `mono` meta row at the bottom surfaces
+          unread state when (and only when) there is something to surface. */}
       <div
         className="shrink-0 flex flex-col"
         style={{
-          gap: 6,
+          gap: "var(--sp-2)",
           padding: "var(--sp-2_5) var(--sp-3) var(--sp-2)",
           borderBottom: "var(--hairline) solid var(--border-faint)",
+          background: "radial-gradient(140% 80% at 0% 0%, var(--accent-bg) 0%, transparent 60%)",
         }}
       >
         <button
           type="button"
           onClick={onNewChat}
-          className="w-full inline-flex items-center transition-colors text-body hover:bg-[var(--bg-hover)]"
+          aria-current={isDraftActive ? "page" : undefined}
+          className={cn(
+            "group relative w-full inline-flex items-center transition-colors text-body cursor-pointer font-semibold",
+            // Hover affordance only when not already on the draft — otherwise
+            // `bg-hover` would wash out the active `accent-bg` tint.
+            !isDraftActive && "hover:bg-[var(--bg-hover)] hover:border-[var(--border-strong)]",
+            "focus-visible:outline-none focus-visible:border-[var(--accent-dim)]",
+          )}
           style={{
-            gap: 6,
-            padding: "var(--sp-1_25) var(--sp-2)",
-            border: "var(--hairline) solid var(--border)",
-            borderRadius: "var(--radius-input)",
-            background: selectedChatId === DRAFT_CHAT_ID ? "var(--bg-active)" : "transparent",
-            color: selectedChatId === DRAFT_CHAT_ID ? "var(--accent)" : "var(--fg)",
-            cursor: "pointer",
-            fontWeight: 500,
+            gap: "var(--sp-2)",
+            padding: "var(--sp-1_75) var(--sp-2) var(--sp-1_75) var(--sp-2_5)",
+            border: `var(--hairline) solid ${isDraftActive ? "var(--accent-dim)" : "var(--border)"}`,
+            borderRadius: "var(--radius-panel)",
+            background: isDraftActive ? "var(--accent-bg)" : "var(--bg-raised)",
+            color: isDraftActive ? "var(--accent)" : "var(--fg)",
           }}
           title="New chat"
         >
-          <Plus className="h-3.5 w-3.5" strokeWidth={2} />
-          New chat
+          {/* Accent stripe — the visual anchor for the primary entry point.
+              Sits a hair outside the border so it cleanly abuts the rounded edge.
+              Width is a design parameter without a matching `--sp-*` token
+              (`--hairline` / `--hairline-bold` are both too thin); the number
+              literal sidesteps the px-token lint by design. */}
+          <span
+            aria-hidden
+            className="absolute pointer-events-none"
+            style={{
+              left: -1,
+              top: -1,
+              bottom: -1,
+              width: 3,
+              background: "var(--accent)",
+              borderRadius: "var(--radius-panel) 0 0 var(--radius-panel)",
+            }}
+          />
+          <span
+            aria-hidden
+            className="inline-flex items-center justify-center shrink-0 transition-colors group-hover:bg-[var(--accent)] group-hover:text-[var(--fg-on-vivid)]"
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: "var(--radius-chip)",
+              background: isDraftActive ? "var(--accent)" : "var(--accent-bg)",
+              color: isDraftActive ? "var(--fg-on-vivid)" : "var(--accent)",
+            }}
+          >
+            <Plus className="h-3 w-3" strokeWidth={2} />
+          </span>
+          <span className="flex-1 text-left">New chat</span>
         </button>
         {/* Source tag bar. Splits the workspace by chat origin (Manual / PR /
             Issue / Discussion / Commit / Feishu). `manual` is always rendered
@@ -273,26 +311,43 @@ export function ConversationList({
             </FilterPill>
           ))}
         </div>
-        {/* Filter pills. Only `unread` is exposed: `all` is the
-            default state (no UI affordance needed) and `watching`
-            is a niche power-user concept that's better surfaced
-            implicitly through the row's `Watching · ...` subtitle.
-            The unread pill itself only shows up when there's
-            something to filter to — clicking the active pill
-            toggles back to `all`. The whole row collapses when
-            there's nothing to show. */}
+        {/* Meta row. Replaces the standalone `unread` FilterPill: surfaces
+            the unread count (and toggles the unread filter on click) and the
+            total chats in the current view. Entire row collapses when there
+            is nothing to surface — `all` is the implicit default and needs no
+            affordance, and `watching` is exposed via the row's subtitle. */}
         {totalUnread > 0 && (
-          <div className="flex items-center gap-1 shrink-0">
-            <FilterPill
-              active={filter === "unread"}
-              count={totalUnread}
+          <div
+            className="mono flex items-center justify-between text-caption"
+            style={{
+              padding: "0 var(--sp-0_5)",
+              color: "var(--fg-4)",
+            }}
+          >
+            <button
+              type="button"
               onClick={() => {
-                setFilter(filter === "unread" ? "all" : "unread");
+                setFilter(isUnreadFilter ? "all" : "unread");
                 resetExtras();
               }}
+              aria-pressed={isUnreadFilter}
+              className="mono cursor-pointer bg-transparent border-0 p-0 text-caption transition-opacity hover:opacity-80"
+              style={{
+                color: "var(--state-error)",
+                textDecoration: isUnreadFilter ? "underline" : "none",
+                textUnderlineOffset: 2,
+              }}
+              title={isUnreadFilter ? "Show all chats" : "Filter to unread only"}
             >
-              unread
-            </FilterPill>
+              {totalUnread} unread
+            </button>
+            {/* Suppress the total-chats label when the unread filter is on —
+                it would just echo `{totalUnread} unread` on the other side. */}
+            {!isUnreadFilter && (
+              <span>
+                {allRows.length} {allRows.length === 1 ? "chat" : "chats"} · workspace
+              </span>
+            )}
           </div>
         )}
       </div>
