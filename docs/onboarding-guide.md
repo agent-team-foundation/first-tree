@@ -24,7 +24,6 @@ first-tree-hub onboard                         # End-to-end onboarding
   --feishu-bot-app-secret <s>                  #   Feishu bot App Secret (optional)
   --check                                      #   Dry-run: show readiness checklist
 
-first-tree-hub agent token bootstrap <agent-id>      # GitHub identity → Agent token
 first-tree-hub agent bind bot --platform feishu ...   # Self-service Feishu bot binding
 first-tree-hub agent bind user <id> --platform feishu # Bind Feishu user (delegate or admin)
 first-tree-hub client start                           # Start all configured agents

@@ -134,6 +134,28 @@ async function sendMessageInner(
     const mergedMentions = [...new Set([...explicitMentions, ...resolved])];
     const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
 
+    // Direct-chat auto-mention for the unread-counter projection (chat-first
+    // workspace). In a 1-on-1 the recipient is implicit, so the conversation
+    // list should red-dot every DM message — without this, `extractMentions`
+    // returns [] on plain text and `applyAfterFanOut` short-circuits the
+    // counter bump, leaving DM rows at zero unread.
+    //
+    // This list is **projection-only** — it deliberately does NOT join
+    // `mergedMentions`. Folding it in would make the auto-mention also
+    // drive fan-out (`notify=true` inbox), which would reintroduce the
+    // agent↔agent courtesy loop migration 0029 fixed: A's "ok thanks"
+    // would wake B in `mention_only` mode again. Keep the two lists
+    // separate so unread badges are correct without unmuting agent wakes.
+    //
+    // Silent-send (step 2e) overrides this back to [] so the badge stays
+    // off — a silent turn whose entire text is `@<name>` tokens is meant
+    // to land in history without bothering anyone; bumping unread
+    // contradicts that intent.
+    const dmAutoProjection: string[] =
+      chatType === "direct"
+        ? [...new Set([...mergedMentions, ...participants.filter((p) => p.agentId !== senderId).map((p) => p.agentId)])]
+        : mergedMentions;
+
     // 2b. Group-chat receiver enforcement (agent-only). Stop a misuse where an
     //     agent calls `send --chat <id>` against a group without naming who
     //     should pick it up — every mention_only participant would silently
@@ -144,7 +166,7 @@ async function sendMessageInner(
       if (recipientMentions.length === 0) {
         throw new BadRequestError(
           "Sending to a group chat requires an explicit @mention. " +
-            "Use `agent send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
+            "Use `first-tree-hub chat send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
         );
       }
     }
@@ -187,7 +209,7 @@ async function sendMessageInner(
     // 2e. L4 silent-send form guard — mirror of the client-side result-sink
     //     silent-turn (runtime/result-sink.ts). Covers any path that reaches
     //     sendMessage without going through result-sink: the agent CLI
-    //     `agent send`, AskUserQuestion, external IM adapters, admin/web
+    //     `chat send`, AskUserQuestion, external IM adapters, admin/web
     //     posts. Form-only check on the FINAL outbound text (after
     //     normalizeMentionsInContent has had its turn): if everything that
     //     remains after stripping leading `@<name>` tokens is empty, the
@@ -207,6 +229,12 @@ async function sendMessageInner(
         "silent send: empty content after mention strip — no fan-out wake-up",
       );
     }
+
+    // Silent-send overrides the direct-chat auto-mention projection: a
+    // silent turn is "this exists in history but nobody needs to know",
+    // so the recipient's red-dot badge stays off too. Mirrors the
+    // fan-out `notify=false` guarantee at step 4 below.
+    const projectionMentions: string[] = isSilentSend ? [] : dmAutoProjection;
 
     // 3. Store the message (with merged metadata + normalised content).
     const messageId = randomUUID();
@@ -337,7 +365,7 @@ async function sendMessageInner(
       chatId,
       messageId: msg.id,
       senderId,
-      mentionedAgentIds: mergedMentions,
+      mentionedAgentIds: projectionMentions,
       contentPreview: previewText,
       messageCreatedAt: msg.createdAt,
     });
@@ -526,12 +554,12 @@ export async function sendToAgent(
     .limit(1);
 
   if (!target) {
-    // Agents routinely pick up uuids from `agent chats` / chat participant
+    // Agents routinely pick up uuids from `chat list` / chat participant
     // lists and mistakenly paste them as the send target. Give the hint in
     // the error so the next LLM attempt self-corrects.
     const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetName);
     const hint = looksLikeUuid
-      ? " — `agent send` expects an agent NAME, not a uuid. Run `first-tree-hub agent list` to see available names."
+      ? " — `first-tree-hub chat send` expects an agent NAME, not a uuid. Run `first-tree-hub agent list` to see available names."
       : "";
     throw new NotFoundError(`Agent "${targetName}" not found${hint}`);
   }
@@ -552,7 +580,7 @@ export async function sendToAgent(
   // BOTH the sender and target are participants of that chat, deliver the
   // message there instead of opening a parallel direct chat. This is what
   // every observed group-chat flow wants: "agent A in group G calls
-  // `agent send B`" should land in G when B is a member.
+  // `chat send B`" should land in G when B is a member.
   //
   // BOTH ends are checked because replyToChat is caller-supplied (env or
   // explicit flag) and otherwise unconstrained. The /agent/chats/:id/messages

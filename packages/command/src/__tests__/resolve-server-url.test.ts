@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * Regression test for the CLI's `agent send` (and any other SDK-using command)
+ * Regression test for the CLI's `chat send` (and any other SDK-using command)
  * silently falling back to http://localhost:8000 when client.yaml points elsewhere.
  *
  * Root cause: resolveServerUrl() internally calls getClientConfig(), which reads

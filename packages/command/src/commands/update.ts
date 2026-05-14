@@ -91,7 +91,7 @@ export function registerUpdateCommand(program: Command): void {
       const svc = getClientServiceStatus();
       if (svc.state === "not-installed") {
         print.line("  No background service installed — nothing to restart.\n");
-        print.line("  Run `first-tree-hub client connect <url>` to set one up.\n\n");
+        print.line("  Run `first-tree-hub connect <token>` to set one up.\n\n");
         return;
       }
 
@@ -101,7 +101,7 @@ export function registerUpdateCommand(program: Command): void {
       // unable to terminate the service. Just swapping the npm package would
       // leave that broken unit in place — the operator wouldn't pick up the
       // `Restart=on-failure` semantics until they manually re-ran
-      // `client connect`. installClientService is idempotent (bootout +
+      // `connect <token>`. installClientService is idempotent (bootout +
       // bootstrap on launchd, daemon-reload + enable --now on systemd), so
       // running it on every update gives existing machines a free unit
       // refresh on top of the binary swap. Best-effort: a unit-rewrite

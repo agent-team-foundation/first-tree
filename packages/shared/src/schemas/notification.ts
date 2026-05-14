@@ -4,19 +4,11 @@ import { z } from "zod";
 
 export const NOTIFICATION_TYPES = {
   AGENT_ERROR: "agent_error",
-  SESSION_ERROR: "session_error",
   AGENT_BLOCKED: "agent_blocked",
   AGENT_STALE: "agent_stale",
-  SESSION_COMPLETED: "session_completed",
 } as const;
 
-export const notificationTypeSchema = z.enum([
-  "agent_error",
-  "session_error",
-  "agent_blocked",
-  "agent_stale",
-  "session_completed",
-]);
+export const notificationTypeSchema = z.enum(["agent_error", "agent_blocked", "agent_stale"]);
 export type NotificationType = z.infer<typeof notificationTypeSchema>;
 
 // -- Notification Severity --

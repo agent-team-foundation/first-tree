@@ -17,6 +17,12 @@ export type InvolveReason = z.infer<typeof involveReasonSchema>;
  * read in place of the raw `(eventType, action)` pair. Stage 1 collapses
  * GitHub's wider action vocabulary into this set so callers don't have to
  * special-case every action string.
+ *
+ * Historical-compat note: `"merged"` is no longer emitted by Stage 1
+ * (`buildPullRequestRule` drops `closed` outright). It's retained in the
+ * enum so Zod validation of historical card metadata persisted in the
+ * messages table continues to pass. `"closed"` and `"reopened"` are still
+ * actively emitted by `buildIssuesRule`.
  */
 export const NORMALIZED_EVENT_KINDS = [
   "opened",
@@ -30,6 +36,7 @@ export const NORMALIZED_EVENT_KINDS = [
   "review_comment",
   "synchronized",
   "commit_commented",
+  "assigned",
   "other",
 ] as const;
 export const normalizedEventKindSchema = z.enum(NORMALIZED_EVENT_KINDS);

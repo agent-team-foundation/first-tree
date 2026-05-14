@@ -20,3 +20,24 @@ export async function reportOnboardingEvent(
     // intentionally swallowed
   }
 }
+
+/**
+ * Stamp the terminal-state `onboarding_completed_at` column. Called when
+ * the user walks Step 3 to success (admin Continue, invitee Confirm /
+ * Continue). Once stamped, the Settings → Onboarding sidebar entry and
+ * Resume button disappear permanently — Step 3 cannot be re-entered.
+ *
+ * Distinct from `dismissOnboarding()`, which only hides the stepper UI
+ * and stays reversible via Settings → Resume. Idempotent on the server
+ * (only writes when the column is still NULL). Errors are swallowed:
+ * the user has already finished the wizard, so a network blip here just
+ * means the sidebar entry lingers until /me refetches — not worth
+ * surfacing.
+ */
+export async function markOnboardingCompleted(): Promise<void> {
+  try {
+    await api.post<{ ok: true }>("/me/onboarding-completed", {});
+  } catch {
+    // intentionally swallowed — see jsdoc
+  }
+}

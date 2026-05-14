@@ -355,11 +355,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event }));
   }
 
-  reportSessionCompletion(agentId: string, chatId: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "session:completion", agentId, chatId }));
-  }
-
   /** Ask the server which of the supplied chatIds the client should drop. */
   sendSessionReconcile(agentId: string, chatIds: string[]): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;

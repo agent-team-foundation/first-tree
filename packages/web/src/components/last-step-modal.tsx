@@ -64,13 +64,13 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
   }, [agentQuery.data, onBound]);
 
   // Assemble the Last-step one-liner entirely on the web side so the server
-  // stays out of UI-shaped concerns (it only returns the raw `client connect`
+  // stays out of UI-shaped concerns (it only returns the raw `connect <token>`
   // invocation). The three segments, in order:
   //   1. `npm install -g` — bootstrap the CLI for users who've never run it
   //   2. `agent add`      — pure local file write,no auth/network;the
   //                          resulting `agent.yaml` is what the runtime picks
   //                          up on first load
-  //   3. `client connect` — computer-level auth + launchd/systemd service;
+  //   3. `connect <token>` — computer-level auth + launchd/systemd service;
   //                          runtime's first `loadAgents` already sees the
   //                          agent written in step 2,no watcher race
   const baseCommand = tokenQuery.data?.command ?? "";

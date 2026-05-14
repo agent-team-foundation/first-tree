@@ -85,19 +85,19 @@ export async function promptMissingFields(options: {
  */
 export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{ name: string; agentId: string }> {
   // Phase 3 needs a live Hub to resolve the canonical agent name, which
-  // means the caller must have run `client connect` first. Detect the
+  // means the caller must have run `connect <token>` first. Detect the
   // two common "not connected yet" states up front with a clear error
   // instead of letting `ensureFreshAccessToken` or `resolveServerUrl`
   // throw a cryptic message after the user already typed a UUID.
   if (loadCredentials() === null) {
-    throw new Error("Not connected. Run `first-tree-hub client connect <server-url>` first.");
+    throw new Error("Not connected. Run `first-tree-hub connect <token>` first.");
   }
   let serverUrl: string;
   try {
     serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`${msg} Run \`first-tree-hub client connect\` or set FIRST_TREE_HUB_SERVER_URL.`);
+    throw new Error(`${msg} Run \`first-tree-hub connect <token>\` or set FIRST_TREE_HUB_SERVER_URL.`);
   }
 
   const agentId =

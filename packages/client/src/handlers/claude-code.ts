@@ -27,6 +27,7 @@ import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, installFirstTreeIntegration } from "../runtime/bootstrap.js";
+import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
   AgentHandler,
@@ -729,7 +730,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // handler shares one code path — see runtime/result-sink.ts.
                     await sessionCtx.forwardResult(resultText);
                     sessionCtx.log("Result forwarded to chat");
-                    sessionCtx.reportSessionCompletion();
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                   } catch (err) {
                     const reason = err instanceof Error ? err.message : String(err);
@@ -827,7 +827,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     if (!gitMirrorManager || !payload?.gitRepos?.length) return;
     for (const repo of payload.gitRepos) {
       const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
-      const targetPath = join(workspace, localPath);
+      const targetPath = resolveGitRepoTargetPath(workspace, localPath);
       sessionCtx.log(`Git: preparing ${repo.url} → ${localPath}${repo.ref ? ` @ ${repo.ref}` : ""}`);
 
       // D14: ensureMirror is idempotent — clone once, fast return thereafter.

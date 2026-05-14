@@ -524,7 +524,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
   });
 
-  // ─── Integration: sendToAgent (CLI `agent send <name>`) ────────────────
+  // ─── Integration: sendToAgent (CLI `chat send <name>`) ────────────────
 
   describe("integration — sendToAgent unified through step 2c", () => {
     it("prepends @<name> via the unified normalisation path", async () => {
@@ -575,7 +575,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
 
     it("merges with caller-provided metadata.mentions (additive, not replacing)", async () => {
-      // If a future agent runtime feeds an extra mention through `agent send`,
+      // If a future agent runtime feeds an extra mention through `chat send`,
       // we must not overwrite it with just the target.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);

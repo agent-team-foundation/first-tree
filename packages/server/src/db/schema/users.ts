@@ -17,6 +17,15 @@ export const users = pgTable("users", {
    * See docs/new-user-onboarding-design.md §8.
    */
   onboardingDismissedAt: timestamp("onboarding_dismissed_at", { withTimezone: true }),
+  /**
+   * Set when the user actually walks Step 3 to success (admin Continue,
+   * invitee Confirm/Continue). Distinct from `onboardingDismissedAt`:
+   * dismissed = "hid the stepper UI" (reversible from Settings → Resume);
+   * completed = "setup is done" — permanently removes the Settings →
+   * Onboarding entry point and the Resume button. `inferOnboardingStep()`
+   * does NOT consult this column; it remains a pure UI-gate.
+   */
+  onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

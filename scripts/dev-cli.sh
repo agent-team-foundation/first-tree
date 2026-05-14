@@ -14,7 +14,7 @@
 #
 # Usage:
 #   scripts/dev-cli.sh client status
-#   scripts/dev-cli.sh client connect <url> --token <t>
+#   scripts/dev-cli.sh connect <connect-token>
 #   scripts/dev-cli.sh update --check
 #   scripts/dev-cli.sh --rebuild client restart   # rebuild dist first
 #

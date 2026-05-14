@@ -435,27 +435,35 @@ describe("chat-first workspace service layer", () => {
   });
 
   it("watcher cannot be a mention recipient (mention-candidate invariant)", async () => {
+    // The invariant under test: an `@<watcher-name>` token must not bump
+    // the watcher's `unread_mention_count` — mention extraction reads only
+    // chat_membership.access_mode = 'speaker', so a watcher's name resolves
+    // to nothing even when typed verbatim. We pin this in a group chat
+    // (≥3 speakers) so the direct-chat auto-mention path is not exercised
+    // here; admin watches no one in this chat, so the manager-of-mentioned
+    // branch can't fire either, isolating the name-resolution invariant.
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const { createAgent } = await import("../services/agent.js");
-    const managed = await createAgent(app.db, {
-      name: `mng-mc-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
-      displayName: "Mng-MC",
-      managerId: admin.memberId,
-      organizationId: admin.organizationId,
-      clientId: undefined,
-    });
-    const peer = await createTestAgent(app, { name: "peer-mc" });
+    const peer = await createTestAgent(app, { name: `peer-mc-${crypto.randomUUID().slice(0, 6)}` });
+    const peer2 = await createTestAgent(app, { name: `peer2-mc-${crypto.randomUUID().slice(0, 6)}` });
+    const peer3 = await createTestAgent(app, { name: `peer3-mc-${crypto.randomUUID().slice(0, 6)}` });
 
+    // Add a watcher row for admin against this chat via raw INSERT — admin
+    // doesn't manage any participant, so the standard auto-watcher path
+    // doesn't apply, but the invariant we're pinning is about name
+    // resolution, not how the watcher row got there.
     const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
-      participantIds: [managed.uuid],
+      participantIds: [peer2.agent.uuid, peer3.agent.uuid],
     });
+    await app.db.execute(sql`
+      INSERT INTO chat_membership (chat_id, agent_id, role, access_mode, mode, source)
+      VALUES (${chatId}, ${admin.humanAgentUuid}, 'member', 'watcher', 'full', 'manual')
+      ON CONFLICT (chat_id, agent_id) DO NOTHING
+    `);
 
     // peer @-mentions admin (the watcher) by name. Mention extraction reads
-    // speakers only (chat_membership where access_mode = 'speaker'), so
-    // admin is NOT in the candidate set — the resulting message must NOT
-    // bump admin's `unread_mention_count` in chat_user_state.
+    // speakers only, so admin is NOT in the candidate set — the resulting
+    // message must NOT bump admin's `unread_mention_count`.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
       format: "text",
       content: `Hi @${admin.username}, please look`,
@@ -466,10 +474,8 @@ describe("chat-first workspace service layer", () => {
        WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
     `);
     // Either the row was never created (lazy materialisation, no event
-    // touched it) or the count was bumped via the watcher-manager path
-    // (which IS the legitimate channel for a manager-of-mentioned-non-human).
-    // In this test the mention target is admin themselves, not the managed
-    // agent — so neither the speaker nor the watcher branch should fire.
+    // touched it) or its count stayed at zero — the @-name path cannot
+    // reach a watcher, by design.
     expect(adminStateRow?.unread_mention_count ?? 0).toBe(0);
   });
 

@@ -1,5 +1,5 @@
 /**
- * Resolve `replyTo` envelope fields for `agent send`. When the CLI is invoked
+ * Resolve `replyTo` envelope fields for `chat send`. When the CLI is invoked
  * from inside a claude-code session (the handler exports
  * `FIRST_TREE_HUB_CHAT_ID` + `FIRST_TREE_HUB_INBOX_ID`), default the reply
  * target to the calling session's own chat so the peer's reply routes back
@@ -23,7 +23,7 @@ export function resolveReplyToFromEnv(
 
 /**
  * Resolve which locally-configured agent the CLI should authenticate as
- * (the SENDER) for an outbound `agent send` / `agent chats` / etc. call.
+ * (the SENDER) for an outbound `chat send` / `chat list` / etc. call.
  *
  * Resolution order:
  *   1. Explicit `--agent <name>` override.
