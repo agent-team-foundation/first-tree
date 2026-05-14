@@ -41,6 +41,31 @@ export const meChatParticipantSchema = z.object({
 });
 export type MeChatParticipant = z.infer<typeof meChatParticipantSchema>;
 
+/**
+ * Live activity hint surfaced in the conversation row's time slot. Derived
+ * server-side from the latest `session_events` row for the chat. See
+ * `MeChatRow.liveActivity` for the lifecycle rules.
+ *
+ * `kind` is intentionally narrower than the full `sessionEventKind` enum:
+ * `turn_end` / `error` produce `liveActivity: null` rather than a live
+ * indicator.
+ */
+export const liveActivityKindSchema = z.enum(["tool_call", "thinking", "assistant_text"]);
+export type LiveActivityKind = z.infer<typeof liveActivityKindSchema>;
+
+export const liveActivitySchema = z.object({
+  agentId: z.string(),
+  kind: liveActivityKindSchema,
+  /** Short user-facing label, e.g. "Read", "Thinking", "Writing". */
+  label: z.string(),
+  /** ISO timestamp of the originating event; web uses this as the ticker base. */
+  startedAt: z.string(),
+});
+export type LiveActivity = z.infer<typeof liveActivitySchema>;
+
+/** Stale threshold (ms) past which a `session_events` row stops driving liveActivity. */
+export const LIVE_ACTIVITY_STALE_MS = 60_000;
+
 export const meChatRowSchema = z.object({
   chatId: z.string(),
   type: z.string(),
@@ -55,16 +80,27 @@ export const meChatRowSchema = z.object({
   canReply: z.boolean(),
   engagementStatus: chatEngagementStatusSchema,
   /**
-   * Speakers in this chat whose `agent_presence.runtime_state === 'working'`.
-   * Derived from the global presence table — NOT per-chat — so an agent
-   * running in any chat appears here for every chat they speak in. The web
-   * client only renders the working ring for `type === "direct"` and
-   * defers group-chat working signals to a future per-chat data source.
+   * Speakers in this chat with an active per-(agent,chat) session
+   * (`agent_chat_sessions.state === 'active'`). Drives the breathing ring
+   * around the avatar — "session online, can be reached". Per-pair signal,
+   * not affected by the agent's activity in other chats. Independent of
+   * `liveActivity` (which is the live "working right now" signal).
    *
-   * Always returned, possibly empty. No schema migration required: this
-   * field is derived at query time from existing tables.
+   * Always returned, possibly empty. No schema migration required: derived
+   * at query time from the existing `agent_chat_sessions` table.
    */
-  workingAgentIds: z.array(z.string()),
+  engagedAgentIds: z.array(z.string()),
+  /**
+   * Live "working right now" signal derived from the latest `session_events`
+   * row for this chat. Null when:
+   *   - no events recorded for this chat, OR
+   *   - the latest event is `turn_end` / `error`, OR
+   *   - the latest event is older than the stale threshold (60 s).
+   *
+   * Web renders this in the lastMessageAt slot with a pulsing dot + label
+   * + auto-incrementing seconds counter.
+   */
+  liveActivity: liveActivitySchema.nullable(),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 

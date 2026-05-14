@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
+import { WorkingChip } from "../../../components/chat/working-chip.js";
 import { FilterPill } from "../../../components/ui/filter-pill.js";
 import { cn } from "../../../lib/utils.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
@@ -267,7 +268,7 @@ export function ConversationList({
                   type={row.type}
                   participants={row.participants}
                   selfAgentId={selfAgentId ?? ""}
-                  workingAgentIds={row.workingAgentIds}
+                  engagedAgentIds={row.engagedAgentIds}
                   unreadCount={row.unreadMentionCount}
                 />
                 <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
@@ -283,16 +284,27 @@ export function ConversationList({
                     >
                       {row.title}
                     </span>
-                    {row.lastMessageAt && (
-                      // Time vacates its right-anchor slot so the ⋯ trigger can
-                      // take over on hover or while the menu is open (Gmail-style swap).
-                      <span
-                        className="mono text-caption shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0"
-                        style={{ color: "var(--fg-4)" }}
-                      >
-                        {formatRowTime(row.lastMessageAt)}
-                      </span>
-                    )}
+                    {(() => {
+                      // Right-anchor slot vacates on hover so the ⋯ trigger can
+                      // take over (Gmail-style swap). When the chat has a live
+                      // activity (agent actively working on a turn), we render
+                      // a pulsing WorkingChip in this slot; otherwise the
+                      // static lastMessageAt timestamp. The chip is naturally
+                      // self-clearing — server returns null once the latest
+                      // session_event is `turn_end` or older than 60s.
+                      const slot = row.liveActivity ? (
+                        <WorkingChip activity={row.liveActivity} />
+                      ) : row.lastMessageAt ? (
+                        <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                          {formatRowTime(row.lastMessageAt)}
+                        </span>
+                      ) : null;
+                      return slot ? (
+                        <span className="shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0">
+                          {slot}
+                        </span>
+                      ) : null;
+                    })()}
                   </div>
                   <div
                     className="truncate text-body"

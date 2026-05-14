@@ -608,6 +608,31 @@
   }
 }
 
+/* Chat-row WorkingChip pulse dot — faster, shorter beat so the
+   activity indicator reads as "live right now" rather than the
+   slower "session online" cadence of the ring. */
+@keyframes chat-row-live-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.7);
+    opacity: 0.4;
+  }
+}
+.chat-row-live-chip__dot {
+  animation: chat-row-live-pulse 1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-row-live-chip__dot {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .fade-in {
   animation: subtle-fade 180ms ease-out;
 }

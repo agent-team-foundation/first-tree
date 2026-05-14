@@ -795,9 +795,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               const payload = sessionEventMessageSchema.parse(msg);
+              const boundInfo = boundAgents.get(agentId);
               chainSessionOp(agentId, payload.chatId, async () => {
                 try {
                   await sessionEventService.appendEvent(app.db, agentId, payload.chatId, payload.event);
+                  if (boundInfo) {
+                    // Best-effort cross-instance kick so admin WS sockets in
+                    // the same org can invalidate `liveActivity` without
+                    // waiting for the 15s `me/chats` poll. Failures are
+                    // swallowed inside the notifier (fire-and-forget).
+                    notifier
+                      .notifySessionEvent(agentId, payload.chatId, payload.event.kind, boundInfo.organizationId)
+                      .catch(() => {});
+                  }
                 } catch (err) {
                   socket.send(
                     JSON.stringify({
