@@ -715,6 +715,32 @@ export function ChatView({
     refetchInterval: 15_000,
   });
 
+  // High-watermark message-id ref read by `useReadTracker` when it
+  // flushes IDB. Declared up here (rather than down in the tracker
+  // block) so `sendMut.onSuccess` and the file-send path can write
+  // it SYNCHRONOUSLY at the moment the server returns a new
+  // message id. The synchronous write closes a timing race in the
+  // chat-switch-mid-send scenario:
+  //
+  //   - onSuccess sets `pendingHighWaterAdvance` (state update).
+  //   - User clicks switch-to-B in a separate event-loop task,
+  //     BEFORE React's scheduler runs the post-paint useEffects.
+  //   - React commits chatId=B + reset state in one cycle. The
+  //     drain useEffect and the ref-sync useEffect from the
+  //     interleaving render are cancelled by React.
+  //   - After the chatId=B render paints, the tracker's
+  //     chatId-cleanup fires and reads this ref. If we waited for
+  //     a useEffect to sync it, the ref would still be at the
+  //     pre-send baseline — and IDB would be written with the
+  //     stale id, undoing the explicit `setReadState` call we made
+  //     in onSuccess.
+  //
+  // Writing the ref synchronously in onSuccess sidesteps that
+  // entire chain: by the time the tracker cleanup reads, the ref
+  // already holds the new message id. Per PR 286 manual sign-off
+  // rev 12 (reviewer's option A, sharpened).
+  const highWatermarkMessageIdRef = useRef<string | null>(null);
+
   // Pre-advance target for the session high water: the id of a
   // message the USER just sent (text-only or file path). The actual
   // `setSessionHighestId` call happens in an effect further down,
@@ -774,6 +800,12 @@ export function ChatView({
       };
       queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
       void setReadState(chatId, sentMessage.id, sentMessage.id);
+      // Synchronously advance the tracker's high-water ref so that
+      // a chat-switch fired before React's post-paint useEffects
+      // run cannot leave the ref at a stale baseline. See the
+      // declaration of `highWatermarkMessageIdRef` for the full
+      // race trace.
+      highWatermarkMessageIdRef.current = sentMessage.id;
       // Pre-advance the in-memory high water to the new message id
       // BEFORE initiating the smooth scroll. By the time the new
       // message commits to `mergedMessages`, `sessionHighestIdx`
@@ -897,6 +929,9 @@ export function ChatView({
           };
           queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
           void setReadState(chatId, lastSentMessageId, lastSentMessageId);
+          // Synchronous ref write — see sendMut.onSuccess for
+          // the chat-switch-mid-send race rationale.
+          highWatermarkMessageIdRef.current = lastSentMessageId;
           setPendingHighWaterAdvance({ chatId, messageId: lastSentMessageId });
         }
         // Same scroll-on-send as sendMut.onSuccess — the file-send
@@ -1189,25 +1224,34 @@ export function ChatView({
     return Math.max(0, mergedMessages.length - 1 - sessionHighestIdx);
   }, [mergedMessages, sessionHighestIdx]);
 
-  // Ref to the high water message id. Read by useReadTracker at
-  // IDB-write time so the persisted `latestKnownMessageId` reflects
-  // the user's high watermark rather than "the latest message in
-  // the DOM" (the previous default, which over-counted unread
-  // messages for users who never scrolled to the bottom).
+  // Keep `highWatermarkMessageIdRef` (declared up near `sendMut`)
+  // in sync with the resolved high water as session state evolves.
+  // The ref is the source of truth for the tracker's IDB writes;
+  // this effect captures organic advances (user scrolling forward,
+  // baseline-only re-visits) that aren't already covered by the
+  // synchronous own-send write in `sendMut.onSuccess` /
+  // file-send path.
   //
-  // Prefers the explicit `sessionHighestId` over the
-  // `mergedMessages[sessionHighestIdx]` lookup when both are
-  // available. Rationale: `sessionHighestId` may be pre-advanced
-  // (own send) to an id that has not yet appeared in
-  // `mergedMessages` while the chat-messages refetch is in flight.
-  // Without this preference, the ref would resolve to
-  // `mergedMessages[baselineIdx].id` (the pre-send last message)
-  // during that window — and a tracker flush on chat-switch
-  // cleanup would then write the stale baseline to IDB, undoing
-  // the pre-advance. That is exactly the chat-switch-mid-send
-  // regression caught in PR 286 manual sign-off rev 10.
-  const highWatermarkMessageIdRef = useRef<string | null>(null);
+  // Branch order matters:
+  //
+  //   1. Pending pre-advance for the current chat → use it. This
+  //      covers the small but real window after `setPendingHighWaterAdvance`
+  //      and before the drain effect has applied it to
+  //      `sessionHighestId`. Without this branch, the effect would
+  //      fall through to `mergedMessages[baselineIdx]` and clobber
+  //      the synchronous ref write done in `onSuccess` — exactly
+  //      the regression caught in PR 286 manual sign-off rev 11
+  //      (T5 fail report).
+  //   2. Explicit `sessionHighestId` → use it. Covers the post-drain
+  //      window where pending has been cleared but the new id is
+  //      still pre-refetch.
+  //   3. Resolve through `mergedMessages[sessionHighestIdx]`. Normal
+  //      organic-advance case.
   useEffect(() => {
+    if (pendingHighWaterAdvance && pendingHighWaterAdvance.chatId === chatId) {
+      highWatermarkMessageIdRef.current = pendingHighWaterAdvance.messageId;
+      return;
+    }
     if (sessionHighestId !== null) {
       highWatermarkMessageIdRef.current = sessionHighestId;
       return;
@@ -1217,7 +1261,7 @@ export function ChatView({
     } else {
       highWatermarkMessageIdRef.current = null;
     }
-  }, [sessionHighestId, sessionHighestIdx, mergedMessages]);
+  }, [pendingHighWaterAdvance, chatId, sessionHighestId, sessionHighestIdx, mergedMessages]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
