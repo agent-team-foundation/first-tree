@@ -1483,8 +1483,10 @@ export function ChatView({
                       setCursor(e.target.selectionStart ?? e.target.value.length);
                       // Dismiss a stale upload error (e.g. the "no @mention"
                       // hint) the moment the user starts fixing it. Mirrors
-                      // the implicit clear in `addImages` at line ~756.
-                      if (uploadError !== null) setUploadError(null);
+                      // the unconditional clears in `addImages` / `removeImage`
+                      // — React bails on identical setState so the null→null
+                      // case is free.
+                      setUploadError(null);
                     }}
                     onSelect={(e) => {
                       setCursor(e.currentTarget.selectionStart ?? draft.length);
