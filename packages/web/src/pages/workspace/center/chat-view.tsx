@@ -762,6 +762,10 @@ export function ChatView({
       if (img) URL.revokeObjectURL(img.previewUrl);
       return prev.filter((i) => i.id !== id);
     });
+    // Mirror addImages: removing an image is also a "user is fixing it"
+    // signal — a prior "image too large" or "no @mention" error is now
+    // potentially stale and shouldn't stay pinned under the composer.
+    setUploadError(null);
   }, []);
 
   const handleSend = async () => {
@@ -771,7 +775,19 @@ export function ChatView({
     if (uploading) return;
     // Group-chat send guard: don't fire requests we know the server (with
     // proposal §3 enforcement) or downstream `mention_only` agents will drop.
-    if (requiresMention && draftMentions.length === 0) return;
+    // Applies to image-only sends too — the server-side mention check runs
+    // per message regardless of format, so an image without an addressee
+    // would 400 just like a text without an addressee (issue 387). Surface
+    // a hint when the user has only attached images so the silent-return
+    // doesn't look like a stuck send.
+    if (requiresMention && draftMentions.length === 0) {
+      if (images.length > 0) {
+        // English matches the other uploadError strings in this file
+        // (Failed to send image / Failed to add participants / Image too large).
+        setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
+      }
+      return;
+    }
 
     // "Mention to invite": any `@<name>` pointing at an agent outside the
     // current chat is treated as both an address and an invitation. We add
@@ -793,6 +809,14 @@ export function ChatView({
       setUploading(true);
       setUploadError(null);
       try {
+        // Carry the text-draft mentions onto each image message so the
+        // server's group-chat mention guard (services/message.ts) accepts
+        // file-format sends. Without this, every image POST is missing
+        // recipient mentions and 400s before the text message is sent
+        // (issue 387). In direct chats `draftMentions` is empty and the
+        // metadata field is omitted entirely — server check is skipped
+        // anyway, so this is a no-op for 1:1.
+        const imageMetadata = draftMentions.length > 0 ? { mentions: draftMentions } : undefined;
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
           const imageId = crypto.randomUUID();
@@ -800,13 +824,17 @@ export function ChatView({
           // its own message via the imageRef shape immediately on refetch,
           // even if the server write races ahead of the response.
           await putImage({ imageId, base64: data, mimeType: img.file.type });
-          await sendFileMessage(chatId, {
-            data,
-            mimeType: img.file.type,
-            filename: img.file.name,
-            size: img.file.size,
-            imageId,
-          });
+          await sendFileMessage(
+            chatId,
+            {
+              data,
+              mimeType: img.file.type,
+              filename: img.file.name,
+              size: img.file.size,
+              imageId,
+            },
+            imageMetadata,
+          );
           URL.revokeObjectURL(img.previewUrl);
         }
         setPendingImages([]);
@@ -1453,6 +1481,12 @@ export function ChatView({
                     onChange={(e) => {
                       setDraft(e.target.value);
                       setCursor(e.target.selectionStart ?? e.target.value.length);
+                      // Dismiss a stale upload error (e.g. the "no @mention"
+                      // hint) the moment the user starts fixing it. Mirrors
+                      // the unconditional clears in `addImages` / `removeImage`
+                      // — React bails on identical setState so the null→null
+                      // case is free.
+                      setUploadError(null);
                     }}
                     onSelect={(e) => {
                       setCursor(e.currentTarget.selectionStart ?? draft.length);
