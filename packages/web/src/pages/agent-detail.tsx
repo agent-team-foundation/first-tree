@@ -22,6 +22,7 @@ import {
 } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
 import { listAgentSessions } from "./../api/sessions.js";
+import { useAuth } from "./../auth/auth-context.js";
 import { FirstTreeLogo } from "./../components/first-tree-logo.js";
 import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
@@ -31,6 +32,8 @@ import { UppercaseLabel } from "./../components/ui/section-header.js";
 import { StateChip } from "./../components/ui/state-chip.js";
 import { Tile } from "./../components/ui/tile.js";
 import { cn, formatDate } from "./../lib/utils.js";
+import { canManageAgentDetail } from "./agent-detail/access.js";
+import { getAgentTestActionState, isBindableClient } from "./agent-detail/action-state.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import { DangerZone } from "./agent-detail/danger-zone.js";
 import { EnvSection } from "./agent-detail/env-section.js";
@@ -44,7 +47,7 @@ import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
 import { SectionDivider, SectionShell } from "./agent-detail/section-shell.js";
 import { SetupSection } from "./agent-detail/setup-section.js";
 import { deriveSaveHint } from "./agent-detail/status-bar.js";
-import { useConfigDraft } from "./agent-detail/use-config-draft.js";
+import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config-draft.js";
 
 type SidebarItem = {
   key: string;
@@ -67,14 +70,21 @@ const SECTION_ANCHORS = {
   danger: "ad-danger",
 } as const;
 
+function sectionToAnchor(section: DraftSectionName): string {
+  if (section === "model") return SECTION_ANCHORS.setup;
+  if (section === "mcp") return SECTION_ANCHORS.tools;
+  if (section === "env" || section === "git") return SECTION_ANCHORS.advanced;
+  return SECTION_ANCHORS.prompt;
+}
+
 /**
  * Flat sidebar with a divider before Danger zone. Autonomous agents get the
- * full list; human agents collapse to Profile + Danger zone per the ticket
- * "human agent 自然降级" rule.
+ * full editable list only when the caller can manage them; shared read-only
+ * agents collapse to Profile because config and lifecycle routes are manage-only.
  */
-function buildSidebar(isHuman: boolean): SidebarItem[] {
+function buildSidebar(isHuman: boolean, canManage: boolean): SidebarItem[] {
   const items: SidebarItem[] = [{ key: "overview", label: "Profile", anchor: SECTION_ANCHORS.overview }];
-  if (!isHuman) {
+  if (!isHuman && canManage) {
     items.push(
       { key: "setup", label: "Setup", anchor: SECTION_ANCHORS.setup },
       { key: "prompt", label: "Prompt", anchor: SECTION_ANCHORS.prompt },
@@ -82,7 +92,9 @@ function buildSidebar(isHuman: boolean): SidebarItem[] {
       { key: "advanced", label: "Advanced", anchor: SECTION_ANCHORS.advanced },
     );
   }
-  items.push({ key: "danger", label: "Danger zone", anchor: SECTION_ANCHORS.danger, divider: true, danger: true });
+  if (canManage) {
+    items.push({ key: "danger", label: "Danger zone", anchor: SECTION_ANCHORS.danger, divider: true, danger: true });
+  }
   return items;
 }
 
@@ -91,6 +103,7 @@ export function AgentDetailPage() {
   const uuid = params.uuid ?? "";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { memberId, role } = useAuth();
 
   // Agent identity data
   const agentQuery = useQuery({
@@ -98,11 +111,13 @@ export function AgentDetailPage() {
     queryFn: () => getAgent(uuid),
     enabled: !!uuid,
   });
+  const canManageAgent = canManageAgentDetail(agentQuery.data, memberId, role);
+  const canEditConfig = agentQuery.data?.type !== "human" && canManageAgent;
 
   const cfgQuery = useQuery({
     queryKey: ["agent-config", uuid],
     queryFn: () => getAgentConfig(uuid),
-    enabled: !!uuid && agentQuery.data?.type !== "human",
+    enabled: !!uuid && canEditConfig,
   });
 
   const clientStatusQuery = useQuery({
@@ -123,7 +138,7 @@ export function AgentDetailPage() {
   const allClientsQuery = useQuery({
     queryKey: ["clients"],
     queryFn: listClients,
-    enabled: !!uuid && agentQuery.data?.type !== "human",
+    enabled: !!uuid && canEditConfig,
     refetchInterval: 30_000,
   });
 
@@ -131,6 +146,8 @@ export function AgentDetailPage() {
   const draft = useConfigDraft(cfgQuery.data);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflictMsg, setConflictMsg] = useState<string | null>(null);
+  const [dangerError, setDangerError] = useState<string | null>(null);
+  const [remoteReloading, setRemoteReloading] = useState(false);
   // Flash an inline "Saved" check in the SaveBar for a short window after a
   // successful save. Cleared by any subsequent edit, error, or timer.
   const [justSaved, setJustSaved] = useState(false);
@@ -143,6 +160,7 @@ export function AgentDetailPage() {
     },
     onSuccess: (next) => {
       queryClient.setQueryData(["agent-config", uuid], next);
+      draft.resetToConfig(next);
       setSaveError(null);
       setConflictMsg(null);
       setJustSaved(true);
@@ -169,12 +187,24 @@ export function AgentDetailPage() {
     if (draft.summary.anyDirty) setJustSaved(false);
   }, [draft.summary.anyDirty]);
 
-  const reloadRemote = useCallback(() => {
-    setConflictMsg(null);
+  const resetDraftToConfig = draft.resetToConfig;
+  const reloadRemote = useCallback(async () => {
     setSaveError(null);
-    queryClient.invalidateQueries({ queryKey: ["agent-config", uuid] });
-    draft.resetAll();
-  }, [queryClient, uuid, draft]);
+    setRemoteReloading(true);
+    try {
+      const latest = await queryClient.fetchQuery({
+        queryKey: ["agent-config", uuid],
+        queryFn: () => getAgentConfig(uuid),
+        staleTime: 0,
+      });
+      resetDraftToConfig(latest);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRemoteReloading(false);
+      setConflictMsg(null);
+    }
+  }, [queryClient, uuid, resetDraftToConfig]);
 
   const jumpTo = useCallback((anchor: string) => {
     const el = document.getElementById(anchor);
@@ -193,15 +223,27 @@ export function AgentDetailPage() {
   // Lifecycle mutations
   const suspendMutation = useMutation({
     mutationFn: () => suspendAgent(uuid),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", uuid] }),
+    onMutate: () => setDangerError(null),
+    onSuccess: () => {
+      setDangerError(null);
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+    },
+    onError: (err) => setDangerError(err instanceof Error ? err.message : String(err)),
   });
   const reactivateMutation = useMutation({
     mutationFn: () => reactivateAgent(uuid),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", uuid] }),
+    onMutate: () => setDangerError(null),
+    onSuccess: () => {
+      setDangerError(null);
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+    },
+    onError: (err) => setDangerError(err instanceof Error ? err.message : String(err)),
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteAgent(uuid),
+    onMutate: () => setDangerError(null),
     onSuccess: () => navigate("/team"),
+    onError: (err) => setDangerError(err instanceof Error ? err.message : String(err)),
   });
 
   // Test connection
@@ -256,7 +298,7 @@ export function AgentDetailPage() {
   }, [draft.summary.anyDirty]);
 
   const isHumanLocal = agentQuery.data?.type === "human";
-  const sidebarItems = useMemo(() => buildSidebar(isHumanLocal), [isHumanLocal]);
+  const sidebarItems = useMemo(() => buildSidebar(isHumanLocal, canManageAgent), [isHumanLocal, canManageAgent]);
 
   // Sticky ContextBar visibility: hide while the page-top header is on screen,
   // show once the operator has scrolled past it. Driven by an IntersectionObserver
@@ -316,10 +358,7 @@ export function AgentDetailPage() {
   const dirtyAnchors = useMemo(() => {
     const set = new Set<string>();
     for (const s of draft.summary.dirtySections) {
-      if (s === "prompt") set.add(SECTION_ANCHORS.prompt);
-      if (s === "model") set.add(SECTION_ANCHORS.setup);
-      if (s === "mcp") set.add(SECTION_ANCHORS.tools);
-      if (s === "env" || s === "git") set.add(SECTION_ANCHORS.advanced);
+      set.add(sectionToAnchor(s));
     }
     return set;
   }, [draft.summary.dirtySections]);
@@ -353,8 +392,21 @@ export function AgentDetailPage() {
 
   const clientStatus: ClientStatusInfo | undefined = clientStatusQuery.data;
   const activeSessions = sessionsQuery.data?.length ?? 0;
-  const isUnclaimed = !isHuman && !clientStatus?.clientId;
+  const clientStatusInitialLoading = !isHuman && !clientStatus && clientStatusQuery.isLoading;
+  const clientStatusError =
+    clientStatusQuery.error instanceof Error
+      ? clientStatusQuery.error.message
+      : clientStatusQuery.error
+        ? "Unknown"
+        : null;
+  const isUnclaimed = !isHuman && clientStatusQuery.isSuccess && !clientStatus?.clientId;
   const isOffline = !isHuman && clientStatus ? !clientStatus.online && !!clientStatus.clientId : false;
+  const testAction = getAgentTestActionState({
+    agentStatus: agent.status,
+    clientStatus,
+    clientStatusLoading: clientStatusInitialLoading,
+    testPending: testMutation.isPending,
+  });
 
   const runtimeExt = agent as Record<string, unknown>;
   const runtimeState = (runtimeExt.runtimeState as string | null) ?? null;
@@ -406,7 +458,8 @@ export function AgentDetailPage() {
   const boundClient: HubClient | null = boundClientId
     ? (allClientsQuery.data?.find((c) => c.id === boundClientId) ?? null)
     : null;
-  const boundClientLabel: string | null = boundClientId ? (boundClient?.hostname ?? boundClientId) : null;
+  const boundClientLabel: string | null =
+    boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
 
   // Runtime provider label for the Setup "Where it runs" card. The agent
   // schema carries the authoritative `runtimeProvider` field post-0026; the
@@ -503,7 +556,7 @@ export function AgentDetailPage() {
               <Button variant="ghost" size="xs" onClick={() => navigate(`/?a=${agent.uuid}`)}>
                 <MessageSquare className="h-3 w-3" /> Open chat
               </Button>
-              {!isHuman && agent.status === "active" && (
+              {!isHuman && canManageAgent && agent.status === "active" && (
                 <Button
                   variant="outline"
                   size="xs"
@@ -511,7 +564,8 @@ export function AgentDetailPage() {
                     testMutation.reset();
                     testMutation.mutate();
                   }}
-                  disabled={testMutation.isPending}
+                  disabled={testAction.disabled}
+                  title={testAction.title}
                 >
                   <Play className="h-3 w-3" />
                   {testMutation.isPending ? "Testing…" : "Test"}
@@ -558,26 +612,31 @@ export function AgentDetailPage() {
             anchorId={SECTION_ANCHORS.overview}
             title="Profile"
             right={
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => navigate(`/settings/integrations?agent=${agent.uuid}`)}
-                title="Manage platform bindings in Integrations"
-              >
-                <Link2 className="h-3 w-3" />
-                Manage bindings
-              </Button>
+              canManageAgent ? (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => navigate(`/settings/integrations?agent=${agent.uuid}`)}
+                  title="Manage platform bindings in Integrations"
+                >
+                  <Link2 className="h-3 w-3" />
+                  Manage bindings
+                </Button>
+              ) : null
             }
           >
             <IdentitySection
               agent={agent}
+              canEdit={canManageAgent}
               onSave={async (patch) => {
                 await identityUpdateMutation.mutateAsync(patch);
               }}
             />
           </SectionShell>
 
-          {!isHuman && (
+          {!isHuman && !canManageAgent && <ReadOnlyConfigNotice />}
+
+          {canEditConfig && (
             <>
               <SectionShell
                 anchorId={SECTION_ANCHORS.setup}
@@ -610,6 +669,8 @@ export function AgentDetailPage() {
                   <SetupSection
                     runtimeProvider={setupRuntimeProvider}
                     computerLabel={boundClientLabel}
+                    computerStatusLoading={clientStatusInitialLoading}
+                    computerStatusError={clientStatusError}
                     canBindComputer={isUnclaimed && agent.status === "active"}
                     bindComputerPending={bindClientMutation.isPending}
                     onBindComputer={() => setBindClientOpen(true)}
@@ -720,34 +781,42 @@ export function AgentDetailPage() {
             </>
           )}
 
-          <SectionDivider />
+          {canManageAgent && (
+            <>
+              <SectionDivider />
 
-          <DangerZone
-            agent={agent}
-            suspendPending={suspendMutation.isPending}
-            reactivatePending={reactivateMutation.isPending}
-            deletePending={deleteMutation.isPending}
-            onSuspend={() => suspendMutation.mutate()}
-            onReactivate={() => reactivateMutation.mutate()}
-            onDelete={() => deleteMutation.mutate()}
-          />
+              <DangerZone
+                agent={agent}
+                suspendPending={suspendMutation.isPending}
+                reactivatePending={reactivateMutation.isPending}
+                deletePending={deleteMutation.isPending}
+                errorMessage={dangerError}
+                onSuspend={() => suspendMutation.mutate()}
+                onReactivate={() => reactivateMutation.mutate()}
+                onDelete={() => deleteMutation.mutate()}
+              />
+            </>
+          )}
         </div>
 
-        {!isHuman && (
+        {canEditConfig && (
           <SaveBar
             summary={draft.summary}
             saveHint={saveHint}
             conflictMessage={conflictMsg}
             errorMessage={saveError}
             saving={saveMutation.isPending}
+            reloadingRemote={remoteReloading}
             justSaved={justSaved}
             onSave={() => saveMutation.mutate()}
             onDiscard={() => {
               if (!draft.summary.anyDirty) return;
               setDiscardDialogOpen(true);
             }}
-            onReloadRemote={reloadRemote}
-            onJumpTo={(section) => jumpTo(sectionAnchorId(section))}
+            onReloadRemote={() => {
+              void reloadRemote();
+            }}
+            onJumpTo={(section) => jumpTo(sectionToAnchor(section))}
           />
         )}
       </div>
@@ -827,6 +896,26 @@ export function AgentDetailPage() {
 
       <ReBindDialog open={reBindOpen} onOpenChange={setReBindOpen} agent={agent} />
     </div>
+  );
+}
+
+function ReadOnlyConfigNotice() {
+  return (
+    <SectionShell anchorId="ad-runtime-readonly" title="Runtime configuration">
+      <div
+        className="text-body"
+        style={{
+          padding: "var(--sp-3)",
+          border: "var(--hairline) solid var(--border-faint)",
+          borderRadius: "var(--radius-panel)",
+          background: "var(--bg-raised)",
+          color: "var(--fg-3)",
+        }}
+      >
+        You can view this shared agent profile. Runtime configuration, bindings, testing, and lifecycle controls are
+        limited to the agent manager or an organization admin.
+      </div>
+    </SectionShell>
   );
 }
 
@@ -951,7 +1040,7 @@ function BindClientList({
   selected: string;
   onSelect: (id: string) => void;
 }) {
-  const bindable = clients.filter((c) => c.status === "connected");
+  const bindable = clients.filter(isBindableClient);
   if (bindable.length === 0) {
     return (
       <div
@@ -983,7 +1072,6 @@ function BindClientList({
     >
       {bindable.map((c) => {
         const picked = c.id === selected;
-        const online = c.status === "online" || c.status === "active";
         return (
           <li key={c.id} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
             <button
@@ -999,7 +1087,7 @@ function BindClientList({
             >
               <span
                 className={cn("inline-block h-2 w-2 rounded-full shrink-0")}
-                style={{ background: online ? "var(--state-idle)" : "var(--fg-4)" }}
+                style={{ background: isBindableClient(c) ? "var(--state-idle)" : "var(--fg-4)" }}
                 aria-hidden
               />
               <span className="flex-1 min-w-0">

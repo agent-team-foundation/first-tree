@@ -22,10 +22,11 @@ import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 
 export type IdentitySectionProps = {
   agent: Agent;
+  canEdit?: boolean;
   onSave: (patch: UpdateAgent) => Promise<void>;
 };
 
-export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
+export function IdentitySection({ agent, canEdit = true, onSave }: IdentitySectionProps) {
   const [open, setOpen] = useState(false);
   const resolveAgent = useAgentIdentityMap();
   const resolveMember = useMemberNameMap();
@@ -43,7 +44,7 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
     <Panel>
       <PanelHeader>
         <PanelTitle>Profile</PanelTitle>
-        {agent.status === "active" && (
+        {canEdit && agent.status === "active" && (
           <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
             <Pencil className="h-3 w-3" /> Edit
           </Button>
@@ -95,7 +96,7 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
         </div>
       </PanelBody>
 
-      <IdentityEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} />
+      {canEdit && <IdentityEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} />}
     </Panel>
   );
 }

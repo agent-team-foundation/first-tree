@@ -18,6 +18,7 @@ export type SaveBarProps = {
   conflictMessage: string | null;
   errorMessage: string | null;
   saving: boolean;
+  reloadingRemote?: boolean;
   /** Emits true for a short window after a successful save, so the bar can flash an inline check. */
   justSaved: boolean;
   onSave: () => void;
@@ -38,6 +39,7 @@ export function SaveBar(props: SaveBarProps) {
   if (!props.summary.anyDirty && !props.conflictMessage && !props.errorMessage && !props.justSaved) return null;
 
   const dirtyCount = props.summary.dirtySections.length;
+  const showDraftActions = props.summary.anyDirty || props.saving;
 
   return (
     <div
@@ -108,23 +110,34 @@ export function SaveBar(props: SaveBarProps) {
         </div>
         <div className="flex gap-2 shrink-0">
           {props.conflictMessage && (
-            <Button variant="outline" size="sm" onClick={props.onReloadRemote}>
-              Discard mine, load latest
+            <Button variant="outline" size="sm" onClick={props.onReloadRemote} disabled={!!props.reloadingRemote}>
+              {props.reloadingRemote ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                  Loading latest…
+                </span>
+              ) : (
+                "Discard mine, load latest"
+              )}
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={props.onDiscard} disabled={props.saving}>
-            Discard changes
-          </Button>
-          <Button size="sm" onClick={props.onSave} disabled={props.saving || !props.summary.anyDirty}>
-            {props.saving ? (
-              <span className="inline-flex items-center gap-1.5">
-                <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-                Saving…
-              </span>
-            ) : (
-              "Save"
-            )}
-          </Button>
+          {showDraftActions && (
+            <>
+              <Button variant="ghost" size="sm" onClick={props.onDiscard} disabled={props.saving}>
+                Discard changes
+              </Button>
+              <Button size="sm" onClick={props.onSave} disabled={props.saving || !props.summary.anyDirty}>
+                {props.saving ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                    Saving…
+                  </span>
+                ) : (
+                  "Save"
+                )}
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>
