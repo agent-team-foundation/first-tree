@@ -45,6 +45,7 @@ import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
+import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { addChatParticipants, changeChatType } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
@@ -358,6 +359,8 @@ export async function listMeChats(
       agentId: chatMembership.agentId,
       displayName: agents.displayName,
       type: agents.type,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
       sessionState: agentChatSessions.state,
     })
     .from(chatMembership)
@@ -372,7 +375,13 @@ export async function listMeChats(
   const engagedByChat = new Map<string, string[]>();
   for (const p of participantRows) {
     const list = participantsByChat.get(p.chatId) ?? [];
-    list.push({ agentId: p.agentId, displayName: p.displayName, type: p.type });
+    list.push({
+      agentId: p.agentId,
+      displayName: p.displayName,
+      type: p.type,
+      avatarColorToken: p.avatarColorToken,
+      avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt),
+    });
     participantsByChat.set(p.chatId, list);
     if (p.sessionState === "active") {
       const engaged = engagedByChat.get(p.chatId) ?? [];

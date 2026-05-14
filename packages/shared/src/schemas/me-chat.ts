@@ -45,6 +45,20 @@ export const meChatParticipantSchema = z.object({
   agentId: z.string(),
   displayName: z.string(),
   type: z.string(),
+  /**
+   * Manager-selected avatar color token (one of `AVATAR_COLOR_TOKENS`).
+   * NULL = auto — renderer falls back to the deterministic djb2 hash of
+   * `agentId`. Kept as a loose string here (matching `type`) so DB rows
+   * with legacy / unrecognised values flow through harmlessly; the web
+   * renderer guards on the known set.
+   */
+  avatarColorToken: z.string().nullable(),
+  /**
+   * Synthesized URL for the manager-uploaded avatar image, or NULL when
+   * the agent has no image and the renderer should fall back to
+   * color + initial.
+   */
+  avatarImageUrl: z.string().nullable(),
 });
 export type MeChatParticipant = z.infer<typeof meChatParticipantSchema>;
 

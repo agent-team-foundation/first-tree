@@ -34,6 +34,7 @@ import { Tile } from "./../components/ui/tile.js";
 import { cn, formatDate } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
 import { getAgentTestActionState, isBindableClient } from "./agent-detail/action-state.js";
+import { AppearanceSection } from "./agent-detail/appearance-section.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import { DangerZone } from "./agent-detail/danger-zone.js";
 import { EnvSection } from "./agent-detail/env-section.js";
@@ -630,6 +631,21 @@ export function AgentDetailPage() {
               canEdit={canManageAgent}
               onSave={async (patch) => {
                 await identityUpdateMutation.mutateAsync(patch);
+              }}
+            />
+          </SectionShell>
+
+          <SectionShell anchorId="ad-appearance" title="Appearance">
+            <AppearanceSection
+              agent={agent}
+              canEdit={canManageAgent}
+              onSave={async (patch) => {
+                await identityUpdateMutation.mutateAsync(patch);
+              }}
+              onRefresh={async () => {
+                await queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+                await queryClient.invalidateQueries({ queryKey: ["agents"] });
+                await queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
               }}
             />
           </SectionShell>
