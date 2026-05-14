@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { sessionEvents } from "../db/schema/session-events.js";
 import * as sessionEventService from "../services/session-event.js";
-import { useTestApp } from "./helpers.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * S10 (NC2 backend) — session_events persistence & seq semantics.
@@ -223,5 +223,34 @@ describe("sessionEventService", () => {
 
     expect(remaining1).toHaveLength(0);
     expect(remaining2).toHaveLength(1);
+  });
+
+  it("summarizes Context Tree usage by organization", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+    const c = chatId();
+
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: "https://github.com/example/tree" },
+    });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: "https://github.com/example/tree" },
+    });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "tool_call",
+      payload: { toolUseId: "tu", name: "Read", args: {}, status: "ok" },
+    });
+    await sessionEventService.appendEvent(app.db, "missing-agent", c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null },
+    });
+
+    await expect(sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3)).resolves.toEqual({
+      windowDays: 3,
+      agentCount: 1,
+      usageCount: 2,
+    });
   });
 });

@@ -3,13 +3,18 @@ import type { ServerConfig } from "@agent-team-foundation/first-tree-hub-shared/
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { requireOrgMembership } from "../../scope/require-org.js";
-import { type ContextTreeBinding, getContextTreeSnapshot } from "../../services/context-tree-snapshot.js";
+import {
+  type ContextTreeBinding,
+  contextTreeSnapshotWindowDays,
+  getContextTreeSnapshot,
+} from "../../services/context-tree-snapshot.js";
 import { getOrgContextTree } from "../../services/org-settings.js";
+import { summarizeContextTreeUsage } from "../../services/session-event.js";
 import { contextTreeGithubTokenForRepo } from "../context-tree-snapshot.js";
 
 const querySchema = z
   .object({
-    window: z.enum(["1d", "7d", "30d"]).optional(),
+    window: z.enum(["1d", "3d", "7d", "30d"]).optional(),
   })
   .strict();
 
@@ -36,8 +41,14 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
         binding.repo,
         app.config.contextTreeSync as ContextTreeSyncConfig | undefined,
       );
-      const snapshot = await getContextTreeSnapshot({ ...binding, githubToken }, query.window ?? "7d");
-      return contextTreeSnapshotSchema.parse(snapshot);
+      const window = query.window ?? "7d";
+      const snapshot = await getContextTreeSnapshot({ ...binding, githubToken }, window);
+      const usage = await summarizeContextTreeUsage(
+        app.db,
+        scope.organizationId,
+        contextTreeSnapshotWindowDays(window),
+      );
+      return contextTreeSnapshotSchema.parse({ ...snapshot, usage });
     },
   );
 }

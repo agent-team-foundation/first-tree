@@ -539,7 +539,7 @@ describe("org-settings API (admin gating + masking)", () => {
 
     const sideSnapshot = await app.inject({
       method: "GET",
-      url: `/api/v1/orgs/${sideOrgId}/context-tree/snapshot?window=7d`,
+      url: `/api/v1/orgs/${sideOrgId}/context-tree/snapshot?window=3d`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(sideSnapshot.statusCode).toBe(200);
@@ -551,7 +551,7 @@ describe("org-settings API (admin gating + masking)", () => {
 
     const defaultSnapshot = await app.inject({
       method: "GET",
-      url: `/api/v1/orgs/${admin.organizationId}/context-tree/snapshot?window=7d`,
+      url: `/api/v1/orgs/${admin.organizationId}/context-tree/snapshot?window=3d`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(defaultSnapshot.statusCode).toBe(200);

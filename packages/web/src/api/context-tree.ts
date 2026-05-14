@@ -1,7 +1,7 @@
 import type { ContextTreeSnapshot } from "@agent-team-foundation/first-tree-hub-shared";
 import { api, withOrgAt } from "./client.js";
 
-export type ContextTreeWindow = "1d" | "7d" | "30d";
+export type ContextTreeWindow = "1d" | "3d" | "7d" | "30d";
 
 export function getContextTreeSnapshot(
   organizationId: string,

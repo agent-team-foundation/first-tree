@@ -121,6 +121,13 @@ export const contextTreeSummarySchema = z.object({
 });
 export type ContextTreeSummary = z.infer<typeof contextTreeSummarySchema>;
 
+export const contextTreeUsageSummarySchema = z.object({
+  windowDays: z.number().int().positive(),
+  agentCount: z.number().int().nonnegative(),
+  usageCount: z.number().int().nonnegative(),
+});
+export type ContextTreeUsageSummary = z.infer<typeof contextTreeUsageSummarySchema>;
+
 export const contextTreeSnapshotSchema = z.object({
   repo: z.string().nullable(),
   branch: z.string().nullable(),
@@ -129,6 +136,7 @@ export const contextTreeSnapshotSchema = z.object({
   snapshotStatus: contextTreeSnapshotStatusSchema,
   contextStatus: contextTreeStatusSchema,
   summary: contextTreeSummarySchema,
+  usage: contextTreeUsageSummarySchema,
   updates: z.array(contextTreeUpdateSchema),
   nodes: z.array(contextTreeNodeSchema),
   edges: z.array(contextTreeEdgeSchema),

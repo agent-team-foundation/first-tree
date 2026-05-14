@@ -64,6 +64,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
     severity: "ok",
   },
   summary: { addedCount: 1, editedCount: 4, removedCount: 1, changedNodeCount: 6 },
+  usage: { windowDays: 7, agentCount: 4, usageCount: 18 },
   nodes: [
     node("root", null, "/", "Context Tree", "root", null),
 
