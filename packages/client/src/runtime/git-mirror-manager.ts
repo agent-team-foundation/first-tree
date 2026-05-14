@@ -566,6 +566,16 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
           );
         }
 
+        // Pre-add cleanup: when a previous owner of `absTarget` crashed or
+        // the directory was wiped externally, the bare mirror retains a
+        // "prunable" worktree admin record. A subsequent `git worktree add`
+        // against the same path then fails with
+        //   `fatal: '<path>' is a missing but already registered worktree`.
+        // `prune` is idempotent and safe — it only removes records whose
+        // backing directory no longer exists. Live worktrees that we own
+        // (e.g. the same agent's other chats) are untouched.
+        await gitOk(["worktree", "prune"], mirror, 10_000);
+
         const pathExists = existsSync(absTarget);
         const hasBranch = await branchExists(mirror, branchName);
 

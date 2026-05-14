@@ -5,9 +5,13 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { backfillSilentContextForNewParticipants } from "./inbox.js";
+import { resolveChatTitle } from "./me-chat.js";
 import { addChatParticipants, changeChatType, wouldUpgradeToGroup } from "./participant-mode.js";
+import { extractSummary } from "./session.js";
 import { leaveAsParticipant, recomputeChatWatchers } from "./watcher.js";
 
 export async function createChat(db: Database, creatorId: string, data: CreateChat) {
@@ -88,14 +92,54 @@ export async function getChat(db: Database, chatId: string) {
   return chat;
 }
 
-export async function getChatDetail(db: Database, chatId: string) {
+/**
+ * Read a chat row + speaker participants + server-resolved display
+ * metadata (`title`, `firstMessagePreview`) so the agent route can return
+ * a payload that matches the wire `chatDetailSchema` contract.
+ *
+ * `selfAgentId` only affects the participant-join fallback in
+ * `resolveChatTitle` (e.g. `"alice, bob"` excluding self when topic + first
+ * message are both empty). Callers that don't have a self agent (admin
+ * paths) can pass `null` — the fallback degrades to "all displayNames".
+ */
+export async function getChatDetail(db: Database, chatId: string, selfAgentId: string | null = null) {
   const chat = await getChat(db, chatId);
-  const participants = await db
-    .select()
+  const participantRows = await db
+    .select({
+      agentId: chatMembership.agentId,
+      role: chatMembership.role,
+      mode: chatMembership.mode,
+      joinedAt: chatMembership.joinedAt,
+      displayName: agents.displayName,
+    })
     .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
-  return { ...chat, participants };
+  // Compute server-resolved `title` + `firstMessagePreview` so the agent
+  // route returns a payload that matches the wire contract. Without this,
+  // the client's chat-context injection cannot render a chat label when
+  // the creator never set an explicit topic — see PR #393 dogfood report.
+  const [firstMessageRow] = await db
+    .select({ content: messages.content })
+    .from(messages)
+    .where(eq(messages.chatId, chatId))
+    .orderBy(messages.createdAt, messages.id)
+    .limit(1);
+  const firstMessagePreview = firstMessageRow ? extractSummary(firstMessageRow.content) : null;
+  const title = resolveChatTitle(chat.topic, firstMessagePreview, participantRows, selfAgentId ?? "");
+
+  // Bare `chatMembership` rows still flow through `participants` for any
+  // existing wire-shape consumers — the new fields are additive.
+  const participants = participantRows.map((p) => ({
+    chatId,
+    agentId: p.agentId,
+    role: p.role,
+    mode: p.mode,
+    joinedAt: p.joinedAt,
+  }));
+
+  return { ...chat, participants, title, firstMessagePreview };
 }
 
 export async function listChats(db: Database, agentId: string, limit: number, cursor?: string) {
@@ -244,7 +288,7 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
 
   // Verify target agent exists and is in the same org
   const [targetAgent] = await db
-    .select({ id: agents.uuid, organizationId: agents.organizationId })
+    .select({ id: agents.uuid, organizationId: agents.organizationId, inboxId: agents.inboxId })
     .from(agents)
     .where(eq(agents.uuid, data.agentId))
     .limit(1);
@@ -294,6 +338,12 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
     // separate so read state is preserved without a state-carry transaction.
     await addChatParticipants(tx, chatId, [{ agentId: data.agentId }], { upgradeWatcherToSpeaker: true });
     await recomputeChatWatchers(tx, chatId);
+    // v1 §四 改造 2: backfill the most recent N messages as silent
+    // (notify=false) inbox rows for the new participant so a future trigger
+    // (mention / chat send / replyTo) can replay them as preceding
+    // context. Hook lives in the service layer — caller-agnostic, so
+    // human web / dispatcher / future agent-CLI all benefit.
+    await backfillSilentContextForNewParticipants(tx, chatId, [{ inboxId: targetAgent.inboxId }]);
   });
   invalidateChatAudience(chatId);
 

@@ -573,10 +573,10 @@ export function toLiveActivity(row: {
  *   2. First message summary (auto, ≤ 50 chars from `extractSummary`)
  *   3. Participant join (fallback when chat has no messages yet)
  */
-export function resolveChatTitle(
+export function resolveChatTitle<P extends { agentId: string; displayName: string }>(
   topic: string | null,
   firstMessageSummary: string | null,
-  participants: MeChatRow["participants"],
+  participants: ReadonlyArray<P>,
   selfAgentId: string,
 ): string {
   if (topic && topic.length > 0) return topic;

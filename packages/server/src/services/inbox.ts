@@ -13,7 +13,7 @@ import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 type ClaimedEntry = typeof inboxEntries.$inferSelect;
 
 /** Structurally-typed DB so both `Database` and transaction clients work. */
-type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete">;
+type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete" | "insert">;
 
 const DEFAULT_INBOX_TIMEOUT_SECONDS = 300;
 const DEFAULT_MAX_RETRY_COUNT = 3;
@@ -30,6 +30,67 @@ const DEFAULT_MAX_RETRY_COUNT = 3;
  */
 export const PRECEDING_CONTEXT_MAX_ENTRIES = 50;
 export const PRECEDING_CONTEXT_WINDOW_SECONDS = 24 * 60 * 60;
+
+/**
+ * Backfill the most recent `PRECEDING_CONTEXT_MAX_ENTRIES` messages of `chatId`
+ * as silent (notify=false) inbox rows for every new participant. Called from
+ * `addParticipant()` inside the participant-insert transaction so a freshly
+ * added member already has prior chat history available the first time they
+ * are woken (mentioned / `chat send`-ed).
+ *
+ * Invariants the implementation upholds:
+ *
+ *   - **`notify=false` everywhere**: adding a participant is not itself a
+ *     wake event. The new participant only runs the LLM when an actual
+ *     trigger lands later; the backfill rows then piggy-back as preceding
+ *     context (see `collectPrecedingContext`).
+ *   - **Old members are not woken**: only inbox rows for the brand-new
+ *     participants are written.
+ *   - **Transaction-scoped**: writes go through the caller's `tx`, so a
+ *     rollback of `addParticipant` rolls the backfill back too.
+ *   - **Quiet on chats with no prior history**: a chat with zero messages
+ *     produces zero backfill rows; no error, no INSERT.
+ *   - **Idempotent**: collides cleanly on the
+ *     `(inbox_id, message_id, chat_id)` unique key via
+ *     `ON CONFLICT DO NOTHING`. This matters when a watcher → speaker
+ *     promotion already had inbox rows for some of these messages.
+ *
+ * Pure data write — no PG NOTIFY, no participant-mode logic, no watcher
+ * recompute. Callers stay responsible for those.
+ *
+ * **Caller responsibility — bulk batching**: writes a single
+ * `INSERT VALUES (...)` of `newParticipants.length * PRECEDING_CONTEXT_MAX_ENTRIES`
+ * tuples. v1's only caller (`addParticipant`) always passes 1 participant
+ * (≤ 50 rows). Future bulk-add paths (sub-chat / spawn / etc.) should split
+ * input into chunks (suggested: ≤ 512 rows per call) before passing here.
+ *
+ * See proposals/hub-chat-message-v1-design §四 改造 2.
+ */
+export async function backfillSilentContextForNewParticipants(
+  tx: TxLike,
+  chatId: string,
+  newParticipants: ReadonlyArray<{ inboxId: string }>,
+): Promise<void> {
+  if (newParticipants.length === 0) return;
+
+  const recent = await tx
+    .select({ id: messages.id })
+    .from(messages)
+    .where(eq(messages.chatId, chatId))
+    .orderBy(desc(messages.createdAt))
+    .limit(PRECEDING_CONTEXT_MAX_ENTRIES);
+
+  if (recent.length === 0) return;
+
+  const rows: Array<{ inboxId: string; messageId: string; chatId: string; notify: boolean }> = [];
+  for (const p of newParticipants) {
+    for (const m of recent) {
+      rows.push({ inboxId: p.inboxId, messageId: m.id, chatId, notify: false });
+    }
+  }
+
+  await tx.insert(inboxEntries).values(rows).onConflictDoNothing();
+}
 
 export async function pollInbox(db: Database, inboxId: string, limit: number) {
   return withSpan("inbox.deliver", { "inbox.id": inboxId, "inbox.poll.limit": limit }, () =>
@@ -267,6 +328,14 @@ async function collectPrecedingContext(
     // mark them acked anyway, so the agent would silently lose the messages
     // that mattered most.
     //
+    // We sort by `messages.createdAt` rather than `inboxEntries.createdAt`
+    // because `addParticipant`'s backfill writes 50 inbox rows in one
+    // `INSERT VALUES (...)` — they all share `statement_timestamp()`. The
+    // message rows themselves have distinct, monotonic timestamps (uuidv7
+    // ids are time-ordered, `messages.created_at` is the authoritative
+    // chronology), so ordering by the joined message timestamp is the only
+    // stable contract the prompt-rendered context can rely on.
+    //
     // Concurrency: `FOR UPDATE OF inboxEntries SKIP LOCKED` prevents two
     // parallel polls on the same inbox from bundling the same silent row
     // twice. Without it, poll A picking trigger T1 and poll B picking T2
@@ -297,7 +366,7 @@ async function collectPrecedingContext(
             sql`${inboxEntries.createdAt} > NOW() - make_interval(secs => ${PRECEDING_CONTEXT_WINDOW_SECONDS})`,
           ),
         )
-        .orderBy(desc(inboxEntries.createdAt))
+        .orderBy(desc(messages.createdAt))
         .limit(PRECEDING_CONTEXT_MAX_ENTRIES)
         .for("update", { of: inboxEntries, skipLocked: true });
 

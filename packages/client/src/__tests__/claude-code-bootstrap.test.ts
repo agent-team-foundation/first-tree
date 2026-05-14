@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ChatContext } from "../runtime/chat-context.js";
+import { renderChatContextSection } from "../runtime/chat-context-section.js";
 import type { AgentIdentity } from "../runtime/handler.js";
 
 // We test the generateClaudeMd function indirectly by checking its output.
@@ -29,7 +31,12 @@ afterEach(() => {
  * Layer 2 (if Context Tree configured): Operating instructions + domain map
  * Layer 3 (if Context Tree configured): Context Tree location for on-demand reading
  */
-function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): string {
+function generateClaudeMd(
+  workspacePath: string,
+  identity: AgentIdentity,
+  contextTreePath: string | null,
+  chatContext?: ChatContext,
+): string {
   const sections: string[] = [];
   const contextDir = join(workspacePath, ".agent", "context");
 
@@ -39,6 +46,12 @@ function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contex
     sections.push(`# Agent Identity\n\nYou are ${name}, a personal assistant agent.\n`);
   } else {
     sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
+  }
+
+  // Current Chat Context — narrow identity block from chat-context-section.ts.
+  const chatContextSection = renderChatContextSection(chatContext);
+  if (chatContextSection) {
+    sections.push(chatContextSection);
   }
 
   // PRD D7: profile / self.md is intentionally not consumed here — the
@@ -255,4 +268,102 @@ describe("CLAUDE.md generation", () => {
   // it pinned — that the identity banner renders `displayName` verbatim —
   // is already covered by the "generates autonomous_agent template" test
   // above. Intentionally no test here.
+
+  it("emits a Current Chat Context section after Agent Identity when chatContext is provided", () => {
+    const workspace = join(tmpBase, "ws-chat-context");
+    mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
+
+    const identity: AgentIdentity = {
+      agentId: "test",
+      inboxId: "inbox-test",
+      displayName: "Test",
+      type: "autonomous_agent",
+      delegateMention: null,
+      metadata: {},
+    };
+
+    const md = generateClaudeMd(workspace, identity, null, {
+      chatId: "chat-cc",
+      title: "ship v1",
+      topic: "ship v1",
+      participants: [
+        { name: "alice", displayName: "Alice", type: "human" },
+        { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
+      ],
+    });
+    expect(md).toContain("## Current Chat Context");
+    expect(md).toContain("Chat ID: chat-cc");
+    expect(md).toContain("Title: ship v1");
+    expect(md).toContain("@alice (Alice, type=human)");
+    expect(md).toContain("@bob-bot (Bob Bot, type=agent)");
+    expect(md).not.toContain("Your owner:");
+    // Order: Agent Identity comes before Current Chat Context.
+    expect(md.indexOf("# Agent Identity")).toBeLessThan(md.indexOf("## Current Chat Context"));
+  });
+
+  it("omits the Current Chat Context section when chatContext is missing (degradation)", () => {
+    const workspace = join(tmpBase, "ws-chat-context-missing");
+    mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
+
+    const identity: AgentIdentity = {
+      agentId: "test",
+      inboxId: "inbox-test",
+      displayName: "Test",
+      type: "autonomous_agent",
+      delegateMention: null,
+      metadata: {},
+    };
+
+    const md = generateClaudeMd(workspace, identity, null, undefined);
+    expect(md).not.toContain("Current Chat Context");
+  });
+
+  it("renders 'Your owner' line for delegate agents with selfOwner", () => {
+    const workspace = join(tmpBase, "ws-chat-context-owner");
+    mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
+
+    const identity: AgentIdentity = {
+      agentId: "test",
+      inboxId: "inbox-test",
+      displayName: "Test PA",
+      type: "personal_assistant",
+      delegateMention: "owner",
+      metadata: {},
+    };
+
+    const md = generateClaudeMd(workspace, identity, null, {
+      chatId: "chat-1",
+      title: "Owner + Test PA",
+      topic: null,
+      selfOwner: { name: "owner", displayName: "Owner Human" },
+      participants: [{ name: "owner", displayName: "Owner Human", type: "human" }],
+    });
+    expect(md).toContain("Your owner: Owner Human (@owner)");
+  });
+
+  it("does NOT expose internal agentId / access_mode / role / mode fields in the section", () => {
+    const workspace = join(tmpBase, "ws-chat-context-narrow");
+    mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
+
+    const identity: AgentIdentity = {
+      agentId: "test",
+      inboxId: "inbox-test",
+      displayName: "Test",
+      type: "autonomous_agent",
+      delegateMention: null,
+      metadata: {},
+    };
+
+    const md = generateClaudeMd(workspace, identity, null, {
+      chatId: "chat-cc",
+      title: "alice",
+      topic: null,
+      participants: [{ name: "alice", displayName: "Alice", type: "human" }],
+    });
+    // Block must not leak structural / internal identifiers.
+    expect(md.toLowerCase()).not.toContain("agentid");
+    expect(md.toLowerCase()).not.toContain("access_mode");
+    expect(md.toLowerCase()).not.toContain("mode=");
+    expect(md.toLowerCase()).not.toContain("role=");
+  });
 });

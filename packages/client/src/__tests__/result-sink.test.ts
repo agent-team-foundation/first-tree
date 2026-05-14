@@ -1,49 +1,37 @@
-import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
 import { describe, expect, it, vi } from "vitest";
-import { createParticipantCache } from "../runtime/agent-io.js";
 import { createResultSink, type Trigger } from "../runtime/result-sink.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
 /**
  * Contract tests for the forward-to-chat sink (runtime-owned, handler-agnostic).
- * These guard the **InReplyTo-required** and **Mention-default** invariants
- * from proposals/hub-agent-messaging-reply-and-mentions §3.4 without needing
- * a live Hub or a full handler. When a second handler (Gemini / Cursor / …)
- * is wired up, these remain the authoritative sink behaviour tests.
+ *
+ * v1 §四 改造 4: the trigger-sender mention auto-injection branch was
+ * deleted to break the agent ↔ agent echo loop. These tests pin:
+ *
+ *   1. final-text deliveries no longer inject `metadata.mentions`
+ *      (case 1, case 5);
+ *   2. the documentContext metadata branch (PR #356) is preserved
+ *      (case 1.5 — the v1.5 regression guard);
+ *   3. silent-turn + `inReplyTo` invariants survive (case 2 / case 3);
+ *   4. `chat send <target>` wake-ups stay outside this sink (server side).
  */
 
 const ME = "agent-me";
 
-function mkParticipant(agentId: string, name: string, type = "autonomous_agent"): ChatParticipantDetail {
-  return {
-    agentId,
-    role: "member",
-    mode: "full",
-    joinedAt: new Date().toISOString(),
-    name,
-    displayName: name,
-    type,
-  };
-}
-
 type SinkFixtures = {
   trigger: Trigger | null;
-  participants: ChatParticipantDetail[];
   sendMessage?: ReturnType<typeof vi.fn>;
-  listChatParticipants?: ReturnType<typeof vi.fn>;
-  getDocumentBasePath?: ReturnType<typeof vi.fn>;
+  getDocumentBasePath?: () => Promise<string | null>;
 };
 
 function buildSink(fx: SinkFixtures) {
   const sendMessage = fx.sendMessage ?? vi.fn().mockResolvedValue(undefined);
-  const listChatParticipants = fx.listChatParticipants ?? vi.fn().mockResolvedValue(fx.participants);
   const logs: string[] = [];
 
   let trigger = fx.trigger;
   const sdk = {
     serverUrl: "http://test",
     sendMessage,
-    listChatParticipants,
   } as unknown as FirstTreeHubSDK;
 
   const sink = createResultSink({
@@ -62,18 +50,19 @@ function buildSink(fx: SinkFixtures) {
       trigger = null;
     },
     log: (msg) => logs.push(msg),
-    participants: createParticipantCache(sdk, "chat-1", (msg) => logs.push(msg)),
     getDocumentBasePath: fx.getDocumentBasePath,
   });
 
-  return { sink, sendMessage, listChatParticipants, logs };
+  return { sink, sendMessage, logs };
 }
 
 describe("createResultSink — forwardResult enrichment", () => {
-  it("populates inReplyTo with the current trigger messageId (InReplyTo-required)", async () => {
+  it("case 1: non-empty output WITHOUT documentBasePath omits metadata entirely (no mention auto-injection)", async () => {
+    // v1 §四 改造 4: trigger-sender mention is no longer injected here.
+    // Without a documentBasePath there's nothing else for buildMetadata to
+    // contribute, so metadata is left off the wire.
     const { sink, sendMessage } = buildSink({
       trigger: { messageId: "m1", senderId: "agent-peer" },
-      participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
     });
 
     await sink("final answer");
@@ -82,128 +71,95 @@ describe("createResultSink — forwardResult enrichment", () => {
     const [chatId, body] = sendMessage.mock.calls[0] ?? [];
     expect(chatId).toBe("chat-1");
     expect(body).toMatchObject({ format: "text", content: "final answer", inReplyTo: "m1" });
+    expect((body as Record<string, unknown>).metadata).toBeUndefined();
+    // v1 §四 改造 4 (b): final text always carries `purpose: "agent-final-text"`
+    // so server bypasses enforceGroupMention + fan-out is forced notify=false.
+    expect((body as Record<string, unknown>).purpose).toBe("agent-final-text");
   });
 
-  it("omits mentions metadata in a 2-person direct chat when peer is full-mode (human↔agent)", async () => {
-    const { sink, sendMessage } = buildSink({
-      trigger: { messageId: "m1", senderId: "agent-peer" },
-      participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
-    });
+  it('every forward carries `purpose: "agent-final-text"` — server uses it to bypass group-chat mention enforcement', async () => {
+    // Pin the bypass tag on the wire so AskUserQuestion + result-sink both
+    // continue to land in group chats without 400s after改造 4 removed the
+    // client-side mention auto-injection. Server匹配此 field 跳过
+    // enforceGroupMention + 强制全员 notify=false.
+    const { sink, sendMessage } = buildSink({ trigger: null });
 
-    await sink("final answer");
+    await sink("turn ended");
 
     const body = sendMessage.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(body.metadata).toBeUndefined();
+    expect(body.purpose).toBe("agent-final-text");
   });
 
-  it("attaches documentContext when a repo-local document base path is available", async () => {
+  it("case 1.5 (documentContext regression): writes metadata.documentContext + omits metadata.mentions", async () => {
+    // v1.5 regression guard — PR #356's documentContext injection must
+    // survive改造 4 surgery. Verifying the branch is still wired AND that
+    // it is NOT accompanied by an automatic mentions array.
     const { sink, sendMessage } = buildSink({
       trigger: { messageId: "m1", senderId: "agent-peer" },
-      participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
       getDocumentBasePath: vi.fn().mockResolvedValue("first-tree-hub"),
     });
 
     await sink("see [design](docs/design.md)");
 
-    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { documentContext?: { basePath?: string } } };
+    const body = sendMessage.mock.calls[0]?.[1] as {
+      metadata?: { documentContext?: { basePath?: string }; mentions?: unknown };
+    };
     expect(body.metadata?.documentContext).toEqual({ basePath: "first-tree-hub" });
+    expect(body.metadata?.mentions).toBeUndefined();
   });
 
-  it("emits default trigger mention in a 2-person direct chat when peer is mention_only (agent↔agent)", async () => {
-    // Migration 0029 + findOrCreateDirectChat seed both participants as
-    // `mention_only` in agent↔agent direct chats so courtesy replies don't
-    // wake the peer and produce A↔B reply loops. The sink has to
-    // explicitly @-mention the trigger sender to route the genuine reply
-    // back to them; without this branch, B's answer to A's question would
-    // land silently and A would never see it.
-    const peer = mkParticipant("agent-peer", "peer");
-    peer.mode = "mention_only";
-    const me = mkParticipant(ME, "me");
-    me.mode = "mention_only";
+  it("case 3: inReplyTo is set from the current trigger (InReplyTo-required)", async () => {
     const { sink, sendMessage } = buildSink({
-      trigger: { messageId: "m1", senderId: "agent-peer" },
-      participants: [me, peer],
+      trigger: { messageId: "m-abc", senderId: "agent-peer" },
     });
 
     await sink("final answer");
 
-    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { mentions?: string[] } };
-    expect(body.metadata?.mentions).toEqual(["agent-peer"]);
+    const body = sendMessage.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(body.inReplyTo).toBe("m-abc");
   });
 
-  it("defaults mentions to [trigger.senderId] in a group chat (Mention-default)", async () => {
-    const { sink, sendMessage } = buildSink({
-      trigger: { messageId: "m2", senderId: "agent-peer" },
-      participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer"), mkParticipant("agent-obs", "obs")],
-    });
+  it("case 3b: no inReplyTo when there's no current trigger (unprompted forward)", async () => {
+    const { sink, sendMessage } = buildSink({ trigger: null });
 
-    await sink("hi there");
+    await sink("status update");
 
-    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { mentions?: string[] } };
-    expect(body.metadata?.mentions).toEqual(["agent-peer"]);
+    const body = sendMessage.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(body.inReplyTo).toBeUndefined();
+    expect(body.metadata).toBeUndefined();
   });
 
-  it("does NOT itself parse `@name` tokens from the reply — server is authoritative", async () => {
-    // `@name` → agentId resolution lives server-side in sendMessage (see
-    // services/message.ts). The sink only contributes the default trigger
-    // mention; unmatched tokens are server-logged. This test pins that the
-    // client does not emit a local attempt at resolution that could diverge
-    // from the server.
-    const { sink, sendMessage } = buildSink({
-      trigger: { messageId: "m3", senderId: "agent-peer" },
-      participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer"), mkParticipant("agent-obs", "obs")],
-    });
-
-    await sink("planning: @obs please double-check");
-
-    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { mentions?: string[] } };
-    // Only the default trigger mention — @obs is NOT added client-side.
-    expect(body.metadata?.mentions).toEqual(["agent-peer"]);
-  });
-
-  it("filters self out of the default mention when the trigger sender is ourselves", async () => {
-    // Pathological: server-side filtering usually drops self-fanouts, but the
+  it("case 5: never emits self-mention even when trigger senderId == own agentId", async () => {
+    // Defensive: server-side filtering usually drops self-fanouts, but the
     // sink must degrade gracefully without emitting self-mentions.
     const { sink, sendMessage } = buildSink({
-      trigger: { messageId: "m4", senderId: ME },
-      participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer"), mkParticipant("agent-obs", "obs")],
+      trigger: { messageId: "m-self", senderId: ME },
     });
 
     await sink("status update");
 
-    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { mentions?: string[] } };
+    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { mentions?: unknown } };
     expect(body.metadata).toBeUndefined();
   });
 
-  it("still sends the reply even if listChatParticipants rejects (defensive fallback)", async () => {
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const listChatParticipants = vi.fn().mockRejectedValue(new Error("hub down"));
-    const { sink, logs } = buildSink({
-      trigger: { messageId: "m5", senderId: "agent-peer" },
-      participants: [],
-      sendMessage,
-      listChatParticipants,
+  it("does NOT itself parse `@name` tokens from the reply — server is authoritative", async () => {
+    // `@name` → agentId resolution lives server-side in sendMessage (see
+    // services/message.ts). The sink contributes no mention metadata at all
+    // after改造 4. Any token resolution that happens is the server's job.
+    const { sink, sendMessage } = buildSink({
+      trigger: { messageId: "m3", senderId: "agent-peer" },
     });
 
-    await sink("going out anyway");
+    await sink("planning: @obs please double-check");
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(logs.some((l) => l.includes("listChatParticipants failed"))).toBe(true);
+    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { mentions?: unknown } };
+    expect(body.metadata).toBeUndefined();
   });
 
-  describe("L4 silent-turn protocol — empty output skips delivery", () => {
-    // The agent prompt in bootstrap.ts tells agents: "if you have nothing
-    // new for the recipient, output nothing and the runtime will end the
-    // turn silently". This block is the matching code-side enforcement —
-    // empty/whitespace output is the agent's explicit "I choose silent
-    // turn" signal and the runtime must honor it without firing
-    // sendMessage. Decision-vs-execution split: only purely empty output
-    // is treated as silence; non-empty content is never length-filtered.
-
+  describe("case 2: silent-turn protocol — empty output skips delivery", () => {
     it("skips sendMessage when the agent produces an empty string", async () => {
       const { sink, sendMessage, logs } = buildSink({
         trigger: { messageId: "m-silent", senderId: "agent-peer" },
-        participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
       });
 
       await sink("");
@@ -215,7 +171,6 @@ describe("createResultSink — forwardResult enrichment", () => {
     it("skips sendMessage when the agent produces whitespace-only output", async () => {
       const { sink, sendMessage, logs } = buildSink({
         trigger: { messageId: "m-ws", senderId: "agent-peer" },
-        participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
       });
 
       await sink("   \n\t  ");
@@ -230,7 +185,6 @@ describe("createResultSink — forwardResult enrichment", () => {
       // meaningful?". That's the agent's call (via prompt), not code's.
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m-short", senderId: "agent-peer" },
-        participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
       });
 
       await sink(".");
@@ -244,7 +198,6 @@ describe("createResultSink — forwardResult enrichment", () => {
       const sdk = {
         serverUrl: "http://test",
         sendMessage: vi.fn().mockResolvedValue(undefined),
-        listChatParticipants: vi.fn().mockResolvedValue([mkParticipant(ME, "me")]),
       } as unknown as FirstTreeHubSDK;
       const sink = createResultSink({
         sdk,
@@ -263,15 +216,10 @@ describe("createResultSink — forwardResult enrichment", () => {
           trigger = null;
         },
         log: () => {},
-        participants: createParticipantCache(sdk, "chat-1", () => {}),
       });
 
       await sink("");
 
-      // The trigger was cleared while it still held the silent-turn's
-      // originating message — observed exactly once. After the call the
-      // runtime sees a clean slate, so any next injection starts fresh
-      // rather than re-using m-clear's senderId for the next reply.
       expect(observedTrigger).toHaveLength(1);
       expect(observedTrigger[0]?.messageId).toBe("m-clear");
       expect(trigger).toBeNull();
@@ -279,9 +227,6 @@ describe("createResultSink — forwardResult enrichment", () => {
   });
 
   it("clears the trigger before awaiting sendMessage so a concurrent inject-driven trigger isn't consumed", async () => {
-    // Regression for the race the handler used to guard. The sink's
-    // `clearTrigger` must fire synchronously before the async transport, so
-    // a new trigger set mid-await is attached to the NEXT forward, not this one.
     let trigger: Trigger | null = { messageId: "m-current", senderId: "agent-peer" };
     const observedTriggers: (Trigger | null)[] = [];
     const sendMessage = vi.fn().mockImplementation(async () => {
@@ -291,7 +236,6 @@ describe("createResultSink — forwardResult enrichment", () => {
     const sdkForRace = {
       serverUrl: "http://test",
       sendMessage,
-      listChatParticipants: vi.fn().mockResolvedValue([mkParticipant(ME, "me")]),
     } as unknown as FirstTreeHubSDK;
     const sink = createResultSink({
       sdk: sdkForRace,
@@ -309,18 +253,14 @@ describe("createResultSink — forwardResult enrichment", () => {
         trigger = null;
       },
       log: () => {},
-      participants: createParticipantCache(sdkForRace, "chat-1", () => {}),
     });
 
     const done = sink("reply text");
-    // Simulate an inject mid-flight installing a new trigger.
     trigger = { messageId: "m-next", senderId: "agent-other" };
     await done;
 
-    // The in-flight forward used m-current's inReplyTo (captured before clear);
-    // the mid-await trigger sets the stage for the NEXT turn.
     const body = sendMessage.mock.calls[0]?.[1] as { inReplyTo?: string };
     expect(body.inReplyTo).toBe("m-current");
-    expect(observedTriggers[0]?.messageId).toBe("m-next"); // sanity: mid-await change observed
+    expect(observedTriggers[0]?.messageId).toBe("m-next");
   });
 });

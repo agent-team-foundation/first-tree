@@ -8,6 +8,8 @@ import {
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER, installFirstTreeIntegration } from "../runtime/bootstrap.js";
+import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { renderChatContextSection } from "../runtime/chat-context-section.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -139,7 +141,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return cfg;
   }
 
-  function buildAgentBriefing(payload: AgentRuntimeConfigPayload): string {
+  function buildAgentBriefing(payload: AgentRuntimeConfigPayload, chatContext: ChatContext | undefined): string {
     const lines: string[] = [];
     lines.push("# Agent Briefing");
     lines.push("");
@@ -147,10 +149,28 @@ export const createCodexHandler: HandlerFactory = (config) => {
       lines.push(payload.prompt.append.trim());
       lines.push("");
     }
+    const chatContextSection = renderChatContextSection(chatContext);
+    if (chatContextSection) {
+      lines.push(chatContextSection.trimEnd());
+      lines.push("");
+    }
     lines.push("Refer to `.agent/identity.json` for your agent identity, `.agent/tools.md` for the");
     lines.push("first-tree-hub SDK reference, and `.agent/context/` for organisational context");
     lines.push("(when configured).");
     return lines.join("\n").concat("\n");
+  }
+
+  /**
+   * Best-effort chat-context fetch for the identity-injection path. Failures
+   * are logged but never bubble — bootstrap continues with `undefined`.
+   */
+  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
+    try {
+      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
+    } catch (err) {
+      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
   }
 
   function toCodexInput(message: SessionMessage, sessionCtx: SessionContext): Promise<Input> {
@@ -474,13 +494,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
         };
       }
 
+      const chatContext = await fetchChatContextOrLog(sessionCtx);
       bootstrapWorkspace({
         workspacePath: cwd,
         identity: sessionCtx.agent,
         contextTreePath,
         serverUrl: sessionCtx.sdk.serverUrl,
         chatId: sessionCtx.chatId,
-        briefing: { format: "agents-md", content: buildAgentBriefing(payload) },
+        chatContext,
+        briefing: { format: "agents-md", content: buildAgentBriefing(payload, chatContext) },
       });
       ensureFirstTreeBinding(cwd, sessionCtx);
 
@@ -527,21 +549,22 @@ export const createCodexHandler: HandlerFactory = (config) => {
         };
       }
 
-      // Mirror claude-code's resume fast-path: skip workspace bootstrap and
-      // the `first-tree tree integrate` shell-out when the stage-2 sentinel
-      // is present. Pre-F3 we keyed on `.agent/identity.json`; now the
-      // explicit `.agent/init-complete` is the authoritative "stage 2
-      // succeeded" signal, written by `markWorkspaceInitComplete` after
-      // worktrees materialise.
+      // v1.7: always re-fetch chat-context + rewrite identity.json + AGENTS.md
+      // on resume so newly-added participants surface in the agent's prompt.
+      // The sentinel still gates the expensive `first-tree tree integrate`
+      // shell-out (only re-runs on fresh bootstrap). See
+      // proposals/hub-chat-message-v1-design §四 改造 3 v1.7 dogfood follow-up.
+      const chatContext = await fetchChatContextOrLog(sessionCtx);
+      bootstrapWorkspace({
+        workspacePath: cwd,
+        identity: sessionCtx.agent,
+        contextTreePath,
+        serverUrl: sessionCtx.sdk.serverUrl,
+        chatId: sessionCtx.chatId,
+        chatContext,
+        briefing: { format: "agents-md", content: buildAgentBriefing(payload, chatContext) },
+      });
       if (!existsSync(join(cwd, INIT_COMPLETE_SENTINEL_REL))) {
-        bootstrapWorkspace({
-          workspacePath: cwd,
-          identity: sessionCtx.agent,
-          contextTreePath,
-          serverUrl: sessionCtx.sdk.serverUrl,
-          chatId: sessionCtx.chatId,
-          briefing: { format: "agents-md", content: buildAgentBriefing(payload) },
-        });
         ensureFirstTreeBinding(cwd, sessionCtx);
       }
 
