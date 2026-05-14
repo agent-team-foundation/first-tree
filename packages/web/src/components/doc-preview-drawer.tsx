@@ -139,7 +139,7 @@ export function DocPreviewDrawer() {
           ) {
             return;
           }
-          const nextDocPath = docPreviewPathFromHref(href, resolvedDocPath);
+          const nextDocPath = docPreviewPathFromHref(href, { currentDocPath: resolvedDocPath, basePath: docBasePath });
           if (!nextDocPath) return;
           event.preventDefault();
           openDocPath(nextDocPath);
@@ -152,7 +152,7 @@ export function DocPreviewDrawer() {
         );
       },
     }),
-    [openDocPath, resolvedDocPath],
+    [docBasePath, openDocPath, resolvedDocPath],
   );
 
   const startResize = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {

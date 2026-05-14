@@ -351,7 +351,7 @@ function TextRow({
             return;
           }
 
-          const docPath = docPreviewPathFromHref(href);
+          const docPath = docPreviewPathFromHref(href, { basePath: docBasePath });
           if (!docPath) return;
 
           event.preventDefault();
