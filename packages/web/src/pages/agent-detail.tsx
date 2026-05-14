@@ -22,6 +22,7 @@ import {
 } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
 import { listAgentSessions } from "./../api/sessions.js";
+import { useAuth } from "./../auth/auth-context.js";
 import { FirstTreeLogo } from "./../components/first-tree-logo.js";
 import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
@@ -31,6 +32,7 @@ import { UppercaseLabel } from "./../components/ui/section-header.js";
 import { StateChip } from "./../components/ui/state-chip.js";
 import { Tile } from "./../components/ui/tile.js";
 import { cn, formatDate } from "./../lib/utils.js";
+import { canManageAgentDetail } from "./agent-detail/access.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import { DangerZone } from "./agent-detail/danger-zone.js";
 import { EnvSection } from "./agent-detail/env-section.js";
@@ -76,12 +78,12 @@ function sectionToAnchor(section: DraftSectionName): string {
 
 /**
  * Flat sidebar with a divider before Danger zone. Autonomous agents get the
- * full list; human agents collapse to Profile + Danger zone per the ticket
- * "human agent 自然降级" rule.
+ * full editable list only when the caller can manage them; shared read-only
+ * agents collapse to Profile because config and lifecycle routes are manage-only.
  */
-function buildSidebar(isHuman: boolean): SidebarItem[] {
+function buildSidebar(isHuman: boolean, canManage: boolean): SidebarItem[] {
   const items: SidebarItem[] = [{ key: "overview", label: "Profile", anchor: SECTION_ANCHORS.overview }];
-  if (!isHuman) {
+  if (!isHuman && canManage) {
     items.push(
       { key: "setup", label: "Setup", anchor: SECTION_ANCHORS.setup },
       { key: "prompt", label: "Prompt", anchor: SECTION_ANCHORS.prompt },
@@ -89,7 +91,9 @@ function buildSidebar(isHuman: boolean): SidebarItem[] {
       { key: "advanced", label: "Advanced", anchor: SECTION_ANCHORS.advanced },
     );
   }
-  items.push({ key: "danger", label: "Danger zone", anchor: SECTION_ANCHORS.danger, divider: true, danger: true });
+  if (canManage) {
+    items.push({ key: "danger", label: "Danger zone", anchor: SECTION_ANCHORS.danger, divider: true, danger: true });
+  }
   return items;
 }
 
@@ -98,6 +102,7 @@ export function AgentDetailPage() {
   const uuid = params.uuid ?? "";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { memberId, role } = useAuth();
 
   // Agent identity data
   const agentQuery = useQuery({
@@ -105,11 +110,13 @@ export function AgentDetailPage() {
     queryFn: () => getAgent(uuid),
     enabled: !!uuid,
   });
+  const canManageAgent = canManageAgentDetail(agentQuery.data, memberId, role);
+  const canEditConfig = agentQuery.data?.type !== "human" && canManageAgent;
 
   const cfgQuery = useQuery({
     queryKey: ["agent-config", uuid],
     queryFn: () => getAgentConfig(uuid),
-    enabled: !!uuid && agentQuery.data?.type !== "human",
+    enabled: !!uuid && canEditConfig,
   });
 
   const clientStatusQuery = useQuery({
@@ -130,7 +137,7 @@ export function AgentDetailPage() {
   const allClientsQuery = useQuery({
     queryKey: ["clients"],
     queryFn: listClients,
-    enabled: !!uuid && agentQuery.data?.type !== "human",
+    enabled: !!uuid && canEditConfig,
     refetchInterval: 30_000,
   });
 
@@ -138,6 +145,7 @@ export function AgentDetailPage() {
   const draft = useConfigDraft(cfgQuery.data);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflictMsg, setConflictMsg] = useState<string | null>(null);
+  const [dangerError, setDangerError] = useState<string | null>(null);
   // Flash an inline "Saved" check in the SaveBar for a short window after a
   // successful save. Cleared by any subsequent edit, error, or timer.
   const [justSaved, setJustSaved] = useState(false);
@@ -210,15 +218,27 @@ export function AgentDetailPage() {
   // Lifecycle mutations
   const suspendMutation = useMutation({
     mutationFn: () => suspendAgent(uuid),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", uuid] }),
+    onMutate: () => setDangerError(null),
+    onSuccess: () => {
+      setDangerError(null);
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+    },
+    onError: (err) => setDangerError(err instanceof Error ? err.message : String(err)),
   });
   const reactivateMutation = useMutation({
     mutationFn: () => reactivateAgent(uuid),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", uuid] }),
+    onMutate: () => setDangerError(null),
+    onSuccess: () => {
+      setDangerError(null);
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+    },
+    onError: (err) => setDangerError(err instanceof Error ? err.message : String(err)),
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteAgent(uuid),
+    onMutate: () => setDangerError(null),
     onSuccess: () => navigate("/team"),
+    onError: (err) => setDangerError(err instanceof Error ? err.message : String(err)),
   });
 
   // Test connection
@@ -273,7 +293,7 @@ export function AgentDetailPage() {
   }, [draft.summary.anyDirty]);
 
   const isHumanLocal = agentQuery.data?.type === "human";
-  const sidebarItems = useMemo(() => buildSidebar(isHumanLocal), [isHumanLocal]);
+  const sidebarItems = useMemo(() => buildSidebar(isHumanLocal, canManageAgent), [isHumanLocal, canManageAgent]);
 
   // Sticky ContextBar visibility: hide while the page-top header is on screen,
   // show once the operator has scrolled past it. Driven by an IntersectionObserver
@@ -420,7 +440,8 @@ export function AgentDetailPage() {
   const boundClient: HubClient | null = boundClientId
     ? (allClientsQuery.data?.find((c) => c.id === boundClientId) ?? null)
     : null;
-  const boundClientLabel: string | null = boundClientId ? (boundClient?.hostname ?? boundClientId) : null;
+  const boundClientLabel: string | null =
+    boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
 
   // Runtime provider label for the Setup "Where it runs" card. The agent
   // schema carries the authoritative `runtimeProvider` field post-0026; the
@@ -517,7 +538,7 @@ export function AgentDetailPage() {
               <Button variant="ghost" size="xs" onClick={() => navigate(`/?a=${agent.uuid}`)}>
                 <MessageSquare className="h-3 w-3" /> Open chat
               </Button>
-              {!isHuman && agent.status === "active" && (
+              {!isHuman && canManageAgent && agent.status === "active" && (
                 <Button
                   variant="outline"
                   size="xs"
@@ -572,26 +593,31 @@ export function AgentDetailPage() {
             anchorId={SECTION_ANCHORS.overview}
             title="Profile"
             right={
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => navigate(`/settings/integrations?agent=${agent.uuid}`)}
-                title="Manage platform bindings in Integrations"
-              >
-                <Link2 className="h-3 w-3" />
-                Manage bindings
-              </Button>
+              canManageAgent ? (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => navigate(`/settings/integrations?agent=${agent.uuid}`)}
+                  title="Manage platform bindings in Integrations"
+                >
+                  <Link2 className="h-3 w-3" />
+                  Manage bindings
+                </Button>
+              ) : null
             }
           >
             <IdentitySection
               agent={agent}
+              canEdit={canManageAgent}
               onSave={async (patch) => {
                 await identityUpdateMutation.mutateAsync(patch);
               }}
             />
           </SectionShell>
 
-          {!isHuman && (
+          {!isHuman && !canManageAgent && <ReadOnlyConfigNotice />}
+
+          {canEditConfig && (
             <>
               <SectionShell
                 anchorId={SECTION_ANCHORS.setup}
@@ -734,20 +760,25 @@ export function AgentDetailPage() {
             </>
           )}
 
-          <SectionDivider />
+          {canManageAgent && (
+            <>
+              <SectionDivider />
 
-          <DangerZone
-            agent={agent}
-            suspendPending={suspendMutation.isPending}
-            reactivatePending={reactivateMutation.isPending}
-            deletePending={deleteMutation.isPending}
-            onSuspend={() => suspendMutation.mutate()}
-            onReactivate={() => reactivateMutation.mutate()}
-            onDelete={() => deleteMutation.mutate()}
-          />
+              <DangerZone
+                agent={agent}
+                suspendPending={suspendMutation.isPending}
+                reactivatePending={reactivateMutation.isPending}
+                deletePending={deleteMutation.isPending}
+                errorMessage={dangerError}
+                onSuspend={() => suspendMutation.mutate()}
+                onReactivate={() => reactivateMutation.mutate()}
+                onDelete={() => deleteMutation.mutate()}
+              />
+            </>
+          )}
         </div>
 
-        {!isHuman && (
+        {canEditConfig && (
           <SaveBar
             summary={draft.summary}
             saveHint={saveHint}
@@ -843,6 +874,26 @@ export function AgentDetailPage() {
 
       <ReBindDialog open={reBindOpen} onOpenChange={setReBindOpen} agent={agent} />
     </div>
+  );
+}
+
+function ReadOnlyConfigNotice() {
+  return (
+    <SectionShell anchorId="ad-runtime-readonly" title="Runtime configuration">
+      <div
+        className="text-body"
+        style={{
+          padding: "var(--sp-3)",
+          border: "var(--hairline) solid var(--border-faint)",
+          borderRadius: "var(--radius-panel)",
+          background: "var(--bg-raised)",
+          color: "var(--fg-3)",
+        }}
+      >
+        You can view this shared agent profile. Runtime configuration, bindings, testing, and lifecycle controls are
+        limited to the agent manager or an organization admin.
+      </div>
+    </SectionShell>
   );
 }
 
