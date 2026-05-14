@@ -121,10 +121,23 @@ type ChatRow = {
 };
 
 /**
- * Gate access to a chat. Allowed if the caller's HUMAN agent is a
- * participant, OR any agent the caller manages (via members.id) is a
- * participant. Admin role does NOT auto-grant chat access — chat content
- * remains private to participants and supervisors (their managers).
+ * Gate access to a chat. Allowed if the caller's HUMAN agent has any
+ * `chat_membership` row (speaker OR watcher), OR any agent the caller
+ * manages (via members.id) is a speaker. Admin role does NOT auto-grant
+ * chat access — chat content remains private to members and supervisors
+ * (their managers).
+ *
+ * Watchers are allowed on the direct-membership branch because they
+ * surface in `listMeChats` with their own unread badge and engagement
+ * state; chat-scoped per-user operations like read-cursor and
+ * watcher→speaker upgrade must be reachable from that surface. Write
+ * endpoints that need to refuse watchers rely on `ensureParticipant`
+ * or service-layer checks, not on this guard.
+ *
+ * The supervisor branch is a fallback for callers whose human agent
+ * has no direct row but who manage a speaker — e.g. before
+ * `recomputeChatWatchers` has materialised the watcher row, or when a
+ * member's human agent and managed agent diverge in cross-org chats.
  *
  * The Params type is generic so routes that mount on a path with extra
  * params (e.g. `/agents/:uuid/sessions/:chatId/...` for compound checks)
@@ -154,17 +167,15 @@ export async function requireChatAccess<P extends { chatId: string }>(
     humanAgentId: caller.humanAgentId,
   };
 
-  // Direct speaker?
+  // Direct membership — speaker or watcher. A watcher row grants
+  // chat-level access even if the supervisor anchor that produced it
+  // is no longer live; pruning stale watcher rows is a separate
+  // concern from gating callers who can already see the chat in their
+  // own workspace list.
   const [direct] = await db
     .select({ chatId: chatMembership.chatId })
     .from(chatMembership)
-    .where(
-      and(
-        eq(chatMembership.chatId, chatId),
-        eq(chatMembership.agentId, caller.humanAgentId),
-        eq(chatMembership.accessMode, "speaker"),
-      ),
-    )
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, caller.humanAgentId)))
     .limit(1);
   if (direct) {
     stampOrgScope(request, scope);
