@@ -426,7 +426,8 @@ export function AgentDetailPage() {
   const boundClient: HubClient | null = boundClientId
     ? (allClientsQuery.data?.find((c) => c.id === boundClientId) ?? null)
     : null;
-  const boundClientLabel: string | null = boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
+  const boundClientLabel: string | null =
+    boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
 
   // Runtime provider label for the Setup "Where it runs" card. The agent
   // schema carries the authoritative `runtimeProvider` field post-0026; the
