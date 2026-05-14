@@ -59,6 +59,20 @@ type AuthContextValue = {
   memberId: string | null;
   role: string | null;
   agentId: string | null;
+  /**
+   * Display name of the current org (e.g. `${login}'s team` for a fresh
+   * solo signup, or the renamed value once the user has gone through
+   * Step 1). Drives the onboarding gate's "is this still the auto-named
+   * default" check without re-fetching `/me/organizations`.
+   */
+  teamDisplayName: string | null;
+  /**
+   * `true` when the current org has at least one ACTIVE member besides
+   * the caller (`COUNT(members) > 1`). Sourced from `/me`'s per-membership
+   * count, so it stays accurate cross-tab / cross-device — the prior
+   * `sessionStorage.joinPath` flag could not.
+   */
+  orgHasOtherMembers: boolean;
   onboardingStep: "connect" | "create_agent" | "completed" | null;
   /**
    * ISO timestamp when the user clicked `✕` on the onboarding stepper.
@@ -330,6 +344,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         memberId: currentMembership?.id ?? null,
         role: currentMembership?.role ?? null,
         agentId: currentMembership?.agentId ?? null,
+        teamDisplayName: currentMembership?.organizationName ?? null,
+        orgHasOtherMembers: currentMembership?.orgHasOtherMembers ?? false,
         onboardingStep,
         onboardingDismissedAt,
         onboardingCompletedAt,

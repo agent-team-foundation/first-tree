@@ -22,6 +22,7 @@ import { GithubAppApiError, refreshAppUserToken } from "../services/github-app.j
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
 import {
+  countActiveMembersByOrgs,
   ensureMembership,
   leaveOrganization,
   listActiveMemberships,
@@ -64,6 +65,16 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       ? (memberships.find((m) => m.memberId === defaultMembership.id)?.organizationId ?? null)
       : null;
 
+    // One COUNT(*)/GROUP BY for every org the caller belongs to. The web
+    // onboarding gate keys off "does this team have anyone other than me"
+    // (replaces sessionStorage `joinPath`, which leaks between tabs/devices).
+    // Default to 1 on a missing row so a transient race never spuriously
+    // flips the "team-of-teammates" copy on.
+    const memberCounts = await countActiveMembersByOrgs(
+      app.db,
+      memberships.map((mb) => mb.organizationId),
+    );
+
     // Surface invite URL only for users who admin at least one org. The
     // web client picks the relevant org from `selectedOrganizationId`
     // first; this is purely a convenience fallback for the default org.
@@ -87,6 +98,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         organizationName: mb.orgDisplayName,
         role: mb.role,
         agentId: mb.agentId,
+        orgHasOtherMembers: (memberCounts.get(mb.organizationId) ?? 1) > 1,
       })),
       onboarding: {
         step: onboardingStep,

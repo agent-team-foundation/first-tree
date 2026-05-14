@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
@@ -198,6 +198,27 @@ export async function listActiveMemberships(db: Database, userId: string) {
     .where(and(eq(members.userId, userId), eq(members.status, "active")))
     .orderBy(desc(members.createdAt));
   return rows;
+}
+
+/**
+ * Count ACTIVE members per org, restricted to the given org IDs. Returns a
+ * Map keyed by `organizationId`; orgs absent from the result simply have
+ * zero active members (shouldn't happen in practice — the caller always
+ * passes orgs the user is a member of — but the Map shape lets callers do
+ * `counts.get(orgId) ?? 0` defensively). Used by `/me` to surface
+ * `orgHasOtherMembers` per membership without N+1 queries.
+ */
+export async function countActiveMembersByOrgs(db: Database, organizationIds: string[]): Promise<Map<string, number>> {
+  if (organizationIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      organizationId: members.organizationId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(members)
+    .where(and(inArray(members.organizationId, organizationIds), eq(members.status, "active")))
+    .groupBy(members.organizationId);
+  return new Map(rows.map((r) => [r.organizationId, r.count]));
 }
 
 /**
