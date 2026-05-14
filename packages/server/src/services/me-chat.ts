@@ -22,14 +22,18 @@ import {
   CHAT_ENGAGEMENT_STATUSES,
   type ChatEngagementStatus,
   type ChatEngagementView,
+  type ChatSource,
   type CreateMeChat,
+  GITHUB_ENTITY_TYPES,
   LIVE_ACTIVITY_STALE_MS,
+  type ListMeChatSourceCountsQuery,
   type ListMeChatsQuery,
   type ListMeChatsResponse,
   type LiveActivity,
   type MeChatLeaveResponse,
   type MeChatReadResponse,
   type MeChatRow,
+  type MeChatSourceCounts,
   type ToolCallEventPayload,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
@@ -152,6 +156,75 @@ export async function getCallerEngagement(
 }
 
 // ---------------------------------------------------------------------------
+// Source tag projection
+// ---------------------------------------------------------------------------
+//
+// The conversation-list tag bar splits chats by source — Manual / GitHub PR /
+// GitHub Issue / etc — using `chats.metadata`. All SQL below derives from
+// `GITHUB_ENTITY_TYPES` (the single source of truth for "which github
+// entities get their own tag"), so adding a new entity type means editing
+// `shared/src/schemas/chat-metadata.ts` once and not chasing literals across
+// three places. `ChatSource` follows the `github_{entityType}` naming
+// convention; the TypeScript switch over `ChatSource` is exhaustive so any
+// drift between the enum and the filter is a compile error.
+//
+//   - `sourceFilterSql(source)` — WHERE predicate for `listMeChats`.
+//   - `chatSourceSqlExpression` — CASE for the aggregate `GROUP BY` in
+//     `listMeChatSourceCounts`.
+//
+// Invariant: every github row covered by `chatSourceSqlExpression` MUST also
+// match `sourceFilterSql` for the same ChatSource, and vice versa — a
+// malformed row (e.g. `{source:"github", entityType:"some-new-thing"}`) goes
+// into `manual` consistently in both the count and the list. Pinned by the
+// "malformed github metadata falls into manual" test.
+
+const githubEntityList = sql.join(
+  GITHUB_ENTITY_TYPES.map((t) => sql`${t}`),
+  sql.raw(", "),
+);
+
+const KNOWN_NON_MANUAL_PREDICATE = sql`(
+     (c.metadata->>'source' = 'github' AND c.metadata->>'entityType' IN (${githubEntityList}))
+  OR c.metadata->>'source' = 'feishu'
+)`;
+
+const githubCaseArms = sql.join(
+  GITHUB_ENTITY_TYPES.map(
+    (t) => sql`WHEN c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = ${t} THEN ${`github_${t}`}`,
+  ),
+  sql.raw("\n    "),
+);
+
+const chatSourceSqlExpression = sql`CASE
+    ${githubCaseArms}
+    WHEN c.metadata->>'source' = 'feishu' THEN 'feishu'
+    ELSE 'manual'
+  END`;
+
+function sourceFilterSql(source: ChatSource): SQL {
+  switch (source) {
+    case "manual":
+      // Defined as the negation of every known-non-manual case so we stay
+      // in lock-step with `chatSourceSqlExpression`'s ELSE arm.
+      // `IS NOT TRUE` (not `NOT (...)`) because `metadata->>'source'` is
+      // NULL for the `{}` / NULL metadata cases — `NULL = 'github'` is
+      // NULL, and `NOT NULL` is still NULL in WHERE, which Postgres treats
+      // as FALSE and would silently drop every manual chat from the list.
+      return sql`(${KNOWN_NON_MANUAL_PREDICATE}) IS NOT TRUE`;
+    case "github_issue":
+      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'issue')`;
+    case "github_pull_request":
+      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'pull_request')`;
+    case "github_discussion":
+      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'discussion')`;
+    case "github_commit":
+      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'commit')`;
+    case "feishu":
+      return sql`(c.metadata->>'source' = 'feishu')`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
 
@@ -187,6 +260,7 @@ export async function listMeChats(
   const filterUnreadOnly = query.filter === "unread";
   const filterWatchingOnly = query.filter === "watching";
   const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
+  const sourcePredicate = query.source ? sourceFilterSql(query.source) : sql`TRUE`;
 
   // Cursor predicate (sort: last_message_at DESC NULLS LAST, chat_id DESC).
   // See the original commentary in git history for the case-by-case
@@ -235,6 +309,7 @@ export async function listMeChats(
        AND (${!filterUnreadOnly}::bool OR COALESCE(cus.unread_mention_count, 0) > 0)
        AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
        AND ${engagementPredicate}
+       AND ${sourcePredicate}
        AND ${cursorPredicate}
      ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
      LIMIT ${limit + 1}
@@ -745,6 +820,80 @@ export async function leaveMeChat(db: Database, chatId: string, humanAgentId: st
  * (any `engagement` view), so the badge must exclude them too — otherwise
  * the user sees an unread red dot for a chat they've removed from view.
  */
+/**
+ * Per-source aggregate for the conversation-list tag bar.
+ *
+ * Returns one row per source the caller has at least one chat for, plus an
+ * always-present `manual` entry (zero counts when there are no manual chats —
+ * the workspace UI uses `manual` as its default tab and must render it even
+ * when empty).
+ *
+ * Filtering matches `listMeChats` for the corresponding tab so the badges
+ * cannot drift from the list: same membership join, same `parent_chat_id IS
+ * NULL` and `organization_id` scopes, same engagement view, same
+ * `chat_user_state.unread_mention_count` source.
+ */
+export async function listMeChatSourceCounts(
+  db: Database,
+  humanAgentId: string,
+  organizationId: string,
+  query: ListMeChatSourceCountsQuery,
+): Promise<MeChatSourceCounts> {
+  const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
+
+  // GROUP BY 1 (select-list position) instead of the `source` alias or the
+  // full CASE: `GROUP BY <alias>` doesn't transitively treat columns inside
+  // the aliased expression as grouped (PG reports `c.metadata` un-grouped),
+  // and `GROUP BY <CASE>` fails when the CASE arms are parameterised — the
+  // ungrouped-column analyser treats two textually-different parameter
+  // bindings as distinct expressions even when they reduce to the same
+  // value. Ordinal position works in both cases.
+  // Aggregate semantics:
+  //   - chat_count: COUNT of rows in the membership join (matches what the
+  //     paginated list would return for this source).
+  //   - unread_chat_count: COUNT of those rows where the user's
+  //     unread_mention_count > 0. Deliberately a count of chats, NOT a SUM
+  //     of mention counts, so the tag badge matches the existing
+  //     `totalUnread` pill in the conversation list ("N chats with unread").
+  //   - Membership join (no `cm.access_mode` filter) intentionally counts
+  //     watcher rows as well: watcher chats appear in `listMeChats`, so
+  //     omitting them here would let a watcher-only PR chat disappear from
+  //     the tag bar but show up in the list when filtered.
+  const rows = (await db.execute(sql`
+    SELECT
+      ${chatSourceSqlExpression} AS source,
+      count(*)::int AS chat_count,
+      count(*) FILTER (WHERE COALESCE(cus.unread_mention_count, 0) > 0)::int AS unread_chat_count
+      FROM chats c
+      JOIN chat_membership cm
+        ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
+      LEFT JOIN chat_user_state cus
+        ON cus.chat_id = c.id AND cus.agent_id = ${humanAgentId}
+     WHERE c.parent_chat_id IS NULL
+       AND c.organization_id = ${organizationId}
+       AND ${engagementPredicate}
+     GROUP BY 1
+  `)) as unknown as Array<{
+    source: ChatSource;
+    chat_count: number;
+    unread_chat_count: number;
+  }>;
+
+  const counts: MeChatSourceCounts["counts"] = {};
+  for (const row of rows) {
+    counts[row.source] = {
+      chatCount: Number(row.chat_count),
+      unreadChatCount: Number(row.unread_chat_count),
+    };
+  }
+  // `manual` is always rendered as the default tab — surface it even at zero
+  // counts so the client doesn't have to special-case the empty workspace.
+  if (!counts.manual) {
+    counts.manual = { chatCount: 0, unreadChatCount: 0 };
+  }
+  return { counts };
+}
+
 export async function countUnreadMeChats(db: Database, humanAgentId: string, organizationId: string): Promise<number> {
   const rows = await db.execute<{ count: number }>(sql`
     SELECT count(*)::int AS count

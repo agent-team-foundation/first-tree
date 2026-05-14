@@ -1,8 +1,8 @@
-import type { ChatEngagementView, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatEngagementView, ChatSource, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { listMeChats } from "../../../api/me-chats.js";
+import { listMeChatSourceCounts, listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { WorkingChip } from "../../../components/chat/working-chip.js";
@@ -28,6 +28,20 @@ const ENGAGEMENT_TABS: ReadonlyArray<{ value: ChatEngagementView; label: string 
   { value: "active", label: "Active" },
   { value: "archived", label: "Archived" },
   { value: "all", label: "All" },
+];
+
+/**
+ * Source tag-bar order. `manual` is the default tab and always renders; the
+ * GitHub / Feishu tags render only when the workspace has at least one chat
+ * for that source (driven by `listMeChatSourceCounts`).
+ */
+const SOURCE_TABS: ReadonlyArray<{ value: ChatSource; label: string }> = [
+  { value: "manual", label: "Manual" },
+  { value: "github_pull_request", label: "PR" },
+  { value: "github_issue", label: "Issue" },
+  { value: "github_discussion", label: "Discussion" },
+  { value: "github_commit", label: "Commit" },
+  { value: "feishu", label: "Feishu" },
 ];
 
 function formatRowTime(iso: string | null): string {
@@ -74,12 +88,16 @@ export function ConversationList({
   onNewChat,
   engagement,
   onEngagementChange,
+  source,
+  onSourceChange,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
   onNewChat: () => void;
   engagement: ChatEngagementView;
   onEngagementChange: (view: ChatEngagementView) => void;
+  source: ChatSource;
+  onSourceChange: (source: ChatSource) => void;
 }) {
   const { agentId: selfAgentId } = useAuth();
   const [filter, setFilter] = useState<Filter>("all");
@@ -88,17 +106,42 @@ export function ConversationList({
   const [moreError, setMoreError] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["me", "chats", filter, engagement] as const,
-    queryFn: () => listMeChats({ filter, engagement }),
+    queryKey: ["me", "chats", filter, engagement, source] as const,
+    queryFn: () => listMeChats({ filter, engagement, source }),
     refetchInterval: 15_000,
   });
 
-  // Reset paginated tail when filter / engagement change so we don't
+  // Per-source aggregate drives the tag bar. Lives on its own poll so the
+  // list query stays cheap when the user is just clicking between tags —
+  // tags only need to re-evaluate at the same cadence as the list itself.
+  // The query key intentionally omits `filter` and `source`: the badge
+  // semantics are workspace-wide ("how many chats of each source have unread
+  // mentions"), not filtered by the user's current `unread`/`watching`
+  // selection or the tab they're standing on.
+  const { data: sourceCounts } = useQuery({
+    queryKey: ["me", "chats", "source-counts", engagement] as const,
+    queryFn: () => listMeChatSourceCounts({ engagement }),
+    refetchInterval: 15_000,
+  });
+
+  // Reset paginated tail when filter / engagement / source change so we don't
   // bleed rows from a different view into the current one.
   const resetExtras = (): void => {
     if (extraPages.length > 0) setExtraPages([]);
     setMoreError(null);
   };
+
+  // `resetExtras` covers in-component tab clicks, but both `source` and
+  // `engagement` can also flip via the URL (browser back/forward, deep link,
+  // parent-driven `setSource`/`setEngagement`). Mirror the reset in an
+  // effect so a URL-only change can't bleed previous-tab rows into the new
+  // list. The body doesn't read either value (only their identities drive
+  // the effect), so we suppress biome's exhaustive-deps complaint here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: source/engagement are triggers, not reads
+  useEffect(() => {
+    setExtraPages((prev) => (prev.length > 0 ? [] : prev));
+    setMoreError(null);
+  }, [source, engagement]);
 
   const baseRows = data?.rows ?? [];
   const allRows = useMemo(() => [...baseRows, ...extraPages], [baseRows, extraPages]);
@@ -110,7 +153,7 @@ export function ConversationList({
     setLoadingMore(true);
     setMoreError(null);
     try {
-      const next = await listMeChats({ filter, engagement, cursor });
+      const next = await listMeChats({ filter, engagement, cursor, source });
       setExtraPages((prev) => [...prev, ...next.rows]);
       // Keep `data.nextCursor` reflecting the freshest tail by appending the
       // next cursor onto the React-Query cache via the data object. We do
@@ -177,6 +220,39 @@ export function ConversationList({
           <Plus className="h-3.5 w-3.5" strokeWidth={2} />
           New chat
         </button>
+        {/* Source tag bar. Splits the workspace by chat origin (Manual / PR /
+            Issue / Discussion / Commit / Feishu). `manual` is always rendered
+            as the default tab; the rest are hidden when the workspace has
+            zero chats for that source so the rail doesn't fill up with empty
+            tags. Each tag shows the source's aggregate unread mention count,
+            mirroring the row-level unread badge. URL-backed via `?source=`. */}
+        <div className="flex items-center flex-wrap" style={{ gap: 4 }}>
+          {SOURCE_TABS.map((tab) => {
+            const counts = sourceCounts?.counts[tab.value];
+            // Manual is the default tab and always rendered; other tags only
+            // surface when the workspace actually has chats for them.
+            if (tab.value !== "manual" && (!counts || counts.chatCount === 0)) {
+              return null;
+            }
+            const unread = counts?.unreadChatCount ?? 0;
+            return (
+              <FilterPill
+                key={tab.value}
+                active={source === tab.value}
+                count={unread > 0 ? unread : undefined}
+                warn={unread > 0}
+                onClick={() => {
+                  if (source !== tab.value) {
+                    onSourceChange(tab.value);
+                    resetExtras();
+                  }
+                }}
+              >
+                {tab.label}
+              </FilterPill>
+            );
+          })}
+        </div>
         {/* Engagement tabs: Active (default) / Archived / All. URL-backed in
             the parent via `?engagement=` so refresh & deep-links preserve the
             user's view. `deleted` is intentionally not a tab — restoring a
