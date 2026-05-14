@@ -210,7 +210,7 @@ Locations TBD — likely in `packages/client/src/runtime/bootstrap.ts` (the conn
 **Entry points that catch this:**
 
 - `first-tree-hub client start` — the most common path; rotate + ask operator to re-run.
-- `first-tree-hub client connect [--no-service]` — inline path after credential switch; same rotate + re-run flow, rerun command includes the server URL and any `--token` / `--no-service` flags the user originally supplied.
+- `first-tree-hub connect <token> [--no-service]` — inline path after credential switch; same rotate + re-run flow, rerun command includes the connect token and any `--no-service` flag the user originally supplied.
 
 ## File change summary
 

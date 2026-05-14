@@ -60,7 +60,7 @@ describe("Agent Send-to-Agent API", () => {
   });
 
   it("hints at using name when target looks like a uuid (common LLM mistake)", async () => {
-    // Agents routinely paste uuids harvested from `agent chats` / participant
+    // Agents routinely paste uuids harvested from `chat list` / participant
     // listings. The 404 error must nudge them to use the name so the next
     // attempt self-corrects rather than looping.
     const app = getApp();

@@ -60,7 +60,7 @@ export function runHomeMigration(): void {
   if (runningAsService) {
     print.line(
       `[first-tree-hub] Note: running as background service — skipped auto re-register to avoid self-termination.\n` +
-        `  Service paths will refresh on the next \`first-tree-hub client connect <url>\`.\n`,
+        `  Service paths will refresh on the next \`first-tree-hub connect <token>\`.\n`,
     );
     return;
   }
@@ -77,7 +77,7 @@ export function runHomeMigration(): void {
     const msg = err instanceof Error ? err.message : String(err);
     print.line(
       `[first-tree-hub] WARNING: home migration succeeded but re-registering the background service failed: ${msg}\n` +
-        `  Re-run \`first-tree-hub client connect <url>\` to refresh service paths.\n`,
+        `  Re-run \`first-tree-hub connect <token>\` to refresh service paths.\n`,
     );
   }
 }

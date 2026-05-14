@@ -12,7 +12,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  * Pins the L4 server-side silent-send form guard in `services/message.ts`
  * (step 2e). The guard mirrors the client-side `result-sink` silent-turn
  * protocol (§3.2 of the design) on the server entry point so that paths
- * NOT going through result-sink — the agent CLI `agent send`, AskUserQuestion,
+ * NOT going through result-sink — the agent CLI `chat send`, AskUserQuestion,
  * external IM adapters, admin/web posts — get the same loop protection.
  *
  * The rule is purely formal:
@@ -112,7 +112,7 @@ describe("server-side silent-send form guard (L4 mirror of result-sink)", () => 
   });
 
   it("Case 2: pure @-mention with no trailing content — silenced (mention stripped, remainder empty)", async () => {
-    // This is the exact shape `agent send X ""` produces after server-side
+    // This is the exact shape `chat send X ""` produces after server-side
     // normalizeMentionsInContent runs: the recipient's @ is prepended but
     // there's no actual message body. Without this guard the recipient
     // would be woken with an empty conversation turn.
@@ -190,7 +190,7 @@ describe("server-side silent-send form guard (L4 mirror of result-sink)", () => 
     // Pins the invariant: any message that triggers silent-send MUST end up
     // with notify=false on EVERY inbox row tied to its id — including the
     // replyTo cross-chat route at message.ts:301-321. Without this, an
-    // agent that uses `agent send X ""` to reply to a message that had
+    // agent that uses `chat send X ""` to reply to a message that had
     // declared `replyToChat` would silently wake the original requester
     // through the back-channel, breaking the loop-prevention guarantee.
     const app = getApp();

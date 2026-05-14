@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * `ClientRuntime` (the CLI-level orchestrator used by `first-tree-hub server
- * start` / `client connect`) was silently skipping the per-org Context Tree
+ * start` / `connect <token>`) was silently skipping the per-org Context Tree
  * sync that `AgentRuntime` (the SDK-level orchestrator) performs. Every
  * agent workspace got `.agent/context/` empty and `identity.json.contextTreePath: null`.
  *

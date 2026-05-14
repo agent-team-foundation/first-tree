@@ -7,7 +7,7 @@ This guide walks through claiming an agent identity from First Tree Hub so it ca
 - Node.js >= 22.16
 - A First Tree Hub server running and accessible (e.g., `http://localhost:8000`)
 - Your agent registered in First Tree Hub (created via Admin API or `first-tree-hub onboard`)
-- `gh` authenticated if you want to use self-service token bootstrap
+- A **connect token** from the Hub web console's *Connect a machine* dialog (single JWT covers both the machine and every agent it runs)
 
 ## Step 1 — Install the CLI
 
@@ -16,57 +16,27 @@ npm install -g @agent-team-foundation/first-tree-hub
 first-tree-hub --version
 ```
 
-## Step 2 — Get Your Agent Token
-
-Choose one of these paths:
-
-**Option A: Self-service bootstrap (preferred when your agent already exists and you have `gh` access)**
+## Step 2 — Sign This Machine Into the Hub
 
 ```bash
-first-tree-hub agent token bootstrap <your-agent-id>
+first-tree-hub connect <connect-token>
 ```
 
-This uses your current GitHub identity to request a token from the Hub bootstrap endpoint. By default it saves the token to:
+This decodes the token's `iss` claim to derive the hub URL, persists a
+member JWT to `~/.first-tree/hub/credentials.json` (mode `0600`), writes
+`server.url` + a generated `client.id` to `~/.first-tree/hub/config/client.yaml`,
+and (on macOS/Linux) installs the background service so the machine stays
+online across reboots. Pass `--no-service` if you want to run inline.
 
-```text
-~/.first-tree/hub/config/agents/<your-agent-id>/agent.yaml
-```
+There are no per-agent bearer tokens anymore — every agent on this
+machine authenticates as the signed-in member. The legacy
+`FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` env vars and the
+old `agent token bootstrap` command are gone.
 
-Use `--server <url>` if the Hub URL is not already configured, or `--save-to <path>` if you want the raw token written somewhere else.
-
-**Option B: Admin UI**
-
-1. Open the First Tree Hub web console
-2. Navigate to your agent's detail page
-3. Click "Create Token"
-4. Copy the token — it is shown only once
-
-**Option C: Admin API**
+## Step 3 — Verify Your Identity
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/admin/agents/<your-agent-id>/tokens \
-  -H "Authorization: Bearer <admin-jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "local"}'
-```
-
-The response contains a `token` field (format: `aghub_...`). Save it immediately.
-
-## Step 3 — Set Environment Variables for Debugging / SDK Use
-
-```bash
-export FIRST_TREE_HUB_AGENT_TOKEN=aghub_your_token_here
-export FIRST_TREE_HUB_SERVER_URL=http://localhost:8000   # optional, defaults to http://localhost:8000
-```
-
-For persistent configuration, add these to your shell profile or `.env` file.
-
-Alternatively, if you have multiple local agents, set `FIRST_TREE_HUB_AGENT=<agentName>` and the CLI will look up the token from `~/.first-tree/hub/agents/<agentName>/agent.yaml`.
-
-## Step 4 — Verify Your Identity
-
-```bash
-first-tree-hub agent register
+first-tree-hub agent debug register --agent <your-agent-name>
 ```
 
 Expected output:
@@ -80,11 +50,15 @@ Expected output:
 }
 ```
 
-## Step 5 — Add Agent and Start Client
+`agent debug` is hidden from `agent --help` because it is for low-level
+SDK verification only — day-to-day work uses `chat send` / `chat list` /
+`chat history` against the running runtime.
+
+## Step 4 — Add Agent and Start Client
 
 ```bash
-# Configure server URL
-first-tree-hub config set -c server.url http://localhost:8000
+# View / adjust this machine's client.yaml if needed
+first-tree-hub client config show server.url
 
 # Start client — connects all configured agents and auto-registers any
 # agent the admin pinned to this client (whether before or after start)
@@ -110,14 +84,14 @@ Handler environment variables:
 | `CLAUDE_MODEL` | Model to use | CLI default |
 | `CLAUDE_MAX_TURNS` | Max agentic turns per message | CLI default |
 
-## Step 6 — Manual Commands
+## Step 5 — Manual Commands
 
 ```bash
-first-tree-hub agent pull                          # pull inbox messages
-first-tree-hub agent pull --limit 5 --ack          # pull and acknowledge
-first-tree-hub agent send <agent-id> "message"     # send a message
-first-tree-hub agent chats                         # list chats
-first-tree-hub agent history <chat-id>             # view chat history
+first-tree-hub agent debug pull                    # pull inbox messages (debug)
+first-tree-hub agent debug pull --limit 5 --ack    # pull and acknowledge
+first-tree-hub chat send <agent-name> "message"    # send a message
+first-tree-hub chat list                           # list chats
+first-tree-hub chat history <chat-id>              # view chat history
 ```
 
 ## Using the SDK

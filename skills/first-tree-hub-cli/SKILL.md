@@ -1,6 +1,6 @@
 ---
 name: first-tree-hub-cli
-description: Install, operate, deploy, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `client connect`/`server`/`agent`/`agent config`/`config`/`status`/`onboard` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to a Hub server, installing or running the Hub as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
+description: Install, operate, deploy, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `connect`/`server`/`client`/`agent`/`chat`/`onboard` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to a Hub server, installing or running the Hub as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
 ---
 
 # First Tree Hub CLI
@@ -22,17 +22,17 @@ This shape drives almost every command: `server` targets the deployment, `client
 1. **Classify the task before acting.** Most requests fall into one of these buckets. Pick the bucket, then go to the reference it names.
    - Install or sanity-check the CLI on a fresh machine → `references/command-surface.md`
    - Run, diagnose, or deploy a Hub server → `references/command-surface.md`
-   - Connect a computer to a Hub server (first time) → the **`client connect`** section below, then `references/scenario-playbooks.md`
+   - Connect a computer to a Hub server (first time) → the **`connect <token>`** section below, then `references/scenario-playbooks.md`
    - Make a computer stay online permanently → the **Background service** section below
    - Map a natural-language request to an end-to-end CLI flow → `references/scenario-playbooks.md`
    - Operate `onboard` from an external agent prompt → `references/onboarding-operator.md`
    - Explain product or architecture concepts → `references/core-concepts.md`
    - Modify CLI or adjacent package behavior → `references/developer-map.md`
 2. **Prefer the supported CLI path over hand-rolled API calls or YAML edits.** The CLI already wires up auth, refresh, config layering, and retries for you.
-   - `client connect` for first-time auth on a new machine (auto-installs the background service on macOS/Linux)
+   - `connect <token>` for first-time auth on a new machine (auto-installs the background service on macOS/Linux)
    - `agent config ...` to change a running agent's model / prompt / MCP / env / repos
    - `onboard` to add a member end-to-end
-   - `config set/get/list` to read or write YAML, instead of hand-editing it
+   - `client config show/set/get` to read or write `client.yaml`, instead of hand-editing it
 3. **Read the canonical repo docs when the task becomes specialized.**
    - `docs/cli-reference.md` — every flag and env var in one place
    - `docs/onboarding-guide.md` — full onboarding walkthrough
@@ -51,26 +51,26 @@ The CLI stores a single **member access JWT + refresh token** at `~/.first-tree/
 
 Implications:
 
-- There is **one** way to sign in: `first-tree-hub client connect <server-url>`. It accepts either a one-time `--token` (from the web "Connect a machine" dialog) or falls back to interactive username/password.
+- There is **one** way to sign in: `first-tree-hub connect <token>`. Paste the connect token from the Hub web console's "Connect a machine" dialog; the CLI decodes the token's `iss` claim to derive the hub URL, so the operator never supplies a URL separately. Username/password login has been removed.
 - There is **no** standalone admin login, service-user token, or per-agent bearer token in the current CLI. Admin actions, agent-owner actions, and low-level SDK calls all use the signed-in member's JWT. The legacy `FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` env vars and the old `agent token bootstrap` command have been removed.
 - `FIRST_TREE_HUB_SERVER_URL` still works for overriding the server URL per command, but auth itself is file-based.
 - Agents are database rows, owned by members. They do not hold their own tokens anymore — the client that runs them authenticates as the owning member.
 
-If a flow looks like "get an agent token, set an env var, then run the agent" — that flow is outdated. Point the user at `client connect` instead.
+If a flow looks like "get an agent token, set an env var, then run the agent" — that flow is outdated. Point the user at `connect <token>` instead.
 
 ## First-Time Setup on a New Machine
 
-The happy path is three commands, in this order:
+The happy path is two commands, in this order:
 
 ```bash
 npm install -g @agent-team-foundation/first-tree-hub            # install
-first-tree-hub client connect https://hub.example.com --token <one-time>   # sign in + register the machine
+first-tree-hub connect <connect-token>                          # sign in + register the machine
 # (service auto-installs on macOS/Linux — you can close the terminal)
 ```
 
-If the user does not have a one-time connect token, omit `--token` and the command prompts for username/password. Pass `--no-service` when the user wants to run inline (useful in containers or for quick tests).
+Pass `--no-service` when the user wants to run inline (useful in containers or for quick tests).
 
-After `client connect` succeeds:
+After `connect <token>` succeeds:
 
 - `~/.first-tree/hub/credentials.json` exists
 - `~/.first-tree/hub/config/client.yaml` has `server.url` and a generated `client.id`
@@ -79,26 +79,26 @@ After `client connect` succeeds:
 
 ## Background Service (keep the machine online)
 
-`client connect` installs a user-level background service automatically (launchd on macOS, `systemd --user` on Linux) so the runtime survives logout/reboot — pass `--no-service` to opt out and run inline. Windows is unsupported; on Windows the command falls back to inline mode (`first-tree-hub client start` plus a user-managed supervisor).
+`connect <token>` installs a user-level background service automatically (launchd on macOS, `systemd --user` on Linux) so the runtime survives logout/reboot — pass `--no-service` to opt out and run inline. Windows is unsupported; on Windows the command falls back to inline mode (`first-tree-hub client start` plus a user-managed supervisor).
 
-There are **no `client service ...` subcommands** — the service lifecycle is folded into `client connect` (install or repair) and `client doctor` (status). Tail logs directly:
+There are **no `client service ...` subcommands** — the service lifecycle is folded into `connect <token>` (install or repair) and `client doctor` (status). Tail logs directly:
 
 ```bash
 tail -f ~/.first-tree/hub/logs/client.log
 ```
 
-To decommission a machine: stop and remove the unit at the OS level (`launchctl bootout` + `rm` of the plist on macOS; `systemctl --user disable --now` + `rm` of the unit file on Linux), then `rm -rf ~/.first-tree/hub`. See `docs/cli-reference.md` for the exact commands. To force-drop a client from the server side, use `client hub-disconnect <clientId>`.
+To decommission a machine: stop and remove the unit at the OS level (`launchctl bootout` + `rm` of the plist on macOS; `systemctl --user disable --now` + `rm` of the unit file on Linux), then `rm -rf ~/.first-tree/hub`. See `docs/cli-reference.md` for the exact commands. To force-drop a client from the server side, use `client disconnect <clientId>`.
 
 ## Operating Rules
 
 - **Keep subsystem boundaries clear.**
-  - `server ...` — server lifecycle (start, stop, doctor, status, migrations, admin creation).
-  - `client ...` — everything that happens on a specific computer: first-time auth (`connect`), the foreground runtime (`start`), the background service, and Hub-side client inventory (`hub-list`, `hub-disconnect`).
-  - `agent ...` — everything that is "about an agent record": local alias config (`add`/`remove`/`list`), creation and claiming, workspace cleanup, bindings, **runtime configuration via `agent config`**, messaging, sessions, and interactive chat.
-  - `config ...` — scope-aware YAML editing for `server.yaml`, `client.yaml`, or a specific agent's `agent.yaml`.
-  - `status` — top-level overview across server health, database, client config, and local agent count.
+  - `connect <token>` — first-time setup for this computer; folds in auth, `client.yaml` write, and background-service install.
+  - `server ...` — server lifecycle (start, stop, doctor, status, migrate, admin create).
+  - `client ...` — everything that happens on a specific computer once it is connected: the foreground runtime (`start`), the background service, Hub-side client inventory (`list`, `disconnect`), and local YAML edits via `client config`.
+  - `agent ...` — everything that is "about an agent record": local alias config (`add`/`remove`/`list`), creation and claiming, workspace cleanup, bindings, **runtime configuration via `agent config`**, status / reset / sessions.
+  - `chat ...` — day-to-day messaging: `send`, `list`, `history`, and the interactive `open` REPL.
   - `onboard` — the guided "add a new member" flow; composes multiple low-level operations behind one command.
-- **Distinguish `agent config` (server-side runtime) from `config -a <name>` (local YAML).** `agent config set-model` or `append-prompt` mutates the Hub database via the admin API and affects the running agent everywhere. `config -a <name> set` edits the local `agent.yaml`, which only names the agent locally and tells the client which `agentId` to load.
+- **Distinguish `agent config` (server-side runtime) from `client config` (local YAML).** `agent config set-model` or `append-prompt` mutates the Hub database via the admin API and affects the running agent everywhere. `client config set` edits the local `client.yaml`, which controls the computer's own runtime behavior.
 - **Respect config layering.** CLI args override env vars → env vars override YAML → YAML overrides auto-generated → auto-generated overrides defaults.
 - **Distinguish config scopes and paths.**
   - Home defaults to `~/.first-tree/hub`; `FIRST_TREE_HUB_HOME` relocates it.
@@ -116,16 +116,16 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 
 - Install + verify: `npm install -g @agent-team-foundation/first-tree-hub`, then `first-tree-hub --version`.
 - First local boot or quick demo: `first-tree-hub server start`.
-- Environment readiness: `first-tree-hub server doctor`, `first-tree-hub client doctor`, or `first-tree-hub status` for a compact summary.
-- Connect a computer to a Hub server: `first-tree-hub client connect <url>` (add `--token <connect-token>` to skip interactive login).
-- Keep the computer online across reboots: handled automatically by `first-tree-hub client connect <url>` (omit `--no-service`).
+- Environment readiness: `first-tree-hub server doctor` or `first-tree-hub client doctor` for a compact summary.
+- Connect a computer to a Hub server: `first-tree-hub connect <token>` — paste the token from the Hub web console's *Connect a machine* dialog.
+- Keep the computer online across reboots: handled automatically by `first-tree-hub connect <token>` (omit `--no-service`).
 - Run the runtime inline (no service): `first-tree-hub client start`.
-- See which machines the Hub currently sees: `first-tree-hub client hub-list`; force-drop one with `first-tree-hub client hub-disconnect <clientId>`.
+- See which machines the Hub currently sees: `first-tree-hub client list`; force-drop one with `first-tree-hub client disconnect <clientId>`.
 - Create an agent from the CLI: `first-tree-hub agent create <name> --type <t> --client-id <id>`.
 - Change a running agent's configuration (model, prompt, MCP, env, repos): `first-tree-hub agent config ...`.
 - Onboard a new human or autonomous agent end-to-end: `first-tree-hub onboard` (or `onboard --check` first to validate inputs).
-- Debug messaging manually: `first-tree-hub agent send`, `agent chats`, `agent history`, `agent pull`, or `agent chat <agent>` for an interactive REPL.
-- Inspect or fix session state: `first-tree-hub agent status`, `agent reset`, `agent sessions`, `agent session suspend|resume|terminate`.
+- Day-to-day messaging: `first-tree-hub chat send`, `chat list`, `chat history`, or `chat open <agent>` for an interactive REPL.
+- Inspect or fix session state: `first-tree-hub agent status`, `agent reset`, `agent session list <name>`, `agent session suspend|terminate`.
 - Clean stale chat workspaces: `first-tree-hub agent workspace clean`.
 
 ### Run Onboarding From an Agent Prompt
@@ -134,7 +134,7 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 - If the machine does not yet have the CLI or credentials:
   - Ensure `gh` is authenticated (`gh auth login`) — required for GitHub-identity agent creation.
   - Install `@agent-team-foundation/first-tree-hub` globally (or use `npx` when the caller installed it locally).
-  - Run `first-tree-hub client connect <server-url>` first. Onboarding depends on a valid credential file — without it, `onboard` exits with a clear error pointing at `client connect`.
+  - Run `first-tree-hub connect <token>` first. Onboarding depends on a valid credential file — without it, `onboard` exits with a clear error pointing at `connect <token>`.
   - When you need to read the canonical guide from the repo without a local checkout:
 
     ```bash
@@ -145,7 +145,7 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 - Default operator flow:
 
   ```bash
-  first-tree-hub client connect <server-url>         # one-time, if not done already
+  first-tree-hub connect <token>                     # one-time, if not done already
   first-tree-hub onboard --check --server <url> --id <id> --type <type> ...
   first-tree-hub onboard --server <url> --id <id> --type <type> ...
   first-tree-hub client start                        # only if no service is installed
