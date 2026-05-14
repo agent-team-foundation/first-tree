@@ -4,6 +4,7 @@ import type { WebSocket } from "ws";
 const INBOX_CHANNEL = "inbox_notifications";
 const CONFIG_CHANNEL = "config_changes";
 const SESSION_STATE_CHANNEL = "session_state_changes";
+const SESSION_EVENT_CHANNEL = "session_event_changes";
 const RUNTIME_STATE_CHANNEL = "runtime_state_changes";
 /**
  * Chat-first workspace cross-process kick. Carries `<chatId>:<messageId>`.
@@ -26,6 +27,20 @@ export type SessionStateChangeHandler = (payload: {
   agentId: string;
   chatId: string;
   state: string;
+  organizationId: string;
+}) => void;
+/**
+ * Session event notification — fired whenever a new `session_events` row is
+ * appended (tool_call / thinking / assistant_text / turn_end / error). The
+ * payload intentionally carries only the routing dimensions; admin WS
+ * consumers refetch `me/chats` rather than reconstructing the event
+ * locally, so the NOTIFY stays under the 8KB PG limit even when events
+ * burst at tool-call cadence.
+ */
+export type SessionEventChangeHandler = (payload: {
+  agentId: string;
+  chatId: string;
+  kind: string;
   organizationId: string;
 }) => void;
 export type RuntimeStateChangeHandler = (payload: { agentId: string; state: string; organizationId: string }) => void;
@@ -63,6 +78,8 @@ export type Notifier = {
   notifyConfigChange(configType: string): Promise<void>;
   /** Notify that a session state has changed */
   notifySessionStateChange(agentId: string, chatId: string, state: string, organizationId: string): Promise<void>;
+  /** Notify that a session event was appended (used to invalidate `liveActivity`). */
+  notifySessionEvent(agentId: string, chatId: string, kind: string, organizationId: string): Promise<void>;
   /** Notify that an agent runtime state has changed (idle/working/error/…). Payload is org-scoped so admin consumers can filter. */
   notifyRuntimeStateChange(agentId: string, state: string, organizationId: string): Promise<void>;
   /** Chat-first workspace: kick admin WS sockets to invalidate ["me","chats"] and the timeline of `chatId`. */
@@ -85,6 +102,8 @@ export type Notifier = {
   onConfigChange(handler: ConfigChangeHandler): void;
   /** Register a handler for session state change notifications */
   onSessionStateChange(handler: SessionStateChangeHandler): void;
+  /** Register a handler for session-event notifications (per-chat liveActivity). */
+  onSessionEvent(handler: SessionEventChangeHandler): void;
   /** Register a handler for runtime state change notifications */
   onRuntimeStateChange(handler: RuntimeStateChangeHandler): void;
   /** Register a handler for chat:message change notifications. */
@@ -104,12 +123,14 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const subscriptions = new Map<string, Map<WebSocket, InboxPushHandler | null>>();
   const configChangeHandlers: ConfigChangeHandler[] = [];
   const sessionStateChangeHandlers: SessionStateChangeHandler[] = [];
+  const sessionEventHandlers: SessionEventChangeHandler[] = [];
   const runtimeStateChangeHandlers: RuntimeStateChangeHandler[] = [];
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
   const adminBroadcastHandlers: AdminBroadcastHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
+  let unlistenSessionEventFn: (() => Promise<void>) | null = null;
   let unlistenRuntimeStateFn: (() => Promise<void>) | null = null;
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
   let unlistenAdminBroadcastFn: (() => Promise<void>) | null = null;
@@ -188,6 +209,18 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifySessionEvent(agentId: string, chatId: string, kind: string, organizationId: string) {
+      try {
+        // Same `<a>:<b>:<c>:<d>` shape as the session-state channel so
+        // payload parsing can reuse the index-of-3 split below. agentId
+        // and chatId are UUIDs (no colons); kind is a fixed-vocabulary
+        // enum (`tool_call` etc., no colons either).
+        await listenClient`SELECT pg_notify(${SESSION_EVENT_CHANNEL}, ${`${agentId}:${chatId}:${kind}:${organizationId}`})`;
+      } catch {
+        // fire-and-forget — admin UI's 15s `me/chats` polling re-syncs.
+      }
+    },
+
     async notifyRuntimeStateChange(agentId: string, state: string, organizationId: string) {
       try {
         await listenClient`SELECT pg_notify(${RUNTIME_STATE_CHANNEL}, ${`${agentId}:${state}:${organizationId}`})`;
@@ -261,6 +294,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       sessionStateChangeHandlers.push(handler);
     },
 
+    onSessionEvent(handler: SessionEventChangeHandler) {
+      sessionEventHandlers.push(handler);
+    },
+
     onRuntimeStateChange(handler: RuntimeStateChangeHandler) {
       runtimeStateChangeHandlers.push(handler);
     },
@@ -306,6 +343,30 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenSessionStateFn = sessionStateResult.unlisten;
+
+      const sessionEventResult = await listenClient.listen(SESSION_EVENT_CHANNEL, (payload) => {
+        if (payload) {
+          // payload format: "agentId:chatId:kind:organizationId" — mirrors
+          // the session-state channel split.
+          const firstSep = payload.indexOf(":");
+          const secondSep = payload.indexOf(":", firstSep + 1);
+          const thirdSep = payload.indexOf(":", secondSep + 1);
+          if (firstSep > 0 && secondSep > firstSep && thirdSep > secondSep) {
+            const agentId = payload.slice(0, firstSep);
+            const chatId = payload.slice(firstSep + 1, secondSep);
+            const kind = payload.slice(secondSep + 1, thirdSep);
+            const organizationId = payload.slice(thirdSep + 1);
+            for (const handler of sessionEventHandlers) {
+              try {
+                handler({ agentId, chatId, kind, organizationId });
+              } catch {
+                // swallow — handler errors must not poison fan-out
+              }
+            }
+          }
+        }
+      });
+      unlistenSessionEventFn = sessionEventResult.unlisten;
 
       const runtimeStateResult = await listenClient.listen(RUNTIME_STATE_CHANNEL, (payload) => {
         if (payload) {
@@ -377,6 +438,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenSessionStateFn) {
         await unlistenSessionStateFn();
         unlistenSessionStateFn = null;
+      }
+      if (unlistenSessionEventFn) {
+        await unlistenSessionEventFn();
+        unlistenSessionEventFn = null;
       }
       if (unlistenRuntimeStateFn) {
         await unlistenRuntimeStateFn();

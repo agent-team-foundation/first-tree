@@ -23,7 +23,13 @@ export function SessionContext({ agentId, chatId }: { agentId: string; chatId: s
         <SectionLabel>Session</SectionLabel>
         <KV>
           <KVRow label="state">
-            <StateChip state={session?.runtimeState ?? session?.state ?? null} />
+            {/* Use the per-(agent, chat) session.state lifecycle (active /
+                suspended / errored / evicted). The pre-fix fallback chained
+                `session.runtimeState`, which is the agent-global runtime
+                state — for this chat's session it was the wrong axis and
+                would surface "working" while the agent was actually busy
+                in a different chat. */}
+            <StateChip state={session?.state ?? null} />
           </KVRow>
           <KVRow label="chat">
             <span className="mono text-body">{chatId.slice(0, 12)}</span>

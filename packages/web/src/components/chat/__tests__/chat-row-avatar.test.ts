@@ -101,19 +101,19 @@ describe("buildAvatarAriaLabel — state-only screen-reader text", () => {
   it("returns null when nothing is happening (avatar goes aria-hidden)", () => {
     // Title is announced by the enclosing chat-row button; an avatar
     // with no dynamic state shouldn't double-announce anything.
-    expect(buildAvatarAriaLabel({ peerWorking: false, unread: 0 })).toBeNull();
+    expect(buildAvatarAriaLabel({ engaged: false, unread: 0 })).toBeNull();
   });
 
-  it("'working' only when peer is working and there's no unread", () => {
-    expect(buildAvatarAriaLabel({ peerWorking: true, unread: 0 })).toBe("working");
+  it("'engaged' only when at least one peer has an active session and there's no unread", () => {
+    expect(buildAvatarAriaLabel({ engaged: true, unread: 0 })).toBe("engaged");
   });
 
-  it("'N unread' only when there's unread but no working signal", () => {
-    expect(buildAvatarAriaLabel({ peerWorking: false, unread: 3 })).toBe("3 unread");
-    expect(buildAvatarAriaLabel({ peerWorking: false, unread: 1 })).toBe("1 unread");
+  it("'N unread' only when there's unread but no engaged signal", () => {
+    expect(buildAvatarAriaLabel({ engaged: false, unread: 3 })).toBe("3 unread");
+    expect(buildAvatarAriaLabel({ engaged: false, unread: 1 })).toBe("1 unread");
   });
 
   it("composes both into one comma-joined label", () => {
-    expect(buildAvatarAriaLabel({ peerWorking: true, unread: 5 })).toBe("working, 5 unread");
+    expect(buildAvatarAriaLabel({ engaged: true, unread: 5 })).toBe("engaged, 5 unread");
   });
 });
