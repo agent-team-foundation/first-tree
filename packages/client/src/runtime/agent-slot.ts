@@ -196,7 +196,6 @@ export class AgentSlot {
       onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
       onRuntimeStateChange: (state) => this.reportRuntimeState(state),
       onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
-      onSessionCompletion: (chatId) => this.reportSessionCompletion(chatId),
     });
 
     const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
@@ -249,10 +248,6 @@ export class AgentSlot {
 
   private reportSessionEvent(chatId: string, event: SessionEvent): void {
     this.clientConnection.reportSessionEvent(this.config.agentId, chatId, event);
-  }
-
-  private reportSessionCompletion(chatId: string): void {
-    this.clientConnection.reportSessionCompletion(this.config.agentId, chatId);
   }
 
   private fullStateSync(): void {

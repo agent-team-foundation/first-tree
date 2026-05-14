@@ -6,7 +6,6 @@ import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
-import * as notificationService from "../services/notification.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import * as sessionEventService from "../services/session-event.js";
 import { uuidv7 } from "../uuid.js";
@@ -17,12 +16,10 @@ import { createTestApp } from "./helpers.js";
  *
  * Exercises the full client-to-server flow:
  *   1. `session:event` WS frame ⇒ row lands in `session_events`.
- *   2. `session:completion` WS frame ⇒ `session_completed` notification
- *      is created (5-min cooldown applies on the same chat).
- *   3. `session:state { state: "evicted" }` WS frame ⇒ persisted events
+ *   2. `session:state { state: "evicted" }` WS frame ⇒ persisted events
  *      for that (agent, chat) are cleared (D4 eviction hook).
  *
- * All three behaviors were previously wired to `session:output` and
+ * Both behaviors were previously wired to `session:output` and
  * `sessionOutputService`; this test protects the new protocol from
  * regression without booting a real Claude Code session.
  */
@@ -336,38 +333,6 @@ describe("Agent WS — session event protocol (S10)", () => {
 
       const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 50 });
       expect(items).toHaveLength(eventCount);
-    } finally {
-      ws.close();
-      await new Promise<void>((r) => ws.once("close", () => r()));
-    }
-  }, 15000);
-
-  it("`session:completion` creates a session_completed notification", async () => {
-    const seed = await seedBoundAgent("compl");
-    const ws = await openBoundSocket(seed);
-    const chatId = `chat-${crypto.randomUUID()}`;
-
-    try {
-      ws.send(
-        JSON.stringify({
-          type: "session:completion",
-          agentId: seed.agent.uuid,
-          chatId,
-        }),
-      );
-
-      const hit = await waitForCondition(async () => {
-        const { items } = await notificationService.listNotifications(app.db, seed.organizationId, seed.memberId, {
-          limit: 50,
-        });
-        const found = items.find(
-          (n) => n.type === "session_completed" && n.agentId === seed.agent.uuid && n.chatId === chatId,
-        );
-        return found ?? null;
-      });
-
-      expect(hit.type).toBe("session_completed");
-      expect(hit.severity).toBe("low");
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));

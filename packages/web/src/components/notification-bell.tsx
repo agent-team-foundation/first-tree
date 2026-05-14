@@ -53,11 +53,16 @@ export function NotificationBell() {
         queryClient.invalidateQueries({ queryKey: ["notifications"] });
       }
       setOpen(false);
-      if (n.agentId && n.chatId) {
-        navigate(`/?a=${n.agentId}&c=${n.chatId}`);
-      } else if (n.agentId) {
-        navigate(`/?a=${n.agentId}`);
-      }
+      // Two navigation targets, in priority order:
+      //   - `chatId` → the workspace chat the event happened in (currently
+      //     only `session_*` events, but the schema leaves room).
+      //   - `agentId` → the per-agent detail page. Fault-scoped events
+      //     (error / blocked / stale) carry only an agent id, so this is
+      //     where the user lands to triage.
+      // A row with neither is rendered non-clickable below, so the handler
+      // never sees that case.
+      if (n.chatId) navigate(`/?c=${n.chatId}`);
+      else if (n.agentId) navigate(`/agents/${n.agentId}`);
     },
     [navigate, queryClient],
   );
@@ -163,7 +168,7 @@ export function NotificationBell() {
                   <NotificationItem
                     key={n.id}
                     notification={n}
-                    clickable={!!n.agentId}
+                    clickable={!!n.chatId || !!n.agentId}
                     onClick={() => handleClickNotification(n)}
                   />
                 ))

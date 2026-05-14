@@ -1,6 +1,7 @@
 import {
   AGENT_STATUSES,
   AGENT_VISIBILITY,
+  NOTIFICATION_TYPES,
   type NotificationQuery,
   type NotificationSeverity,
   type NotificationType,
@@ -8,7 +9,6 @@ import {
 import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { notifications } from "../db/schema/notifications.js";
 import { uuidv7 } from "../uuid.js";
@@ -40,19 +40,29 @@ export type CreateNotificationData = {
 /**
  * Create a notification, persist it, and fire-and-forget push to all channels.
  *
- * Returns `null` when the insert was suppressed by the dedup partial unique
- * index — i.e. an unread notification with the same `(orgId, dedupKey)`
- * already exists and the producer should treat this call as a no-op.
+ * Dedup contract (when `dedupKey` is set and an unread row already exists):
+ *   - **severity escalates monotonically** — `high` never drops back to
+ *     `medium`, `medium` never drops back to `low`. Prevents the bell badge
+ *     from understating a degrading agent (stale=medium first, then
+ *     error=high arriving — the row sticks at high).
+ *   - **type and message take the latest event's values** — so the row
+ *     reflects the most recent observation in the UI ("entered error state"
+ *     replaces "is unresponsive" once the runtime starts reporting error).
+ *   - **createdAt is preserved** so the bell ordering still tracks "when did
+ *     this incident open" rather than "when was the last observation".
+ *
+ * Rows without a `dedupKey` never hit the partial unique index and keep the
+ * legacy always-insert behaviour.
  */
 export async function createNotification(db: Database, data: CreateNotificationData) {
   const id = uuidv7();
 
-  // ON CONFLICT DO NOTHING on the partial unique index. The `where` clause is
+  // ON CONFLICT DO UPDATE on the partial unique index. The `where` clause is
   // mandatory when the target index is partial — PG raises "there is no
   // unique or exclusion constraint matching the ON CONFLICT specification"
-  // unless the predicate matches the index definition exactly. Rows without
-  // a dedup_key never satisfy the predicate, so the conflict path never
-  // fires for them and they keep the legacy always-insert behaviour.
+  // unless the predicate matches the index definition exactly. The CASE on
+  // severity expresses GREATEST() across the three text values without
+  // depending on a PG enum or lookup table.
   const inserted = await db
     .insert(notifications)
     .values({
@@ -65,16 +75,27 @@ export async function createNotification(db: Database, data: CreateNotificationD
       message: data.message,
       dedupKey: data.dedupKey ?? null,
     })
-    .onConflictDoNothing({
+    .onConflictDoUpdate({
       target: [notifications.organizationId, notifications.dedupKey],
-      where: sql`${notifications.read} = false AND ${notifications.dedupKey} IS NOT NULL`,
+      set: {
+        severity: sql`CASE
+          WHEN ${notifications.severity} = 'high' OR excluded.severity = 'high' THEN 'high'
+          WHEN ${notifications.severity} = 'medium' OR excluded.severity = 'medium' THEN 'medium'
+          ELSE 'low'
+        END`,
+        type: sql`excluded.type`,
+        message: sql`excluded.message`,
+      },
+      targetWhere: sql`${notifications.read} = false AND ${notifications.dedupKey} IS NOT NULL`,
     })
     .returning();
 
   const row = inserted[0];
   if (!row) {
-    // Dedup suppressed the insert. Callers should treat this as a no-op —
-    // the prior unread row is still in flight to the admin UI.
+    // Defensive: ON CONFLICT DO UPDATE always returns a row when the
+    // predicate matches, but a producer who passes `dedupKey: null` and
+    // races with itself could still see this path on a hypothetical
+    // exclusion. Treat as a no-op so callers never crash on this.
     return null;
   }
 
@@ -258,10 +279,6 @@ type AgentContext = {
   clientLabel: string | null;
 };
 
-type ChatContext = {
-  chatLabel: string;
-};
-
 async function resolveAgentContext(db: Database, agentId: string): Promise<AgentContext | null> {
   const [agent] = await db
     .select({
@@ -293,33 +310,16 @@ async function resolveAgentContext(db: Database, agentId: string): Promise<Agent
   };
 }
 
-async function resolveChatContext(db: Database, chatId: string): Promise<ChatContext> {
-  const [chat] = await db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
-  // Chat topic is nullable; fall back to a short hash of the chat id so the
-  // message still reads as a concrete entity rather than "Chat null completed".
-  const shortId = chatId.slice(0, 8);
-  const label = chat?.topic && chat.topic.trim().length > 0 ? chat.topic.trim() : `Chat ${shortId}`;
-  return { chatLabel: label };
-}
-
 /**
- * Compose a human-readable message for each notification type.
- *
- * Keep subjects consistent with what the dashboard shows the member:
- *   - Session-scoped events → subject is the chat (topic / "Chat xxxxxxxx")
- *   - Client-scoped events  → subject is the computer (hostname / clientId)
- *   - Agent-scoped events   → subject is the agent display name
+ * Compose a human-readable message for each notification type. The full set
+ * is fault-scoped (error / blocked / stale) — completion events are not
+ * notifications because the conversation list already surfaces them.
  */
-function composeMessage(type: NotificationType, agentCtx: AgentContext, chatCtx: ChatContext | null): string {
+function composeMessage(type: NotificationType, agentCtx: AgentContext): string {
   const agent = agentCtx.agentName;
   const computer = agentCtx.clientLabel ?? "Unknown computer";
-  const chat = chatCtx?.chatLabel ?? null;
 
   switch (type) {
-    case "session_completed":
-      return chat ? `${chat} completed` : `${agent} completed a task`;
-    case "session_error":
-      return chat ? `${chat} hit an error` : `${agent} hit a session error`;
     case "agent_stale":
       return `Computer ${computer} is unresponsive`;
     case "agent_error":
@@ -332,17 +332,16 @@ function composeMessage(type: NotificationType, agentCtx: AgentContext, chatCtx:
 }
 
 /**
- * Convenience: create a notification for an agent event, resolving org,
- * agent display name, computer hostname, and chat topic automatically.
- * Callers supply the event type, severity, and (recommended) dedup_key; the
- * message text is generated here so language/phrasing is centralized (see
- * {@link composeMessage}).
+ * Convenience: create a notification for an agent event, resolving org and
+ * agent display name automatically. The message text is generated here so
+ * language/phrasing is centralized (see {@link composeMessage}).
  *
- * Default dedup_key when none is supplied: `agent:{agentId}:{type}` or, when
- * a chatId is present, `chat:{chatId}:{type}`. This makes "burst of identical
- * events for the same agent/chat surfaces a single unread row" the default
- * behaviour rather than an opt-in — pass `dedupKey: null` if you want the
- * legacy "every event creates a new row" semantics.
+ * Default dedup_key when none is supplied: `agent:{agentId}:fault`. All three
+ * current fault types (error / blocked / stale) collapse onto one unread row
+ * per agent — a single agent that goes error AND then stale should not double
+ * the badge for the same underlying problem. Pair with
+ * {@link markAgentFaultsResolved}, which closes the row when the agent
+ * recovers.
  *
  * Fire-and-forget — errors are swallowed so event producers never fail just
  * because the notification pipeline is unhealthy.
@@ -352,33 +351,66 @@ export async function notifyAgentEvent(
   agentId: string,
   type: NotificationType,
   severity: NotificationSeverity,
-  options: { chatId?: string | null; dedupKey?: string | null } = {},
+  options: { dedupKey?: string | null } = {},
 ): Promise<void> {
   try {
     const agentCtx = await resolveAgentContext(db, agentId);
     if (!agentCtx) return;
 
-    const chatId = options.chatId ?? null;
-    const chatCtx = chatId ? await resolveChatContext(db, chatId) : null;
-    const message = composeMessage(type, agentCtx, chatCtx);
-
-    const dedupKey =
-      options.dedupKey === undefined
-        ? chatId
-          ? `chat:${chatId}:${type}`
-          : `agent:${agentId}:${type}`
-        : options.dedupKey;
+    const message = composeMessage(type, agentCtx);
+    const dedupKey = options.dedupKey === undefined ? `agent:${agentId}:fault` : options.dedupKey;
 
     await createNotification(db, {
       organizationId: agentCtx.organizationId,
       type,
       severity,
       agentId,
-      chatId,
       clientId: agentCtx.clientId,
       message,
       dedupKey,
     });
+  } catch {
+    // fire-and-forget
+  }
+}
+
+/**
+ * Mark every unread fault-scoped notification for this agent as read. Called
+ * when the agent recovers — either by rebinding (offline → online) or by
+ * reporting a healthy runtime state (error/blocked → idle/working). Without
+ * this, a transient incident leaves its notification row in "unread" forever
+ * and the badge never clears even though the underlying problem is gone.
+ *
+ * Fire-and-forget — same rationale as {@link notifyAgentEvent}: presence /
+ * runtime-state callers must not fail just because notification bookkeeping
+ * is unhealthy.
+ *
+ * Note on badge freshness: this UPDATEs the DB but does not push an event
+ * across admin WS. The bell refetches on its own next push or reconnect, so
+ * the badge may lag the actual state by up to one push cycle. Adding a
+ * dedicated `notification:read` envelope was deferred — it adds a new event
+ * shape on both sides for a sub-second cosmetic difference.
+ */
+export async function markAgentFaultsResolved(db: Database, agentId: string): Promise<void> {
+  try {
+    await db
+      .update(notifications)
+      .set({ read: true })
+      .where(
+        and(
+          eq(notifications.agentId, agentId),
+          eq(notifications.read, false),
+          // Scoped to fault-scoped types — not just "all unread for agent".
+          // The recovery signal (rebind / state→healthy) closes incidents,
+          // not arbitrary future agent-scoped notifications (reminders,
+          // system messages, etc.) that a feature may add later.
+          inArray(notifications.type, [
+            NOTIFICATION_TYPES.AGENT_ERROR,
+            NOTIFICATION_TYPES.AGENT_BLOCKED,
+            NOTIFICATION_TYPES.AGENT_STALE,
+          ]),
+        ),
+      );
   } catch {
     // fire-and-forget
   }

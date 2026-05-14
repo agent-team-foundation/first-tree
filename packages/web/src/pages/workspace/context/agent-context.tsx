@@ -41,7 +41,6 @@ function Tile({ label, value, accent }: { label: string; value: string | number;
 
 function NotificationList({
   notifications,
-  agentId,
 }: {
   notifications: Array<{
     id: string;
@@ -52,9 +51,8 @@ function NotificationList({
     chatId: string | null;
     createdAt: string;
   }>;
-  agentId: string;
 }) {
-  const [, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const markReadMut = useMutation({
     mutationFn: (id: string) => markNotificationRead(id),
@@ -76,7 +74,11 @@ function NotificationList({
           onClick={() => {
             if (!n.read) markReadMut.mutate(n.id);
             if (n.chatId) {
-              setSearchParams({ a: agentId, c: n.chatId });
+              // Preserve other query params (`engagement` etc.) — clobbering
+              // the param set drops the user's filter context.
+              const next = new URLSearchParams(searchParams);
+              next.set("c", n.chatId);
+              setSearchParams(next);
             }
           }}
         />
@@ -212,7 +214,7 @@ export function AgentContext({ agentId }: { agentId: string }) {
             No notifications for this agent
           </div>
         ) : (
-          <NotificationList notifications={notifications.items} agentId={agentId} />
+          <NotificationList notifications={notifications.items} />
         )}
       </div>
     </div>

@@ -246,6 +246,28 @@
   --warn: oklch(0.82 0.18 75);
   --danger: oklch(0.68 0.22 25);
 
+  /* Near-white text for content rendered on top of a vivid colored
+     surface (state-error badges, hashed-hue avatars, etc). Stable in
+     both themes — these surfaces don't track --fg, which inverts
+     under .dark and would yield dark-on-color in dark mode. */
+  --fg-on-vivid: oklch(0.985 0 0);
+
+  /* Per-agent avatar palette. Eight perceptually-balanced OkLCH hues
+     at matched lightness/chroma so every avatar reads with the same
+     visual weight. Consumed via `pickAvatarHue(agentId)` in
+     `components/chat/chat-row-avatar.tsx` — same agent → same hue
+     across direct chats and group composites. White-ish initials
+     (`--fg-on-vivid`) clear WCAG AA against every entry in both
+     themes. Add new entries in this block, not at the call site. */
+  --avatar-hue-0: oklch(0.66 0.16 150); /* green (also the empty-seed fallback) */
+  --avatar-hue-1: oklch(0.62 0.17 250); /* blue */
+  --avatar-hue-2: oklch(0.6 0.18 295); /* purple */
+  --avatar-hue-3: oklch(0.65 0.2 0); /* pink */
+  --avatar-hue-4: oklch(0.68 0.16 50); /* orange */
+  --avatar-hue-5: oklch(0.65 0.13 200); /* teal */
+  --avatar-hue-6: oklch(0.72 0.15 90); /* amber */
+  --avatar-hue-7: oklch(0.55 0.17 270); /* indigo */
+
   --radius: 0.5rem;
 
   /* Light theme (default when .dark class is absent) */
@@ -561,6 +583,28 @@
   100% {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Chat-row avatar working ring — steady breathe to signal "agent is
+   responding now" without the urgency of a flash. opacity-only so the
+   animation stays GPU-cheap on long conversation lists. */
+@keyframes chat-row-avatar-working-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.chat-row-avatar__working-ring {
+  animation: chat-row-avatar-working-breathe 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-row-avatar__working-ring {
+    animation: none;
+    opacity: 1;
   }
 }
 

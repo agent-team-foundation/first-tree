@@ -83,14 +83,3 @@ export const sessionEventMessageSchema = z.object({
   event: sessionEventSchema,
 });
 export type SessionEventMessage = z.infer<typeof sessionEventMessageSchema>;
-
-/**
- * WS control message: client signals that a query completed end-to-end.
- * Decoupled from `session:event` so the `session_completed` notification
- * fires on actual result forwarding, not on incidental tool activity.
- */
-export const sessionCompletionMessageSchema = z.object({
-  agentId: z.string(),
-  chatId: z.string(),
-});
-export type SessionCompletionMessage = z.infer<typeof sessionCompletionMessageSchema>;

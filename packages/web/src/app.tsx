@@ -33,6 +33,12 @@ const ContextPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/context-preview.js").then((module) => ({ default: module.ContextPreviewPage })))
   : null;
 
+const ChatRowAvatarPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/chat-row-avatar-preview.js").then((module) => ({ default: module.ChatRowAvatarPreviewPage })),
+    )
+  : null;
+
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -52,6 +58,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ContextPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {ChatRowAvatarPreviewPage ? (
+                <Route
+                  path="/preview/chat-row-avatar"
+                  element={
+                    <Suspense fallback={null}>
+                      <ChatRowAvatarPreviewPage />
                     </Suspense>
                   }
                 />
