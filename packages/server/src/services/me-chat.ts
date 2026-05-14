@@ -23,20 +23,24 @@ import {
   type ChatEngagementStatus,
   type ChatEngagementView,
   type CreateMeChat,
+  LIVE_ACTIVITY_STALE_MS,
   type ListMeChatsQuery,
   type ListMeChatsResponse,
+  type LiveActivity,
   type MeChatLeaveResponse,
   type MeChatReadResponse,
   type MeChatRow,
+  type ToolCallEventPayload,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
-import { agentPresence } from "../db/schema/agent-presence.js";
+import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
+import { sessionEvents } from "../db/schema/session-events.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { addChatParticipants, changeChatType } from "./participant-mode.js";
@@ -263,36 +267,55 @@ export async function listMeChats(
   const chatIds = pageRaw.map((r) => r.chat_id);
 
   // Lookup participants (speakers only — watchers do not appear in
-  // the conversation row's participant chip list). Also pick up each
-  // speaker's `agent_presence.runtime_state` so we can derive
-  // `workingAgentIds` per chat without a second query — `agent_presence`
-  // PK is `agent_id`, so the LEFT JOIN is a row-by-row PK lookup with
-  // no extra index needed.
+  // the conversation row's participant chip list). The leftJoin to
+  // `agent_chat_sessions` is keyed on BOTH (agent_id, chat_id) so each
+  // row sees the session state for *this* chat — never another chat the
+  // same agent happens to speak in. PK on agent_chat_sessions is
+  // (agent_id, chat_id), so the join is a row-by-row PK lookup with no
+  // extra index needed.
+  //
+  // The previous implementation joined `agent_presence.runtime_state`
+  // (agent-global). That made `workingAgentIds` light up on every chat
+  // an agent participated in whenever it worked in any one of them —
+  // the cross-chat false-positive #366 self-described as "Option A".
   const participantRows = await db
     .select({
       chatId: chatMembership.chatId,
       agentId: chatMembership.agentId,
       displayName: agents.displayName,
       type: agents.type,
-      runtimeState: agentPresence.runtimeState,
+      sessionState: agentChatSessions.state,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .leftJoin(agentPresence, eq(agentPresence.agentId, chatMembership.agentId))
+    .leftJoin(
+      agentChatSessions,
+      and(eq(agentChatSessions.agentId, chatMembership.agentId), eq(agentChatSessions.chatId, chatMembership.chatId)),
+    )
     .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker")));
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
-  const workingByChat = new Map<string, string[]>();
+  const engagedByChat = new Map<string, string[]>();
   for (const p of participantRows) {
     const list = participantsByChat.get(p.chatId) ?? [];
     list.push({ agentId: p.agentId, displayName: p.displayName, type: p.type });
     participantsByChat.set(p.chatId, list);
-    if (p.runtimeState === "working") {
-      const working = workingByChat.get(p.chatId) ?? [];
-      working.push(p.agentId);
-      workingByChat.set(p.chatId, working);
+    if (p.sessionState === "active") {
+      const engaged = engagedByChat.get(p.chatId) ?? [];
+      engaged.push(p.agentId);
+      engagedByChat.set(p.chatId, engaged);
     }
   }
+
+  // Live activity — derived from each chat's latest `session_events` row.
+  // One query for the whole page using `SELECT DISTINCT ON (agent_id,
+  // chat_id) ... ORDER BY seq DESC`; the existing index
+  // `idx_session_events_chat_created (agent_id, chat_id, created_at DESC)`
+  // makes the per-pair seek efficient. Stale events (older than
+  // `LIVE_ACTIVITY_STALE_MS`) and turn-terminal kinds (`turn_end`,
+  // `error`) are filtered out at derivation time so the wire payload
+  // already represents "is currently working".
+  const liveActivityByChat = await deriveLiveActivity(db, chatIds);
 
   // First-message lookup for auto-title fallback. Mirrors
   // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
@@ -331,11 +354,99 @@ export async function listMeChats(
       unreadMentionCount: r.unread_mention_count,
       canReply: isSpeaker,
       engagementStatus: r.engagement_status,
-      workingAgentIds: workingByChat.get(r.chat_id) ?? [],
+      engagedAgentIds: engagedByChat.get(r.chat_id) ?? [],
+      liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
     };
   });
 
   return { rows, nextCursor };
+}
+
+// ---------------------------------------------------------------------------
+// Live activity derivation
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-chat live activity, derived from the most recent `session_events` row.
+ *
+ * Returns a chatId → LiveActivity map; chats with no activity (or where the
+ * latest event is terminal / stale) are absent from the map (caller treats
+ * absence as null).
+ */
+export async function deriveLiveActivity(db: Database, chatIds: string[]): Promise<Map<string, LiveActivity>> {
+  if (chatIds.length === 0) return new Map();
+
+  // `DISTINCT ON (agent_id, chat_id)` + `ORDER BY seq DESC` returns the
+  // latest event per (agent, chat) pair. Multiple agents could in theory
+  // produce events for the same chat (group chats); we surface whichever
+  // pair has the freshest event since the row only carries one indicator.
+  const rawRows = await db
+    .selectDistinctOn([sessionEvents.agentId, sessionEvents.chatId], {
+      agentId: sessionEvents.agentId,
+      chatId: sessionEvents.chatId,
+      kind: sessionEvents.kind,
+      payload: sessionEvents.payload,
+      createdAt: sessionEvents.createdAt,
+    })
+    .from(sessionEvents)
+    .where(inArray(sessionEvents.chatId, chatIds))
+    .orderBy(sessionEvents.agentId, sessionEvents.chatId, desc(sessionEvents.seq));
+  const rows = rawRows.map((r) => ({
+    agent_id: r.agentId,
+    chat_id: r.chatId,
+    kind: r.kind,
+    payload: r.payload,
+    created_at: r.createdAt,
+  }));
+
+  const now = Date.now();
+  const byChat = new Map<string, { activity: LiveActivity; createdAtMs: number }>();
+  for (const row of rows) {
+    const activity = toLiveActivity(row);
+    if (!activity) continue;
+    const createdAtMs = new Date(row.created_at).getTime();
+    if (now - createdAtMs > LIVE_ACTIVITY_STALE_MS) continue;
+    // Multiple agents may produce events for the same chat — keep the
+    // freshest one. DISTINCT ON already collapses per (agent, chat) pair;
+    // here we collapse across agents within the same chat.
+    const existing = byChat.get(row.chat_id);
+    if (!existing || createdAtMs > existing.createdAtMs) {
+      byChat.set(row.chat_id, { activity, createdAtMs });
+    }
+  }
+
+  const out = new Map<string, LiveActivity>();
+  for (const [chatId, { activity }] of byChat) out.set(chatId, activity);
+  return out;
+}
+
+/**
+ * Translate a `session_events` row into a `LiveActivity`, or null when the
+ * kind is terminal (`turn_end` / `error`) or unrecognised. Pure & exported
+ * for unit testing.
+ */
+export function toLiveActivity(row: {
+  agent_id: string;
+  chat_id: string;
+  kind: string;
+  payload: unknown;
+  created_at: Date | string;
+}): LiveActivity | null {
+  const startedAt = new Date(row.created_at).toISOString();
+  switch (row.kind) {
+    case "tool_call": {
+      const payload = (row.payload ?? {}) as Partial<ToolCallEventPayload>;
+      const label = typeof payload.name === "string" && payload.name.length > 0 ? payload.name : "Tool";
+      return { agentId: row.agent_id, kind: "tool_call", label, startedAt };
+    }
+    case "thinking":
+      return { agentId: row.agent_id, kind: "thinking", label: "Thinking", startedAt };
+    case "assistant_text":
+      return { agentId: row.agent_id, kind: "assistant_text", label: "Writing", startedAt };
+    default:
+      // turn_end / error / unknown → no live indicator
+      return null;
+  }
 }
 
 /**

@@ -81,6 +81,13 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
     broadcastOrgScoped({ type: "session:state", ...payload });
   });
 
+  notifier.onSessionEvent((payload) => {
+    // Frame intentionally minimal — admin WS consumers (web's
+    // `use-admin-ws.ts`) refetch `me/chats` rather than reconstructing the
+    // session_event locally, so we only carry the routing dimensions.
+    broadcastOrgScoped({ type: "session:event", ...payload });
+  });
+
   notifier.onChatMessage(({ chatId }) => {
     void dispatchChatMessage(chatId);
   });

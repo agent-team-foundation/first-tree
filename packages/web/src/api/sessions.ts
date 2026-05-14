@@ -5,6 +5,17 @@ export type SessionListItem = {
   agentId: string;
   chatId: string;
   state: string;
+  /**
+   * Agent-global `agent_presence.runtime_state` copied onto every session
+   * the agent owns. NOT per-session — every row for the same agent carries
+   * the same value. Kept for the roster / admin views that intentionally
+   * show the aggregate axis; do NOT use it as a per-session "is this chat
+   * working" signal — that is what `state` (lifecycle) and `liveActivity`
+   * on `MeChatRow` express.
+   *
+   * @deprecated for per-session UI — use `state` (lifecycle) or, on the
+   * chat-list, `MeChatRow.liveActivity` (live working signal).
+   */
   runtimeState: string | null;
   startedAt: string;
   lastActivityAt: string;

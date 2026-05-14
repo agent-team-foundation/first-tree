@@ -71,12 +71,20 @@ function broadcast(msg: WsMessage) {
     } else if (msg.type === "session:state") {
       latestQc.invalidateQueries({ queryKey: ["activity"] });
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
-      // `MeChatRow.workingAgentIds` is derived from `agent_presence.runtime_state`,
-      // which is mutated by the same `session:state` event upstream. Invalidate
-      // the conversation-list query so the working ring switches on / off in
-      // real time without waiting for the 15s `refetchInterval`. Throttled
-      // because the upstream frames can burst tool-call-fast — see the
-      // helper's banner comment.
+      // `MeChatRow.engagedAgentIds` is derived from
+      // `agent_chat_sessions(agent_id, chat_id).state === 'active'`, which
+      // is mutated by the same `session:state` event upstream. Invalidate
+      // the conversation-list query so the avatar engaged ring switches
+      // on / off in real time without waiting for the 15s `refetchInterval`.
+      // Throttled because the upstream frames can burst tool-call-fast.
+      invalidateMeChatsThrottled(latestQc);
+    } else if (msg.type === "session:event") {
+      // `MeChatRow.liveActivity` is derived from the most recent
+      // `session_events` row for each chat. The same wire frame produced
+      // by tool_call / thinking / assistant_text / turn_end fans out
+      // through this socket; invalidate the conversation-list so the
+      // WorkingChip in the time slot updates within the throttle window.
+      // Re-uses the same 500ms leading + trailing helper as `session:state`.
       invalidateMeChatsThrottled(latestQc);
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
