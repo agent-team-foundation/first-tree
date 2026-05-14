@@ -22,7 +22,7 @@ npm install -g @agent-team-foundation/first-tree-hub@latest
 顶栏 **Clients** → 点 **Generate Connect Command** → 复制命令到终端回车：
 
 ```bash
-first-tree-hub client connect https://first-tree.staging.unispark.dev --token <jwt>
+first-tree-hub connect <connect-token>
 ```
 
 几秒后 Clients 页出现你的电脑 —— **确认 status 是 `connected` 再进入下一步**，否则 agent 绑定不上。

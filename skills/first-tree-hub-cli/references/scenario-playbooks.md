@@ -23,7 +23,7 @@ gh auth status
 ### What to remember
 
 - First Tree Hub requires Node.js `>= 22.16`.
-- Do not jump to `server start`, `client start`, `client connect`, or `onboard` on a machine where installation state is unknown.
+- Do not jump to `server start`, `client start`, `connect <token>`, or `onboard` on a machine where installation state is unknown.
 - If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree-hub ...` so they do not have to fight PATH.
 
 ## 1. "Get First Tree Hub running locally"
@@ -60,14 +60,11 @@ Use this when the Hub is already up and the user wants this machine to run agent
 ### Flow
 
 ```bash
-# Interactive login (prompts for username/password):
-first-tree-hub client connect https://hub.example.com
-
-# Or with a one-time connect token from the web "Connect a machine" dialog:
-first-tree-hub client connect https://hub.example.com --token <connect-token>
+# Paste a connect token from the Hub web console's "Connect a machine" dialog:
+first-tree-hub connect <connect-token>
 
 # Skip the background service install (useful in containers):
-first-tree-hub client connect https://hub.example.com --no-service
+first-tree-hub connect <connect-token> --no-service
 ```
 
 After `connect` succeeds, the machine is signed in and (by default on macOS/Linux) running as a background service.
@@ -77,15 +74,16 @@ To verify:
 ```bash
 first-tree-hub client status          # local: configured agents
 first-tree-hub client doctor          # readiness checks (includes background-service state)
-first-tree-hub client hub-list        # server-side: this client appears in the Hub
+first-tree-hub client list            # server-side: this client appears in the Hub
 ```
 
 If something breaks, `client doctor` usually points at the culprit (no credentials, wrong server URL, WebSocket blocked, etc.).
 
 ### What to remember
 
-- `client connect` is the **only** supported way to sign in. There is no separate `login`, `token`, or manual credential setup.
+- `connect <token>` is the **only** supported way to sign in. There is no separate `login`, username/password, or manual credential setup.
 - It writes `~/.first-tree/hub/credentials.json` and a generated `client.id` in `client.yaml`.
+- The hub URL is derived from the token's `iss` claim, so the operator never types a URL.
 - Agents are not registered by this command. Admins pin agents to this machine's `client.id` from the Hub UI (or via `agent create --client-id ...`). A running client auto-picks them up.
 
 ## 3. "Keep this machine online across reboots"
@@ -94,15 +92,15 @@ Use this for a production desktop or a server that should run agents permanently
 
 ### Flow
 
-`client connect` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
+`connect <token>` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
 
 ```bash
-first-tree-hub client connect <server-url>     # auto-installs the service
+first-tree-hub connect <token>                 # auto-installs the service
 first-tree-hub client doctor                   # verify: shows running/inactive/not-installed
 tail -f ~/.first-tree/hub/logs/client.log      # tail logs (NDJSON)
 ```
 
-To repair a broken unit (binary moved, Node upgraded), re-run `client connect <url>` — it rewrites the unit file. Re-authentication is required.
+To repair a broken unit (binary moved, Node upgraded), re-run `connect <token>` — it rewrites the unit file. Re-authentication is required (paste a fresh connect token).
 
 To decommission a machine, remove the unit at the OS level and clear local state:
 
@@ -119,13 +117,13 @@ rm -f ~/.config/systemd/user/first-tree-hub-client.service
 rm -rf ~/.first-tree/hub
 ```
 
-To force-disconnect from the server side: `first-tree-hub client hub-disconnect <clientId>`.
+To force-disconnect from the server side: `first-tree-hub client disconnect <clientId>`.
 
 ### What to remember
 
-- Windows is unsupported. `client connect` falls back to inline mode there — tell the user to use `first-tree-hub client start` inside a user-managed supervisor.
-- The service runs `client start --no-interactive`, so the machine must already have valid `credentials.json` — `client connect` writes that for you in the same step.
-- Re-running `client connect` is safe and idempotent for the unit file, but always re-authenticates.
+- Windows is unsupported. `connect <token>` falls back to inline mode there — tell the user to use `first-tree-hub client start` inside a user-managed supervisor.
+- The service runs `client start --no-interactive`, so the machine must already have valid `credentials.json` — `connect <token>` writes that for you in the same step.
+- Re-running `connect <token>` is safe and idempotent for the unit file, but always re-authenticates.
 
 ## 4. "Onboard a new human member"
 
@@ -135,7 +133,7 @@ Add a real person to the team through the supported identity flow.
 
 ```bash
 # 0. Prereq on this machine: CLI installed, logged in.
-first-tree-hub client connect <server-url>             # if credentials.json does not exist
+first-tree-hub connect <token>                         # if credentials.json does not exist
 
 # 1. Dry-run to surface missing fields:
 first-tree-hub onboard --check \
@@ -154,7 +152,7 @@ If the machine should also run this human's personal assistant, run `client star
 ### What to remember
 
 - `onboard` creates the agent via Admin API and wires up the local alias + optional Feishu bot in one step.
-- It **does not** log you in. If `credentials.json` is missing, it exits with a pointer to `client connect`.
+- It **does not** log you in. If `credentials.json` is missing, it exits with a pointer to `connect <token>`.
 - Pass the server URL explicitly (`--server`) whenever the user / automation supplied one — do not silently fall back to defaults.
 - Humans with a Feishu bot configured still need to send `/bind <id>` in Feishu afterwards to attach the human user to the assistant.
 
@@ -187,7 +185,7 @@ Use this whenever the user wants the live agent to behave differently — *not* 
 ### Flow
 
 ```bash
-first-tree-hub agent config get alice                                      # read current config
+first-tree-hub agent config show alice                                     # read current config
 first-tree-hub agent config set-model alice claude-opus-4-7                # swap model
 cat ./house-prompt.md | first-tree-hub agent config append-prompt alice    # replace prompt append
 first-tree-hub agent config add-mcp alice --name gh --transport stdio --command gh --args mcp
@@ -199,29 +197,29 @@ first-tree-hub agent config dry-run alice -f ./patch.json                  # pre
 ### What to remember
 
 - This surface mutates server-side runtime config via `/api/v1/admin/agents/:id/config` and affects the running agent everywhere.
-- Requests carry an `expectedVersion` — concurrent edits get a conflict, not silent overwrite. On conflict, re-fetch with `agent config get` and retry.
+- Requests carry an `expectedVersion` — concurrent edits get a conflict, not silent overwrite. On conflict, re-fetch with `agent config show` and retry.
 - `--sensitive` env values are encrypted at rest and always masked in subsequent `get`/`list`.
 - `dry-run` is the safe way to preview a big patch before committing it.
-- Do not confuse this with `first-tree-hub config -a <name> set ...`, which edits the local `agent.yaml` (alias → UUID mapping), not server state.
+- Do not confuse this with the local `agent.yaml` (alias → UUID mapping at `~/.first-tree/hub/config/agents/<name>/agent.yaml`), which is local-only state and unrelated to server-side runtime config.
 
-## 7. "Why can't the client connect?" / "Why does startup fail?"
+## 7. "Why can't the client get online?" / "Why does startup fail?"
 
 Diagnose before editing code or YAML.
 
 ### Flow
 
 ```bash
-first-tree-hub status                 # overall state: server, db, client, agents
-first-tree-hub client doctor          # or `server doctor` for the server side (background-service state included)
-first-tree-hub config list -c         # effective client YAML
-first-tree-hub config list -s         # effective server YAML
+first-tree-hub client status          # local state: service, hub URL, agents
+first-tree-hub client doctor          # readiness checks (background-service state included)
+first-tree-hub client config show     # effective client YAML
+first-tree-hub server doctor          # readiness check on the server side
 first-tree-hub server status          # health-probe an already-running server
 ```
 
 ### What to remember
 
-- If `client doctor` flags "no credentials", the fix is `client connect`, not a YAML edit.
-- If `hub-list` shows the client but `client status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
+- If `client doctor` flags "no credentials", the fix is `first-tree-hub connect <token>`, not a YAML edit.
+- If `client list` shows the client but `client status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
 - Server and client issues look similar from a distance. Make the user goal explicit before debugging.
 
 ## 8. "Debug messaging between agents"
@@ -231,18 +229,18 @@ Verify delivery, inspect chats, send test messages manually.
 ### Flow
 
 ```bash
-# Prereq: this machine must have credentials.json (client connect).
+# Prereq: this machine must have credentials.json (connect <token>).
 
-first-tree-hub agent send <agentId> "hello"                    # send to an agent
-first-tree-hub agent send <chatId> "hello" --chat              # send to an existing chat
-echo "piped" | first-tree-hub agent send <agentId>             # stdin
-first-tree-hub agent send <agentId> "hi" --metadata '{"priority":"high"}'
-first-tree-hub agent send <agentId> "follow-up" --reply-to-inbox <inboxId> --reply-to-chat <chatId>
+first-tree-hub chat send <agentName> "hello"                   # send to an agent
+first-tree-hub chat send <chatId> "hello" --chat               # send to an existing chat
+echo "piped" | first-tree-hub chat send <agentName>            # stdin
+first-tree-hub chat send <agentName> "hi" -m '{"priority":"high"}'
+first-tree-hub chat send <agentName> "follow-up" --reply-to-inbox <inboxId> --reply-to-chat <chatId>
 
-first-tree-hub agent chats
-first-tree-hub agent history <chatId>
-first-tree-hub agent pull --ack                                # low-level inbox polling
-first-tree-hub agent chat <agent-name>                         # interactive REPL
+first-tree-hub chat list
+first-tree-hub chat history <chatId>
+first-tree-hub agent debug pull --ack                          # low-level inbox polling
+first-tree-hub chat open <agent-name>                          # interactive REPL
 ```
 
 ### What to remember
@@ -259,11 +257,10 @@ Use these when a user reports a stuck or misbehaving session.
 ```bash
 first-tree-hub agent status                     # fleet-wide snapshot (runtime states, session counts)
 first-tree-hub agent status <name>              # single-agent detail
-first-tree-hub agent sessions <name>            # list sessions for one agent
-first-tree-hub agent sessions <name> --state suspended
+first-tree-hub agent session list <name>            # list sessions for one agent
+first-tree-hub agent session list <name> --state suspended
 
 first-tree-hub agent session suspend <name> <chat-id>
-first-tree-hub agent session resume <name> <chat-id>
 first-tree-hub agent session terminate <name> <chat-id>
 
 first-tree-hub agent reset <name>               # move an error-state agent back to idle
@@ -284,7 +281,7 @@ Use this when the task goes beyond a local demo.
 1. Read `docs/deployment-guide.md` before proposing anything — it covers Docker, Railway, Render, Supabase, HTTPS, and multi-machine topology.
 2. Provision the backing Postgres externally and pass `--database-url` to `server start`; do not rely on the CLI's Docker-managed Postgres in production.
 3. Set secrets via env vars (`FIRST_TREE_HUB_JWT_SECRET`, `FIRST_TREE_HUB_ENCRYPTION_KEY`, `FIRST_TREE_HUB_GITHUB_TOKEN`, etc.) so they are not auto-generated on restart.
-4. On each client machine, run `client connect <server-url>` once — it signs the machine in and installs the background service in a single step so the runtime survives reboots.
+4. On each client machine, run `first-tree-hub connect <token>` once — it signs the machine in and installs the background service in a single step so the runtime survives reboots.
 
 ### What to remember
 

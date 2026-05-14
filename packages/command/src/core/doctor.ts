@@ -292,7 +292,7 @@ export function checkBackgroundService(): CheckResult {
   return {
     label: "Background service",
     ok: false,
-    detail: "not installed — re-run `first-tree-hub client connect <url>` to install",
+    detail: "not installed — re-run `first-tree-hub connect <token>` to install",
   };
 }
 

@@ -68,7 +68,7 @@ a CLI upgrade to silently rename people's prod service.
 ## When to use which knob
 
 - **`scripts/dev-cli.sh` with default home** — most testing, including
-  end-to-end `client connect` / `start` / `stop` / `restart` / `update`.
+  end-to-end `connect` / `client start` / `stop` / `restart` / `update`.
   Coexists with prod.
 - **Custom dev home via `FIRST_TREE_HUB_DEV_HOME=$HOME/.first-tree/hub-foo`**
   — when you want a second parallel dev install (e.g. one per branch).

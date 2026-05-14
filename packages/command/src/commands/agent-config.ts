@@ -99,8 +99,8 @@ export function registerAgentConfigCommands(parent: Command): void {
   const config = parent.command("config").description("Manage agent runtime configuration (Step 8)");
 
   config
-    .command("get <agent>")
-    .description("Print the current runtime config for an agent")
+    .command("show <agent>")
+    .description("Show the current runtime config for an agent")
     .action(async (agentName: string) => {
       const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();

@@ -11,7 +11,7 @@ describe("agent config CLI registration (Step 8)", () => {
     const configCmd = agent.commands.find((c) => c.name() === "config");
     expect(configCmd).toBeDefined();
     const subs = configCmd?.commands.map((c) => c.name()).sort();
-    expect(subs).toEqual(["add-mcp", "add-repo", "append-prompt", "dry-run", "get", "set-env", "set-model"]);
+    expect(subs).toEqual(["add-mcp", "add-repo", "append-prompt", "dry-run", "set-env", "set-model", "show"]);
   });
 
   it("set-env requires KEY=VALUE", () => {

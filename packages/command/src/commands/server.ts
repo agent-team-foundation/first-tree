@@ -96,7 +96,7 @@ export function registerServerCommands(program: Command): void {
   // ── Database management ─────────────────────────────────────────────
 
   server
-    .command("db:migrate")
+    .command("migrate")
     .description("Run database migrations")
     .action(async () => {
       try {
@@ -112,8 +112,10 @@ export function registerServerCommands(program: Command): void {
 
   // ── Admin management ────────────────────────────────────────────────
 
-  server
-    .command("admin:create")
+  const admin = server.command("admin").description("Admin user management");
+
+  admin
+    .command("create")
     .description("Create an admin user with organization")
     .option("-u, --username <name>", "Admin username", "admin")
     .option("-n, --name <name>", "Display name", "Admin")

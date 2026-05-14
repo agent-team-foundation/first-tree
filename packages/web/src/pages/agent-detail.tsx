@@ -1032,8 +1032,8 @@ function BindClientList({
         }}
       >
         No connected computers available. Run{" "}
-        <code className="mono text-label">first-tree-hub client connect &lt;url&gt;</code> on the computer that should
-        run this agent, then reopen this dialog.
+        <code className="mono text-label">first-tree-hub connect &lt;token&gt;</code> on the computer that should run
+        this agent, then reopen this dialog.
       </div>
     );
   }

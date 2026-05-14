@@ -45,7 +45,7 @@ The command package depends on server and client packages, but it is still an en
 
 ### Auth uses one credential, everywhere
 
-- Clients sign in once via `client connect`, which persists a member access JWT + refresh token in `~/.first-tree/hub/credentials.json`.
+- Clients sign in once via `first-tree-hub connect <token>`, which persists a member access JWT + refresh token in `~/.first-tree/hub/credentials.json`.
 - Every subsequent CLI call runs through `ensureFreshAccessToken()`, which auto-refreshes 30s before expiry via `/api/v1/auth/refresh`.
 - Admin actions, agent-owner actions, Feishu binding, `agent config` mutations, and SDK debug calls all use the same member JWT. Server enforcement is role-based.
 - There is no separate admin JWT or per-agent bearer token in the current model. The legacy `FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` env vars and `agent token bootstrap` command are gone.
@@ -84,7 +84,7 @@ The client runtime:
 - manages session state and isolated chat workspaces
 - optionally syncs a shared Context Tree clone for organizational context
 
-The **background service** is installed automatically by `client connect` (skip with `--no-service`). It runs `client start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. There is no `client service ...` CLI subcommand — `client doctor` shows current state, manual lifecycle ops go through `launchctl` / `systemctl` directly (see `docs/cli-reference.md`).
+The **background service** is installed automatically by `first-tree-hub connect <token>` (skip with `--no-service`). It runs `client start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. There is no `client service ...` CLI subcommand — `client doctor` shows current state, manual lifecycle ops go through `launchctl` / `systemctl` directly (see `docs/cli-reference.md`).
 
 ### Workspace bootstrap
 
@@ -100,7 +100,7 @@ When a handler starts, the client runtime bootstraps a per-chat workspace and wr
 `onboard` is intentionally higher-level than the rest of the CLI.
 
 - It creates the agent via Admin API, optionally creates a personal assistant, optionally binds a Feishu bot, and saves the local alias — all in one step.
-- It uses the signed-in member's JWT (from `credentials.json`). If no credentials exist, it exits with a clear pointer to `client connect`.
+- It uses the signed-in member's JWT (from `credentials.json`). If no credentials exist, it exits with a clear pointer to `connect <token>`.
 - `--check` performs a dry-run that surfaces exactly which fields are missing, using the same check logic as the real path.
 
 Do not replace `onboard` with ad hoc Admin API calls unless the user explicitly wants to bypass the supported flow for development or debugging.
