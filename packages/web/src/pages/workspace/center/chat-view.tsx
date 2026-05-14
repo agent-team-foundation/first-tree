@@ -22,7 +22,7 @@ import {
 import { getImage, putImage } from "../../../api/image-store.js";
 import { addMeChatParticipants } from "../../../api/me-chats.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
-import { getReadState, type ReadState } from "../../../api/read-state-store.js";
+import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -752,11 +752,33 @@ export function ChatView({
       // wait up to 10s for the polling refetch. See M plan Step 3 in
       // docs/session-creation-on-first-message.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
-      // Pre-advance the high water to the new message id BEFORE
-      // initiating the smooth scroll. By the time the new message
-      // commits to `mergedMessages`, `sessionHighestIdx` already
-      // resolves to the new last index → `pillCount = 0` → pill
-      // never flashes for the user's own send.
+      // Persist the own-send advance to chat-A's read-state row
+      // BOTH in the React Query cache and in IndexedDB, keyed by
+      // the `chatId` captured in this closure at send time.
+      //
+      // Why directly (rather than relying on the tracker's
+      // debounced/flush-on-unmount writes): if the user switches to
+      // a different chat within the first ~600ms of pressing Enter,
+      // the tracker hasn't debounced-written yet and its flush on
+      // chatId change reads `highWatermarkMessageIdRef`, which may
+      // still be at the pre-send baseline because
+      // `sessionHighestId` hasn't been advanced yet either (the
+      // drain effect runs after paint). Writing here makes the
+      // own-send advance durable independent of timing. Per PR 286
+      // manual sign-off rev 11 (chat-switch-mid-send fix).
+      const ownSendReadState: ReadState = {
+        chatId,
+        bottomVisibleMessageId: sentMessage.id,
+        latestKnownMessageId: sentMessage.id,
+        updatedAt: Date.now(),
+      };
+      queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
+      void setReadState(chatId, sentMessage.id, sentMessage.id);
+      // Pre-advance the in-memory high water to the new message id
+      // BEFORE initiating the smooth scroll. By the time the new
+      // message commits to `mergedMessages`, `sessionHighestIdx`
+      // already resolves to the new last index → `pillCount = 0` →
+      // pill never flashes for the user's own send.
       setPendingHighWaterAdvance({ chatId, messageId: sentMessage.id });
       // When the user sends a message, scroll all the way to the
       // bottom so they see their own send. ResizeObserver-debounced
@@ -863,8 +885,18 @@ export function ChatView({
         queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
         // Pre-advance the high water before the smooth scroll for
         // the same reason as in sendMut.onSuccess — pill never
-        // flashes for the user's own send.
+        // flashes for the user's own send. Also persist directly to
+        // queryClient cache + IDB so the chat-switch-mid-send case
+        // is durable (see sendMut.onSuccess for rationale).
         if (lastSentMessageId) {
+          const ownSendReadState: ReadState = {
+            chatId,
+            bottomVisibleMessageId: lastSentMessageId,
+            latestKnownMessageId: lastSentMessageId,
+            updatedAt: Date.now(),
+          };
+          queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
+          void setReadState(chatId, lastSentMessageId, lastSentMessageId);
           setPendingHighWaterAdvance({ chatId, messageId: lastSentMessageId });
         }
         // Same scroll-on-send as sendMut.onSuccess — the file-send
@@ -1157,20 +1189,35 @@ export function ChatView({
     return Math.max(0, mergedMessages.length - 1 - sessionHighestIdx);
   }, [mergedMessages, sessionHighestIdx]);
 
-  // Ref to the message id at `sessionHighestIdx`. Read by
-  // useReadTracker at IDB-write time so the persisted
-  // `latestKnownMessageId` reflects the user's high watermark
-  // rather than "the latest message in the DOM" (the previous
-  // default, which over-counted unread messages for users who
-  // never scrolled to the bottom).
+  // Ref to the high water message id. Read by useReadTracker at
+  // IDB-write time so the persisted `latestKnownMessageId` reflects
+  // the user's high watermark rather than "the latest message in
+  // the DOM" (the previous default, which over-counted unread
+  // messages for users who never scrolled to the bottom).
+  //
+  // Prefers the explicit `sessionHighestId` over the
+  // `mergedMessages[sessionHighestIdx]` lookup when both are
+  // available. Rationale: `sessionHighestId` may be pre-advanced
+  // (own send) to an id that has not yet appeared in
+  // `mergedMessages` while the chat-messages refetch is in flight.
+  // Without this preference, the ref would resolve to
+  // `mergedMessages[baselineIdx].id` (the pre-send last message)
+  // during that window — and a tracker flush on chat-switch
+  // cleanup would then write the stale baseline to IDB, undoing
+  // the pre-advance. That is exactly the chat-switch-mid-send
+  // regression caught in PR 286 manual sign-off rev 10.
   const highWatermarkMessageIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (sessionHighestId !== null) {
+      highWatermarkMessageIdRef.current = sessionHighestId;
+      return;
+    }
     if (sessionHighestIdx >= 0 && sessionHighestIdx < mergedMessages.length) {
       highWatermarkMessageIdRef.current = mergedMessages[sessionHighestIdx]?.id ?? null;
     } else {
       highWatermarkMessageIdRef.current = null;
     }
-  }, [sessionHighestIdx, mergedMessages]);
+  }, [sessionHighestId, sessionHighestIdx, mergedMessages]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
