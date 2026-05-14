@@ -1258,10 +1258,24 @@ export function ChatView({
     }
     if (sessionHighestIdx >= 0 && sessionHighestIdx < mergedMessages.length) {
       highWatermarkMessageIdRef.current = mergedMessages[sessionHighestIdx]?.id ?? null;
-    } else {
-      highWatermarkMessageIdRef.current = null;
+      return;
     }
-  }, [pendingHighWaterAdvance, chatId, sessionHighestId, sessionHighestIdx, mergedMessages]);
+    // Fallback: when IDB has a `latestKnownMessageId` but it can't
+    // yet be resolved to an index in `mergedMessages` (chat re-open
+    // while chat-messages refetch is in flight, common for the
+    // B → A return after an own-send), keep the ref pinned to the
+    // IDB value rather than dropping to null. Without this, the
+    // tracker's first debounced write after re-mount would call
+    // `findLatestMessageId(container)` and persist the pre-send
+    // baseline back into IDB — clobbering the own-send advance we
+    // wrote in `onSuccess` two visits ago. Caught in PR 286 manual
+    // sign-off rev 12 T5 fail report.
+    if (storedLatestKnownId !== null) {
+      highWatermarkMessageIdRef.current = storedLatestKnownId;
+      return;
+    }
+    highWatermarkMessageIdRef.current = null;
+  }, [pendingHighWaterAdvance, chatId, sessionHighestId, sessionHighestIdx, mergedMessages, storedLatestKnownId]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
