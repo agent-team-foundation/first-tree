@@ -710,6 +710,11 @@
   font-weight: 700;
 }
 
+.context-live-status-detail {
+  max-width: 560px;
+  color: var(--fg-3);
+}
+
 .context-map-section {
   width: min(100%, 1120px);
   display: flex;

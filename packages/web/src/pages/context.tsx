@@ -78,6 +78,8 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
 function LiveContextHero({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const lastUpdated = exactTimeLabel(snapshot.syncedAt) ?? "sync time unknown";
   const statusTone = severityColor(snapshot.contextStatus.severity);
+  const statusDetail =
+    snapshot.contextStatus.severity === "ok" ? null : (snapshot.contextStatus.detail ?? snapshot.contextStatus.label);
 
   return (
     <section className="context-live-hero" aria-label={snapshot.contextStatus.label}>
@@ -95,6 +97,7 @@ function LiveContextHero({ snapshot }: { snapshot: ContextTreeSnapshot }) {
       <div className="text-lead context-live-subtitle">
         Last updated at <strong>{lastUpdated}</strong>
       </div>
+      {statusDetail ? <div className="text-body context-live-status-detail">{statusDetail}</div> : null}
     </section>
   );
 }
@@ -193,13 +196,14 @@ function ChangeMap({
 }
 
 function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const windowText = snapshot.usage.windowDays === 1 ? "1 day" : `${snapshot.usage.windowDays} days`;
   const agentText = snapshot.usage.agentCount === 1 ? "1 agent" : `${snapshot.usage.agentCount} agents`;
   const usageText = snapshot.usage.usageCount === 1 ? "1 time" : `${snapshot.usage.usageCount} times`;
 
   return (
     <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
       <span>
-        In the last {snapshot.usage.windowDays} days, <mark>{agentText}</mark>
+        In the last {windowText}, <mark>{agentText}</mark>
       </span>
       <span>
         used the tree <mark>{usageText}</mark> to make design decisions.
@@ -522,8 +526,7 @@ function changeBreakdownParts(
   if (counts.added > 0) parts.push({ type: "added", label: "added", count: counts.added });
   if (counts.edited > 0) parts.push({ type: "edited", label: "edited", count: counts.edited });
   if (counts.removed > 0) parts.push({ type: "removed", label: "removed", count: counts.removed });
-
-  return parts.length > 0 ? parts : [{ type: "edited", label: "edited", count: 0 }];
+  return parts;
 }
 
 function selectedChangeGroupId(nodes: ContextTreeNode[], selectedNodeId: string | null): string | null {

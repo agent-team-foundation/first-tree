@@ -34,7 +34,6 @@ const REMOTE_SYNC_TTL_MS = 60_000;
 const REMOTE_FAILURE_TTL_MS = 30_000;
 const CONTEXT_TREE_SNAPSHOT_WINDOWS = {
   ONE_DAY: "1d",
-  THREE_DAYS: "3d",
   SEVEN_DAYS: "7d",
   THIRTY_DAYS: "30d",
 } as const;
@@ -44,7 +43,6 @@ export type ContextTreeSnapshotWindow =
 
 const WINDOW_DAYS: Record<ContextTreeSnapshotWindow, number> = {
   "1d": 1,
-  "3d": 3,
   "7d": 7,
   "30d": 30,
 };

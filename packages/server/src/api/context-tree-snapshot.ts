@@ -13,7 +13,7 @@ import { summarizeContextTreeUsage } from "../services/session-event.js";
 
 const querySchema = z
   .object({
-    window: z.enum(["1d", "3d", "7d", "30d"]).optional(),
+    window: z.enum(["1d", "7d", "30d"]).optional(),
   })
   .strict();
 
