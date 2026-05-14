@@ -859,11 +859,14 @@ async function resolveOnboardingAgent(): Promise<ManagedAgent> {
 }
 
 function buildSetupHiddenToast(navigate: ReturnType<typeof useNavigate>): ToastInput {
+  // Description must match the action label: previously pointed at a
+  // non-existent "Agent settings" tab, which was a dead end. The Settings
+  // surface that actually resumes Step 3 is Settings → Onboarding, so the
+  // action takes the user there and the copy says so.
   return {
     title: "Setup hidden",
-    description:
-      "Resume any time in Settings → Onboarding. Your agent isn't bound to a source repo yet — add one in Agent settings when ready.",
-    action: { label: "Open settings", onClick: () => navigate("/settings/onboarding") },
+    description: "Your agent isn't bound to a source repo yet. Resume from Settings → Onboarding any time to finish.",
+    action: { label: "Resume setup", onClick: () => navigate("/settings/onboarding") },
   };
 }
 
