@@ -44,7 +44,7 @@ import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
 import { SectionDivider, SectionShell } from "./agent-detail/section-shell.js";
 import { SetupSection } from "./agent-detail/setup-section.js";
 import { deriveSaveHint } from "./agent-detail/status-bar.js";
-import { useConfigDraft } from "./agent-detail/use-config-draft.js";
+import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config-draft.js";
 
 type SidebarItem = {
   key: string;
@@ -66,6 +66,13 @@ const SECTION_ANCHORS = {
   advanced: "ad-advanced",
   danger: "ad-danger",
 } as const;
+
+function sectionToAnchor(section: DraftSectionName): string {
+  if (section === "model") return SECTION_ANCHORS.setup;
+  if (section === "mcp") return SECTION_ANCHORS.tools;
+  if (section === "env" || section === "git") return SECTION_ANCHORS.advanced;
+  return SECTION_ANCHORS.prompt;
+}
 
 /**
  * Flat sidebar with a divider before Danger zone. Autonomous agents get the
@@ -143,6 +150,7 @@ export function AgentDetailPage() {
     },
     onSuccess: (next) => {
       queryClient.setQueryData(["agent-config", uuid], next);
+      draft.resetToConfig(next);
       setSaveError(null);
       setConflictMsg(null);
       setJustSaved(true);
@@ -169,12 +177,21 @@ export function AgentDetailPage() {
     if (draft.summary.anyDirty) setJustSaved(false);
   }, [draft.summary.anyDirty]);
 
-  const reloadRemote = useCallback(() => {
+  const resetDraftToConfig = draft.resetToConfig;
+  const reloadRemote = useCallback(async () => {
     setConflictMsg(null);
     setSaveError(null);
-    queryClient.invalidateQueries({ queryKey: ["agent-config", uuid] });
-    draft.resetAll();
-  }, [queryClient, uuid, draft]);
+    try {
+      const latest = await queryClient.fetchQuery({
+        queryKey: ["agent-config", uuid],
+        queryFn: () => getAgentConfig(uuid),
+        staleTime: 0,
+      });
+      resetDraftToConfig(latest);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    }
+  }, [queryClient, uuid, resetDraftToConfig]);
 
   const jumpTo = useCallback((anchor: string) => {
     const el = document.getElementById(anchor);
@@ -316,10 +333,7 @@ export function AgentDetailPage() {
   const dirtyAnchors = useMemo(() => {
     const set = new Set<string>();
     for (const s of draft.summary.dirtySections) {
-      if (s === "prompt") set.add(SECTION_ANCHORS.prompt);
-      if (s === "model") set.add(SECTION_ANCHORS.setup);
-      if (s === "mcp") set.add(SECTION_ANCHORS.tools);
-      if (s === "env" || s === "git") set.add(SECTION_ANCHORS.advanced);
+      set.add(sectionToAnchor(s));
     }
     return set;
   }, [draft.summary.dirtySections]);
@@ -746,8 +760,10 @@ export function AgentDetailPage() {
               if (!draft.summary.anyDirty) return;
               setDiscardDialogOpen(true);
             }}
-            onReloadRemote={reloadRemote}
-            onJumpTo={(section) => jumpTo(sectionAnchorId(section))}
+            onReloadRemote={() => {
+              void reloadRemote();
+            }}
+            onJumpTo={(section) => jumpTo(sectionToAnchor(section))}
           />
         )}
       </div>
