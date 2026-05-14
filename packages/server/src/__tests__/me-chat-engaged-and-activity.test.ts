@@ -169,6 +169,22 @@ describe("listMeChats: engagedAgentIds derivation from agent_chat_sessions", () 
 describe("listMeChats: liveActivity derivation from session_events", () => {
   const getApp = useTestApp();
 
+  /**
+   * Real client always emits `session:state=active` (which writes the
+   * `agent_chat_sessions` row) before emitting any `session:event`. The
+   * LATERAL-join derivation reflects that contract — it walks the
+   * `(agent_id, chat_id)` directory and looks up each pair's latest
+   * event. Tests mirror the wire order: ensureSession then appendEvent.
+   */
+  async function ensureSession(agentId: string, chatId: string, state = "active"): Promise<void> {
+    const app = getApp();
+    await app.db.execute(sql`
+      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, updated_at)
+      VALUES (${agentId}, ${chatId}, ${state}, NOW())
+      ON CONFLICT (agent_id, chat_id) DO UPDATE SET state = EXCLUDED.state
+    `);
+  }
+
   async function appendEvent(
     agentId: string,
     chatId: string,
@@ -177,6 +193,7 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
     createdAt?: Date,
   ): Promise<void> {
     const app = getApp();
+    await ensureSession(agentId, chatId);
     const id = crypto.randomUUID();
     const ts = createdAt ?? new Date();
     await app.db.execute(sql`

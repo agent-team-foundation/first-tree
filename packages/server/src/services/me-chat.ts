@@ -32,7 +32,7 @@ import {
   type MeChatRow,
   type ToolCallEventPayload,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
@@ -40,7 +40,6 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
-import { sessionEvents } from "../db/schema/session-events.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { addChatParticipants, changeChatType } from "./participant-mode.js";
@@ -308,14 +307,13 @@ export async function listMeChats(
   }
 
   // Live activity — derived from each chat's latest `session_events` row.
-  // One query for the whole page using `SELECT DISTINCT ON (agent_id,
-  // chat_id) ... ORDER BY seq DESC`. The existing unique index
-  // `uq_session_events_chat_seq (agent_id, chat_id, seq)` covers the
-  // sort key exactly — PG can backward-scan it once the table grows
-  // past the seq-scan threshold. Stale events (older than
-  // `LIVE_ACTIVITY_STALE_MS`) and turn-terminal kinds (`turn_end`,
-  // `error`) are filtered out at derivation time so the wire payload
-  // already represents "is currently working".
+  // One LATERAL JOIN seeks the latest event per (agent, chat) pair via
+  // the unique index `uq_session_events_chat_seq (agent_id, chat_id,
+  // seq)`. See `deriveLiveActivity` for the query shape and the index
+  // notes. Stale events (older than `LIVE_ACTIVITY_STALE_MS`) and
+  // turn-terminal kinds (`turn_end`, `error`) are filtered out at
+  // derivation time so the wire payload already represents "is
+  // currently working".
   const liveActivityByChat = await deriveLiveActivity(db, chatIds);
 
   // First-message lookup for auto-title fallback. Mirrors
@@ -377,29 +375,61 @@ export async function listMeChats(
 export async function deriveLiveActivity(db: Database, chatIds: string[]): Promise<Map<string, LiveActivity>> {
   if (chatIds.length === 0) return new Map();
 
-  // `DISTINCT ON (agent_id, chat_id)` + `ORDER BY seq DESC` returns the
-  // latest event per (agent, chat) pair (`seq` is strictly monotonic per
-  // pair, so seq-max == newest event). Multiple agents could in theory
-  // produce events for the same chat (group chats); the post-query
-  // reduction below collapses across agents and keeps the freshest one
-  // since `liveActivity` carries a single agent indicator.
-  const rawRows = await db
-    .selectDistinctOn([sessionEvents.agentId, sessionEvents.chatId], {
-      agentId: sessionEvents.agentId,
-      chatId: sessionEvents.chatId,
-      kind: sessionEvents.kind,
-      payload: sessionEvents.payload,
-      createdAt: sessionEvents.createdAt,
-    })
-    .from(sessionEvents)
-    .where(inArray(sessionEvents.chatId, chatIds))
-    .orderBy(sessionEvents.agentId, sessionEvents.chatId, desc(sessionEvents.seq));
+  // Per-pair seek via LATERAL: `agent_chat_sessions` is the (agent_id,
+  // chat_id) directory (PK = the same pair). For each pair we look up
+  // *the* newest event via the unique index `uq_session_events_chat_seq
+  // (agent_id, chat_id, seq)` — a backward index scan with `LIMIT 1`
+  // costs one B-tree descent per pair, independent of how many events
+  // the pair has accumulated.
+  //
+  // The naive shape `SELECT DISTINCT ON ... FROM session_events WHERE
+  // chat_id = ANY(?)` (see PR #378 review thread) cannot use either
+  // index as a seek because both lead with `agent_id`; it degrades to a
+  // full scan + sort. The LATERAL form is independent of session_events
+  // table size and stays cheap as the table grows.
+  //
+  // `state <> 'evicted'` is defensive — evicted sessions trigger
+  // `clearEvents` so they shouldn't have rows, but a half-completed
+  // eviction would otherwise surface stale chips here.
+  // `IN (${sql.join(...)})` rather than `= ANY($1::text[])` because
+  // postgres-js binds `string[]` as a flat string when the driver-level
+  // type hint resolves to `text[]`, which PG rejects (`malformed array
+  // literal`). Inlining each value as its own placeholder is equivalent
+  // shape-wise and sidesteps the binding mismatch.
+  const chatIdInClause = sql.join(
+    chatIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const rawRows = (await db.execute(sql`
+    SELECT acs.agent_id        AS agent_id,
+           acs.chat_id         AS chat_id,
+           e.kind              AS kind,
+           e.payload           AS payload,
+           e.created_at        AS created_at
+      FROM agent_chat_sessions acs
+      CROSS JOIN LATERAL (
+        SELECT kind, payload, created_at, seq
+          FROM session_events se
+         WHERE se.agent_id = acs.agent_id
+           AND se.chat_id  = acs.chat_id
+         ORDER BY se.seq DESC
+         LIMIT 1
+      ) e
+     WHERE acs.chat_id IN (${chatIdInClause})
+       AND acs.state <> 'evicted'
+  `)) as unknown as Array<{
+    agent_id: string;
+    chat_id: string;
+    kind: string;
+    payload: unknown;
+    created_at: Date | string;
+  }>;
   const rows = rawRows.map((r) => ({
-    agent_id: r.agentId,
-    chat_id: r.chatId,
+    agent_id: r.agent_id,
+    chat_id: r.chat_id,
     kind: r.kind,
     payload: r.payload,
-    created_at: r.createdAt,
+    created_at: r.created_at,
   }));
 
   const now = Date.now();

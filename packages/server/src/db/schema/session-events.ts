@@ -2,8 +2,9 @@ import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "dr
 
 /**
  * Session events — structured event stream per (agent, chat) session.
- * `kind` is 'tool_call' | 'error'; the payload shape is enforced by the
- * service layer via Zod (no FK / CHECK on this table per project rule).
+ * `kind` is one of `'tool_call' | 'error' | 'assistant_text' | 'thinking'
+ * | 'turn_end'`; payload shape per kind is enforced by the service layer
+ * via Zod (no FK / CHECK on this table per project rule).
  *
  * `seq` is monotonic per (agent_id, chat_id). The single-writer invariant
  * in the client-side session-manager guarantees ordering; the service wraps
