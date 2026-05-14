@@ -166,7 +166,7 @@ async function sendMessageInner(
       if (recipientMentions.length === 0) {
         throw new BadRequestError(
           "Sending to a group chat requires an explicit @mention. " +
-            "Use `agent send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
+            "Use `first-tree-hub chat send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
         );
       }
     }
@@ -209,7 +209,7 @@ async function sendMessageInner(
     // 2e. L4 silent-send form guard — mirror of the client-side result-sink
     //     silent-turn (runtime/result-sink.ts). Covers any path that reaches
     //     sendMessage without going through result-sink: the agent CLI
-    //     `agent send`, AskUserQuestion, external IM adapters, admin/web
+    //     `chat send`, AskUserQuestion, external IM adapters, admin/web
     //     posts. Form-only check on the FINAL outbound text (after
     //     normalizeMentionsInContent has had its turn): if everything that
     //     remains after stripping leading `@<name>` tokens is empty, the
@@ -554,12 +554,12 @@ export async function sendToAgent(
     .limit(1);
 
   if (!target) {
-    // Agents routinely pick up uuids from `agent chats` / chat participant
+    // Agents routinely pick up uuids from `chat list` / chat participant
     // lists and mistakenly paste them as the send target. Give the hint in
     // the error so the next LLM attempt self-corrects.
     const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetName);
     const hint = looksLikeUuid
-      ? " — `agent send` expects an agent NAME, not a uuid. Run `first-tree-hub agent list` to see available names."
+      ? " — `first-tree-hub chat send` expects an agent NAME, not a uuid. Run `first-tree-hub agent list` to see available names."
       : "";
     throw new NotFoundError(`Agent "${targetName}" not found${hint}`);
   }
@@ -580,7 +580,7 @@ export async function sendToAgent(
   // BOTH the sender and target are participants of that chat, deliver the
   // message there instead of opening a parallel direct chat. This is what
   // every observed group-chat flow wants: "agent A in group G calls
-  // `agent send B`" should land in G when B is a member.
+  // `chat send B`" should land in G when B is a member.
   //
   // BOTH ends are checked because replyToChat is caller-supplied (env or
   // explicit flag) and otherwise unconstrained. The /agent/chats/:id/messages

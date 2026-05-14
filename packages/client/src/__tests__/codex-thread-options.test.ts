@@ -58,4 +58,15 @@ describe("buildCodexThreadOptions", () => {
     );
     expect(opts.additionalDirectories).toEqual(["/tmp/wsk/bar", "/tmp/wsk/custom-path"]);
   });
+
+  it("rejects unsafe git repo localPath before adding additionalDirectories", () => {
+    expect(() =>
+      buildCodexThreadOptions(
+        basePayload({
+          gitRepos: [{ url: "https://github.com/foo/bar.git", localPath: "../outside" }],
+        }),
+        "/tmp/wsk",
+      ),
+    ).toThrow(/Unsafe git repo localPath/);
+  });
 });

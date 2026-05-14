@@ -1,5 +1,6 @@
 import {
   createMeChatSchema,
+  listMeChatSourceCountsQuerySchema,
   listMeChatsQuerySchema,
   paginationQuerySchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
@@ -10,7 +11,7 @@ import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { assertAllAgentsVisibleInOrg } from "../../scope/require-resource.js";
 import { listChatsForMember } from "../../services/chat.js";
-import { createMeChat, listMeChats } from "../../services/me-chat.js";
+import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
 
 /**
  * Class B — org-scoped chat collection routes. Mounted at
@@ -91,6 +92,18 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
     // Default: workspace conversation list for the caller's HUMAN agent.
     const query = listMeChatsQuerySchema.parse(request.query);
     return listMeChats(app.db, scope.humanAgentId, scope.organizationId, query);
+  });
+
+  /**
+   * GET /orgs/:orgId/chats/source-counts — per-source aggregate powering the
+   * conversation-list tag bar (Manual / GitHub PR / GitHub Issue / Feishu).
+   * Returns counts only for sources the caller has chats in, plus an
+   * always-present `manual` entry. Same engagement view filter as the list.
+   */
+  app.get<{ Params: { orgId: string } }>("/source-counts", async (request) => {
+    const scope = await requireOrgMembership(request, app.db);
+    const query = listMeChatSourceCountsQuerySchema.parse(request.query);
+    return listMeChatSourceCounts(app.db, scope.humanAgentId, scope.organizationId, query);
   });
 
   /**

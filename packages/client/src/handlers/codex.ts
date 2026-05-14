@@ -8,6 +8,7 @@ import {
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER, installFirstTreeIntegration } from "../runtime/bootstrap.js";
+import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { acquireWorkspace, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
@@ -35,7 +36,7 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   for (const repo of payload.gitRepos) {
     const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
     if (!localPath) continue;
-    additionalDirectories.push(join(workspaceCwd, localPath));
+    additionalDirectories.push(resolveGitRepoTargetPath(workspaceCwd, localPath));
   }
   // Only pin a model when the operator explicitly set one in the agent
   // config — leaving it unset lets the Codex CLI choose a default that
@@ -176,7 +177,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     for (const repo of payload.gitRepos) {
       const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
       if (!localPath) continue;
-      const targetPath = join(workspaceCwd, localPath);
+      const targetPath = resolveGitRepoTargetPath(workspaceCwd, localPath);
       if (existsSync(targetPath)) continue;
       try {
         await gitMirrorManager.ensureMirror(repo.url);

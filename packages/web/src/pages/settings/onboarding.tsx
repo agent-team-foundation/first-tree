@@ -1,4 +1,5 @@
 import { Check } from "lucide-react";
+import { Navigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { PageHeader } from "../../components/ui/page-header.js";
@@ -15,7 +16,15 @@ import { SettingsSection } from "../../components/ui/settings-section.js";
  * one-way action. This page is the recovery path.
  */
 export function SettingsOnboardingPage() {
-  const { onboardingStep, onboardingDismissedAt, dismissOnboarding, restoreOnboarding } = useAuth();
+  const { onboardingStep, onboardingDismissedAt, onboardingCompletedAt, dismissOnboarding, restoreOnboarding } =
+    useAuth();
+  // Terminal state — Step 3 was completed. The wizard is one-shot;
+  // subsequent config edits go through Settings → Team and /agents/:uuid.
+  // Sidebar entry is also hidden, but a direct URL would still reach this
+  // page without the guard.
+  if (onboardingCompletedAt) {
+    return <Navigate to="/settings/team" replace />;
+  }
   const isDismissed = !!onboardingDismissedAt;
 
   // Mirror the stepper `✕` gate exactly — only `completed` (i.e. has at

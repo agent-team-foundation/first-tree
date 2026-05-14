@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { MessageFormat } from "@agent-team-foundation/first-tree-hub-shared";
 import {
   agentConfigSchema,
   clientConfigSchema,
@@ -14,7 +13,7 @@ import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@fi
 import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
-import { resolveReplyToFromEnv, resolveSenderName } from "../core/agent-messaging.js";
+import { resolveSenderName } from "../core/agent-messaging.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../core/bootstrap.js";
 import { cliFetch } from "../core/cli-fetch.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
@@ -59,7 +58,7 @@ function resolveLocalAgent(agentName?: string): ResolvedAgentConfig {
       "ENV_AGENT_NOT_LOCAL",
       `FIRST_TREE_HUB_AGENT_ID="${resolution.envAgentId}" is not configured on this machine. ` +
         `Available local agents: ${resolution.available.join(", ")}. ` +
-        `Pick one explicitly: \`first-tree-hub agent send --agent <senderName> <recipientName> "..."\`.`,
+        `Pick one explicitly with \`--agent <senderName>\`.`,
       2,
     );
   } else {
@@ -67,8 +66,7 @@ function resolveLocalAgent(agentName?: string): ResolvedAgentConfig {
       "AMBIGUOUS_AGENT",
       `Multiple agents are configured on this machine (${resolution.available.join(", ")}) and ` +
         `FIRST_TREE_HUB_AGENT_ID is not set, so the CLI can't tell which one is the sender. ` +
-        `Specify it explicitly: \`first-tree-hub agent send --agent <senderName> <recipientName> "..."\` ` +
-        `(--agent picks the SENDER; the recipient is the next positional argument).`,
+        `Specify it explicitly with \`--agent <senderName>\`.`,
       2,
     );
   }
@@ -118,28 +116,6 @@ function parseLimit(value: string, max: number): number {
   return limit;
 }
 
-const MAX_STDIN_BYTES = 10 * 1024 * 1024;
-
-function readStdin(): Promise<string | null> {
-  if (process.stdin.isTTY) return Promise.resolve(null);
-
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let totalSize = 0;
-    process.stdin.on("data", (chunk: Buffer) => {
-      totalSize += chunk.length;
-      if (totalSize > MAX_STDIN_BYTES) {
-        process.stdin.destroy();
-        reject(new Error(`stdin exceeds ${MAX_STDIN_BYTES} bytes`));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    process.stdin.on("error", reject);
-  });
-}
-
 type ResolvedAgent = { uuid: string; name: string | null; displayName: string | null };
 
 async function resolveAgent(serverUrl: string, adminToken: string, agentName: string): Promise<ResolvedAgent> {
@@ -165,7 +141,7 @@ async function resolveAgent(serverUrl: string, adminToken: string, agentName: st
  * Read the persisted `client.id` from `client.yaml`. Required by `agent
  * prune` to filter the user-scoped `listMyAgents` response down to "what
  * actually binds on THIS machine". `fail()` instead of throwing so the
- * "no client.yaml — run client connect first" path renders as a clean
+ * "no client.yaml — run connect <token> first" path renders as a clean
  * CLI error rather than a stack trace.
  */
 function readClientId(): string {
@@ -336,7 +312,7 @@ export function registerAgentCommands(program: Command): void {
           }
           for (const [name, config] of agents) {
             // Label the UUID column as `uuid` — NOT `agentId` — to discourage
-            // agents from copy-pasting the uuid into `agent send <target>`,
+            // agents from copy-pasting the uuid into `chat send <target>`,
             // which expects the agent name. See the Agent Hub SDK section of
             // the bootstrap-generated CLAUDE.md.
             print.line(`  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} uuid: ${config.agentId}\n`);
@@ -393,7 +369,7 @@ export function registerAgentCommands(program: Command): void {
     .requiredOption("--type <type>", "Agent type (human, personal_assistant, autonomous_agent)")
     .requiredOption(
       "--client-id <id>",
-      "Client (machine) that will run this agent — must be owned by you. Run `first-tree-hub client connect` on that machine first.",
+      "Client (machine) that will run this agent — must be owned by you. Run `first-tree-hub connect <token>` on that machine first.",
     )
     .option("--runtime <runtime>", "Runtime handler (default: claude-code)", "claude-code")
     .option("--display-name <name>", "Display name")
@@ -572,7 +548,7 @@ export function registerAgentCommands(program: Command): void {
     .description("Bind an unbound agent to a client machine (first-time bind only — ID is immutable once set)")
     .requiredOption(
       "--client-id <id>",
-      "Client (machine) ID — must be owned by you. Run `first-tree-hub client connect` on that machine first.",
+      "Client (machine) ID — must be owned by you. Run `first-tree-hub connect <token>` on that machine first.",
     )
     .option("--server <url>", "Hub server URL")
     .action(async (agentName: string, options: { clientId: string; server?: string }) => {
@@ -659,110 +635,6 @@ export function registerAgentCommands(program: Command): void {
         }
       },
     );
-
-  // ── Messaging (send / chats / history) ──────────────────────────────
-
-  interface SendOptions {
-    format: MessageFormat;
-    chat?: boolean;
-    metadata?: string;
-    replyTo?: string;
-    replyToInbox?: string;
-    replyToChat?: string;
-    agent?: string;
-  }
-
-  agent
-    .command("send <target> [message]")
-    .description("Send a message to an agent or chat")
-    .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
-    .option("--chat", "Treat target as chat ID instead of agent ID")
-    .option("-m, --metadata <json>", "JSON metadata to attach")
-    .option("--reply-to <messageId>", "Message ID to reply to")
-    .option("--reply-to-inbox <inboxId>", "Cross-chat reply target inbox")
-    .option("--reply-to-chat <chatId>", "Cross-chat reply target chat")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
-    .action(async (target: string, message: string | undefined, options: SendOptions) => {
-      try {
-        const content = message ?? (await readStdin());
-        if (!content) {
-          fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
-        }
-
-        let metadata: Record<string, unknown> | undefined;
-        if (options.metadata) {
-          try {
-            metadata = JSON.parse(options.metadata) as Record<string, unknown>;
-          } catch {
-            fail("INVALID_METADATA", "Metadata must be valid JSON.", 2);
-          }
-        }
-
-        const { replyToInbox, replyToChat } = resolveReplyToFromEnv(process.env, {
-          replyToInbox: options.replyToInbox,
-          replyToChat: options.replyToChat,
-        });
-
-        const sdk = createSdk(options.agent);
-
-        if (options.chat) {
-          const result = await sdk.sendMessage(target, {
-            format: options.format,
-            content,
-            metadata,
-            inReplyTo: options.replyTo,
-            replyToInbox,
-            replyToChat,
-          });
-          success(result);
-        } else {
-          const result = await sdk.sendToAgent(target, {
-            format: options.format,
-            content,
-            metadata,
-            replyToInbox,
-            replyToChat,
-          });
-          success(result);
-        }
-      } catch (error) {
-        handleSdkError(error);
-      }
-    });
-
-  agent
-    .command("chats")
-    .description("List chats this agent participates in")
-    .option("-l, --limit <number>", "Maximum chats to return (1-100)", "20")
-    .option("--cursor <cursor>", "Pagination cursor from previous response")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
-    .action(async (options: { limit: string; cursor?: string; agent?: string }) => {
-      try {
-        const limit = parseLimit(options.limit, 100);
-        const sdk = createSdk(options.agent);
-        const result = await sdk.listChats({ limit, cursor: options.cursor });
-        success(result);
-      } catch (error) {
-        handleSdkError(error);
-      }
-    });
-
-  agent
-    .command("history <chatId>")
-    .description("View message history in a chat")
-    .option("-l, --limit <number>", "Maximum messages to return (1-100)", "20")
-    .option("--cursor <cursor>", "Pagination cursor from previous response")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
-    .action(async (chatId: string, options: { limit: string; cursor?: string; agent?: string }) => {
-      try {
-        const limit = parseLimit(options.limit, 100);
-        const sdk = createSdk(options.agent);
-        const result = await sdk.listMessages(chatId, { limit, cursor: options.cursor });
-        success(result);
-      } catch (error) {
-        handleSdkError(error);
-      }
-    });
 
   // ── Runtime status & management ─────────────────────────────────────
 
@@ -888,8 +760,10 @@ export function registerAgentCommands(program: Command): void {
 
   // ── Session management ──────────────────────────────────────────────
 
-  agent
-    .command("sessions <agent-name>")
+  const sessionCmd = agent.command("session").description("Session lifecycle commands");
+
+  sessionCmd
+    .command("list <agent-name>")
     .description("List sessions for an agent")
     .option("--server <url>", "Hub server URL")
     .option("--state <state>", "Filter by session state (active/suspended/evicted)")
@@ -933,8 +807,6 @@ export function registerAgentCommands(program: Command): void {
       }
     });
 
-  const sessionCmd = agent.command("session").description("Session lifecycle commands");
-
   for (const [cmd, desc] of [
     ["suspend", "Suspend a session"],
     ["terminate", "Terminate a session"],
@@ -965,131 +837,11 @@ export function registerAgentCommands(program: Command): void {
       });
   }
 
-  // ── Interactive chat ────────────────────────────────────────────────
+  // ── Low-level SDK debugging (hidden from `agent --help`) ────────────
 
-  agent
-    .command("chat <agent-name>")
-    .description("Open an interactive chat with an agent (as the current member's human agent)")
-    .option("--server <url>", "Hub server URL")
-    .action(async (agentName: string, options: { server?: string }) => {
-      try {
-        const serverUrl = resolveServerUrl(options.server);
-        const adminToken = await ensureFreshAccessToken();
-        const headers = {
-          Authorization: `Bearer ${adminToken}`,
-          "Content-Type": "application/json",
-        };
+  const debugCmd = agent.command("debug", { hidden: true }).description("Low-level SDK debug commands");
 
-        const targetAgent = await resolveAgent(serverUrl, adminToken, agentName);
-
-        const dmRes = await cliFetch(`${serverUrl}/api/v1/agents/${targetAgent.uuid}/chats`, {
-          method: "POST",
-          headers,
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!dmRes.ok) {
-          const body = await dmRes.text();
-          fail("DM_ERROR", `Failed to create DM: ${dmRes.status} — ${body}`, 1);
-        }
-        const dm = (await dmRes.json()) as { id: string };
-
-        print.line(`\n  Chat with ${targetAgent.displayName ?? targetAgent.name ?? targetAgent.uuid}\n`);
-        print.line(`  Chat ID: ${dm.id}\n`);
-        print.line(`  Type a message and press Enter. Ctrl+C to exit.\n\n`);
-
-        const readline = await import("node:readline");
-        const rl = readline.createInterface({ input: process.stdin, output: process.stderr, prompt: "  > " });
-
-        let lastSeenAt: string | null = null;
-
-        const pollMessages = async (): Promise<void> => {
-          try {
-            const qs = lastSeenAt ? `?limit=50` : `?limit=10`;
-            const msgRes = await cliFetch(`${serverUrl}/api/v1/chats/${dm.id}/messages${qs}`, {
-              headers,
-              signal: AbortSignal.timeout(10_000),
-            });
-            if (!msgRes.ok) return;
-            const msgData = (await msgRes.json()) as {
-              items: Array<{
-                id: string;
-                senderId: string;
-                content: unknown;
-                createdAt: string;
-              }>;
-            };
-
-            const cutoff = lastSeenAt;
-            const newMessages = cutoff
-              ? msgData.items.filter((m) => m.createdAt > cutoff && m.senderId === targetAgent.uuid).reverse()
-              : [];
-
-            for (const msg of newMessages) {
-              const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
-              const preview = content.length > 500 ? `${content.slice(0, 500)}...` : content;
-              print.line(`\r  [${targetAgent.displayName ?? targetAgent.name ?? "agent"}] ${preview}\n`);
-            }
-
-            if (msgData.items.length > 0 && msgData.items[0]) {
-              const newest = msgData.items[0].createdAt;
-              if (!lastSeenAt || newest > lastSeenAt) {
-                lastSeenAt = newest;
-              }
-            }
-          } catch {
-            // ignore polling errors
-          }
-        };
-
-        await pollMessages();
-
-        const pollTimer = setInterval(() => {
-          pollMessages().then(() => rl.prompt());
-        }, 2000);
-
-        rl.prompt();
-
-        rl.on("line", async (line: string) => {
-          const text = line.trim();
-          if (!text) {
-            rl.prompt();
-            return;
-          }
-
-          try {
-            const sendRes = await cliFetch(`${serverUrl}/api/v1/chats/${dm.id}/messages`, {
-              method: "POST",
-              headers,
-              body: JSON.stringify({ format: "text", content: text }),
-              signal: AbortSignal.timeout(10_000),
-            });
-            if (!sendRes.ok) {
-              const body = await sendRes.text();
-              print.line(`  [error] Failed to send: ${sendRes.status} — ${body}\n`);
-            } else {
-              const sent = (await sendRes.json()) as { createdAt: string };
-              lastSeenAt = sent.createdAt;
-            }
-          } catch (err) {
-            print.line(`  [error] ${err instanceof Error ? err.message : String(err)}\n`);
-          }
-          rl.prompt();
-        });
-
-        rl.on("close", () => {
-          clearInterval(pollTimer);
-          print.line("\n  Chat ended.\n");
-          process.exit(0);
-        });
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        fail("CHAT_ERROR", msg);
-      }
-    });
-
-  // ── Low-level SDK debugging (register / pull) ───────────────────────
-
-  agent
+  debugCmd
     .command("register")
     .description("Register this agent and return identity info")
     .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
@@ -1103,7 +855,7 @@ export function registerAgentCommands(program: Command): void {
       }
     });
 
-  agent
+  debugCmd
     .command("pull")
     .description("Pull pending messages from inbox")
     .option("-l, --limit <number>", "Maximum entries to return", "10")

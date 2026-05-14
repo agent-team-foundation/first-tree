@@ -1,4 +1,9 @@
-import { type ChatEngagementView, chatEngagementViewSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  type ChatEngagementView,
+  type ChatSource,
+  chatEngagementViewSchema,
+  chatSourceSchema,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
@@ -18,12 +23,14 @@ import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
  *     primary navigation key.
  */
 const engagementViewParser = chatEngagementViewSchema.catch("active");
+const sourceParser = chatSourceSchema.catch("manual");
 
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const engagement: ChatEngagementView = engagementViewParser.parse(searchParams.get("engagement"));
+  const source: ChatSource = sourceParser.parse(searchParams.get("source"));
 
   useAdminWs();
 
@@ -68,6 +75,18 @@ export function WorkspacePage() {
     [searchParams, setSearchParams],
   );
 
+  const setSource = useCallback(
+    (next: ChatSource) => {
+      const params = new URLSearchParams(searchParams);
+      // Default `manual` is the implicit value — keep it out of the URL so
+      // `/` stays the canonical workspace entrypoint.
+      if (next === "manual") params.delete("source");
+      else params.set("source", next);
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
   return (
     <div className="flex flex-1 overflow-hidden">
       <ConversationList
@@ -76,6 +95,8 @@ export function WorkspacePage() {
         onNewChat={openDraft}
         engagement={engagement}
         onEngagementChange={setEngagement}
+        source={source}
+        onSourceChange={setSource}
       />
 
       <main className="flex-1 flex flex-col overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>

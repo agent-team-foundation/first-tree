@@ -160,7 +160,7 @@ function InviteeLoadingBody() {
 
 function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos: OrgSourceReposOutput["repos"] }) {
   const navigate = useNavigate();
-  const { dismissOnboarding } = useAuth();
+  const { dismissOnboarding, markOnboardingCompleted } = useAuth();
   const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -208,12 +208,17 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
         joinPath: "invite",
       });
       void dismissOnboarding();
+      // Terminal state — Step 3 succeeded. Stamps `onboarding_completed_at`
+      // so Settings → Onboarding (sidebar entry + page) hides permanently.
+      // Distinct from dismissOnboarding above, which only hides the
+      // stepper UI and stays reversible via Resume.
+      void markOnboardingCompleted();
       navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start the chat");
       setBusy(false);
     }
-  }, [chosenRepoUrls, treeUrl, navigate, dismissOnboarding]);
+  }, [chosenRepoUrls, treeUrl, navigate, dismissOnboarding, markOnboardingCompleted]);
 
   const handleLater = useCallback(() => {
     void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite" });
@@ -313,7 +318,7 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
 
 function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
   const navigate = useNavigate();
-  const { dismissOnboarding } = useAuth();
+  const { dismissOnboarding, markOnboardingCompleted } = useAuth();
   const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -371,12 +376,15 @@ function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
         joinPath: "invite",
       });
       void dismissOnboarding();
+      // Terminal state — Step 3 succeeded. See InviteeConfirmBody for the
+      // dismissed-vs-completed distinction.
+      void markOnboardingCompleted();
       navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start the chat");
       setBusy(false);
     }
-  }, [selectedRepoUrls, treeUrl, navigate, dismissOnboarding]);
+  }, [selectedRepoUrls, treeUrl, navigate, dismissOnboarding, markOnboardingCompleted]);
 
   const handleLater = useCallback(() => {
     void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite" });
@@ -491,7 +499,7 @@ function InviteeWaitingBody() {
 
 function AdminBindCreateBody() {
   const navigate = useNavigate();
-  const { dismissOnboarding, organizationId } = useAuth();
+  const { dismissOnboarding, markOnboardingCompleted, organizationId } = useAuth();
   const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -582,54 +590,41 @@ function AdminBindCreateBody() {
       const agent = await resolveOnboardingAgent();
       const cfg = await getAgentConfig(agent.uuid);
       const repoEntries = selectedRepoUrls.map((url) => ({ url }));
+      // All team-level + agent-level writes share one fail-stop scope:
+      // any failure aborts before the chat is created so the admin can
+      // simply Try again. Both PUTs (`source_repos`, `context_tree`) and
+      // `updateAgentConfig` are idempotent overwrites, so a retry after
+      // a partial run safely re-converges on the intended state.
+      //
+      // Previously each team-level write had its own inconsistent catch
+      // style (one console.warn, one console.warn + toast) and the chat
+      // was created even after both failed — leaving the team partially
+      // configured and the admin in a chat with no way to know that
+      // future invitees would route to InviteeWaitingBody. Fail-stopping
+      // keeps the configuration consistent.
       await updateAgentConfig(agent.uuid, {
         expectedVersion: cfg.version,
         payload: { gitRepos: repoEntries },
       });
-
-      // Phase B: mirror the chosen source repos to the team-level
-      // `source_repos` namespace so subsequent invitees route through
-      // InviteeConfirmBody (one-click join) rather than InviteePickerBody
-      // (re-walk GitHub OAuth). The write overwrites whatever was there
-      // before — onboarding is the admin's initial setup; subsequent
-      // additions/removals happen in Team Settings.
-      //
-      // Non-fatal — agent's own gitRepos already saved above, so a failure
-      // here only means the next invitee will see the picker instead of
-      // the confirm card.
       if (organizationId) {
-        try {
-          await putSourceReposSetting(organizationId, { repos: repoEntries });
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("Step 3: PUT source_repos failed; agent gitRepos already saved", err);
-        }
+        // Mirror the chosen source repos to the team-level `source_repos`
+        // namespace so subsequent invitees route through InviteeConfirmBody
+        // (one-click join) rather than InviteePickerBody (re-walk GitHub
+        // OAuth). The write overwrites whatever was there before —
+        // onboarding is the admin's initial setup; subsequent
+        // additions/removals happen in Team Settings.
+        await putSourceReposSetting(organizationId, { repos: repoEntries });
       }
-
-      // Path A: persist the existing tree URL to the org NOW via the
-      // generic per-org settings surface (`context_tree` namespace). Agent
-      // will still write `.first-tree/local-tree.json` to the source repo
-      // via PR (proper binding), but Hub already has the URL cached so
-      // future agents in this org can find it without re-reading source
-      // files.
-      //
-      // Non-fatal — the agent's own gitRepos was saved above so the chat
-      // will proceed. But unlike the source_repos write (which only
-      // affects whether the next invitee sees a one-click confirm card),
-      // a missing tree binding means future invitees see "team has no
-      // tree" and route to InviteeWaitingBody — surface this with a toast
-      // so the admin knows to re-bind from Team Settings before inviting.
       if (treeMode === "existing" && organizationId) {
-        try {
-          await putContextTreeSetting(organizationId, { repo: trimmedTreeUrl });
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("Step 3: PUT context_tree settings failed; agent will still proceed", err);
-          addToast({
-            title: "Tree binding wasn't saved to Hub yet",
-            description: "Your agent will still proceed. You can re-bind from Team Settings later.",
-          });
-        }
+        // Persist the existing tree URL to the org NOW via the generic
+        // per-org settings surface (`context_tree` namespace). Agent
+        // will still write `.first-tree/local-tree.json` to the source
+        // repo via PR (proper binding), but Hub already has the URL
+        // cached so future agents in this org can find it without
+        // re-reading source files. A missing tree binding means future
+        // invitees see "team has no tree" and route to
+        // InviteeWaitingBody, so this can't silently swallow failures.
+        await putContextTreeSetting(organizationId, { repo: trimmedTreeUrl });
       }
 
       const chat = await createAgentChat(agent.uuid);
@@ -640,7 +635,10 @@ function AdminBindCreateBody() {
       try {
         await sendChatMessage(chat.id, bootstrap);
       } catch {
-        // intentionally non-fatal — user lands in the empty chat
+        // Intentionally non-fatal — the chat row exists, and the agent
+        // can self-introduce when the user starts typing. Bootstrap-send
+        // is the one true "best effort" write in this flow; everything
+        // else above must succeed before the chat is created.
       }
       void reportOnboardingEvent("tree_chat_started", {
         agentUuid: agent.uuid,
@@ -650,6 +648,10 @@ function AdminBindCreateBody() {
       // Step 3 launched — auto-dismiss the stepper so it doesn't linger
       // above the user's first chat. No toast here (mid-success path).
       void dismissOnboarding();
+      // Terminal state — Step 3 succeeded. Stamps `onboarding_completed_at`
+      // so Settings → Onboarding hides permanently. Subsequent edits go
+      // through Settings → Team / per-agent settings instead of the wizard.
+      void markOnboardingCompleted();
       navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start the tree-init chat");
@@ -663,7 +665,7 @@ function AdminBindCreateBody() {
     organizationId,
     navigate,
     dismissOnboarding,
-    addToast,
+    markOnboardingCompleted,
   ]);
 
   const hasSelection = selectedRepoUrls.length > 0;
@@ -859,11 +861,14 @@ async function resolveOnboardingAgent(): Promise<ManagedAgent> {
 }
 
 function buildSetupHiddenToast(navigate: ReturnType<typeof useNavigate>): ToastInput {
+  // Description must match the action label: previously pointed at a
+  // non-existent "Agent settings" tab, which was a dead end. The Settings
+  // surface that actually resumes Step 3 is Settings → Onboarding, so the
+  // action takes the user there and the copy says so.
   return {
     title: "Setup hidden",
-    description:
-      "Resume any time in Settings → Onboarding. Your agent isn't bound to a source repo yet — add one in Agent settings when ready.",
-    action: { label: "Open settings", onClick: () => navigate("/settings/onboarding") },
+    description: "Your agent isn't bound to a source repo yet. Resume from Settings → Onboarding any time to finish.",
+    action: { label: "Resume setup", onClick: () => navigate("/settings/onboarding") },
   };
 }
 

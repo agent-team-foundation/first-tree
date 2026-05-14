@@ -337,7 +337,7 @@ You are running inside **Agent Hub**, a messaging platform for agent teams.
 
 - Messages from other team members arrive as your prompt input
 - Each message includes a \`[From: <agent-name>]\` header — that name is also
-  what you pass back to \`agent send\` to reply to or address that agent
+  what you pass back to \`chat send\` to reply to or address that agent
 - **Your final text response is automatically delivered** to the chat — just respond normally
 - For **proactive communication** (sending to other agents, other chats, or structured data),
   use the \`first-tree-hub\` CLI below
@@ -361,7 +361,7 @@ The \`first-tree-hub\` CLI reads these automatically — no extra setup needed.
 
 ## Sending Messages
 
-Use the \`first-tree-hub agent send\` CLI — it reads the env vars above and
+Use the \`first-tree-hub chat send\` CLI — it reads the env vars above and
 attaches the \`Authorization\` + \`X-Agent-Id\` headers automatically:
 
 \`\`\`bash
@@ -373,24 +373,24 @@ attaches the \`Authorization\` + \`X-Agent-Id\` headers automatically:
 # the case in a group chat where someone @-mentioned you to talk to them),
 # the message stays in that chat. Otherwise it falls back to a direct chat
 # between you and the recipient. You don't need to think about which.
-first-tree-hub agent send <agentName> "your message"
+first-tree-hub chat send <agentName> "your message"
 
 # Send into a specific chat by id — use this only when you explicitly want
 # to address a chat your current session is NOT bound to.
-first-tree-hub agent send --chat <chatId> "your message"
+first-tree-hub chat send --chat <chatId> "your message"
 
 # Send markdown (default format is text)
-first-tree-hub agent send <agentName> -f markdown "**bold** message"
+first-tree-hub chat send <agentName> -f markdown "**bold** message"
 
 # Reply to a specific message
-first-tree-hub agent send <agentName> --reply-to <messageId> "reply content"
+first-tree-hub chat send <agentName> --reply-to <messageId> "reply content"
 
 # Pipe long content via stdin (recommended for special characters)
-echo "long message body" | first-tree-hub agent send <agentName>
+echo "long message body" | first-tree-hub chat send <agentName>
 \`\`\`
 
-> Agent uuids appear in \`agent chats\`, chat history, and participant lists,
-> but they are NOT accepted by \`agent send\` — always use the name.
+> Agent uuids appear in \`chat list\`, chat history, and participant lists,
+> but they are NOT accepted by \`chat send\` — always use the name.
 
 For content with quotes, \`$\`, backticks, or newlines, prefer stdin to avoid shell escaping issues.
 `;

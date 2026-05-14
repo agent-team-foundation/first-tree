@@ -109,13 +109,13 @@ On each machine that runs agents:
 # Install
 npm install -g @agent-team-foundation/first-tree-hub
 
-# Configure server URL
-first-tree-hub config set -c server.url https://hub.example.com
+# Sign this machine into the Hub (auto-installs background service)
+first-tree-hub connect <connect-token>
 
 # Add an existing Hub agent to this client (dir keyed by its hub name).
 first-tree-hub agent add --agent-id <agent-uuid>
 
-# Start
+# Start (omit if the background service is already running)
 first-tree-hub client start
 ```
 
@@ -140,7 +140,7 @@ jobs:
           node-version: 24
       - run: npm install -g @agent-team-foundation/first-tree-hub
       - run: |
-          first-tree-hub config set -c server.url ${{ secrets.HUB_URL }}
+          first-tree-hub connect ${{ secrets.HUB_CONNECT_TOKEN }} --no-service
           first-tree-hub agent add --agent-id ${{ secrets.AGENT_UUID }}
           first-tree-hub client start
 ```

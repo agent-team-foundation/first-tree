@@ -22,16 +22,23 @@ import {
   CHAT_ENGAGEMENT_STATUSES,
   type ChatEngagementStatus,
   type ChatEngagementView,
+  type ChatSource,
   type CreateMeChat,
+  GITHUB_ENTITY_TYPES,
+  LIVE_ACTIVITY_STALE_MS,
+  type ListMeChatSourceCountsQuery,
   type ListMeChatsQuery,
   type ListMeChatsResponse,
+  type LiveActivity,
   type MeChatLeaveResponse,
   type MeChatReadResponse,
   type MeChatRow,
+  type MeChatSourceCounts,
+  type ToolCallEventPayload,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
-import { agentPresence } from "../db/schema/agent-presence.js";
+import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
@@ -149,6 +156,75 @@ export async function getCallerEngagement(
 }
 
 // ---------------------------------------------------------------------------
+// Source tag projection
+// ---------------------------------------------------------------------------
+//
+// The conversation-list tag bar splits chats by source — Manual / GitHub PR /
+// GitHub Issue / etc — using `chats.metadata`. All SQL below derives from
+// `GITHUB_ENTITY_TYPES` (the single source of truth for "which github
+// entities get their own tag"), so adding a new entity type means editing
+// `shared/src/schemas/chat-metadata.ts` once and not chasing literals across
+// three places. `ChatSource` follows the `github_{entityType}` naming
+// convention; the TypeScript switch over `ChatSource` is exhaustive so any
+// drift between the enum and the filter is a compile error.
+//
+//   - `sourceFilterSql(source)` — WHERE predicate for `listMeChats`.
+//   - `chatSourceSqlExpression` — CASE for the aggregate `GROUP BY` in
+//     `listMeChatSourceCounts`.
+//
+// Invariant: every github row covered by `chatSourceSqlExpression` MUST also
+// match `sourceFilterSql` for the same ChatSource, and vice versa — a
+// malformed row (e.g. `{source:"github", entityType:"some-new-thing"}`) goes
+// into `manual` consistently in both the count and the list. Pinned by the
+// "malformed github metadata falls into manual" test.
+
+const githubEntityList = sql.join(
+  GITHUB_ENTITY_TYPES.map((t) => sql`${t}`),
+  sql.raw(", "),
+);
+
+const KNOWN_NON_MANUAL_PREDICATE = sql`(
+     (c.metadata->>'source' = 'github' AND c.metadata->>'entityType' IN (${githubEntityList}))
+  OR c.metadata->>'source' = 'feishu'
+)`;
+
+const githubCaseArms = sql.join(
+  GITHUB_ENTITY_TYPES.map(
+    (t) => sql`WHEN c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = ${t} THEN ${`github_${t}`}`,
+  ),
+  sql.raw("\n    "),
+);
+
+const chatSourceSqlExpression = sql`CASE
+    ${githubCaseArms}
+    WHEN c.metadata->>'source' = 'feishu' THEN 'feishu'
+    ELSE 'manual'
+  END`;
+
+function sourceFilterSql(source: ChatSource): SQL {
+  switch (source) {
+    case "manual":
+      // Defined as the negation of every known-non-manual case so we stay
+      // in lock-step with `chatSourceSqlExpression`'s ELSE arm.
+      // `IS NOT TRUE` (not `NOT (...)`) because `metadata->>'source'` is
+      // NULL for the `{}` / NULL metadata cases — `NULL = 'github'` is
+      // NULL, and `NOT NULL` is still NULL in WHERE, which Postgres treats
+      // as FALSE and would silently drop every manual chat from the list.
+      return sql`(${KNOWN_NON_MANUAL_PREDICATE}) IS NOT TRUE`;
+    case "github_issue":
+      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'issue')`;
+    case "github_pull_request":
+      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'pull_request')`;
+    case "github_discussion":
+      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'discussion')`;
+    case "github_commit":
+      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'commit')`;
+    case "feishu":
+      return sql`(c.metadata->>'source' = 'feishu')`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
 
@@ -184,6 +260,7 @@ export async function listMeChats(
   const filterUnreadOnly = query.filter === "unread";
   const filterWatchingOnly = query.filter === "watching";
   const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
+  const sourcePredicate = query.source ? sourceFilterSql(query.source) : sql`TRUE`;
 
   // Cursor predicate (sort: last_message_at DESC NULLS LAST, chat_id DESC).
   // See the original commentary in git history for the case-by-case
@@ -232,6 +309,7 @@ export async function listMeChats(
        AND (${!filterUnreadOnly}::bool OR COALESCE(cus.unread_mention_count, 0) > 0)
        AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
        AND ${engagementPredicate}
+       AND ${sourcePredicate}
        AND ${cursorPredicate}
      ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
      LIMIT ${limit + 1}
@@ -263,36 +341,55 @@ export async function listMeChats(
   const chatIds = pageRaw.map((r) => r.chat_id);
 
   // Lookup participants (speakers only — watchers do not appear in
-  // the conversation row's participant chip list). Also pick up each
-  // speaker's `agent_presence.runtime_state` so we can derive
-  // `workingAgentIds` per chat without a second query — `agent_presence`
-  // PK is `agent_id`, so the LEFT JOIN is a row-by-row PK lookup with
-  // no extra index needed.
+  // the conversation row's participant chip list). The leftJoin to
+  // `agent_chat_sessions` is keyed on BOTH (agent_id, chat_id) so each
+  // row sees the session state for *this* chat — never another chat the
+  // same agent happens to speak in. PK on agent_chat_sessions is
+  // (agent_id, chat_id), so the join is a row-by-row PK lookup with no
+  // extra index needed.
+  //
+  // The previous implementation joined `agent_presence.runtime_state`
+  // (agent-global). That made `workingAgentIds` light up on every chat
+  // an agent participated in whenever it worked in any one of them —
+  // the cross-chat false-positive #366 self-described as "Option A".
   const participantRows = await db
     .select({
       chatId: chatMembership.chatId,
       agentId: chatMembership.agentId,
       displayName: agents.displayName,
       type: agents.type,
-      runtimeState: agentPresence.runtimeState,
+      sessionState: agentChatSessions.state,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .leftJoin(agentPresence, eq(agentPresence.agentId, chatMembership.agentId))
+    .leftJoin(
+      agentChatSessions,
+      and(eq(agentChatSessions.agentId, chatMembership.agentId), eq(agentChatSessions.chatId, chatMembership.chatId)),
+    )
     .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker")));
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
-  const workingByChat = new Map<string, string[]>();
+  const engagedByChat = new Map<string, string[]>();
   for (const p of participantRows) {
     const list = participantsByChat.get(p.chatId) ?? [];
     list.push({ agentId: p.agentId, displayName: p.displayName, type: p.type });
     participantsByChat.set(p.chatId, list);
-    if (p.runtimeState === "working") {
-      const working = workingByChat.get(p.chatId) ?? [];
-      working.push(p.agentId);
-      workingByChat.set(p.chatId, working);
+    if (p.sessionState === "active") {
+      const engaged = engagedByChat.get(p.chatId) ?? [];
+      engaged.push(p.agentId);
+      engagedByChat.set(p.chatId, engaged);
     }
   }
+
+  // Live activity — derived from each chat's latest `session_events` row.
+  // One LATERAL JOIN seeks the latest event per (agent, chat) pair via
+  // the unique index `uq_session_events_chat_seq (agent_id, chat_id,
+  // seq)`. See `deriveLiveActivity` for the query shape and the index
+  // notes. Stale events (older than `LIVE_ACTIVITY_STALE_MS`) and
+  // turn-terminal kinds (`turn_end`, `error`) are filtered out at
+  // derivation time so the wire payload already represents "is
+  // currently working".
+  const liveActivityByChat = await deriveLiveActivity(db, chatIds);
 
   // First-message lookup for auto-title fallback. Mirrors
   // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
@@ -331,11 +428,133 @@ export async function listMeChats(
       unreadMentionCount: r.unread_mention_count,
       canReply: isSpeaker,
       engagementStatus: r.engagement_status,
-      workingAgentIds: workingByChat.get(r.chat_id) ?? [],
+      engagedAgentIds: engagedByChat.get(r.chat_id) ?? [],
+      liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
     };
   });
 
   return { rows, nextCursor };
+}
+
+// ---------------------------------------------------------------------------
+// Live activity derivation
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-chat live activity, derived from the most recent `session_events` row.
+ *
+ * Returns a chatId → LiveActivity map; chats with no activity (or where the
+ * latest event is terminal / stale) are absent from the map (caller treats
+ * absence as null).
+ */
+export async function deriveLiveActivity(db: Database, chatIds: string[]): Promise<Map<string, LiveActivity>> {
+  if (chatIds.length === 0) return new Map();
+
+  // Per-pair seek via LATERAL: `agent_chat_sessions` is the (agent_id,
+  // chat_id) directory (PK = the same pair). For each pair we look up
+  // *the* newest event via the unique index `uq_session_events_chat_seq
+  // (agent_id, chat_id, seq)` — a backward index scan with `LIMIT 1`
+  // costs one B-tree descent per pair, independent of how many events
+  // the pair has accumulated.
+  //
+  // The naive shape `SELECT DISTINCT ON ... FROM session_events WHERE
+  // chat_id = ANY(?)` (see PR #378 review thread) cannot use either
+  // index as a seek because both lead with `agent_id`; it degrades to a
+  // full scan + sort. The LATERAL form is independent of session_events
+  // table size and stays cheap as the table grows.
+  //
+  // `state <> 'evicted'` is defensive — evicted sessions trigger
+  // `clearEvents` so they shouldn't have rows, but a half-completed
+  // eviction would otherwise surface stale chips here.
+  // `IN (${sql.join(...)})` rather than `= ANY($1::text[])` because
+  // postgres-js binds `string[]` as a flat string when the driver-level
+  // type hint resolves to `text[]`, which PG rejects (`malformed array
+  // literal`). Inlining each value as its own placeholder is equivalent
+  // shape-wise and sidesteps the binding mismatch.
+  const chatIdInClause = sql.join(
+    chatIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const rawRows = (await db.execute(sql`
+    SELECT acs.agent_id        AS agent_id,
+           acs.chat_id         AS chat_id,
+           e.kind              AS kind,
+           e.payload           AS payload,
+           e.created_at        AS created_at
+      FROM agent_chat_sessions acs
+      CROSS JOIN LATERAL (
+        SELECT kind, payload, created_at, seq
+          FROM session_events se
+         WHERE se.agent_id = acs.agent_id
+           AND se.chat_id  = acs.chat_id
+         ORDER BY se.seq DESC
+         LIMIT 1
+      ) e
+     WHERE acs.chat_id IN (${chatIdInClause})
+       AND acs.state <> 'evicted'
+  `)) as unknown as Array<{
+    agent_id: string;
+    chat_id: string;
+    kind: string;
+    payload: unknown;
+    created_at: Date | string;
+  }>;
+  const rows = rawRows.map((r) => ({
+    agent_id: r.agent_id,
+    chat_id: r.chat_id,
+    kind: r.kind,
+    payload: r.payload,
+    created_at: r.created_at,
+  }));
+
+  const now = Date.now();
+  const byChat = new Map<string, { activity: LiveActivity; createdAtMs: number }>();
+  for (const row of rows) {
+    const activity = toLiveActivity(row);
+    if (!activity) continue;
+    const createdAtMs = new Date(row.created_at).getTime();
+    if (now - createdAtMs > LIVE_ACTIVITY_STALE_MS) continue;
+    // Multiple agents may produce events for the same chat — keep the
+    // freshest one. DISTINCT ON already collapses per (agent, chat) pair;
+    // here we collapse across agents within the same chat.
+    const existing = byChat.get(row.chat_id);
+    if (!existing || createdAtMs > existing.createdAtMs) {
+      byChat.set(row.chat_id, { activity, createdAtMs });
+    }
+  }
+
+  const out = new Map<string, LiveActivity>();
+  for (const [chatId, { activity }] of byChat) out.set(chatId, activity);
+  return out;
+}
+
+/**
+ * Translate a `session_events` row into a `LiveActivity`, or null when the
+ * kind is terminal (`turn_end` / `error`) or unrecognised. Pure & exported
+ * for unit testing.
+ */
+export function toLiveActivity(row: {
+  agent_id: string;
+  chat_id: string;
+  kind: string;
+  payload: unknown;
+  created_at: Date | string;
+}): LiveActivity | null {
+  const startedAt = new Date(row.created_at).toISOString();
+  switch (row.kind) {
+    case "tool_call": {
+      const payload = (row.payload ?? {}) as Partial<ToolCallEventPayload>;
+      const label = typeof payload.name === "string" && payload.name.length > 0 ? payload.name : "Tool";
+      return { agentId: row.agent_id, kind: "tool_call", label, startedAt };
+    }
+    case "thinking":
+      return { agentId: row.agent_id, kind: "thinking", label: "Thinking", startedAt };
+    case "assistant_text":
+      return { agentId: row.agent_id, kind: "assistant_text", label: "Writing", startedAt };
+    default:
+      // turn_end / error / unknown → no live indicator
+      return null;
+  }
 }
 
 /**
@@ -601,6 +820,80 @@ export async function leaveMeChat(db: Database, chatId: string, humanAgentId: st
  * (any `engagement` view), so the badge must exclude them too — otherwise
  * the user sees an unread red dot for a chat they've removed from view.
  */
+/**
+ * Per-source aggregate for the conversation-list tag bar.
+ *
+ * Returns one row per source the caller has at least one chat for, plus an
+ * always-present `manual` entry (zero counts when there are no manual chats —
+ * the workspace UI uses `manual` as its default tab and must render it even
+ * when empty).
+ *
+ * Filtering matches `listMeChats` for the corresponding tab so the badges
+ * cannot drift from the list: same membership join, same `parent_chat_id IS
+ * NULL` and `organization_id` scopes, same engagement view, same
+ * `chat_user_state.unread_mention_count` source.
+ */
+export async function listMeChatSourceCounts(
+  db: Database,
+  humanAgentId: string,
+  organizationId: string,
+  query: ListMeChatSourceCountsQuery,
+): Promise<MeChatSourceCounts> {
+  const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
+
+  // GROUP BY 1 (select-list position) instead of the `source` alias or the
+  // full CASE: `GROUP BY <alias>` doesn't transitively treat columns inside
+  // the aliased expression as grouped (PG reports `c.metadata` un-grouped),
+  // and `GROUP BY <CASE>` fails when the CASE arms are parameterised — the
+  // ungrouped-column analyser treats two textually-different parameter
+  // bindings as distinct expressions even when they reduce to the same
+  // value. Ordinal position works in both cases.
+  // Aggregate semantics:
+  //   - chat_count: COUNT of rows in the membership join (matches what the
+  //     paginated list would return for this source).
+  //   - unread_chat_count: COUNT of those rows where the user's
+  //     unread_mention_count > 0. Deliberately a count of chats, NOT a SUM
+  //     of mention counts, so the tag badge matches the existing
+  //     `totalUnread` pill in the conversation list ("N chats with unread").
+  //   - Membership join (no `cm.access_mode` filter) intentionally counts
+  //     watcher rows as well: watcher chats appear in `listMeChats`, so
+  //     omitting them here would let a watcher-only PR chat disappear from
+  //     the tag bar but show up in the list when filtered.
+  const rows = (await db.execute(sql`
+    SELECT
+      ${chatSourceSqlExpression} AS source,
+      count(*)::int AS chat_count,
+      count(*) FILTER (WHERE COALESCE(cus.unread_mention_count, 0) > 0)::int AS unread_chat_count
+      FROM chats c
+      JOIN chat_membership cm
+        ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
+      LEFT JOIN chat_user_state cus
+        ON cus.chat_id = c.id AND cus.agent_id = ${humanAgentId}
+     WHERE c.parent_chat_id IS NULL
+       AND c.organization_id = ${organizationId}
+       AND ${engagementPredicate}
+     GROUP BY 1
+  `)) as unknown as Array<{
+    source: ChatSource;
+    chat_count: number;
+    unread_chat_count: number;
+  }>;
+
+  const counts: MeChatSourceCounts["counts"] = {};
+  for (const row of rows) {
+    counts[row.source] = {
+      chatCount: Number(row.chat_count),
+      unreadChatCount: Number(row.unread_chat_count),
+    };
+  }
+  // `manual` is always rendered as the default tab — surface it even at zero
+  // counts so the client doesn't have to special-case the empty workspace.
+  if (!counts.manual) {
+    counts.manual = { chatCount: 0, unreadChatCount: 0 };
+  }
+  return { counts };
+}
+
 export async function countUnreadMeChats(db: Database, humanAgentId: string, organizationId: string): Promise<number> {
   const rows = await db.execute<{ count: number }>(sql`
     SELECT count(*)::int AS count

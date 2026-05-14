@@ -3,8 +3,8 @@
 import { applyClientLoggerConfig } from "@first-tree-hub/client";
 import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent.js";
+import { registerChatCommands } from "../commands/chat.js";
 import { registerClientCommands } from "../commands/client.js";
-import { registerConfigCommands } from "../commands/config.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
 import { registerOrgCommands } from "../commands/org.js";
 import { registerSaaSConnectCommand } from "../commands/saas-connect.js";
@@ -53,21 +53,19 @@ program
     }
   });
 
-// Top-level `connect <token>` — the SaaS-form entry point. Hub URL is
-// derived from the token's `iss` claim, so users only paste the token.
-// The legacy `client connect <url> --token` form remains for self-host /
-// power-user workflows; both are supported simultaneously.
+// Top-level `connect <token>` — single entry point. Hub URL is derived from
+// the token's `iss` claim, so users only paste the token.
 registerSaaSConnectCommand(program);
 
-// Core subsystems — `client` group mounts the legacy `client connect` too.
+// Core subsystems
 registerServerCommands(program);
 registerClientCommands(program);
 
-// Agent management (config, tokens, bindings, messaging)
+// Agent management (config, bindings, lifecycle)
 registerAgentCommands(program);
 
-// Configuration
-registerConfigCommands(program);
+// Chats and messaging
+registerChatCommands(program);
 
 // Self-update — user-triggered upgrade + service restart.
 registerUpdateCommand(program);

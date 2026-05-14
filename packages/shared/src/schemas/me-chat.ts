@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { chatEngagementStatusSchema } from "./chat.js";
+import { chatSourceSchema } from "./chat-metadata.js";
 
 /**
  * Member-facing chat APIs (`/me/chats*`) for the chat-first workspace.
@@ -31,6 +32,12 @@ export const listMeChatsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(ME_CHAT_MAX_LIMIT).default(ME_CHAT_DEFAULT_LIMIT),
   filter: meChatFilterSchema.default("all"),
   engagement: chatEngagementViewSchema.default("active"),
+  /**
+   * Restrict the conversation list to a single source tag (Manual, GitHub PR,
+   * GitHub Issue, …). Omitted — i.e. unfiltered — returns every source the
+   * caller is in; the workspace UI defaults to `manual`.
+   */
+  source: chatSourceSchema.optional(),
 });
 export type ListMeChatsQuery = z.infer<typeof listMeChatsQuerySchema>;
 
@@ -40,6 +47,31 @@ export const meChatParticipantSchema = z.object({
   type: z.string(),
 });
 export type MeChatParticipant = z.infer<typeof meChatParticipantSchema>;
+
+/**
+ * Live activity hint surfaced in the conversation row's time slot. Derived
+ * server-side from the latest `session_events` row for the chat. See
+ * `MeChatRow.liveActivity` for the lifecycle rules.
+ *
+ * `kind` is intentionally narrower than the full `sessionEventKind` enum:
+ * `turn_end` / `error` produce `liveActivity: null` rather than a live
+ * indicator.
+ */
+export const liveActivityKindSchema = z.enum(["tool_call", "thinking", "assistant_text"]);
+export type LiveActivityKind = z.infer<typeof liveActivityKindSchema>;
+
+export const liveActivitySchema = z.object({
+  agentId: z.string(),
+  kind: liveActivityKindSchema,
+  /** Short user-facing label, e.g. "Read", "Thinking", "Writing". */
+  label: z.string(),
+  /** ISO timestamp of the originating event; web uses this as the ticker base. */
+  startedAt: z.string(),
+});
+export type LiveActivity = z.infer<typeof liveActivitySchema>;
+
+/** Stale threshold (ms) past which a `session_events` row stops driving liveActivity. */
+export const LIVE_ACTIVITY_STALE_MS = 60_000;
 
 export const meChatRowSchema = z.object({
   chatId: z.string(),
@@ -55,16 +87,27 @@ export const meChatRowSchema = z.object({
   canReply: z.boolean(),
   engagementStatus: chatEngagementStatusSchema,
   /**
-   * Speakers in this chat whose `agent_presence.runtime_state === 'working'`.
-   * Derived from the global presence table — NOT per-chat — so an agent
-   * running in any chat appears here for every chat they speak in. The web
-   * client only renders the working ring for `type === "direct"` and
-   * defers group-chat working signals to a future per-chat data source.
+   * Speakers in this chat with an active per-(agent,chat) session
+   * (`agent_chat_sessions.state === 'active'`). Drives the breathing ring
+   * around the avatar — "session online, can be reached". Per-pair signal,
+   * not affected by the agent's activity in other chats. Independent of
+   * `liveActivity` (which is the live "working right now" signal).
    *
-   * Always returned, possibly empty. No schema migration required: this
-   * field is derived at query time from existing tables.
+   * Always returned, possibly empty. No schema migration required: derived
+   * at query time from the existing `agent_chat_sessions` table.
    */
-  workingAgentIds: z.array(z.string()),
+  engagedAgentIds: z.array(z.string()),
+  /**
+   * Live "working right now" signal derived from the latest `session_events`
+   * row for this chat. Null when:
+   *   - no events recorded for this chat, OR
+   *   - the latest event is `turn_end` / `error`, OR
+   *   - the latest event is older than the stale threshold (60 s).
+   *
+   * Web renders this in the lastMessageAt slot with a pulsing dot + label
+   * + auto-incrementing seconds counter.
+   */
+  liveActivity: liveActivitySchema.nullable(),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
@@ -104,3 +147,43 @@ export const chatMessageFrameSchema = z.object({
   chatId: z.string(),
 });
 export type ChatMessageFrame = z.infer<typeof chatMessageFrameSchema>;
+
+/**
+ * Per-source aggregate for the conversation-list tag bar.
+ *
+ *   - `chatCount` — number of chats the caller is in for this source. Used
+ *     to hide tags whose count is 0 ("don't render a PR tag if there are no
+ *     PRs").
+ *   - `unreadChatCount` — number of chats whose `unread_mention_count > 0`.
+ *     This is "chats with unread mentions", NOT "total mention count", so
+ *     the badge on each tag matches the semantics of the existing `unread`
+ *     filter pill (`totalUnread` in `pages/workspace/conversations`) — a
+ *     `2` on the PR tag means "2 PR chats have unread mentions", which is
+ *     what a user expects to click into.
+ *
+ * The map ALWAYS contains the `manual` key (the default tab is always
+ * available, even at zero counts); other keys are present only when the
+ * caller has at least one chat for that source.
+ */
+export const chatSourceCountSchema = z.object({
+  chatCount: z.number().int().nonnegative(),
+  unreadChatCount: z.number().int().nonnegative(),
+});
+export type ChatSourceCount = z.infer<typeof chatSourceCountSchema>;
+
+export const listMeChatSourceCountsQuerySchema = z.object({
+  engagement: chatEngagementViewSchema.default("active"),
+});
+export type ListMeChatSourceCountsQuery = z.infer<typeof listMeChatSourceCountsQuerySchema>;
+
+export const meChatSourceCountsSchema = z.object({
+  /**
+   * Map keyed by ChatSource. Keys absent from the map mean "no chats for that
+   * source"; the client must not render a tag for them. `manual` is always
+   * present. `partialRecord` (not `record`) so the union of optional keys is
+   * preserved on the TypeScript side — the server only emits keys whose
+   * `chatCount > 0` (plus `manual`).
+   */
+  counts: z.partialRecord(chatSourceSchema, chatSourceCountSchema),
+});
+export type MeChatSourceCounts = z.infer<typeof meChatSourceCountsSchema>;

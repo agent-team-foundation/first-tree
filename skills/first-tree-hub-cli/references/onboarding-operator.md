@@ -9,7 +9,7 @@ The goal is to run the supported CLI workflow — not to manually create agents 
 ## Core Rule
 
 - Use `first-tree-hub onboard` for the end-to-end flow.
-- `onboard` depends on a valid credential file; if this machine is not yet signed in, run `first-tree-hub client connect <server-url>` first.
+- `onboard` depends on a valid credential file; if this machine is not yet signed in, run `first-tree-hub connect <token>` first (paste the connect token from the Hub web console's *Connect a machine* dialog).
 - Ensure `gh` is installed and authenticated (`gh auth login`) — required for GitHub-identity agent creation.
 
 ## When the Prompt Starts From Scratch
@@ -32,11 +32,9 @@ If the task only gives you a package name, a docs URL, and a server URL, transla
 4. Sign this machine into the Hub:
 
    ```bash
-   first-tree-hub client connect <server-url>                       # interactive login
-   # or
-   first-tree-hub client connect <server-url> --token <connect-token>
+   first-tree-hub connect <connect-token>
    # or, in a container / CI:
-   first-tree-hub client connect <server-url> --no-service
+   first-tree-hub connect <connect-token> --no-service
    ```
 
 5. Dry-run the onboarding to surface missing fields:
@@ -71,7 +69,7 @@ Interpret it as:
 
 - Install (or `npx`-invoke) the published CLI.
 - Fetch the onboarding guide with `gh` rather than relying on a browser.
-- If this machine has no `~/.first-tree/hub/credentials.json`, run `first-tree-hub client connect https://first-tree.staging.unispark.dev/` first.
+- If this machine has no `~/.first-tree/hub/credentials.json`, run `first-tree-hub connect <token>` first (paste a connect token from the Hub web console's *Connect a machine* dialog — its `iss` claim carries the hub URL).
 - Thread `https://first-tree.staging.unispark.dev/` through `--server` in every onboarding command.
 - Use the supported `onboard` flow instead of hand-rolling Admin API calls.
 
@@ -148,7 +146,7 @@ first-tree-hub onboard \
 
 ## Common Pitfalls
 
-- **"No credentials found" error** → run `first-tree-hub client connect <server-url>` before re-running `onboard`. Do not try to set an `AGENT_TOKEN` env var; that path no longer exists.
+- **"No credentials found" error** → run `first-tree-hub connect <token>` before re-running `onboard`. Do not try to set an `AGENT_TOKEN` env var; that path no longer exists.
 - **`gh` not authenticated** → `gh auth login`. GitHub identity is what `onboard` uses to create the agent.
 - **Missing `--server`** → if the automation supplied a URL, thread it explicitly; do not rely on an unconfigured default. `onboard --check` will tell you when it's missing.
 - **Trying `onboard` twice with the same ID** → if the first run partially succeeded, `.onboard-state.json` has the previous args; re-running interactive mode picks up where it left off rather than starting over.

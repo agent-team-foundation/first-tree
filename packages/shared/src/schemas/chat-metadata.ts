@@ -11,6 +11,13 @@ import { z } from "zod";
  * Add new variants here; do not extend with free-form `Record<string, unknown>`.
  */
 
+/**
+ * Source of truth for which github entities get their own tag in the
+ * conversation list. Adding a new entry here extends `ChatSource`
+ * (`github_${entityType}`) and the SQL CASE/IN-list in
+ * `server/services/me-chat.ts` without touching them — both derive from
+ * this constant.
+ */
 export const GITHUB_ENTITY_TYPES = ["issue", "pull_request", "discussion", "commit"] as const;
 export const githubEntityTypeSchema = z.enum(GITHUB_ENTITY_TYPES);
 export type GithubEntityType = z.infer<typeof githubEntityTypeSchema>;
@@ -42,3 +49,32 @@ export type ChatMetadata = z.infer<typeof chatMetadataSchema>;
  */
 export const optionalChatMetadataSchema = z.union([z.object({}).strict(), chatMetadataSchema]);
 export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
+
+/**
+ * Conversation-list source tag. Flattens the discriminated union above into a
+ * single enum the workspace UI can switch on directly — callers don't have
+ * to inspect both `metadata.source` and `metadata.entityType`.
+ *
+ *  - `manual` — user-created, agent-to-agent, or any chat whose metadata is
+ *    absent / empty / unrecognised. The default conversation-list view.
+ *    Anything that doesn't cleanly match a known writer falls here so the
+ *    default tab can't accidentally hide a chat.
+ *  - `github_*` — projected from `{ source: "github", entityType: ... }`.
+ *  - `feishu` — projected from `{ source: "feishu", ... }`.
+ *
+ * The projection itself lives next to the WHERE clause that consumes it
+ * (`packages/server/src/services/me-chat.ts::chatSourceSqlExpression`) so the
+ * SQL CASE and any TS classifier stay textually adjacent to the predicates
+ * they feed. Add a new variant on the metadata side first, then extend this
+ * enum, then both the SQL CASE and the `sourceFilterSql` switch.
+ */
+export const CHAT_SOURCES = [
+  "manual",
+  "github_issue",
+  "github_pull_request",
+  "github_discussion",
+  "github_commit",
+  "feishu",
+] as const;
+export const chatSourceSchema = z.enum(CHAT_SOURCES);
+export type ChatSource = z.infer<typeof chatSourceSchema>;

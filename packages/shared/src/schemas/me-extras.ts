@@ -75,6 +75,12 @@ export type OnboardingEvent = z.infer<typeof onboardingEventSchema>;
  * `currentMembership` derivation (decouple-client-from-identity §C1).
  * `agentId` is the human-agent UUID seeded for the user in that org —
  * the web admin gate keys off it.
+ *
+ * `orgHasOtherMembers` is true when the org has at least one other active
+ * member besides the caller (`COUNT(members WHERE status='active') > 1`).
+ * The web onboarding flow uses this to derive "is this a solo team or a
+ * team-of-teammates" without relying on the per-tab `joinPath` flag, which
+ * can be lost on a different tab / device mid-onboarding.
  */
 export const meMembershipSchema = z.object({
   id: z.string(),
@@ -82,5 +88,6 @@ export const meMembershipSchema = z.object({
   organizationName: z.string(),
   role: z.enum(["admin", "member"]),
   agentId: z.string(),
+  orgHasOtherMembers: z.boolean(),
 });
 export type MeMembership = z.infer<typeof meMembershipSchema>;

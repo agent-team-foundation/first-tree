@@ -21,8 +21,14 @@ import { cn } from "../lib/utils.js";
  * 403 inside.
  */
 export function SettingsLayout() {
-  const { role } = useAuth();
+  const { role, onboardingCompletedAt } = useAuth();
   const isAdmin = role === "admin";
+  // Once Step 3 succeeds (`onboarding_completed_at` stamped), the wizard
+  // is a terminal — subsequent tree / source-repo edits live in Settings →
+  // Team and /agents/:uuid, not back inside the onboarding flow. Hiding
+  // the sidebar entry is the gate; /settings/onboarding itself also
+  // redirects to /settings/team for direct URL access.
+  const hasCompletedOnboarding = onboardingCompletedAt !== null;
 
   return (
     <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
@@ -37,7 +43,7 @@ export function SettingsLayout() {
         <SubNavLink to="/settings/computers" label="Computers" />
         {isAdmin && <SubNavLink to="/settings/github" label="GitHub" />}
         <SubNavLink to="/settings/integrations" label="Messaging" />
-        <SubNavLink to="/settings/onboarding" label="Onboarding" />
+        {!hasCompletedOnboarding && <SubNavLink to="/settings/onboarding" label="Onboarding" />}
       </aside>
 
       <div className="flex-1 min-w-0 overflow-auto">
