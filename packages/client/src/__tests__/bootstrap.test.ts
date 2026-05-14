@@ -76,18 +76,22 @@ describe("bootstrapWorkspace", () => {
     expect(existsSync(toolsPath)).toBe(true);
 
     const content = readFileSync(toolsPath, "utf-8");
-    expect(content).toContain("FIRST_TREE_HUB_SERVER_URL");
-    expect(content).toContain("FIRST_TREE_HUB_ACCESS_TOKEN");
-    expect(content).toContain("How You Communicate");
     expect(content).toContain("Agent Hub");
     expect(content).toContain("[From: <agent-name>]");
-    expect(content).toContain("Use your judgment about when to respond");
+    expect(content).toContain("first-tree-hub chat send");
     // L4 silent-turn protocol: the prompt directive that pairs with the
     // result-sink empty-output guard. Tells the agent that silence is the
     // correct response when it has nothing new — drops courtesy fillers
     // that would otherwise sustain agent↔agent loops.
-    expect(content).toContain("if you have nothing new for the recipient, output nothing");
-    expect(content).toContain("the runtime will end the turn silently");
+    expect(content).toContain("Stay silent when you have nothing to add");
+    expect(content).toContain("If you have nothing new for the recipient, output nothing");
+    expect(content).toContain("the runtime ends the turn");
+    // Issue #389: pin the anti-double-encode directive so future prompt edits
+    // don't accidentally drop it. The CLI passes content as-is; agents that
+    // JSON.stringify before sending produce a literal `"@x ...\n..."` row
+    // that the UI cannot render as markdown.
+    expect(content).toContain("Content rules");
+    expect(content).toContain("JSON.stringify");
   });
 
   it("does not write self.md (per PRD D7 — prompt lives in agent_configs)", () => {
