@@ -781,7 +781,20 @@ export function ChatView({
    */
   const items: TimelineItem[] = useMemo(() => {
     const msgs = messagesData?.items ?? [];
-    const visibleEvents = filterEventsForTimeline(eventsData?.items ?? []);
+    const rawEvents = eventsData?.items ?? [];
+    const visibleEvents = filterEventsForTimeline(rawEvents);
+
+    // Turn id = the seq of the last turn_end seen across all events, including
+    // ones filterEventsForTimeline dropped. Every visible transient event has
+    // seq > lastTurnEndSeq, so each turn gets a unique stable anchor that
+    // survives toolUseId dedupe (where individual event ids change as
+    // pending → final updates flow in). Used to build remount-safe bubble
+    // keys so the user's manual open/closed toggle isn't reset when a single
+    // tool call's pending row gets replaced by its final-status row.
+    let lastTurnEndSeq = -1;
+    for (const e of rawEvents) {
+      if (e.kind === "turn_end" && e.seq > lastTurnEndSeq) lastTurnEndSeq = e.seq;
+    }
 
     const flat: TimelineItem[] = [
       ...msgs.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
@@ -791,10 +804,17 @@ export function ChatView({
 
     const grouped: TimelineItem[] = [];
     let bucket: SessionEventRow[] = [];
+    let bucketIndex = 0;
     const flushBucket = () => {
       const first = bucket[0];
       if (!first) return;
-      grouped.push({ kind: "workgroup", at: first.createdAt, key: `wg-${first.id}`, events: bucket });
+      grouped.push({
+        kind: "workgroup",
+        at: first.createdAt,
+        key: `wg-${lastTurnEndSeq}-${bucketIndex}`,
+        events: bucket,
+      });
+      bucketIndex += 1;
       bucket = [];
     };
     for (const item of flat) {
@@ -1219,7 +1239,13 @@ export function ChatView({
           <div className="flex flex-col" style={{ gap: 4 }}>
             {items.map((item) => {
               if (item.kind === "workgroup") {
-                return <WorkingBubble key={item.key} events={item.events} defaultOpen={chatDetail?.type !== "group"} />;
+                // Default to folded while chatDetail is still loading — opening
+                // a group chat's bubble for one frame and then folding it after
+                // chatDetail resolves is worse than under-opening direct chats
+                // by the same one-frame window.
+                return (
+                  <WorkingBubble key={item.key} events={item.events} defaultOpen={chatDetail?.type === "direct"} />
+                );
               }
               if (item.kind === "event") {
                 const ev = item.data;
