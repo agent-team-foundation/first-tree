@@ -762,6 +762,10 @@ export function ChatView({
       if (img) URL.revokeObjectURL(img.previewUrl);
       return prev.filter((i) => i.id !== id);
     });
+    // Mirror addImages: removing an image is also a "user is fixing it"
+    // signal — a prior "image too large" or "no @mention" error is now
+    // potentially stale and shouldn't stay pinned under the composer.
+    setUploadError(null);
   }, []);
 
   const handleSend = async () => {
@@ -778,7 +782,9 @@ export function ChatView({
     // doesn't look like a stuck send.
     if (requiresMention && draftMentions.length === 0) {
       if (images.length > 0) {
-        setUploadError("群聊发图请在文本里 @ 一位群成员（图片消息会沿用同一条 @）");
+        // English matches the other uploadError strings in this file
+        // (Failed to send image / Failed to add participants / Image too large).
+        setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
       }
       return;
     }
@@ -1475,6 +1481,10 @@ export function ChatView({
                     onChange={(e) => {
                       setDraft(e.target.value);
                       setCursor(e.target.selectionStart ?? e.target.value.length);
+                      // Dismiss a stale upload error (e.g. the "no @mention"
+                      // hint) the moment the user starts fixing it. Mirrors
+                      // the implicit clear in `addImages` at line ~756.
+                      if (uploadError !== null) setUploadError(null);
                     }}
                     onSelect={(e) => {
                       setCursor(e.currentTarget.selectionStart ?? draft.length);

@@ -94,10 +94,15 @@ export function sendFileMessage(
   content: SendFileMessageBody,
   metadata?: SendFileMessageMetadata,
 ): Promise<Message> {
+  // Project explicit fields rather than spreading `metadata` whole so future
+  // additions to SendFileMessageMetadata don't ride out on the `mentions`
+  // truthiness check by accident — each new field must be opted in here.
+  const mentions = metadata?.mentions;
+  const hasMentions = Array.isArray(mentions) && mentions.length > 0;
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "file",
     content,
-    ...(metadata?.mentions && metadata.mentions.length > 0 ? { metadata } : {}),
+    ...(hasMentions ? { metadata: { mentions } } : {}),
   });
 }
 
