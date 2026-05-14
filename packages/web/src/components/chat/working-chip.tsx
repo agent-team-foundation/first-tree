@@ -36,14 +36,15 @@ export function formatElapsed(ms: number): string {
 }
 
 export function WorkingChip({ activity }: { activity: LiveActivity }) {
-  // Ticker — re-render every second so the elapsed string moves. We key
-  // the effect by `startedAt` so a new live event (e.g. tool_call A →
-  // tool_call B) resets the clock cleanly.
+  // Ticker — re-render every second so the elapsed string moves forward.
+  // The interval is mount-once; when a new live event arrives the parent
+  // re-renders with a fresh `activity.startedAt`, and the next derivation
+  // of `elapsed` below naturally reflects the new origin (no explicit
+  // restart needed since the interval only schedules `setNow` ticks).
   const startedAt = new Date(activity.startedAt).getTime();
   const [now, setNow] = useState<number>(() => Date.now());
 
   useEffect(() => {
-    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS);
     return () => clearInterval(id);
   }, []);

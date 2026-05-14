@@ -309,9 +309,10 @@ export async function listMeChats(
 
   // Live activity — derived from each chat's latest `session_events` row.
   // One query for the whole page using `SELECT DISTINCT ON (agent_id,
-  // chat_id) ... ORDER BY seq DESC`; the existing index
-  // `idx_session_events_chat_created (agent_id, chat_id, created_at DESC)`
-  // makes the per-pair seek efficient. Stale events (older than
+  // chat_id) ... ORDER BY seq DESC`. The existing unique index
+  // `uq_session_events_chat_seq (agent_id, chat_id, seq)` covers the
+  // sort key exactly — PG can backward-scan it once the table grows
+  // past the seq-scan threshold. Stale events (older than
   // `LIVE_ACTIVITY_STALE_MS`) and turn-terminal kinds (`turn_end`,
   // `error`) are filtered out at derivation time so the wire payload
   // already represents "is currently working".
@@ -377,9 +378,11 @@ export async function deriveLiveActivity(db: Database, chatIds: string[]): Promi
   if (chatIds.length === 0) return new Map();
 
   // `DISTINCT ON (agent_id, chat_id)` + `ORDER BY seq DESC` returns the
-  // latest event per (agent, chat) pair. Multiple agents could in theory
-  // produce events for the same chat (group chats); we surface whichever
-  // pair has the freshest event since the row only carries one indicator.
+  // latest event per (agent, chat) pair (`seq` is strictly monotonic per
+  // pair, so seq-max == newest event). Multiple agents could in theory
+  // produce events for the same chat (group chats); the post-query
+  // reduction below collapses across agents and keeps the freshest one
+  // since `liveActivity` carries a single agent indicator.
   const rawRows = await db
     .selectDistinctOn([sessionEvents.agentId, sessionEvents.chatId], {
       agentId: sessionEvents.agentId,
