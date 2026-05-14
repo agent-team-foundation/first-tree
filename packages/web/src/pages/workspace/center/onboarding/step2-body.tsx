@@ -407,9 +407,10 @@ function Step2FormBody({
   // member in the org — i.e. the user is joining a populated team (the
   // common invitee case) rather than spinning up a solo space. Falls back
   // to the neutral copy for solo signups, where the "You've joined X" line
-  // would read awkwardly. (Was `joinPath === "invite" && teamName` before
-  // PR #377; the sessionStorage-derived flag could desync from server
-  // reality on cross-tab/device resumes.)
+  // would read awkwardly. Replaces the prior
+  // `joinPath === "invite" && teamName` check, which read from
+  // sessionStorage and could desync from server reality on cross-tab /
+  // cross-device resumes.
   const hasTeammates = orgHasOtherMembers && !!teamName;
   const computerReady =
     !!connectedClient && !!selectedRuntime && capabilitiesLoaded && okRuntimes.includes(selectedRuntime);

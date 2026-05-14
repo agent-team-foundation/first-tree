@@ -79,8 +79,7 @@ export function OnboardingView() {
   // happens case-insensitively — see `isAutoNamedTeam` for the full
   // rationale (the lowercase/casing skew is what matters for the typical
   // mixed-case GitHub login; the hex-suffix collision branch is a known
-  // accepted false negative). PR #377 review caught the case-sensitivity
-  // regression.
+  // accepted false negative).
   const login = user?.username ?? null;
   const teamHasDefaultName = isAutoNamedTeam(teamDisplayName, login);
 

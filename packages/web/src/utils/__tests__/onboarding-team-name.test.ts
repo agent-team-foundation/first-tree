@@ -8,7 +8,7 @@ describe("isAutoNamedTeam", () => {
     expect(isAutoNamedTeam("octocat's team", "octocat")).toBe(true);
   });
 
-  it("matches when the GitHub login was mixed-case (the PR #377 regression case)", () => {
+  it("matches when the GitHub login was mixed-case (regression caught in review)", () => {
     // GitHub login `Gandy2025` → `users.username = "gandy2025"` (forced
     // lowercase by `auth-identity.ts`) but
     // `team.displayName = "Gandy2025's team"` (original casing preserved
