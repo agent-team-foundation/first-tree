@@ -32,12 +32,19 @@ function prettyRuntimeLabel(provider: string): string {
 export function Step2Body({
   organizationId,
   memberId,
-  joinPath,
+  orgHasOtherMembers,
   refreshMe,
 }: {
   organizationId: string | null;
   memberId: string | null;
-  joinPath: "solo" | "invite" | null;
+  /**
+   * `true` when the caller's org has at least one ACTIVE member besides
+   * themselves. Drives the "You've joined {team}…" team-aware headline
+   * copy. Sourced from `/me` (per-membership count) so it stays accurate
+   * across tabs/devices — the prior `joinPath === "invite"` proxy could
+   * desync from server reality when sessionStorage was cleared.
+   */
+  orgHasOtherMembers: boolean;
   refreshMe: () => Promise<void>;
 }) {
   const navigate = useNavigate();
@@ -332,7 +339,7 @@ export function Step2Body({
 
   return (
     <Step2FormBody
-      joinPath={joinPath}
+      orgHasOtherMembers={orgHasOtherMembers}
       teamName={teamName}
       displayName={displayName}
       setDisplayName={setDisplayName}
@@ -361,7 +368,7 @@ function pickPreferredRuntime(caps: ClientCapabilities): string | null {
 }
 
 function Step2FormBody({
-  joinPath,
+  orgHasOtherMembers,
   teamName,
   displayName,
   setDisplayName,
@@ -378,7 +385,7 @@ function Step2FormBody({
   canCreate,
   onCreate,
 }: {
-  joinPath: "solo" | "invite" | null;
+  orgHasOtherMembers: boolean;
   teamName: string;
   displayName: string;
   setDisplayName: (next: string) => void;
@@ -396,7 +403,14 @@ function Step2FormBody({
   onCreate: () => void;
 }) {
   const nameInputRef = useRef<HTMLInputElement | null>(null);
-  const inviteHasTeam = joinPath === "invite" && teamName;
+  // Team-aware headline fires when there's at least one other active
+  // member in the org — i.e. the user is joining a populated team (the
+  // common invitee case) rather than spinning up a solo space. Falls back
+  // to the neutral copy for solo signups, where the "You've joined X" line
+  // would read awkwardly. (Was `joinPath === "invite" && teamName` before
+  // PR #377; the sessionStorage-derived flag could desync from server
+  // reality on cross-tab/device resumes.)
+  const hasTeammates = orgHasOtherMembers && !!teamName;
   const computerReady =
     !!connectedClient && !!selectedRuntime && capabilitiesLoaded && okRuntimes.includes(selectedRuntime);
 
@@ -419,7 +433,7 @@ function Step2FormBody({
   return (
     <>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
-        {inviteHasTeam ? (
+        {hasTeammates ? (
           <>
             You&apos;ve joined{" "}
             <span className="font-semibold" style={{ color: "var(--fg-2)" }}>

@@ -30,6 +30,7 @@ describe("/me: memberships + default org", () => {
         organizationName: string;
         role: string;
         agentId: string;
+        orgHasOtherMembers: boolean;
       }>;
     }>();
 
@@ -38,6 +39,11 @@ describe("/me: memberships + default org", () => {
     expect(fromList?.organizationId).toBe(admin.organizationId);
     expect(fromList?.role).toBe("admin");
     expect(fromList?.agentId).toBe(admin.humanAgentUuid);
+    // Solo admin: the org has exactly one active member (themselves), so
+    // the onboarding gate's "team-of-teammates" signal is false. Drives
+    // Step 2's neutral copy and Step 1's auto-named-team detection on the
+    // web client.
+    expect(fromList?.orgHasOtherMembers).toBe(false);
     expect(body.defaultOrganizationId).toBe(admin.organizationId);
   });
 });
