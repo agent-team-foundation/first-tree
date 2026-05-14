@@ -7,6 +7,7 @@ describe("resolveGitRepoTargetPath", () => {
     const workspace = sep === "\\" ? "C:\\tmp\\workspace" : "/tmp/workspace";
 
     expect(resolveGitRepoTargetPath(workspace, "repos/first-tree")).toBe(resolve(workspace, "repos/first-tree"));
+    expect(resolveGitRepoTargetPath(workspace, "..safe")).toBe(resolve(workspace, "..safe"));
   });
 
   it.each([
