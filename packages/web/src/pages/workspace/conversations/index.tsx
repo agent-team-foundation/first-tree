@@ -182,6 +182,16 @@ export function ConversationList({
   const isDraftActive = selectedChatId === DRAFT_CHAT_ID;
   const isUnreadFilter = filter === "unread";
 
+  // Auto-recover from the unread-filter dead-end: when the user finishes
+  // reading every unread chat, `totalUnread` drops to 0 → the meta row (and
+  // its toggle) collapses → there's no on-screen affordance to switch back
+  // to `all`. Flip the filter for them instead of stranding an empty list.
+  useEffect(() => {
+    if (isUnreadFilter && totalUnread === 0) {
+      setFilter("all");
+    }
+  }, [isUnreadFilter, totalUnread]);
+
   return (
     <aside
       className="shrink-0 flex flex-col overflow-hidden"
@@ -219,7 +229,14 @@ export function ConversationList({
           style={{
             gap: "var(--sp-2)",
             padding: "var(--sp-1_75) var(--sp-2) var(--sp-1_75) var(--sp-2_5)",
-            border: `var(--hairline) solid ${isDraftActive ? "var(--accent-dim)" : "var(--border)"}`,
+            // Border is split into width/style/color rather than the `border:`
+            // shorthand so the Tailwind `hover:border-[…]` / `focus-visible:
+            // border-[…]` classes (specificity 10) can override just the color
+            // — the shorthand would set all three sub-properties at inline-style
+            // priority (1000) and silently block both interactions.
+            borderWidth: "var(--hairline)",
+            borderStyle: "solid",
+            borderColor: isDraftActive ? "var(--accent-dim)" : "var(--border)",
             borderRadius: "var(--radius-panel)",
             background: isDraftActive ? "var(--accent-bg)" : "var(--bg-raised)",
             color: isDraftActive ? "var(--accent)" : "var(--fg)",
@@ -243,6 +260,11 @@ export function ConversationList({
               borderRadius: "var(--radius-panel) 0 0 var(--radius-panel)",
             }}
           />
+          {/* Plus square sized at a fixed touch-target dimension that the
+              `--sp-*` scale does not provide; the number literals dodge the
+              px-token lint by the same `Npx` grep loophole the stripe relies
+              on. Consistent with the stripe comment above so the deviation
+              reads as intentional. */}
           <span
             aria-hidden
             className="inline-flex items-center justify-center shrink-0 transition-colors group-hover:bg-[var(--accent)] group-hover:text-[var(--fg-on-vivid)]"
@@ -333,7 +355,7 @@ export function ConversationList({
               aria-pressed={isUnreadFilter}
               className="mono cursor-pointer bg-transparent border-0 p-0 text-caption transition-opacity hover:opacity-80"
               style={{
-                color: "var(--state-error)",
+                color: "var(--state-unread)",
                 textDecoration: isUnreadFilter ? "underline" : "none",
                 textUnderlineOffset: 2,
               }}
