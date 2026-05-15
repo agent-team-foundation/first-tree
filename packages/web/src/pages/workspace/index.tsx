@@ -5,7 +5,7 @@ import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { CenterPanel } from "./center/index.js";
 import { OnboardingStepper } from "./center/onboarding-stepper.js";
-import type { GroupMode } from "./conversations/group-rows.js";
+import { type GroupMode, parseGroupMode } from "./conversations/group-rows.js";
 import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
 
 /**
@@ -29,11 +29,6 @@ import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
  */
 const engagementViewParser = chatEngagementViewSchema.catch("active");
 
-function parseGroup(raw: string | null): GroupMode {
-  if (raw === "source" || raw === "none") return raw;
-  return "recency";
-}
-
 /**
  * Canonicalised parse of the mutually-exclusive `?unread=` / `?watching=`
  * pair. Exported for unit tests. The server `filter` enum can hold only
@@ -54,7 +49,7 @@ export function WorkspacePage() {
   const legacyAgentId = searchParams.get("a");
   const engagement: ChatEngagementView = engagementViewParser.parse(searchParams.get("engagement"));
   const { unread, watching } = parseUnreadWatching(searchParams);
-  const group = parseGroup(searchParams.get("group"));
+  const group = parseGroupMode(searchParams.get("group"));
 
   useAdminWs();
 

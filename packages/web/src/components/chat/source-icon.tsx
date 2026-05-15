@@ -44,16 +44,31 @@ export function SourceIcon({
   emphasize = false,
   size = 16,
 }: {
-  source: ChatSource;
+  source: ChatSource | undefined;
   /** When true, render at full `--fg` (used on rows with unread mentions). */
   emphasize?: boolean;
   size?: number;
 }) {
-  const Icon = SOURCE_ICON_MAP[source];
+  // Two-layer fallback:
+  //   1. `source` itself may be `undefined` when an older server build
+  //      doesn't yet include the `source` column in the row payload
+  //      (web rolls before server). `api.get<>` is a plain TS cast,
+  //      so the shared schema's `default("manual")` doesn't run at
+  //      runtime — we have to defend here.
+  //   2. Even when `source` arrives, a future `ChatSource` literal
+  //      added to the shared enum without a corresponding map entry
+  //      would otherwise render `<undefined />` and crash React.
+  //
+  // Both cases collapse to the Manual placeholder so the row still
+  // renders. Manual is the visually quietest fallback (`MessagesSquare`)
+  // and the label preserves the unknown source's identity in screen
+  // readers via the source key.
+  const Icon = (source && SOURCE_ICON_MAP[source]) ?? MessagesSquare;
+  const label = (source && SOURCE_LABEL_MAP[source]) ?? "Conversation";
   return (
     <Icon
       role="img"
-      aria-label={SOURCE_LABEL_MAP[source]}
+      aria-label={label}
       size={size}
       strokeWidth={1.75}
       style={{

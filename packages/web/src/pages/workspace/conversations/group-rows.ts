@@ -2,6 +2,17 @@ import type { ChatSource, MeChatRow } from "@agent-team-foundation/first-tree-hu
 
 export type GroupMode = "recency" | "source" | "none";
 
+/**
+ * Parse a `?group=` URL value into a `GroupMode`. Unknown / missing
+ * values fall back to `recency` (the default). Exported so both the
+ * URL-state side (`WorkspacePage`) and the `<select>`-onChange side
+ * (`ConversationList`) share one canonical parser.
+ */
+export function parseGroupMode(raw: string | null): GroupMode {
+  if (raw === "source" || raw === "none") return raw;
+  return "recency";
+}
+
 export type GroupBucket = {
   key: string;
   /** `null` = no header rendered (used by `none`). */
@@ -114,9 +125,13 @@ const SOURCE_BUCKETS: ReadonlyArray<{ key: ChatSource; label: string }> = [
 function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket> {
   const map = new Map<ChatSource, MeChatRow[]>();
   for (const r of rows) {
-    const list = map.get(r.source);
+    // Same defence as `SourceIcon`: if `r.source` is missing because
+    // an older server build hasn't shipped the column yet, treat the
+    // row as Manual so it still gets a bucket instead of vanishing.
+    const key: ChatSource = r.source ?? "manual";
+    const list = map.get(key);
     if (list) list.push(r);
-    else map.set(r.source, [r]);
+    else map.set(key, [r]);
   }
   const buckets: GroupBucket[] = [];
   for (const b of SOURCE_BUCKETS) {

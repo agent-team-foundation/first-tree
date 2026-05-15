@@ -9,7 +9,7 @@ import { SourceIcon } from "../../../components/chat/source-icon.js";
 import { WorkingChip } from "../../../components/chat/working-chip.js";
 import { SegmentedControl } from "../../../components/ui/segmented-control.js";
 import { cn } from "../../../lib/utils.js";
-import { type GroupMode, groupRows } from "./group-rows.js";
+import { type GroupMode, groupRows, parseGroupMode } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -73,11 +73,6 @@ function buildSubtitle(row: MeChatRow): string {
     return row.lastMessagePreview ? `Watching · ${row.lastMessagePreview}` : "Watching";
   }
   return row.lastMessagePreview ?? "";
-}
-
-function parseGroupValue(raw: string): GroupMode {
-  if (raw === "source" || raw === "none") return raw;
-  return "recency";
 }
 
 export function ConversationList({
@@ -209,9 +204,15 @@ export function ConversationList({
   };
 
   const toggleBucket = (key: string, defaultCollapsed: boolean): void => {
+    // The functional updater MUST derive the new value from `prev`, not
+    // from the outer `bucketCollapse`. Under React 19 concurrent
+    // rendering two toggles in the same tick could be batched, and the
+    // second one would otherwise compute its `next` from the pre-batch
+    // closure state and clobber the first.
     setBucketCollapse((prev) => {
+      const current = prev.get(key) ?? defaultCollapsed;
       const next = new Map(prev);
-      next.set(key, !isBucketCollapsed(key, defaultCollapsed));
+      next.set(key, !current);
       return next;
     });
   };
@@ -323,7 +324,7 @@ export function ConversationList({
               <span>Group</span>
               <select
                 value={group}
-                onChange={(e) => onGroupChange(parseGroupValue(e.target.value))}
+                onChange={(e) => onGroupChange(parseGroupMode(e.target.value))}
                 className="text-label cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
                 style={{
                   padding: "var(--sp-0_5) var(--sp-1)",
