@@ -214,170 +214,165 @@ export function ConversationList({
         borderRight: "var(--hairline) solid var(--border)",
       }}
     >
-      {/* Header — hero + per-dimension controls. Source / origin filter
-          deliberately omitted: Phase B will surface it in a filter popover
-          rather than as a third row of pills. */}
-      <div
-        className="shrink-0 flex flex-col"
-        style={{
-          gap: "var(--sp-2)",
-          padding: "var(--sp-2_5) var(--sp-3) var(--sp-2)",
-          borderBottom: "var(--hairline) solid var(--border-faint)",
-          background: "radial-gradient(140% 80% at 0% 0%, var(--accent-bg) 0%, transparent 60%)",
-        }}
-      >
+      {/* Header — New chat row + toolbar block.
+          New chat sits as a list-row sibling of chat rows (not a hero
+          CTA) so the rail's visual rhythm stays uniform. Toolbar block
+          underneath carries filter / scope / group controls, separated
+          from New chat by a hairline so the two regions read distinctly. */}
+      <div className="shrink-0 flex flex-col" style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
         <button
           type="button"
           onClick={onNewChat}
           aria-current={isDraftActive ? "page" : undefined}
           className={cn(
-            "group relative w-full inline-flex items-center transition-colors text-body cursor-pointer font-semibold",
-            !isDraftActive && "hover:bg-[var(--bg-hover)] hover:border-[var(--border-strong)]",
-            "focus-visible:outline-none focus-visible:border-[var(--accent-dim)]",
+            "group w-full text-left flex items-center transition-colors text-body cursor-pointer",
+            !isDraftActive && "hover:bg-[var(--bg-hover)]",
           )}
           style={{
-            gap: "var(--sp-2)",
-            padding: "var(--sp-1_75) var(--sp-2) var(--sp-1_75) var(--sp-2_5)",
-            borderWidth: "var(--hairline)",
-            borderStyle: "solid",
-            borderColor: isDraftActive ? "var(--accent-dim)" : "var(--border)",
-            borderRadius: "var(--radius-panel)",
-            background: isDraftActive ? "var(--accent-bg)" : "var(--bg-raised)",
-            color: isDraftActive ? "var(--accent)" : "var(--fg)",
+            gap: "var(--sp-2_5)",
+            // Padding mirrors the chat row so the rail's leading edge
+            // and avatar/icon column stay vertically aligned across
+            // New chat, Unread, and every conversation row.
+            padding: "var(--sp-1_75) var(--sp-3)",
+            background: isDraftActive ? "var(--bg-active)" : "transparent",
+            // Active draft state mirrors the selected-row treatment
+            // (left stripe in `--accent`) so "New chat is the current
+            // selection" reads identically to "this chat is selected".
+            borderLeft: `var(--hairline-bold) solid ${isDraftActive ? "var(--accent)" : "transparent"}`,
+            color: "var(--fg)",
           }}
           title="New chat"
         >
           <span
             aria-hidden
-            className="absolute pointer-events-none"
+            className="inline-flex items-center justify-center shrink-0"
             style={{
-              left: -1,
-              top: -1,
-              bottom: -1,
-              width: 3,
-              background: "var(--accent)",
-              borderRadius: "var(--radius-panel) 0 0 var(--radius-panel)",
-            }}
-          />
-          <span
-            aria-hidden
-            className="inline-flex items-center justify-center shrink-0 transition-colors group-hover:bg-[var(--accent)] group-hover:text-[var(--fg-on-vivid)]"
-            style={{
-              width: 20,
-              height: 20,
-              borderRadius: "var(--radius-chip)",
+              // Sized to sit between the row's text leading (~14 px) and
+              // the avatar disc (36 px) — present but unobtrusive.
+              width: 22,
+              height: 22,
+              borderRadius: "50%",
               background: isDraftActive ? "var(--accent)" : "var(--accent-bg)",
               color: isDraftActive ? "var(--fg-on-vivid)" : "var(--accent)",
             }}
           >
             <Plus className="h-3 w-3" strokeWidth={2} />
           </span>
-          <span className="flex-1 text-left">New chat</span>
+          <span className="flex-1 font-medium">New chat</span>
         </button>
 
-        {/* Unread toggle. Active state uses --bg-active to match the
+        <div
+          className="flex flex-col"
+          style={{
+            gap: "var(--sp-2)",
+            padding: "var(--sp-2) var(--sp-3)",
+            borderTop: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          {/* Unread toggle. Active state uses --bg-active to match the
             SegmentedControl below; pressing it again clears the filter.
             Count appears only when nonzero so the chip width doesn't
             jitter at the empty-state boundary. */}
-        <button
-          type="button"
-          onClick={() => onUnreadChange(!unread)}
-          aria-pressed={unread}
-          className="mono inline-flex items-center text-caption cursor-pointer"
-          style={{
-            gap: "var(--sp-1)",
-            padding: "var(--sp-0_5) var(--sp-1_75)",
-            border: `var(--hairline) solid ${unread ? "var(--border-strong)" : "var(--border)"}`,
-            borderRadius: 3,
-            background: unread ? "var(--bg-active)" : "transparent",
-            color: unread ? "var(--fg)" : "var(--fg-3)",
-            alignSelf: "flex-start",
-          }}
-          title={unread ? "Show all chats" : "Filter to unread only"}
-        >
-          <Bell size={12} strokeWidth={2} />
-          <span>Unread</span>
-          {totalUnread > 0 && <span style={{ color: "var(--state-unread)" }}>{totalUnread}</span>}
-        </button>
+          <button
+            type="button"
+            onClick={() => onUnreadChange(!unread)}
+            aria-pressed={unread}
+            className="mono inline-flex items-center text-caption cursor-pointer"
+            style={{
+              gap: "var(--sp-1)",
+              padding: "var(--sp-0_5) var(--sp-1_75)",
+              border: `var(--hairline) solid ${unread ? "var(--border-strong)" : "var(--border)"}`,
+              borderRadius: 3,
+              background: unread ? "var(--bg-active)" : "transparent",
+              color: unread ? "var(--fg)" : "var(--fg-3)",
+              alignSelf: "flex-start",
+            }}
+            title={unread ? "Show all chats" : "Filter to unread only"}
+          >
+            <Bell size={12} strokeWidth={2} />
+            <span>Unread</span>
+            {totalUnread > 0 && <span style={{ color: "var(--state-unread)" }}>{totalUnread}</span>}
+          </button>
 
-        {/* Scope + Group by share one row. Both are "view mode" controls
+          {/* Scope + Group by share one row. Both are "view mode" controls
             (which pool × how it's arranged), so co-locating them avoids
             implying that Group by is another filter dimension. Group by
             right-aligns via `marginLeft: auto`. Uses a native `<select>`
             for Group by — the option set is tiny (3 entries) and a custom
             popover would be visual overkill on a 320 px rail. */}
-        <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-          <SegmentedControl
-            options={ENGAGEMENT_OPTIONS}
-            value={engagement}
-            onChange={(v) => {
-              if (engagement !== v) {
-                onEngagementChange(v);
-                resetExtras();
-              }
-            }}
-          />
-          <label
-            className="mono inline-flex items-center text-caption"
-            style={{ marginLeft: "auto", gap: 4, color: "var(--fg-4)" }}
-          >
-            <span>Group</span>
-            <select
-              value={group}
-              onChange={(e) => onGroupChange(parseGroupValue(e.target.value))}
-              className="mono text-caption"
-              style={{
-                padding: "var(--sp-0_5) var(--sp-1)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: 3,
-                background: "var(--bg-raised)",
-                color: "var(--fg-2)",
-                cursor: "pointer",
+          <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+            <SegmentedControl
+              options={ENGAGEMENT_OPTIONS}
+              value={engagement}
+              onChange={(v) => {
+                if (engagement !== v) {
+                  onEngagementChange(v);
+                  resetExtras();
+                }
               }}
+            />
+            <label
+              className="mono inline-flex items-center text-caption"
+              style={{ marginLeft: "auto", gap: 4, color: "var(--fg-4)" }}
             >
-              {GROUP_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+              <span>Group</span>
+              <select
+                value={group}
+                onChange={(e) => onGroupChange(parseGroupValue(e.target.value))}
+                className="mono text-caption"
+                style={{
+                  padding: "var(--sp-0_5) var(--sp-1)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: 3,
+                  background: "var(--bg-raised)",
+                  color: "var(--fg-2)",
+                  cursor: "pointer",
+                }}
+              >
+                {GROUP_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
 
-        {/* Filter chip row — only renders when at least one filter is
+          {/* Filter chip row — only renders when at least one filter is
             active. Phase A only surfaces unread / watching here; Phase B
             will extend it with origin / participants chips. */}
-        {hasActiveFilter && (
-          <div className="flex items-center flex-wrap" style={{ gap: 4 }}>
-            <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-              Filters
-            </span>
-            {unread && (
-              <FilterChip
-                label={`Unread${totalUnread > 0 ? ` ${totalUnread}` : ""}`}
-                onClear={() => onUnreadChange(false)}
-              />
-            )}
-            {watching && <FilterChip label="Watching" onClear={() => onWatchingChange(false)} />}
-            <button
-              type="button"
-              onClick={() => {
-                if (unread) onUnreadChange(false);
-                if (watching) onWatchingChange(false);
-              }}
-              className="mono text-caption cursor-pointer"
-              style={{
-                marginLeft: "auto",
-                background: "transparent",
-                border: 0,
-                padding: 0,
-                color: "var(--accent)",
-              }}
-            >
-              Clear
-            </button>
-          </div>
-        )}
+          {hasActiveFilter && (
+            <div className="flex items-center flex-wrap" style={{ gap: 4 }}>
+              <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                Filters
+              </span>
+              {unread && (
+                <FilterChip
+                  label={`Unread${totalUnread > 0 ? ` ${totalUnread}` : ""}`}
+                  onClear={() => onUnreadChange(false)}
+                />
+              )}
+              {watching && <FilterChip label="Watching" onClear={() => onWatchingChange(false)} />}
+              <button
+                type="button"
+                onClick={() => {
+                  if (unread) onUnreadChange(false);
+                  if (watching) onWatchingChange(false);
+                }}
+                className="mono text-caption cursor-pointer"
+                style={{
+                  marginLeft: "auto",
+                  background: "transparent",
+                  border: 0,
+                  padding: 0,
+                  color: "var(--accent)",
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* List */}
