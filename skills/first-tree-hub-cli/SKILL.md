@@ -1,6 +1,6 @@
 ---
 name: first-tree-hub-cli
-description: Install, operate, deploy, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `connect`/`server`/`client`/`agent`/`chat`/`onboard` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to a Hub server, installing or running the Hub as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
+description: Install, operate, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `connect`/`client`/`agent`/`chat`/`onboard` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to the SaaS Hub, installing or running the client as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
 ---
 
 # First Tree Hub CLI
@@ -9,20 +9,19 @@ description: Install, operate, deploy, and modify First Tree Hub with emphasis o
 
 Use this skill to map user intent onto the right First Tree Hub command or code path without re-discovering the repo each time.
 
-Keep the mental model straight: First Tree Hub is the communication and identity backbone for agent teams. It is **not** the agent framework, not the orchestration engine, and not the Context Tree. A Hub deployment has three principals:
+Keep the mental model straight: First Tree Hub is the communication and identity backbone for agent teams. It is **not** the agent framework, not the orchestration engine, and not the Context Tree. The Hub has three principals:
 
-- **Server** — one per deployment. Owns identity, persistence, admin surface, and the inbox.
+- **Server** — operated centrally as a SaaS by the First Tree team. Owns identity, persistence, admin surface, and the inbox. End users do not run their own server; the CLI has no `server` command group.
 - **Client** — one per computer. A machine signs in with a Hub member's credentials once, then runs every agent pinned to it.
 - **Agent** — many per Hub. Lives in the server's database; is bound to exactly one client machine.
 
-This shape drives almost every command: `server` targets the deployment, `client` targets a machine, `agent` targets a row in the server's database (usually acting as the member via their own JWT).
+This shape drives almost every command: `client` targets a machine, `agent` targets a row in the server's database (usually acting as the member via their own JWT).
 
 ## Start Here
 
 1. **Classify the task before acting.** Most requests fall into one of these buckets. Pick the bucket, then go to the reference it names.
    - Install or sanity-check the CLI on a fresh machine → `references/command-surface.md`
-   - Run, diagnose, or deploy a Hub server → `references/command-surface.md`
-   - Connect a computer to a Hub server (first time) → the **`connect <token>`** section below, then `references/scenario-playbooks.md`
+   - Connect a computer to the SaaS Hub (first time) → the **`connect <token>`** section below, then `references/scenario-playbooks.md`
    - Make a computer stay online permanently → the **Background service** section below
    - Map a natural-language request to an end-to-end CLI flow → `references/scenario-playbooks.md`
    - Operate `onboard` from an external agent prompt → `references/onboarding-operator.md`
@@ -37,7 +36,6 @@ This shape drives almost every command: `server` targets the deployment, `client
    - `docs/cli-reference.md` — every flag and env var in one place
    - `docs/onboarding-guide.md` — full onboarding walkthrough
    - `docs/claim-agent-guide.md` — agent claim + Feishu binding
-   - `docs/deployment-guide.md` — Docker, Railway/Render, HTTPS, production
 4. **On a fresh machine, verify prerequisites before proposing a flow.**
    - Node.js `>= 22.16`
    - Install: `npm install -g @agent-team-foundation/first-tree-hub`
@@ -93,7 +91,6 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 
 - **Keep subsystem boundaries clear.**
   - `connect <token>` — first-time setup for this computer; folds in auth, `client.yaml` write, and background-service install.
-  - `server ...` — server lifecycle (start, stop, doctor, status, migrate, admin create).
   - `client ...` — everything that happens on a specific computer once it is connected: the foreground runtime (`start`), the background service, Hub-side client inventory (`list`, `disconnect`), and local YAML edits via `client config`.
   - `agent ...` — everything that is "about an agent record": local alias config (`add`/`remove`/`list`), creation and claiming, workspace cleanup, bindings, **runtime configuration via `agent config`**, status / reset / sessions.
   - `chat ...` — day-to-day messaging: `send`, `list`, `history`, and the interactive `open` REPL.
@@ -102,7 +99,6 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 - **Respect config layering.** CLI args override env vars → env vars override YAML → YAML overrides auto-generated → auto-generated overrides defaults.
 - **Distinguish config scopes and paths.**
   - Home defaults to `~/.first-tree/hub`; `FIRST_TREE_HUB_HOME` relocates it.
-  - Server config: `$FIRST_TREE_HUB_HOME/config/server.yaml`
   - Client config: `$FIRST_TREE_HUB_HOME/config/client.yaml`
   - Per-agent local alias: `$FIRST_TREE_HUB_HOME/config/agents/<name>/agent.yaml`
   - Credentials: `$FIRST_TREE_HUB_HOME/credentials.json`
@@ -115,9 +111,8 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 ### Choose a Command
 
 - Install + verify: `npm install -g @agent-team-foundation/first-tree-hub`, then `first-tree-hub --version`.
-- First local boot or quick demo: `first-tree-hub server start`.
-- Environment readiness: `first-tree-hub server doctor` or `first-tree-hub client doctor` for a compact summary.
-- Connect a computer to a Hub server: `first-tree-hub connect <token>` — paste the token from the Hub web console's *Connect a machine* dialog.
+- Environment readiness: `first-tree-hub client doctor` for a compact summary.
+- Connect a computer to the SaaS Hub: `first-tree-hub connect <token>` — paste the token from the Hub web console's *Connect a machine* dialog.
 - Keep the computer online across reboots: handled automatically by `first-tree-hub connect <token>` (omit `--no-service`).
 - Run the runtime inline (no service): `first-tree-hub client start`.
 - See which machines the Hub currently sees: `first-tree-hub client list`; force-drop one with `first-tree-hub client disconnect <clientId>`.
@@ -157,7 +152,7 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 
 - For new or changed CLI behavior, inspect:
   - `packages/command/src/commands/*.ts` — command registration and argument shape.
-  - `packages/command/src/core/*.ts` — reusable logic (auth, service install, doctor, onboard, Docker Postgres, Feishu, etc.).
+  - `packages/command/src/core/*.ts` — reusable logic (auth, service install, doctor, onboard, Feishu, etc.).
   - `packages/shared/src/config/*.ts` — if flags, env vars, or schema change.
   - `docs/cli-reference.md` and `docs/onboarding-guide.md` — whenever user-facing behavior changes.
 - Keep command modules thin. Reusable business logic belongs in `packages/command/src/core/`. Re-export new reusable functions from `packages/command/src/core/index.ts` and `packages/command/src/index.ts` when external callers should be able to import them.

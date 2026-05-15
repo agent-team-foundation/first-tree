@@ -5,9 +5,7 @@
 | User intent | Preferred entry point | Non-obvious note |
 | --- | --- | --- |
 | Install or verify the CLI on a fresh machine | `npm install -g @agent-team-foundation/first-tree-hub` then `first-tree-hub --version` | Requires Node.js `>= 22.16` |
-| Bring up a full local Hub quickly | `first-tree-hub server start` | Interactive on first run; auto-provisions PostgreSQL with Docker, runs migrations, creates the default admin, and serves the web UI |
-| Check whether a machine is ready for Hub | `first-tree-hub server doctor` / `client doctor` | `doctor` = readiness; top-level `status` = current state summary |
-| See if the server is alive | `first-tree-hub server status` | Hits `/api/v1/health`; defaults to `http://localhost:8000` unless `FIRST_TREE_HUB_SERVER_URL` is set |
+| Check whether a machine is ready for Hub | `first-tree-hub client doctor` | `doctor` = readiness; top-level `status` = current state summary |
 | Sign this computer into a Hub server | `first-tree-hub connect <token> [--no-service]` | Paste a connect token from the Hub web console; hub URL is derived from the token's `iss` claim. Stores a member JWT at `~/.first-tree/hub/credentials.json`, writes `client.yaml`, and (by default) installs the background service |
 | Run the client inline instead of via service | `first-tree-hub client start` | Loads credentials written by `connect`; fails if there are none or if no agents are pinned to this client |
 | Keep the computer online across reboots | `first-tree-hub connect <token>` (omit `--no-service`) | Auto-installs launchd on macOS or `systemd --user` on Linux; Windows unsupported (falls back to inline) |
@@ -33,17 +31,6 @@ There are no separate admin or agent tokens. The member's JWT is used for every 
 If `credentials.json` is missing or refresh fails, the CLI exits with a message pointing at `first-tree-hub connect <token>`. Do not paper over this with manual env vars — run `connect <token>`.
 
 ## Command Families
-
-### `server`
-
-Lifecycle for the Hub server process and its PostgreSQL backing store.
-
-- `server start` — best default for first-run local usage. Prompts for missing config unless `--no-interactive` is set; can auto-start a Docker-managed PostgreSQL if no `--database-url` is provided; runs migrations; creates the default `admin` user on an empty database; resolves/builds the web dist so the admin UI is served.
-- `server stop` — stops the CLI-managed PostgreSQL container only. It does **not** stop a standalone Fastify process.
-- `server doctor` — Node version, Docker availability, server config, database connectivity, GitHub token, Context Tree access, server health.
-- `server status` — simple health probe against `/api/v1/health`; defaults to `http://localhost:8000` unless `FIRST_TREE_HUB_SERVER_URL` is set.
-- `server migrate` — applies migrations against the configured database.
-- `server admin create` — creates a new owner/admin against the configured database (not via HTTP — direct DB access).
 
 ### `client`
 
@@ -130,10 +117,8 @@ there are no `-s` / `-c` / `-a` flags.
 - `client config set <key> <value>` — sets a dotted key. Values matching `^\d+$`, `true`, or `false` are auto-coerced.
 - `client config get <key> [--show-secrets]` — alias for `show <key>` (kept for scripts that pre-date the rename).
 
-Server-side YAML (`server.yaml`) is configured via env vars or by
-hand-editing the file. Agent-side runtime configuration lives under
-`agent config ...`, which mutates the Hub database via the admin API, not
-a local file.
+Agent-side runtime configuration lives under `agent config ...`, which
+mutates the Hub database via the admin API, not a local file.
 
 ### `onboard`
 
@@ -155,28 +140,17 @@ Important: `onboard` depends on a valid credential file. If `loadCredentials()` 
 
 - Home: `~/.first-tree/hub` by default; override with `FIRST_TREE_HUB_HOME`.
 - `$HOME/credentials.json` — member JWT + refresh token.
-- `$HOME/config/server.yaml`
 - `$HOME/config/client.yaml`
 - `$HOME/config/agents/<name>/agent.yaml`
 - `$HOME/.onboard-state.json`
 - `$HOME/logs/` — background service stdout/stderr
 - `$HOME/context-tree/` — optional organizational clone
-- `$HOME/data/sessions/`, `$HOME/data/workspaces/<agent>/<chatId>/`, `$HOME/data/postgres/`
+- `$HOME/data/sessions/`, `$HOME/data/workspaces/<agent>/<chatId>/`
 
 ### Environment variables
 
 **Global**
 - `FIRST_TREE_HUB_HOME`
-
-**Server**
-- `FIRST_TREE_HUB_DATABASE_URL`
-- `FIRST_TREE_HUB_PORT`
-- `FIRST_TREE_HUB_HOST`
-- `FIRST_TREE_HUB_JWT_SECRET`
-- `FIRST_TREE_HUB_ENCRYPTION_KEY`
-- `FIRST_TREE_HUB_CONTEXT_TREE_REPO`
-- `FIRST_TREE_HUB_GITHUB_TOKEN`
-- `FIRST_TREE_HUB_WEB_DIST_PATH`
 
 **Client**
 - `FIRST_TREE_HUB_SERVER_URL` — overrides `client.yaml`'s `server.url` at call time.
@@ -207,4 +181,3 @@ Useful when debugging or when a user wants to script around the CLI. All calls a
 - `docs/cli-reference.md` — the canonical public flag/env reference.
 - `docs/onboarding-guide.md` — end-to-end onboarding walkthrough and type-specific notes.
 - `docs/claim-agent-guide.md` — claim + Feishu binding details.
-- `docs/deployment-guide.md` — Docker, Railway, Render, Supabase, HTTPS, multi-machine.

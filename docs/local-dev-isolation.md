@@ -84,7 +84,7 @@ a CLI upgrade to silently rename people's prod service.
 ## What `dev-cli.sh` does NOT isolate
 
 - The PostgreSQL database. Hub server uses one shared DB by default.
-  If you also run an in-tree server (`pnpm --filter ... dev -- server start`),
+  If you also run an in-tree server (`pnpm --filter @first-tree-hub/server dev`),
   use a separate DB URL via `FIRST_TREE_HUB_DATABASE_URL`.
 - Global npm packages. `update --no-restart` will still run
   `npm install -g @agent-team-foundation/first-tree-hub@latest` and
