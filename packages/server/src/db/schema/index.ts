@@ -23,5 +23,4 @@ export { organizations } from "./organizations.js";
 export { pendingQuestions } from "./pending-questions.js";
 export { serverInstances } from "./server-instances.js";
 export { sessionEvents } from "./session-events.js";
-export { treeWriteTasks } from "./tree-write-tasks.js";
 export { users } from "./users.js";

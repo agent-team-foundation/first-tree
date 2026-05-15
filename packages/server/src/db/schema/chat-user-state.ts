@@ -44,12 +44,6 @@ export const chatUserState = pgTable(
      * matches what `COALESCE(..., 'active')` returns for missing rows.
      */
     engagementStatus: text("engagement_status").notNull().default("active"),
-    /**
-     * Monotonic per-(chat, user) archive event counter. Increments only on
-     * real `active -> archived` transitions so re-archives after auto-revive
-     * can be uniquely identified.
-     */
-    archiveSeq: integer("archive_seq").notNull().default(0),
   },
   (table) => [
     primaryKey({ columns: [table.chatId, table.agentId] }),

@@ -1,7 +1,6 @@
 import {
   CONTEXT_TREE_VERIFICATION_STATUSES,
   NOTIFICATION_TYPES,
-  TREE_WRITE_TASK_STATES,
   type TreeWriteTaskResult,
   type TreeWriteTaskStart,
 } from "@agent-team-foundation/first-tree-hub-shared";
@@ -11,7 +10,6 @@ import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
-import { treeWriteTasks } from "../db/schema/tree-write-tasks.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 import { createChat } from "./chat.js";
@@ -20,22 +18,12 @@ import { createNotification } from "./notification.js";
 import { getOrgContextTree } from "./org-settings.js";
 
 const { VERIFIED } = CONTEXT_TREE_VERIFICATION_STATUSES;
-const { PENDING, RUNNING, DONE, NO_WRITE, FAILED } = TREE_WRITE_TASK_STATES;
 const log = createLogger("tree-write");
 
-const TREE_WRITE_MAX_ATTEMPTS = 3;
-const TREE_WRITE_RETRY_BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000] as const;
-const TREE_WRITE_LEASE_SQL = sql`NOW() + INTERVAL '15 minutes'`;
-const TREE_WRITE_LEASE_REFRESH_SQL = sql`NOW() + INTERVAL '15 minutes'`;
-
-type TreeWriteClaimRow = {
-  id: string;
-  source_chat_id: string;
-  owner_user_id: string;
-  archive_seq: number;
-  agent_id: string;
-  exec_chat_id: string | null;
-  attempt_count: number;
+type ActiveTreeWriteTask = {
+  agentId: string;
+  sourceChatId: string;
+  cleanupTimer: ReturnType<typeof setTimeout>;
 };
 
 type PromptMessageRow = {
@@ -46,6 +34,31 @@ type PromptMessageRow = {
   name: string | null;
   display_name: string | null;
 };
+
+const activeTasks = new Map<string, ActiveTreeWriteTask>();
+const ACTIVE_TASK_TTL_MS = 24 * 60 * 60 * 1000;
+
+function rememberTask(taskId: string, task: { agentId: string; sourceChatId: string }): void {
+  const existing = activeTasks.get(taskId);
+  if (existing) clearTimeout(existing.cleanupTimer);
+  const cleanupTimer = setTimeout(() => {
+    activeTasks.delete(taskId);
+  }, ACTIVE_TASK_TTL_MS);
+  activeTasks.set(taskId, { ...task, cleanupTimer });
+}
+
+function getTask(taskId: string): { agentId: string; sourceChatId: string } | null {
+  const task = activeTasks.get(taskId);
+  if (!task) return null;
+  return { agentId: task.agentId, sourceChatId: task.sourceChatId };
+}
+
+function forgetTask(taskId: string): void {
+  const task = activeTasks.get(taskId);
+  if (!task) return;
+  clearTimeout(task.cleanupTimer);
+  activeTasks.delete(taskId);
+}
 
 function renderMessageContentForPrompt(content: unknown): string {
   if (typeof content === "string") return content;
@@ -81,6 +94,30 @@ function pickTailWithinBudget(values: string[], byteBudget: number): string[] {
   }
   reversed.reverse();
   return reversed;
+}
+
+async function createTreeWriteNotification(
+  db: Database,
+  sourceChatId: string,
+  agentId: string,
+  message: string,
+  severity: "low" | "medium" = "low",
+): Promise<void> {
+  const [chat] = await db
+    .select({ organizationId: chats.organizationId })
+    .from(chats)
+    .where(eq(chats.id, sourceChatId))
+    .limit(1);
+  if (!chat) return;
+
+  await createNotification(db, {
+    organizationId: chat.organizationId,
+    type: NOTIFICATION_TYPES.TREE_WRITE_COMPLETED,
+    severity,
+    agentId,
+    chatId: sourceChatId,
+    message,
+  });
 }
 
 async function createExecChatForTreeWrite(
@@ -183,95 +220,6 @@ async function buildTreeWritePrompt(db: Database, sourceChatId: string): Promise
   ].join("\n");
 }
 
-async function finalizeTreeWriteNotification(
-  db: Database,
-  task: { sourceChatId: string; agentId: string },
-  input:
-    | { state: typeof DONE; message: string }
-    | { state: typeof NO_WRITE; message: string }
-    | { state: typeof FAILED; message: string },
-): Promise<void> {
-  const [chat] = await db
-    .select({ organizationId: chats.organizationId })
-    .from(chats)
-    .where(eq(chats.id, task.sourceChatId))
-    .limit(1);
-  if (!chat) return;
-
-  await createNotification(db, {
-    organizationId: chat.organizationId,
-    type: NOTIFICATION_TYPES.TREE_WRITE_COMPLETED,
-    severity: input.state === FAILED ? "medium" : "low",
-    agentId: task.agentId,
-    chatId: task.sourceChatId,
-    message: input.message,
-  });
-}
-
-function retryDelayMsForAttempt(attemptCount: number): number {
-  const index = Math.max(0, Math.min(attemptCount - 1, TREE_WRITE_RETRY_BACKOFF_MS.length - 1));
-  const delay = TREE_WRITE_RETRY_BACKOFF_MS[index];
-  if (delay !== undefined) return delay;
-  return 30 * 60_000;
-}
-
-async function scheduleRetryOrFail(db: Database, task: TreeWriteClaimRow, errorMessage: string): Promise<void> {
-  if (task.attempt_count >= TREE_WRITE_MAX_ATTEMPTS) {
-    await db
-      .update(treeWriteTasks)
-      .set({
-        state: FAILED,
-        leaseExpiresAt: null,
-        lastError: errorMessage,
-        updatedAt: new Date(),
-      })
-      .where(eq(treeWriteTasks.id, task.id));
-    await finalizeTreeWriteNotification(
-      db,
-      { sourceChatId: task.source_chat_id, agentId: task.agent_id },
-      { state: FAILED, message: `Context Tree write failed after retries: ${errorMessage}` },
-    );
-    return;
-  }
-
-  await db
-    .update(treeWriteTasks)
-    .set({
-      state: PENDING,
-      leaseExpiresAt: null,
-      nextAttemptAt: new Date(Date.now() + retryDelayMsForAttempt(task.attempt_count)),
-      lastError: errorMessage,
-      updatedAt: new Date(),
-    })
-    .where(eq(treeWriteTasks.id, task.id));
-}
-
-async function finalizeNoWrite(
-  db: Database,
-  taskId: string,
-  sourceChatId: string,
-  agentId: string,
-  reason: { code: string; message: string },
-): Promise<void> {
-  await db
-    .update(treeWriteTasks)
-    .set({
-      state: NO_WRITE,
-      execChatId: null,
-      leaseExpiresAt: null,
-      resultKind: NO_WRITE,
-      resultPayload: { reason },
-      lastError: null,
-      updatedAt: new Date(),
-    })
-    .where(eq(treeWriteTasks.id, taskId));
-  await finalizeTreeWriteNotification(
-    db,
-    { sourceChatId, agentId },
-    { state: NO_WRITE, message: `Context Tree write skipped: ${reason.message}` },
-  );
-}
-
 async function resolveOwnerHumanAgentId(
   db: Database,
   sourceChatId: string,
@@ -292,13 +240,12 @@ async function resolveOwnerHumanAgentId(
   return { humanAgentId: row.agent_id, organizationId: row.organization_id };
 }
 
-export async function maybeEnqueueTreeWriteTask(
+export async function maybeStartTreeWriteOnArchive(
   db: Database,
   input: {
     sourceChatId: string;
     ownerUserId: string;
     ownerMemberId: string;
-    archiveSeq: number;
   },
 ): Promise<void> {
   const candidates = await db
@@ -322,178 +269,97 @@ export async function maybeEnqueueTreeWriteTask(
   if (candidates.length === 0) {
     log.debug(
       { chatId: input.sourceChatId, ownerMemberId: input.ownerMemberId },
-      "tree-write enqueue skipped: no eligible owning agent",
+      "tree-write start skipped: no eligible owning agent",
     );
     return;
   }
-  if (candidates.length !== 1) {
+  if (candidates.length > 1) {
     log.warn(
       { chatId: input.sourceChatId, ownerMemberId: input.ownerMemberId, candidateCount: candidates.length },
-      "tree-write enqueue skipped: multiple eligible owning agents",
+      "tree-write start skipped: multiple eligible owning agents",
     );
     return;
   }
+
   const candidate = candidates[0];
   if (!candidate) return;
 
-  await db
-    .insert(treeWriteTasks)
-    .values({
-      id: uuidv7(),
-      sourceChatId: input.sourceChatId,
-      ownerUserId: input.ownerUserId,
-      archiveSeq: input.archiveSeq,
-      agentId: candidate.agentId,
-      state: PENDING,
-      nextAttemptAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .onConflictDoNothing();
-}
-
-export async function claimReadyTreeWriteTasks(db: Database, limit = 1): Promise<TreeWriteClaimRow[]> {
-  return db.execute<TreeWriteClaimRow>(sql`
-    UPDATE tree_write_tasks
-       SET state = ${RUNNING},
-           attempt_count = attempt_count + 1,
-           lease_expires_at = ${TREE_WRITE_LEASE_SQL},
-           updated_at = NOW()
-     WHERE id IN (
-       SELECT id
-         FROM tree_write_tasks
-        WHERE state = ${PENDING}
-          AND next_attempt_at <= NOW()
-        ORDER BY created_at ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT ${limit}
-     )
-     RETURNING
-       id,
-       source_chat_id,
-       owner_user_id,
-       archive_seq,
-       agent_id,
-       exec_chat_id,
-       attempt_count
-  `);
-}
-
-export async function renewTreeWriteLease(
-  db: Database,
-  taskId: string,
-  agentId: string,
-  attemptCount: number,
-): Promise<void> {
-  await db
-    .update(treeWriteTasks)
-    .set({ state: RUNNING, leaseExpiresAt: TREE_WRITE_LEASE_REFRESH_SQL, updatedAt: new Date() })
-    .where(
-      and(
-        eq(treeWriteTasks.id, taskId),
-        eq(treeWriteTasks.agentId, agentId),
-        eq(treeWriteTasks.attemptCount, attemptCount),
-        sql`${treeWriteTasks.state} IN (${RUNNING}, ${PENDING})`,
-      ),
+  if (!hasActiveConnection(candidate.agentId)) {
+    await createTreeWriteNotification(
+      db,
+      input.sourceChatId,
+      candidate.agentId,
+      "Context Tree write skipped: agent_offline",
     );
-}
-
-export async function sweepExpiredTreeWriteTasks(db: Database): Promise<void> {
-  const expired = await db.execute<TreeWriteClaimRow>(sql`
-    SELECT
-      id,
-      source_chat_id,
-      owner_user_id,
-      archive_seq,
-      agent_id,
-      exec_chat_id,
-      attempt_count
-    FROM tree_write_tasks
-    WHERE state = ${RUNNING}
-      AND lease_expires_at IS NOT NULL
-      AND lease_expires_at <= NOW()
-  `);
-
-  for (const task of expired) {
-    await scheduleRetryOrFail(db, task, "tree-write lease expired before a terminal result arrived");
+    return;
   }
-}
 
-export async function dispatchTreeWriteTask(db: Database, task: TreeWriteClaimRow): Promise<void> {
-  try {
-    if (!hasActiveConnection(task.agent_id)) {
-      await scheduleRetryOrFail(db, task, "target agent is currently offline");
-      return;
-    }
-
-    const owner = await resolveOwnerHumanAgentId(db, task.source_chat_id, task.owner_user_id);
-    if (!owner) {
-      await scheduleRetryOrFail(db, task, "owner human agent could not be resolved for the archived chat");
-      return;
-    }
-
-    const orgTree = await getOrgContextTree(db, owner.organizationId);
-    const [presence] = await db
-      .select({
-        clientId: agentPresence.clientId,
-        contextTreeRepoUrl: agentPresence.contextTreeRepoUrl,
-        contextTreeBranch: agentPresence.contextTreeBranch,
-        contextTreeVerificationStatus: agentPresence.contextTreeVerificationStatus,
-      })
-      .from(agentPresence)
-      .where(eq(agentPresence.agentId, task.agent_id))
-      .limit(1);
-
-    if (!presence?.clientId) {
-      await scheduleRetryOrFail(
-        db,
-        task,
-        "target agent presence is offline while waiting for a verified context tree binding",
-      );
-      return;
-    }
-
-    const expectedBranch = orgTree.branch ?? "main";
-    const verified =
-      !!orgTree.repo &&
-      presence?.contextTreeVerificationStatus === VERIFIED &&
-      presence.contextTreeRepoUrl === orgTree.repo &&
-      (presence.contextTreeBranch ?? "main") === expectedBranch;
-
-    if (!verified) {
-      await finalizeNoWrite(db, task.id, task.source_chat_id, task.agent_id, {
-        code: "unverified_tree",
-        message: "Resolved Context Tree binding is missing, stale, or not verified on the running client.",
-      });
-      return;
-    }
-
-    const execChatId =
-      task.exec_chat_id ??
-      (await createExecChatForTreeWrite(db, task.source_chat_id, owner.humanAgentId, task.agent_id, task.id));
-
-    if (!task.exec_chat_id) {
-      await db.update(treeWriteTasks).set({ execChatId, updatedAt: new Date() }).where(eq(treeWriteTasks.id, task.id));
-    }
-
-    const prompt = await buildTreeWritePrompt(db, task.source_chat_id);
-    const frame: TreeWriteTaskStart = {
-      type: "task:tree_write:start",
-      taskId: task.id,
-      attemptCount: task.attempt_count,
-      execChatId,
-      sourceChatId: task.source_chat_id,
-      prompt,
-    };
-
-    const delivered = sendToAgent(task.agent_id, frame);
-    if (!delivered) {
-      await scheduleRetryOrFail(db, task, "target agent is not currently connected to the hub");
-      return;
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await scheduleRetryOrFail(db, task, message);
+  const owner = await resolveOwnerHumanAgentId(db, input.sourceChatId, input.ownerUserId);
+  if (!owner) {
+    log.warn(
+      { chatId: input.sourceChatId, ownerUserId: input.ownerUserId },
+      "tree-write start skipped: owner human agent could not be resolved",
+    );
+    return;
   }
+
+  const orgTree = await getOrgContextTree(db, owner.organizationId);
+  const [presence] = await db
+    .select({
+      contextTreeRepoUrl: agentPresence.contextTreeRepoUrl,
+      contextTreeBranch: agentPresence.contextTreeBranch,
+      contextTreeVerificationStatus: agentPresence.contextTreeVerificationStatus,
+    })
+    .from(agentPresence)
+    .where(eq(agentPresence.agentId, candidate.agentId))
+    .limit(1);
+
+  const expectedBranch = orgTree.branch ?? "main";
+  const verified =
+    !!orgTree.repo &&
+    presence?.contextTreeVerificationStatus === VERIFIED &&
+    presence.contextTreeRepoUrl === orgTree.repo &&
+    (presence.contextTreeBranch ?? "main") === expectedBranch;
+
+  if (!verified) {
+    await createTreeWriteNotification(
+      db,
+      input.sourceChatId,
+      candidate.agentId,
+      "Context Tree write skipped: unverified_tree",
+    );
+    return;
+  }
+
+  const taskId = uuidv7();
+  const execChatId = await createExecChatForTreeWrite(
+    db,
+    input.sourceChatId,
+    owner.humanAgentId,
+    candidate.agentId,
+    taskId,
+  );
+  const prompt = await buildTreeWritePrompt(db, input.sourceChatId);
+  const frame: TreeWriteTaskStart = {
+    type: "task:tree_write:start",
+    taskId,
+    execChatId,
+    sourceChatId: input.sourceChatId,
+    prompt,
+  };
+
+  const delivered = sendToAgent(candidate.agentId, frame);
+  if (!delivered) {
+    await createTreeWriteNotification(
+      db,
+      input.sourceChatId,
+      candidate.agentId,
+      "Context Tree write skipped: agent_offline",
+    );
+    return;
+  }
+
+  rememberTask(taskId, { agentId: candidate.agentId, sourceChatId: input.sourceChatId });
 }
 
 export async function finalizeTreeWriteTaskResult(
@@ -501,87 +367,36 @@ export async function finalizeTreeWriteTaskResult(
   agentId: string,
   result: TreeWriteTaskResult,
 ): Promise<void> {
+  const task = getTask(result.taskId);
+  if (!task) return;
+  if (task.agentId !== agentId) return;
+  forgetTask(result.taskId);
+
   if (result.kind === "done") {
-    const [task] = await db
-      .update(treeWriteTasks)
-      .set({
-        state: DONE,
-        leaseExpiresAt: null,
-        resultKind: DONE,
-        resultPayload: { prUrl: result.prUrl },
-        lastError: null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(treeWriteTasks.id, result.taskId),
-          eq(treeWriteTasks.agentId, agentId),
-          eq(treeWriteTasks.attemptCount, result.attemptCount),
-          sql`${treeWriteTasks.state} IN (${RUNNING}, ${PENDING})`,
-        ),
-      )
-      .returning({ sourceChatId: treeWriteTasks.sourceChatId, agentId: treeWriteTasks.agentId });
-    if (!task) return;
-    await finalizeTreeWriteNotification(
+    await createTreeWriteNotification(
       db,
-      { sourceChatId: task.sourceChatId, agentId: task.agentId },
-      { state: DONE, message: `Context Tree write completed: ${result.prUrl}` },
+      task.sourceChatId,
+      task.agentId,
+      `Context Tree write completed: ${result.prUrl}`,
     );
     return;
   }
 
   if (result.kind === "no_write") {
-    const [task] = await db
-      .update(treeWriteTasks)
-      .set({
-        state: NO_WRITE,
-        leaseExpiresAt: null,
-        resultKind: NO_WRITE,
-        resultPayload: { reason: result.reason },
-        lastError: null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(treeWriteTasks.id, result.taskId),
-          eq(treeWriteTasks.agentId, agentId),
-          eq(treeWriteTasks.attemptCount, result.attemptCount),
-          sql`${treeWriteTasks.state} IN (${RUNNING}, ${PENDING})`,
-        ),
-      )
-      .returning({ sourceChatId: treeWriteTasks.sourceChatId, agentId: treeWriteTasks.agentId });
-    if (!task) return;
-    await finalizeTreeWriteNotification(
+    await createTreeWriteNotification(
       db,
-      { sourceChatId: task.sourceChatId, agentId: task.agentId },
-      { state: NO_WRITE, message: `Context Tree write skipped: ${result.reason.message}` },
+      task.sourceChatId,
+      task.agentId,
+      `Context Tree write skipped: ${result.reason.message}`,
     );
     return;
   }
 
-  const [task] = await db
-    .update(treeWriteTasks)
-    .set({
-      state: FAILED,
-      leaseExpiresAt: null,
-      resultKind: FAILED,
-      resultPayload: { error: result.error },
-      lastError: result.error.message,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(treeWriteTasks.id, result.taskId),
-        eq(treeWriteTasks.agentId, agentId),
-        eq(treeWriteTasks.attemptCount, result.attemptCount),
-        sql`${treeWriteTasks.state} IN (${RUNNING}, ${PENDING})`,
-      ),
-    )
-    .returning({ sourceChatId: treeWriteTasks.sourceChatId, agentId: treeWriteTasks.agentId });
-  if (!task) return;
-  await finalizeTreeWriteNotification(
+  await createTreeWriteNotification(
     db,
-    { sourceChatId: task.sourceChatId, agentId: task.agentId },
-    { state: FAILED, message: `Context Tree write failed: ${result.error.message}` },
+    task.sourceChatId,
+    task.agentId,
+    `Context Tree write failed: ${result.error.message}`,
+    "medium",
   );
 }

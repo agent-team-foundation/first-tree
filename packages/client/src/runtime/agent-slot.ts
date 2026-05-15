@@ -228,8 +228,6 @@ export class AgentSlot {
       handlerConfig: handlerCfg,
       sdk,
       log: (msg) => this.logger.info(msg),
-      onHeartbeat: (taskId, attemptCount) =>
-        this.clientConnection.reportTreeWriteTaskHeartbeat(this.config.agentId, taskId, attemptCount),
       onResult: (result) => this.clientConnection.reportTreeWriteTaskResult(this.config.agentId, result),
     });
 

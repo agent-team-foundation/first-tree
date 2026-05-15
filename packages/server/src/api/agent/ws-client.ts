@@ -12,8 +12,6 @@ import {
   sessionEventMessageSchema,
   sessionReconcileRequestSchema,
   sessionStateMessageSchema,
-  treeWriteTaskAckSchema,
-  treeWriteTaskHeartbeatSchema,
   treeWriteTaskResultSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
@@ -810,18 +808,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               const payload = treeWriteTaskResultSchema.parse(msg);
               await treeWriteService.finalizeTreeWriteTaskResult(app.db, agentId, payload);
-              socket.send(
-                JSON.stringify(treeWriteTaskAckSchema.parse({ type: "task:tree_write:ack", taskId: payload.taskId })),
-              );
-            } else if (type === "task:tree_write:heartbeat") {
-              const agentId = parsed.data.agentId;
-              if (!agentId || !boundAgents.has(agentId)) {
-                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
-                return;
-              }
-
-              const payload = treeWriteTaskHeartbeatSchema.parse(msg);
-              await treeWriteService.renewTreeWriteLease(app.db, payload.taskId, agentId, payload.attemptCount);
             } else if (type === "session:event") {
               const agentId = parsed.data.agentId;
               if (!agentId || !boundAgents.has(agentId)) {

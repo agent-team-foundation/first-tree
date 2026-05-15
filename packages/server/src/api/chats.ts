@@ -32,7 +32,7 @@ import { sendMessage } from "../services/message.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { submitAnswer } from "../services/questions.js";
 import { extractSummary } from "../services/session.js";
-import { maybeEnqueueTreeWriteTask } from "../services/tree-write.js";
+import { maybeStartTreeWriteOnArchive } from "../services/tree-write.js";
 
 /**
  * Class C — resource-scoped chat routes. Mounted at
@@ -108,6 +108,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { scope } = await requireChatAccess(request, app.db);
       const body = patchChatEngagementSchema.parse(request.body);
+      let shouldStartTreeWrite = false;
       await app.db.transaction(async (tx) => {
         const result = await setChatEngagement(
           tx as unknown as typeof app.db,
@@ -115,18 +116,17 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           scope.humanAgentId,
           body.status,
         );
-        if (
+        shouldStartTreeWrite =
           result.previousStatus === CHAT_ENGAGEMENT_STATUSES.ACTIVE &&
-          body.status === CHAT_ENGAGEMENT_STATUSES.ARCHIVED
-        ) {
-          await maybeEnqueueTreeWriteTask(tx as unknown as typeof app.db, {
-            sourceChatId: request.params.chatId,
-            ownerUserId: scope.userId,
-            ownerMemberId: scope.memberId,
-            archiveSeq: result.archiveSeq,
-          });
-        }
+          body.status === CHAT_ENGAGEMENT_STATUSES.ARCHIVED;
       });
+      if (shouldStartTreeWrite) {
+        await maybeStartTreeWriteOnArchive(app.db, {
+          sourceChatId: request.params.chatId,
+          ownerUserId: scope.userId,
+          ownerMemberId: scope.memberId,
+        });
+      }
       return reply.status(200).send({ chatId: request.params.chatId, engagementStatus: body.status });
     },
   );

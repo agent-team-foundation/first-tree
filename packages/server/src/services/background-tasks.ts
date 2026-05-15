@@ -6,7 +6,6 @@ import * as inboxService from "./inbox.js";
 import type { KaelRuntime } from "./kael-runtime.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
-import * as treeWriteService from "./tree-write.js";
 
 const log = createLogger("BackgroundTasks");
 
@@ -25,7 +24,6 @@ export function createBackgroundTasks(
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let adapterOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let kaelOutboundTimer: ReturnType<typeof setInterval> | null = null;
-  let treeWriteTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -70,7 +68,6 @@ export function createBackgroundTasks(
               notificationService.notifyAgentEvent(app.db, agentId, "agent_stale", "medium").catch(() => {});
             }
           }
-          await treeWriteService.sweepExpiredTreeWriteTasks(app.db);
         } catch (err) {
           log.error({ err }, "failed to heartbeat / cleanup presence");
         }
@@ -82,17 +79,6 @@ export function createBackgroundTasks(
           await adapterManager.processOutbound();
         } catch (err) {
           log.error({ err }, "adapter outbound processing failed");
-        }
-      }, 5_000);
-
-      treeWriteTimer = setInterval(async () => {
-        try {
-          const claimed = await treeWriteService.claimReadyTreeWriteTasks(app.db, 3);
-          for (const task of claimed) {
-            await treeWriteService.dispatchTreeWriteTask(app.db, task);
-          }
-        } catch (err) {
-          log.error({ err }, "tree-write queue processing failed");
         }
       }, 5_000);
 
@@ -125,10 +111,6 @@ export function createBackgroundTasks(
       if (adapterOutboundTimer) {
         clearInterval(adapterOutboundTimer);
         adapterOutboundTimer = null;
-      }
-      if (treeWriteTimer) {
-        clearInterval(treeWriteTimer);
-        treeWriteTimer = null;
       }
       if (kaelOutboundTimer) {
         clearInterval(kaelOutboundTimer);
