@@ -28,13 +28,16 @@ const { privateKey: TEST_APP_PRIVATE_KEY_PEM } = generateKeyPairSync("rsa", {
 /**
  * Stub `globalThis.fetch` for the GitHub round-trips `/auth/github/callback`
  * makes: the OAuth code exchange, the `/user` profile fetch, the
- * `/user/installations` access check, and `/app/installations/<id>` (the
- * metadata pull that the callback UPSERTs from). Everything else falls
- * through to the real fetch.
+ * `/user/memberships/orgs/{login}` admin proof, and `/app/installations/<id>`
+ * (the metadata pull that the callback UPSERTs from). Everything else
+ * falls through to the real fetch.
  *
- * Returning `/app/installations/<id>` from the stub lets the codex P2 fix
- * — clear `installationId` on upsert failure — exercise its happy path:
- * the bind step only runs when the metadata fetch + upsert succeed.
+ * `installAccountIsAdmin` only matters for Org-type installs:
+ *   - true  → state=active, role=admin (admin proof passes)
+ *   - false → state=active, role=member (proof fails)
+ *
+ * User-type installs short-circuit before the HTTP call so the stub is
+ * unused there.
  */
 function stubGithub(opts: {
   githubId: number;
@@ -43,6 +46,7 @@ function stubGithub(opts: {
   installAccountLogin?: string;
   installAccountType?: "User" | "Organization";
   installAccountGithubId?: number;
+  installAccountIsAdmin?: boolean;
 }) {
   const original = globalThis.fetch;
   type FetchInput = Parameters<typeof globalThis.fetch>[0];
@@ -74,14 +78,12 @@ function stubGithub(opts: {
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
-    if (url.startsWith("https://api.github.com/user/installations")) {
-      return new Response(
-        JSON.stringify({
-          total_count: opts.installationIds.length,
-          installations: opts.installationIds.map((id) => ({ id })),
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+    if (url.startsWith("https://api.github.com/user/memberships/orgs/")) {
+      const isAdmin = opts.installAccountIsAdmin ?? true;
+      return new Response(JSON.stringify({ state: "active", role: isAdmin ? "admin" : "member" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
     const appInstallMatch = url.match(/^https:\/\/api\.github\.com\/app\/installations\/(\d+)$/);
     if (appInstallMatch?.[1]) {
@@ -233,6 +235,51 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     // The install stays unbound — the 403 short-circuits before the bind.
     const row = await findInstallationByGithubId(app.db, installationId);
     expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("refuses to bind when the caller is a non-admin member of the GitHub org install", async () => {
+    // Hijack vector: a plain GitHub org member (NOT admin) could pass
+    // that org's installation_id; the old `/user/installations` check
+    // would accept them. The admin-proof check calls
+    // `/user/memberships/orgs/{login}` and requires role=admin — a
+    // non-admin member must fail.
+    //
+    // Sign-in still succeeds (user authenticated by their GitHub identity);
+    // only `installationId` is cleared so no row gets bound.
+    const app = getApp();
+    const githubId = 770_004;
+    const login = `targetorg-githubmember-${uuidv7().slice(0, 6)}`;
+    const installationId = 8_822_004;
+
+    const admin = await createTestAdmin(app, { username: `${login}-u` });
+    await seedGithubIdentity(app, admin.userId, githubId, login);
+
+    const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github");
+    const restore = stubGithub({
+      githubId,
+      login,
+      installationIds: [installationId],
+      installAccountType: "Organization",
+      installAccountLogin: "acme",
+      installAccountGithubId: 990_001,
+      installAccountIsAdmin: false, // member, not admin → admin proof fails
+    });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
+        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+      });
+      // Sign-in succeeds (302) — only the install bind is refused.
+      expect(res.statusCode).toBe(302);
+    } finally {
+      restore();
+    }
+
+    // The installation row is NOT created (the upsert is gated behind
+    // admin proof passing) and the user's Hub team has no install bound.
+    const row = await findInstallationByGithubId(app.db, installationId);
+    expect(row).toBeNull();
   });
 
   it("ignores a targetOrganizationId naming an org the user isn't a member of", async () => {
