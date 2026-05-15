@@ -214,92 +214,84 @@ export function ConversationList({
         borderRight: "var(--hairline) solid var(--border)",
       }}
     >
-      {/* Header — New chat row + toolbar block.
-          New chat sits as a list-row sibling of chat rows (not a hero
-          CTA) so the rail's visual rhythm stays uniform. Toolbar block
-          underneath carries filter / scope / group controls, separated
-          from New chat by a hairline so the two regions read distinctly. */}
+      {/* Header — uniform ghost-button toolbar.
+          New chat / Unread / (Phase B: Filter) sit on row 1 as equal
+          action peers; Scope + Group sit on row 2 as view-mode controls.
+          All toolbar controls share the same ghost-button language (no
+          static borders, mono only for digits) so the rail reads as a
+          navigation strip rather than a chip matrix. */}
       <div className="shrink-0 flex flex-col" style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>
-        <button
-          type="button"
-          onClick={onNewChat}
-          aria-current={isDraftActive ? "page" : undefined}
-          className={cn(
-            "group w-full text-left flex items-center transition-colors text-body cursor-pointer",
-            !isDraftActive && "hover:bg-[var(--bg-hover)]",
-          )}
-          style={{
-            gap: "var(--sp-2_5)",
-            // Padding mirrors the chat row so the rail's leading edge
-            // and avatar/icon column stay vertically aligned across
-            // New chat, Unread, and every conversation row.
-            padding: "var(--sp-1_75) var(--sp-3)",
-            background: isDraftActive ? "var(--bg-active)" : "transparent",
-            // Active draft state mirrors the selected-row treatment
-            // (left stripe in `--accent`) so "New chat is the current
-            // selection" reads identically to "this chat is selected".
-            borderLeft: `var(--hairline-bold) solid ${isDraftActive ? "var(--accent)" : "transparent"}`,
-            color: "var(--fg)",
-          }}
-          title="New chat"
-        >
-          <span
-            aria-hidden
-            className="inline-flex items-center justify-center shrink-0"
+        <div className="flex items-center" style={{ gap: "var(--sp-1)", padding: "var(--sp-2_5) var(--sp-3)" }}>
+          <button
+            type="button"
+            onClick={onNewChat}
+            aria-current={isDraftActive ? "page" : undefined}
+            className={cn(
+              "inline-flex items-center text-label font-medium cursor-pointer transition-colors",
+              !isDraftActive && "hover:bg-[var(--accent-bg)]",
+            )}
             style={{
-              // Sized to sit between the row's text leading (~14 px) and
-              // the avatar disc (36 px) — present but unobtrusive.
-              width: 22,
-              height: 22,
-              borderRadius: "50%",
-              background: isDraftActive ? "var(--accent)" : "var(--accent-bg)",
-              color: isDraftActive ? "var(--fg-on-vivid)" : "var(--accent)",
+              // Slightly larger leading icon than the Unread bell, and
+              // both icon + label rendered in `--accent`. The colour
+              // delta (accent vs Unread's fg-3) is the only thing
+              // lifting New chat above the toolbar's other ghost
+              // actions — no border, no fill, no size bump.
+              gap: "var(--sp-1)",
+              padding: "var(--sp-0_5) var(--sp-1_5)",
+              border: 0,
+              borderRadius: 4,
+              background: isDraftActive ? "var(--accent-bg)" : "transparent",
+              color: "var(--accent)",
             }}
+            title="New chat"
           >
-            <Plus className="h-3 w-3" strokeWidth={2} />
-          </span>
-          <span className="flex-1 font-medium">New chat</span>
-        </button>
+            <Plus size={15} strokeWidth={2} />
+            <span>New chat</span>
+          </button>
+
+          {/* Unread toggle — right-aligned secondary action (next to Filter
+              in Phase B). Sits opposite New chat so the row reads as
+              "primary action ↔ filtering controls". */}
+          <button
+            type="button"
+            onClick={() => onUnreadChange(!unread)}
+            aria-pressed={unread}
+            className={cn(
+              "inline-flex items-center text-label cursor-pointer transition-colors",
+              !unread && "hover:bg-[var(--bg-hover)]",
+            )}
+            style={{
+              marginLeft: "auto",
+              gap: "var(--sp-1)",
+              padding: "var(--sp-0_5) var(--sp-1_5)",
+              border: 0,
+              borderRadius: 4,
+              background: unread ? "var(--bg-active)" : "transparent",
+              color: unread ? "var(--fg)" : "var(--fg-3)",
+            }}
+            title={unread ? "Show all chats" : "Filter to unread only"}
+          >
+            <Bell size={14} strokeWidth={1.75} />
+            <span>Unread</span>
+            {totalUnread > 0 && (
+              <span className="mono" style={{ color: "var(--state-unread)" }}>
+                {totalUnread}
+              </span>
+            )}
+          </button>
+        </div>
 
         <div
           className="flex flex-col"
           style={{
             gap: "var(--sp-2)",
-            padding: "var(--sp-2) var(--sp-3)",
-            borderTop: "var(--hairline) solid var(--border-faint)",
+            padding: "var(--sp-1) var(--sp-3) var(--sp-2_5)",
           }}
         >
-          {/* Unread toggle. Active state uses --bg-active to match the
-            SegmentedControl below; pressing it again clears the filter.
-            Count appears only when nonzero so the chip width doesn't
-            jitter at the empty-state boundary. */}
-          <button
-            type="button"
-            onClick={() => onUnreadChange(!unread)}
-            aria-pressed={unread}
-            className="mono inline-flex items-center text-caption cursor-pointer"
-            style={{
-              gap: "var(--sp-1)",
-              padding: "var(--sp-0_5) var(--sp-1_75)",
-              border: `var(--hairline) solid ${unread ? "var(--border-strong)" : "var(--border)"}`,
-              borderRadius: 3,
-              background: unread ? "var(--bg-active)" : "transparent",
-              color: unread ? "var(--fg)" : "var(--fg-3)",
-              alignSelf: "flex-start",
-            }}
-            title={unread ? "Show all chats" : "Filter to unread only"}
-          >
-            <Bell size={12} strokeWidth={2} />
-            <span>Unread</span>
-            {totalUnread > 0 && <span style={{ color: "var(--state-unread)" }}>{totalUnread}</span>}
-          </button>
-
           {/* Scope + Group by share one row. Both are "view mode" controls
             (which pool × how it's arranged), so co-locating them avoids
             implying that Group by is another filter dimension. Group by
-            right-aligns via `marginLeft: auto`. Uses a native `<select>`
-            for Group by — the option set is tiny (3 entries) and a custom
-            popover would be visual overkill on a 320 px rail. */}
+            right-aligns via `marginLeft: auto`. */}
           <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
             <SegmentedControl
               options={ENGAGEMENT_OPTIONS}
@@ -312,21 +304,20 @@ export function ConversationList({
               }}
             />
             <label
-              className="mono inline-flex items-center text-caption"
+              className="inline-flex items-center text-label"
               style={{ marginLeft: "auto", gap: 4, color: "var(--fg-4)" }}
             >
               <span>Group</span>
               <select
                 value={group}
                 onChange={(e) => onGroupChange(parseGroupValue(e.target.value))}
-                className="mono text-caption"
+                className="text-label cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
                 style={{
                   padding: "var(--sp-0_5) var(--sp-1)",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: 3,
-                  background: "var(--bg-raised)",
+                  border: 0,
+                  borderRadius: 4,
+                  background: "transparent",
                   color: "var(--fg-2)",
-                  cursor: "pointer",
                 }}
               >
                 {GROUP_OPTIONS.map((opt) => (
@@ -343,7 +334,7 @@ export function ConversationList({
             will extend it with origin / participants chips. */}
           {hasActiveFilter && (
             <div className="flex items-center flex-wrap" style={{ gap: 4 }}>
-              <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+              <span className="text-label" style={{ color: "var(--fg-4)" }}>
                 Filters
               </span>
               {unread && (
@@ -359,7 +350,7 @@ export function ConversationList({
                   if (unread) onUnreadChange(false);
                   if (watching) onWatchingChange(false);
                 }}
-                className="mono text-caption cursor-pointer"
+                className="text-label cursor-pointer"
                 style={{
                   marginLeft: "auto",
                   background: "transparent",
@@ -399,20 +390,20 @@ export function ConversationList({
                 <button
                   type="button"
                   onClick={() => toggleBucket(bucket.key, bucket.defaultCollapsed)}
-                  className="mono w-full inline-flex items-center text-caption cursor-pointer font-semibold"
+                  className="w-full inline-flex items-center text-eyebrow cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
                   aria-expanded={!collapsed}
                   style={{
                     gap: "var(--sp-1)",
-                    padding: "var(--sp-1) var(--sp-3)",
-                    background: "var(--bg-sunken)",
-                    borderTop: "var(--hairline) solid var(--border-faint)",
-                    borderBottom: "var(--hairline) solid var(--border-faint)",
-                    color: "var(--fg-3)",
+                    padding: "var(--sp-1_25) var(--sp-3) var(--sp-0_5)",
+                    background: "transparent",
+                    border: 0,
+                    color: "var(--fg-4)",
+                    textTransform: "uppercase",
                   }}
                 >
-                  {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  {collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
                   <span>{bucket.label}</span>
-                  <span className="font-normal" style={{ color: "var(--fg-4)" }}>
+                  <span className="mono font-normal" style={{ color: "var(--fg-4)" }}>
                     {bucket.rows.length}
                   </span>
                 </button>
@@ -460,8 +451,14 @@ export function ConversationList({
                             <span
                               className="truncate text-subtitle"
                               style={{
-                                color: hasUnread ? "var(--fg)" : "var(--fg-2)",
-                                fontWeight: hasUnread ? 700 : 500,
+                                // Always render the title at full `--fg`.
+                                // Unread state keeps the stronger 700
+                                // weight to stay visually distinguishable,
+                                // but the read-state title is no longer
+                                // dimmed via `--fg-2` — that was making
+                                // every "already read" row look greyed out.
+                                color: "var(--fg)",
+                                fontWeight: hasUnread ? 700 : 600,
                                 flex: 1,
                                 minWidth: 0,
                               }}
@@ -543,13 +540,12 @@ export function ConversationList({
 function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
   return (
     <span
-      className="mono inline-flex items-center text-caption"
+      className="inline-flex items-center text-label"
       style={{
         gap: 4,
         padding: "var(--sp-0_5) var(--sp-0_5) var(--sp-0_5) var(--sp-1_5)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: 3,
-        background: "var(--bg-raised)",
+        borderRadius: 4,
+        background: "var(--bg-sunken)",
         color: "var(--fg-2)",
       }}
     >

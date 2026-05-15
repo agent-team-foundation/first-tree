@@ -11,35 +11,25 @@ type SegmentedControlProps<T extends string> = {
 };
 
 /**
- * SegmentedControl — N-way mutually exclusive toggle for scope-like
- * choices. Visually distinct from `FilterPill` (which is a standalone
- * chip) by being a connected strip with shared borders, conveying
- * "one of N" semantics natively. Used in the workspace rail for the
- * Active/Archived/All scope so it reads as a clearly different
- * dimension from the multi-select origin pills/popover.
+ * SegmentedControl — N-way mutually exclusive picker rendered as a row
+ * of ghost text buttons. Active segment lights up with `--bg-active`;
+ * inactive segments are bare text and pick up a hover fade. No outer
+ * box, no inter-segment dividers — the visual language matches navigation
+ * items rather than a data chip strip, which is what we want for the
+ * workspace rail's "view mode" controls.
  *
- * Each segment is a button with `aria-pressed`. We deliberately do NOT
- * use `role="radio"`/`role="group"` because biome's `useSemanticElements`
- * would push us toward a `<fieldset>` + `<input type=radio>` form
- * pattern that adds zero a11y for an in-page view toggle.
+ * Active state is conveyed by background fill alone. Each segment also
+ * carries `aria-pressed` so assistive tech announces the selection.
  */
 export function SegmentedControl<T extends string>({ options, value, onChange, className }: SegmentedControlProps<T>) {
   return (
     <div
-      className={cn("inline-flex items-stretch", className)}
+      className={cn("inline-flex items-center", className)}
       style={{
-        // `alignSelf: flex-start` prevents the parent flex column from
-        // stretching the control to fill the column width. Without it
-        // the last segment swallows all leftover space and the strip
-        // looks lopsided.
-        alignSelf: "flex-start",
-        borderRadius: 4,
-        border: "var(--hairline) solid var(--border)",
-        background: "var(--bg-raised)",
-        overflow: "hidden",
+        gap: "var(--sp-0_5)",
       }}
     >
-      {options.map((opt, i) => {
+      {options.map((opt) => {
         const active = opt.value === value;
         return (
           <button
@@ -49,16 +39,11 @@ export function SegmentedControl<T extends string>({ options, value, onChange, c
             onClick={() => {
               if (!active) onChange(opt.value);
             }}
-            className="mono text-caption leading-[1.6]"
+            className={cn("text-caption cursor-pointer transition-colors", !active && "hover:bg-[var(--bg-hover)]")}
             style={{
-              // `flex: 1 1 0` + `textAlign: center` makes every segment
-              // share the strip width equally, so the active state is a
-              // uniform rectangle regardless of label length.
-              flex: "1 1 0",
-              textAlign: "center",
-              padding: "var(--sp-0_5) var(--sp-2)",
+              padding: "var(--sp-0_5) var(--sp-1_5)",
               border: 0,
-              borderLeft: i === 0 ? undefined : "var(--hairline) solid var(--border)",
+              borderRadius: 4,
               background: active ? "var(--bg-active)" : "transparent",
               color: active ? "var(--fg)" : "var(--fg-3)",
               cursor: active ? "default" : "pointer",
