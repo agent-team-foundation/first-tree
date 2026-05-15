@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createResultSink, type Trigger } from "../runtime/result-sink.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
@@ -90,10 +93,15 @@ describe("createResultSink — forwardResult enrichment", () => {
     expect(body.purpose).toBe("agent-final-text");
   });
 
-  it("case 1.5 (documentContext regression): writes metadata.documentContext + omits metadata.mentions", async () => {
+  it("case 1.5 (documentContext regression): writes path-variant metadata.documentContext + omits metadata.mentions", async () => {
     // v1.5 regression guard — PR #356's documentContext injection must
     // survive改造 4 surgery. Verifying the branch is still wired AND that
     // it is NOT accompanied by an automatic mentions array.
+    //
+    // The basePath here is a relative string that won't resolve to a real
+    // worktree on disk, so the snapshot scan returns no docs and the sink
+    // falls back to the legacy path variant — exactly what we want for
+    // single-host / shared-fs deployments.
     const { sink, sendMessage } = buildSink({
       trigger: { messageId: "m1", senderId: "agent-peer" },
       getDocumentBasePath: vi.fn().mockResolvedValue("first-tree-hub"),
@@ -102,10 +110,151 @@ describe("createResultSink — forwardResult enrichment", () => {
     await sink("see [design](docs/design.md)");
 
     const body = sendMessage.mock.calls[0]?.[1] as {
-      metadata?: { documentContext?: { basePath?: string }; mentions?: unknown };
+      metadata?: { documentContext?: { kind?: string; basePath?: string }; mentions?: unknown };
     };
-    expect(body.metadata?.documentContext).toEqual({ basePath: "first-tree-hub" });
+    expect(body.metadata?.documentContext).toEqual({ kind: "path", basePath: "first-tree-hub" });
     expect(body.metadata?.mentions).toBeUndefined();
+  });
+
+  describe("inline snapshot variant", () => {
+    let worktree: string;
+
+    beforeAll(async () => {
+      worktree = await mkdtemp(join(tmpdir(), "result-sink-snapshot-"));
+      await writeFile(join(worktree, "design.md"), "# design\n\nbody.\n", "utf8");
+      await writeFile(join(worktree, "api.md"), "# api\n", "utf8");
+      await mkdir(join(worktree, "docs"), { recursive: true });
+      await writeFile(join(worktree, "docs", "intro.md"), "# intro\n", "utf8");
+      // For symlink escape test: a "public" link whose realpath actually lives
+      // inside `.agent/`.
+      await mkdir(join(worktree, ".agent"), { recursive: true });
+      await writeFile(join(worktree, ".agent", "secret.md"), "# secret\n", "utf8");
+      await symlink(join(worktree, ".agent", "secret.md"), join(worktree, "public.md"));
+    });
+
+    afterAll(async () => {
+      await rm(worktree, { recursive: true, force: true });
+    });
+
+    it("emits kind=snapshot when basePath resolves and the text references a real .md", async () => {
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("see [design](design.md)");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: {
+          documentContext?: {
+            kind?: string;
+            docs?: Array<{ path: string; content: string; size: number; sha256: string }>;
+          };
+        };
+      };
+      expect(body.metadata?.documentContext?.kind).toBe("snapshot");
+      expect(body.metadata?.documentContext?.docs).toHaveLength(1);
+      const [doc] = body.metadata?.documentContext?.docs ?? [];
+      expect(doc?.path).toBe("design.md");
+      expect(doc?.content).toBe("# design\n\nbody.\n");
+      expect(doc?.size).toBe(16);
+      expect(doc?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it("rejects dotfiles / hidden dirs and falls back to path variant when no docs survive", async () => {
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("hidden: [secret](.agent/secret.md)");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: { documentContext?: { kind?: string; basePath?: string } };
+      };
+      expect(body.metadata?.documentContext?.kind).toBe("path");
+      expect(body.metadata?.documentContext?.basePath).toBe(worktree);
+    });
+
+    it("stores canonical workspace-relative paths so web cache lookup matches", async () => {
+      // `./docs/intro.md` and `docs/intro.md` should both store as `docs/intro.md`,
+      // matching what `docPreviewPathFromHref` produces for a click.
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("see [a](./docs/intro.md) and [b](./other/../docs/intro.md)");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: {
+          documentContext?: {
+            docs?: Array<{ path: string }>;
+          };
+        };
+      };
+      const paths = body.metadata?.documentContext?.docs?.map((d) => d.path) ?? [];
+      expect(paths).toEqual(["docs/intro.md"]);
+    });
+
+    it("rejects symlinks whose realpath crosses into a hidden directory", async () => {
+      // public.md is a symlink → .agent/secret.md. Link-path segments alone
+      // would pass; realpath-relative segments must fail.
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("see [public](public.md)");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: { documentContext?: { kind?: string; basePath?: string } };
+      };
+      expect(body.metadata?.documentContext?.kind).toBe("path");
+      expect(body.metadata?.documentContext?.basePath).toBe(worktree);
+    });
+
+    it("ignores external-link hrefs (https / mailto / scheme-relative) even when a matching file exists on disk", async () => {
+      // Defence in depth: if an agent emits `[doc](https://x.com/api.md)` and
+      // the workspace happens to contain `https:/x.com/api.md`, the runtime
+      // must NOT canonicalise the URL into a workspace path. We pre-create
+      // that exact path to prove the guard is structural and not just
+      // accidentally-by-missing-file.
+      await mkdir(join(worktree, "https:", "x.com"), { recursive: true });
+      await writeFile(join(worktree, "https:", "x.com", "api.md"), "# evil\n", "utf8");
+
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("see [evil](https://x.com/api.md) and [also](//x.com/a.md) and [mail](mailto:a@b.md)");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: { documentContext?: { kind?: string; basePath?: string } };
+      };
+      // None of the three hrefs is a workspace path, so the sink falls back
+      // to the path variant rather than emitting any snapshot.
+      expect(body.metadata?.documentContext?.kind).toBe("path");
+      expect(body.metadata?.documentContext?.basePath).toBe(worktree);
+    });
+
+    it("ignores escaped link `\\[...](path.md)` and image link `![alt](path.md)`", async () => {
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("escaped: \\[design](design.md) and image: ![diagram](api.md)");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: { documentContext?: { kind?: string; basePath?: string } };
+      };
+      // Neither escaped nor image triggers snapshot emission, so the sink
+      // falls back to the path variant.
+      expect(body.metadata?.documentContext?.kind).toBe("path");
+      expect(body.metadata?.documentContext?.basePath).toBe(worktree);
+    });
   });
 
   it("case 3: inReplyTo is set from the current trigger (InReplyTo-required)", async () => {

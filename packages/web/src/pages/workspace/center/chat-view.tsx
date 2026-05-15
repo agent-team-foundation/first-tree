@@ -228,9 +228,11 @@ function TextRow({
   agentAvatarFn: (id: string) => string | null;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const senderName = agentNameFn(msg.senderId);
   const isSelf = myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
+  const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -255,10 +257,30 @@ function TextRow({
           next.set("docChat", msg.chatId);
           next.set("docAgent", msg.senderId);
           next.set("docPath", docPath);
-          if (docBasePath) {
-            next.set("docBase", docBasePath);
-          } else {
+
+          // Prefer the inline snapshot variant: hand the drawer the bytes via
+          // React Query cache (keyed by chat+message+path) and tag the URL
+          // with the source message id. Falls back to path-based legacy
+          // preview when the agent emitted only a `kind: "path"` context.
+          //
+          // Seed the ENTIRE message's docs[] in one shot — not just the
+          // clicked one — so when the drawer's internal markdown links jump
+          // between snapshots in the same message they still hit cache and
+          // avoid the legacy network round-trip.
+          const snapshot = docSnapshots?.get(docPath);
+          if (snapshot && docSnapshots) {
+            for (const entry of docSnapshots.values()) {
+              queryClient.setQueryData(docSnapshotQueryKey(msg.chatId, msg.id, entry.path), entry);
+            }
+            next.set("docMsg", msg.id);
             next.delete("docBase");
+          } else {
+            next.delete("docMsg");
+            if (docBasePath) {
+              next.set("docBase", docBasePath);
+            } else {
+              next.delete("docBase");
+            }
           }
           setSearchParams(next);
         };
@@ -270,7 +292,7 @@ function TextRow({
         );
       },
     }),
-    [docBasePath, msg.chatId, msg.senderId, searchParams, setSearchParams],
+    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams],
   );
 
   return (
@@ -341,7 +363,34 @@ function TextRow({
 
 function documentBasePathFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
   const parsed = documentContextSchema.safeParse(metadata?.documentContext);
-  return parsed.success ? parsed.data.basePath : undefined;
+  if (!parsed.success) return undefined;
+  // Only the path-based legacy variant exposes basePath; snapshot variants
+  // carry inline content rendered through a separate path.
+  return parsed.data.kind === "path" ? parsed.data.basePath : undefined;
+}
+
+export type DocSnapshotEntry = { path: string; content: string; sha256: string; size: number };
+
+/**
+ * For snapshot-variant `documentContext`, return a map from `docs[].path` to
+ * the snapshot record. Path-based or absent variants return `undefined`.
+ * The map keys match the raw href that the agent emitted, so the chat link
+ * click handler can use the clicked href directly as a lookup key.
+ */
+export function documentSnapshotMapFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Map<string, DocSnapshotEntry> | undefined {
+  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
+  if (!parsed.success || parsed.data.kind !== "snapshot") return undefined;
+  const map = new Map<string, DocSnapshotEntry>();
+  for (const doc of parsed.data.docs) {
+    map.set(doc.path, { path: doc.path, content: doc.content, sha256: doc.sha256, size: doc.size });
+  }
+  return map;
+}
+
+export function docSnapshotQueryKey(chatId: string, messageId: string, path: string): readonly unknown[] {
+  return ["chat-doc-snapshot", chatId, messageId, path] as const;
 }
 
 function isInlineImageContent(content: unknown): content is FileMessageContent {
