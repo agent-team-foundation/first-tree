@@ -202,7 +202,15 @@ export async function resolveAudience(
   if (audience.length === 0) return audience;
 
   const actor = await identifyActor(db, organizationId, event.actor, appSlug);
-  if (actor.kind === "our-app-bot") return [];
+  if (actor.kind === "our-app-bot") {
+    // The App bot is on the wire because Hub itself wrote to GitHub — the
+    // user already saw their own action client-side. We still need to fan
+    // out to *existing* subscriptions so PR comments / CI changes reach
+    // the chat the agent worked in; mention-driven `kind: "new"` rows are
+    // dropped because creating a fresh chat just to echo our own write is
+    // never useful.
+    return audience.filter((a) => a.kind === "existing");
+  }
   if (actor.kind === "agent") {
     // Echo suppression applies to subscribed rows only: a row where the
     // actor is on either side of an existing mapping shouldn't fan back

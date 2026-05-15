@@ -5,8 +5,22 @@ import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
-import { resolveTargetChat } from "../services/github-entity-chat.js";
+import { resolveTargetChat as resolveTargetChatRaw } from "../services/github-entity-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
+
+/**
+ * Test-only thin wrapper: every existing case in this file expects a
+ * non-null resolution (none of them exercise the creation-event guard's
+ * `null` branch). Wrap the service so the existing assertions still
+ * compile after the signature change.
+ */
+async function resolveTargetChat(
+  ...args: Parameters<typeof resolveTargetChatRaw>
+): Promise<NonNullable<Awaited<ReturnType<typeof resolveTargetChatRaw>>>> {
+  const result = await resolveTargetChatRaw(...args);
+  if (!result) throw new Error("resolveTargetChat returned null in legacy test path");
+  return result;
+}
 
 async function seedDelegate(
   app: ReturnType<ReturnType<typeof useTestApp>>,
