@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { nextParamsForEngagement, nextParamsForGroup, nextParamsForUnread, nextParamsForWatching } from "../index.js";
+import {
+  nextParamsForClearFilters,
+  nextParamsForEngagement,
+  nextParamsForGroup,
+  nextParamsForUnread,
+  nextParamsForWatching,
+  parseUnreadWatching,
+} from "../index.js";
 
 function paramsOf(search: string): URLSearchParams {
   return new URLSearchParams(search);
@@ -76,6 +83,53 @@ describe("nextParamsForWatching", () => {
   it("removes watching when disabling", () => {
     const result = nextParamsForWatching(paramsOf("watching=1"), false);
     expect(result.has("watching")).toBe(false);
+  });
+});
+
+describe("parseUnreadWatching", () => {
+  it("reads each flag independently when only one is set", () => {
+    expect(parseUnreadWatching(paramsOf("unread=1"))).toEqual({ unread: true, watching: false });
+    expect(parseUnreadWatching(paramsOf("watching=1"))).toEqual({ unread: false, watching: true });
+  });
+
+  it("canonicalises both-true URLs by letting unread win", () => {
+    // A hand-typed or shared URL with both flags set is impossible for
+    // the server filter enum to represent. The parser collapses the
+    // ambiguity here so the rest of the app sees one consistent state.
+    expect(parseUnreadWatching(paramsOf("unread=1&watching=1"))).toEqual({ unread: true, watching: false });
+  });
+
+  it("defaults both off when neither key is present", () => {
+    expect(parseUnreadWatching(paramsOf(""))).toEqual({ unread: false, watching: false });
+    expect(parseUnreadWatching(paramsOf("c=abc"))).toEqual({ unread: false, watching: false });
+  });
+
+  it("treats non-`1` values as absent", () => {
+    expect(parseUnreadWatching(paramsOf("unread=true&watching=yes"))).toEqual({ unread: false, watching: false });
+  });
+});
+
+describe("nextParamsForClearFilters", () => {
+  it("strips both flags in a single mutation", () => {
+    // The Clear handler must clear `unread` and `watching` atomically
+    // because two sequential `setSearchParams` calls would each derive
+    // from the same render-stale params and the second would clobber
+    // the first.
+    const result = nextParamsForClearFilters(paramsOf("unread=1&watching=1"));
+    expect(result.has("unread")).toBe(false);
+    expect(result.has("watching")).toBe(false);
+  });
+
+  it("preserves unrelated params (scope, chat selection, group)", () => {
+    const result = nextParamsForClearFilters(paramsOf("unread=1&c=abc&engagement=archived&group=source"));
+    expect(result.get("c")).toBe("abc");
+    expect(result.get("engagement")).toBe("archived");
+    expect(result.get("group")).toBe("source");
+  });
+
+  it("is idempotent when no filters are active", () => {
+    const result = nextParamsForClearFilters(paramsOf("c=abc"));
+    expect(result.toString()).toBe("c=abc");
   });
 });
 

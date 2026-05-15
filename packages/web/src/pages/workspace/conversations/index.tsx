@@ -90,6 +90,7 @@ export function ConversationList({
   onUnreadChange,
   watching,
   onWatchingChange,
+  onClearFilters,
   group,
   onGroupChange,
 }: {
@@ -102,6 +103,13 @@ export function ConversationList({
   onUnreadChange: (next: boolean) => void;
   watching: boolean;
   onWatchingChange: (next: boolean) => void;
+  /**
+   * Clears every Phase A filter dimension (`unread`, `watching`) in one
+   * URL write. Calling the per-flag setters in sequence inside the Clear
+   * handler would race against React-router's stale `searchParams` (see
+   * `nextParamsForClearFilters` in `workspace/index.tsx`).
+   */
+  onClearFilters: () => void;
   group: GroupMode;
   onGroupChange: (next: GroupMode) => void;
 }) {
@@ -145,10 +153,15 @@ export function ConversationList({
   const baseRows = data?.rows ?? [];
   const allRows = useMemo(() => [...baseRows, ...extraPages], [baseRows, extraPages]);
 
-  // Buckets are recomputed every render — pure, cheap, and re-evaluating
-  // them on the wall-clock `Date.now()` for `recency` is the easiest way
-  // to handle the day-rollover case (a chat that was "Today" 30 s ago
-  // becomes "Yesterday" without any data change).
+  // Buckets are recomputed whenever the rows or group mode change.
+  // Day-rollover (a chat that was "Today" at 23:59 should drift into
+  // "Yesterday" after midnight) is handled implicitly by the 15 s
+  // `useQuery` refetch on the parent query — the refetched response
+  // changes `data.rows`' identity, which invalidates this memo. A
+  // user who leaves the rail open past midnight without a refetch
+  // (e.g. an inactive tab the browser throttles) won't see the bucket
+  // shift until the next refetch lands; that's an acceptable degree
+  // of staleness for a presentational concern.
   const buckets = useMemo(() => groupRows(allRows, group), [allRows, group]);
 
   // Track the cursor for follow-up page loads. Mirrored from the latest
@@ -346,10 +359,7 @@ export function ConversationList({
               {watching && <FilterChip label="Watching" onClear={() => onWatchingChange(false)} />}
               <button
                 type="button"
-                onClick={() => {
-                  if (unread) onUnreadChange(false);
-                  if (watching) onWatchingChange(false);
-                }}
+                onClick={onClearFilters}
                 className="text-label cursor-pointer"
                 style={{
                   marginLeft: "auto",

@@ -34,13 +34,26 @@ function parseGroup(raw: string | null): GroupMode {
   return "recency";
 }
 
+/**
+ * Canonicalised parse of the mutually-exclusive `?unread=` / `?watching=`
+ * pair. Exported for unit tests. The server `filter` enum can hold only
+ * one of these at a time; if a hand-typed or shared URL arrives with
+ * both flags set, `unread` wins and `watching` collapses to `false`.
+ * Every downstream consumer (chip row, request payload, Clear handler)
+ * thus reads from a single consistent state.
+ */
+export function parseUnreadWatching(params: URLSearchParams): { unread: boolean; watching: boolean } {
+  const unread = params.get("unread") === "1";
+  const watching = !unread && params.get("watching") === "1";
+  return { unread, watching };
+}
+
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const engagement: ChatEngagementView = engagementViewParser.parse(searchParams.get("engagement"));
-  const unread = searchParams.get("unread") === "1";
-  const watching = searchParams.get("watching") === "1";
+  const { unread, watching } = parseUnreadWatching(searchParams);
   const group = parseGroup(searchParams.get("group"));
 
   useAdminWs();
@@ -111,6 +124,15 @@ export function WorkspacePage() {
     [searchParams, setSearchParams],
   );
 
+  const clearFilters = useCallback(() => {
+    // Single URLSearchParams mutation + single setSearchParams call.
+    // Calling `setUnread(false)` and `setWatching(false)` back to back
+    // would each build off the same render-stale `searchParams`, so the
+    // second `setSearchParams` would overwrite the first's `unread`
+    // deletion. Bundling the deletes here keeps Clear deterministic.
+    setSearchParams(nextParamsForClearFilters(searchParams), { replace: true });
+  }, [searchParams, setSearchParams]);
+
   return (
     <div className="flex flex-1 overflow-hidden">
       <ConversationList
@@ -123,6 +145,7 @@ export function WorkspacePage() {
         onUnreadChange={setUnread}
         watching={watching}
         onWatchingChange={setWatching}
+        onClearFilters={clearFilters}
         group={group}
         onGroupChange={setGroup}
       />
@@ -209,5 +232,21 @@ export function nextParamsForGroup(current: URLSearchParams, mode: GroupMode): U
   const next = new URLSearchParams(current);
   if (mode === "recency") next.delete("group");
   else next.set("group", mode);
+  return next;
+}
+
+/**
+ * Pure URL transition that strips every Phase A filter dimension in one
+ * shot. Used by the rail's "Clear" affordance. Exported for unit tests.
+ *
+ * Done in a single mutation because the rail filters that the user can
+ * Clear (`?unread=`, `?watching=`) live on independent URL keys; running
+ * the per-key setters back-to-back would re-derive each call from the
+ * same stale `searchParams` snapshot, so only the last write would win.
+ */
+export function nextParamsForClearFilters(current: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(current);
+  next.delete("unread");
+  next.delete("watching");
   return next;
 }
