@@ -7,7 +7,7 @@ export function SetupTab() {
   const ctx = useAgentDetailContext();
   return (
     <>
-      {ctx.canEditConfig ? (
+      {ctx.canEditConfig && (
         <>
           {ctx.config?.version != null && (
             <div className="mono text-caption" style={{ color: "var(--fg-3)" }}>
@@ -53,9 +53,7 @@ export function SetupTab() {
             />
           )}
         </>
-      ) : !ctx.canManageAgent ? (
-        <ReadOnlyConfigNotice />
-      ) : null}
+      )}
 
       {ctx.canManageAgent && (
         <DangerZone
@@ -70,23 +68,5 @@ export function SetupTab() {
         />
       )}
     </>
-  );
-}
-
-function ReadOnlyConfigNotice() {
-  return (
-    <div
-      className="text-body"
-      style={{
-        padding: "var(--sp-3)",
-        border: "var(--hairline) solid var(--border-faint)",
-        borderRadius: "var(--radius-panel)",
-        background: "var(--bg-raised)",
-        color: "var(--fg-3)",
-      }}
-    >
-      You can view this shared agent profile. Runtime configuration, bindings, testing, and lifecycle controls are
-      limited to the agent manager or an organization admin.
-    </div>
   );
 }

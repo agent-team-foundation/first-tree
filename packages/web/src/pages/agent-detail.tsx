@@ -545,7 +545,7 @@ export function AgentDetailPage() {
           onReloadRemote={() => {
             void reloadRemote();
           }}
-          onJumpTo={(section) => navigate(`/agents/${uuid}/${SECTION_TO_TAB[section]}`)}
+          onJumpTo={(section) => navigate(`/agents/${uuid}/${SECTION_TO_TAB[section]}`, { replace: true })}
         />
       )}
 
