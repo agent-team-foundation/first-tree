@@ -6,11 +6,6 @@ import { MAX_FORKS, TEMPLATE_DB, WORKER_DB_PREFIX } from "./test-config.js";
 let container: Awaited<ReturnType<PostgreSqlContainer["start"]>> | undefined;
 
 export async function setup() {
-  // Skip Ryuk reaper to avoid pulling testcontainers/ryuk:0.14.0 from docker.io
-  // — many local Docker daemons sit behind flaky proxies, and Ryuk is only
-  // needed to clean up containers when the test runner crashes; for local dev
-  // and CI with explicit teardown, it is safe to disable.
-  process.env.TESTCONTAINERS_RYUK_DISABLED ??= "true";
   container = await new PostgreSqlContainer("postgres:17").start();
 
   const baseUrl = container.getConnectionUri();
