@@ -197,15 +197,7 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
  * `senderId` is missing entirely. Falling back to "?" keeps the timeline
  * rendering instead of crashing the whole chat view.
  */
-function Avatar({
-  name,
-  imageUrl,
-  seed,
-}: {
-  name: string;
-  imageUrl?: string | null;
-  seed?: string;
-}) {
+function Avatar({ name, imageUrl, seed }: { name: string; imageUrl?: string | null; seed?: string }) {
   const safeName = name ?? "?";
   return <RealAvatar src={imageUrl ?? null} name={safeName} seed={seed ?? safeName} size={20} />;
 }
