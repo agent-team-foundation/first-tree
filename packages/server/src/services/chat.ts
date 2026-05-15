@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AddParticipant, CreateChat } from "@agent-team-foundation/first-tree-hub-shared";
+import { type AddParticipant, AGENT_VISIBILITY, type CreateChat } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -18,7 +18,13 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
 
   // Verify all participants exist and belong to the same organization
   const existingAgents = await db
-    .select({ id: agents.uuid, organizationId: agents.organizationId, type: agents.type })
+    .select({
+      id: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      visibility: agents.visibility,
+      managerId: agents.managerId,
+    })
     .from(agents)
     .where(inArray(agents.uuid, [...allParticipantIds]));
 
@@ -35,6 +41,22 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
   const crossOrg = existingAgents.filter((a) => a.organizationId !== orgId);
   if (crossOrg.length > 0) {
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
+  }
+
+  // Owner-exclusive rule: a private agent can only be brought into a
+  // chat by another agent owned by the same member (i.e. the creator
+  // and the target share `managerId`). `creator.managerId` is the
+  // caller's effective owner identity — for a human agent this is the
+  // member's own id; for an autonomous agent this is whichever member
+  // owns it. RFC §4.4.2 / §4.5 — keeping the gate at the service layer
+  // closes the agent-SDK bypass path, not only the user-facing /me API.
+  const privateNotOwned = existingAgents.filter(
+    (a) => a.id !== creatorId && a.visibility === AGENT_VISIBILITY.PRIVATE && a.managerId !== creator.managerId,
+  );
+  if (privateNotOwned.length > 0) {
+    throw new ForbiddenError(
+      `Only the owner can add a private agent to a chat: ${privateNotOwned.map((a) => a.id).join(", ")}`,
+    );
   }
 
   return db.transaction(async (tx) => {
@@ -90,9 +112,22 @@ export async function getChat(db: Database, chatId: string) {
 
 export async function getChatDetail(db: Database, chatId: string) {
   const chat = await getChat(db, chatId);
+  // Participants JOIN `agents` so each row carries `name / displayName /
+  // type`. Identity rendering inside a chat is membership-derived; we do
+  // not apply `agentVisibilityCondition` here — see
+  // `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
   const participants = await db
-    .select()
+    .select({
+      agentId: chatMembership.agentId,
+      role: chatMembership.role,
+      mode: chatMembership.mode,
+      joinedAt: chatMembership.joinedAt,
+      name: agents.name,
+      displayName: agents.displayName,
+      type: agents.type,
+    })
     .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
   return { ...chat, participants };
@@ -244,7 +279,12 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
 
   // Verify target agent exists and is in the same org
   const [targetAgent] = await db
-    .select({ id: agents.uuid, organizationId: agents.organizationId })
+    .select({
+      id: agents.uuid,
+      organizationId: agents.organizationId,
+      visibility: agents.visibility,
+      managerId: agents.managerId,
+    })
     .from(agents)
     .where(eq(agents.uuid, data.agentId))
     .limit(1);
@@ -255,6 +295,29 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
 
   if (targetAgent.organizationId !== chat.organizationId) {
     throw new BadRequestError("Cannot add agent from different organization");
+  }
+
+  // Owner-exclusive rule for private targets. The requester is an
+  // agent on the SDK side; resolve its owner via `agents.managerId`
+  // and compare with the target's owner — only the same member may
+  // bring a private agent into a chat. Closes the agent-SDK bypass of
+  // the discovery filter (RFC §4.4.2 / §4.5). `targetAgent.id !==
+  // requesterId` skips the self-add case so an agent rejoining its own
+  // chat via `joinChat` semantics isn't incidentally blocked.
+  if (targetAgent.visibility === AGENT_VISIBILITY.PRIVATE && targetAgent.id !== requesterId) {
+    const [requester] = await db
+      .select({ managerId: agents.managerId })
+      .from(agents)
+      .where(eq(agents.uuid, requesterId))
+      .limit(1);
+    if (!requester) {
+      // Should be unreachable — `assertParticipant` above proved the
+      // requester is in chat_membership, which FK-references agents.
+      throw new NotFoundError(`Agent "${requesterId}" not found`);
+    }
+    if (requester.managerId !== targetAgent.managerId) {
+      throw new ForbiddenError(`Only the owner can add a private agent to a chat: ${targetAgent.id}`);
+    }
   }
 
   // Check not already a speaker. A watcher row is allowed — it's the
@@ -581,7 +644,13 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
   //      cannot reuse a historical dirty row whose participants happen to
   //      include both ends but whose chat lives in another org.
   const ends = await db
-    .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
+    .select({
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      visibility: agents.visibility,
+      managerId: agents.managerId,
+    })
     .from(agents)
     .where(inArray(agents.uuid, [agentAId, agentBId]));
 
@@ -624,6 +693,25 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
     if (directChats.length > 0 && directChats[0]) {
       return directChats[0];
     }
+  }
+
+  // Owner-exclusive rule for new direct chats. Applied symmetrically:
+  // if either endpoint is a private agent and the two endpoints have
+  // different owners, refuse to materialise the direct chat. Covers
+  // the agent-SDK `sendToAgent` path — sender knowing only the
+  // target's `agents.name` (which is org-scoped, not secret) would
+  // otherwise create a direct chat with a private agent it has no
+  // owner relationship to (RFC §4.4.2 / §4.5 / §4.7 "Personal agent
+  // outbound DM to a stranger → forbidden"). Pre-existing direct
+  // chats are intentionally NOT retroactively gated: an existing
+  // membership row is already a scoped-consent artefact.
+  if (
+    (agentA.visibility === AGENT_VISIBILITY.PRIVATE || agentB.visibility === AGENT_VISIBILITY.PRIVATE) &&
+    agentA.managerId !== agentB.managerId
+  ) {
+    throw new ForbiddenError(
+      `Cannot open a direct chat with a private agent across owners: "${agentAId}" ↔ "${agentBId}"`,
+    );
   }
 
   // Create new direct chat. Mode is derived server-side from
