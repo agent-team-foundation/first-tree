@@ -174,7 +174,31 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
     type: p.type,
   }));
 
-  return { ...chat, participants, title, firstMessagePreview };
+  // Match the chatDetailSchema wire contract — the chat-first workspace
+  // reads this field instead of round-tripping `/orgs/:orgId/chats` just to
+  // distinguish speaker vs watcher view. Agent-SDK callers always reach
+  // this code with their own uuid as `selfAgentId`, and the SDK only sees
+  // chats it is a speaker in, so the lookup is cheap and almost always
+  // resolves to `"participant"`; the admin / supervisor `null` shape still
+  // matters for the alternate route (`api/chats.ts`).
+  const viewerMembershipKind = await resolveViewerMembershipKind(db, chatId, selfAgentId);
+
+  return { ...chat, participants, title, firstMessagePreview, viewerMembershipKind };
+}
+
+async function resolveViewerMembershipKind(
+  db: Database,
+  chatId: string,
+  viewerAgentId: string | null,
+): Promise<"participant" | "watching" | null> {
+  if (!viewerAgentId) return null;
+  const [row] = await db
+    .select({ accessMode: chatMembership.accessMode })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, viewerAgentId)))
+    .limit(1);
+  if (!row) return null;
+  return row.accessMode === "speaker" ? "participant" : "watching";
 }
 
 export async function listChats(db: Database, agentId: string, limit: number, cursor?: string) {

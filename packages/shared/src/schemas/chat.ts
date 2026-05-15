@@ -104,6 +104,13 @@ export const chatDetailSchema = chatSchema.extend({
    *  the lazy-materialised `chat_user_state` row so the value is always
    *  defined (defaults to `active`); the schema is non-nullable on purpose. */
   engagementStatus: chatEngagementStatusSchema,
+  /** Caller's chat-membership view: `"participant"` (speaker), `"watching"`
+   *  (watcher), or `null` for supervisor / admin views where the caller has
+   *  no direct row in `chat_membership` (access granted via managed agents).
+   *  Mirrors the value `services/me-chat.ts` puts on `MeChatRow.membershipKind`
+   *  so the chat-detail page can decide between speaker UI and watcher UI
+   *  without round-tripping through the conversation-list query. */
+  viewerMembershipKind: z.enum(["participant", "watching"]).nullable(),
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
 
