@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bootstrapWorkspace,
+  contextTreeCloneDir,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
 } from "../runtime/bootstrap.js";
@@ -35,6 +36,19 @@ function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
     ...overrides,
   };
 }
+
+describe("contextTreeCloneDir", () => {
+  it("isolates local checkouts by repo URL and branch", () => {
+    const main = contextTreeCloneDir("https://github.com/example/context-tree", "main");
+    const release = contextTreeCloneDir("https://github.com/example/context-tree", "release");
+    const otherOrg = contextTreeCloneDir("https://github.com/other/context-tree", "main");
+
+    expect(main).not.toBe(release);
+    expect(main).not.toBe(otherOrg);
+    expect(main).toContain("context-tree-repos");
+    expect(main.split("/").at(-1)).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
 
 describe("bootstrapWorkspace", () => {
   it("writes identity.json with correct fields", () => {

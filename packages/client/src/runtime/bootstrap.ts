@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
+import { type AccessTokenProvider, type ContextTreeConfig, FirstTreeHubSDK } from "../sdk.js";
 import type { AgentIdentity } from "./handler.js";
 
-const CONTEXT_TREE_DIR = join(DEFAULT_DATA_DIR, "context-tree");
+const CONTEXT_TREE_REPOS_DIR = join(DEFAULT_DATA_DIR, "context-tree-repos");
+const contextTreeSyncLocks = new Map<string, Promise<ContextTreeBinding | null>>();
 
 /**
  * Resolved Context Tree binding the runtime threads through every layer:
@@ -19,17 +21,30 @@ export type ContextTreeBinding = {
   branch: string;
 };
 
-/**
- * Sync the shared Context Tree git clone.
- *
- * Clones on first run, pulls on subsequent runs.
- * Returns the binding on success, null on failure (graceful degradation).
- */
-export async function syncContextTree(
-  serverUrl: string,
-  getAccessToken: AccessTokenProvider,
+export function contextTreeCloneDir(repo: string, branch: string): string {
+  const digest = createHash("sha256").update(`${repo}\0${branch}`).digest("hex");
+  return join(CONTEXT_TREE_REPOS_DIR, digest);
+}
+
+function withContextTreeSyncLock(
+  key: string,
+  fn: () => Promise<ContextTreeBinding | null>,
+): Promise<ContextTreeBinding | null> {
+  const next = (contextTreeSyncLocks.get(key) ?? Promise.resolve(null))
+    .catch(() => null)
+    .then(fn)
+    .finally(() => {
+      if (contextTreeSyncLocks.get(key) === next) {
+        contextTreeSyncLocks.delete(key);
+      }
+    });
+  contextTreeSyncLocks.set(key, next);
+  return next;
+}
+
+async function resolveContextTreeBinding(
+  fetchConfig: () => Promise<ContextTreeConfig>,
   log: (msg: string) => void,
-  userAgent?: string,
 ): Promise<ContextTreeBinding | null> {
   // 1. Check git is available
   try {
@@ -43,8 +58,7 @@ export async function syncContextTree(
   let repo: string;
   let branch: string;
   try {
-    const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken, userAgent });
-    const config = await sdk.getContextTreeConfig();
+    const config = await fetchConfig();
     if (!config.repo) {
       log("Context Tree sync skipped: not configured on server");
       return null;
@@ -57,18 +71,28 @@ export async function syncContextTree(
     return null;
   }
 
+  const cloneDir = contextTreeCloneDir(repo, branch);
+  return withContextTreeSyncLock(cloneDir, () => syncContextTreeRepo(repo, branch, cloneDir, log));
+}
+
+async function syncContextTreeRepo(
+  repo: string,
+  branch: string,
+  cloneDir: string,
+  log: (msg: string) => void,
+): Promise<ContextTreeBinding | null> {
   // 3. Clone or pull
   try {
-    if (existsSync(join(CONTEXT_TREE_DIR, ".git"))) {
+    if (existsSync(join(cloneDir, ".git"))) {
       // Ensure we're on the expected branch before pulling
       const currentBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-        cwd: CONTEXT_TREE_DIR,
+        cwd: cloneDir,
         encoding: "utf-8",
         timeout: 5_000,
       }).trim();
       if (currentBranch !== branch) {
         execFileSync("git", ["checkout", branch], {
-          cwd: CONTEXT_TREE_DIR,
+          cwd: cloneDir,
           stdio: "pipe",
           timeout: 10_000,
         });
@@ -77,21 +101,21 @@ export async function syncContextTree(
 
       // Pull latest changes
       execFileSync("git", ["pull", "--ff-only"], {
-        cwd: CONTEXT_TREE_DIR,
+        cwd: cloneDir,
         stdio: "pipe",
         timeout: 30_000,
       });
       log(`Context Tree updated (pull)`);
     } else {
       // First clone
-      mkdirSync(CONTEXT_TREE_DIR, { recursive: true });
-      execFileSync("git", ["clone", "--branch", branch, "--single-branch", repo, CONTEXT_TREE_DIR], {
+      mkdirSync(cloneDir, { recursive: true });
+      execFileSync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
         stdio: "pipe",
         timeout: 60_000,
       });
       log(`Context Tree cloned from ${repo} (branch: ${branch})`);
     }
-    return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
+    return { path: cloneDir, repoUrl: repo, branch };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Context Tree sync failed: ${msg}`);
@@ -103,30 +127,53 @@ export async function syncContextTree(
     const isGitStateError =
       msg.includes("cannot fast-forward") || msg.includes("not possible to fast-forward") || msg.includes("CONFLICT");
 
-    if (isGitStateError && existsSync(join(CONTEXT_TREE_DIR, ".git"))) {
+    if (isGitStateError && existsSync(join(cloneDir, ".git"))) {
       log("Diverged history detected, attempting fresh clone...");
       try {
-        rmSync(CONTEXT_TREE_DIR, { recursive: true, force: true });
-        mkdirSync(CONTEXT_TREE_DIR, { recursive: true });
-        execFileSync("git", ["clone", "--branch", branch, "--single-branch", repo, CONTEXT_TREE_DIR], {
+        rmSync(cloneDir, { recursive: true, force: true });
+        mkdirSync(cloneDir, { recursive: true });
+        execFileSync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
           stdio: "pipe",
           timeout: 60_000,
         });
         log("Context Tree re-cloned successfully");
-        return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
+        return { path: cloneDir, repoUrl: repo, branch };
       } catch {
         log("Context Tree re-clone also failed, continuing without context");
       }
     }
 
     // Return existing clone path if available (preserves local work on transient errors)
-    if (existsSync(join(CONTEXT_TREE_DIR, ".git"))) {
+    if (existsSync(join(cloneDir, ".git"))) {
       log("Using existing Context Tree clone despite sync failure");
-      return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
+      return { path: cloneDir, repoUrl: repo, branch };
     }
 
     return null;
   }
+}
+
+/**
+ * Sync the shared Context Tree git clone.
+ *
+ * Clones on first run, pulls on subsequent runs.
+ * Returns the binding on success, null on failure (graceful degradation).
+ */
+export async function syncContextTree(
+  serverUrl: string,
+  getAccessToken: AccessTokenProvider,
+  log: (msg: string) => void,
+  userAgent?: string,
+): Promise<ContextTreeBinding | null> {
+  const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken, userAgent });
+  return resolveContextTreeBinding(() => sdk.getContextTreeConfig(), log);
+}
+
+export async function syncAgentContextTree(
+  sdk: FirstTreeHubSDK,
+  log: (msg: string) => void,
+): Promise<ContextTreeBinding | null> {
+  return resolveContextTreeBinding(() => sdk.getAgentContextTreeConfig(), log);
 }
 
 /**

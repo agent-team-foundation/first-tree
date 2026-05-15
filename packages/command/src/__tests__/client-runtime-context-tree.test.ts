@@ -1,17 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * `ClientRuntime` (the CLI-level orchestrator used by `first-tree-hub server
- * start` / `connect <token>`) was silently skipping the per-org Context Tree
- * sync that `AgentRuntime` (the SDK-level orchestrator) performs. Every
- * agent workspace got `.agent/context/` empty and `identity.json.contextTreePath: null`.
- *
- * These tests pin the contract:
- *   1. `ClientRuntime.start()` calls `syncContextTree` once with the runtime's
- *      server URL + access-token provider + user-agent.
- *   2. The resulting binding is forwarded to every slot — both eager ones
- *      registered before `start()`, and slots spawned later via the
- *      `agent:pinned` push path.
+ * Context Tree sync is agent-scoped: `AgentSlot.start()` binds the agent,
+ * then fetches `/api/v1/agent/context-tree/info` through that agent's SDK.
+ * The CLI-level `ClientRuntime` must not resolve one shared user-primary-org
+ * binding and pass it into every slot.
  */
 
 const slotInstances: Array<{
@@ -28,8 +21,6 @@ const connectionMock = {
   connect: vi.fn(async () => undefined),
   disconnect: vi.fn(async () => undefined),
 };
-const syncContextTreeMock = vi.fn();
-
 vi.mock("@first-tree-hub/client", () => {
   class FakeAgentSlot {
     public readonly name: string;
@@ -52,7 +43,6 @@ vi.mock("@first-tree-hub/client", () => {
     UpdateManager: { attach: vi.fn(() => ({ dispose: vi.fn() })) },
     getHandlerFactory: vi.fn(() => vi.fn()),
     registerBuiltinHandlers: vi.fn(),
-    syncContextTree: syncContextTreeMock,
   };
 });
 
@@ -81,7 +71,6 @@ describe("ClientRuntime context-tree wiring", () => {
   beforeEach(() => {
     slotInstances.length = 0;
     connectionListeners.clear();
-    syncContextTreeMock.mockReset();
     connectionMock.on.mockClear();
     connectionMock.connect.mockClear();
     connectionMock.disconnect.mockClear();
@@ -91,14 +80,7 @@ describe("ClientRuntime context-tree wiring", () => {
     vi.clearAllMocks();
   });
 
-  it("syncs Context Tree at start() and forwards the binding to every slot", async () => {
-    const fakeBinding = {
-      path: "/tmp/fake-context-tree",
-      repoUrl: "https://example.test/tree.git",
-      branch: "main",
-    };
-    syncContextTreeMock.mockResolvedValue(fakeBinding);
-
+  it("starts eager slots without a shared Context Tree binding", async () => {
     const { ClientRuntime } = await import("../core/client-runtime.js");
     const rt = new ClientRuntime("https://hub.test", "client-test");
     rt.addAgent("alpha", {
@@ -109,39 +91,11 @@ describe("ClientRuntime context-tree wiring", () => {
     } as unknown as Parameters<typeof rt.addAgent>[1]);
 
     await rt.start();
-
-    expect(syncContextTreeMock).toHaveBeenCalledTimes(1);
-    const [serverUrl, getAccessToken, log, userAgent] = syncContextTreeMock.mock.calls[0] ?? [];
-    expect(serverUrl).toBe("https://hub.test");
-    expect(typeof getAccessToken).toBe("function");
-    expect(typeof log).toBe("function");
-    expect(userAgent).toBe("first-tree-hub-test/0.0.0");
 
     expect(slotInstances).toHaveLength(1);
     const slot = slotInstances[0];
     if (!slot) throw new Error("slot not constructed");
     expect(slot.start).toHaveBeenCalledTimes(1);
-    expect(slot.start.mock.calls[0]?.[0]).toEqual(fakeBinding);
-  });
-
-  it("forwards a null binding when Context Tree is unconfigured (graceful degradation)", async () => {
-    syncContextTreeMock.mockResolvedValue(null);
-
-    const { ClientRuntime } = await import("../core/client-runtime.js");
-    const rt = new ClientRuntime("https://hub.test", "client-test");
-    rt.addAgent("alpha", {
-      agentId: "agent-alpha",
-      runtime: "claude-code",
-      session: { idle_timeout: 300, max_sessions: 4 },
-      concurrency: 1,
-    } as unknown as Parameters<typeof rt.addAgent>[1]);
-
-    await rt.start();
-
-    expect(syncContextTreeMock).toHaveBeenCalledTimes(1);
-    const slot = slotInstances[0];
-    if (!slot) throw new Error("slot not constructed");
-    expect(slot.start).toHaveBeenCalledTimes(1);
-    expect(slot.start.mock.calls[0]?.[0]).toBeNull();
+    expect(slot.start.mock.calls[0]).toEqual([]);
   });
 });

@@ -196,6 +196,11 @@ export class FirstTreeHubSDK {
     return this.requestJson<ContextTreeConfig>("/api/v1/context-tree/info");
   }
 
+  /** Fetch Context Tree configuration for this SDK's authenticated agent. */
+  async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
+    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
+  }
+
   async fetchAgentConfig(): Promise<AgentRuntimeConfig> {
     return this.requestJson<AgentRuntimeConfig>("/api/v1/agent/config");
   }
