@@ -5,6 +5,7 @@ import {
   type MentionParticipant,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
+  scanMentionTokens,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
@@ -624,9 +625,12 @@ export function ChatView({
     enabled: !!chatId,
   });
 
-  /** Org-wide agent list for the `@` picker. We surface every agent the
-   *  user can address — not just current chat participants — so `@`-ing
-   *  someone outside the chat acts as both an invite and a mention. */
+  /** Org-wide agent list, consumed only by the ParticipantsHeader `[+]`
+   *  dropdown via `addableCandidates`. The `@` autocomplete is
+   *  membership-scoped (`mentionCandidates` below) and does NOT read
+   *  from this list — inviting a new agent goes through the `[+]`
+   *  button explicitly, not through `@<outsider>`. Also feeds
+   *  `managedByMeMap` for picker grouping. */
   const { data: activity } = useQuery({
     queryKey: ["activity"],
     queryFn: getActivityOverview,
@@ -645,6 +649,13 @@ export function ChatView({
       // wait up to 10s for the polling refetch. See M plan Step 3 in
       // docs/session-creation-on-first-message.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+    },
+    // Backstop: surface server-side `enforceGroupMention` 400s (and any
+    // other send failure) under the composer instead of silently failing.
+    // The pre-flight check in `handleSend` should catch unresolved
+    // `@<token>` locally; this catches anything that slips through.
+    onError: (err) => {
+      setUploadError(err instanceof Error ? err.message : "Failed to send message");
     },
   });
 
@@ -687,6 +698,37 @@ export function ChatView({
     const images = pendingImages;
     if (!text && images.length === 0) return;
     if (uploading) return;
+
+    // Unresolved-@-token guard (client mirror of `enforceGroupMention` in
+    // `services/message.ts`). The autocomplete only offers in-chat
+    // members, but the user can still hand-type `@<name>` — typos,
+    // renamed agents, or agents not in this chat. Catching it here
+    // produces a precise hint immediately instead of round-tripping to a
+    // 400 the user has to decode. New participants are added via
+    // ParticipantsHeader's `[+]`, not via `@`.
+    //
+    // Derive the speaker set from `chatDetail.participants` rather than
+    // `mentionCandidates` so it includes self — `mentionCandidates`
+    // intentionally excludes self (you don't autocomplete "@yourself"),
+    // but `@<own-name>` is a legal token the server accepts. Without
+    // self here the guard would reject it with the "[+] button" hint,
+    // which is misleading since the user is already a member.
+    if (text) {
+      const memberNames = new Set(
+        (chatDetail?.participants ?? [])
+          .map((p) => chatScopedAgentIdentity(p.agentId)?.name?.toLowerCase())
+          .filter((n): n is string => !!n),
+      );
+      const unresolved = scanMentionTokens(text).filter((t) => !memberNames.has(t));
+      if (unresolved.length > 0) {
+        const sample = unresolved[0];
+        setUploadError(
+          `Cannot @-mention "${sample}" — they're not in this chat. Use the [+] button above to add them first.`,
+        );
+        return;
+      }
+    }
+
     // Group-chat send guard: don't fire requests we know the server (with
     // proposal §3 enforcement) or downstream `mention_only` agents will drop.
     // Applies to image-only sends too — the server-side mention check runs
@@ -701,22 +743,6 @@ export function ChatView({
         setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
       }
       return;
-    }
-
-    // "Mention to invite": any `@<name>` pointing at an agent outside the
-    // current chat is treated as both an address and an invitation. We add
-    // them first so by the time the message is processed, the server's
-    // `extractMentions` resolves successfully and direct-chats auto-upgrade
-    // to groups via the server's `changeChatType` service. Idempotent on
-    // the server.
-    if (draftOutsiders.length > 0) {
-      try {
-        await addMeChatParticipants(chatId, { participantIds: draftOutsiders });
-        await queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
-      } catch (err) {
-        setUploadError(err instanceof Error ? err.message : "Failed to add participants");
-        return;
-      }
     }
 
     if (images.length > 0) {
@@ -949,40 +975,56 @@ export function ChatView({
 
   const displayName = chatScopedAgentName(agentId);
 
-  /** Set of agentIds currently in the chat. Used to (a) detect "outsiders"
-   *  the user `@`-mentions and (b) skip the redundant addParticipants call
-   *  when everyone they mention is already in the room. */
-  const chatParticipantIds = useMemo(() => {
-    return new Set(chatDetail?.participants?.map((p) => p.agentId) ?? []);
-  }, [chatDetail?.participants]);
+  // `/activity` carries `managedByMe` per agent — both candidate lists
+  // need it for picker grouping. Known limitation: agents that appear
+  // only via `chatDetail.participants` (no runtime presence row, e.g.
+  // an autonomous agent that has never been bound to a client) default
+  // to false, so a caller's own offline agent can land in the
+  // "teammates" group. Grouping is a visual hint, not a security
+  // boundary, so we accept the fidelity loss rather than widen
+  // `/activity`'s shape (also consumed by roster / team / clients).
+  const managedByMeMap = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const a of activity?.agents ?? []) m.set(a.agentId, a.managedByMe);
+    return m;
+  }, [activity?.agents]);
 
-  // Mention autocomplete candidates: every agent the user might address,
-  // resolved to their `{name, displayName}`. Chat participants take
-  // precedence over the visibility-filtered identity map so private agents
-  // already in the chat surface in the picker (identity inside a chat is
-  // membership-derived, not discovery-derived — fixes the missing-private-
-  // agent autocomplete bug). Outsiders sourced from `/activity` continue
-  // to rely on the identity map — that lookup is org-scoped and correctly
-  // bounded by discovery rules. Self is excluded; any agent without a slug
-  // (`name`) is skipped because mentions need one.
+  // Mention autocomplete candidates: strictly the agents currently in
+  // THIS chat (minus self). Driving the `@` popover and `extractMentions`
+  // off membership — instead of org-wide discovery — keeps the picker
+  // focused on the people who'll actually receive the message. To pull
+  // a new agent into the conversation, use the ParticipantsHeader `[+]`
+  // button (which is fed by `addableCandidates` below). Any participant
+  // without a slug (`name`) is skipped — mentions need one. Private
+  // agents in the chat surface here because membership, not discovery,
+  // is the source of truth.
   const mentionCandidates = useMemo<MentionCandidate[]>(() => {
+    const out: MentionCandidate[] = [];
+    for (const p of chatDetail?.participants ?? []) {
+      if (p.agentId === myAgentId) continue;
+      const ident = chatScopedAgentIdentity(p.agentId);
+      if (!ident || !ident.name) continue;
+      out.push({
+        agentId: p.agentId,
+        name: ident.name,
+        displayName: ident.displayName,
+        managedByMe: managedByMeMap.get(p.agentId) ?? false,
+      });
+    }
+    return out;
+  }, [chatDetail?.participants, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
+
+  // Candidates for the ParticipantsHeader `[+]` add-member dropdown:
+  // every agent the user might invite, union of current members and
+  // org-wide discoverable agents from `/activity`. The header filters
+  // out already-joined participants internally, so we pass the union
+  // and let it compute `outsideCandidates`. Self is excluded; missing
+  // slug is skipped.
+  const addableCandidates = useMemo<MentionCandidate[]>(() => {
     const ids = new Set<string>();
     for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
     for (const a of activity?.agents ?? []) ids.add(a.agentId);
     if (ids.size === 0) ids.add(agentId);
-    // Build a lookup from `/activity` so we can attach `managedByMe`
-    // per candidate. Known limitation: agents that appear only via
-    // `chatDetail.participants` (no runtime presence row, e.g. an
-    // autonomous agent that has never been bound to a client) default
-    // to false. That means a caller's own offline agent can be
-    // misclassified into the "teammates" group of the [+] picker.
-    // The picker grouping is a visual hint, not a security boundary,
-    // so we accept this fidelity loss rather than widen `/activity`'s
-    // shape (which is also consumed by roster / team / clients pages).
-    // To revisit: surface `managedByMe` independently of runtime via a
-    // dedicated `/me/managed-agents` endpoint and intersect here.
-    const managedByMeMap = new Map<string, boolean>();
-    for (const a of activity?.agents ?? []) managedByMeMap.set(a.agentId, a.managedByMe);
     const out: MentionCandidate[] = [];
     for (const id of ids) {
       if (id === myAgentId) continue;
@@ -996,7 +1038,7 @@ export function ChatView({
       });
     }
     return out;
-  }, [chatDetail?.participants, activity?.agents, agentId, chatScopedAgentIdentity, myAgentId]);
+  }, [chatDetail?.participants, activity?.agents, agentId, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
 
   /**
    * "Needs explicit @mention" guard: a real group, OR a direct chat where the
@@ -1060,23 +1102,18 @@ export function ChatView({
     readOnly,
   ]);
 
-  /** All agentIds the draft text addresses via `@<name>` tokens — computed
-   * unconditionally (not just for groups) so the "outsider invite" path
-   * below can detect mentions of agents not yet in the chat. The send-gate
-   * for groups still uses `requiresMention && draftMentions.length === 0`. */
+  /** AgentIds the draft text addresses via `@<name>` tokens, resolved
+   * against the in-chat membership (`mentionCandidates`). The client no
+   * longer auto-invites `@<outsider>` — and the server now rejects any
+   * unresolved `@<token>` with a 400 (see `enforceGroupMention` guard in
+   * `services/message.ts`). To avoid the round-trip and a confusing
+   * error, `handleSend` runs the same check locally via
+   * `scanMentionTokens` before firing the mutation; new participants go
+   * through the ParticipantsHeader `[+]` button instead. */
   const draftMentions = useMemo(() => {
     const ps: MentionParticipant[] = mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name }));
     return extractMentions(draft, ps);
   }, [draft, mentionCandidates]);
-
-  /** Mentions in the draft that point at agents NOT currently in the chat.
-   * Sending a message that addresses these will first POST to
-   * `/me/chats/:id/participants` to add them, which turns a direct chat
-   * into a group via the server's `changeChatType` service. */
-  const draftOutsiders = useMemo(() => {
-    if (chatParticipantIds.size === 0) return [];
-    return draftMentions.filter((id) => !chatParticipantIds.has(id));
-  }, [draftMentions, chatParticipantIds]);
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -1265,7 +1302,7 @@ export function ChatView({
           <ParticipantsHeader
             chatId={chatId}
             participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-            candidates={mentionCandidates}
+            candidates={addableCandidates}
             agentIdentity={chatScopedAgentIdentity}
             onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
             readOnly={readOnly}
