@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { type AccessTokenProvider, type ContextTreeConfig, FirstTreeHubSDK } from "../sdk.js";
+import type { ContextTreeConfig } from "../sdk.js";
+import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import type { AgentIdentity } from "./handler.js";
 
 const CONTEXT_TREE_REPOS_DIR = join(DEFAULT_DATA_DIR, "context-tree-repos");

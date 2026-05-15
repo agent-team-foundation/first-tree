@@ -196,11 +196,6 @@ export class FirstTreeHubSDK {
     return this.requestJson<ContextTreeConfig>("/api/v1/context-tree/info");
   }
 
-  /** Fetch Context Tree configuration for this SDK's authenticated agent. */
-  async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
-    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
-  }
-
   async fetchAgentConfig(): Promise<AgentRuntimeConfig> {
     return this.requestJson<AgentRuntimeConfig>("/api/v1/agent/config");
   }
@@ -282,6 +277,11 @@ export class FirstTreeHubSDK {
    */
   async listChatParticipants(chatId: string): Promise<ChatParticipantDetail[]> {
     return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
+  }
+
+  /** Fetch Context Tree configuration for this SDK's authenticated agent. */
+  async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
+    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
   }
 
   private queryString(options?: { limit?: number; cursor?: string }): string {

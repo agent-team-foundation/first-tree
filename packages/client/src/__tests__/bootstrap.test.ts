@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bootstrapWorkspace,
-  contextTreeCloneDir,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
 } from "../runtime/bootstrap.js";
@@ -38,7 +37,8 @@ function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
 }
 
 describe("contextTreeCloneDir", () => {
-  it("isolates local checkouts by repo URL and branch", () => {
+  it("isolates local checkouts by repo URL and branch", async () => {
+    const { contextTreeCloneDir } = await import("../runtime/bootstrap.js");
     const main = contextTreeCloneDir("https://github.com/example/context-tree", "main");
     const release = contextTreeCloneDir("https://github.com/example/context-tree", "release");
     const otherOrg = contextTreeCloneDir("https://github.com/other/context-tree", "main");
