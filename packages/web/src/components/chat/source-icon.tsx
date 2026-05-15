@@ -82,12 +82,22 @@ export function SourceIcon({
   //   3. `source` itself is missing (old server build that doesn't yet
   //      include the field) → Manual placeholder, matches Phase A's
   //      defence-in-depth narrowing.
+  //
+  // `hasOwnProperty.call` (rather than `in`) so a stray string that
+  // names a built-in `Object.prototype` member (`"constructor"`,
+  // `"toString"`, …) can never accidentally satisfy the membership
+  // check across version skew. The TypeScript types narrow
+  // `entityType` / `source` to known unions today, but the runtime
+  // input is raw JSON from the server, so the defensive check costs
+  // nothing. (We'd use the cleaner `Object.hasOwn` if the web
+  // package's tsconfig target was bumped to ES2022.)
+  const hasOwn = Object.prototype.hasOwnProperty;
   let Icon: LucideIcon = MessagesSquare;
   let label = "Conversation";
-  if (source === "github" && entityType !== null && entityType in GITHUB_ENTITY_ICON_MAP) {
+  if (source === "github" && entityType !== null && hasOwn.call(GITHUB_ENTITY_ICON_MAP, entityType)) {
     Icon = GITHUB_ENTITY_ICON_MAP[entityType];
     label = GITHUB_ENTITY_LABEL_MAP[entityType];
-  } else if (source !== undefined && source in SOURCE_ICON_MAP) {
+  } else if (source !== undefined && hasOwn.call(SOURCE_ICON_MAP, source)) {
     Icon = SOURCE_ICON_MAP[source];
     label = SOURCE_LABEL_MAP[source];
   }

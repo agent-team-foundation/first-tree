@@ -12,11 +12,15 @@ import { z } from "zod";
  */
 
 /**
- * Source of truth for which github entities get their own tag in the
- * conversation list. Adding a new entry here extends `ChatSource`
- * (`github_${entityType}`) and the SQL CASE/IN-list in
- * `server/services/me-chat.ts` without touching them — both derive from
- * this constant.
+ * Source of truth for which github entity types the workspace UI knows
+ * how to render. Drives `MeChatRow.entityType` (per-row sub-type, drives
+ * the leading icon) and the `Github*Schema` discriminator below. The
+ * `ChatSource` enum below does NOT branch on these — Phase C collapsed
+ * the conversation-list origin filter to a single `github` value, and
+ * the entity sub-type rides on `MeChatRow.entityType` instead. Adding a
+ * new entry here means new icon mappings in
+ * `packages/web/src/components/chat/source-icon.tsx`; the SQL classifier
+ * does not need to be touched.
  */
 export const GITHUB_ENTITY_TYPES = ["issue", "pull_request", "discussion", "commit"] as const;
 export const githubEntityTypeSchema = z.enum(GITHUB_ENTITY_TYPES);

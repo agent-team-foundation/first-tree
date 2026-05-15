@@ -1,16 +1,21 @@
 /**
- * Source-tag projection for the conversation-list left rail.
+ * Origin-tag projection for the conversation-list left rail.
  *
- * Pins two new pieces of behavior:
+ * Pins two pieces of behavior:
  *
- *   1. `listMeChats({ source })` filters down to a single ChatSource — manual
- *      vs. github_issue vs. github_pull_request vs. feishu — by inspecting
- *      `chats.metadata` (no schema migration; the field already existed and
- *      was only written by the github-entity-chat and feishu adapter paths).
+ *   1. `listMeChats({ origin })` filters down to one or more ChatSource
+ *      values — `manual` / `github` / `feishu` — by inspecting
+ *      `chats.metadata` (no schema migration; the field already existed
+ *      and was only written by the github-entity-chat and feishu adapter
+ *      paths). Phase C collapsed the GitHub entity types (PR / Issue /
+ *      Discussion / Commit) into a single `github` origin; the
+ *      per-entity granularity lives on `MeChatRow.entityType` (drives
+ *      the leading icon, not the filter dimension).
  *
- *   2. `listMeChatSourceCounts` returns one row per source the caller has at
- *      least one chat in, plus an always-present `manual` row, so the web
- *      tag bar can render badges (and hide tags whose chatCount is 0).
+ *   2. `listMeChatSourceCounts` returns one row per source the caller has
+ *      at least one chat in, plus an always-present `manual` row, so the
+ *      web filter popover can render badges (and hide options whose
+ *      chatCount is 0).
  *
  * The seeding here goes around `createMeChat` because that helper writes
  * `metadata: '{}'` — to exercise the github / feishu arms we need to plant
