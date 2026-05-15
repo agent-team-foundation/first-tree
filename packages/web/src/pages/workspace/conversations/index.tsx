@@ -7,11 +7,12 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { SourceIcon } from "../../../components/chat/source-icon.js";
 import { WorkingChip } from "../../../components/chat/working-chip.js";
+import { Popover } from "../../../components/ui/popover.js";
 import { SegmentedControl } from "../../../components/ui/segmented-control.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
 import { FilterPopover, originLabel } from "./filter-popover.js";
-import { type GroupMode, groupRows, parseGroupMode } from "./group-rows.js";
+import { type GroupMode, groupRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -387,30 +388,74 @@ export function ConversationList({
                 }
               }}
             />
-            <label
-              className="inline-flex items-center text-label"
-              style={{ marginLeft: "auto", gap: 4, color: "var(--fg-4)" }}
-            >
-              <span>Group</span>
-              <select
-                value={group}
-                onChange={(e) => onGroupChange(parseGroupMode(e.target.value))}
-                className="text-label cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
-                style={{
-                  padding: "var(--sp-0_5) var(--sp-1)",
-                  border: 0,
-                  borderRadius: 4,
-                  background: "transparent",
-                  color: "var(--fg-2)",
+            <div className="inline-flex items-center text-label" style={{ marginLeft: "auto", gap: 4 }}>
+              <span style={{ color: "var(--fg-4)" }}>Group</span>
+              {/* Custom dropdown built on the shared `Popover` primitive.
+                  Phase A used a native `<select>` here; reviewers flagged
+                  the OS-theme chrome (browser-rendered border + arrow) as
+                  visually inconsistent with the rest of the de-chipped
+                  toolbar. The headless replacement matches the ghost-button
+                  language and keeps `<select>`-style listbox semantics via
+                  `role="listbox" / role="option"`. */}
+              <Popover
+                align="end"
+                panelStyle={{ minWidth: 140, padding: "var(--sp-0_5)" }}
+                trigger={({ open, toggle }) => {
+                  const current = GROUP_OPTIONS.find((o) => o.value === group);
+                  return (
+                    <button
+                      type="button"
+                      onClick={toggle}
+                      aria-haspopup="listbox"
+                      aria-expanded={open}
+                      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        gap: 4,
+                        padding: "var(--sp-0_5) var(--sp-1)",
+                        border: 0,
+                        borderRadius: 4,
+                        background: open ? "var(--bg-active)" : "transparent",
+                        color: "var(--fg-2)",
+                      }}
+                    >
+                      <span>{current?.label ?? "Recency"}</span>
+                      <ChevronDown size={12} strokeWidth={1.75} />
+                    </button>
+                  );
                 }}
               >
-                {GROUP_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                {({ close }) => (
+                  <div role="listbox" aria-label="Group by" className="flex flex-col">
+                    {GROUP_OPTIONS.map((opt) => {
+                      const selected = opt.value === group;
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          onClick={() => {
+                            if (!selected) onGroupChange(opt.value);
+                            close();
+                          }}
+                          className="text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)] text-left"
+                          style={{
+                            padding: "var(--sp-0_75) var(--sp-1_5)",
+                            border: 0,
+                            borderRadius: 4,
+                            background: selected ? "var(--bg-active)" : "transparent",
+                            color: selected ? "var(--fg)" : "var(--fg-2)",
+                            minWidth: 110,
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </Popover>
+            </div>
           </div>
 
           {/* Filter chip row. Renders one chip per active filter
