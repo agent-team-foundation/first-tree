@@ -5,7 +5,6 @@ import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
-import { NotificationBell } from "./notification-bell.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
 import { UserMenu } from "./user-menu.js";
 
@@ -115,7 +114,6 @@ export function Layout() {
               margin: "0 var(--sp-1)",
             }}
           />
-          <NotificationBell />
           <ThemeToggle />
           <span
             style={{

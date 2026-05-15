@@ -412,12 +412,8 @@ export {
 export {
   NOTIFICATION_SEVERITIES,
   NOTIFICATION_TYPES,
-  type Notification,
-  type NotificationQuery,
   type NotificationSeverity,
   type NotificationType,
-  notificationQuerySchema,
-  notificationSchema,
   notificationSeveritySchema,
   notificationTypeSchema,
 } from "./schemas/notification.js";

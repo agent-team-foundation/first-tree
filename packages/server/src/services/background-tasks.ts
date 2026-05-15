@@ -57,13 +57,12 @@ export function createBackgroundTasks(
           const staleSeconds = app.config.runtime.presenceCleanupSeconds;
           await presenceService.cleanupStalePresence(app.db, staleSeconds);
           await clientService.cleanupStaleClients(app.db, staleSeconds);
-          // M1: per-agent heartbeat staleness detection
+          // Per-agent heartbeat staleness detection. Message text is composed
+          // inside notifyAgentEvent so phrasing (computer hostname vs agent
+          // name) stays consistent across event sources.
           const staleAgents = await presenceService.markStaleAgents(app.db, staleSeconds);
           if (staleAgents.length > 0) {
             log.info({ count: staleAgents.length, agentIds: staleAgents }, "marked agents as stale");
-            // M1: Create notifications for stale agents. Message text is
-            // composed inside notifyAgentEvent so phrasing (computer hostname
-            // vs agent name) stays consistent across event sources.
             for (const agentId of staleAgents) {
               notificationService.notifyAgentEvent(app.db, agentId, "agent_stale", "medium").catch(() => {});
             }

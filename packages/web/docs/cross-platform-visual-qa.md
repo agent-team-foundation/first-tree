@@ -95,7 +95,7 @@ These only surface on Windows at 125% / 150% DPI. Do not ship without this pass.
 |---|---|
 | 1px borders render as antialiased-but-visible line (inevitable at 1.25x, acceptable trade-off) | Not invisible; not 2px thick |
 | 11px `text-label` still legible | No blurry edges on uppercase letters |
-| 10px `text-eyebrow` readable with `font-weight: 600` + 0.1em tracking | Uppercase `NOTIFICATIONS`, `REGISTERED`, etc. still crisp |
+| 10px `text-eyebrow` readable with `font-weight: 600` + 0.1em tracking | Uppercase `REGISTERED`, `WORKSPACE`, etc. still crisp |
 | `text-subtitle` letter-spacing `-0.1px` — not clamped to 0 | Title widths visually match Figma mocks |
 | Scrollbar width matches Mac overlay scrollbar (via `scrollbar-width: thin`) | Column widths do not jump by ~15px when scrollbar appears |
 
