@@ -64,6 +64,8 @@ export const clientWireCapabilitiesSchema = z
     /**
      * Historical opt-in for the `inbox:deliver` push path. The server now
      * ignores the value; 0.10.4 ~ 0.14.2 clients still emit it as `true`.
+     * Kept for parse-compat only; safe to remove after 0.16 once those
+     * middle-version installs are no longer in the field.
      */
     wsInboxDeliver: z.boolean().default(false),
   })

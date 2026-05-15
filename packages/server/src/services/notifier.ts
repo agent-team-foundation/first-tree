@@ -62,7 +62,7 @@ export type InboxPushHandler = (messageId: string) => Promise<void> | void;
 export type Notifier = {
   /**
    * Subscribe a WebSocket for an inbox. NOTIFY traffic for the inbox is
-   * dispatched to `pushHandler`. Multiple sockets per inbox are supported.
+   * dispatched to `pushHandler`.
    */
   subscribe(inboxId: string, ws: WebSocket, pushHandler: InboxPushHandler): void;
   /** Unsubscribe a WebSocket connection */

@@ -794,6 +794,21 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             } else if (type === "inbox:ack") {
               const payloadResult = inboxAckFrameSchema.safeParse(msg);
               if (!payloadResult.success) {
+                // Server-side log so a buggy / malicious client's malformed
+                // frames are visible in trace backends even when the client
+                // discards the error reply. Wire-shape drift between
+                // client and server schemas is the most common cause.
+                app.log.warn(
+                  {
+                    clientId,
+                    issues: payloadResult.error.issues.map((i) => ({
+                      path: i.path.join("."),
+                      code: i.code,
+                      message: i.message,
+                    })),
+                  },
+                  "malformed inbox:ack frame — replying error",
+                );
                 socket.send(JSON.stringify({ type: "error", message: "Malformed inbox:ack frame" }));
                 return;
               }
@@ -815,7 +830,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   // status, or it belongs to an inbox this socket hasn't bound.
                   // All three are non-fatal — the client may have raced a
                   // server-side reset (300s timeout reaper) or be ack'ing a
-                  // stale entry from a previous run. Drop silently.
+                  // stale entry from a previous run. Debug-level only because
+                  // the 300s reaper race is expected at low volume; promoting
+                  // to warn would flood the logs on every reconnect.
+                  app.log.debug(
+                    { clientId, entryId, boundInboxes: boundAgents.size },
+                    "inbox:ack matched no row — stale ack or reaper race",
+                  );
                   return;
                 }
                 // Find the agentId that owns this inbox to decrement the

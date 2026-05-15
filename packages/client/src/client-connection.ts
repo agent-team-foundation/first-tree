@@ -270,11 +270,20 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   /**
    * Ack a delivered inbox entry over the WS data plane. Safe to call when the
-   * WS is closed — the frame is dropped silently and the entry will time out
-   * and re-deliver on reconnect.
+   * WS is closed — the frame is dropped (logged) and the entry will time out
+   * server-side and re-deliver on reconnect. The handler has by then already
+   * started processing, so reaper-driven redelivery surfaces as a duplicate
+   * dispatch on the next connect; SessionManager's dedupe key
+   * `(chatId, messageId)` collapses it.
    */
   sendInboxAck(entryId: number): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      // Visibility for the "ack lost on closed socket → server reaper resets
+      // entry to pending → duplicate dispatch on reconnect" path. Warn-level
+      // so staging can correlate spikes against reconnect-storm windows.
+      this.wsLogger.warn({ entryId, readyState: this.ws?.readyState }, "inbox:ack dropped — socket not OPEN");
+      return;
+    }
     this.ws.send(JSON.stringify({ type: "inbox:ack", entryId }));
   }
 
