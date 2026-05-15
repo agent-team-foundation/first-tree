@@ -399,14 +399,28 @@ async function sendMessageInner(
         .limit(1);
 
       if (original?.replyToInbox && original?.replyToChat) {
-        // Mirror silent-send (§2e) and agent-final-text (§2b bypass) into
-        // the replyTo cross-chat route — when the main fan-out is silenced,
-        // the replyTo recipient must NOT be woken either, or the silent
-        // invariant ("any silent message has zero notify=true inbox rows")
-        // leaks through this back-channel. We still write the row so the
-        // original requester sees the reply when their session next picks
-        // it up.
-        const replyNotify = !isSilentSend && !isAgentFinalText;
+        // Cross-chat replyTo: when message N has `replyToInbox = X` +
+        // `replyToChat = C`, every reply (`inReplyTo = N`) gets a duplicate
+        // inbox row routed back to X in C. This is the delegation-closure
+        // primitive: A in c1 delegates to B in c2 → B's reply must wake A
+        // in c1 so the user-facing thread can continue. The flag is the
+        // original sender's promise; the reply path has to honor it.
+        //
+        // Mirror silent-send (§2e) into this route — a silent message has
+        // zero notify=true inbox rows by definition; leaking notify=true
+        // through this back-channel would break that invariant.
+        //
+        // **Do NOT** mirror `isAgentFinalText` (§四 改造 4 b bypass) here.
+        // Bypass's intent is "final text doesn't wake chat-internal peers"
+        // (correct for c2 fan-out). But the replyTo cross-chat route is
+        // delegation-closure, not chat-internal peer wake — silencing it
+        // strands B's reply in c2 and breaks the whole delegation loop.
+        // Empirically caught in PR #393 v1.7 dogfood: A in c1 → asks B in
+        // c2 → B's final text → cross-chat route went notify=false → A
+        // never woke in c1 → A "continued in c2" because that's the only
+        // path that surfaced anything. Fix: replyTo cross-chat is governed
+        // by silent-send only.
+        const replyNotify = !isSilentSend;
         await tx
           .insert(inboxEntries)
           .values({
