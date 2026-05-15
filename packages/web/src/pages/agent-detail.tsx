@@ -646,6 +646,11 @@ export function AgentDetailPage() {
                 await queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
                 await queryClient.invalidateQueries({ queryKey: ["agents"] });
                 await queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
+                // chat-detail caches participant `displayName / name / type`
+                // (per-chat join against agents); editing an agent's identity
+                // must invalidate every cached chat-detail row, otherwise the
+                // open chat view shows stale labels until the next push.
+                await queryClient.invalidateQueries({ queryKey: ["chat-detail"] });
               }}
             />
           </SectionShell>
