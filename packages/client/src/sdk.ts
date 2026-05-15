@@ -6,7 +6,6 @@ import {
   type ChatDetail,
   type ChatParticipantDetail,
   type ClientCapabilities,
-  type InboxEntryWithMessage,
   type Message,
   type RuntimeProvider,
   type SendMessage,
@@ -67,10 +66,6 @@ export type RegisterResult = {
 export type ContextTreeConfig = {
   repo: string | null;
   branch: string | null;
-};
-
-export type PullResult = {
-  entries: InboxEntryWithMessage[];
 };
 
 export type PaginatedResult<T> = {
@@ -235,19 +230,6 @@ export class FirstTreeHubSDK {
     } catch {
       return false;
     }
-  }
-
-  async pull(limit = 10): Promise<PullResult> {
-    const entries = await this.requestJson<InboxEntryWithMessage[]>(`/api/v1/agent/inbox?limit=${limit}`);
-    return { entries };
-  }
-
-  async ack(entryId: number): Promise<void> {
-    await this.requestVoid(`/api/v1/agent/inbox/${entryId}/ack`, { method: "POST" });
-  }
-
-  async renew(entryId: number): Promise<void> {
-    await this.requestVoid(`/api/v1/agent/inbox/${entryId}/renew`, { method: "POST" });
   }
 
   async sendMessage(chatId: string, data: SendMessage): Promise<Message> {

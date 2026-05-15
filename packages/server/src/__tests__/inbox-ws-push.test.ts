@@ -49,7 +49,7 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(entry.messageId).toBe(messageId);
     expect(entry.status).toBe("delivered");
     expect(entry.message.id).toBe(messageId);
-    // Same wire shape as the legacy poll path → client-side dispatch is
+    // Same wire shape as the `pollInbox` path → client-side dispatch is
     // identical (single SessionManager.dispatch call site).
     expect(typeof entry.message.configVersion).toBe("number");
     expect(entry.message.recipientMode).toBeTruthy();
@@ -60,7 +60,7 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(typeof entry.id).toBe("number");
   });
 
-  it("returns an empty array on a second claim of the same (inbox, message) — race-safe with HTTP poll", async () => {
+  it("returns an empty array on a second claim of the same (inbox, message) — race-safe with the debug GET /inbox path", async () => {
     const app = getApp();
     const { a2, messageId } = await seedDeliverable(app);
 
@@ -307,33 +307,5 @@ describe("inbox WS data-plane claim helpers", () => {
     const app = getApp();
     const res = await inboxService.ackEntryByIdForBoundAgents(app.db, 1, []);
     expect(res).toBeNull();
-  });
-
-  it("ackEntryByIdForBoundAgents returns null when an HTTP ack already flipped the row", async () => {
-    // Pins the bug class behind the WS-push double-ack incident: if the
-    // legacy HTTP ack runs first (`delivered → acked`), a follow-up WS ack
-    // matches 0 rows and returns null. The SessionManager.ackEntry callback
-    // must therefore ROUTE to exactly one channel — never both — otherwise
-    // the server's per-agent in-flight counter (which only decrements on a
-    // successful WS ack) leaks until push silently dies.
-    //
-    // This test exists to stop a future refactor from "helpfully" sending a
-    // WS ack on top of HTTP (or vice-versa) without first reading why the
-    // ackEntry callback exists.
-    const app = getApp();
-    const { a2, messageId } = await seedDeliverable(app);
-
-    const claimed = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
-    const entry = claimed[0];
-    if (!entry) throw new Error("seed claim failed");
-
-    // Simulate the legacy HTTP ack path running first.
-    await inboxService.ackEntry(app.db, entry.id, a2.agent.inboxId);
-
-    // Now the WS-path ack arrives — must be a no-op (no double transition,
-    // no error, just `null` so the caller can decline to decrement its
-    // in-flight counter for a row it never moved).
-    const wsAckResult = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
-    expect(wsAckResult).toBeNull();
   });
 });

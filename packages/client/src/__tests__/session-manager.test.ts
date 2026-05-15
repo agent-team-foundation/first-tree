@@ -11,12 +11,14 @@ import { mockEntry } from "./test-helpers.js";
 function mockSdk(): FirstTreeHubSDK {
   return {
     register: vi.fn(),
-    pull: vi.fn(),
-    ack: vi.fn().mockResolvedValue(undefined),
-    renew: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
     sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
   } as unknown as FirstTreeHubSDK;
+}
+
+/** Create a vi-mocked WS ack callback for SessionManager tests. */
+function mockAckEntry() {
+  return vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
 }
 
 /** Create a mock handler conforming to the new session-oriented interface. */
@@ -34,6 +36,7 @@ function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
 function createSessionManager(opts: {
   sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
+  ackEntry?: (entryId: number) => Promise<void>;
   session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
   concurrency?: number;
   log?: pino.Logger;
@@ -57,6 +60,7 @@ function createSessionManager(opts: {
     },
     sdk,
     log: opts.log ?? silentLogger(),
+    ackEntry: opts.ackEntry ?? mockAckEntry(),
   });
 }
 
@@ -76,12 +80,12 @@ describe("SessionManager", () => {
   });
 
   it("ACKs inbox entry immediately on dispatch", async () => {
-    const sdk = mockSdk();
-    const sm = createSessionManager({ sdk });
+    const ackEntry = mockAckEntry();
+    const sm = createSessionManager({ ackEntry });
 
     await sm.dispatch(mockEntry({ id: 42, chatId: "chat-1" }));
 
-    expect(sdk.ack).toHaveBeenCalledWith(42);
+    expect(ackEntry).toHaveBeenCalledWith(42);
 
     await sm.shutdown();
   });
@@ -126,6 +130,7 @@ describe("SessionManager", () => {
       },
       sdk,
       log: silentLogger(),
+      ackEntry: mockAckEntry(),
     });
 
     const sharedMessageId = "msg-shared";
@@ -192,6 +197,7 @@ describe("SessionManager", () => {
       },
       sdk,
       log: silentLogger(),
+      ackEntry: mockAckEntry(),
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
@@ -278,6 +284,7 @@ describe("SessionManager", () => {
       },
       sdk,
       log: silentLogger(),
+      ackEntry: mockAckEntry(),
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
@@ -322,6 +329,7 @@ describe("SessionManager", () => {
       },
       sdk,
       log: silentLogger(),
+      ackEntry: mockAckEntry(),
     });
 
     // Fill up max_sessions
@@ -375,6 +383,7 @@ describe("SessionManager", () => {
       },
       sdk,
       log: silentLogger(),
+      ackEntry: mockAckEntry(),
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
@@ -466,8 +475,8 @@ describe("shouldSuppressEcho", () => {
 describe("SessionManager routing guards — dispatch integration", () => {
   it("ACKs and does NOT start a session when shouldSuppressEcho fires", async () => {
     const handler = createMockHandler();
-    const sdk = mockSdk();
-    const sm = createSessionManager({ handler, sdk });
+    const ackEntry = mockAckEntry();
+    const sm = createSessionManager({ handler, ackEntry });
 
     const echo = mockEntry({
       id: 99,
@@ -478,7 +487,7 @@ describe("SessionManager routing guards — dispatch integration", () => {
     await sm.dispatch(echo);
 
     expect(handler.start).not.toHaveBeenCalled();
-    expect(sdk.ack).toHaveBeenCalledWith(99);
+    expect(ackEntry).toHaveBeenCalledWith(99);
 
     await sm.shutdown();
   });
@@ -490,8 +499,8 @@ describe("SessionManager routing guards — dispatch integration", () => {
     // client does NOT double-filter (no silent drops that would mask server
     // routing bugs, no skipping of legitimate mention deliveries).
     const handler = createMockHandler();
-    const sdk = mockSdk();
-    const sm = createSessionManager({ handler, sdk });
+    const ackEntry = mockAckEntry();
+    const sm = createSessionManager({ handler, ackEntry });
 
     const pinged = mockEntry({
       id: 101,
@@ -502,7 +511,7 @@ describe("SessionManager routing guards — dispatch integration", () => {
     await sm.dispatch(pinged);
 
     expect(handler.start).toHaveBeenCalledTimes(1);
-    expect(sdk.ack).toHaveBeenCalledWith(101);
+    expect(ackEntry).toHaveBeenCalledWith(101);
 
     await sm.shutdown();
   });
@@ -533,8 +542,8 @@ describe("SessionManager routing guards — dispatch integration", () => {
     // c2 copy must be silently dropped (echo suppression) while the c1 copy
     // wakes the waiting session. This is the core No-echo invariant.
     const handler = createMockHandler();
-    const sdk = mockSdk();
-    const sm = createSessionManager({ handler, sdk });
+    const ackEntry = mockAckEntry();
+    const sm = createSessionManager({ handler, ackEntry });
 
     const snapshot = { senderId: "agent-1", chatId: "c2", replyToChat: "c1" };
     const sharedMessageId = "msg-shared-reply";
@@ -560,27 +569,21 @@ describe("SessionManager routing guards — dispatch integration", () => {
     const startArg = (handler.start as ReturnType<typeof vi.fn>).mock.calls[0];
     const firstArg = startArg?.[0] as { chatId?: string } | undefined;
     expect(firstArg?.chatId).toBe("c1");
-    expect(sdk.ack).toHaveBeenCalledWith(201);
-    expect(sdk.ack).toHaveBeenCalledWith(202);
+    expect(ackEntry).toHaveBeenCalledWith(201);
+    expect(ackEntry).toHaveBeenCalledWith(202);
 
     await sm.shutdown();
   });
 });
 
 /**
- * `ackEntry` is the WS-push escape hatch (proposal hub-inbox-ws-data-plane
- * §3.4): when set, dispatch acks via this callback instead of `sdk.ack`,
- * keeping push-mode slots from double-acking and leaking the server-side
- * per-agent in-flight counter (which only decrements on a WS ack matching
- * a still-`delivered` row).
- *
- * The four paths that ack inside dispatch — echo suppression, inject into
- * an active session, start a new session, resume an evicted session —
- * must all flow through the injected callback, AND `sdk.ack` must NOT be
- * called when one is provided. Anything less than that re-introduces the
- * counter leak.
+ * `ackEntry` is the WS data-plane ack callback wired from AgentSlot to
+ * `clientConnection.sendInboxAck`. Every code path inside `dispatch` that
+ * acks an entry — echo suppression, inject into an active session, start a
+ * new session, resume an evicted session — must route through that single
+ * callback.
  */
-describe("SessionManager ackEntry callback (WS push channel)", () => {
+describe("SessionManager ackEntry callback", () => {
   function buildSm(ackEntry: (entryId: number) => Promise<void>, handler?: AgentHandler) {
     const h = handler ?? createMockHandler();
     const sdk = mockSdk();
@@ -601,25 +604,24 @@ describe("SessionManager ackEntry callback (WS push channel)", () => {
       log: silentLogger(),
       ackEntry,
     });
-    return { sm, sdk, handler: h };
+    return { sm, handler: h };
   }
 
-  it("uses the injected callback (not sdk.ack) when starting a new session", async () => {
+  it("acks via the callback when starting a new session", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
-    const { sm, sdk } = buildSm(ackEntry);
+    const { sm } = buildSm(ackEntry);
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
 
     expect(ackEntry).toHaveBeenCalledTimes(1);
     expect(ackEntry).toHaveBeenCalledWith(1);
-    expect(sdk.ack).not.toHaveBeenCalled();
 
     await sm.shutdown();
   });
 
-  it("uses the injected callback when injecting into an active session", async () => {
+  it("acks via the callback when injecting into an active session", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
-    const { sm, sdk } = buildSm(ackEntry);
+    const { sm } = buildSm(ackEntry);
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-1" }));
@@ -627,15 +629,14 @@ describe("SessionManager ackEntry callback (WS push channel)", () => {
     expect(ackEntry).toHaveBeenCalledTimes(2);
     expect(ackEntry).toHaveBeenNthCalledWith(1, 1);
     expect(ackEntry).toHaveBeenNthCalledWith(2, 2);
-    expect(sdk.ack).not.toHaveBeenCalled();
 
     await sm.shutdown();
   });
 
-  it("uses the injected callback for echo-suppressed entries", async () => {
+  it("acks echo-suppressed entries via the callback", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const handler = createMockHandler();
-    const { sm, sdk } = buildSm(ackEntry, handler);
+    const { sm } = buildSm(ackEntry, handler);
 
     const echo = mockEntry({
       id: 99,
@@ -647,12 +648,11 @@ describe("SessionManager ackEntry callback (WS push channel)", () => {
 
     expect(handler.start).not.toHaveBeenCalled();
     expect(ackEntry).toHaveBeenCalledWith(99);
-    expect(sdk.ack).not.toHaveBeenCalled();
 
     await sm.shutdown();
   });
 
-  it("uses the injected callback when resuming an evicted session", async () => {
+  it("acks via the callback when resuming an evicted session", async () => {
     // Seed an evicted session by exceeding concurrency=1, then dispatch into
     // the evicted chat to trigger the resume branch (session-manager.ts:422).
     const ackEntry = vi.fn().mockResolvedValue(undefined);
@@ -680,42 +680,11 @@ describe("SessionManager ackEntry callback (WS push channel)", () => {
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
     ackEntry.mockClear();
-    (sdk.ack as ReturnType<typeof vi.fn>).mockClear();
 
     // Dispatching back into chat-a hits the resume branch.
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-a", messageId: "msg-resume" }));
 
     expect(ackEntry).toHaveBeenCalledWith(3);
-    expect(sdk.ack).not.toHaveBeenCalled();
-
-    await sm.shutdown();
-  });
-
-  it("falls back to sdk.ack when no ackEntry callback is configured (legacy poll path)", async () => {
-    // Default behaviour — a slot constructed without `ackEntry` keeps the
-    // legacy HTTP ack channel so existing poll deployments are unaffected.
-    const sdk = mockSdk();
-    const handler = createMockHandler();
-    const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
-      concurrency: 5,
-      handlerFactory: () => handler,
-      handlerConfig: { workspaceRoot: "/tmp/test" },
-      agentIdentity: {
-        agentId: "agent-1",
-        inboxId: "inbox-agent-1",
-        displayName: "Agent",
-        type: "autonomous_agent",
-        delegateMention: null,
-        metadata: {},
-      },
-      sdk,
-      log: silentLogger(),
-    });
-
-    await sm.dispatch(mockEntry({ id: 7, chatId: "chat-1" }));
-
-    expect(sdk.ack).toHaveBeenCalledWith(7);
 
     await sm.shutdown();
   });

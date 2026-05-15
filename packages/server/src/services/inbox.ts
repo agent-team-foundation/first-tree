@@ -4,7 +4,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { ForbiddenError, NotFoundError } from "../errors.js";
+import { ForbiddenError } from "../errors.js";
 import { FIRST_TREE_HUB_ATTR, withSpan } from "../observability/index.js";
 import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 
@@ -129,7 +129,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
 /**
  * Shared payload assembler for already-claimed `inbox_entries` rows.
  *
- * Both the HTTP poll path (`pollInbox`) and the WS push path
+ * Both the debug `GET /inbox` path (`pollInbox`) and the WS push path
  * (`claimAndBuildForPush`) call this with rows they have just `UPDATE`d to
  * `status='delivered'`. Keeping the silent-context bundling in one place is
  * the only way to keep the two paths from drifting (proposal
@@ -225,9 +225,9 @@ const PUSH_CLAIM_BATCH_LIMIT = 8;
  * WS-push path: atomically claim every pending entry the just-fired
  * `NOTIFY (inboxId:messageId)` references and assemble their wire payloads.
  *
- * Returns `[]` if no row matches — benign race with HTTP poll or another
- * server instance that already claimed the entry. NOTIFY is fire-and-forget
- * (proposal §3.2).
+ * Returns `[]` if no row matches — benign race with another server instance
+ * (or the debug `GET /inbox` endpoint) that already claimed the entry.
+ * NOTIFY is fire-and-forget (proposal §3.2).
  *
  * Why an array, not a single row: `sendMessage` can write **two** rows for
  * the same `(inbox, messageId)` pair when the recipient is both a chat
@@ -273,9 +273,9 @@ export async function claimAndBuildForPush(
 /**
  * WS-push backlog path: on agent rebind (or once an in-flight slot frees up
  * after an ack), drain up to `limit` pending `notify=true` entries oldest-
- * first and assemble wire payloads. Identical claim shape to the HTTP poll
- * path — they are intentionally interchangeable so a hot-path bug fixed in
- * one shows up in the other (proposal §3.3 / §3.5).
+ * first and assemble wire payloads. Identical claim shape to `pollInbox` —
+ * they are intentionally interchangeable so a hot-path bug fixed in one
+ * shows up in the other (proposal §3.3 / §3.5).
  */
 export async function claimBacklogForPush(
   db: Database,
@@ -409,37 +409,14 @@ async function collectPrecedingContext(
   return result;
 }
 
-export async function ackEntry(db: Database, entryId: number, inboxId: string) {
-  return withSpan(
-    "inbox.ack",
-    { [FIRST_TREE_HUB_ATTR.INBOX_ENTRY_ID]: String(entryId), "inbox.id": inboxId },
-    async () => {
-      const [entry] = await db
-        .update(inboxEntries)
-        .set({ status: "acked", ackedAt: new Date() })
-        .where(
-          and(eq(inboxEntries.id, entryId), eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "delivered")),
-        )
-        .returning();
-
-      if (!entry) {
-        throw new NotFoundError("Inbox entry not found or not in delivered status");
-      }
-
-      return entry;
-    },
-  );
-}
-
 /**
  * Ack a delivered entry from the WS data plane, scoped to the inboxes the
  * connected socket has bound. Returns the acked row on success, `null` if no
  * row matches — a benign outcome the caller should ignore (the entry may
  * have already been acked, timed out, or never belonged to this socket).
  *
- * Distinct from {@link ackEntry} so the WS path can ack without trusting an
- * `inboxId` from the wire — only entries whose `inboxId` is in `inboxIds`
- * are eligible. Empty `inboxIds` short-circuits to `null`.
+ * Trusts only the `inboxId` set the connected socket has bound (no `inboxId`
+ * on the wire), and short-circuits on an empty `inboxIds`.
  */
 export async function ackEntryByIdForBoundAgents(
   db: Database,
@@ -461,20 +438,6 @@ export async function ackEntryByIdForBoundAgents(
       .returning();
     return entry ?? null;
   });
-}
-
-export async function renewEntry(db: Database, entryId: number, inboxId: string) {
-  const [entry] = await db
-    .update(inboxEntries)
-    .set({ deliveredAt: new Date() })
-    .where(and(eq(inboxEntries.id, entryId), eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "delivered")))
-    .returning();
-
-  if (!entry) {
-    throw new NotFoundError("Inbox entry not found or not in delivered status");
-  }
-
-  return entry;
 }
 
 export async function resetTimedOutEntries(
