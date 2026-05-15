@@ -15,6 +15,7 @@ import { users } from "../db/schema/users.js";
 import { NotFoundError } from "../errors.js";
 import { requireUser } from "../scope/require-user.js";
 import { listAgentsManagedByUser } from "../services/access-control.js";
+import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
 import { decryptValue, encryptValue } from "../services/crypto.js";
@@ -354,6 +355,17 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       visibility: r.visibility,
       runtimeProvider: r.runtimeProvider,
       clientId: r.clientId,
+      // Resolved avatar URL — uploaded image takes priority; for human
+      // agents falls back to the backing user's external (GitHub) URL.
+      // Lets the web client render cross-org human avatars in chat
+      // surfaces, since `useAgentIdentityMap` merges this list with the
+      // org-scoped `/agents` source.
+      avatarImageUrl: resolveAvatarImageUrl({
+        uuid: r.uuid,
+        type: r.type,
+        avatarImageUpdatedAt: r.avatarImageUpdatedAt,
+        userAvatarUrl: r.userAvatarUrl,
+      }),
     }));
   });
 

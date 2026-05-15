@@ -64,10 +64,15 @@ export function useAgentNameMap(): (uuid: string | null | undefined) => string {
  * full `<AgentChip>` (display name + `@name`) instead of a single string.
  * `displayName` is non-null post-Phase 2 of the agent-naming refactor;
  * `name` stays nullable because soft-deleted rows have it cleared.
+ *
+ * `avatarImageUrl` is the resolved avatar URL (uploaded image, or — for
+ * human agents — the backing user's external avatar URL such as GitHub).
+ * `null` means the renderer should fall back to color + initial.
  */
 export type AgentIdentity = {
   name: string | null;
   displayName: string;
+  avatarImageUrl: string | null;
 };
 
 /**
@@ -76,6 +81,11 @@ export type AgentIdentity = {
  * the agents list. Returns `null` when the UUID is missing from both the
  * org-scoped and cross-org caches (soft-deleted, filtered out, or never
  * loaded) — callers render their own fallback.
+ *
+ * Both sources carry `avatarImageUrl`. The org-scoped `/agents` source
+ * wins on collision (it's the more authoritative view for the
+ * currently-selected tenant); the cross-org `/me/managed-agents` source
+ * fills in agents the caller manages in non-default orgs.
  */
 export function useAgentIdentityMap(): (uuid: string | null | undefined) => AgentIdentity | null {
   const { data } = useQuery({
@@ -93,12 +103,20 @@ export function useAgentIdentityMap(): (uuid: string | null | undefined) => Agen
     const map = new Map<string, AgentIdentity>();
     if (managed) {
       for (const a of managed) {
-        map.set(a.uuid, { name: a.name, displayName: a.displayName });
+        map.set(a.uuid, {
+          name: a.name,
+          displayName: a.displayName,
+          avatarImageUrl: a.avatarImageUrl ?? null,
+        });
       }
     }
     if (data?.items) {
       for (const a of data.items) {
-        map.set(a.uuid, { name: a.name, displayName: a.displayName });
+        map.set(a.uuid, {
+          name: a.name,
+          displayName: a.displayName,
+          avatarImageUrl: a.avatarImageUrl ?? null,
+        });
       }
     }
     return (uuid: string | null | undefined) => {
