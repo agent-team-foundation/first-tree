@@ -7,15 +7,9 @@ import type { Config } from "../config.js";
  * Boot-time gate: a typo in `FIRST_TREE_HUB_AUTH_*_EXPIRY` must fail the
  * server boot, not the first `/connect-tokens` call hours later.
  *
- * Why this lives next to buildApp rather than next to expiryToSeconds:
- * the parser itself is already covered by `auth-expiry-parse.test.ts`.
- * What we're guarding here is that the validation *call site* still
- * exists in the boot path. An earlier draft put the same check in
- * `server/src/index.ts:main`, which the standalone bin uses but the
- * CLI's `server start` (the path 99% of users run) bypasses entirely
- * — so the gate was effectively dead despite passing every unit test.
- * Asserting via buildApp covers BOTH entry points, since both flow
- * through it.
+ * The parser itself is covered by `auth-expiry-parse.test.ts`; this test
+ * guards that the validation *call site* still lives in the buildApp boot
+ * path so a config typo trips the assertion before listen() returns.
  */
 const baseConfig: Config = {
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },

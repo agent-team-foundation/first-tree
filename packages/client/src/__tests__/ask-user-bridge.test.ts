@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearAllPendingQuestionsForTest,
+  clearPendingForChat,
   hasPendingForChat,
   pendingQuestionCount,
   registerPendingQuestion,
-  rejectPendingForAgent,
+  rejectPendingForChat,
   tryResolveQuestionAnswer,
 } from "../handlers/ask-user-bridge.js";
 
@@ -55,13 +56,13 @@ describe("ask-user-bridge", () => {
     expect(tryResolveQuestionAnswer("string")).toBe(false);
   });
 
-  it("rejectPendingForAgent rejects only that agent's entries and returns the count", async () => {
+  it("rejectPendingForChat rejects only that (agent, chat) handler's entries and returns the count", async () => {
     const a1 = registerPendingQuestion({ correlationId: "tu_a1", agentId: "agent_a", chatId: "chat_a" });
     const a2 = registerPendingQuestion({ correlationId: "tu_a2", agentId: "agent_a", chatId: "chat_a" });
     const b1 = registerPendingQuestion({ correlationId: "tu_b1", agentId: "agent_b", chatId: "chat_b" });
     expect(pendingQuestionCount()).toBe(3);
 
-    const dropped = rejectPendingForAgent("agent_a", "Session shutting down.");
+    const dropped = rejectPendingForChat("agent_a", "chat_a", "Session shutting down.");
     expect(dropped).toBe(2);
     expect(pendingQuestionCount()).toBe(1);
 
@@ -72,6 +73,59 @@ describe("ask-user-bridge", () => {
     const matched = tryResolveQuestionAnswer({ correlationId: "tu_b1", answers: { q: "v" } });
     expect(matched).toBe(true);
     await expect(b1).resolves.toEqual({ status: "answered", answers: { q: "v" } });
+  });
+
+  it("rejectPendingForChat does NOT touch other chats of the same agent (#418)", async () => {
+    // The regression that motivated this scope key: one chat shutting down
+    // used to nuke another chat's pending askuser waiters because the
+    // bridge cleanup was per-agent, but handlers (and SDK transports) are
+    // per-(agent, chat). With per-chat scoping, tearing down chat_a leaves
+    // chat_b's awaiter alive so the user can still answer.
+    const a1 = registerPendingQuestion({ correlationId: "tu_a1", agentId: "agent_shared", chatId: "chat_a" });
+    const b1 = registerPendingQuestion({ correlationId: "tu_b1", agentId: "agent_shared", chatId: "chat_b" });
+    expect(pendingQuestionCount()).toBe(2);
+
+    const dropped = rejectPendingForChat("agent_shared", "chat_a", "Session shutting down.");
+    expect(dropped).toBe(1);
+    expect(pendingQuestionCount()).toBe(1);
+
+    await expect(a1).resolves.toEqual({ status: "denied", reason: "Session shutting down." });
+
+    // chat_b's awaiter survives the chat_a shutdown.
+    expect(hasPendingForChat("agent_shared", "chat_b")).toBe(true);
+    const matched = tryResolveQuestionAnswer({ correlationId: "tu_b1", answers: { q: "still alive" } });
+    expect(matched).toBe(true);
+    await expect(b1).resolves.toEqual({ status: "answered", answers: { q: "still alive" } });
+  });
+
+  it("clearPendingForChat silently removes only the matching (agent, chat) entries (#418)", async () => {
+    // suspend-path cleanup: removes without resolving (the SDK transport is
+    // being torn down). Per-chat scoping prevents one chat's suspend from
+    // wiping another chat's still-live waiter on the same agent.
+    const a1 = registerPendingQuestion({ correlationId: "tu_a1", agentId: "agent_shared", chatId: "chat_a" });
+    const b1 = registerPendingQuestion({ correlationId: "tu_b1", agentId: "agent_shared", chatId: "chat_b" });
+    expect(pendingQuestionCount()).toBe(2);
+
+    let a1Settled = false;
+    void a1.then(() => {
+      a1Settled = true;
+    });
+
+    const dropped = clearPendingForChat("agent_shared", "chat_a");
+    expect(dropped).toBe(1);
+    expect(pendingQuestionCount()).toBe(1);
+
+    // clearPendingForChat does NOT resolve the Promise — it's a silent
+    // cleanup. Give the microtask queue a tick to prove the Promise stays
+    // pending.
+    await Promise.resolve();
+    expect(a1Settled).toBe(false);
+
+    // chat_b's awaiter is untouched and still resolves on answer.
+    expect(hasPendingForChat("agent_shared", "chat_b")).toBe(true);
+    const matched = tryResolveQuestionAnswer({ correlationId: "tu_b1", answers: { q: "ok" } });
+    expect(matched).toBe(true);
+    await expect(b1).resolves.toEqual({ status: "answered", answers: { q: "ok" } });
   });
 
   it("hasPendingForChat reports true only for the matching (agent, chat) pair", () => {

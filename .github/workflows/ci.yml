@@ -23,6 +23,14 @@ jobs:
       - name: Validate branch name
         run: |
           BRANCH="${{ github.head_ref }}"
+          # hub-session-* branches are auto-created by the in-tree hub agent
+          # runtime when a coder session opens a PR. The agent doesn't pick
+          # the name, so the convention check skips them. Long-term fix is
+          # to teach the hub session bootstrap to prefix with feat/ etc.
+          if [[ "$BRANCH" =~ ^hub-session- ]]; then
+            echo "Branch '$BRANCH' is auto-named by the hub agent runtime; skipping convention check."
+            exit 0
+          fi
           PATTERN="^(feat|fix|refactor|test|docs|chore)/"
           if [[ ! "$BRANCH" =~ $PATTERN ]]; then
             echo "::error::Branch name '$BRANCH' does not follow convention: feat/, fix/, refactor/, test/, docs/, chore/"

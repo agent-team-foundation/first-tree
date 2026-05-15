@@ -4,35 +4,23 @@ import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
-
-// Mirror of packages/server/src/db/connection.ts — kept local to avoid pulling
-// the server package into the command CLI bundle. RDS/Aurora enforces
-// rds.force_ssl=1 with a cert outside Node's default CA bundle.
-function sslOptions(url: string) {
-  try {
-    if (new URL(url).hostname.endsWith(".rds.amazonaws.com")) {
-      return { ssl: { rejectUnauthorized: false } };
-    }
-  } catch {
-    // Not a parseable URL — let postgres-js report the error.
-  }
-  return {};
-}
+import { sslOptions } from "./connection.js";
 
 /**
  * Resolve the drizzle migrations directory.
- * 1. npm install: embedded at dist/drizzle/ (relative to the built CLI)
- * 2. Monorepo dev: resolved from @first-tree-hub/server package
+ *
+ * Two layouts to support:
+ *   - Built (Docker): `packages/server/dist/index.mjs` + `packages/server/drizzle/`
+ *     → `../drizzle` from the bundled file.
+ *   - Dev (tsx):      `packages/server/src/db/migrate.ts` + `packages/server/drizzle/`
+ *     → `../../drizzle` from the source file.
  */
 function resolveMigrationsFolder(): string {
-  // npm publish: migrations are embedded next to the built CLI
-  const cliDir = dirname(fileURLToPath(import.meta.url));
-  const embeddedPath = join(cliDir, "..", "drizzle");
-  if (existsSync(embeddedPath)) return embeddedPath;
-
-  // Monorepo dev: resolve from server package
-  const serverDir = dirname(fileURLToPath(import.meta.resolve("@first-tree-hub/server/package.json")));
-  return join(serverDir, "drizzle");
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [join(here, "..", "drizzle"), join(here, "..", "..", "drizzle")]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Cannot locate drizzle migrations folder relative to ${here}`);
 }
 
 /**
@@ -65,12 +53,12 @@ function validateJournalOrder(migrationsFolder: string): void {
 }
 
 /**
- * Run Drizzle database migrations.
+ * Run Drizzle database migrations. Returns the count of public tables after
+ * migration, used as a rough indicator that the schema landed.
  */
 export async function runMigrations(databaseUrl: string): Promise<number> {
   const migrationsFolder = resolveMigrationsFolder();
 
-  // Fail fast if journal timestamps are out of order
   validateJournalOrder(migrationsFolder);
 
   const ssl = sslOptions(databaseUrl);
@@ -84,7 +72,6 @@ export async function runMigrations(databaseUrl: string): Promise<number> {
     await client.end();
   }
 
-  // Count tables as a rough indicator of migration state
   const countClient = postgres(databaseUrl, { max: 1, ...ssl });
   try {
     const result = await countClient`

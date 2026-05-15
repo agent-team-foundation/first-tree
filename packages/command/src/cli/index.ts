@@ -8,7 +8,6 @@ import { registerClientCommands } from "../commands/client.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
 import { registerOrgCommands } from "../commands/org.js";
 import { registerSaaSConnectCommand } from "../commands/saas-connect.js";
-import { registerServerCommands } from "../commands/server.js";
 import { registerUpdateCommand } from "../commands/update.js";
 import { runHomeMigration } from "../core/migrate-home.js";
 import { setJsonMode } from "../core/output.js";
@@ -58,7 +57,6 @@ program
 registerSaaSConnectCommand(program);
 
 // Core subsystems
-registerServerCommands(program);
 registerClientCommands(program);
 
 // Agent management (config, bindings, lifecycle)

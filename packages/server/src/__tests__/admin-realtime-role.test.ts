@@ -172,15 +172,20 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
   it("GET /admin/agents/:uuid still 404s when the caller has no membership in the agent's org", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);
-    const bob = await createTestAdmin(app, { username: `rt-bob-${crypto.randomUUID().slice(0, 6)}` });
-    // Bob is an admin in his own default org. Use createTestAdmin's seeded
-    // org as a foreign org Alice has zero membership in. Pin an agent there.
+    // Bob owns an agent in a foreign org Alice has zero membership in.
+    // `attachMember` creates a fresh org row + member, so the agent really
+    // lives outside Alice's reachable scope — `createTestAdmin` would
+    // otherwise put Bob in the same default org as Alice and the test
+    // would only be exercising the visibility filter, not the
+    // not-a-member-of-this-org guard the title claims.
+    const bobBase = await createTestAdmin(app, { username: `rt-bob-${crypto.randomUUID().slice(0, 6)}` });
+    const bobForeign = await attachMember(app, bobBase.userId, "admin");
     const bot = await createAgent(app.db, {
       name: `rt-foreign-${crypto.randomUUID().slice(0, 6)}`,
       type: "autonomous_agent",
       displayName: "Bot Owned By Bob",
-      managerId: bob.memberId,
-      organizationId: bob.organizationId,
+      managerId: bobForeign.memberId,
+      organizationId: bobForeign.orgId,
       visibility: "private",
     });
 
@@ -189,14 +194,9 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
       url: `/api/v1/agents/${bot.uuid}`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
-    // Same UUID exists but Alice is not a member of that org → 404 to
-    // prevent enumeration. (Both Alice and Bob seed in the same default
-    // org via createTestAdmin, so Alice IS a member; this test stays
-    // deterministic only when the realtime probe matches; if not, the
-    // visibility filter still gates a private agent owned by another
-    // member to 404.)
-    // The agent is `private` and not managed by Alice → visibility filter
-    // returns 404 either way.
+    // Alice has no membership in bobForeign.orgId; resolveCallerInOrg
+    // throws NotFoundError before the visibility/admin probe ever runs,
+    // so the response is 404 regardless of Alice's role.
     expect(res.statusCode).toBe(404);
   });
 });

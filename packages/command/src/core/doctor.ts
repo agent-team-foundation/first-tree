@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -7,7 +6,6 @@ import {
   DEFAULT_CONFIG_DIR,
   loadAgents,
   resolveConfigReadonly,
-  serverConfigSchema,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { findStaleAliases, formatStaleReason, type PinnedAgent, type StaleAlias } from "./agent-prune.js";
 import { cliFetch } from "./cli-fetch.js";
@@ -23,10 +21,6 @@ export type CheckResult = {
 // ---------------------------------------------------------------------------
 // Config resolution helpers — delegates to shared config system
 // ---------------------------------------------------------------------------
-
-function getServerConfig(): Record<string, unknown> {
-  return resolveConfigReadonly({ schema: serverConfigSchema, role: "server" });
-}
 
 function getClientConfig(): Record<string, unknown> {
   return resolveConfigReadonly({ schema: clientConfigSchema, role: "client" });
@@ -55,69 +49,6 @@ export function checkNodeVersion(): CheckResult {
     ok,
     detail: ok ? `v${version}` : `v${version} (requires >= 22.16)`,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Server-specific checks
-// ---------------------------------------------------------------------------
-
-export function checkDocker(): CheckResult {
-  try {
-    const output = execFileSync("docker", ["--version"], { encoding: "utf-8", timeout: 5000 }).trim();
-    return { label: "Docker", ok: true, detail: output.replace("Docker version ", "v").split(",")[0] ?? "" };
-  } catch {
-    return { label: "Docker", ok: false, detail: "not found (optional — needed for auto PG provisioning)" };
-  }
-}
-
-export function checkServerConfig(): CheckResult {
-  const hasFile = existsSync(join(DEFAULT_CONFIG_DIR, "server.yaml"));
-  // Check if key required env vars are set
-  const hasEnv = !!process.env.FIRST_TREE_HUB_DATABASE_URL;
-
-  if (hasFile && hasEnv) return { label: "Config", ok: true, detail: "config file + env vars" };
-  if (hasFile) return { label: "Config", ok: true, detail: join(DEFAULT_CONFIG_DIR, "server.yaml") };
-  if (hasEnv) return { label: "Config", ok: true, detail: "via environment variables" };
-  return { label: "Config", ok: false, detail: "no config file or env vars found" };
-}
-
-export async function checkDatabase(): Promise<CheckResult> {
-  const config = getServerConfig();
-  const dbUrl = get(config, "database.url");
-  if (typeof dbUrl !== "string" || !dbUrl) {
-    return { label: "Database", ok: false, detail: "not configured (FIRST_TREE_HUB_DATABASE_URL or config file)" };
-  }
-
-  try {
-    const { default: pg } = (await import("postgres")) as { default: (url: string, opts: unknown) => unknown };
-    const sql = pg(dbUrl, { max: 1, connect_timeout: 5, idle_timeout: 1 }) as {
-      unsafe: (q: string) => Promise<unknown>;
-      end: () => Promise<void>;
-    };
-    await sql.unsafe("SELECT 1");
-    await sql.end();
-    return { label: "Database", ok: true, detail: "connected" };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { label: "Database", ok: false, detail: `unreachable — ${msg.slice(0, 80)}` };
-  }
-}
-
-export async function checkServerHealth(): Promise<CheckResult> {
-  const config = getServerConfig();
-  const host = (get(config, "server.host") as string) ?? "127.0.0.1";
-  const port = (get(config, "server.port") as number) ?? 8000;
-  const url = `http://${host}:${port}/healthz`;
-
-  try {
-    const res = await cliFetch(url, { signal: AbortSignal.timeout(3000) });
-    if (res.ok) {
-      return { label: "Server Health", ok: true, detail: `running at ${host}:${port}` };
-    }
-    return { label: "Server Health", ok: false, detail: `unhealthy (HTTP ${res.status}) at ${host}:${port}` };
-  } catch {
-    return { label: "Server Health", ok: false, detail: `not running at ${host}:${port}` };
-  }
 }
 
 // ---------------------------------------------------------------------------
