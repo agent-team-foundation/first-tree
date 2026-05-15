@@ -280,7 +280,11 @@ export async function assertAllAgentsVisibleInOrg(db: Database, scope: OrgScope,
     }
     const orgVisible = row.visibility === AGENT_VISIBILITY.ORGANIZATION;
     const managed = row.managerId === scope.memberId;
-    if (!orgVisible && !managed) {
+    // Mirror the requireAgentAccess(visible) admin short-circuit so
+    // chat-create that references another member's private agent stays
+    // symmetric with the detail-side admin behavior.
+    const isAdmin = scope.role === "admin";
+    if (!orgVisible && !managed && !isAdmin) {
       throw new NotFoundError(`Agent "${id}" not found`);
     }
   }
