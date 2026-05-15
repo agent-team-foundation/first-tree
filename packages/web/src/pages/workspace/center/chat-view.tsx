@@ -855,7 +855,57 @@ export function ChatView({
     }
   }, [itemCount]);
 
-  const displayName = agentName(agentId);
+  /**
+   * Chat-scoped identity index. The chat detail endpoint resolves each
+   * participant's `name / displayName / type` via JOIN `agents` without
+   * applying `agentVisibilityCondition`, so private agents that are
+   * members of this chat carry their real labels here — the identity
+   * map (`useAgentNameMap` / `useAgentIdentityMap`) goes through the
+   * org-scoped `/agents` endpoint and would drop them. The chat
+   * membership is the authoritative trust boundary for in-chat identity
+   * rendering; see
+   * `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
+   */
+  const chatParticipantById = useMemo(() => {
+    const map = new Map<string, { name: string | null; displayName: string }>();
+    for (const p of chatDetail?.participants ?? []) {
+      map.set(p.agentId, { name: p.name, displayName: p.displayName });
+    }
+    return map;
+  }, [chatDetail?.participants]);
+
+  /**
+   * Resolve an agentId to a display label, preferring the chat-scoped
+   * participant index over the org-visibility-filtered identity map.
+   * Falls back to the identity map for senders that are no longer in
+   * the chat (e.g. historical messages after a future remove flow lands)
+   * and to the raw UUID prefix as a last resort.
+   */
+  const chatScopedAgentName = useCallback(
+    (id: string | null | undefined): string => {
+      if (!id) return "—";
+      const p = chatParticipantById.get(id);
+      if (p) return p.displayName;
+      return agentName(id);
+    },
+    [chatParticipantById, agentName],
+  );
+
+  /**
+   * Identity-pair variant used by the participant chip row and the
+   * mention picker. Same precedence rule as `chatScopedAgentName`.
+   */
+  const chatScopedAgentIdentity = useCallback(
+    (id: string | null | undefined): { name: string | null; displayName: string } | null => {
+      if (!id) return null;
+      const p = chatParticipantById.get(id);
+      if (p) return { name: p.name, displayName: p.displayName };
+      return agentIdentity(id);
+    },
+    [chatParticipantById, agentIdentity],
+  );
+
+  const displayName = chatScopedAgentName(agentId);
 
   /** Set of agentIds currently in the chat. Used to (a) detect "outsiders"
    *  the user `@`-mentions and (b) skip the redundant addParticipants call
@@ -864,19 +914,15 @@ export function ChatView({
     return new Set(chatDetail?.participants?.map((p) => p.agentId) ?? []);
   }, [chatDetail?.participants]);
 
-  // Mention autocomplete candidates: every org agent the user might address,
-  // resolved to their `{name, displayName}` via the shared identity map.
-  // Includes BOTH chat participants and outsiders — picking an outsider
-  // implicitly invites them via `addMeChatParticipants` at send time, which
-  // turns a 1:1 into a group server-side. Self is excluded; any agent
-  // without a slug (`name`) is skipped because mentions need one — even
-  // current chat participants. This is intentional: the server's
-  // `extractMentions` matches `@<token>` against `agents.name`, so a
-  // participant with `name=null` (legacy / soft-deleted row) cannot be
-  // addressed via `@` regardless. They still show in `ParticipantsHeader`
-  // chips (which uses `agentIdentity.displayName`); the picker just won't
-  // offer them. Fixing this requires the server to backfill missing
-  // `agents.name`, not a client-side workaround.
+  // Mention autocomplete candidates: every agent the user might address,
+  // resolved to their `{name, displayName}`. Chat participants take
+  // precedence over the visibility-filtered identity map so private agents
+  // already in the chat surface in the picker (identity inside a chat is
+  // membership-derived, not discovery-derived — fixes the missing-private-
+  // agent autocomplete bug). Outsiders sourced from `/activity` continue
+  // to rely on the identity map — that lookup is org-scoped and correctly
+  // bounded by discovery rules. Self is excluded; any agent without a slug
+  // (`name`) is skipped because mentions need one.
   const mentionCandidates = useMemo<MentionCandidate[]>(() => {
     const ids = new Set<string>();
     for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
@@ -898,7 +944,7 @@ export function ChatView({
     const out: MentionCandidate[] = [];
     for (const id of ids) {
       if (id === myAgentId) continue;
-      const ident = agentIdentity(id);
+      const ident = chatScopedAgentIdentity(id);
       if (!ident || !ident.name) continue;
       out.push({
         agentId: id,
@@ -908,7 +954,7 @@ export function ChatView({
       });
     }
     return out;
-  }, [chatDetail?.participants, activity?.agents, agentId, agentIdentity, myAgentId]);
+  }, [chatDetail?.participants, activity?.agents, agentId, chatScopedAgentIdentity, myAgentId]);
 
   /**
    * "Needs explicit @mention" guard: a real group, OR a direct chat where the
@@ -1178,7 +1224,7 @@ export function ChatView({
             chatId={chatId}
             participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
             candidates={mentionCandidates}
-            agentIdentity={agentIdentity}
+            agentIdentity={chatScopedAgentIdentity}
             onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
             readOnly={readOnly}
           />
@@ -1251,7 +1297,9 @@ export function ChatView({
                 const ev = item.data;
                 switch (ev.kind) {
                   case "assistant_text":
-                    return <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
+                    return (
+                      <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={chatScopedAgentName} />
+                    );
                   case "error":
                     return <ErrorRow key={item.key} event={ev} />;
                   default:
@@ -1272,14 +1320,14 @@ export function ChatView({
                     content={msg.content}
                     answer={answer}
                     status={status}
-                    agentNameFn={agentName}
+                    agentNameFn={chatScopedAgentName}
                   />
                 );
               }
               if (msg.format === "question_answer") {
-                return <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={agentName} />;
+                return <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={chatScopedAgentName} />;
               }
-              return <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={agentName} />;
+              return <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={chatScopedAgentName} />;
             })}
           </div>
           <div ref={messagesEndRef} />
@@ -1746,6 +1794,29 @@ function ParticipantsHeader({
                 borderColor: "var(--border)",
               }}
             >
+              {/* V1 one-way-door notice. Chat membership has no remove
+                  flow yet (`docs/agent-space-and-mention-visibility-
+                  design.zh-CN.md` §4.4.3 / §4.5 — "Revocable" deferred
+                  to V2), so the user can't undo an add. Surface this
+                  before they pick rather than after — especially load-
+                  bearing when an owner adds their own private agent,
+                  because that is the moment the agent's existence is
+                  exposed to other chat members (the "邀请即同意" /
+                  invite-as-consent boundary). */}
+              <div
+                role="note"
+                className="text-caption"
+                style={{
+                  padding: "var(--sp-1) var(--sp-3)",
+                  color: "var(--fg-3)",
+                  borderBottom: "var(--hairline) solid var(--border-faint)",
+                  background: "var(--bg-sunken)",
+                  whiteSpace: "normal",
+                  lineHeight: 1.4,
+                }}
+              >
+                Adding is final in V1 — participants can't be removed yet.
+              </div>
               {(() => {
                 const ambiguous = ambiguousDisplayNames(outsideCandidates);
                 // Same grouping contract as the new-chat picker: mine
