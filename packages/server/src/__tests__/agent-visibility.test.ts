@@ -216,6 +216,23 @@ describe("Agent Visibility", () => {
       const res = await member.req("GET", `/api/v1/agents/${myAgent.uuid}`);
       expect(res.statusCode).toBe(200);
     });
+
+    it("admin can access a private agent managed by another member", async () => {
+      const app = getApp();
+      const { req: adminReq } = await authedRequest(app);
+      const otherMemberBundle = await authedRequest(app);
+      const otherMember = await createMemberAndLogin(app, otherMemberBundle);
+
+      const privateAgent = await seedAgent(app, {
+        name: "admin-cross-priv",
+        type: "personal_assistant",
+        managerId: otherMember.memberId,
+      });
+
+      const res = await adminReq("GET", `/api/v1/agents/${privateAgent.uuid}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ uuid: string }>().uuid).toBe(privateAgent.uuid);
+    });
   });
 
   describe("managerId authorization for PATCH", () => {

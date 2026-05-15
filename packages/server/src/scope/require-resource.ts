@@ -87,9 +87,14 @@ export async function requireAgentAccess(
   };
 
   if (kind === "visible") {
+    // Admin in the agent's org can read any agent — symmetric with the
+    // admin-only `/orgs/:orgId/agents/all` listing that already exposes
+    // private agents for cross-member troubleshooting. Without this short
+    // circuit, admins see private agents in the list but get 404 on detail.
     const orgVisible = agent.visibility === AGENT_VISIBILITY.ORGANIZATION;
     const managed = agent.managerId === caller.memberId;
-    if (!orgVisible && !managed) {
+    const isAdmin = caller.role === "admin";
+    if (!orgVisible && !managed && !isAdmin) {
       throw new NotFoundError(`Agent "${uuid}" not found`);
     }
   } else {
