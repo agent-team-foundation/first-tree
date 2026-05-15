@@ -8,7 +8,9 @@ import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { SourceIcon } from "../../../components/chat/source-icon.js";
 import { WorkingChip } from "../../../components/chat/working-chip.js";
 import { SegmentedControl } from "../../../components/ui/segmented-control.js";
+import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
+import { FilterPopover, originLabel } from "./filter-popover.js";
 import { type GroupMode, groupRows, parseGroupMode } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
@@ -86,9 +88,9 @@ export function ConversationList({
   watching,
   onWatchingChange,
   origin,
-  onOriginChange: _onOriginChange,
+  onOriginChange,
   participants,
-  onParticipantsChange: _onParticipantsChange,
+  onParticipantsChange,
   onClearFilters,
   group,
   onGroupChange,
@@ -264,7 +266,20 @@ export function ConversationList({
     });
   };
 
-  const hasActiveFilter = unread || watching;
+  // Total active filter dimensions — drives the Filter button badge and
+  // the chip-row visibility. Origin / participants count their list
+  // length so a multi-select "PR + Issue" shows 2.
+  const activeFilterCount = origin.length + participants.length + (unread ? 1 : 0) + (watching ? 1 : 0);
+  const hasActiveFilter = activeFilterCount > 0;
+
+  const resolveAgentName = useAgentNameMap();
+
+  const removeOrigin = (src: ChatSource): void => {
+    onOriginChange(origin.filter((s) => s !== src));
+  };
+  const removeParticipant = (id: string): void => {
+    onParticipantsChange(participants.filter((p) => p !== id));
+  };
 
   return (
     <aside
@@ -310,9 +325,9 @@ export function ConversationList({
             <span>New chat</span>
           </button>
 
-          {/* Unread toggle — right-aligned secondary action (next to Filter
-              in Phase B). Sits opposite New chat so the row reads as
-              "primary action ↔ filtering controls". */}
+          {/* Unread toggle. The two filter entries (Unread + Filter) sit
+              on the right of the toolbar opposite New chat so the row
+              reads as "primary action ↔ filtering controls". */}
           <button
             type="button"
             onClick={() => onUnreadChange(!unread)}
@@ -340,6 +355,14 @@ export function ConversationList({
               </span>
             )}
           </button>
+
+          <FilterPopover
+            origin={origin}
+            onOriginChange={onOriginChange}
+            watching={watching}
+            onWatchingChange={onWatchingChange}
+            activeCount={origin.length + participants.length + (watching ? 1 : 0)}
+          />
         </div>
 
         <div
@@ -390,9 +413,10 @@ export function ConversationList({
             </label>
           </div>
 
-          {/* Filter chip row — only renders when at least one filter is
-            active. Phase A only surfaces unread / watching here; Phase B
-            will extend it with origin / participants chips. */}
+          {/* Filter chip row. Renders one chip per active filter
+              dimension. Each chip's × removes only that dimension; the
+              trailing "Clear" button strips every filter in a single
+              URL write (see `nextParamsForClearFilters`). */}
           {hasActiveFilter && (
             <div className="flex items-center flex-wrap" style={{ gap: 4 }}>
               <span className="text-label" style={{ color: "var(--fg-4)" }}>
@@ -405,6 +429,16 @@ export function ConversationList({
                 />
               )}
               {watching && <FilterChip label="Watching" onClear={() => onWatchingChange(false)} />}
+              {origin.map((src) => (
+                <FilterChip key={`origin-${src}`} label={originLabel(src)} onClear={() => removeOrigin(src)} />
+              ))}
+              {participants.map((agentId) => (
+                <FilterChip
+                  key={`with-${agentId}`}
+                  label={`@${resolveAgentName(agentId)}`}
+                  onClear={() => removeParticipant(agentId)}
+                />
+              ))}
               <button
                 type="button"
                 onClick={onClearFilters}
