@@ -192,9 +192,9 @@ export const serverConfigSchema = defineConfig({
      *
      * The WS data plane is the only delivery path on this server build. The
      * legacy `new_message` doorbell + HTTP poll fallback was removed in
-     * `@agent-team-foundation/first-tree-hub@0.15.0`. Clients older than
+     * `@agent-team-foundation/first-tree-hub@0.14.3`. Clients older than
      * 0.10.4 (before the WS push data plane was introduced) are no longer
-     * supported; clients in 0.10.4 ~ 0.14.x continue to work because they
+     * supported; clients in 0.10.4 ~ 0.14.2 continue to work because they
      * read `server:welcome.capabilities.wsInboxDeliver` to skip their own
      * poll path on bootstrap.
      */

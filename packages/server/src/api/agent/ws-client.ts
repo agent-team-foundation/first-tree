@@ -404,10 +404,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             socket.send(JSON.stringify({ type: "auth:ok" }));
             // Wire-additive: older clients drop the unknown type; newer ones
             // use it to detect version drift. `capabilities.wsInboxDeliver`
-            // must stay `true` here so 0.10.4 ~ 0.14.x clients suppress
+            // must stay `true` here so 0.10.4 ~ 0.14.2 clients suppress
             // their local 5s HTTP poll on bootstrap — without this flag they
             // would fall back to `GET /inbox` + `POST /inbox/:id/ack` and
-            // the missing ack endpoint would loop messages forever. 0.15.0+
+            // the missing ack endpoint would loop messages forever. 0.14.3+
             // clients ignore the field entirely.
             socket.send(
               JSON.stringify({

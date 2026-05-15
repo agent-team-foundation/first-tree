@@ -53,8 +53,8 @@ export type Client = z.infer<typeof clientSchema>;
  * `clientCapabilitiesSchema` (per-runtime-provider availability — different
  * concept).
  *
- * 0.10.4 ~ 0.14.x clients still send this block (with `wsInboxDeliver: true`
- * hard-coded). The 0.15.0+ runtime omits it. The schema is retained so that
+ * 0.10.4 ~ 0.14.2 clients still send this block (with `wsInboxDeliver: true`
+ * hard-coded). The 0.14.3+ runtime omits it. The schema is retained so that
  * middle-version `client:register` frames still parse, even though the
  * server no longer reads any of these fields — the WS inbox data plane is
  * mandatory on this server build.
@@ -63,7 +63,7 @@ export const clientWireCapabilitiesSchema = z
   .object({
     /**
      * Historical opt-in for the `inbox:deliver` push path. The server now
-     * ignores the value; 0.10.4 ~ 0.14.x clients still emit it as `true`.
+     * ignores the value; 0.10.4 ~ 0.14.2 clients still emit it as `true`.
      */
     wsInboxDeliver: z.boolean().default(false),
   })
