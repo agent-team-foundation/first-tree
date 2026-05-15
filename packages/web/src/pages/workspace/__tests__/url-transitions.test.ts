@@ -3,8 +3,12 @@ import {
   nextParamsForClearFilters,
   nextParamsForEngagement,
   nextParamsForGroup,
+  nextParamsForOrigin,
+  nextParamsForParticipants,
   nextParamsForUnread,
   nextParamsForWatching,
+  parseOriginList,
+  parseParticipantList,
   parseUnreadWatching,
 } from "../index.js";
 
@@ -56,33 +60,37 @@ describe("nextParamsForUnread", () => {
     expect(result.has("unread")).toBe(false);
   });
 
-  it("clears watching when enabling unread (server filter enum is single-valued)", () => {
-    // Enabling both `unread` and `watching` would require a single-valued
-    // server enum to hold two states; flipping the other off keeps the
-    // URL representable on the wire.
+  it("leaves watching alone (Phase B — the two dimensions are independent)", () => {
+    // Phase A enforced mutual exclusivity because the server `filter`
+    // enum could only carry one of {unread, watching} at a time. Phase
+    // B lifted `watching` to an independent boolean, so toggling
+    // `unread` no longer disturbs `watching`.
     const result = nextParamsForUnread(paramsOf("watching=1"), true);
     expect(result.get("unread")).toBe("1");
-    expect(result.has("watching")).toBe(false);
+    expect(result.get("watching")).toBe("1");
   });
 
   it("preserves the chat selection (unlike scope toggles)", () => {
-    // Unread doesn't hide the selected chat from the rail, so leaving
-    // `?c=` alone keeps the reading position stable.
     const result = nextParamsForUnread(paramsOf("c=abc"), true);
     expect(result.get("c")).toBe("abc");
   });
 });
 
 describe("nextParamsForWatching", () => {
-  it("sets watching=1 when enabling and clears unread", () => {
-    const result = nextParamsForWatching(paramsOf("unread=1"), true);
+  it("sets watching=1 when enabling", () => {
+    const result = nextParamsForWatching(paramsOf(""), true);
     expect(result.get("watching")).toBe("1");
-    expect(result.has("unread")).toBe(false);
   });
 
   it("removes watching when disabling", () => {
     const result = nextParamsForWatching(paramsOf("watching=1"), false);
     expect(result.has("watching")).toBe(false);
+  });
+
+  it("leaves unread alone (Phase B — independent dimensions)", () => {
+    const result = nextParamsForWatching(paramsOf("unread=1"), true);
+    expect(result.get("watching")).toBe("1");
+    expect(result.get("unread")).toBe("1");
   });
 });
 
@@ -92,11 +100,11 @@ describe("parseUnreadWatching", () => {
     expect(parseUnreadWatching(paramsOf("watching=1"))).toEqual({ unread: false, watching: true });
   });
 
-  it("canonicalises both-true URLs by letting unread win", () => {
-    // A hand-typed or shared URL with both flags set is impossible for
-    // the server filter enum to represent. The parser collapses the
-    // ambiguity here so the rest of the app sees one consistent state.
-    expect(parseUnreadWatching(paramsOf("unread=1&watching=1"))).toEqual({ unread: true, watching: false });
+  it("reads both flags as true when both are set (Phase B)", () => {
+    // Phase B server accepts both dimensions independently, so the URL
+    // can legitimately encode "unread chats I'm watching". The parser
+    // is straight-through — no more Phase A canonicalisation.
+    expect(parseUnreadWatching(paramsOf("unread=1&watching=1"))).toEqual({ unread: true, watching: true });
   });
 
   it("defaults both off when neither key is present", () => {
@@ -109,18 +117,103 @@ describe("parseUnreadWatching", () => {
   });
 });
 
-describe("nextParamsForClearFilters", () => {
-  it("strips both flags in a single mutation", () => {
-    // The Clear handler must clear `unread` and `watching` atomically
-    // because two sequential `setSearchParams` calls would each derive
-    // from the same render-stale params and the second would clobber
-    // the first.
-    const result = nextParamsForClearFilters(paramsOf("unread=1&watching=1"));
-    expect(result.has("unread")).toBe(false);
-    expect(result.has("watching")).toBe(false);
+describe("parseOriginList", () => {
+  it("returns an empty list when the key is missing or empty", () => {
+    expect(parseOriginList(paramsOf(""))).toEqual([]);
+    expect(parseOriginList(paramsOf("origin="))).toEqual([]);
   });
 
-  it("preserves unrelated params (scope, chat selection, group)", () => {
+  it("parses a single origin", () => {
+    expect(parseOriginList(paramsOf("origin=manual"))).toEqual(["manual"]);
+  });
+
+  it("parses comma-joined multi-value", () => {
+    expect(parseOriginList(paramsOf("origin=manual,github_pull_request,github_issue"))).toEqual([
+      "manual",
+      "github_pull_request",
+      "github_issue",
+    ]);
+  });
+
+  it("silently drops unknown / future-rolled-back ChatSource literals", () => {
+    // A URL with an unfamiliar source string (typo, deprecated value,
+    // or a token introduced after a partial rollback) shouldn't break
+    // the rail — those tokens just don't filter anything.
+    expect(parseOriginList(paramsOf("origin=manual,unknown,github_issue"))).toEqual(["manual", "github_issue"]);
+  });
+
+  it("trims whitespace and dedupes", () => {
+    expect(parseOriginList(paramsOf("origin=manual,%20github_issue%20,manual"))).toEqual(["manual", "github_issue"]);
+  });
+});
+
+describe("parseParticipantList", () => {
+  it("returns an empty list when the key is missing or empty", () => {
+    expect(parseParticipantList(paramsOf(""))).toEqual([]);
+    expect(parseParticipantList(paramsOf("with="))).toEqual([]);
+  });
+
+  it("parses comma-joined ids with trim + dedupe", () => {
+    expect(parseParticipantList(paramsOf("with=agent-a,%20agent-b%20,agent-a"))).toEqual(["agent-a", "agent-b"]);
+  });
+});
+
+describe("nextParamsForOrigin", () => {
+  it("sets a comma-joined list", () => {
+    const result = nextParamsForOrigin(paramsOf(""), ["manual", "github_pull_request"]);
+    expect(result.get("origin")).toBe("manual,github_pull_request");
+  });
+
+  it("deduplicates the input", () => {
+    const result = nextParamsForOrigin(paramsOf(""), ["manual", "manual", "github_issue"]);
+    expect(result.get("origin")).toBe("manual,github_issue");
+  });
+
+  it("removes the key on an empty list (canonical home URL stays bare)", () => {
+    const result = nextParamsForOrigin(paramsOf("origin=manual"), []);
+    expect(result.has("origin")).toBe(false);
+  });
+
+  it("clears the chat selection (narrowing can hide the current chat)", () => {
+    const result = nextParamsForOrigin(paramsOf("c=abc&origin=manual"), ["github_issue"]);
+    expect(result.has("c")).toBe(false);
+    expect(result.get("origin")).toBe("github_issue");
+  });
+});
+
+describe("nextParamsForParticipants", () => {
+  it("sets a comma-joined list and filters out empty entries", () => {
+    const result = nextParamsForParticipants(paramsOf(""), ["agent-a", "", "agent-b"]);
+    expect(result.get("with")).toBe("agent-a,agent-b");
+  });
+
+  it("removes the key on an empty list", () => {
+    const result = nextParamsForParticipants(paramsOf("with=agent-a"), []);
+    expect(result.has("with")).toBe(false);
+  });
+
+  it("clears the chat selection", () => {
+    const result = nextParamsForParticipants(paramsOf("c=abc&with=agent-a"), ["agent-b"]);
+    expect(result.has("c")).toBe(false);
+  });
+});
+
+describe("nextParamsForClearFilters", () => {
+  it("strips every rail filter dimension in a single mutation", () => {
+    // The Clear handler must clear `unread` / `watching` / `origin` /
+    // `with` atomically because two sequential `setSearchParams` calls
+    // would each derive from the same render-stale params and the
+    // second would clobber the first.
+    const result = nextParamsForClearFilters(
+      paramsOf("unread=1&watching=1&origin=manual,github_pull_request&with=agent-a,agent-b"),
+    );
+    expect(result.has("unread")).toBe(false);
+    expect(result.has("watching")).toBe(false);
+    expect(result.has("origin")).toBe(false);
+    expect(result.has("with")).toBe(false);
+  });
+
+  it("preserves non-filter params (scope, chat selection, group)", () => {
     const result = nextParamsForClearFilters(paramsOf("unread=1&c=abc&engagement=archived&group=source"));
     expect(result.get("c")).toBe("abc");
     expect(result.get("engagement")).toBe("archived");

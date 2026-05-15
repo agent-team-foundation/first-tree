@@ -1,4 +1,4 @@
-import type { ChatEngagementView, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatEngagementView, ChatSource, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -85,6 +85,10 @@ export function ConversationList({
   onUnreadChange,
   watching,
   onWatchingChange,
+  origin,
+  onOriginChange: _onOriginChange,
+  participants,
+  onParticipantsChange: _onParticipantsChange,
   onClearFilters,
   group,
   onGroupChange,
@@ -99,10 +103,23 @@ export function ConversationList({
   watching: boolean;
   onWatchingChange: (next: boolean) => void;
   /**
-   * Clears every Phase A filter dimension (`unread`, `watching`) in one
-   * URL write. Calling the per-flag setters in sequence inside the Clear
-   * handler would race against React-router's stale `searchParams` (see
-   * `nextParamsForClearFilters` in `workspace/index.tsx`).
+   * Multi-select origin filter. Phase B's filter popover (forthcoming
+   * in the next commit) will mount its checkbox group against this
+   * pair; for now they thread through so the URL parser already has a
+   * place to land its state.
+   */
+  origin: ReadonlyArray<ChatSource>;
+  onOriginChange: (next: ReadonlyArray<ChatSource>) => void;
+  /**
+   * Multi-select participants filter. Same staging story as `origin`.
+   */
+  participants: ReadonlyArray<string>;
+  onParticipantsChange: (next: ReadonlyArray<string>) => void;
+  /**
+   * Clears every filter dimension (`unread`, `watching`, `origin`,
+   * `with`) in one URL write. Calling the per-flag setters in sequence
+   * inside the Clear handler would race against React-router's stale
+   * `searchParams` (see `nextParamsForClearFilters` in `workspace/index.tsx`).
    */
   onClearFilters: () => void;
   group: GroupMode;
@@ -121,13 +138,36 @@ export function ConversationList({
   // Phase B: `filter` carries only the unread axis. The `watching`
   // dimension travels as an independent boolean — `unread` and
   // `watching` can compose ("unread chats I'm watching"), which the
-  // pre-Phase-B single-enum couldn't express.
+  // pre-Phase-B single-enum couldn't express. `origin` and `with` ride
+  // through as multi-value filters; the wire serialises them as
+  // comma-joined strings (see `me-chats.ts`).
   const filter: "all" | "unread" = unread ? "unread" : "all";
   const watchingParam = watching ? true : undefined;
+  const originParam = origin.length > 0 ? [...origin] : undefined;
+  const withParam = participants.length > 0 ? [...participants] : undefined;
 
   const { data, isLoading } = useQuery({
-    queryKey: ["me", "chats", filter, engagement, watchingParam ?? false] as const,
-    queryFn: () => listMeChats({ filter, engagement, watching: watchingParam }),
+    // `origin` / `with` are arrays — react-query needs a stable key
+    // signature, so we serialise them into the query key the same way
+    // the wire does. Empty array collapses to `null` so an unchanged
+    // "no filter" state doesn't churn the key.
+    queryKey: [
+      "me",
+      "chats",
+      filter,
+      engagement,
+      watchingParam ?? false,
+      originParam ? originParam.join(",") : null,
+      withParam ? withParam.join(",") : null,
+    ] as const,
+    queryFn: () =>
+      listMeChats({
+        filter,
+        engagement,
+        watching: watchingParam,
+        origin: originParam,
+        with: withParam,
+      }),
     refetchInterval: 15_000,
   });
 
@@ -175,7 +215,14 @@ export function ConversationList({
     setLoadingMore(true);
     setMoreError(null);
     try {
-      const next = await listMeChats({ filter, engagement, watching: watchingParam, cursor });
+      const next = await listMeChats({
+        filter,
+        engagement,
+        watching: watchingParam,
+        origin: originParam,
+        with: withParam,
+        cursor,
+      });
       setExtraPages((prev) => [...prev, ...next.rows]);
       setNextCursor(next.nextCursor);
     } catch (err) {
