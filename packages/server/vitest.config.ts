@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { monorepoSourceAliases } from "../../scripts/vitest-aliases.js";
 import { MAX_FORKS } from "./src/__tests__/test-config.js";
 
 export default defineConfig({
@@ -19,5 +20,8 @@ export default defineConfig({
         minForks: 1,
       },
     },
+  },
+  resolve: {
+    alias: monorepoSourceAliases,
   },
 });
