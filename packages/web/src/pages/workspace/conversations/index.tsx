@@ -182,11 +182,23 @@ export function ConversationList({
   // Mirror in an effect so a URL-only change (browser back/forward, deep
   // link, parent-driven toggle) can't bleed previous-view rows into the
   // new list. Identity-only deps; the body doesn't read them.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: filter/engagement are triggers, not reads
+  //
+  // Phase B caveat: `origin` and `participants` are arrays — their object
+  // identity changes on every render even when the contents are unchanged,
+  // which would re-fire the effect every paint. We collapse each into a
+  // stable string key (their canonical URL serialisation) so the effect
+  // only fires on actual content changes. Without this dep the new
+  // Phase B dimensions could `Load more` on Manual, then switch to PR
+  // origin, and the stale Manual tail would still render — same bug as
+  // Phase A's filter/engagement dependency was originally added to
+  // prevent (see commentary in chat-projection-dispatcher).
+  const originKey = origin.join(",");
+  const participantsKey = participants.join(",");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these are triggers, not reads
   useEffect(() => {
     setExtraPages((prev) => (prev.length > 0 ? [] : prev));
     setMoreError(null);
-  }, [filter, engagement]);
+  }, [filter, engagement, watching, originKey, participantsKey]);
 
   const baseRows = data?.rows ?? [];
   const allRows = useMemo(() => [...baseRows, ...extraPages], [baseRows, extraPages]);
@@ -362,6 +374,7 @@ export function ConversationList({
             onOriginChange={onOriginChange}
             watching={watching}
             onWatchingChange={onWatchingChange}
+            onResetAll={onClearFilters}
             activeCount={origin.length + participants.length + (watching ? 1 : 0)}
           />
         </div>

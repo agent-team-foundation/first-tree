@@ -33,6 +33,18 @@ type FilterPopoverProps = {
   watching: boolean;
   onWatchingChange: (next: boolean) => void;
   /**
+   * Clears every rail filter dimension in one URL mutation. The popover
+   * delegates "Reset all" to this so the reset doesn't have to call
+   * `onOriginChange([])` + `onWatchingChange(false)` back-to-back —
+   * those calls would each derive from the same render-stale
+   * `searchParams` snapshot and the second `setSearchParams` would
+   * clobber the first (same bug as Phase A's two-setter Clear).
+   * Also covers `with` (participants), which the popover doesn't
+   * surface on its own but which the URL can carry today via
+   * hand-typed parameters.
+   */
+  onResetAll: () => void;
+  /**
    * Number of active filter dimensions across origin/watching (and,
    * in Phase B v2, participants). Drives the trigger's badge so the
    * user knows the popover has narrowed the list without opening it.
@@ -52,7 +64,14 @@ type FilterPopoverProps = {
  * follow-up. Users who need it today can hand-type `?with=…` in the
  * URL; the rail will narrow accordingly.
  */
-export function FilterPopover({ origin, onOriginChange, watching, onWatchingChange, activeCount }: FilterPopoverProps) {
+export function FilterPopover({
+  origin,
+  onOriginChange,
+  watching,
+  onWatchingChange,
+  onResetAll,
+  activeCount,
+}: FilterPopoverProps) {
   const toggleOrigin = (src: ChatSource): void => {
     const set = new Set(origin);
     if (set.has(src)) set.delete(src);
@@ -62,10 +81,6 @@ export function FilterPopover({ origin, onOriginChange, watching, onWatchingChan
     onOriginChange(ORIGIN_OPTIONS.map((o) => o.value).filter((v) => set.has(v)));
   };
   const resetOrigin = (): void => onOriginChange([]);
-  const resetAll = (): void => {
-    onOriginChange([]);
-    onWatchingChange(false);
-  };
 
   return (
     <Popover
@@ -154,7 +169,7 @@ export function FilterPopover({ origin, onOriginChange, watching, onWatchingChan
           >
             <button
               type="button"
-              onClick={resetAll}
+              onClick={onResetAll}
               className="text-label cursor-pointer"
               style={{
                 background: "transparent",
