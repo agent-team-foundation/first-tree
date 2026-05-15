@@ -10,7 +10,12 @@ import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireAgentAccess } from "../scope/require-resource.js";
 import * as agentService from "../services/agent.js";
-import { agentAvatarImageUrl, SUPPORTED_AVATAR_IMAGE_MIMES } from "../services/agent.js";
+import {
+  agentAvatarImageUrl,
+  fetchUserAvatarForHumanAgent,
+  resolveAvatarImageUrl,
+  SUPPORTED_AVATAR_IMAGE_MIMES,
+} from "../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../services/chat.js";
 import * as clientService from "../services/client.js";
 import {
@@ -25,6 +30,7 @@ import * as presenceService from "../services/presence.js";
 
 type AgentRow = {
   uuid: string;
+  type: string;
   createdAt: Date;
   updatedAt: Date;
   avatarImageData?: Buffer | null;
@@ -36,17 +42,23 @@ type AgentRow = {
 /**
  * Project a DB agent row into its wire shape. Strips the inline image
  * `avatarImageData` (large bytea, only meant for the image-serve route)
- * and synthesises the public `avatarImageUrl` from the upload timestamp.
- * `createdAt`/`updatedAt` are coerced to ISO strings so the response is
- * pure JSON.
+ * and synthesises the public `avatarImageUrl` via {@link resolveAvatarImageUrl}
+ * so human agents fall back to the backing user's external avatar URL
+ * (e.g. GitHub) when no upload exists. `createdAt`/`updatedAt` are
+ * coerced to ISO strings so the response is pure JSON.
  */
-function serializeAgent(agent: AgentRow): Record<string, unknown> {
+function serializeAgent(agent: AgentRow, userAvatarUrl: string | null): Record<string, unknown> {
   const { avatarImageData: _data, avatarImageMime: _mime, avatarImageUpdatedAt, createdAt, updatedAt, ...rest } = agent;
   return {
     ...rest,
     createdAt: createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
-    avatarImageUrl: agentAvatarImageUrl(agent.uuid, avatarImageUpdatedAt ?? null),
+    avatarImageUrl: resolveAvatarImageUrl({
+      uuid: agent.uuid,
+      type: agent.type,
+      avatarImageUpdatedAt,
+      userAvatarUrl,
+    }),
   };
 }
 
@@ -86,7 +98,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { uuid: string } }>("/:uuid", async (request) => {
     const { agent } = await requireAgentAccess(request, app.db, "visible");
-    return serializeAgent(agent);
+    const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
+    return serializeAgent(agent, userAvatarUrl);
   });
 
   app.patch<{ Params: { uuid: string } }>("/:uuid", { config: { otelRecordBody: true } }, async (request) => {
@@ -101,7 +114,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     if (before && before.clientId === null && agent.clientId !== null) {
       notifyClientAgentPinned(agent);
     }
-    return serializeAgent(agent);
+    const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
+    return serializeAgent(agent, userAvatarUrl);
   });
 
   app.patch<{ Params: { uuid: string } }>("/:uuid/rebind", { config: { otelRecordBody: true } }, async (request) => {
@@ -109,7 +123,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     const body = rebindAgentSchema.parse(request.body);
     const agent = await agentService.rebindAgent(app.db, request.params.uuid, body);
     notifyClientAgentPinned(agent);
-    return serializeAgent(agent);
+    const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
+    return serializeAgent(agent, userAvatarUrl);
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/disconnect", async (request, reply) => {
@@ -122,13 +137,15 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { uuid: string } }>("/:uuid/suspend", async (request) => {
     await requireAgentAccess(request, app.db, "manage");
     const agent = await agentService.suspendAgent(app.db, request.params.uuid);
-    return serializeAgent(agent);
+    const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
+    return serializeAgent(agent, userAvatarUrl);
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/reactivate", async (request) => {
     await requireAgentAccess(request, app.db, "manage");
     const agent = await agentService.reactivateAgent(app.db, request.params.uuid);
-    return serializeAgent(agent);
+    const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
+    return serializeAgent(agent, userAvatarUrl);
   });
 
   app.delete<{ Params: { uuid: string } }>("/:uuid", async (request, reply) => {

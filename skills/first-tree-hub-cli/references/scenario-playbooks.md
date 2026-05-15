@@ -239,7 +239,6 @@ first-tree-hub chat send <agentName> "follow-up" --reply-to-inbox <inboxId> --re
 
 first-tree-hub chat list
 first-tree-hub chat history <chatId>
-first-tree-hub agent debug pull --ack                          # low-level inbox polling
 first-tree-hub chat open <agent-name>                          # interactive REPL
 ```
 
