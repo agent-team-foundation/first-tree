@@ -15,13 +15,6 @@ first-tree-hub --version
 ```
 first-tree-hub
 ├── connect <token> [--no-service]
-├── server
-│   ├── start [--port] [--host] [--database-url] [--no-interactive]
-│   ├── stop
-│   ├── status
-│   ├── doctor
-│   ├── migrate
-│   └── admin create [-u <username>] [-n <name>] [-o <org>] [-p <password>]
 ├── client
 │   ├── start [--no-interactive] [--foreground]
 │   ├── stop
@@ -87,36 +80,6 @@ first-tree-hub connect eyJhbGciOi... --no-service   # run inline until Ctrl+C
 Hard-fails (no fallback) when the token is missing an `iss` claim or the
 claim is not an `http(s)` URL — that prevents stale tokens from one
 environment from accidentally re-targeting another.
-
-## server
-
-Server lifecycle and administration.
-
-```bash
-# Start server (interactive config on first run)
-first-tree-hub server start
-first-tree-hub server start --port 9000
-first-tree-hub server start --database-url postgresql://user:pass@host:5432/db
-first-tree-hub server start --no-interactive  # Docker/CI
-
-# Stop managed PostgreSQL container
-first-tree-hub server stop
-
-# Health check
-first-tree-hub server status
-
-# Environment readiness
-first-tree-hub server doctor
-
-# Database migrations
-first-tree-hub server migrate
-
-# Admin user management
-first-tree-hub server admin create
-first-tree-hub server admin create -u admin -p mypassword
-```
-
-`--no-interactive` or no-TTY environments (Docker/CI) skip interactive prompts. Missing required config exits with error listing what's needed and the corresponding environment variable names.
 
 ## client
 
@@ -311,9 +274,7 @@ first-tree-hub client config set update.policy auto
 first-tree-hub client config get update.policy       # alias for `show <key>`
 ```
 
-Server-side configuration (`server.yaml`) is set via env vars or by
-hand-editing the file under `~/.first-tree/hub/config/server.yaml`;
-agent-side runtime configuration (model / prompt / MCP / env / repos)
+Agent-side runtime configuration (model / prompt / MCP / env / repos)
 lives in `first-tree-hub agent config ...` and mutates the Hub database
 via the admin API.
 
@@ -357,16 +318,20 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 |---------|------|--------|
 | `FIRST_TREE_HUB_HOME` | Override the CLI home directory for config, data, cloned Context Tree, and onboard resume state | `~/.first-tree/hub` |
 
-### Server
+### Server (SaaS internal)
+
+These vars configure the SaaS-hosted server and are not exercised by the
+public CLI. They are listed here for reference only — the `server` runtime
+runs in the SaaS Docker image (`packages/server/dist/index.mjs`).
 
 | Variable | Purpose | Default |
 |---------|------|--------|
-| `FIRST_TREE_HUB_DATABASE_URL` | PostgreSQL connection URL | auto: Docker provisioned |
+| `FIRST_TREE_HUB_DATABASE_URL` | PostgreSQL connection URL | — (required) |
 | `FIRST_TREE_HUB_PORT` | Server port | `8000` |
-| `FIRST_TREE_HUB_HOST` | Bind address | `127.0.0.1` |
-| `FIRST_TREE_HUB_JWT_SECRET` | JWT signing key | auto: random generated |
-| `FIRST_TREE_HUB_ENCRYPTION_KEY` | Adapter credential encryption key | auto: random generated |
-| `FIRST_TREE_HUB_WEB_DIST_PATH` | Web static files path | auto-discovered |
+| `FIRST_TREE_HUB_HOST` | Bind address | `0.0.0.0` |
+| `FIRST_TREE_HUB_JWT_SECRET` | JWT signing key | — (required) |
+| `FIRST_TREE_HUB_ENCRYPTION_KEY` | Adapter credential encryption key | — (required) |
+| `FIRST_TREE_HUB_WEB_DIST_PATH` | Web static files path. The Docker image presets this to `/app/packages/server/web-dist`. | — |
 | `FIRST_TREE_HUB_PUBLIC_URL` | Public-facing hub URL. Stamped as the `iss` claim on connect tokens (so `connect <token>` derives the hub URL with no extra arg) and used to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | request `Host` (dev only) |
 | `FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth App client ID. Enables `/signup` + `/auth/github/start`. Both client id AND secret must be set together. | — |
 | `FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth App client secret. | — |
@@ -422,7 +387,6 @@ See [observability.md](observability.md) for the full config reference, backend 
 ~/.first-tree/hub/
 ├── .onboard-state.json           # Saved args for onboard resume
 ├── config/                      # Configuration (human-edited)
-│   ├── server.yaml
 │   ├── client.yaml
 │   └── agents/
 │       ├── my-agent/agent.yaml
@@ -430,10 +394,9 @@ See [observability.md](observability.md) for the full config reference, backend 
 └── data/                        # Runtime data (system-managed)
     ├── context-tree-repos/       # Server-managed readonly Context Tree mirrors
     ├── sessions/                # Agent session registry
-    ├── workspaces/              # Per-chat isolated workspaces
-    │   └── <agent-name>/
-    │       └── <chatId>/
-    └── postgres/                # Docker PG data
+    └── workspaces/              # Per-chat isolated workspaces
+        └── <agent-name>/
+            └── <chatId>/
 ```
 
 If `FIRST_TREE_HUB_HOME` is set, replace `~/.first-tree/hub/` with that location.
@@ -442,8 +405,7 @@ If `FIRST_TREE_HUB_HOME` is set, replace `~/.first-tree/hub/` with that location
 
 Priority from high to low:
 
-1. CLI arguments (`--port 9000`)
-2. Environment variables (`FIRST_TREE_HUB_PORT=9000`)
-3. Config files (`~/.first-tree/hub/config/server.yaml`)
-4. Auto-generated (secrets, Docker PG URL)
-5. Built-in defaults (`port: 8000`)
+1. CLI arguments
+2. Environment variables (`FIRST_TREE_HUB_*`)
+3. Config files (`~/.first-tree/hub/config/client.yaml`)
+4. Built-in defaults

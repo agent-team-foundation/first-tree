@@ -1,7 +1,3 @@
-// Server lifecycle
-
-// Admin management
-export { createOwner, hasUser } from "./admin.js";
 // Agent messaging helpers
 export { resolveReplyToFromEnv } from "./agent-messaging.js";
 // Local agent alias hygiene (stale alias detection + deletion)
@@ -26,19 +22,13 @@ export { handleClientOrgMismatch, rotateClientIdWithBackup } from "./client-reid
 export type { ClientRuntimeOptions } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";
-// Docker PostgreSQL
-export { ensurePostgres, isDockerAvailable, stopPostgres } from "./docker-postgres.js";
 // Diagnostics (doctor)
 export type { CheckResult } from "./doctor.js";
 export {
   checkAgentConfigs,
   checkBackgroundService,
   checkClientConfig,
-  checkDatabase,
-  checkDocker,
   checkNodeVersion,
-  checkServerConfig,
-  checkServerHealth,
   checkServerReachable,
   checkWebSocket,
   printResults,
@@ -46,8 +36,6 @@ export {
 } from "./doctor.js";
 // Feishu
 export { bindFeishuBot, bindFeishuUser } from "./feishu.js";
-// Database
-export { runMigrations } from "./migrate.js";
 // Phase 3 of the agent-naming refactor — renames local agent dirs whose
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";
@@ -68,8 +56,6 @@ export { blank, status } from "./output.js";
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
 // Pre-flight runtime-provider reconciliation (P2 — capabilities + YAML rewrite)
 export { reconcileLocalRuntimeProviders, uploadClientCapabilities } from "./runtime-provider-reconcile.js";
-export type { StartOptions } from "./server.js";
-export { startServer } from "./server.js";
 // Background service install (launchd / systemd --user)
 export type { ServiceInfo, ServiceOpResult, ServiceState } from "./service-install.js";
 export {

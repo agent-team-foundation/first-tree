@@ -17,7 +17,7 @@ Configure an OTLP/HTTP endpoint and matching headers — any backend that
 speaks OTLP works (Logfire, Honeycomb, Jaeger, Tempo, SigNoz, Axiom, …).
 
 ```yaml
-# ~/.first-tree/hub/config/server.yaml
+# server.yaml (SaaS internal — typically injected as env vars in production)
 observability:
   tracing:
     endpoint: https://<your-otlp-endpoint>/v1/traces
@@ -72,19 +72,20 @@ backends treat as first-class:
 
 ### Typical deployment
 
-```bash
-# Production instance
-FIRST_TREE_HUB_OTEL_ENDPOINT=https://logfire-us.pydantic.dev/v1/traces \
-FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer <token>" \
-FIRST_TREE_HUB_OTEL_ENVIRONMENT=production \
-  first-tree-hub server start
+The SaaS Docker image runs `node packages/server/dist/index.mjs`; pass the
+OTLP env vars to the container (e.g. via the platform's secrets store):
 
-# Staging instance (same token, different env label)
-FIRST_TREE_HUB_OTEL_ENDPOINT=https://logfire-us.pydantic.dev/v1/traces \
-FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer <token>" \
-FIRST_TREE_HUB_OTEL_ENVIRONMENT=staging \
-  first-tree-hub server start
+```bash
+docker run \
+  -e FIRST_TREE_HUB_OTEL_ENDPOINT=https://logfire-us.pydantic.dev/v1/traces \
+  -e FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer <token>" \
+  -e FIRST_TREE_HUB_OTEL_ENVIRONMENT=production \
+  -e FIRST_TREE_HUB_DATABASE_URL=... \
+  ghcr.io/agent-team-foundation/first-tree-hub:latest
 ```
+
+Swap `production` → `staging` for the staging instance; same token, different
+env label.
 
 ### Filtering in the UI
 
@@ -188,9 +189,10 @@ log.info({ entryId }, "inbox: entry expired");
 
 ### What these rules do NOT cover
 
-- **CLI status output** (`first-tree-hub server start` banner, `status(...)`
-  helpers) is a different channel — it's interactive, user-facing, and can
-  use formatting / localized strings. It does *not* go through pino.
+- **CLI status output** (`first-tree-hub` connect / client banners,
+  `status(...)` helpers) is a different channel — it's interactive,
+  user-facing, and can use formatting / localized strings. It does *not*
+  go through pino.
 - **Existing log lines that predate these rules**. Follow the style when
   you touch a file; don't do bulk rewrites purely for style.
 - **Natural exceptions**: acronyms stay capitalized (`"failed to parse JWT"`),
@@ -232,12 +234,6 @@ headers:
   Authorization: "Basic <base64(user:token)>"
 ```
 
-### SigNoz self-hosted
-
-```
-endpoint: http://<signoz-host>:4318/v1/traces
-```
-
 ### Axiom
 
 ```
@@ -272,11 +268,14 @@ body. Copy it into your trace backend to jump straight to the full tree.
 
 ### "Turn on temporarily"
 
+Inject the env vars when launching the SaaS server container:
+
 ```
-FIRST_TREE_HUB_LOG_LEVEL=debug \
-FIRST_TREE_HUB_OTEL_ENDPOINT=https://... \
-FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer ..." \
-  first-tree-hub server start
+docker run \
+  -e FIRST_TREE_HUB_LOG_LEVEL=debug \
+  -e FIRST_TREE_HUB_OTEL_ENDPOINT=https://... \
+  -e FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer ..." \
+  ghcr.io/agent-team-foundation/first-tree-hub:latest
 ```
 
 ## Sampling guidance

@@ -17,7 +17,6 @@ This project is part of the [First Tree](https://github.com/agent-team-foundatio
 - **Inbox messaging** — Fan-out on write, WebSocket push + pull delivery, UUID v7 ordered, at-least-once semantics
 - **External IM bridging** — Feishu and Slack adapters map external users to human agents, with encrypted adapter credentials and hot-reload via PG NOTIFY
 - **Web admin dashboard** — Manage agents, messages, and adapters from the browser
-- **One-command start** — Interactive setup handles PostgreSQL provisioning, Context Tree connection, admin account creation, and database migration
 
 ## Architecture
 
@@ -41,50 +40,37 @@ This project is part of the [First Tree](https://github.com/agent-team-foundatio
                      └─────────┘    └─────────┘    └─────────┘
 ```
 
-**Server** is the central hub: API, web dashboard, PostgreSQL, and IM adapters — all in one process.
-**Clients** connect agents to the server via WebSocket. Each client can run on a different machine.
+The **Server** is operated as a SaaS by the First Tree team. The Server, web dashboard, PostgreSQL, and IM adapters all live in one process, deployed centrally.
+**Clients** connect agents to the SaaS server via WebSocket. Each client can run on a different machine.
 
 ## Quick Start
 
 ```bash
 npm install -g @agent-team-foundation/first-tree-hub
-first-tree-hub server start
+first-tree-hub connect <token>
 ```
 
-The interactive setup will guide you through PostgreSQL provisioning, Context Tree configuration, and admin account creation. Open `http://localhost:8000` when it's ready.
-
-## Deploy
-
-| I want to... | Method | Guide |
-|--------------|--------|-------|
-| Try it locally | `first-tree-hub server start` | Quick Start above |
-| Deploy to cloud | Railway / Render one-click | [Deployment guide](docs/deployment-guide.md#one-click-cloud-deployment) |
-| Run with Docker | `docker-compose.production.yml` | [Deployment guide](docs/deployment-guide.md) |
-| Add HTTPS for public access | Caddy reverse proxy | [Deployment guide](docs/deployment-guide.md#production-with-https) |
-| Run agents on other machines | `first-tree-hub client start` | [Deployment guide](docs/deployment-guide.md#client-setup) |
-| Use managed PostgreSQL | Supabase | [Deployment guide](docs/deployment-guide.md#managed-postgresql-supabase) |
+Get the connect token from your Hub web console under *Connect your computer*. The CLI installs a background service (systemd / launchd) and stays online across reboots. See [docs/quickstart-zh.md](docs/quickstart-zh.md) for the full walkthrough (Chinese).
 
 ## Diagnostics
 
 ```bash
-first-tree-hub server doctor   # Check server environment readiness
 first-tree-hub client doctor   # Check client environment readiness
 first-tree-hub client status   # CLI version, service state, hub, agents
 ```
 
 ## Documentation
 
-- [Deployment Guide](docs/deployment-guide.md) — Docker, HTTPS, client setup, and production recommendations
 - [CLI Reference](docs/cli-reference.md) — All commands and environment variables
 - [AGENTS.md](AGENTS.md) — Architecture, conventions, development workflow
 
 ## Development
 
 ```bash
-pnpm install                          # Install dependencies
-docker compose up -d                  # Start dev PostgreSQL
+pnpm install                               # Install dependencies
+docker compose up -d                       # Start dev PostgreSQL
 pnpm --filter @first-tree-hub/server dev   # Start server (dev mode)
 pnpm --filter @first-tree-hub/web dev      # Start web dashboard (dev mode)
-pnpm check && pnpm typecheck          # Lint + type check
-pnpm test                             # Run tests
+pnpm check && pnpm typecheck               # Lint + type check
+pnpm test                                  # Run tests
 ```

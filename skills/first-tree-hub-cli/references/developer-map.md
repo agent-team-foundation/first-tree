@@ -7,12 +7,10 @@
 - `docs/cli-reference.md` — public command and environment variable reference.
 - `docs/onboarding-guide.md` — end-to-end onboarding flow.
 - `docs/claim-agent-guide.md` — claim + Feishu binding details.
-- `docs/deployment-guide.md` — Docker, Railway, Render, Supabase, HTTPS, production.
 
 ## CLI Source Map
 
 - `packages/command/src/cli/index.ts` — top-level Commander program and command registration.
-- `packages/command/src/commands/server.ts` — `server start/stop/status/doctor/migrate` and `server admin create`.
 - `packages/command/src/commands/client.ts` — `client start/stop/restart/status/doctor`, the Hub-side `client list / disconnect` commands, `client claim`, and the `client config show/set/get` subgroup for editing `client.yaml`. The background service has no dedicated subgroup — its lifecycle is folded into top-level `connect <token>` (auto-install) and `client doctor` (state, via `checkBackgroundService`).
 - `packages/command/src/commands/saas-connect.ts` — top-level `connect <token>`: decodes the token's `iss` claim to derive the hub URL, persists `credentials.json`, writes `server.url` into `client.yaml`, and installs the background service by default.
 - `packages/command/src/commands/agent.ts` — local aliases (`add/remove/prune/list`), `create`, `claim`, `workspace clean`, `bind client/bot/user`, runtime status (`status/reset`), `agent session list/suspend/terminate`, and the hidden `agent debug register/pull` debug subgroup. Delegates `agent config` registration to `commands/agent-config.ts`.
@@ -22,16 +20,12 @@
 
 ## Reusable Core Logic
 
-- `packages/command/src/core/server.ts` — orchestration for `server start` (config prompts, Docker Postgres, migrations, admin creation, web dist resolution).
 - `packages/command/src/core/onboard.ts` — agent creation via Admin API, optional assistant creation, optional Feishu binding; provides `onboardCheck` / `onboardCreate` / `formatCheckReport` / `loadOnboardState` / `saveOnboardState`.
 - `packages/command/src/core/bootstrap.ts` — credential persistence (`saveCredentials`, `loadCredentials`) and token freshness (`resolveAccessToken`, `ensureFreshAccessToken`), plus `resolveServerUrl` and `saveAgentConfig`. `ensureFreshAdminToken` is a back-compat alias of `ensureFreshAccessToken`.
 - `packages/command/src/core/service-install.ts` — `installClientService`, `uninstallClientService`, `getClientServiceStatus`, `isServiceSupported`, `resolveCliInvocation`. Handles launchd (macOS) and `systemd --user` (Linux); marks other platforms as `unsupported`. Logs go to `~/.first-tree/hub/logs/`.
 - `packages/command/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `client start` and `connect <token> --no-service`. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
-- `packages/command/src/core/doctor.ts` — readiness checks used by `server doctor` and `client doctor`: `checkNodeVersion`, `checkDocker`, `checkServerConfig`, `checkDatabase`, `checkServerHealth`, `checkServerReachable`, `checkClientConfig`, `checkAgentConfigs`, `checkWebSocket`, `checkBackgroundService`.
+- `packages/command/src/core/doctor.ts` — readiness checks used by `client doctor`: `checkNodeVersion`, `checkClientConfig`, `checkServerReachable`, `checkAgentConfigs`, `checkWebSocket`, `checkBackgroundService`.
 - `packages/command/src/core/feishu.ts` — `bindFeishuBot`, `bindFeishuUser`.
-- `packages/command/src/core/docker-postgres.ts` — `ensurePostgres`, `isDockerAvailable`, `stopPostgres` (CLI-managed Docker Postgres container).
-- `packages/command/src/core/migrate.ts` — `runMigrations`.
-- `packages/command/src/core/admin.ts` — `createOwner`, `hasUser` (direct DB access for seeding).
 - `packages/command/src/core/prompt.ts` — `isInteractive`, `promptAddAgent`, `promptMissingFields` (schema-driven prompting).
 - `packages/command/src/core/output.ts` — `fail`, `success`, `blank`, `status` helpers for consistent stderr/stdout output.
 
@@ -92,7 +86,7 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 1. Update the relevant schema under `packages/shared/src/config/`.
 2. Check whether prompt text, defaults, env names, or secret masking rules also need changes.
 3. Update `docs/cli-reference.md`.
-4. Re-test the matching `config`, `server`, or `client` flows.
+4. Re-test the matching `client config` or `agent` flows.
 
 ### Change messaging or agent runtime behavior
 
