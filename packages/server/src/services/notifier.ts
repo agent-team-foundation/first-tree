@@ -13,14 +13,6 @@ const RUNTIME_STATE_CHANNEL = "runtime_state_changes";
  * inbox NOTIFY path that only reaches speakers.
  */
 const CHAT_MESSAGE_CHANNEL = "chat_message_events";
-/**
- * Generic admin-broadcast envelope channel. Producers (e.g. notification.ts)
- * emit a JSON-stringified `AdminBroadcastPayload`; every server instance
- * LISTENs and hands the envelope to its local admin-socket fanout. Keeps
- * cross-instance and single-instance code paths identical from the admin WS
- * route's perspective.
- */
-const ADMIN_BROADCAST_CHANNEL = "admin_broadcast_envelopes";
 
 export type ConfigChangeHandler = (channel: string) => void;
 export type SessionStateChangeHandler = (payload: {
@@ -45,7 +37,6 @@ export type SessionEventChangeHandler = (payload: {
 }) => void;
 export type RuntimeStateChangeHandler = (payload: { agentId: string; state: string; organizationId: string }) => void;
 export type ChatMessageChangeHandler = (payload: { chatId: string; messageId: string }) => void;
-export type AdminBroadcastHandler = (payload: Record<string, unknown>) => void;
 
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
@@ -80,12 +71,6 @@ export type Notifier = {
   /** Chat-first workspace: kick admin WS sockets to invalidate ["me","chats"] and the timeline of `chatId`. */
   notifyChatMessage(chatId: string, messageId: string): Promise<void>;
   /**
-   * Emit a generic admin-broadcast envelope cross-instance. Every server
-   * instance's LISTEN handler receives the JSON-decoded payload and hands it
-   * to its registered admin-socket fanout (typically `broadcastToAdmins`).
-   */
-  notifyAdminBroadcast(payload: Record<string, unknown>): Promise<void>;
-  /**
    * Push a raw JSON frame to every socket currently subscribed to `inboxId`
    * on **this server instance only**. Unlike `notify`, does not fan out
    * across PG NOTIFY — used for payloads that are too large for NOTIFY
@@ -103,8 +88,6 @@ export type Notifier = {
   onRuntimeStateChange(handler: RuntimeStateChangeHandler): void;
   /** Register a handler for chat:message change notifications. */
   onChatMessage(handler: ChatMessageChangeHandler): void;
-  /** Register a handler for cross-instance admin-broadcast envelopes. */
-  onAdminBroadcast(handler: AdminBroadcastHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -118,14 +101,12 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const sessionEventHandlers: SessionEventChangeHandler[] = [];
   const runtimeStateChangeHandlers: RuntimeStateChangeHandler[] = [];
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
-  const adminBroadcastHandlers: AdminBroadcastHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
   let unlistenSessionEventFn: (() => Promise<void>) | null = null;
   let unlistenRuntimeStateFn: (() => Promise<void>) | null = null;
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
-  let unlistenAdminBroadcastFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -222,35 +203,6 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
-    async notifyAdminBroadcast(payload: Record<string, unknown>) {
-      let encoded: string;
-      try {
-        encoded = JSON.stringify(payload);
-      } catch {
-        // Non-serialisable producer payload — nothing useful to forward.
-        return;
-      }
-      // PG NOTIFY payload limit is ~8000 bytes. Notification envelopes are
-      // ~600 bytes in practice; anything over 7500 means a producer bug
-      // (e.g. someone stuffing message bodies / attachments into the
-      // envelope). Log loudly via console — the rest of `notifier.ts` is
-      // intentionally logger-free to keep the module portable, but a
-      // truncated NOTIFY would silently break admin UI fan-out, which is
-      // exactly the kind of failure we don't want fire-and-forget'd into
-      // the void.
-      if (encoded.length > 7500) {
-        console.error(`[notifier] admin broadcast payload too large (${encoded.length} bytes); refusing to NOTIFY`);
-        return;
-      }
-      try {
-        await listenClient`SELECT pg_notify(${ADMIN_BROADCAST_CHANNEL}, ${encoded})`;
-      } catch {
-        // Transient PG errors are best-effort; admin UI tolerates a
-        // dropped frame, and the next reconnect-time catch-up will
-        // re-sync via REST.
-      }
-    },
-
     async pushFrameToInbox(inboxId: string, frame: string): Promise<number> {
       const map = subscriptions.get(inboxId);
       if (!map) return 0;
@@ -289,10 +241,6 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onChatMessage(handler: ChatMessageChangeHandler) {
       chatMessageHandlers.push(handler);
-    },
-
-    onAdminBroadcast(handler: AdminBroadcastHandler) {
-      adminBroadcastHandlers.push(handler);
     },
 
     async start() {
@@ -387,28 +335,6 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenChatMessageFn = chatMessageResult.unlisten;
-
-      const adminBroadcastResult = await listenClient.listen(ADMIN_BROADCAST_CHANNEL, (payload) => {
-        if (!payload) return;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(payload);
-        } catch {
-          // Malformed payload — drop. A producer bug should never poison the
-          // LISTEN loop for other handlers.
-          return;
-        }
-        if (typeof parsed !== "object" || parsed === null) return;
-        const envelope = parsed as Record<string, unknown>;
-        for (const handler of adminBroadcastHandlers) {
-          try {
-            handler(envelope);
-          } catch {
-            // swallow — handler errors must not poison fan-out
-          }
-        }
-      });
-      unlistenAdminBroadcastFn = adminBroadcastResult.unlisten;
     },
 
     async stop() {
@@ -435,10 +361,6 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenChatMessageFn) {
         await unlistenChatMessageFn();
         unlistenChatMessageFn = null;
-      }
-      if (unlistenAdminBroadcastFn) {
-        await unlistenAdminBroadcastFn();
-        unlistenAdminBroadcastFn = null;
       }
     },
   };

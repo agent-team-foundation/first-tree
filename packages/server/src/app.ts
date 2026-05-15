@@ -49,7 +49,6 @@ import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
-import { orgNotificationRoutes } from "./api/orgs/notifications.js";
 import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
@@ -75,7 +74,7 @@ import {
   rootLogger,
 } from "./observability/index.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
-import { broadcastToAdmins, registerCrossInstanceBroadcaster } from "./services/admin-broadcast.js";
+import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
@@ -284,21 +283,6 @@ export async function buildApp(config: Config) {
   const listenClient = postgres(config.database.url, { max: 1, ...sslOptions(config.database.url) });
   const notifier = createNotifier(listenClient);
 
-  // Cross-instance admin-broadcast wiring. Producers call
-  // `broadcastAdminsCrossInstance` which routes through pg_notify; every
-  // server instance LISTENs and feeds the envelope back into its own
-  // per-instance fanout (`broadcastToAdmins`). Registering both ends here
-  // keeps the bootstrap ordering obvious — producer -> NOTIFY -> LISTEN ->
-  // local fanout — without scattering wiring across services.
-  registerCrossInstanceBroadcaster((payload) => {
-    notifier.notifyAdminBroadcast(payload).catch(() => {
-      // fire-and-forget: admin UI tolerates an occasional dropped frame
-    });
-  });
-  notifier.onAdminBroadcast((payload) => {
-    broadcastToAdmins(payload);
-  });
-
   // WebSocket plugin. `maxPayload` caps a single inbound frame so a hostile
   // or buggy client cannot OOM the server with one giant message. Frames in
   // this codebase are JSON envelopes; image content travels via HTTP.
@@ -472,7 +456,6 @@ export async function buildApp(config: Config) {
           await scope.register(orgOverviewRoutes, { prefix: "/overview" });
           await scope.register(orgActivityRoutes, { prefix: "/activity" });
           await scope.register(orgSessionRoutes, { prefix: "/sessions" });
-          await scope.register(orgNotificationRoutes, { prefix: "/notifications" });
           await scope.register(orgClientRoutes, { prefix: "/clients" });
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
           await scope.register(orgMemberRoutes, { prefix: "/members" });
