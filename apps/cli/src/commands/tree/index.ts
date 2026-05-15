@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 import type { CommandModule, SubcommandModule } from "../types.js";
 import { registerCommandGroup, registerSubcommands } from "../groups.js";
+import { automationSubcommands } from "./automation.js";
 import { bindCommand } from "./bind.js";
 import { bootstrapCommand } from "./bootstrap.js";
 import { generateCodeownersCommand } from "./generate-codeowners.js";
@@ -71,6 +72,10 @@ export const treeCommand: CommandModule = {
 
     registerCommandGroup(command, "workspace", "Run workspace tree helpers.", [
       workspaceSyncCommand,
+    ]);
+
+    registerCommandGroup(command, "automation", "Install or inspect tree GitHub automation.", [
+      ...automationSubcommands,
     ]);
 
     registerCommandGroup(

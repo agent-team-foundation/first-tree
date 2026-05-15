@@ -76,6 +76,17 @@ first-tree github scan stop
 `install` does both first-run setup and daemon start. `start` is for
 re-launching after `stop`. `doctor` is the read-only health check.
 
+## Phase D.5 — GitHub automation rule layer
+
+```bash
+first-tree tree upgrade --tree-path <tree_root>         # only if validate.yml is missing
+first-tree tree automation install --tier 2 --tree-path <tree_root>
+```
+
+`tree automation install --tier 2` is the rule-layer helper. It may write
+workflow files into the tree repo, but it never performs the printed
+ruleset-changing `gh api` calls on the user's behalf.
+
 ## Phase C — Content drafting (no CLI; agent + git)
 
 Phase C is agent-driven, not CLI-driven. The only commands invoked are `git -C <tree_root>` operations (`checkout -b`, `add`, `diff`, `commit`, `push`) plus `gh pr create`. See [`content-drafting.md`](content-drafting.md).
@@ -86,6 +97,8 @@ Phase C is agent-driven, not CLI-driven. The only commands invoked are `git -C <
 - `first-tree github scan run` / `daemon` / `run-once` — those are foreground
   loops for debugging, not the user-facing daemon path. Use `start` /
   `install` instead.
+- The `gh api` commands printed by `first-tree tree automation install --tier 2`
+  — those stay manual.
 - Any direct edit of the managed First Tree blocks in `AGENTS.md` /
   `CLAUDE.md` — let the CLI manage state. If the block looks wrong, re-run
   `tree init` with the right flags.

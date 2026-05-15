@@ -7,9 +7,12 @@ import type { CommandContext, SubcommandModule } from "../types.js";
 import { ensureAgentContextHooks, formatAgentContextHookMessages } from "./agent-context-hooks.js";
 import { removeSourceState, TREE_VERSION_FILE } from "./binding-state.js";
 import { readSourceBindingContract } from "./binding-contract.js";
+import type { Tier0RuleLayerSummary } from "./rule-layer.js";
+import { ensureTier0RuleLayer, validateWorkflowPath } from "./rule-layer.js";
 import { readBundledSkillVersion, copyCanonicalSkills } from "./skill-lib.js";
 import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
+import { describeTemplateWriteResult } from "./template-write.js";
 import {
   ensureWhitepaperSymlink,
   upsertLocalTreeGitIgnore,
@@ -20,6 +23,7 @@ type UpgradeSummary = {
   bundledSkillVersion: string;
   targetKind: "source" | "tree";
   targetRoot: string;
+  tier0RuleLayer?: Tier0RuleLayerSummary;
 };
 
 export const UPGRADE_USAGE = `usage: first-tree tree upgrade [--tree-path PATH]
@@ -78,6 +82,7 @@ function upgradeTreeRoot(targetRoot: string, bundledSkillVersion: string): Upgra
   ensureWhitepaperSymlink(targetRoot);
   upsertLocalTreeGitIgnore(targetRoot);
   writeFileSync(join(targetRoot, TREE_VERSION_FILE), `${bundledSkillVersion}\n`);
+  const tier0RuleLayer = ensureTier0RuleLayer(targetRoot);
   syncTreeIdentityFiles(targetRoot, treeIdentity);
   syncTreeSourceRepoIndex(targetRoot);
   ensureAgentContextHooks(targetRoot);
@@ -86,6 +91,7 @@ function upgradeTreeRoot(targetRoot: string, bundledSkillVersion: string): Upgra
     bundledSkillVersion,
     targetKind: "tree",
     targetRoot,
+    tier0RuleLayer,
   };
 }
 
@@ -122,6 +128,14 @@ function runUpgradeCommand(context: CommandContext): void {
     console.log(`  Target root:           ${summary.targetRoot}`);
     console.log(`  Target kind:           ${summary.targetKind}`);
     console.log(`  Bundled skill version: ${summary.bundledSkillVersion}`);
+    if (summary.tier0RuleLayer) {
+      console.log(
+        `  ${describeTemplateWriteResult(
+          validateWorkflowPath(summary.targetRoot),
+          summary.tier0RuleLayer.validate,
+        )}`,
+      );
+    }
     for (const message of hookMessages) {
       console.log(`  ${message}`);
     }

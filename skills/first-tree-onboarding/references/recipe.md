@@ -157,6 +157,29 @@ Do not store credentials, do not bypass with PATs typed in chat.
 
 `--allow-repo` accepts comma-separated values and glob patterns (`owner/*`). Start narrow — onboarding's job is to bind one repo, not configure org-wide policy.
 
+## Phase D.5 — GitHub automation rule layer
+
+```bash
+test -f <tree_root>/.github/workflows/validate.yml || \
+  first-tree tree upgrade --tree-path <tree_root>
+
+first-tree tree automation install --tier 2 --tree-path <tree_root>
+```
+
+Interpret the output in three buckets:
+
+- `stage: write_rule_layer` — Tier 2 workflow files were written locally, or they exist locally but are not yet on the remote default branch. This is still safe rule-layer prep. Show the tree diff and follow the normal push / PR confirmation rule. Do **not** run any printed `gh api` commands.
+- `stage: create_ruleset` — the workflow files are on the default branch, but the GitHub ruleset does not exist yet. Print the command, explain that GitHub documents `enforcement: evaluate` as Enterprise-only, and let the user run it manually if they choose.
+- `stage: activate_ruleset` — the ruleset exists but is not yet active. Again: print, explain, user runs it.
+- `stage: configured` — Tier 2 is already active. Record that in the wrap-up summary.
+
+Always tell the user:
+
+- Tier 0 (`validate.yml`) is installed by default.
+- Tier 1 AI PR review is not installed by this skill; it belongs to `first-tree-hub`.
+- Tier 2 is optional and rule-based; the onboarding skill can prepare files and explain the rollout, but hard-to-reverse policy changes stay manual.
+- The current parity target for "proper automation similar to `first-tree-context`" is documented in [`github-automation.md`](github-automation.md). Use that file when you need the exact workflow roles, ruleset assumptions, App/secrets names, or rollout sequence.
+
 ## Phase E — Agent templates
 
 `tree init` already wrote two defaults into `<tree_root>/.first-tree/agent-templates/`:
@@ -180,9 +203,18 @@ If any doctor exits non-zero, **do not** print the success summary. Print the fa
 
 The success summary template is in SKILL.md Phase F. Fill it from inspect output and the recorded daemon state.
 
+GitHub automation lines are mandatory:
+
+```text
+GitHub Actions: validate.yml installed (Tier 0, rule-based)
+AI PR review:  not installed by this skill. Enable via your first-tree-hub deployment / onboarding flow.
+Owners gate:   <skipped | pending via `first-tree tree automation install --tier 2 --tree-path <tree_root>` | configured>
+```
+
 ## What this skill never runs
 
 - `first-tree tree publish` — release flow, not onboarding. Tree publish is a separate user-driven action when they're ready to share.
 - `first-tree github scan run` / `daemon` / `run-once` — foreground/debug loops. Use `install` (which starts the launchd service) and `doctor` instead.
+- The `gh api` commands printed by `first-tree tree automation install --tier 2` — those are user-run only.
 - Direct edits to managed First Tree blocks. Re-run the relevant CLI.
 - `gh repo delete` or any destructive remote ops.

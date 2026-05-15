@@ -6,11 +6,14 @@ import type { Command } from "commander";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
 import { ensureAgentContextHooks, formatAgentContextHookMessages } from "./agent-context-hooks.js";
+import type { Tier0RuleLayerSummary } from "./rule-layer.js";
+import { ensureTier0RuleLayer, validateWorkflowPath } from "./rule-layer.js";
 import { copyCanonicalSkills } from "./skill-lib.js";
 import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { ensureWhitepaperSymlink, upsertLocalTreeGitIgnore } from "./source-integration.js";
 import { syncTreeIdentityFiles } from "./tree-identity.js";
 import { isGitRepoRoot, repoNameForRoot, runCommand } from "./shared.js";
+import { describeTemplateWriteResult } from "./template-write.js";
 import {
   renderCodeReviewerAgentTemplate,
   renderDeveloperAgentTemplate,
@@ -30,6 +33,7 @@ type BootstrapOptions = {
 
 type BootstrapSummary = {
   root: string;
+  tier0RuleLayer: Tier0RuleLayerSummary;
   treeMode: "dedicated" | "shared";
   treeRepoName: string;
 };
@@ -115,6 +119,7 @@ export function bootstrapTreeRoot(
   writeIfMissing(join(targetRoot, ".first-tree", "org.yaml"), renderOrgConfigPlaceholder());
   writeIfMissing(join(targetRoot, TREE_VERSION_FILE), "0.4.0-alpha.1");
   writeIfMissing(join(targetRoot, TREE_PROGRESS_FILE), renderTreeProgress());
+  const tier0RuleLayer = ensureTier0RuleLayer(targetRoot);
 
   syncTreeIdentityFiles(targetRoot, {
     treeMode,
@@ -125,6 +130,7 @@ export function bootstrapTreeRoot(
 
   return {
     root: targetRoot,
+    tier0RuleLayer,
     treeMode,
     treeRepoName,
   };
@@ -157,6 +163,12 @@ function runBootstrapCommand(context: CommandContext): void {
     console.log(`  Ensured ${join(summary.root, "AGENTS.md")}`);
     console.log(`  Ensured ${join(summary.root, "members", "NODE.md")}`);
     console.log(`  Ensured ${join(summary.root, "members", "owner", "NODE.md")}`);
+    console.log(
+      `  ${describeTemplateWriteResult(
+        validateWorkflowPath(summary.root),
+        summary.tier0RuleLayer.validate,
+      )}`,
+    );
     for (const message of hookMessages) {
       console.log(`  ${message}`);
     }

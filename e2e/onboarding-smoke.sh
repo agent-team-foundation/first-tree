@@ -4,9 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FT_CLI="${FT_CLI:-$ROOT_DIR/apps/cli/dist/index.js}"
 TEST_REPO_URL="${TEST_REPO_URL:-https://github.com/bingran-you/sbti-cli.git}"
+PROMPT_TEST_REPO_URL="${PROMPT_TEST_REPO_URL:-https://github.com/bingran-you/mews.git}"
 KEEP_WORK_ROOT="${KEEP_WORK_ROOT:-0}"
 RUN_CODEX_PROMPT_SMOKE="${RUN_CODEX_PROMPT_SMOKE:-auto}"
 RUN_CLAUDE_PROMPT_SMOKE="${RUN_CLAUDE_PROMPT_SMOKE:-auto}"
+ONBOARDING_AGENT_PROMPT="${ONBOARDING_AGENT_PROMPT:-Use the latest First-Tree CLI to install the skill in the current repository and complete the onboarding process by running /first-tree-onboarding skill and build an initial version of tree using /first-tree-sync skill}"
+AGENT_TIMEOUT_SECS="${AGENT_TIMEOUT_SECS:-420}"
 
 WORK_ROOT="${WORK_ROOT:-}"
 WORK_ROOT_CREATED=0
@@ -33,6 +36,22 @@ json_value() {
     const value = JSON.parse(fs.readFileSync(path, "utf8"))[field];
     process.stdout.write(String(value ?? ""));
   ' "$file" "$key"
+}
+
+json_query() {
+  local file="$1"
+  local path="$2"
+  node -e '
+    const fs = require("node:fs");
+    const [jsonPath, query] = process.argv.slice(1);
+    const segments = query.split(".");
+    let value = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    for (const segment of segments) {
+      if (!segment) continue;
+      value = value == null ? undefined : value[segment];
+    }
+    process.stdout.write(String(value ?? ""));
+  ' "$file" "$path"
 }
 
 assert_contains() {
@@ -98,8 +117,62 @@ else
 fi
 
 clone_repo() {
-  local dest="$1"
-  git clone --depth 1 "$TEST_REPO_URL" "$dest" >/dev/null
+  local repo_url="$1"
+  local dest="$2"
+  git clone --depth 1 "$repo_url" "$dest" >/dev/null
+}
+
+agent_prompt() {
+  cat <<EOF
+$ONBOARDING_AGENT_PROMPT
+
+For this eval, the latest CLI under test is available locally at:
+$FT_CLI
+
+Use \`node $FT_CLI\` whenever you need the latest build from this checkout.
+EOF
+}
+
+run_with_timeout() {
+  local timeout_secs="$1"
+  local output_file="$2"
+  shift 2
+
+  node - "$timeout_secs" "$output_file" "$@" <<'JS'
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+
+const [timeoutSeconds, outputPath, ...command] = process.argv.slice(2);
+const child = spawn(command[0], command.slice(1), {
+  stdio: ["ignore", "pipe", "pipe"],
+});
+const output = fs.createWriteStream(outputPath, { flags: "w" });
+child.stdout.pipe(output);
+child.stderr.pipe(output);
+
+let timedOut = false;
+const timeoutMs = Number(timeoutSeconds) * 1000;
+const timer = setTimeout(() => {
+  timedOut = true;
+  child.kill("SIGTERM");
+  setTimeout(() => child.kill("SIGKILL"), 5000).unref();
+}, timeoutMs);
+
+child.on("exit", (code, signal) => {
+  clearTimeout(timer);
+  output.end(() => {
+    if (timedOut) {
+      process.exit(124);
+      return;
+    }
+    if (signal) {
+      process.exit(1);
+      return;
+    }
+    process.exit(code ?? 1);
+  });
+});
+JS
 }
 
 run_direct_cli_smoke() {
@@ -108,12 +181,13 @@ run_direct_cli_smoke() {
   local init_json="$WORK_ROOT/direct-cli.init.json"
   local inspect_after="$WORK_ROOT/direct-cli.inspect-after.json"
   local verify_json="$WORK_ROOT/direct-cli.verify.json"
+  local automation_json="$WORK_ROOT/direct-cli.automation.json"
   local doctor_json="$WORK_ROOT/direct-cli.skill-doctor.json"
   local tree_root
   local role
 
   mkdir -p "$WORK_ROOT/direct-cli"
-  clone_repo "$repo_root"
+  clone_repo "$TEST_REPO_URL" "$repo_root"
 
   (
     cd "$repo_root"
@@ -133,55 +207,122 @@ run_direct_cli_smoke() {
     node "$FT_CLI" tree verify --json --tree-path "$tree_root" >"$verify_json"
     [[ "$(json_value "$verify_json" ok)" == "true" ]] || fail "tree verify did not report ok=true"
 
+    node "$FT_CLI" tree automation install --tier 2 --tree-path "$tree_root" --dry-run --json >"$automation_json"
+    [[ "$(json_value "$automation_json" stage)" == "write_rule_layer" ]] || fail "expected tree automation dry-run stage to be write_rule_layer"
+
     node "$FT_CLI" tree skill doctor --json --root "$repo_root" >"$doctor_json"
 
     [[ -f "$repo_root/AGENTS.md" ]] || fail "source repo AGENTS.md was not created"
     [[ -f "$repo_root/CLAUDE.md" ]] || fail "source repo CLAUDE.md was not created"
+    [[ -f "$tree_root/.github/workflows/validate.yml" ]] || fail "validate workflow missing from tree repo"
     [[ -f "$tree_root/.first-tree/agent-templates/developer.yaml" ]] || fail "developer template missing from tree repo"
     [[ -f "$tree_root/.first-tree/agent-templates/code-reviewer.yaml" ]] || fail "code-reviewer template missing from tree repo"
     [[ -f "$tree_root/.first-tree/org.yaml" ]] || fail "org config placeholder missing from tree repo"
+    head -n 1 "$tree_root/.github/workflows/validate.yml" | grep -qx '# first-tree-template-version: 2' || fail "validate workflow missing managed template marker"
   )
 }
 
 run_codex_prompt_smoke() {
-  local repo_root="$WORK_ROOT/prompt-codex/sbti-cli"
-  local last_message="$WORK_ROOT/prompt-codex.last-message.txt"
+  local repo_root="$WORK_ROOT/prompt-codex/$(basename "${PROMPT_TEST_REPO_URL%.git}")"
+  local output_file="$WORK_ROOT/prompt-codex.output.txt"
+  local inspect_after="$WORK_ROOT/prompt-codex.inspect-after.json"
+  local verify_json="$WORK_ROOT/prompt-codex.verify.json"
+  local agent_exit_code
+  local role
+  local tree_repo_name
+  local tree_root
 
   mkdir -p "$WORK_ROOT/prompt-codex"
-  clone_repo "$repo_root"
+  clone_repo "$PROMPT_TEST_REPO_URL" "$repo_root"
 
   (
     cd "$repo_root"
     log "Running Codex prompt smoke in $repo_root"
-    codex exec \
+    set +e
+    run_with_timeout "$AGENT_TIMEOUT_SECS" "$output_file" \
+      codex exec \
       --cd "$PWD" \
       --dangerously-bypass-approvals-and-sandbox \
-      --output-last-message "$last_message" \
-      "Use the first-tree CLI at $FT_CLI. Run \`node $FT_CLI tree inspect --json\` and tell me the detected role only."
+      "$(agent_prompt)"
+    agent_exit_code=$?
+    set -e
+    if [[ "$agent_exit_code" -ne 0 && "$agent_exit_code" -ne 124 ]]; then
+      fail "Codex prompt smoke exited with status $agent_exit_code"
+    fi
   )
 
-  [[ -f "$last_message" ]] || fail "Codex prompt smoke did not write a last-message file"
-  assert_contains "$(cat "$last_message")" "unbound-source-repo"
+  [[ -f "$output_file" ]] || fail "Codex prompt smoke did not write output"
+  (
+    cd "$repo_root"
+    node "$FT_CLI" tree inspect --json >"$inspect_after"
+    role="$(json_value "$inspect_after" role)"
+    [[ "$role" == "source-repo-bound" ]] || fail "expected Codex prompt smoke to bind the source repo, got $role"
+    tree_repo_name="$(json_query "$inspect_after" binding.treeRepoName)"
+    [[ -n "$tree_repo_name" ]] || fail "Codex prompt smoke did not record binding.treeRepoName"
+    tree_root="$(cd .. && pwd)/$tree_repo_name"
+    [[ -d "$tree_root" ]] || fail "expected tree root at $tree_root"
+    node "$FT_CLI" tree verify --json --tree-path "$tree_root" >"$verify_json"
+    [[ "$(json_value "$verify_json" ok)" == "true" ]] || fail "Codex prompt smoke tree verify did not report ok=true"
+    [[ -f "$tree_root/.github/workflows/validate.yml" ]] || fail "validate workflow missing after Codex prompt smoke"
+    ! grep -Fq "The living source of truth for your organization" "$tree_root/NODE.md" || fail "Codex prompt smoke did not replace root placeholder content"
+    ! grep -Fq "Default bootstrap member node" "$tree_root/members/owner/NODE.md" || fail "Codex prompt smoke did not replace default member placeholder"
+  )
+  assert_contains "$(cat "$output_file")" "Local First Tree onboarding is complete and verified."
+  assert_contains "$(cat "$output_file")" "validate.yml"
+  assert_contains "$(cat "$output_file")" "Owners gate:"
+  assert_contains "$(cat "$output_file")" "tree automation install --tier 2"
+  assert_contains "$(cat "$output_file")" "github scan install --allow-repo"
 }
 
 run_claude_prompt_smoke() {
-  local repo_root="$WORK_ROOT/prompt-claude/sbti-cli"
+  local repo_root="$WORK_ROOT/prompt-claude/$(basename "${PROMPT_TEST_REPO_URL%.git}")"
   local output_file="$WORK_ROOT/prompt-claude.output.txt"
+  local inspect_after="$WORK_ROOT/prompt-claude.inspect-after.json"
+  local verify_json="$WORK_ROOT/prompt-claude.verify.json"
+  local agent_exit_code
+  local role
+  local tree_repo_name
+  local tree_root
 
   mkdir -p "$WORK_ROOT/prompt-claude"
-  clone_repo "$repo_root"
+  clone_repo "$PROMPT_TEST_REPO_URL" "$repo_root"
 
   (
     cd "$repo_root"
     log "Running Claude prompt smoke in $repo_root"
-    claude -p \
+    set +e
+    run_with_timeout "$AGENT_TIMEOUT_SECS" "$output_file" \
+      claude -p \
       --permission-mode bypassPermissions \
-      "Use the first-tree CLI at $FT_CLI. Run \`node $FT_CLI tree inspect --json\` and tell me the detected role only." \
-      >"$output_file"
+      "$(agent_prompt)"
+    agent_exit_code=$?
+    set -e
+    if [[ "$agent_exit_code" -ne 0 && "$agent_exit_code" -ne 124 ]]; then
+      fail "Claude prompt smoke exited with status $agent_exit_code"
+    fi
   )
 
   [[ -f "$output_file" ]] || fail "Claude prompt smoke did not write output"
-  assert_contains "$(cat "$output_file")" "unbound-source-repo"
+  (
+    cd "$repo_root"
+    node "$FT_CLI" tree inspect --json >"$inspect_after"
+    role="$(json_value "$inspect_after" role)"
+    [[ "$role" == "source-repo-bound" ]] || fail "expected Claude prompt smoke to bind the source repo, got $role"
+    tree_repo_name="$(json_query "$inspect_after" binding.treeRepoName)"
+    [[ -n "$tree_repo_name" ]] || fail "Claude prompt smoke did not record binding.treeRepoName"
+    tree_root="$(cd .. && pwd)/$tree_repo_name"
+    [[ -d "$tree_root" ]] || fail "expected tree root at $tree_root"
+    node "$FT_CLI" tree verify --json --tree-path "$tree_root" >"$verify_json"
+    [[ "$(json_value "$verify_json" ok)" == "true" ]] || fail "Claude prompt smoke tree verify did not report ok=true"
+    [[ -f "$tree_root/.github/workflows/validate.yml" ]] || fail "validate workflow missing after Claude prompt smoke"
+    ! grep -Fq "The living source of truth for your organization" "$tree_root/NODE.md" || fail "Claude prompt smoke did not replace root placeholder content"
+    ! grep -Fq "Default bootstrap member node" "$tree_root/members/owner/NODE.md" || fail "Claude prompt smoke did not replace default member placeholder"
+  )
+  assert_contains "$(cat "$output_file")" "Local First Tree onboarding is complete and verified."
+  assert_contains "$(cat "$output_file")" "validate.yml"
+  assert_contains "$(cat "$output_file")" "Owners gate:"
+  assert_contains "$(cat "$output_file")" "tree automation install --tier 2"
+  assert_contains "$(cat "$output_file")" "github scan install --allow-repo"
 }
 
 run_direct_cli_smoke
