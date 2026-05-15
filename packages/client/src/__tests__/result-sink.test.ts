@@ -214,6 +214,42 @@ describe("createResultSink — forwardResult enrichment", () => {
       expect(body.metadata?.documentContext?.basePath).toBe(worktree);
     });
 
+    it("stores size that matches Buffer.byteLength(content, utf8) so server validation never rejects a malformed-UTF-8 file", async () => {
+      // Reviewer-flagged regression: when a `.md` file contains invalid
+      // UTF-8 bytes, `buf.toString("utf8")` substitutes U+FFFD, so the raw
+      // byte length drifts from the re-encoded byte length. If runtime
+      // ships raw bytes as `size` but server recomputes from `content`,
+      // sendMessage fails with BadRequestError("size does not match
+      // content"). Pin runtime + server to the SAME algorithm so a
+      // broken-encoding markdown file degrades to a preview-with-FFFD
+      // rather than a hard send failure.
+      const malformed = Buffer.concat([
+        Buffer.from("# title\n", "utf8"),
+        Buffer.from([0xff, 0xfe, 0xfd]), // invalid UTF-8 bytes
+      ]);
+      await writeFile(join(worktree, "broken.md"), malformed);
+
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("see [broken](broken.md)");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: {
+          documentContext?: {
+            docs?: Array<{ path: string; content: string; size: number }>;
+          };
+        };
+      };
+      const [doc] = body.metadata?.documentContext?.docs ?? [];
+      expect(doc?.path).toBe("broken.md");
+      // The cardinal invariant: declared size MUST equal the server's
+      // recomputation of Buffer.byteLength(content, "utf8").
+      expect(doc?.size).toBe(Buffer.byteLength(doc?.content ?? "", "utf8"));
+    });
+
     it("ignores external-link hrefs (https / mailto / scheme-relative) even when a matching file exists on disk", async () => {
       // Defence in depth: if an agent emits `[doc](https://x.com/api.md)` and
       // the workspace happens to contain `https:/x.com/api.md`, the runtime

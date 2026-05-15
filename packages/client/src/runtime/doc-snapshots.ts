@@ -65,18 +65,35 @@ export async function buildMessageDocumentSnapshots(
 
     try {
       const buf = await readFile(resolved);
+      // Pre-flight raw-byte cap so a multi-MB file doesn't waste a full UTF-8
+      // round-trip just to be rejected below.
       if (buf.byteLength > MAX_DOC_SNAPSHOT_BYTES) {
         skipped += 1;
         continue;
       }
-      if (totalBytes + buf.byteLength > MAX_TOTAL_DOC_SNAPSHOT_BYTES) {
+      const content = buf.toString("utf8");
+      // `size` MUST match the byte length the server recomputes from
+      // `content` (see `services/doc-snapshots.ts validateDocumentContext`).
+      // Files that contain invalid UTF-8 sequences have `buf.toString("utf8")`
+      // substitute U+FFFD for each malformed byte, so `buf.byteLength` (raw)
+      // drifts from `Buffer.byteLength(content, "utf8")` (re-encoded) and the
+      // server rejects the message with "size does not match content".
+      // Compute size from the round-tripped content so both sides agree.
+      const size = Buffer.byteLength(content, "utf8");
+      // After substitution `size` may grow (a single invalid byte → 3 bytes
+      // for U+FFFD) and overshoot the per-file cap even if raw bytes were
+      // under. Catch that and skip.
+      if (size > MAX_DOC_SNAPSHOT_BYTES) {
         skipped += 1;
         continue;
       }
-      const content = buf.toString("utf8");
+      if (totalBytes + size > MAX_TOTAL_DOC_SNAPSHOT_BYTES) {
+        skipped += 1;
+        continue;
+      }
       const sha256 = createHash("sha256").update(content, "utf8").digest("hex");
-      docs.push({ path: canonical, sha256, size: buf.byteLength, content });
-      totalBytes += buf.byteLength;
+      docs.push({ path: canonical, sha256, size, content });
+      totalBytes += size;
     } catch {
       skipped += 1;
     }
