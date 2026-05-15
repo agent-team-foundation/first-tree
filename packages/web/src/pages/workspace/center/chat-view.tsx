@@ -706,8 +706,19 @@ export function ChatView({
     // produces a precise hint immediately instead of round-tripping to a
     // 400 the user has to decode. New participants are added via
     // ParticipantsHeader's `[+]`, not via `@`.
+    //
+    // Derive the speaker set from `chatDetail.participants` rather than
+    // `mentionCandidates` so it includes self — `mentionCandidates`
+    // intentionally excludes self (you don't autocomplete "@yourself"),
+    // but `@<own-name>` is a legal token the server accepts. Without
+    // self here the guard would reject it with the "[+] button" hint,
+    // which is misleading since the user is already a member.
     if (text) {
-      const memberNames = new Set(mentionCandidates.map((c) => c.name?.toLowerCase()).filter((n): n is string => !!n));
+      const memberNames = new Set(
+        (chatDetail?.participants ?? [])
+          .map((p) => chatScopedAgentIdentity(p.agentId)?.name?.toLowerCase())
+          .filter((n): n is string => !!n),
+      );
       const unresolved = scanMentionTokens(text).filter((t) => !memberNames.has(t));
       if (unresolved.length > 0) {
         const sample = unresolved[0];
