@@ -128,22 +128,21 @@ describe("parseOriginList", () => {
   });
 
   it("parses comma-joined multi-value", () => {
-    expect(parseOriginList(paramsOf("origin=manual,github_pull_request,github_issue"))).toEqual([
-      "manual",
-      "github_pull_request",
-      "github_issue",
-    ]);
+    expect(parseOriginList(paramsOf("origin=manual,github,feishu"))).toEqual(["manual", "github", "feishu"]);
   });
 
   it("silently drops unknown / future-rolled-back ChatSource literals", () => {
     // A URL with an unfamiliar source string (typo, deprecated value,
     // or a token introduced after a partial rollback) shouldn't break
-    // the rail — those tokens just don't filter anything.
-    expect(parseOriginList(paramsOf("origin=manual,unknown,github_issue"))).toEqual(["manual", "github_issue"]);
+    // the rail — those tokens just don't filter anything. Also covers
+    // pre-Phase-C names like `github_pull_request` that used to be
+    // valid ChatSource values but no longer are; they decay to "no
+    // filter" so the rail shows every origin instead of erroring.
+    expect(parseOriginList(paramsOf("origin=manual,unknown,github_pull_request,feishu"))).toEqual(["manual", "feishu"]);
   });
 
   it("trims whitespace and dedupes", () => {
-    expect(parseOriginList(paramsOf("origin=manual,%20github_issue%20,manual"))).toEqual(["manual", "github_issue"]);
+    expect(parseOriginList(paramsOf("origin=manual,%20github%20,manual"))).toEqual(["manual", "github"]);
   });
 });
 
@@ -160,13 +159,13 @@ describe("parseParticipantList", () => {
 
 describe("nextParamsForOrigin", () => {
   it("sets a comma-joined list", () => {
-    const result = nextParamsForOrigin(paramsOf(""), ["manual", "github_pull_request"]);
-    expect(result.get("origin")).toBe("manual,github_pull_request");
+    const result = nextParamsForOrigin(paramsOf(""), ["manual", "github"]);
+    expect(result.get("origin")).toBe("manual,github");
   });
 
   it("deduplicates the input", () => {
-    const result = nextParamsForOrigin(paramsOf(""), ["manual", "manual", "github_issue"]);
-    expect(result.get("origin")).toBe("manual,github_issue");
+    const result = nextParamsForOrigin(paramsOf(""), ["manual", "manual", "github"]);
+    expect(result.get("origin")).toBe("manual,github");
   });
 
   it("removes the key on an empty list (canonical home URL stays bare)", () => {
@@ -175,9 +174,9 @@ describe("nextParamsForOrigin", () => {
   });
 
   it("clears the chat selection (narrowing can hide the current chat)", () => {
-    const result = nextParamsForOrigin(paramsOf("c=abc&origin=manual"), ["github_issue"]);
+    const result = nextParamsForOrigin(paramsOf("c=abc&origin=manual"), ["github"]);
     expect(result.has("c")).toBe(false);
-    expect(result.get("origin")).toBe("github_issue");
+    expect(result.get("origin")).toBe("github");
   });
 });
 
@@ -204,9 +203,7 @@ describe("nextParamsForClearFilters", () => {
     // `with` atomically because two sequential `setSearchParams` calls
     // would each derive from the same render-stale params and the
     // second would clobber the first.
-    const result = nextParamsForClearFilters(
-      paramsOf("unread=1&watching=1&origin=manual,github_pull_request&with=agent-a,agent-b"),
-    );
+    const result = nextParamsForClearFilters(paramsOf("unread=1&watching=1&origin=manual,github&with=agent-a,agent-b"));
     expect(result.has("unread")).toBe(false);
     expect(result.has("watching")).toBe(false);
     expect(result.has("origin")).toBe(false);

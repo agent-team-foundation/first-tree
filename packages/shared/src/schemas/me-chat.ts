@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { chatEngagementStatusSchema } from "./chat.js";
-import { chatSourceSchema } from "./chat-metadata.js";
+import { chatSourceSchema, githubEntityTypeSchema } from "./chat-metadata.js";
 
 /**
  * Member-facing chat APIs (`/me/chats*`) for the chat-first workspace.
@@ -147,23 +147,35 @@ export const meChatRowSchema = z.object({
   type: z.string(),
   membershipKind: meChatMembershipKindSchema,
   /**
-   * Origin classification — mirrors the projection that drives
-   * `listMeChatsQuery.source` (see `chatSourceSqlExpression` in
-   * `services/me-chat.ts`). Surfaced on the row so the rail can render
-   * a per-source leading icon and group rows by origin without a
-   * second lookup.
+   * Coarse-grained origin — `manual` / `github` / `feishu`. Mirrors the
+   * projection driven by `chatSourceSqlExpression` in
+   * `services/me-chat.ts`. Drives the rail's filter popover (3-way) and
+   * the Group-by-Source bucket assignment.
    *
    * Defaulted to `"manual"` for parse-side defence-in-depth: this
    * schema is consumed by web clients that may briefly be ahead of an
    * old server build (web rolls before server). Without the default, a
    * server response missing `source` would fail validation and blank
-   * the rail. With the default, the row decodes and the icon falls
-   * back to the Manual placeholder until the server catches up. Live
-   * server responses always populate `source` via
+   * the rail. Live server responses always populate `source` via
    * `chatSourceSqlExpression`, so the default is only ever observed
    * across version skew.
    */
   source: chatSourceSchema.default("manual"),
+  /**
+   * Within-origin sub-type. Only meaningful when `source === "github"`,
+   * in which case it's one of `pull_request | issue | discussion | commit`
+   * — drives the per-row leading icon so users still get a PR vs Issue
+   * vs Commit glyph even though the filter popover collapses every
+   * GitHub entity into a single "GitHub" origin. Null for `manual` and
+   * `feishu` rows.
+   *
+   * Server projects this straight from `chats.metadata->>'entityType'`
+   * (no DB migration). Adding new GitHub entity types means extending
+   * `GITHUB_ENTITY_TYPES` in `chat-metadata.ts` — the row schema picks
+   * the new value up automatically through the shared
+   * `githubEntityTypeSchema`.
+   */
+  entityType: githubEntityTypeSchema.nullable(),
   title: z.string(),
   topic: z.string().nullable(),
   participants: z.array(meChatParticipantSchema),

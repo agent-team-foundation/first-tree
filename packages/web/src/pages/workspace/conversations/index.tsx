@@ -40,6 +40,7 @@ const ENGAGEMENT_OPTIONS: ReadonlyArray<{ value: ChatEngagementView; label: stri
 const GROUP_OPTIONS: ReadonlyArray<{ value: GroupMode; label: string }> = [
   { value: "recency", label: "Recency" },
   { value: "source", label: "Source" },
+  { value: "type", label: "Type" },
   { value: "none", label: "None" },
 ];
 
@@ -597,7 +598,7 @@ export function ConversationList({
                         />
                         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
                           <div className="flex items-center" style={{ gap: 6 }}>
-                            <SourceIcon source={row.source} emphasize={hasUnread} />
+                            <SourceIcon source={row.source} entityType={row.entityType} emphasize={hasUnread} />
                             <span
                               className="truncate text-subtitle"
                               style={{

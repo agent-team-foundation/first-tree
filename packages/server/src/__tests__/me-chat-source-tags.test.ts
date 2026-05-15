@@ -127,21 +127,23 @@ describe("conversation-list source tags", () => {
     });
     expect(manualOnly.rows.map((r) => r.chatId)).toEqual([manualChatId]);
 
-    const prOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    // origin collapses PR + Issue into a single `github` bucket — the
+    // per-entity granularity now rides on `row.entityType` for the
+    // leading-icon renderer, not on the filter dimension.
+    const githubOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
-      origin: ["github_pull_request"],
+      origin: ["github"],
     });
-    expect(prOnly.rows.map((r) => r.chatId)).toEqual([prChatId]);
+    expect(githubOnly.rows.map((r) => r.chatId).sort()).toEqual([issueChatId, prChatId].sort());
 
-    const issueOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
-      limit: 50,
-      filter: "all",
-      engagement: "active",
-      origin: ["github_issue"],
-    });
-    expect(issueOnly.rows.map((r) => r.chatId)).toEqual([issueChatId]);
+    // `entityType` is projected from `chats.metadata->>'entityType'`
+    // so the PR vs Issue distinction survives the origin collapse.
+    const prRow = githubOnly.rows.find((r) => r.chatId === prChatId);
+    const issueRow = githubOnly.rows.find((r) => r.chatId === issueChatId);
+    expect(prRow?.entityType).toBe("pull_request");
+    expect(issueRow?.entityType).toBe("issue");
 
     const feishuOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
       limit: 50,
@@ -187,13 +189,14 @@ describe("conversation-list source tags", () => {
     });
 
     expect(counts.manual).toEqual({ chatCount: 2, unreadChatCount: 0 });
-    expect(counts.github_pull_request).toEqual({ chatCount: 2, unreadChatCount: 2 });
-    expect(counts.github_issue).toEqual({ chatCount: 1, unreadChatCount: 0 });
-    // Sources the caller is NOT in must be absent from the map — the web
-    // tag bar uses key presence to decide whether to render the tag at all.
+    // Phase C: `origin` now collapses every github entity type into a
+    // single `github` bucket. Two PRs (both unread) + one Issue (read)
+    // all count under `github` — 3 chats, 2 unread.
+    expect(counts.github).toEqual({ chatCount: 3, unreadChatCount: 2 });
+    // Sources the caller is NOT in must be absent from the map — the
+    // web filter popover uses key presence to decide whether to render
+    // the option at all.
     expect(counts.feishu).toBeUndefined();
-    expect(counts.github_discussion).toBeUndefined();
-    expect(counts.github_commit).toBeUndefined();
   });
 
   it("listMeChatSourceCounts: empty workspace still surfaces manual at zero", async () => {
@@ -205,7 +208,7 @@ describe("conversation-list source tags", () => {
     });
 
     expect(counts.manual).toEqual({ chatCount: 0, unreadChatCount: 0 });
-    expect(counts.github_pull_request).toBeUndefined();
+    expect(counts.github).toBeUndefined();
     expect(counts.feishu).toBeUndefined();
   });
 
@@ -217,12 +220,16 @@ describe("conversation-list source tags", () => {
    * clicking Manual must surface the same chat — otherwise the badge
    * appears to lie.
    */
-  it("malformed github metadata falls into manual in both the count and the list", async () => {
+  it("github metadata with an unknown entityType still buckets under github", async () => {
+    // Phase C: origin collapses on the `source` discriminator alone,
+    // so any `source: "github"` row is `github` regardless of inner
+    // entityType. The unfamiliar entityType decays to `null` on
+    // `row.entityType` (the leading-icon renderer falls back to a
+    // generic glyph). Previously this fell into `manual` because the
+    // pre-collapse CASE matched on `(source, entityType)` pairs.
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const [unknownChatId] = await seedChats(app, admin.organizationId, admin.memberId, admin.humanAgentUuid, [
-      // `entityType` value not in CHAT_SOURCES — could be a new GitHub
-      // entity type we haven't tagged yet, or a writer bug.
+    const [futureChatId] = await seedChats(app, admin.organizationId, admin.memberId, admin.humanAgentUuid, [
       {
         metadata: { source: "github", entityType: "release", entityKey: "o/r@v1" },
         topic: "future-entity-type",
@@ -232,26 +239,28 @@ describe("conversation-list source tags", () => {
     const { counts } = await listMeChatSourceCounts(app.db, admin.humanAgentUuid, admin.organizationId, {
       engagement: "active",
     });
-    expect(counts.manual).toEqual({ chatCount: 1, unreadChatCount: 0 });
-    expect(counts.github_issue).toBeUndefined();
-    expect(counts.github_pull_request).toBeUndefined();
+    expect(counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
+    expect(counts.manual).toEqual({ chatCount: 0, unreadChatCount: 0 });
 
     const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
-      origin: ["manual"],
+      origin: ["github"],
     });
-    expect(list.rows.map((r) => r.chatId)).toEqual([unknownChatId]);
+    expect(list.rows.map((r) => r.chatId)).toEqual([futureChatId]);
+    // Unknown entityType narrows to null on the row — known values
+    // (`pull_request` etc.) flow through; "release" doesn't.
+    expect(list.rows[0]?.entityType).toBeNull();
   });
 
   /**
-   * Source filter must compose with `filter=unread` — neither one swallows
-   * the other. Two PRs (one unread, one read) + one unread Issue: filtering
-   * to `source=github_pull_request` AND `filter=unread` returns only the
-   * unread PR.
+   * Origin filter composes with `filter=unread` — neither swallows the
+   * other. Two PRs (one unread, one read) + one unread Issue: filtering
+   * to `origin=github` AND `filter=unread` returns the unread PR + the
+   * unread Issue (both are `github` after the Phase C collapse).
    */
-  it("source filter composes with filter=unread", async () => {
+  it("origin filter composes with filter=unread", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const [, prUnread, issueUnread] = await seedChats(app, admin.organizationId, admin.memberId, admin.humanAgentUuid, [
@@ -278,9 +287,9 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "unread",
       engagement: "active",
-      origin: ["github_pull_request"],
+      origin: ["github"],
     });
-    expect(res.rows.map((r) => r.chatId)).toEqual([prUnread]);
+    expect(res.rows.map((r) => r.chatId).sort()).toEqual([prUnread, issueUnread].sort());
   });
 
   it("source filter respects engagement view (archived chat hidden from active source counts)", async () => {
@@ -312,20 +321,20 @@ describe("conversation-list source tags", () => {
       engagement: "active",
     });
     // Archived in `active` view → PR row is hidden, only manual at zero remains.
-    expect(activeCounts.counts.github_pull_request).toBeUndefined();
+    expect(activeCounts.counts.github).toBeUndefined();
     expect(activeCounts.counts.manual).toEqual({ chatCount: 0, unreadChatCount: 0 });
 
     const archivedCounts = await listMeChatSourceCounts(app.db, admin.humanAgentUuid, admin.organizationId, {
       engagement: "archived",
     });
-    expect(archivedCounts.counts.github_pull_request).toEqual({ chatCount: 1, unreadChatCount: 0 });
+    expect(archivedCounts.counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
 
     // Sanity: the list query mirrors the same engagement view.
     const archivedList = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "archived",
-      origin: ["github_pull_request"],
+      origin: ["github"],
     });
     expect(archivedList.rows.map((r) => r.chatId)).toEqual([prChatId]);
   });
@@ -383,7 +392,7 @@ describe("conversation-list source tags", () => {
     const { counts } = await listMeChatSourceCounts(app.db, admin.humanAgentUuid, admin.organizationId, {
       engagement: "active",
     });
-    expect(counts.github_pull_request).toEqual({ chatCount: 1, unreadChatCount: 0 });
+    expect(counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
 
     // Filtering by origin AND `watching=true` surfaces the watcher row.
     // Phase B lifted `watching` out of the filter enum into an
@@ -392,10 +401,13 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "all",
       engagement: "active",
-      origin: ["github_pull_request"],
+      origin: ["github"],
       watching: true,
     });
     expect(watchingPr.rows.map((r) => r.chatId)).toEqual([chatId]);
     expect(watchingPr.rows[0]?.membershipKind).toBe("watching");
+    // Sub-type still rides on the row — popover collapse is per-origin,
+    // not per-entity.
+    expect(watchingPr.rows[0]?.entityType).toBe("pull_request");
   });
 });

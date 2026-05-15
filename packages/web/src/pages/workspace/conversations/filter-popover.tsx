@@ -3,11 +3,11 @@ import { Check, Settings } from "lucide-react";
 import { Popover } from "../../../components/ui/popover.js";
 
 /**
- * Canonical order of origin filters shown in the popover. Matches the
- * `CHAT_SOURCES` declaration order in shared, with display labels for
- * the UI. Phase A's `SOURCE_TABS` constant carried the same order; we
- * keep it here so the popover and the per-row source icon read the
- * same vocabulary.
+ * Canonical order of origin filters shown in the popover. Phase C
+ * collapsed the GitHub entity types (PR / Issue / Discussion / Commit)
+ * into a single `github` entry — the per-entity granularity lives on
+ * `MeChatRow.entityType` and drives the row's leading icon, not a
+ * separate filter dimension.
  *
  * Exported so the filter-chip row in `conversations/index.tsx` can
  * render each active origin's short label without duplicating the
@@ -15,14 +15,11 @@ import { Popover } from "../../../components/ui/popover.js";
  */
 export const ORIGIN_OPTIONS: ReadonlyArray<{ value: ChatSource; label: string }> = [
   { value: "manual", label: "Manual" },
-  { value: "github_pull_request", label: "Pull request" },
-  { value: "github_issue", label: "Issue" },
-  { value: "github_discussion", label: "Discussion" },
-  { value: "github_commit", label: "Commit" },
+  { value: "github", label: "GitHub" },
   { value: "feishu", label: "Feishu" },
 ];
 
-/** Map a `ChatSource` to its short user-facing label (Phase B). */
+/** Map a `ChatSource` to its short user-facing label. */
 export function originLabel(source: ChatSource): string {
   return ORIGIN_OPTIONS.find((o) => o.value === source)?.label ?? source;
 }
