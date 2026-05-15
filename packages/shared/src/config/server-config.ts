@@ -72,19 +72,9 @@ export const serverConfigSchema = defineConfig({
   // (webhook secret / allowed org) used to live here as global config.
   // They are now per-org settings in the `organization_settings` table —
   // admins configure them through Team Settings. See issue #255.
-  contextTreeSync: optional({
-    /**
-     * Deployment-level read credential used only by the server-managed Context
-     * Tree mirror. Repo and branch remain per-org settings.
-     */
-    githubToken: field(z.string(), {
-      env: "FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN",
-      secret: true,
-    }),
-    githubTokenRepos: field(z.string().optional(), {
-      env: "FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN_REPOS",
-    }),
-  }),
+  // The server-managed Context Tree mirror mints a per-org GitHub App
+  // installation token at request time (see `services/github-app-token.ts`);
+  // no global token belongs here.
   oauth: optional({
     /**
      * GitHub App credentials — the sign-in surface introduced by PR 2/3 of
