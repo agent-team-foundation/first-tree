@@ -6,7 +6,7 @@ import {
   submitQuestionAnswerSchema,
   updateChatSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -42,9 +42,26 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {
     const { chat, scope } = await requireChatAccess(request, app.db);
 
+    // Participants are resolved via INNER JOIN `agents` so each row
+    // already carries `name / displayName / type`. The trust boundary
+    // for chat-scoped identity is `chat_membership`, not org-level
+    // discovery — we deliberately do **not** apply
+    // `agentVisibilityCondition` here. See
+    // `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
     const participants = await app.db
-      .select()
+      .select({
+        agentId: chatMembership.agentId,
+        role: chatMembership.role,
+        mode: chatMembership.mode,
+        joinedAt: chatMembership.joinedAt,
+        name: agents.name,
+        displayName: agents.displayName,
+        type: agents.type,
+        avatarColorToken: agents.avatarColorToken,
+        avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      })
       .from(chatMembership)
+      .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
       .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.accessMode, "speaker")));
 
     const firstMsgRows = (await app.db.execute<{ content: unknown }>(sql`
@@ -55,31 +72,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     `)) as unknown as Array<{ content: unknown }>;
     const firstMessagePreview = firstMsgRows[0] ? extractSummary(firstMsgRows[0].content) : null;
 
-    const participantAgentIds = participants.map((p) => p.agentId);
-    const agentRows =
-      participantAgentIds.length > 0
-        ? await app.db
-            .select({
-              agentId: agents.uuid,
-              displayName: agents.displayName,
-              type: agents.type,
-              avatarColorToken: agents.avatarColorToken,
-              avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
-            })
-            .from(agents)
-            .where(inArray(agents.uuid, participantAgentIds))
-        : [];
-    const agentMeta = new Map(agentRows.map((a) => [a.agentId, a]));
-    const participantsForTitle = participants.map((p) => {
-      const meta = agentMeta.get(p.agentId);
-      return {
-        agentId: p.agentId,
-        displayName: meta?.displayName ?? p.agentId,
-        type: meta?.type ?? "unknown",
-        avatarColorToken: meta?.avatarColorToken ?? null,
-        avatarImageUrl: agentAvatarImageUrl(p.agentId, meta?.avatarImageUpdatedAt ?? null),
-      };
-    });
+    const participantsForTitle = participants.map((p) => ({
+      agentId: p.agentId,
+      displayName: p.displayName,
+      type: p.type,
+      avatarColorToken: p.avatarColorToken ?? null,
+      avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
+    }));
     const title = resolveChatTitle(chat.topic, firstMessagePreview, participantsForTitle, scope.humanAgentId);
 
     const engagementStatus = await getCallerEngagement(app.db, chat.id, scope.humanAgentId);
@@ -95,6 +94,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         agentId: p.agentId,
         role: p.role,
         mode: p.mode,
+        name: p.name,
+        displayName: p.displayName,
+        type: p.type,
         joinedAt: p.joinedAt.toISOString(),
       })),
     };
