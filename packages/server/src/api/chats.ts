@@ -83,11 +83,29 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
     const engagementStatus = await getCallerEngagement(app.db, chat.id, scope.humanAgentId);
 
+    // Caller's own membership row — drives speaker-vs-watcher UI on the
+    // chat detail page without forcing the client to round-trip through
+    // `/orgs/:orgId/chats`. `null` when the caller reaches the chat via
+    // supervision (managed agent is a speaker) rather than direct
+    // membership; that's the same null-shape `MeChatRow` carries when
+    // listChats filters to supervised-only rows.
+    const [callerMembership] = await app.db
+      .select({ accessMode: chatMembership.accessMode })
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, scope.humanAgentId)))
+      .limit(1);
+    const viewerMembershipKind: "participant" | "watching" | null = callerMembership
+      ? callerMembership.accessMode === "speaker"
+        ? "participant"
+        : "watching"
+      : null;
+
     return {
       ...chat,
       title,
       firstMessagePreview,
       engagementStatus,
+      viewerMembershipKind,
       createdAt: chat.createdAt.toISOString(),
       updatedAt: chat.updatedAt.toISOString(),
       participants: participants.map((p) => ({

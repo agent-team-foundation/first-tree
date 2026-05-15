@@ -29,6 +29,7 @@ function mkChatDetail(overrides?: Partial<ChatDetail>): ChatDetail {
     title: "v1 ship",
     firstMessagePreview: null,
     engagementStatus: "active",
+    viewerMembershipKind: "participant",
     ...overrides,
   };
 }
