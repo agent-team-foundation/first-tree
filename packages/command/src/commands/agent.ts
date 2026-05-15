@@ -108,14 +108,6 @@ function handleSdkError(error: unknown): never {
   fail("UNKNOWN_ERROR", msg, 1);
 }
 
-function parseLimit(value: string, max: number): number {
-  const limit = Number.parseInt(value, 10);
-  if (Number.isNaN(limit) || limit < 1 || limit > max) {
-    fail("INVALID_LIMIT", `Limit must be between 1 and ${max}.`, 2);
-  }
-  return limit;
-}
-
 type ResolvedAgent = { uuid: string; name: string | null; displayName: string | null };
 
 async function resolveAgent(serverUrl: string, adminToken: string, agentName: string): Promise<ResolvedAgent> {
@@ -849,28 +841,6 @@ export function registerAgentCommands(program: Command): void {
       try {
         const sdk = createSdk(options.agent);
         const result = await sdk.register();
-        success(result);
-      } catch (error) {
-        handleSdkError(error);
-      }
-    });
-
-  debugCmd
-    .command("pull")
-    .description("Pull pending messages from inbox")
-    .option("-l, --limit <number>", "Maximum entries to return", "10")
-    .option("-a, --ack", "Automatically ACK entries after pulling")
-    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
-    .action(async (options: { limit: string; ack?: boolean; agent?: string }) => {
-      try {
-        const sdk = createSdk(options.agent);
-        const limit = parseLimit(options.limit, 50);
-        const result = await sdk.pull(limit);
-
-        if (options.ack && result.entries.length > 0) {
-          await Promise.all(result.entries.map((entry) => sdk.ack(entry.id)));
-        }
-
         success(result);
       } catch (error) {
         handleSdkError(error);

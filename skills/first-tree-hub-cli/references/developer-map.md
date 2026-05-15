@@ -56,7 +56,7 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 - `packages/server/src/app.ts` — server wiring, route registration, background jobs.
 - `packages/server/src/api/auth/` — connect-token, refresh endpoints consumed by `connect <token>` and `ensureFreshAccessToken`.
 - `packages/server/src/api/admin/` — agent admin, agent config, session, and client endpoints that the CLI calls.
-- `packages/server/src/services/inbox.ts` — inbox poll/ack/renew behavior.
+- `packages/server/src/services/inbox.ts` — inbox push-claim / WS ack / silent-context bundling / timeout reset (adapter+kael consumers).
 
 ## Change Patterns
 

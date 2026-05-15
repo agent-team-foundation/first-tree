@@ -1,7 +1,7 @@
 // Core functions — programmatic API for external CLI consumers
 
 // SDK — re-export for convenience
-export type { AccessTokenProvider, PullResult, RegisterResult, SdkConfig } from "@first-tree-hub/client";
+export type { AccessTokenProvider, RegisterResult, SdkConfig } from "@first-tree-hub/client";
 export { FirstTreeHubSDK, SdkError } from "@first-tree-hub/client";
 // SaaS connect helpers — derive the hub URL from a connect token's `iss`.
 // `decodeJwtPayload` is intentionally NOT re-exported: it's an internal

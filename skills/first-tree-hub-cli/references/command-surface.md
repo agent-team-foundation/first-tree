@@ -104,7 +104,9 @@ All `agent config` subcommands call `GET`/`PATCH`/`POST dry-run` on `/api/v1/adm
 **Low-level SDK debug (hidden from `agent --help`)**
 
 - `agent debug register` — proxies `sdk.register()` for identity confirmation.
-- `agent debug pull [-l] [--ack]` — low-level inbox polling; `--ack` acknowledges all returned entries.
+
+Inbox delivery is push-only over the client WS (`inbox:deliver` frames); to
+inspect the queue out-of-band, hit `GET /api/v1/agent/inbox` with `curl`.
 
 Day-to-day messaging — `chat send / list / history / open` — lives in the `chat` command group below.
 
