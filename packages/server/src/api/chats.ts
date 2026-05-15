@@ -23,6 +23,7 @@ import {
   joinMeChat,
   leaveMeChat,
   markMeChatRead,
+  markMeChatUnread,
   resolveChatTitle,
   setChatEngagement,
 } from "../services/me-chat.js";
@@ -278,6 +279,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { chatId: string } }>("/:chatId/read", async (request) => {
     const { scope } = await requireChatAccess(request, app.db);
     return markMeChatRead(app.db, request.params.chatId, scope.humanAgentId);
+  });
+
+  /** POST /chats/:chatId/unread — manual "mark as unread" affordance. Idempotent. */
+  app.post<{ Params: { chatId: string } }>("/:chatId/unread", async (request) => {
+    const { scope } = await requireChatAccess(request, app.db);
+    return markMeChatUnread(app.db, request.params.chatId, scope.humanAgentId);
   });
 
   /** POST /chats/:chatId/participants — add speaking participants. Idempotent. */

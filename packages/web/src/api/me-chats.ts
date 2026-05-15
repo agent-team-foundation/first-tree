@@ -7,6 +7,7 @@ import type {
   MeChatLeaveResponse,
   MeChatReadResponse,
   MeChatSourceCounts,
+  MeChatUnreadResponse,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { api, withOrg } from "./client.js";
 
@@ -47,6 +48,10 @@ export function createMeChat(body: CreateMeChat): Promise<{ chatId: string }> {
 
 export function markMeChatRead(chatId: string): Promise<MeChatReadResponse> {
   return api.post<MeChatReadResponse>(`/chats/${encodeURIComponent(chatId)}/read`);
+}
+
+export function markMeChatUnread(chatId: string): Promise<MeChatUnreadResponse> {
+  return api.post<MeChatUnreadResponse>(`/chats/${encodeURIComponent(chatId)}/unread`);
 }
 
 export function addMeChatParticipants(chatId: string, body: AddMeChatParticipants): Promise<void> {

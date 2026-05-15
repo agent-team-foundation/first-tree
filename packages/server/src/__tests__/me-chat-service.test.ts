@@ -34,6 +34,7 @@ import {
   leaveMeChat,
   listMeChats,
   markMeChatRead,
+  markMeChatUnread,
   setChatEngagement,
 } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
@@ -213,6 +214,88 @@ describe("chat-first workspace service layer", () => {
 
     const after = await countUnreadMeChats(app.db, admin.humanAgentUuid, admin.organizationId);
     expect(after).toBe(0);
+  });
+
+  it("markMeChatUnread bumps a read chat back to unread without touching last_read_at", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "peer-mark-unread" });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    // Establish a non-null `last_read_at` first so we can assert it isn't
+    // rewound by markMeChatUnread.
+    await markMeChatRead(app.db, chatId, admin.humanAgentUuid);
+    const [beforeRow] = await app.db.execute<{ last_read_at: string | null; unread_mention_count: number }>(
+      sql`SELECT last_read_at, unread_mention_count FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(beforeRow?.unread_mention_count).toBe(0);
+    expect(beforeRow?.last_read_at).not.toBeNull();
+    const lastReadAtBefore = beforeRow?.last_read_at;
+
+    const res = await markMeChatUnread(app.db, chatId, admin.humanAgentUuid);
+    expect(res).toEqual({ chatId, unreadMentionCount: 1 });
+
+    const [afterRow] = await app.db.execute<{ last_read_at: string | null; unread_mention_count: number }>(
+      sql`SELECT last_read_at, unread_mention_count FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(afterRow?.unread_mention_count).toBe(1);
+    // `last_read_at` is intentionally not modified — this is a UI affordance,
+    // not a read-cursor rewind.
+    expect(afterRow?.last_read_at).toEqual(lastReadAtBefore);
+    expect(await countUnreadMeChats(app.db, admin.humanAgentUuid, admin.organizationId)).toBe(1);
+  });
+
+  it("markMeChatUnread is idempotent and never reduces a pre-existing higher count", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "peer-mark-unread-idem" });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    // Seed `unread_mention_count = 3` to mimic accumulated mentions.
+    await app.db.execute(sql`
+      INSERT INTO chat_user_state (chat_id, agent_id, unread_mention_count)
+      VALUES (${chatId}, ${admin.humanAgentUuid}, 3)
+      ON CONFLICT (chat_id, agent_id) DO UPDATE SET unread_mention_count = 3
+    `);
+
+    // First call: GREATEST(3, 1) keeps it at 3.
+    const r1 = await markMeChatUnread(app.db, chatId, admin.humanAgentUuid);
+    expect(r1.unreadMentionCount).toBe(3);
+
+    // Second call: still 3.
+    const r2 = await markMeChatUnread(app.db, chatId, admin.humanAgentUuid);
+    expect(r2.unreadMentionCount).toBe(3);
+  });
+
+  it("markMeChatUnread lazily materialises a chat_user_state row when none exists", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "peer-mark-unread-lazy" });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    // createMeChat doesn't materialise chat_user_state for the creator; ensure
+    // the row really is absent so we exercise the INSERT branch.
+    await app.db.execute(
+      sql`DELETE FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+
+    const res = await markMeChatUnread(app.db, chatId, admin.humanAgentUuid);
+    expect(res).toEqual({ chatId, unreadMentionCount: 1 });
+
+    const [row] = await app.db.execute<{ unread_mention_count: number; last_read_at: string | null }>(
+      sql`SELECT unread_mention_count, last_read_at FROM chat_user_state WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(row?.unread_mention_count).toBe(1);
+    expect(row?.last_read_at).toBeNull();
   });
 
   it("countUnreadMeChats excludes detached chats (chat_user_state preserved but no membership)", async () => {

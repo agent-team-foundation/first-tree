@@ -315,6 +315,7 @@ export {
   type MeChatReadResponse,
   type MeChatRow,
   type MeChatSourceCounts,
+  type MeChatUnreadResponse,
   meChatFilterSchema,
   meChatLeaveResponseSchema,
   meChatMembershipKindSchema,
@@ -322,6 +323,7 @@ export {
   meChatReadResponseSchema,
   meChatRowSchema,
   meChatSourceCountsSchema,
+  meChatUnreadResponseSchema,
 } from "./schemas/me-chat.js";
 export {
   type DocumentContext,
