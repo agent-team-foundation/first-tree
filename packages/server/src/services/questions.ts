@@ -8,6 +8,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { messages } from "../db/schema/messages.js";
 import { pendingQuestions } from "../db/schema/pending-questions.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
@@ -124,7 +125,7 @@ export async function submitAnswer(
   // here, both submitters could pass the status=pending check, both could
   // commit, both could call sendMessage outside the tx, and the inbox would
   // see two answer messages — a bug we hit in field testing.
-  const questionRow = await db.transaction(async (tx) => {
+  const txResult = await db.transaction(async (tx) => {
     const [row] = await tx
       .select({
         id: pendingQuestions.id,
@@ -149,6 +150,33 @@ export async function submitAnswer(
       throw new ConflictError(`Question "${args.correlationId}" is no longer pending`, {
         "question.status": row.status,
       });
+    }
+
+    // #416: the asker must still be a speaker of this chat. Fan-out is gated
+    // on `chat_membership.accessMode = 'speaker'`, so if the asker has been
+    // moved out between question publish and answer (manager unjoined, role
+    // changed, etc.) the answer would land at no inbox and the SDK's
+    // `canUseTool` Promise would hang forever. Flip to `superseded` inside
+    // the lock-tx so the terminal state is persisted alongside the row lock;
+    // throwing from inside the tx would roll the flip back, so we return a
+    // sentinel and let the caller throw outside.
+    const [askerMembership] = await tx
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(
+        and(
+          eq(chatMembership.chatId, row.chatId),
+          eq(chatMembership.agentId, row.agentId),
+          eq(chatMembership.accessMode, "speaker"),
+        ),
+      )
+      .limit(1);
+    if (!askerMembership) {
+      await tx
+        .update(pendingQuestions)
+        .set({ status: "superseded", supersededAt: new Date(), supersededReason: "asker_left_chat" })
+        .where(eq(pendingQuestions.id, args.correlationId));
+      return { askerLeft: true as const };
     }
 
     // Cross-check the answers' keys against the original question texts so a
@@ -190,8 +218,16 @@ export async function submitAnswer(
       .set({ status: "answered", answeredAt: new Date() })
       .where(eq(pendingQuestions.id, args.correlationId));
 
-    return row;
+    return { askerLeft: false as const, row };
   });
+
+  if (txResult.askerLeft) {
+    throw new ConflictError(`Question "${args.correlationId}" is no longer pending`, {
+      "question.status": "superseded",
+      "question.supersede_reason": "asker_left_chat",
+    });
+  }
+  const questionRow = txResult.row;
 
   // Step 5: send the answer message. By the time we get here we hold an
   // exclusive claim on the row (any concurrent submitter is now seeing
@@ -206,12 +242,25 @@ export async function submitAnswer(
 
   let result: Awaited<ReturnType<typeof sendMessage>>;
   try {
-    result = await sendMessage(db, args.chatId, args.submitterAgentId, {
-      format: "question_answer",
-      content: answerContent,
-      inReplyTo: questionRow.messageId,
-      source: "hub_ui",
-    });
+    result = await sendMessage(
+      db,
+      args.chatId,
+      args.submitterAgentId,
+      {
+        format: "question_answer",
+        content: answerContent,
+        inReplyTo: questionRow.messageId,
+        source: "hub_ui",
+      },
+      // This `question_answer` is addressed to the asker by construction —
+      // the answer's structured content carries no `@<name>` tokens, so
+      // without an explicit recipient hint the default fan-out rule would
+      // set notify=false for the asker if the chat upgraded `direct → group`
+      // between question publish and answer (which re-grades non-human
+      // speakers to `mention_only`), leaving the SDK's `canUseTool` Promise
+      // dangling forever. See issue #404.
+      { addressedToAgentIds: [questionRow.agentId] },
+    );
   } catch (err) {
     // Best-effort revert: status was flipped to 'answered' but we never
     // emitted the answer message, so the agent would never see the answer

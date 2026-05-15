@@ -7,7 +7,7 @@ import type {
   SessionState,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { deriveRepoLocalPath } from "@agent-team-foundation/first-tree-hub-shared";
-import { tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
+import { hasPendingForChat, tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
@@ -663,12 +663,28 @@ export class SessionManager {
     // Blocked detection — 2 minutes without activity while session is active
     const blockedThresholdMs = 120_000;
     const now = Date.now();
+    const agentId = this.config.agentIdentity.agentId;
 
     for (const [, session] of this.sessions) {
       if (session.status !== "active") continue;
       const inactiveMs = now - session.lastActivity;
 
       if (inactiveMs > timeoutMs) {
+        // #418: when an AskUserQuestion is in flight, suspending tears down
+        // the SDK transport and silently drops the bridge entry — the
+        // eventual answer then arrives with no live waiter and the asker
+        // session is permanently stuck. Skip the suspend so the awaiter
+        // can resolve through the live-bridge path. `lastActivity` still
+        // ticks forward on inject, so a runaway pending entry is bounded
+        // by the supersede paths (chat archive / client claim) rather
+        // than by idle eviction.
+        if (hasPendingForChat(agentId, session.chatId)) {
+          this.config.log.info(
+            { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
+            "session idle but AskUserQuestion in flight — skipping suspend",
+          );
+          continue;
+        }
         this.config.log.info(
           { chatId: session.chatId, idleTimeoutSec: this.config.session.idle_timeout },
           "session idle, suspending",
