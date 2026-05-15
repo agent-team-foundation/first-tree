@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
@@ -37,6 +38,10 @@ describe("agent context tree info route", () => {
         role: "admin",
       });
     });
+    await app.db
+      .update(members)
+      .set({ createdAt: new Date(Date.now() + 1_000) })
+      .where(eq(members.id, admin.memberId));
 
     const sideClientId = await seedClient(app, admin.userId, sideOrgId);
     const sideAgent = await createAgent(app.db, {
