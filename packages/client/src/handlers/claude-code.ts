@@ -41,7 +41,7 @@ import type {
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireWorkspace, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
-import { clearPendingForAgent, registerPendingQuestion, rejectPendingForAgent } from "./ask-user-bridge.js";
+import { clearPendingForChat, registerPendingQuestion, rejectPendingForChat } from "./ask-user-bridge.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
@@ -571,7 +571,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (options.signal.aborted) {
         // The query was aborted while we were waiting (eviction, restart,
         // hot-switch). The bridge entry has already been removed by
-        // `rejectPendingForAgent`; just return a deny so the SDK unwinds.
+        // `rejectPendingForChat`; just return a deny so the SDK unwinds.
         return {
           behavior: "deny",
           message: "AskUserQuestion aborted before an answer arrived.",
@@ -1079,7 +1079,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // (the answer becomes regular input on the next turn).
       const sessionCtx = ctx;
       if (sessionCtx) {
-        const dropped = clearPendingForAgent(sessionCtx.agent.agentId);
+        const dropped = clearPendingForChat(sessionCtx.agent.agentId, sessionCtx.chatId);
         if (dropped > 0) sessionCtx.log(`Cleared ${dropped} pending AskUserQuestion entries on suspend`);
       }
 
@@ -1110,7 +1110,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // resolve. The supersede happens server-side via archiveSession /
       // claimClient (commit 2); this is the local-process counterpart.
       if (sessionCtx) {
-        const dropped = rejectPendingForAgent(sessionCtx.agent.agentId, "Session shutting down.");
+        const dropped = rejectPendingForChat(sessionCtx.agent.agentId, sessionCtx.chatId, "Session shutting down.");
         if (dropped > 0) sessionCtx.log(`Rejected ${dropped} pending AskUserQuestion entries during shutdown`);
       }
       // PRD §7.5: shutdown is session termination (explicit terminate,
