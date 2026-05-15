@@ -40,6 +40,25 @@ export async function deliverNormalizedEvent(
   for (const target of audience) {
     try {
       const resolved = await resolveChatFor(app, event, target);
+      if (!resolved) {
+        // Creation-event guard fired: opened webhook had no existing mapping
+        // and no explicit mention for this target, so we drop the event for
+        // this target rather than inventing a chat. Other targets in the
+        // audience may still receive the card.
+        log.info(
+          {
+            humanAgent: target.humanAgentId,
+            delegateAgent: target.delegateAgentId,
+            entityType: event.entity.type,
+            entityKey: event.entity.key,
+            eventType: event.rawEventType,
+            action: event.rawAction,
+            reason: "creation_event_no_mapping_no_mention",
+          },
+          "webhook_dropped_creation",
+        );
+        continue;
+      }
       if (resolved.created) stats.newChats += 1;
 
       const card = buildCard(event, target);
@@ -82,7 +101,7 @@ async function resolveChatFor(
   app: FastifyInstance,
   event: NormalizedEvent,
   target: AudienceTarget,
-): Promise<ResolvedChat> {
+): Promise<ResolvedChat | null> {
   if (target.kind === "existing") {
     if (!target.chatId) {
       throw new Error("audience target kind=existing must carry chatId");
@@ -107,7 +126,14 @@ async function resolveChatFor(
     relatedEntities,
     eventType: event.rawEventType,
     action: event.rawAction ?? "",
+    // `kind: "new"` audience targets come from explicit mentions / involves
+    // in the event payload — these are the only path allowed to mint a fresh
+    // chat for an opened creation event. Subscription targets never reach
+    // resolveTargetChat (`kind: "existing"` short-circuits above), but the
+    // guard is still wired so any future caller is safe by default.
+    isMentionMatched: true,
   });
+  if (!resolved) return null;
   return { chatId: resolved.chatId, created: resolved.created };
 }
 

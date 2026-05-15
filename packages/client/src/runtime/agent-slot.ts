@@ -13,7 +13,7 @@ import type { RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
 import type { ContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
-import { createGitMirrorManager } from "./git-mirror-manager.js";
+import type { GitMirrorManager } from "./git-mirror-manager.js";
 import type { HandlerFactory } from "./handler.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -28,6 +28,13 @@ export type AgentSlotConfig = {
   concurrency: number;
   /** Shared client connection (always present in unified-user-token milestone). */
   clientConnection: ClientConnection;
+  /**
+   * Shared across every AgentSlot on the same runtime. The manager's per-URL
+   * serial queue (`withUrlLock`) is the only thing that prevents two agents on
+   * the same chat from racing on `git worktree add` against the shared bare
+   * mirror's `config` file — so a per-slot instance is wrong by construction.
+   */
+  gitMirrorManager: GitMirrorManager;
   runtimeType?: string;
   runtimeVersion?: string;
 };
@@ -136,13 +143,10 @@ export class AgentSlot {
 
     const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${this.config.name}.json`);
 
-    // Shared bare-mirror root across all agents of this client runtime — the
-    // directory layout hashes by URL so concurrent agents on the same repo
-    // reuse the same mirror (PRD §5.1.5).
-    const gitMirrorManager = createGitMirrorManager({
-      dataDir: DEFAULT_DATA_DIR,
-      log: createLogger("git-mirror").child({ agentName: this.config.name, agentId: this.config.agentId }),
-    });
+    // The runtime owns the GitMirrorManager and injects it here — sharing one
+    // manager across slots is what makes `withUrlLock` actually serialise
+    // concurrent worktree adds for the same URL (PRD §5.1.5).
+    const gitMirrorManager = this.config.gitMirrorManager;
 
     // Ack is fire-and-forget over WS: `ws.send` doesn't block on flush and
     // SessionManager treats ack as advisory. Wrap in a resolved Promise so
