@@ -24,9 +24,6 @@ import { silentLogger } from "./_logger-helpers.js";
 function mockSdk(): FirstTreeHubSDK {
   return {
     register: vi.fn(),
-    pull: vi.fn(),
-    ack: vi.fn().mockResolvedValue(undefined),
-    renew: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
     sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
   } as unknown as FirstTreeHubSDK;
@@ -42,7 +39,11 @@ function createMockHandler(): AgentHandler {
   };
 }
 
-function createSessionManager(handler: AgentHandler, sdk: FirstTreeHubSDK) {
+function createSessionManager(
+  handler: AgentHandler,
+  sdk: FirstTreeHubSDK,
+  ackEntry: (entryId: number) => Promise<void>,
+) {
   const factory: HandlerFactory = () => handler;
   return new SessionManager({
     session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
@@ -59,6 +60,7 @@ function createSessionManager(handler: AgentHandler, sdk: FirstTreeHubSDK) {
     },
     sdk,
     log: silentLogger(),
+    ackEntry,
   });
 }
 
@@ -106,7 +108,8 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
   it("resolves the bridge waiter and acks the entry without invoking the handler", async () => {
     const handler = createMockHandler();
     const sdk = mockSdk();
-    const sm = createSessionManager(handler, sdk);
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = createSessionManager(handler, sdk, ackEntry);
 
     const waiter = registerPendingQuestion({
       correlationId: "tu_abc",
@@ -129,7 +132,7 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
       answers: { "Should I proceed?": "Yes" },
     });
     expect(pendingQuestionCount()).toBe(0);
-    expect(sdk.ack).toHaveBeenCalledWith(99);
+    expect(ackEntry).toHaveBeenCalledWith(99);
     expect(handler.start).not.toHaveBeenCalled();
     expect(handler.resume).not.toHaveBeenCalled();
     expect(handler.inject).not.toHaveBeenCalled();
@@ -140,7 +143,8 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
   it("falls through to normal dispatch when no waiter is registered (stale answer after suspend)", async () => {
     const handler = createMockHandler();
     const sdk = mockSdk();
-    const sm = createSessionManager(handler, sdk);
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = createSessionManager(handler, sdk, ackEntry);
 
     await sm.dispatch(
       makeAnswerEntry({
@@ -157,9 +161,8 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
     // (this chat had no prior session row, so dispatch creates one).
     expect(handler.start).toHaveBeenCalledTimes(1);
     // The handler's start ackEntry path eventually acks; we verify ack
-    // happens at least once. Exact timing depends on the ack-channel
-    // configuration but the contract is "entry must not stay pending".
-    expect(sdk.ack).toHaveBeenCalledWith(100);
+    // happens at least once.
+    expect(ackEntry).toHaveBeenCalledWith(100);
 
     await sm.shutdown();
   });

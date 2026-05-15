@@ -4,7 +4,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { ForbiddenError, NotFoundError } from "../errors.js";
+import { ForbiddenError } from "../errors.js";
 import { FIRST_TREE_HUB_ATTR, withSpan } from "../observability/index.js";
 import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 
@@ -13,7 +13,7 @@ import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 type ClaimedEntry = typeof inboxEntries.$inferSelect;
 
 /** Structurally-typed DB so both `Database` and transaction clients work. */
-type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete">;
+type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete" | "insert">;
 
 const DEFAULT_INBOX_TIMEOUT_SECONDS = 300;
 const DEFAULT_MAX_RETRY_COUNT = 3;
@@ -30,6 +30,67 @@ const DEFAULT_MAX_RETRY_COUNT = 3;
  */
 export const PRECEDING_CONTEXT_MAX_ENTRIES = 50;
 export const PRECEDING_CONTEXT_WINDOW_SECONDS = 24 * 60 * 60;
+
+/**
+ * Backfill the most recent `PRECEDING_CONTEXT_MAX_ENTRIES` messages of `chatId`
+ * as silent (notify=false) inbox rows for every new participant. Called from
+ * `addParticipant()` inside the participant-insert transaction so a freshly
+ * added member already has prior chat history available the first time they
+ * are woken (mentioned / `chat send`-ed).
+ *
+ * Invariants the implementation upholds:
+ *
+ *   - **`notify=false` everywhere**: adding a participant is not itself a
+ *     wake event. The new participant only runs the LLM when an actual
+ *     trigger lands later; the backfill rows then piggy-back as preceding
+ *     context (see `collectPrecedingContext`).
+ *   - **Old members are not woken**: only inbox rows for the brand-new
+ *     participants are written.
+ *   - **Transaction-scoped**: writes go through the caller's `tx`, so a
+ *     rollback of `addParticipant` rolls the backfill back too.
+ *   - **Quiet on chats with no prior history**: a chat with zero messages
+ *     produces zero backfill rows; no error, no INSERT.
+ *   - **Idempotent**: collides cleanly on the
+ *     `(inbox_id, message_id, chat_id)` unique key via
+ *     `ON CONFLICT DO NOTHING`. This matters when a watcher → speaker
+ *     promotion already had inbox rows for some of these messages.
+ *
+ * Pure data write — no PG NOTIFY, no participant-mode logic, no watcher
+ * recompute. Callers stay responsible for those.
+ *
+ * **Caller responsibility — bulk batching**: writes a single
+ * `INSERT VALUES (...)` of `newParticipants.length * PRECEDING_CONTEXT_MAX_ENTRIES`
+ * tuples. v1's only caller (`addParticipant`) always passes 1 participant
+ * (≤ 50 rows). Future bulk-add paths (sub-chat / spawn / etc.) should split
+ * input into chunks (suggested: ≤ 512 rows per call) before passing here.
+ *
+ * See proposals/hub-chat-message-v1-design §四 改造 2.
+ */
+export async function backfillSilentContextForNewParticipants(
+  tx: TxLike,
+  chatId: string,
+  newParticipants: ReadonlyArray<{ inboxId: string }>,
+): Promise<void> {
+  if (newParticipants.length === 0) return;
+
+  const recent = await tx
+    .select({ id: messages.id })
+    .from(messages)
+    .where(eq(messages.chatId, chatId))
+    .orderBy(desc(messages.createdAt))
+    .limit(PRECEDING_CONTEXT_MAX_ENTRIES);
+
+  if (recent.length === 0) return;
+
+  const rows: Array<{ inboxId: string; messageId: string; chatId: string; notify: boolean }> = [];
+  for (const p of newParticipants) {
+    for (const m of recent) {
+      rows.push({ inboxId: p.inboxId, messageId: m.id, chatId, notify: false });
+    }
+  }
+
+  await tx.insert(inboxEntries).values(rows).onConflictDoNothing();
+}
 
 export async function pollInbox(db: Database, inboxId: string, limit: number) {
   return withSpan("inbox.deliver", { "inbox.id": inboxId, "inbox.poll.limit": limit }, () =>
@@ -68,7 +129,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
 /**
  * Shared payload assembler for already-claimed `inbox_entries` rows.
  *
- * Both the HTTP poll path (`pollInbox`) and the WS push path
+ * Both the debug `GET /inbox` path (`pollInbox`) and the WS push path
  * (`claimAndBuildForPush`) call this with rows they have just `UPDATE`d to
  * `status='delivered'`. Keeping the silent-context bundling in one place is
  * the only way to keep the two paths from drifting (proposal
@@ -164,9 +225,9 @@ const PUSH_CLAIM_BATCH_LIMIT = 8;
  * WS-push path: atomically claim every pending entry the just-fired
  * `NOTIFY (inboxId:messageId)` references and assemble their wire payloads.
  *
- * Returns `[]` if no row matches — benign race with HTTP poll or another
- * server instance that already claimed the entry. NOTIFY is fire-and-forget
- * (proposal §3.2).
+ * Returns `[]` if no row matches — benign race with another server instance
+ * (or the debug `GET /inbox` endpoint) that already claimed the entry.
+ * NOTIFY is fire-and-forget (proposal §3.2).
  *
  * Why an array, not a single row: `sendMessage` can write **two** rows for
  * the same `(inbox, messageId)` pair when the recipient is both a chat
@@ -212,9 +273,9 @@ export async function claimAndBuildForPush(
 /**
  * WS-push backlog path: on agent rebind (or once an in-flight slot frees up
  * after an ack), drain up to `limit` pending `notify=true` entries oldest-
- * first and assemble wire payloads. Identical claim shape to the HTTP poll
- * path — they are intentionally interchangeable so a hot-path bug fixed in
- * one shows up in the other (proposal §3.3 / §3.5).
+ * first and assemble wire payloads. Identical claim shape to `pollInbox` —
+ * they are intentionally interchangeable so a hot-path bug fixed in one
+ * shows up in the other (proposal §3.3 / §3.5).
  */
 export async function claimBacklogForPush(
   db: Database,
@@ -267,6 +328,14 @@ async function collectPrecedingContext(
     // mark them acked anyway, so the agent would silently lose the messages
     // that mattered most.
     //
+    // We sort by `messages.createdAt` rather than `inboxEntries.createdAt`
+    // because `addParticipant`'s backfill writes 50 inbox rows in one
+    // `INSERT VALUES (...)` — they all share `statement_timestamp()`. The
+    // message rows themselves have distinct, monotonic timestamps (uuidv7
+    // ids are time-ordered, `messages.created_at` is the authoritative
+    // chronology), so ordering by the joined message timestamp is the only
+    // stable contract the prompt-rendered context can rely on.
+    //
     // Concurrency: `FOR UPDATE OF inboxEntries SKIP LOCKED` prevents two
     // parallel polls on the same inbox from bundling the same silent row
     // twice. Without it, poll A picking trigger T1 and poll B picking T2
@@ -297,7 +366,7 @@ async function collectPrecedingContext(
             sql`${inboxEntries.createdAt} > NOW() - make_interval(secs => ${PRECEDING_CONTEXT_WINDOW_SECONDS})`,
           ),
         )
-        .orderBy(desc(inboxEntries.createdAt))
+        .orderBy(desc(messages.createdAt))
         .limit(PRECEDING_CONTEXT_MAX_ENTRIES)
         .for("update", { of: inboxEntries, skipLocked: true });
 
@@ -340,37 +409,14 @@ async function collectPrecedingContext(
   return result;
 }
 
-export async function ackEntry(db: Database, entryId: number, inboxId: string) {
-  return withSpan(
-    "inbox.ack",
-    { [FIRST_TREE_HUB_ATTR.INBOX_ENTRY_ID]: String(entryId), "inbox.id": inboxId },
-    async () => {
-      const [entry] = await db
-        .update(inboxEntries)
-        .set({ status: "acked", ackedAt: new Date() })
-        .where(
-          and(eq(inboxEntries.id, entryId), eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "delivered")),
-        )
-        .returning();
-
-      if (!entry) {
-        throw new NotFoundError("Inbox entry not found or not in delivered status");
-      }
-
-      return entry;
-    },
-  );
-}
-
 /**
  * Ack a delivered entry from the WS data plane, scoped to the inboxes the
  * connected socket has bound. Returns the acked row on success, `null` if no
  * row matches — a benign outcome the caller should ignore (the entry may
  * have already been acked, timed out, or never belonged to this socket).
  *
- * Distinct from {@link ackEntry} so the WS path can ack without trusting an
- * `inboxId` from the wire — only entries whose `inboxId` is in `inboxIds`
- * are eligible. Empty `inboxIds` short-circuits to `null`.
+ * Trusts only the `inboxId` set the connected socket has bound (no `inboxId`
+ * on the wire), and short-circuits on an empty `inboxIds`.
  */
 export async function ackEntryByIdForBoundAgents(
   db: Database,
@@ -392,20 +438,6 @@ export async function ackEntryByIdForBoundAgents(
       .returning();
     return entry ?? null;
   });
-}
-
-export async function renewEntry(db: Database, entryId: number, inboxId: string) {
-  const [entry] = await db
-    .update(inboxEntries)
-    .set({ deliveredAt: new Date() })
-    .where(and(eq(inboxEntries.id, entryId), eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "delivered")))
-    .returning();
-
-  if (!entry) {
-    throw new NotFoundError("Inbox entry not found or not in delivered status");
-  }
-
-  return entry;
 }
 
 export async function resetTimedOutEntries(

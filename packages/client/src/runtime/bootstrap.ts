@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
+import type { ChatContext } from "./chat-context.js";
 import type { AgentIdentity } from "./handler.js";
 
 const CONTEXT_TREE_REPOS_DIR = join(DEFAULT_DATA_DIR, "context-tree-repos");
@@ -200,6 +201,14 @@ export type BootstrapOptions = {
   serverUrl: string;
   chatId: string;
   /**
+   * Narrow chat-level identity block (topic + participants + optional owner)
+   * fetched by the handler before calling this function. Optional so a
+   * failed fetch degrades to the no-section path: identity.json drops the
+   * field and CLAUDE.md / AGENTS.md never get the "Current Chat Context"
+   * block. See proposals/hub-chat-message-v1-design §四 改造 3.
+   */
+  chatContext?: ChatContext;
+  /**
    * Provider-specific runtime briefing materialised at the workspace root.
    * `agents-md` writes `AGENTS.md` (Codex reads it from the project root via
    * the marker); `claude` is a no-op file-write because Claude Code receives
@@ -218,7 +227,7 @@ export type BootstrapOptions = {
  * and on resume().
  */
 export function bootstrapWorkspace(options: BootstrapOptions): void {
-  const { workspacePath, identity, contextTreePath, serverUrl, chatId, briefing } = options;
+  const { workspacePath, identity, contextTreePath, serverUrl, chatId, chatContext, briefing } = options;
   const agentDir = join(workspacePath, ".agent");
   const contextDir = join(agentDir, "context");
 
@@ -238,6 +247,7 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
     chatId,
     serverUrl,
     contextTreePath,
+    ...(chatContext ? { chatContext } : {}),
   };
   writeFileSync(join(agentDir, "identity.json"), JSON.stringify(identityData, null, 2), "utf-8");
 
@@ -383,22 +393,51 @@ You are running inside **Agent Hub**, a messaging platform for agent teams.
 
 - Messages from other team members arrive as your prompt input. Each message has a
   \`[From: <agent-name>]\` header — that name is what you pass back to \`chat send\`.
-- **Your final text response is automatically delivered** to the chat — just respond normally.
+- **Your final response text is delivered to the chat for human observers to read.
+  It does NOT wake other agents.** To make another agent take action, use
+  \`first-tree-hub chat send <name>\` explicitly (see "Communication Rules" below).
 - **Stay silent when you have nothing to add.** Not every message needs a reply.
   If you have nothing new for the recipient, output nothing and the runtime ends the turn.
 - For **proactive communication** (other agents, other chats, or different format),
   use the \`first-tree-hub\` CLI below.
+
+## Communication Rules
+
+Your final response text is delivered to the chat for **human observers**
+to read. It does NOT wake other agents.
+
+To make another agent take action, you MUST explicitly call:
+
+    first-tree-hub chat send <name> "..."
+
+Decision guide (based on participant \`type\` in the Current Chat Context block):
+
+- Target is a **human** in this chat → your final text is enough; do not
+  redundantly chat send (it just adds noise).
+- Target is an **agent** in this chat → they will NOT see your final text
+  as a wake signal. You MUST chat send <name> if you need them to act.
+- No specific target (just narrating progress / thinking aloud) → final
+  text only; no send needed.
+
+**Fallback** (if Current Chat Context block is missing — context injection
+may have failed): use conservative mode — all cross-agent collaboration
+goes through explicit \`chat send\`; do not rely on final text to wake
+anyone.
 
 ## Sending Messages
 
 The CLI auto-reads its config from env — no setup needed.
 
 \`\`\`bash
-# Send to an agent by NAME (uuids are NOT accepted — run \`first-tree-hub agent list\` for names)
+# Send to an agent by NAME (uuids are NOT accepted — run \`first-tree-hub agent list\` for names).
+# Routing: the recipient MUST be a participant of your current chat — the message
+# lands in that chat. If they are NOT a member the call ERRORS with a hint. To open
+# a side-conversation with a non-member, use the --direct flag explicitly.
 first-tree-hub chat send <agentName> "your message"
 
-# Address a specific chat (only when not your current chat)
-first-tree-hub chat send --chat <chatId> "your message"
+# Open or reuse a direct chat with the recipient (bypass the member check).
+# Use only when intentionally starting a side conversation with a non-member.
+first-tree-hub chat send --direct <agentName> "your message"
 
 # Markdown format (default is text)
 first-tree-hub chat send <agentName> -f markdown "**bold**"
@@ -409,6 +448,17 @@ first-tree-hub chat send <agentName> --reply-to <messageId> "reply"
 # Pipe long / multiline content via stdin
 echo "long body" | first-tree-hub chat send <agentName>
 \`\`\`
+
+**Reaching another agent — pick the right flag**:
+
+- **Same chat member** → \`chat send <agentName> "..."\` (no flag).
+- **Non-member** → \`chat send --direct <agentName> "..."\`. The CLI opens (or
+  reuses) the direct chat AND auto-mentions the recipient so they actually wake.
+
+The CLI **only addresses agents by name**. You cannot route by chat-id from
+this command, and \`@<name>\` in your content only resolves against the chat
+you are currently in — naming someone who is not a member is rejected so a
+silent-drop misroute is impossible.
 
 **Content rules (important):**
 

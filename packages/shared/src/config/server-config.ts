@@ -72,19 +72,9 @@ export const serverConfigSchema = defineConfig({
   // (webhook secret / allowed org) used to live here as global config.
   // They are now per-org settings in the `organization_settings` table —
   // admins configure them through Team Settings. See issue #255.
-  contextTreeSync: optional({
-    /**
-     * Deployment-level read credential used only by the server-managed Context
-     * Tree mirror. Repo and branch remain per-org settings.
-     */
-    githubToken: field(z.string(), {
-      env: "FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN",
-      secret: true,
-    }),
-    githubTokenRepos: field(z.string().optional(), {
-      env: "FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN_REPOS",
-    }),
-  }),
+  // The server-managed Context Tree mirror mints a per-org GitHub App
+  // installation token at request time (see `services/github-app-token.ts`);
+  // no global token belongs here.
   oauth: optional({
     /**
      * GitHub App credentials — the sign-in surface introduced by PR 2/3 of
@@ -200,11 +190,13 @@ export const serverConfigSchema = defineConfig({
      * ack arrives — leftover entries stay `pending` in the DB and get
      * replayed via the post-ack backlog scan. See proposal §3.5.
      *
-     * The WS data plane itself is always on; cross-version compatibility is
-     * handled by the per-socket `wireCapabilities.wsInboxDeliver` opt-in
-     * negotiated during `client:register` (proposal §3.6). An old client
-     * that doesn't send the flag automatically gets the legacy `new_message`
-     * doorbell + HTTP poll; a new client gets push frames.
+     * The WS data plane is the only delivery path on this server build. The
+     * legacy `new_message` doorbell + HTTP poll fallback was removed in
+     * `@agent-team-foundation/first-tree-hub@0.14.3`. Clients older than
+     * 0.10.4 (before the WS push data plane was introduced) are no longer
+     * supported; clients in 0.10.4 ~ 0.14.2 continue to work because they
+     * read `server:welcome.capabilities.wsInboxDeliver` to skip their own
+     * poll path on bootstrap.
      */
     maxInFlightPerAgent: field(z.number().int().min(1).max(1024).default(32), {
       env: "FIRST_TREE_HUB_INBOX_MAX_IN_FLIGHT_PER_AGENT",

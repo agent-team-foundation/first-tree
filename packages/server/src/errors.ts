@@ -81,3 +81,18 @@ export class ClientUserMismatchError extends AppError {
     this.name = "ClientUserMismatchError";
   }
 }
+
+/**
+ * v1 §四 改造 1: `chat send <name>` was implicitly opening a direct chat
+ * whenever the target wasn't a member of the caller's current chat (issue
+ * #311). That auto-routing now requires `--direct`; otherwise the call
+ * fails with this error and a hint pointing at both the `--direct` escape
+ * hatch and the "ask a human in this chat to add the agent" workflow.
+ */
+export class AgentSendNonMemberError extends AppError {
+  readonly code = "AGENT_SEND_NON_MEMBER";
+  constructor(message: string, attrs?: AppErrorAttrs) {
+    super(400, message, attrs);
+    this.name = "AgentSendNonMemberError";
+  }
+}

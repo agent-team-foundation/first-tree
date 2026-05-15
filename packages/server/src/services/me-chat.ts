@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type AddMeChatParticipants,
+  AGENT_VISIBILITY,
   CHAT_ENGAGEMENT_STATUSES,
   type ChatEngagementStatus,
   type ChatEngagementView,
@@ -45,7 +46,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
-import { BadRequestError, NotFoundError } from "../errors.js";
+import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { addChatParticipants, changeChatType } from "./participant-mode.js";
@@ -381,6 +382,13 @@ export async function listMeChats(
       displayName: p.displayName,
       type: p.type,
       avatarColorToken: p.avatarColorToken,
+      // Chat list intentionally retains the agent-only avatar path — it
+      // does NOT fall back to `users.avatar_url` for human participants.
+      // The detail-view surfaces (message bubbles, ParticipantsHeader)
+      // use `resolveAvatarImageUrl` via `/agents` / `/me/managed-agents`
+      // and DO honor the human → GitHub fallback. Keep the chat row
+      // unchanged so the existing visual contract (first-letter / hue
+      // for humans without an upload) stays stable.
       avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt),
     });
     participantsByChat.set(p.chatId, list);
@@ -574,10 +582,10 @@ export function toLiveActivity(row: {
  *   2. First message summary (auto, ≤ 50 chars from `extractSummary`)
  *   3. Participant join (fallback when chat has no messages yet)
  */
-export function resolveChatTitle(
+export function resolveChatTitle<P extends { agentId: string; displayName: string }>(
   topic: string | null,
   firstMessageSummary: string | null,
-  participants: MeChatRow["participants"],
+  participants: ReadonlyArray<P>,
   selfAgentId: string,
 ): string {
   if (topic && topic.length > 0) return topic;
@@ -605,7 +613,13 @@ export async function createMeChat(
 
   const allIds = [humanAgentId, ...distinctIds];
   const found = await db
-    .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
+    .select({
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      visibility: agents.visibility,
+      managerId: agents.managerId,
+    })
     .from(agents)
     .where(inArray(agents.uuid, allIds));
 
@@ -617,6 +631,24 @@ export async function createMeChat(
   const crossOrg = found.filter((a) => a.organizationId !== organizationId);
   if (crossOrg.length > 0) {
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.uuid).join(", ")}`);
+  }
+
+  // Owner-exclusive rule for private agents (creation path, mirroring
+  // the add-participant gate in `addMeChatParticipants`). The caller
+  // agent's `managerId` is its owning member — looking it up from
+  // `found` (rather than accepting it as a parameter) keeps the
+  // owner-id source-of-truth inside the service. RFC §4.4.2 / §4.5.
+  const caller = found.find((a) => a.uuid === humanAgentId);
+  if (!caller) {
+    throw new BadRequestError("Caller agent not found in the chat's organization");
+  }
+  const privateNotOwned = found.filter(
+    (a) => a.uuid !== humanAgentId && a.visibility === AGENT_VISIBILITY.PRIVATE && a.managerId !== caller.managerId,
+  );
+  if (privateNotOwned.length > 0) {
+    throw new ForbiddenError(
+      `Only the owner can add a private agent to a chat: ${privateNotOwned.map((a) => a.uuid).join(", ")}`,
+    );
   }
 
   const chatType = distinctIds.length === 1 ? "direct" : "group";
@@ -686,9 +718,18 @@ export async function addMeChatParticipants(
   if (chat.organizationId !== callerOrganizationId) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
   }
+  // Resolve caller's chat-membership AND owner member-id in one query.
+  // The owner member-id is the authoritative input to the
+  // owner-exclusive check below — deriving it from the caller agent's
+  // `managerId` (rather than accepting it as a parameter) prevents an
+  // internal caller from mismatching the two and bypassing the check.
+  // Works regardless of caller agent type: a human agent's managerId
+  // is its own member; an autonomous/personal_assistant agent's
+  // managerId is the member that owns it.
   const [callerRow] = await db
-    .select({ chatId: chatMembership.chatId })
+    .select({ ownerMemberId: agents.managerId })
     .from(chatMembership)
+    .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
     .where(
       and(
         eq(chatMembership.chatId, chatId),
@@ -700,9 +741,16 @@ export async function addMeChatParticipants(
   if (!callerRow) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
   }
+  const callerMemberId = callerRow.ownerMemberId;
 
   const found = await db
-    .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
+    .select({
+      uuid: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      visibility: agents.visibility,
+      managerId: agents.managerId,
+    })
     .from(agents)
     .where(inArray(agents.uuid, distinct));
 
@@ -714,6 +762,25 @@ export async function addMeChatParticipants(
   const crossOrg = found.filter((a) => a.organizationId !== chat.organizationId);
   if (crossOrg.length > 0) {
     throw new BadRequestError(`Cross-organization participant rejected: ${crossOrg.map((a) => a.uuid).join(", ")}`);
+  }
+
+  // Owner-exclusive rule for private agents. Only the agent's manager
+  // (the owner) can pull a private agent into a chat — inviting it into
+  // the chat is the owner's own scoped "consent" to expose it to other
+  // members. Mirrors the "邀请即同意 / Owner-exclusive" property in
+  // `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.4.2 /
+  // §4.5, and prevents anyone with an agent's UUID from bypassing the
+  // discovery filter to drop someone else's private agent into a chat.
+  // Living at the service layer (not just the API caller-side
+  // `assertAllAgentsVisibleInOrg` gate) so the invariant holds for any
+  // future entrypoint that builds on this service.
+  const privateNotOwned = found.filter(
+    (a) => a.visibility === AGENT_VISIBILITY.PRIVATE && a.managerId !== callerMemberId,
+  );
+  if (privateNotOwned.length > 0) {
+    throw new ForbiddenError(
+      `Only the owner can add a private agent to a chat: ${privateNotOwned.map((a) => a.uuid).join(", ")}`,
+    );
   }
 
   await db.transaction(async (tx) => {

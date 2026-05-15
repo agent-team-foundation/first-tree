@@ -9,9 +9,11 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const sender = await createTestAgent(app, { name: "flow-sender" });
     const receiver = await createTestAgent(app, { name: "flow-receiver" });
 
+    // v1 §四 改造 1: opening a side-chat with a non-member needs `direct: true`.
     const sendRes = await sender.request("POST", `/api/v1/agent/agents/${receiver.agent.name}/messages`, {
       format: "text",
       content: "Hello from sender",
+      direct: true,
     });
     expect(sendRes.statusCode).toBe(201);
     const sentMessage = sendRes.json();
@@ -63,6 +65,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
       await a1.request("POST", `/api/v1/agent/agents/${target.name}/messages`, {
         format: "text",
         content: `hi ${target.name}`,
+        direct: true,
       });
     }
 
@@ -86,6 +89,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const firstMsg = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
       format: "text",
       content: "msg-1",
+      direct: true,
     });
     const chatId = firstMsg.json().chatId as string;
 
@@ -116,6 +120,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const sendRes = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
       format: "text",
       content: "private",
+      direct: true,
     });
     const chatId = sendRes.json().chatId as string;
 
@@ -131,6 +136,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const res = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
       format: "markdown",
       content: "## Hello\n\nThis is **bold**",
+      direct: true,
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().format).toBe("markdown");
@@ -148,6 +154,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
       format: "text",
       content: "approval needed",
       metadata: { intent: "approval", urgency: "high" },
+      direct: true,
     });
     expect(res.statusCode).toBe(201);
     const msg = res.json();

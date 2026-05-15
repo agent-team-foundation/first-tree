@@ -149,9 +149,13 @@ describe("sendMessage returns recipients", () => {
     const { agent: a2 } = await createTestAgent(app, { name: `recip-dm2-${crypto.randomUUID().slice(0, 6)}` });
     if (!a2.name) throw new Error("Expected a2.name to be set");
 
+    // No shared chat exists between a1 and a2; with v1 §四 改造 1 the
+    // non-member path requires `direct: true` to fall through to
+    // findOrCreateDirectChat.
     const result = await sendToAgent(app.db, a1.uuid, a2.name, {
       format: "text",
       content: "direct message",
+      direct: true,
     });
 
     expect(result.message).toBeDefined();

@@ -41,8 +41,9 @@ function normaliseMode(mode: string | null | undefined): ParticipantMode {
  * a client must funnel through here so `configVersion` is always present and
  * always reflects the current `agent_configs.version`.
  *
- * Inputs may be either an `inboxId` (HTTP poll path) or an `agentId`
- * (direct-send paths). Both resolve to the same agent-config lookup.
+ * Inputs may be either an `inboxId` (inbox claim paths — push and the debug
+ * `GET /inbox`) or an `agentId` (direct-send paths). Both resolve to the
+ * same agent-config lookup.
  *
  * `entryChatId` is the chat this payload is routed to on the receiver side
  * — often equal to `message.chatId`, but in `replyTo` routing the original

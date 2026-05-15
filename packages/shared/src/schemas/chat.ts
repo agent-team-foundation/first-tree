@@ -79,7 +79,18 @@ export const chatSchema = z.object({
 export type Chat = z.infer<typeof chatSchema>;
 
 export const chatDetailSchema = chatSchema.extend({
-  participants: z.array(chatParticipantSchema),
+  /**
+   * Participants with `name / displayName / type` resolved via JOIN
+   * `agents`, intentionally **not** filtered by agent visibility. The
+   * authoritative trust boundary in a chat-scoped query is
+   * `chat_membership`, not org-level discovery — see
+   * `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
+   * The client renders chat-internal identity (mention autocomplete,
+   * participant chips, message sender name) off this field so a private
+   * agent that is a member of the chat shows its real name to every
+   * other member, not a UUID prefix.
+   */
+  participants: z.array(chatParticipantDetailSchema),
   /** Server-resolved display title. Priority: `topic` > first message
    *  preview > participant join. Clients should render this directly
    *  rather than re-implementing the fallback chain. */

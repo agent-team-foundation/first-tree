@@ -45,7 +45,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    const detail = await chatService.getChatDetail(app.db, request.params.chatId);
+    const detail = await chatService.getChatDetail(app.db, request.params.chatId, identity.uuid);
     return {
       ...serializeChat(detail),
       participants: detail.participants.map((p) => ({

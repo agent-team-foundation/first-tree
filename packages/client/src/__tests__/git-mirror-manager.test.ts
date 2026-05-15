@@ -343,6 +343,53 @@ describe("GitMirrorManager — crash recovery", () => {
     expect(tryGitIn(mirrorPath, "rev-parse --verify --quiet refs/remotes/origin/HEAD").ok).toBe(true);
   });
 
+  it("prunes a stale worktree registration before re-creating at the same path", async () => {
+    // PR #393 dogfood: the bare mirror retained a "prunable" worktree
+    // admin record after an external `rm -rf` of the worktree directory.
+    // Subsequent `git worktree add -b <newBranch> <samePath> ...` failed
+    // with `fatal: '<path>' is a missing but already registered worktree`.
+    // The fix runs `git worktree prune` inside `createWorktree` so dead
+    // records are cleared before the add attempt.
+    //
+    // Setup: create a worktree, rm -rf the dir WITHOUT running prune
+    // (mimics the dogfood crash), then call `createWorktree` for a
+    // DIFFERENT sessionKey/branch at the same path. Without the fix git
+    // would error; with the fix it succeeds.
+    const m = makeManager();
+    const { mirrorPath } = await m.ensureMirror(fixtureUrl);
+    const target = join(workRoot, "prune-collision");
+
+    // 1. First session: writes a worktree + branch + registration.
+    const first = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: target,
+      sessionKey: "session-A",
+      agentName: "agent-x",
+    });
+    expect(existsSync(target)).toBe(true);
+
+    // 2. Simulate external wipe: directory gone, branch + worktree admin
+    //    record still in the bare mirror. (No `git worktree prune` here.)
+    rmSync(target, { recursive: true, force: true });
+    expect(existsSync(target)).toBe(false);
+    // Sanity: the admin record is still around — `git worktree list` shows
+    // the path as prunable.
+    const listed = execSync("git worktree list --porcelain", { cwd: mirrorPath }).toString();
+    expect(listed).toContain(target);
+
+    // 3. New session targets the same path with a NEW branch (different
+    //    sessionKey → different hash). Without the prune fix this throws
+    //    "missing but already registered worktree".
+    const second = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: target,
+      sessionKey: "session-B-different-key",
+      agentName: "agent-x",
+    });
+    expect(second.branchName).not.toBe(first.branchName);
+    expect(existsSync(join(target, "README.md"))).toBe(true);
+  });
+
   it("refuses to proceed when the worktree path exists but the session branch is missing", async () => {
     // Simulates ref-level corruption: the worktree directory survives on disk,
     // but the session branch in the mirror has vanished (manual ref tampering,

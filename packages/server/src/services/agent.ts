@@ -25,6 +25,7 @@ import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
@@ -53,6 +54,51 @@ const RESERVED_AGENT_NAME_PREFIX = "__";
 export function agentAvatarImageUrl(uuid: string, updatedAt: Date | null | undefined): string | null {
   if (!updatedAt) return null;
   return `/api/v1/agents/${uuid}/avatar?v=${updatedAt.getTime()}`;
+}
+
+/**
+ * Resolve the public avatar image URL for an agent, considering both the
+ * manager-uploaded image and — for human agents — the user's external
+ * avatar URL (e.g. GitHub `users.avatar_url` injected by OAuth). Returns
+ * `null` when neither source is available; the renderer then falls back
+ * to color + initial.
+ *
+ * Priority: uploaded image > human user's avatar > null. The "upload
+ * wins" rule gives users explicit control: once they upload a custom
+ * avatar for their human agent it always shows, regardless of any later
+ * GitHub avatar change.
+ */
+export function resolveAvatarImageUrl(args: {
+  uuid: string;
+  type: string;
+  avatarImageUpdatedAt: Date | null | undefined;
+  userAvatarUrl: string | null | undefined;
+}): string | null {
+  const uploaded = agentAvatarImageUrl(args.uuid, args.avatarImageUpdatedAt);
+  if (uploaded) return uploaded;
+  if (args.type === AGENT_TYPES.HUMAN && args.userAvatarUrl) return args.userAvatarUrl;
+  return null;
+}
+
+/**
+ * Look up the external user-avatar URL backing a human agent via the
+ * `members.agent_id → members.user_id → users.avatar_url` path. Returns
+ * `null` for non-human agents or when the user has no avatar URL
+ * captured (e.g. signed in without GitHub OAuth). Used by single-agent
+ * API responses; list endpoints inline the join in their SELECT.
+ */
+export async function fetchUserAvatarForHumanAgent(
+  db: Database,
+  agent: { uuid: string; type: string },
+): Promise<string | null> {
+  if (agent.type !== AGENT_TYPES.HUMAN) return null;
+  const [row] = await db
+    .select({ avatarUrl: users.avatarUrl })
+    .from(members)
+    .innerJoin(users, eq(members.userId, users.id))
+    .where(eq(members.agentId, agent.uuid))
+    .limit(1);
+  return row?.avatarUrl ?? null;
 }
 
 /**
@@ -532,6 +578,11 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       runtimeProvider: agents.runtimeProvider,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      // Backing user's external avatar URL (e.g. GitHub) — populated only for
+      // human agents through the 1:1 members.agent_id link; null otherwise.
+      // Used by `resolveAvatarImageUrl` as the fallback when no avatar has
+      // been uploaded for this human agent.
+      userAvatarUrl: users.avatarUrl,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -543,6 +594,8 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(where)
     .orderBy(desc(agents.createdAt))
     .limit(limit + 1);
@@ -585,6 +638,7 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
       runtimeProvider: agents.runtimeProvider,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -594,6 +648,8 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(where)
     .orderBy(desc(agents.createdAt))
     .limit(limit + 1);
@@ -641,6 +697,7 @@ export async function listAgentsForMember(
       runtimeProvider: agents.runtimeProvider,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -650,6 +707,8 @@ export async function listAgentsForMember(
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(where)
     .orderBy(desc(agents.createdAt))
     .limit(limit + 1);

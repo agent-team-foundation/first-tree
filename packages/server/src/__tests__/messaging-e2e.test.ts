@@ -2,7 +2,7 @@ import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hu
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../services/chat.js";
-import { ackEntry, pollInbox } from "../services/inbox.js";
+import { ackEntryByIdForBoundAgents, pollInbox } from "../services/inbox.js";
 import { listMessages, sendMessage, sendToAgent } from "../services/message.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -40,9 +40,13 @@ function skipForMode(entry: Entry, myAgentId: string): boolean {
   return !raw.some((m) => m === myAgentId);
 }
 
-async function ackAll(app: { db: Parameters<typeof ackEntry>[0] }, entries: Entry[], inboxId: string) {
+async function ackAll(
+  app: { db: Parameters<typeof ackEntryByIdForBoundAgents>[0] },
+  entries: Entry[],
+  inboxId: string,
+) {
   for (const e of entries) {
-    await ackEntry(app.db, e.id, inboxId);
+    await ackEntryByIdForBoundAgents(app.db, e.id, [inboxId]);
   }
 }
 
@@ -86,11 +90,14 @@ describe("messaging E2E — proposal §六 scenarios", () => {
     expect(humanMsg.message.inReplyToSnapshot).toBeNull();
     expect(suppressEcho(humanMsg, b1.uuid)).toBe(false);
 
+    // b2 is not a member of c1; v1 §四 改造 1 routes this through the
+    // explicit direct-chat path via `direct: true`.
     await sendToAgent(app.db, b1.uuid, b2.name as string, {
       format: "text",
       content: "please summarize",
       replyToInbox: b1.inboxId,
       replyToChat: c1.id,
+      direct: true,
     });
     await ackAll(app, b1PulledInit, b1.inboxId);
 

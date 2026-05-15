@@ -136,7 +136,7 @@ async function resolveAgent(serverUrl: string, adminToken: string, agentName: st
 
 interface SendOptions {
   format: MessageFormat;
-  chat?: boolean;
+  direct?: boolean;
   metadata?: string;
   replyTo?: string;
   replyToInbox?: string;
@@ -148,16 +148,19 @@ export function registerChatCommands(program: Command): void {
   const chat = program.command("chat").description("Chats and messaging — list, history, send, open");
 
   chat
-    .command("send <target> [message]")
-    .description("Send a message to an agent or chat")
+    .command("send <agentName> [message]")
+    .description("Send a message to an agent. Defaults to your current chat; use --direct for a side conversation.")
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
-    .option("--chat", "Treat target as chat ID instead of agent ID")
+    .option(
+      "--direct",
+      "Open or reuse a direct chat with the recipient (bypass member check). Use only when intentionally starting a side conversation with a non-member.",
+    )
     .option("-m, --metadata <json>", "JSON metadata to attach")
     .option("--reply-to <messageId>", "Message ID to reply to")
     .option("--reply-to-inbox <inboxId>", "Cross-chat reply target inbox")
     .option("--reply-to-chat <chatId>", "Cross-chat reply target chat")
     .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
-    .action(async (target: string, message: string | undefined, options: SendOptions) => {
+    .action(async (agentName: string, message: string | undefined, options: SendOptions) => {
       try {
         const content = message ?? (await readStdin());
         if (!content) {
@@ -180,26 +183,15 @@ export function registerChatCommands(program: Command): void {
 
         const sdk = createSdk(options.agent);
 
-        if (options.chat) {
-          const result = await sdk.sendMessage(target, {
-            format: options.format,
-            content,
-            metadata,
-            inReplyTo: options.replyTo,
-            replyToInbox,
-            replyToChat,
-          });
-          success(result);
-        } else {
-          const result = await sdk.sendToAgent(target, {
-            format: options.format,
-            content,
-            metadata,
-            replyToInbox,
-            replyToChat,
-          });
-          success(result);
-        }
+        const result = await sdk.sendToAgent(agentName, {
+          format: options.format,
+          content,
+          metadata,
+          replyToInbox,
+          replyToChat,
+          direct: options.direct ?? false,
+        });
+        success(result);
       } catch (error) {
         handleSdkError(error);
       }

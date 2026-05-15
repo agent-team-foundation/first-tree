@@ -108,6 +108,64 @@ describe("bootstrapWorkspace", () => {
     expect(content).toContain("JSON.stringify");
   });
 
+  it("tools.md contains the Communication Rules section with Decision guide + Fallback (v1 §四 改造 4)", () => {
+    const workspace = join(tmpBase, "ws-tools-rules");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+      chatId: "chat-1",
+    });
+
+    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
+    expect(content).toContain("## Communication Rules");
+    // New final-text contract — "human observers" + "does NOT wake other agents"
+    expect(content).toContain("human observers");
+    expect(content).toContain("does NOT wake other agents");
+    // Decision guide section anchors
+    expect(content).toContain("Decision guide");
+    expect(content).toMatch(/Target is a \*\*human\*\* in this chat/);
+    expect(content).toMatch(/Target is an \*\*agent\*\* in this chat/);
+    // Fallback paragraph for chat-context-missing degradation
+    expect(content).toContain("**Fallback**");
+    expect(content).toContain("conservative mode");
+
+    // Old contract text must be gone — these are the lines the v1.5 spec
+    // requires改造 4 to overwrite.
+    expect(content).not.toContain("Your final text response is automatically delivered");
+    expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
+  });
+
+  it("tools.md shows --direct as a documented chat send option (v1 §四 改造 1)", () => {
+    const workspace = join(tmpBase, "ws-tools-direct");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+      chatId: "chat-1",
+    });
+
+    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
+    // Sending Messages section must include a --direct example
+    expect(content).toContain("first-tree-hub chat send --direct");
+    // Member-default routing description (replaces the implicit-fallback note)
+    expect(content).toMatch(/recipient MUST be a participant/);
+    expect(content).toMatch(/--direct flag explicitly/);
+    // v1.7: agent surface is narrowed to "address an agent by name". The
+    // `--chat <chatId>` foot-gun is gone from the CLI and from this prompt.
+    expect(content).not.toMatch(/--chat <chatId>/);
+    expect(content).not.toMatch(/--chat <directChatId>/);
+    expect(content).toMatch(/Reaching another agent/);
+    expect(content).toMatch(/auto-mentions the recipient/);
+    expect(content).toMatch(/only addresses agents by name/);
+  });
+
   it("does not write self.md (per PRD D7 — prompt lives in agent_configs)", () => {
     const workspace = join(tmpBase, "ws-no-self-md");
     mkdirSync(workspace, { recursive: true });
@@ -214,6 +272,56 @@ describe("bootstrapWorkspace", () => {
 
     const degradedPath = join(workspace, ".agent", "context", "degraded.md");
     expect(existsSync(degradedPath)).toBe(false);
+  });
+
+  it("writes chatContext into identity.json when provided", () => {
+    const workspace = join(tmpBase, "ws-chat-context");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity({ agentId: "a", type: "autonomous_agent" }),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+      chatId: "chat-cc",
+      chatContext: {
+        chatId: "chat-cc",
+        title: "ship v1",
+        topic: "ship v1",
+        participants: [
+          { name: "alice", displayName: "Alice", type: "human" },
+          { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
+        ],
+      },
+    });
+
+    const data = JSON.parse(readFileSync(join(workspace, ".agent", "identity.json"), "utf-8"));
+    expect(data.chatContext).toMatchObject({
+      chatId: "chat-cc",
+      title: "ship v1",
+      topic: "ship v1",
+      participants: [
+        { name: "alice", displayName: "Alice", type: "human" },
+        { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
+      ],
+    });
+    expect(data.chatContext.selfOwner).toBeUndefined();
+  });
+
+  it("omits chatContext from identity.json when not provided (degradation)", () => {
+    const workspace = join(tmpBase, "ws-no-chat-context");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity({ agentId: "a" }),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+      chatId: "chat-nc",
+    });
+
+    const data = JSON.parse(readFileSync(join(workspace, ".agent", "identity.json"), "utf-8"));
+    expect("chatContext" in data).toBe(false);
   });
 
   it("overwrites existing files on re-bootstrap", () => {
