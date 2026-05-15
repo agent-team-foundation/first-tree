@@ -156,9 +156,11 @@ async function syncContextTreeRepo(
 }
 
 /**
- * Sync the shared Context Tree git clone.
+ * Sync the user-scoped Context Tree checkout.
  *
- * Clones on first run, pulls on subsequent runs.
+ * Fetches the legacy `/api/v1/context-tree/info` binding, which resolves
+ * against the caller's current default organization. Clones on first run,
+ * pulls on subsequent runs, using a hashed local checkout per `(repo, branch)`.
  * Returns the binding on success, null on failure (graceful degradation).
  */
 export async function syncContextTree(
@@ -171,6 +173,13 @@ export async function syncContextTree(
   return resolveContextTreeBinding(() => sdk.getContextTreeConfig(), log);
 }
 
+/**
+ * Sync the Context Tree checkout for the authenticated runtime agent.
+ *
+ * Uses the SDK's agent-scoped `/api/v1/agent/context-tree/info` route, so the
+ * binding follows the agent's own organization rather than the caller's
+ * default organization. Local checkouts are still isolated per `(repo, branch)`.
+ */
 export async function syncAgentContextTree(
   sdk: FirstTreeHubSDK,
   log: (msg: string) => void,
