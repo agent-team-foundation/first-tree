@@ -1,5 +1,6 @@
 import { documentContextSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import { buildMessageDocumentSnapshots } from "./doc-snapshots.js";
 import type { AgentIdentity } from "./handler.js";
 
 /**
@@ -55,11 +56,38 @@ export type ResultSinkDeps = {
 export type ResultSink = (text: string) => Promise<void>;
 
 export function createResultSink(deps: ResultSinkDeps): ResultSink {
-  async function buildMetadata(): Promise<Record<string, unknown> | undefined> {
+  async function buildMetadata(text: string): Promise<Record<string, unknown> | undefined> {
     const metadata: Record<string, unknown> = {};
     const documentBasePath = await deps.getDocumentBasePath?.();
     if (documentBasePath) {
-      metadata.documentContext = documentContextSchema.parse({ basePath: documentBasePath });
+      // Prefer the inline-snapshot variant when the text actually references
+      // markdown docs we can resolve. This is the cloud-friendly form: web
+      // gets the bytes straight from the message, no second server round-trip
+      // and no dependency on the server having access to the agent's local
+      // workspace filesystem (see proposal §核心设计).
+      //
+      // When no resolvable links exist (or all of them are rejected), fall
+      // back to the path-based variant so single-host deployments where
+      // server + runtime share the workspace can still preview via the
+      // legacy `/docs/preview` endpoint.
+      let snapshotsWritten = false;
+      try {
+        const { docs, skipped } = await buildMessageDocumentSnapshots(text, documentBasePath);
+        if (docs.length > 0) {
+          metadata.documentContext = documentContextSchema.parse({ kind: "snapshot", docs });
+          snapshotsWritten = true;
+        }
+        if (skipped > 0) {
+          deps.log(`doc snapshot: skipped ${skipped} unresolvable link(s)`);
+        }
+      } catch (err) {
+        // Snapshot build failure must never block message delivery — degrade
+        // to the path-based fallback below and log so it's debuggable.
+        deps.log(`doc snapshot: build failed, falling back to path variant: ${(err as Error).message}`);
+      }
+      if (!snapshotsWritten) {
+        metadata.documentContext = documentContextSchema.parse({ kind: "path", basePath: documentBasePath });
+      }
     }
 
     // v1 §四 改造 4: the trigger-sender mention auto-injection that used to
@@ -87,7 +115,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // isn't accidentally attached to this outbound reply.
     deps.clearTrigger();
 
-    const metadata = await buildMetadata();
+    const metadata = await buildMetadata(text);
 
     await deps.sdk.sendMessage(deps.chatId, {
       format: "text",

@@ -5,6 +5,7 @@ import {
   type MentionParticipant,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
+  scanMentionTokens,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
@@ -34,6 +35,7 @@ import {
   type SessionEventRow,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import {
   isQuestionAnswerContent,
   isQuestionContent,
@@ -41,7 +43,6 @@ import {
   type QuestionStatus,
 } from "../../../components/chat/question-message.js";
 import { WorkingBubble } from "../../../components/chat/working-bubble.js";
-import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import {
   ambiguousDisplayNames,
   groupAndSortCandidates,
@@ -103,10 +104,14 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
 function AssistantTextRow({
   event,
   agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
   agentId,
 }: {
   event: SessionEventRow;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
   agentId: string;
 }) {
   const payload = asAssistantTextPayload(event.payload);
@@ -122,7 +127,12 @@ function AssistantTextRow({
         opacity: 0.85,
       }}
     >
-      <Avatar name={senderName} isSelf={false} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(agentId)}
+        seed={agentId}
+        colorToken={agentColorTokenFn(agentId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
@@ -179,26 +189,41 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
   );
 }
 
-function Avatar({ name, isSelf }: { name: string; isSelf: boolean }) {
-  const initials = name.slice(0, 2).toUpperCase();
+/**
+ * Small inline avatar used in the message timeline. Always renders via
+ * the shared `<Avatar>` component so every speaker — self, peer agents,
+ * humans — gets the same visual treatment: uploaded image when present,
+ * otherwise a hue-seeded color disc + first initial. `seed` is the
+ * sender's agent UUID, which makes the fallback color stable across
+ * reloads and identical to the left-rail `ChatRowAvatar` for the same
+ * agent.
+ *
+ * `name` is typed as required but accepts `undefined` defensively:
+ * `useAgentNameMap` should always return a string (uuid fallback), but a
+ * version-skewed backend can leak partial message rows where the wire
+ * `senderId` is missing entirely. Falling back to "?" keeps the timeline
+ * rendering instead of crashing the whole chat view.
+ */
+function Avatar({
+  name,
+  imageUrl,
+  seed,
+  colorToken,
+}: {
+  name: string;
+  imageUrl?: string | null;
+  seed?: string;
+  colorToken?: string | null;
+}) {
+  const safeName = name ?? "?";
   return (
-    <div
-      className="mono text-eyebrow font-bold"
-      style={{
-        width: 20,
-        height: 20,
-        borderRadius: "var(--radius-input)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        background: isSelf ? "linear-gradient(135deg, var(--accent), oklch(0.58 0.14 170))" : "var(--bg-active)",
-        border: isSelf ? "none" : "var(--hairline) solid var(--border-strong)",
-        color: isSelf ? "oklch(0.14 0.01 150)" : "var(--fg-2)",
-      }}
-    >
-      {isSelf ? initials : <FirstTreeLogo width={9} height={10} style={{ color: "var(--accent)" }} />}
-    </div>
+    <RealAvatar
+      src={imageUrl ?? null}
+      name={safeName}
+      seed={seed ?? safeName}
+      colorToken={colorToken ?? null}
+      size={20}
+    />
   );
 }
 
@@ -206,15 +231,21 @@ function TextRow({
   msg,
   myAgentId,
   agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
 }: {
   msg: MessageWithDelivery;
   myAgentId: string | null;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const senderName = agentNameFn(msg.senderId);
   const isSelf = myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
+  const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -239,10 +270,30 @@ function TextRow({
           next.set("docChat", msg.chatId);
           next.set("docAgent", msg.senderId);
           next.set("docPath", docPath);
-          if (docBasePath) {
-            next.set("docBase", docBasePath);
-          } else {
+
+          // Prefer the inline snapshot variant: hand the drawer the bytes via
+          // React Query cache (keyed by chat+message+path) and tag the URL
+          // with the source message id. Falls back to path-based legacy
+          // preview when the agent emitted only a `kind: "path"` context.
+          //
+          // Seed the ENTIRE message's docs[] in one shot — not just the
+          // clicked one — so when the drawer's internal markdown links jump
+          // between snapshots in the same message they still hit cache and
+          // avoid the legacy network round-trip.
+          const snapshot = docSnapshots?.get(docPath);
+          if (snapshot && docSnapshots) {
+            for (const entry of docSnapshots.values()) {
+              queryClient.setQueryData(docSnapshotQueryKey(msg.chatId, msg.id, entry.path), entry);
+            }
+            next.set("docMsg", msg.id);
             next.delete("docBase");
+          } else {
+            next.delete("docMsg");
+            if (docBasePath) {
+              next.set("docBase", docBasePath);
+            } else {
+              next.delete("docBase");
+            }
           }
           setSearchParams(next);
         };
@@ -254,7 +305,7 @@ function TextRow({
         );
       },
     }),
-    [docBasePath, msg.chatId, msg.senderId, searchParams, setSearchParams],
+    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams],
   );
 
   return (
@@ -266,7 +317,12 @@ function TextRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={isSelf} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
@@ -325,7 +381,34 @@ function TextRow({
 
 function documentBasePathFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
   const parsed = documentContextSchema.safeParse(metadata?.documentContext);
-  return parsed.success ? parsed.data.basePath : undefined;
+  if (!parsed.success) return undefined;
+  // Only the path-based legacy variant exposes basePath; snapshot variants
+  // carry inline content rendered through a separate path.
+  return parsed.data.kind === "path" ? parsed.data.basePath : undefined;
+}
+
+export type DocSnapshotEntry = { path: string; content: string; sha256: string; size: number };
+
+/**
+ * For snapshot-variant `documentContext`, return a map from `docs[].path` to
+ * the snapshot record. Path-based or absent variants return `undefined`.
+ * The map keys match the raw href that the agent emitted, so the chat link
+ * click handler can use the clicked href directly as a lookup key.
+ */
+export function documentSnapshotMapFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Map<string, DocSnapshotEntry> | undefined {
+  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
+  if (!parsed.success || parsed.data.kind !== "snapshot") return undefined;
+  const map = new Map<string, DocSnapshotEntry>();
+  for (const doc of parsed.data.docs) {
+    map.set(doc.path, { path: doc.path, content: doc.content, sha256: doc.sha256, size: doc.size });
+  }
+  return map;
+}
+
+export function docSnapshotQueryKey(chatId: string, messageId: string, path: string): readonly unknown[] {
+  return ["chat-doc-snapshot", chatId, messageId, path] as const;
 }
 
 function isInlineImageContent(content: unknown): content is FileMessageContent {
@@ -399,6 +482,8 @@ function QuestionMessageRow({
   answer,
   status,
   agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
 }: {
   msg: MessageWithDelivery;
   chatId: string;
@@ -406,6 +491,8 @@ function QuestionMessageRow({
   answer: QuestionAnswerMessageContent | null;
   status: QuestionStatus;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
 }) {
   const senderName = agentNameFn(msg.senderId);
   return (
@@ -417,7 +504,12 @@ function QuestionMessageRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={false} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0 flex flex-col" style={{ gap: "var(--sp-1)" }}>
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--accent)" }}>
@@ -435,7 +527,17 @@ function QuestionMessageRow({
 
 /** Compact recap row for `format=question_answer`. Mirrors the style of a
  *  user text reply but flagged so it's clear this came from the answer card. */
-function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; agentNameFn: (id: string) => string }) {
+function QuestionAnswerRow({
+  msg,
+  agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
+}: {
+  msg: MessageWithDelivery;
+  agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
+}) {
   const parsed = isQuestionAnswerContent(msg.content) ? msg.content : null;
   const senderName = agentNameFn(msg.senderId);
   const summary = parsed
@@ -452,7 +554,12 @@ function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; age
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--fg)" }}>
@@ -541,6 +648,23 @@ export function ChatView({
   const queryClient = useQueryClient();
   const agentName = useAgentNameMap();
   const agentIdentity = useAgentIdentityMap();
+  /**
+   * Avatar URL resolver derived from the identity map: returns the
+   * sender's resolved avatar (uploaded agent image, or — for human
+   * agents — the backing user's GitHub avatar). `null` when the agent
+   * is missing from the identity map or has no avatar; the timeline
+   * row's `<Avatar>` then falls back to a hue-seeded color disc +
+   * initial.
+   */
+  const agentAvatar = useCallback((id: string) => agentIdentity(id)?.avatarImageUrl ?? null, [agentIdentity]);
+  /**
+   * Manager-selected hue override (`hue-0..7`) for the sender. `null`
+   * when no override is set, in which case the fallback hue is derived
+   * from a deterministic djb2 hash on the agent UUID. Threading this
+   * through the timeline keeps a manager's color choice in sync with
+   * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
+   */
+  const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
   const { agentId: myAgentId } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -591,9 +715,12 @@ export function ChatView({
     enabled: !!chatId,
   });
 
-  /** Org-wide agent list for the `@` picker. We surface every agent the
-   *  user can address — not just current chat participants — so `@`-ing
-   *  someone outside the chat acts as both an invite and a mention. */
+  /** Org-wide agent list, consumed only by the ParticipantsHeader `[+]`
+   *  dropdown via `addableCandidates`. The `@` autocomplete is
+   *  membership-scoped (`mentionCandidates` below) and does NOT read
+   *  from this list — inviting a new agent goes through the `[+]`
+   *  button explicitly, not through `@<outsider>`. Also feeds
+   *  `managedByMeMap` for picker grouping. */
   const { data: activity } = useQuery({
     queryKey: ["activity"],
     queryFn: getActivityOverview,
@@ -612,6 +739,13 @@ export function ChatView({
       // wait up to 10s for the polling refetch. See M plan Step 3 in
       // docs/session-creation-on-first-message.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+    },
+    // Backstop: surface server-side `enforceGroupMention` 400s (and any
+    // other send failure) under the composer instead of silently failing.
+    // The pre-flight check in `handleSend` should catch unresolved
+    // `@<token>` locally; this catches anything that slips through.
+    onError: (err) => {
+      setUploadError(err instanceof Error ? err.message : "Failed to send message");
     },
   });
 
@@ -654,6 +788,37 @@ export function ChatView({
     const images = pendingImages;
     if (!text && images.length === 0) return;
     if (uploading) return;
+
+    // Unresolved-@-token guard (client mirror of `enforceGroupMention` in
+    // `services/message.ts`). The autocomplete only offers in-chat
+    // members, but the user can still hand-type `@<name>` — typos,
+    // renamed agents, or agents not in this chat. Catching it here
+    // produces a precise hint immediately instead of round-tripping to a
+    // 400 the user has to decode. New participants are added via
+    // ParticipantsHeader's `[+]`, not via `@`.
+    //
+    // Derive the speaker set from `chatDetail.participants` rather than
+    // `mentionCandidates` so it includes self — `mentionCandidates`
+    // intentionally excludes self (you don't autocomplete "@yourself"),
+    // but `@<own-name>` is a legal token the server accepts. Without
+    // self here the guard would reject it with the "[+] button" hint,
+    // which is misleading since the user is already a member.
+    if (text) {
+      const memberNames = new Set(
+        (chatDetail?.participants ?? [])
+          .map((p) => chatScopedAgentIdentity(p.agentId)?.name?.toLowerCase())
+          .filter((n): n is string => !!n),
+      );
+      const unresolved = scanMentionTokens(text).filter((t) => !memberNames.has(t));
+      if (unresolved.length > 0) {
+        const sample = unresolved[0];
+        setUploadError(
+          `Cannot @-mention "${sample}" — they're not in this chat. Use the [+] button above to add them first.`,
+        );
+        return;
+      }
+    }
+
     // Group-chat send guard: don't fire requests we know the server (with
     // proposal §3 enforcement) or downstream `mention_only` agents will drop.
     // Applies to image-only sends too — the server-side mention check runs
@@ -668,22 +833,6 @@ export function ChatView({
         setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
       }
       return;
-    }
-
-    // "Mention to invite": any `@<name>` pointing at an agent outside the
-    // current chat is treated as both an address and an invitation. We add
-    // them first so by the time the message is processed, the server's
-    // `extractMentions` resolves successfully and direct-chats auto-upgrade
-    // to groups via the server's `changeChatType` service. Idempotent on
-    // the server.
-    if (draftOutsiders.length > 0) {
-      try {
-        await addMeChatParticipants(chatId, { participantIds: draftOutsiders });
-        await queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
-      } catch (err) {
-        setUploadError(err instanceof Error ? err.message : "Failed to add participants");
-        return;
-      }
     }
 
     if (images.length > 0) {
@@ -896,10 +1045,19 @@ export function ChatView({
    * mention picker. Same precedence rule as `chatScopedAgentName`.
    */
   const chatScopedAgentIdentity = useCallback(
-    (id: string | null | undefined): { name: string | null; displayName: string } | null => {
+    (
+      id: string | null | undefined,
+    ): { name: string | null; displayName: string; avatarImageUrl: string | null } | null => {
       if (!id) return null;
       const p = chatParticipantById.get(id);
-      if (p) return { name: p.name, displayName: p.displayName };
+      if (p) {
+        // Labels come from the chat-membership-authoritative source, but
+        // the avatar URL is org-scoped — pull it from the identity map
+        // when present. A private agent visible only through chat
+        // membership won't have an `agentIdentity` entry; we surface a
+        // null URL so the chip falls back to color + initial.
+        return { name: p.name, displayName: p.displayName, avatarImageUrl: agentIdentity(id)?.avatarImageUrl ?? null };
+      }
       return agentIdentity(id);
     },
     [chatParticipantById, agentIdentity],
@@ -907,40 +1065,56 @@ export function ChatView({
 
   const displayName = chatScopedAgentName(agentId);
 
-  /** Set of agentIds currently in the chat. Used to (a) detect "outsiders"
-   *  the user `@`-mentions and (b) skip the redundant addParticipants call
-   *  when everyone they mention is already in the room. */
-  const chatParticipantIds = useMemo(() => {
-    return new Set(chatDetail?.participants?.map((p) => p.agentId) ?? []);
-  }, [chatDetail?.participants]);
+  // `/activity` carries `managedByMe` per agent — both candidate lists
+  // need it for picker grouping. Known limitation: agents that appear
+  // only via `chatDetail.participants` (no runtime presence row, e.g.
+  // an autonomous agent that has never been bound to a client) default
+  // to false, so a caller's own offline agent can land in the
+  // "teammates" group. Grouping is a visual hint, not a security
+  // boundary, so we accept the fidelity loss rather than widen
+  // `/activity`'s shape (also consumed by roster / team / clients).
+  const managedByMeMap = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const a of activity?.agents ?? []) m.set(a.agentId, a.managedByMe);
+    return m;
+  }, [activity?.agents]);
 
-  // Mention autocomplete candidates: every agent the user might address,
-  // resolved to their `{name, displayName}`. Chat participants take
-  // precedence over the visibility-filtered identity map so private agents
-  // already in the chat surface in the picker (identity inside a chat is
-  // membership-derived, not discovery-derived — fixes the missing-private-
-  // agent autocomplete bug). Outsiders sourced from `/activity` continue
-  // to rely on the identity map — that lookup is org-scoped and correctly
-  // bounded by discovery rules. Self is excluded; any agent without a slug
-  // (`name`) is skipped because mentions need one.
+  // Mention autocomplete candidates: strictly the agents currently in
+  // THIS chat (minus self). Driving the `@` popover and `extractMentions`
+  // off membership — instead of org-wide discovery — keeps the picker
+  // focused on the people who'll actually receive the message. To pull
+  // a new agent into the conversation, use the ParticipantsHeader `[+]`
+  // button (which is fed by `addableCandidates` below). Any participant
+  // without a slug (`name`) is skipped — mentions need one. Private
+  // agents in the chat surface here because membership, not discovery,
+  // is the source of truth.
   const mentionCandidates = useMemo<MentionCandidate[]>(() => {
+    const out: MentionCandidate[] = [];
+    for (const p of chatDetail?.participants ?? []) {
+      if (p.agentId === myAgentId) continue;
+      const ident = chatScopedAgentIdentity(p.agentId);
+      if (!ident || !ident.name) continue;
+      out.push({
+        agentId: p.agentId,
+        name: ident.name,
+        displayName: ident.displayName,
+        managedByMe: managedByMeMap.get(p.agentId) ?? false,
+      });
+    }
+    return out;
+  }, [chatDetail?.participants, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
+
+  // Candidates for the ParticipantsHeader `[+]` add-member dropdown:
+  // every agent the user might invite, union of current members and
+  // org-wide discoverable agents from `/activity`. The header filters
+  // out already-joined participants internally, so we pass the union
+  // and let it compute `outsideCandidates`. Self is excluded; missing
+  // slug is skipped.
+  const addableCandidates = useMemo<MentionCandidate[]>(() => {
     const ids = new Set<string>();
     for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
     for (const a of activity?.agents ?? []) ids.add(a.agentId);
     if (ids.size === 0) ids.add(agentId);
-    // Build a lookup from `/activity` so we can attach `managedByMe`
-    // per candidate. Known limitation: agents that appear only via
-    // `chatDetail.participants` (no runtime presence row, e.g. an
-    // autonomous agent that has never been bound to a client) default
-    // to false. That means a caller's own offline agent can be
-    // misclassified into the "teammates" group of the [+] picker.
-    // The picker grouping is a visual hint, not a security boundary,
-    // so we accept this fidelity loss rather than widen `/activity`'s
-    // shape (which is also consumed by roster / team / clients pages).
-    // To revisit: surface `managedByMe` independently of runtime via a
-    // dedicated `/me/managed-agents` endpoint and intersect here.
-    const managedByMeMap = new Map<string, boolean>();
-    for (const a of activity?.agents ?? []) managedByMeMap.set(a.agentId, a.managedByMe);
     const out: MentionCandidate[] = [];
     for (const id of ids) {
       if (id === myAgentId) continue;
@@ -954,7 +1128,7 @@ export function ChatView({
       });
     }
     return out;
-  }, [chatDetail?.participants, activity?.agents, agentId, chatScopedAgentIdentity, myAgentId]);
+  }, [chatDetail?.participants, activity?.agents, agentId, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
 
   /**
    * "Needs explicit @mention" guard: a real group, OR a direct chat where the
@@ -1018,23 +1192,18 @@ export function ChatView({
     readOnly,
   ]);
 
-  /** All agentIds the draft text addresses via `@<name>` tokens — computed
-   * unconditionally (not just for groups) so the "outsider invite" path
-   * below can detect mentions of agents not yet in the chat. The send-gate
-   * for groups still uses `requiresMention && draftMentions.length === 0`. */
+  /** AgentIds the draft text addresses via `@<name>` tokens, resolved
+   * against the in-chat membership (`mentionCandidates`). The client no
+   * longer auto-invites `@<outsider>` — and the server now rejects any
+   * unresolved `@<token>` with a 400 (see `enforceGroupMention` guard in
+   * `services/message.ts`). To avoid the round-trip and a confusing
+   * error, `handleSend` runs the same check locally via
+   * `scanMentionTokens` before firing the mutation; new participants go
+   * through the ParticipantsHeader `[+]` button instead. */
   const draftMentions = useMemo(() => {
     const ps: MentionParticipant[] = mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name }));
     return extractMentions(draft, ps);
   }, [draft, mentionCandidates]);
-
-  /** Mentions in the draft that point at agents NOT currently in the chat.
-   * Sending a message that addresses these will first POST to
-   * `/me/chats/:id/participants` to add them, which turns a direct chat
-   * into a group via the server's `changeChatType` service. */
-  const draftOutsiders = useMemo(() => {
-    if (chatParticipantIds.size === 0) return [];
-    return draftMentions.filter((id) => !chatParticipantIds.has(id));
-  }, [draftMentions, chatParticipantIds]);
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -1223,7 +1392,7 @@ export function ChatView({
           <ParticipantsHeader
             chatId={chatId}
             participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-            candidates={mentionCandidates}
+            candidates={addableCandidates}
             agentIdentity={chatScopedAgentIdentity}
             onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
             readOnly={readOnly}
@@ -1298,7 +1467,14 @@ export function ChatView({
                 switch (ev.kind) {
                   case "assistant_text":
                     return (
-                      <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={chatScopedAgentName} />
+                      <AssistantTextRow
+                        key={item.key}
+                        event={ev}
+                        agentId={agentId}
+                        agentNameFn={chatScopedAgentName}
+                        agentAvatarFn={agentAvatar}
+                        agentColorTokenFn={agentColorToken}
+                      />
                     );
                   case "error":
                     return <ErrorRow key={item.key} event={ev} />;
@@ -1321,13 +1497,32 @@ export function ChatView({
                     answer={answer}
                     status={status}
                     agentNameFn={chatScopedAgentName}
+                    agentAvatarFn={agentAvatar}
+                    agentColorTokenFn={agentColorToken}
                   />
                 );
               }
               if (msg.format === "question_answer") {
-                return <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={chatScopedAgentName} />;
+                return (
+                  <QuestionAnswerRow
+                    key={item.key}
+                    msg={msg}
+                    agentNameFn={chatScopedAgentName}
+                    agentAvatarFn={agentAvatar}
+                    agentColorTokenFn={agentColorToken}
+                  />
+                );
               }
-              return <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={chatScopedAgentName} />;
+              return (
+                <TextRow
+                  key={item.key}
+                  msg={msg}
+                  myAgentId={myAgentId}
+                  agentNameFn={chatScopedAgentName}
+                  agentAvatarFn={agentAvatar}
+                  agentColorTokenFn={agentColorToken}
+                />
+              );
             })}
           </div>
           <div ref={messagesEndRef} />
@@ -1701,8 +1896,11 @@ function ParticipantsHeader({
   candidates: MentionCandidate[];
   /** Identity resolver covering ALL agents (incl. the viewer's own,
    *  which `mentionCandidates` excludes). Lets the chip row label
-   *  self correctly instead of falling back to a UUID prefix. */
-  agentIdentity: (uuid: string | null | undefined) => { name: string | null; displayName: string } | null;
+   *  self correctly instead of falling back to a UUID prefix. The
+   *  `avatarImageUrl` field is consumed for the chip's leading avatar. */
+  agentIdentity: (
+    uuid: string | null | undefined,
+  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
   onAdded: () => void;
   readOnly?: boolean;
 }) {
@@ -1747,12 +1945,14 @@ function ParticipantsHeader({
             key={id}
             className="inline-flex items-center text-label"
             style={{
-              padding: "var(--sp-0_5) var(--sp-1_5)",
+              padding: "var(--sp-0_5) var(--sp-1_5) var(--sp-0_5) var(--sp-0_5)",
               borderRadius: "var(--radius-chip)",
               background: "var(--bg-sunken)",
               color: "var(--fg-2)",
+              gap: 6,
             }}
           >
+            <RealAvatar src={ident?.avatarImageUrl ?? null} name={label} seed={id} size={16} />
             {label}
           </span>
         );

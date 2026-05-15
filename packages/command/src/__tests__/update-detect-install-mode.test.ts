@@ -79,6 +79,60 @@ describe("detectInstallMode", () => {
     expect(detectInstallMode(binLink)).toBe("global");
   });
 
+  it("classifies a global install as 'global' even when an ancestor of the npm prefix has a .git dir", () => {
+    // Regression: operators occasionally `git init` their npm prefix (e.g.
+    // a Homebrew prefix at `/opt/homebrew/` tracked as a personal repo).
+    // The ancestor `.git` would short-circuit Pass 1 and mis-classify the
+    // install as "source", causing self-update to silently skip forever
+    // with "Running from source checkout — self-update skipped".
+    const prefix = join(root, "opt", "homebrew");
+    mkdirSync(join(prefix, ".git"), { recursive: true });
+    const pkgDir = join(prefix, "lib", "node_modules", "@agent-team-foundation", "first-tree-hub");
+    mkdirSync(join(pkgDir, "dist", "cli"), { recursive: true });
+    writeFileSync(
+      join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@agent-team-foundation/first-tree-hub", version: "0.14.2" }),
+    );
+    const argv1 = join(pkgDir, "dist", "cli", "index.mjs");
+    writeFileSync(argv1, "// stub");
+    expect(detectInstallMode(argv1)).toBe("global");
+  });
+
+  it("classifies a global install as 'global' when $HOME is managed by dotfiles git (yadm / chezmoi)", () => {
+    // Regression: users on yadm / chezmoi / homeshick track the whole
+    // `$HOME` in git, and frequently `npm config set prefix ~/.local`.
+    // Before the fix, the `~/.git` ancestor flipped detection to "source"
+    // and silently broke auto-update for that entire user segment.
+    const home = join(root, "home", "alice");
+    mkdirSync(join(home, ".git"), { recursive: true });
+    const pkgDir = join(home, ".local", "lib", "node_modules", "@agent-team-foundation", "first-tree-hub");
+    mkdirSync(join(pkgDir, "dist", "cli"), { recursive: true });
+    writeFileSync(
+      join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@agent-team-foundation/first-tree-hub", version: "0.14.2" }),
+    );
+    const argv1 = join(pkgDir, "dist", "cli", "index.mjs");
+    writeFileSync(argv1, "// stub");
+    expect(detectInstallMode(argv1)).toBe("global");
+  });
+
+  it("still classifies an npx cache as 'npx' even when an ancestor has a .git dir", () => {
+    // The node_modules short-circuit must not promote npx caches to
+    // "global" — the `_npx` segment check in Pass 2 is what differentiates
+    // them, and it has to keep running.
+    const home = join(root, "home", "alice");
+    mkdirSync(join(home, ".git"), { recursive: true });
+    const pkgDir = join(home, ".npm", "_npx", "abc123", "node_modules", "@agent-team-foundation", "first-tree-hub");
+    mkdirSync(join(pkgDir, "dist", "cli"), { recursive: true });
+    writeFileSync(
+      join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@agent-team-foundation/first-tree-hub", version: "0.14.2" }),
+    );
+    const argv1 = join(pkgDir, "dist", "cli", "index.mjs");
+    writeFileSync(argv1, "// stub");
+    expect(detectInstallMode(argv1)).toBe("npx");
+  });
+
   it("treats a dist build inside a checkout as 'source' even when an inner package.json matches our name", () => {
     // Simulates `scripts/dev-cli.sh` running `node packages/command/dist/index.mjs`
     // from inside the monorepo: the inner package.json (name matches) lives

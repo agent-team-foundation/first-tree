@@ -384,6 +384,13 @@ export async function listMeChats(
       displayName: p.displayName,
       type: p.type,
       avatarColorToken: p.avatarColorToken,
+      // Chat list intentionally retains the agent-only avatar path — it
+      // does NOT fall back to `users.avatar_url` for human participants.
+      // The detail-view surfaces (message bubbles, ParticipantsHeader)
+      // use `resolveAvatarImageUrl` via `/agents` / `/me/managed-agents`
+      // and DO honor the human → GitHub fallback. Keep the chat row
+      // unchanged so the existing visual contract (first-letter / hue
+      // for humans without an upload) stays stable.
       avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt),
     });
     participantsByChat.set(p.chatId, list);

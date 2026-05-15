@@ -195,6 +195,40 @@ describe("GitMirrorManager — lifecycle", () => {
     const { removed } = await m.gcMirrors(new Set([fixtureUrl]));
     expect(removed).toEqual([]);
   });
+
+  it("gcOrphanSessionBranches removes hub-session branches that no live worktree holds", async () => {
+    const m = makeManager();
+    const { mirrorPath } = await m.ensureMirror(fixtureUrl);
+    // One live worktree — its branch must survive the sweep.
+    const liveTarget = join(workRoot, "gc-live");
+    const { branchName: liveBranch } = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: liveTarget,
+      sessionKey: "gc-live",
+      agentName: "agent-x",
+    });
+    // Two orphans: a `hub-session-` branch with no worktree, and an unrelated
+    // local branch the sweep must NOT touch (only `hub-session-*` is in scope).
+    const baseSha = gitIn(mirrorPath, `rev-parse refs/heads/${liveBranch}`);
+    execSync(`git branch hub-session-orphan-aaaaaaaa ${baseSha}`, { cwd: mirrorPath });
+    execSync(`git branch unrelated-feature ${baseSha}`, { cwd: mirrorPath });
+    expect(tryGitIn(mirrorPath, "rev-parse --verify --quiet refs/heads/hub-session-orphan-aaaaaaaa").ok).toBe(true);
+
+    const result = await m.gcOrphanSessionBranches();
+    expect(result.deleted).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(tryGitIn(mirrorPath, "rev-parse --verify --quiet refs/heads/hub-session-orphan-aaaaaaaa").ok).toBe(false);
+    // Live worktree's branch is untouched.
+    expect(tryGitIn(mirrorPath, `rev-parse --verify --quiet refs/heads/${liveBranch}`).ok).toBe(true);
+    // Non-session branch is out of scope and stays.
+    expect(tryGitIn(mirrorPath, "rev-parse --verify --quiet refs/heads/unrelated-feature").ok).toBe(true);
+  });
+
+  it("gcOrphanSessionBranches is a no-op when the mirrors root is empty", async () => {
+    const m = makeManager();
+    const result = await m.gcOrphanSessionBranches();
+    expect(result).toEqual({ scanned: 0, deleted: 0, failed: 0 });
+  });
 });
 
 describe("GitMirrorManager — session isolation regressions", () => {

@@ -1,9 +1,9 @@
-import type { MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { getChat } from "../../../api/chats.js";
-import { joinMeChat, listMeChats, markMeChatRead } from "../../../api/me-chats.js";
+import { joinMeChat, markMeChatRead } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { useAdminWs } from "../../../hooks/use-admin-ws.js";
 import { ChatView } from "./chat-view.js";
 
 /**
@@ -16,18 +16,22 @@ import { ChatView } from "./chat-view.js";
  *      autonomous/personal agent).
  *   2. Fallback: the first non-self participant.
  *
- * Mark-read fires once per chat on mount. Watching chats render the
- * timeline only — composer is replaced with `Join to reply`.
+ * Reads everything off `chatDetail` — speaker/watcher distinction comes
+ * from `chatDetail.viewerMembershipKind`, participant `type` comes from
+ * the wire schema. The earlier implementation also pulled two filter
+ * variants of `/orgs/:orgId/chats` just to find this one row, which
+ * compounded every `["me","chats"]` invalidate into 3 concurrent
+ * list fetches.
+ *
+ * Mark-read fires on mount and on every incoming `chat:message` frame
+ * for this chatId (the server-side write is a single idempotent UPSERT,
+ * so re-firing is cheap and lets the conversation-list's unread badge
+ * drop without the user having to leave + return).
  */
 
-function findRowAcrossFilters(qcRows: MeChatRow[] | undefined, chatId: string): MeChatRow | null {
-  if (!qcRows) return null;
-  return qcRows.find((r) => r.chatId === chatId) ?? null;
-}
-
-function pickPrimaryAgent(participants: { agentId: string; type?: string }[], myAgentId: string | null): string | null {
+function pickPrimaryAgent(participants: { agentId: string; type: string }[], myAgentId: string | null): string | null {
   const nonSelf = participants.filter((p) => p.agentId !== myAgentId);
-  const nonHuman = nonSelf.find((p) => p.type !== undefined && p.type !== "human");
+  const nonHuman = nonSelf.find((p) => p.type !== "human");
   if (nonHuman) return nonHuman.agentId;
   return nonSelf[0]?.agentId ?? null;
 }
@@ -35,54 +39,20 @@ function pickPrimaryAgent(participants: { agentId: string; type?: string }[], my
 export function ChatByIdView({ chatId }: { chatId: string }) {
   const queryClient = useQueryClient();
   const { agentId: myAgentId } = useAuth();
-  /**
-   * Track the (chatId, lastMessageAt) pair we've already mark-read'd in this
-   * mount. Re-marking on chat re-entry is necessary when new mentions
-   * arrived between A → B → A, otherwise the unread dot stays. We key on
-   * the row's `lastMessageAt` so a fresh message bumps the entry and the
-   * next mount of this chat fires mark-read again.
-   */
-  const markedRef = useRef<Map<string, string>>(new Map());
 
-  // Load the canonical chat detail for participant membership. ChatDetail
-  // doesn't include `type`, so we cross-reference with `/me/chats` rows to
-  // find a non-human primary.
   const { data: chatDetail } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
   });
 
-  // Pull the user's chat list to (a) decide membership (participant vs
-  // watching) and (b) read participant `type` annotations the admin chat
-  // detail doesn't expose. We try the `all` filter first since it is the
-  // hot-list the conversation list also uses.
-  const { data: allChats } = useQuery({
-    queryKey: ["me", "chats", "all"] as const,
-    queryFn: () => listMeChats({ filter: "all" }),
-    refetchInterval: 30_000,
-  });
-
-  const { data: watchingChats } = useQuery({
-    queryKey: ["me", "chats", "watching"] as const,
-    queryFn: () => listMeChats({ filter: "watching" }),
-    refetchInterval: 30_000,
-  });
-
-  const meRow: MeChatRow | null = useMemo(() => {
-    return findRowAcrossFilters(allChats?.rows, chatId) ?? findRowAcrossFilters(watchingChats?.rows, chatId) ?? null;
-  }, [allChats, watchingChats, chatId]);
-
-  const participantsForPrimary = useMemo(() => {
-    if (meRow) return meRow.participants.map((p) => ({ agentId: p.agentId, type: p.type }));
-    if (chatDetail) return chatDetail.participants.map((p) => ({ agentId: p.agentId, type: undefined }));
-    return [];
-  }, [meRow, chatDetail]);
-
-  const primaryAgent = useMemo(
-    () => pickPrimaryAgent(participantsForPrimary, myAgentId),
-    [participantsForPrimary, myAgentId],
-  );
+  const primaryAgent = useMemo(() => {
+    if (!chatDetail) return null;
+    return pickPrimaryAgent(
+      chatDetail.participants.map((p) => ({ agentId: p.agentId, type: p.type })),
+      myAgentId,
+    );
+  }, [chatDetail, myAgentId]);
 
   const markReadMut = useMutation({
     mutationFn: () => markMeChatRead(chatId),
@@ -93,20 +63,47 @@ export function ChatByIdView({ chatId }: { chatId: string }) {
     },
   });
 
-  // Fire mark-read whenever (chatId, lastMessageAt) is new for this mount.
-  // The lastMessageAt key means: if a new message arrives while the user is
-  // looking at chat B (admin WS invalidates `["me","chats"]` → meRow refreshes
-  // → lastMessageAt advances), navigating back to A and on to a different
-  // chat-with-new-mentions still triggers mark-read on re-entry.
+  // Track whether we've already fired mark-read for the current chatId so a
+  // strict-mode double-mount or a `chatDetail` refetch doesn't pile up redundant
+  // POSTs. Incoming `chat:message` and `ws:reconnect` frames still re-fire below.
   const markReadFn = markReadMut.mutate;
-  const meRowLastMessageAt = meRow?.lastMessageAt ?? "";
+  const markedChatIdRef = useRef<string | null>(null);
+  // Whether the caller has a chat_membership row (speaker or watcher).
+  // Supervisor / admin views reach this page via managed agents and have
+  // no row of their own — firing markRead would `INSERT INTO chat_user_state`
+  // a row the conversation-list query (INNER JOIN `chat_membership`) never
+  // reads, leaving permanent dead rows in the table. Wait for chatDetail to
+  // load before deciding; once known, all three trigger points (mount,
+  // chat:message, ws:reconnect) share the same gate.
+  const canMarkRead = chatDetail != null && chatDetail.viewerMembershipKind !== null;
   useEffect(() => {
-    if (!meRow) return; // wait for the row to load before firing mark-read
-    const seen = markedRef.current.get(chatId);
-    if (seen === meRowLastMessageAt) return;
-    markedRef.current.set(chatId, meRowLastMessageAt);
+    if (!canMarkRead) return;
+    if (markedChatIdRef.current === chatId) return;
+    markedChatIdRef.current = chatId;
     markReadFn();
-  }, [chatId, meRow, meRowLastMessageAt, markReadFn]);
+  }, [chatId, canMarkRead, markReadFn]);
+
+  // Re-fire on every incoming message for this chat — the user has the
+  // composer open and is reading in real time, so the unread state on the
+  // list rail should follow. `ws:reconnect` is a synthetic frame emitted
+  // by `use-admin-ws` after a WS gap closes, covering the case where
+  // chat:message frames fired while the socket was down (the chat-detail
+  // and chat-messages caches catch up via the reconnect-block invalidate,
+  // but the unread badge needs an explicit markRead because nothing else
+  // observes "we are looking at this chat right now").
+  useAdminWs({
+    onMessage: (msg) => {
+      if (!canMarkRead) return;
+      if (msg.type === "ws:reconnect") {
+        markReadFn();
+        return;
+      }
+      if (msg.type !== "chat:message") return;
+      const incomingChatId = typeof msg.chatId === "string" ? msg.chatId : null;
+      if (incomingChatId !== chatId) return;
+      markReadFn();
+    },
+  });
 
   const joinMut = useMutation({
     mutationFn: () => joinMeChat(chatId),
@@ -116,7 +113,7 @@ export function ChatByIdView({ chatId }: { chatId: string }) {
     },
   });
 
-  const isWatching = meRow?.membershipKind === "watching";
+  const isWatching = chatDetail?.viewerMembershipKind === "watching";
 
   if (!primaryAgent) {
     return (
@@ -137,7 +134,7 @@ export function ChatByIdView({ chatId }: { chatId: string }) {
         agentId={primaryAgent}
         chatId={chatId}
         readOnly
-        titleFallback={meRow?.title ?? null}
+        titleFallback={chatDetail?.title ?? null}
         joinAction={{
           onJoin: () => joinMut.mutate(),
           joining: joinMut.isPending,

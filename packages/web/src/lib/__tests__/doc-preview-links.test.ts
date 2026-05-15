@@ -26,4 +26,10 @@ describe("docPreviewPathFromHref", () => {
     expect(docPreviewPathFromHref("#heading")).toBeNull();
     expect(docPreviewPathFromHref("docs/readme.txt")).toBeNull();
   });
+
+  it("rejects hidden segments (.dotfile / .agent / .git) so a click never resolves into them", () => {
+    expect(docPreviewPathFromHref(".agent/secret.md")).toBeNull();
+    expect(docPreviewPathFromHref("docs/.hidden.md")).toBeNull();
+    expect(docPreviewPathFromHref("docs/.git/HEAD.md")).toBeNull();
+  });
 });

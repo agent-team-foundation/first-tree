@@ -25,6 +25,8 @@ export { probeCapabilities } from "./runtime/capabilities/index.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
 export { Deduplicator } from "./runtime/deduplicator.js";
+export type { GitMirrorManager, GitMirrorManagerOptions } from "./runtime/git-mirror-manager.js";
+export { createGitMirrorManager, GitMirrorError } from "./runtime/git-mirror-manager.js";
 export type {
   AgentHandler,
   HandlerConfig,

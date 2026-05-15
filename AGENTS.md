@@ -21,17 +21,19 @@ First Tree Hub ≠ Context Tree
 ## Common Commands
 
 ```bash
-pnpm install                          # Install all dependencies
-docker compose up -d                  # Start PostgreSQL (dev)
+pnpm install                                       # Install all dependencies
+docker compose up -d                               # Start PostgreSQL (dev)
 
-# One-command CLI start (interactive config + auto-migration + embedded Web)
-pnpm --filter @agent-team-foundation/first-tree-hub dev -- server start
+# Run the SaaS server locally (auto-runs Drizzle migrations on boot)
+pnpm --filter @first-tree-hub/server dev
+# Web dashboard (separate terminal)
+pnpm --filter @first-tree-hub/web dev
 
-pnpm check && pnpm typecheck          # Run after every change
-pnpm test                             # Vitest
+pnpm check && pnpm typecheck                       # Run after every change
+pnpm test                                          # Vitest
 
-pnpm --filter @first-tree-hub/server db:generate    # Generate migrations
-pnpm --filter @first-tree-hub/server db:migrate     # Apply migrations
+pnpm --filter @first-tree-hub/server db:generate   # Generate migrations
+pnpm --filter @first-tree-hub/server db:migrate    # Apply migrations
 ```
 
 > Full CLI commands, env vars, and per-package dev scripts: [docs/cli-reference.md](docs/cli-reference.md). All other scripts (`format`, `build`, `db:studio`, per-package `dev` / `test`) are in each package's `package.json`.
@@ -67,7 +69,7 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 ## Architecture Rules
 
-**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@agent-team-foundation/first-tree-hub-shared`. Command is the unified CLI entry point, depending on Server and Client.
+**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@agent-team-foundation/first-tree-hub-shared`. Command is the user-facing CLI for client / agent operations and depends only on Client + Shared; Server is shipped separately as the SaaS Docker image.
 
 **Stateless Server:** All persistent data lives in PostgreSQL. Server holds no business state.
 
@@ -118,8 +120,6 @@ SDK methods live in `sdk.ts`, handlers register in `handlers/`, runtime changes 
 4. Export from **both** `core/index.ts` **and** `src/index.ts` — easy to forget, breaks external consumers
 5. Config changes → schema in `shared/src/config/`
 
-External projects (e.g. context-tree) import core via `import { startServer, checkDatabase } from "@agent-team-foundation/first-tree-hub"` — this is why `core/` must stay CLI-free.
-
 ### Git Conventions
 
 - **Branching**: trunk-based; feature branch → PR → squash merge → main
@@ -131,7 +131,7 @@ External projects (e.g. context-tree) import core via `import { startServer, che
 ### Versioning
 
 - **Bump `packages/command`** on every PR that touches `command` or `client`, **or** parts of `shared` that `command` / `client` actually import. This is the consumer-facing tarball — only changes that flow through `npm install` need a new version.
-- **Do not bump** for changes confined to `server` / `web`, or to `shared` modules consumed only by `server` / `web` (e.g. admin-API contract schemas, server-only Zod schemas, web-only types). Those ship via the docker image and SaaS cloud deploy, not npm.
+- **Do not bump** for changes confined to `server` / `web`, or to `shared` modules consumed only by `server` / `web` (e.g. admin-API contract schemas, server-only Zod schemas, web-only types). Those ship via the SaaS Docker image, not npm.
 - **Never bump** `private: true` packages (`shared` / `client` / `server` / `web`) — `tsdown` inlines them into the `command` tarball; their `version` is inert.
 
 Full policy (how to pick the next version, anti-patterns, bash recipes): [docs/versioning-and-publishing.md](docs/versioning-and-publishing.md).

@@ -56,6 +56,19 @@ export function detectInstallMode(argv1: string = process.argv[1] ?? ""): Instal
   // Cap at 10 levels to avoid runaway walks on exotic symlink layouts.
   const start = dirname(resolve(resolvedArgv1));
 
+  // A globally-installed (or npx-cached) package always lives under a
+  // `node_modules/` directory, never directly inside a source checkout.
+  // Skip the ancestor-`.git` scan in that case — otherwise we mis-classify
+  // legitimate installs as "source" whenever the install prefix happens to
+  // sit inside a git-tracked directory. Real-world triggers: a Homebrew
+  // prefix that was `git init`-ed by the operator, a `$HOME` managed by
+  // dotfiles tools (yadm / chezmoi / homeshick) combined with
+  // `npm config set prefix ~/.local`, or a CI image that tracks the whole
+  // root with git. Symptom: `update` silently prints
+  // "Running from source checkout — self-update skipped" forever and the
+  // client never picks up new versions.
+  const inNodeModules = /(?:^|[\\/])node_modules[\\/]/.test(resolvedArgv1);
+
   // Pass 1: any ancestor with a `.git` dir means we're inside a checkout.
   // This MUST happen before the package.json scan — when a built dist lives
   // at `packages/command/dist/index.mjs` inside the monorepo, the scan
@@ -64,7 +77,7 @@ export function detectInstallMode(argv1: string = process.argv[1] ?? ""): Instal
   // as `global` and letting `update` run `npm i -g` against the operator's
   // real install. The two-pass split keeps source-checkout detection
   // strictly higher priority than "package on disk with our name".
-  {
+  if (!inNodeModules) {
     let dir = start;
     for (let i = 0; i < 10; i++) {
       if (existsSync(resolve(dir, ".git"))) return "source";

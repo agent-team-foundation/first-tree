@@ -22,8 +22,7 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio",
-    "admin:create": "tsx src/scripts/create-admin.ts"
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@agent-team-foundation/first-tree-hub-shared": "workspace:*",

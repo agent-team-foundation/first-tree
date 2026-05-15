@@ -6,14 +6,19 @@ import { MAX_FORKS, TEMPLATE_DB, WORKER_DB_PREFIX } from "./test-config.js";
 let container: Awaited<ReturnType<PostgreSqlContainer["start"]>> | undefined;
 
 export async function setup() {
-  // Skip Ryuk reaper to avoid pulling testcontainers/ryuk:0.14.0 from docker.io
-  // — many local Docker daemons sit behind flaky proxies, and Ryuk is only
-  // needed to clean up containers when the test runner crashes; for local dev
-  // and CI with explicit teardown, it is safe to disable.
-  process.env.TESTCONTAINERS_RYUK_DISABLED ??= "true";
-  container = await new PostgreSqlContainer("postgres:17").start();
-
-  const baseUrl = container.getConnectionUri();
+  // CI fast path: a sidecar Postgres is already running (GitHub Actions
+  // `services:`), URL injected via env. Skip the testcontainers spin-up — on
+  // ubuntu-latest runners the image pull + container start costs 10-25s on
+  // the test critical path. Locally `CI_DATABASE_URL` is unset and we fall
+  // back to testcontainers as before.
+  const ciUrl = process.env.CI_DATABASE_URL;
+  let baseUrl: string;
+  if (ciUrl) {
+    baseUrl = ciUrl;
+  } else {
+    container = await new PostgreSqlContainer("postgres:17").start();
+    baseUrl = container.getConnectionUri();
+  }
   process.env.JWT_SECRET_KEY = "test-jwt-secret-key-for-vitest";
 
   // Create a migrated template database. Each worker (see setup.ts) gets its

@@ -64,10 +64,24 @@ export function useAgentNameMap(): (uuid: string | null | undefined) => string {
  * full `<AgentChip>` (display name + `@name`) instead of a single string.
  * `displayName` is non-null post-Phase 2 of the agent-naming refactor;
  * `name` stays nullable because soft-deleted rows have it cleared.
+ *
+ * `avatarImageUrl` is the resolved avatar URL (uploaded image, or — for
+ * human agents — the backing user's external avatar URL such as GitHub).
+ * `null` means the renderer should fall back to color + initial.
+ *
+ * `avatarColorToken` is the manager-selected hue override (`hue-0..7`).
+ * `null` means "auto" — the renderer falls back to a deterministic
+ * djb2 hash on the agent UUID. Carrying the token through the identity
+ * map keeps the fallback hue in sync between left-rail `ChatRowAvatar`
+ * and the message timeline (both feed `resolveAvatarHue(colorToken,
+ * seed)`); otherwise a manager override applied to one surface would
+ * silently disagree with the other.
  */
 export type AgentIdentity = {
   name: string | null;
   displayName: string;
+  avatarImageUrl: string | null;
+  avatarColorToken: string | null;
 };
 
 /**
@@ -76,6 +90,17 @@ export type AgentIdentity = {
  * the agents list. Returns `null` when the UUID is missing from both the
  * org-scoped and cross-org caches (soft-deleted, filtered out, or never
  * loaded) — callers render their own fallback.
+ *
+ * Both sources carry `avatarImageUrl`. The org-scoped `/agents` source
+ * wins on collision (it's the more authoritative view for the
+ * currently-selected tenant); the cross-org `/me/managed-agents` source
+ * fills in agents the caller manages in non-default orgs.
+ *
+ * Only the org-scoped `/agents` source carries `avatarColorToken` today
+ * (the `me/managed-agents` route doesn't project it). Cross-org-only
+ * agents therefore get `colorToken=null` and fall back to the
+ * deterministic djb2 hash on the UUID — same hue both surfaces would
+ * have rendered before this token field existed.
  */
 export function useAgentIdentityMap(): (uuid: string | null | undefined) => AgentIdentity | null {
   const { data } = useQuery({
@@ -93,12 +118,24 @@ export function useAgentIdentityMap(): (uuid: string | null | undefined) => Agen
     const map = new Map<string, AgentIdentity>();
     if (managed) {
       for (const a of managed) {
-        map.set(a.uuid, { name: a.name, displayName: a.displayName });
+        map.set(a.uuid, {
+          name: a.name,
+          displayName: a.displayName,
+          avatarImageUrl: a.avatarImageUrl ?? null,
+          // `/me/managed-agents` doesn't project `avatarColorToken`
+          // today; cross-org-only agents land on the djb2-hash fallback.
+          avatarColorToken: null,
+        });
       }
     }
     if (data?.items) {
       for (const a of data.items) {
-        map.set(a.uuid, { name: a.name, displayName: a.displayName });
+        map.set(a.uuid, {
+          name: a.name,
+          displayName: a.displayName,
+          avatarImageUrl: a.avatarImageUrl ?? null,
+          avatarColorToken: a.avatarColorToken ?? null,
+        });
       }
     }
     return (uuid: string | null | undefined) => {

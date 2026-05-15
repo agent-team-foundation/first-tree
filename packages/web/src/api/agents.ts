@@ -50,6 +50,12 @@ export type ManagedAgent = {
   visibility: string;
   runtimeProvider: string;
   clientId: string | null;
+  /**
+   * Resolved avatar URL: uploaded agent image if present, else — for
+   * human agents — the backing user's external avatar URL (e.g. GitHub
+   * `users.avatar_url`). `null` when the agent has neither source.
+   */
+  avatarImageUrl: string | null;
 };
 
 export function listManagedAgents(): Promise<ManagedAgent[]> {

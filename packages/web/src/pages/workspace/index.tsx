@@ -167,6 +167,7 @@ function clearDocPreviewParams(params: URLSearchParams): void {
   params.delete("docAgent");
   params.delete("docPath");
   params.delete("docBase");
+  params.delete("docMsg");
 }
 
 /**
