@@ -23,37 +23,10 @@ gh auth status
 ### What to remember
 
 - First Tree Hub requires Node.js `>= 22.16`.
-- Do not jump to `server start`, `client start`, `connect <token>`, or `onboard` on a machine where installation state is unknown.
+- Do not jump to `client start`, `connect <token>`, or `onboard` on a machine where installation state is unknown.
 - If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree-hub ...` so they do not have to fight PATH.
 
-## 1. "Get First Tree Hub running locally"
-
-For a first-time local Hub.
-
-### Flow
-
-```bash
-first-tree-hub server start                     # interactive; provisions Docker Postgres + admin + web UI
-# or for CI / Docker:
-first-tree-hub server start --no-interactive
-# using an existing Postgres:
-first-tree-hub server start --database-url postgresql://user:pass@host:5432/db
-```
-
-If startup fails:
-
-```bash
-first-tree-hub server doctor
-first-tree-hub status
-```
-
-### What to remember
-
-- `server start` is the happy-path bootstrap. It can run migrations, seed the first admin, and build/serve the web dist.
-- Prefer `--database-url` over forcing Docker when the user already has a Postgres.
-- First-run prints a generated admin password — capture it; it is shown only once.
-
-## 2. "Connect this computer to an existing Hub server"
+## 1. "Connect this computer to an existing Hub server"
 
 Use this when the Hub is already up and the user wants this machine to run agents against it.
 
@@ -86,7 +59,7 @@ If something breaks, `client doctor` usually points at the culprit (no credentia
 - The hub URL is derived from the token's `iss` claim, so the operator never types a URL.
 - Agents are not registered by this command. Admins pin agents to this machine's `client.id` from the Hub UI (or via `agent create --client-id ...`). A running client auto-picks them up.
 
-## 3. "Keep this machine online across reboots"
+## 2. "Keep this machine online across reboots"
 
 Use this for a production desktop or a server that should run agents permanently.
 
@@ -125,7 +98,7 @@ To force-disconnect from the server side: `first-tree-hub client disconnect <cli
 - The service runs `client start --no-interactive`, so the machine must already have valid `credentials.json` — `connect <token>` writes that for you in the same step.
 - Re-running `connect <token>` is safe and idempotent for the unit file, but always re-authenticates.
 
-## 4. "Onboard a new human member"
+## 3. "Onboard a new human member"
 
 Add a real person to the team through the supported identity flow.
 
@@ -156,7 +129,7 @@ If the machine should also run this human's personal assistant, run `client star
 - Pass the server URL explicitly (`--server`) whenever the user / automation supplied one — do not silently fall back to defaults.
 - Humans with a Feishu bot configured still need to send `/bind <id>` in Feishu afterwards to attach the human user to the assistant.
 
-## 5. "Onboard a standalone autonomous agent"
+## 4. "Onboard a standalone autonomous agent"
 
 A bot with no human owner (code reviewer, monitor, pipeline agent).
 
@@ -178,7 +151,7 @@ first-tree-hub onboard \
 - Feishu bot binding is optional here (no `/bind` follow-up needed).
 - Thread through `--server <url>` whenever supplied.
 
-## 6. "Change an agent's model / prompt / MCP / env / repos"
+## 5. "Change an agent's model / prompt / MCP / env / repos"
 
 Use this whenever the user wants the live agent to behave differently — *not* when they want to edit their local alias file.
 
@@ -202,7 +175,7 @@ first-tree-hub agent config dry-run alice -f ./patch.json                  # pre
 - `dry-run` is the safe way to preview a big patch before committing it.
 - Do not confuse this with the local `agent.yaml` (alias → UUID mapping at `~/.first-tree/hub/config/agents/<name>/agent.yaml`), which is local-only state and unrelated to server-side runtime config.
 
-## 7. "Why can't the client get online?" / "Why does startup fail?"
+## 6. "Why can't the client get online?" / "Why does startup fail?"
 
 Diagnose before editing code or YAML.
 
@@ -212,17 +185,15 @@ Diagnose before editing code or YAML.
 first-tree-hub client status          # local state: service, hub URL, agents
 first-tree-hub client doctor          # readiness checks (background-service state included)
 first-tree-hub client config show     # effective client YAML
-first-tree-hub server doctor          # readiness check on the server side
-first-tree-hub server status          # health-probe an already-running server
 ```
 
 ### What to remember
 
 - If `client doctor` flags "no credentials", the fix is `first-tree-hub connect <token>`, not a YAML edit.
 - If `client list` shows the client but `client status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
-- Server and client issues look similar from a distance. Make the user goal explicit before debugging.
+- The Hub server is operated by the First Tree team as a SaaS — when a client cannot reach it, the issue is local connectivity / credentials, not server config.
 
-## 8. "Debug messaging between agents"
+## 7. "Debug messaging between agents"
 
 Verify delivery, inspect chats, send test messages manually.
 
@@ -247,7 +218,7 @@ first-tree-hub chat open <agent-name>                          # interactive REP
 - These are debugging / operator commands. For production, agents run under `client start` (or the service) and receive messages via WebSocket.
 - Use `--agent <name>` when multiple agent aliases are configured; with a single alias the flag is optional.
 
-## 9. "Inspect or recover session state"
+## 8. "Inspect or recover session state"
 
 Use these when a user reports a stuck or misbehaving session.
 
@@ -271,23 +242,27 @@ first-tree-hub agent workspace clean            # remove stale chat workspaces s
 - `workspace clean` consults the session registry — it will not remove a chat that still has an active (non-evicted) session. Safe to run on a live machine.
 - `reset` only clears the error flag; it does not restart the agent.
 
-## 10. "Deploy First Tree Hub somewhere real"
+## 9. "Roll out clients across many machines"
 
-Use this when the task goes beyond a local demo.
+The Hub server itself is operated by the First Tree team as a SaaS — there
+is no self-host path. Use this section when scaling out the *client* side.
 
 ### Flow
 
-1. Read `docs/deployment-guide.md` before proposing anything — it covers Docker, Railway, Render, Supabase, HTTPS, and multi-machine topology.
-2. Provision the backing Postgres externally and pass `--database-url` to `server start`; do not rely on the CLI's Docker-managed Postgres in production.
-3. Set secrets via env vars (`FIRST_TREE_HUB_JWT_SECRET`, `FIRST_TREE_HUB_ENCRYPTION_KEY`, `FIRST_TREE_HUB_GITHUB_TOKEN`, etc.) so they are not auto-generated on restart.
-4. On each client machine, run `first-tree-hub connect <token>` once — it signs the machine in and installs the background service in a single step so the runtime survives reboots.
+1. Generate a connect token per machine from the Hub web console.
+2. On each machine, run `first-tree-hub connect <token>` once — it signs the
+   machine in and installs the background service in a single step so the
+   runtime survives reboots.
+3. Verify with `first-tree-hub client doctor` and `first-tree-hub client list`.
 
 ### What to remember
 
-- Production auto-generated secrets (JWT, encryption key) should be pinned in env so that restarts do not invalidate issued tokens or make encrypted adapter credentials unreadable.
-- `server stop` only stops the CLI-managed Docker Postgres container — it is not a generic "stop the running server" command.
+- Connect tokens carry the hub URL in their `iss` claim — operators never
+  type a URL.
+- Windows is unsupported. `connect <token>` falls back to inline mode there;
+  use a user-managed supervisor for permanent deployment.
 
-## 11. "Change how the CLI behaves" (code change)
+## 10. "Change how the CLI behaves" (code change)
 
 Use this when the task is a code change, not an operation.
 

@@ -9,7 +9,7 @@ export { FirstTreeHubSDK, SdkError } from "@first-tree-hub/client";
 // public use case (URL derivation) already has a dedicated export.
 export { deriveHubUrlFromToken, HubUrlDerivationError } from "./commands/saas-connect.js";
 // Core types
-export type { CheckResult, ServiceInfo, ServiceOpResult, ServiceState, StartOptions } from "./core/index.js";
+export type { CheckResult, ServiceInfo, ServiceOpResult, ServiceState } from "./core/index.js";
 export {
   AuthRefreshFailedError,
   AuthRefreshRateLimitedError,
@@ -19,23 +19,15 @@ export {
   ClientRuntime,
   checkAgentConfigs,
   checkClientConfig,
-  checkDatabase,
-  checkDocker,
   checkNodeVersion,
-  checkServerConfig,
-  checkServerHealth,
   checkServerReachable,
   checkWebSocket,
-  createOwner,
   ensureFreshAccessToken,
   ensureFreshAdminToken,
-  ensurePostgres,
   formatCheckReport,
   getClientServiceStatus,
   handleClientOrgMismatch,
-  hasUser,
   installClientService,
-  isDockerAvailable,
   isInteractive,
   isServiceSupported,
   onboardCheck,
@@ -49,11 +41,8 @@ export {
   restartClientService,
   rotateClientIdWithBackup,
   runHomeMigration,
-  runMigrations,
   startClientService,
-  startServer,
   status,
   stopClientService,
-  stopPostgres,
   uninstallClientService,
 } from "./core/index.js";

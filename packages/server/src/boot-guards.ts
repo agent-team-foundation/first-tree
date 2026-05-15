@@ -1,14 +1,8 @@
 import type { Config } from "./config.js";
 
 /**
- * Boot-time configuration sanity checks. Called from `buildApp` so BOTH
- * server entry points are covered:
- *   - `packages/server/src/index.ts` (the standalone bin)
- *   - `packages/command/src/core/server.ts` (the CLI `server start` path)
- *
- * The previous incarnation lived in `index.ts` and was only run by the
- * standalone bin — the CLI path could boot a misconfigured prod with no
- * surface complaint (codex P1-8).
+ * Boot-time configuration sanity checks. Called from `buildApp` (and thus
+ * from `packages/server/src/index.ts`'s bootstrap path).
  *
  * Throws on misconfiguration; never returns a value.
  */

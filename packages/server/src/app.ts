@@ -128,9 +128,7 @@ function namePlugin<T extends FastifyPluginAsync>(name: string, fn: T): T {
 export async function buildApp(config: Config) {
   // Validate token-lifetime config eagerly so a typo in
   // `FIRST_TREE_HUB_AUTH_*_EXPIRY` fails the boot, not the first
-  // /connect-tokens call hours later. Both server entry points
-  // (the standalone bin and the CLI's `server start`) flow through
-  // buildApp, so this single check covers both.
+  // /connect-tokens call hours later.
   try {
     expiryToSeconds(config.auth.accessTokenExpiry);
     expiryToSeconds(config.auth.refreshTokenExpiry);
@@ -144,9 +142,8 @@ export async function buildApp(config: Config) {
 
   // GitHub App config sanity (PEM header / blank-secret / half-config).
   // Runs here so a misconfigured App env block fails the boot, not the
-  // first App JWT call hours later. Both server entry points (standalone
-  // bin and CLI `server start`) flow through buildApp, so this single
-  // check covers both — cheap, only fires when the App block is present.
+  // first App JWT call hours later. Cheap; only fires when the App
+  // block is present.
   assertBootConfigValid(config);
 
   applyLoggerConfig({

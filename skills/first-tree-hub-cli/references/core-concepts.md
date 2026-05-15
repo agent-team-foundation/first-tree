@@ -13,13 +13,13 @@ Use this distinction consistently when explaining the system or choosing where a
 
 ## Package Roles
 
-- `packages/server` — Fastify API server, admin APIs, agent APIs, database access, adapters, notifications.
+- `packages/server` — Fastify API server, admin APIs, agent APIs, database access, adapters, notifications. Operated centrally as the SaaS Hub.
 - `packages/client` — Agent SDK, client runtime, WebSocket connection management, workspace/session handling.
-- `packages/command` — Unified CLI entry point plus reusable core orchestration helpers (auth, service install, onboard, doctor, Docker Postgres, Feishu binding).
+- `packages/command` — Unified CLI entry point plus reusable core orchestration helpers (auth, service install, onboard, doctor, Feishu binding). User-facing commands are limited to client / agent operations; the SaaS server runs from its own bundle (`packages/server/dist/index.mjs`).
 - `packages/shared` — Zod schemas, TypeScript types, and the schema-driven config system shared across packages.
 - `packages/web` — React admin dashboard served by the server.
 
-The command package depends on server and client packages, but it is still an entry layer — keep business logic in reusable `core/*` modules instead of duplicating it in Commander handlers.
+The command package depends on the client package; it does not invoke server bootstrap code. Keep business logic in reusable `core/*` modules instead of duplicating it in Commander handlers.
 
 ## Architecture Invariants
 
@@ -57,18 +57,17 @@ The command package depends on server and client packages, but it is still an en
 
 ## Runtime Mental Model
 
-### Server startup
+### Server startup (SaaS internal)
 
-`server start` is more than "run Fastify".
+The server bootstrap (`packages/server/src/index.ts`, packaged into the
+SaaS Docker image as `packages/server/dist/index.mjs`) does the following
+on startup:
 
-It can:
-
-- collect missing config interactively
-- provision PostgreSQL via Docker if the user did not provide one
-- run migrations
-- create the first admin account on an empty database
-- discover or build the web dist
-- start the server with a generated instance ID
+- loads server config from env / yaml
+- initializes telemetry with a generated instance ID
+- runs Drizzle migrations against `FIRST_TREE_HUB_DATABASE_URL`
+- builds the Fastify app and serves the bundled web dist from
+  `FIRST_TREE_HUB_WEB_DIST_PATH` (set in the Docker image)
 
 ### Client startup
 
