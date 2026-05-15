@@ -17,6 +17,7 @@ import { createLogger, messageAttrs, withSpan } from "../observability/index.js"
 import { upsertSessionState } from "./activity.js";
 import { findOrCreateDirectChat, isParticipant } from "./chat.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
+import { validateDocumentContext } from "./doc-snapshots.js";
 import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from "./questions.js";
 
 const log = createLogger("message");
@@ -166,6 +167,11 @@ async function sendMessageInner(
     //    by the caller are preserved verbatim — server resolution is
     //    additive, not authoritative.
     const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+    // Server-side bottom-line on `metadata.documentContext`: shape via shared
+    // schema + byte budgets and sha256 calibration. Snapshot content arrives
+    // from a trusted runtime, but server still has to verify so a client bug
+    // can't lodge mismatched hash/size into immutable message history.
+    validateDocumentContext(incomingMeta);
     const explicitMentionsRaw = incomingMeta.mentions;
     const explicitMentions = Array.isArray(explicitMentionsRaw)
       ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
