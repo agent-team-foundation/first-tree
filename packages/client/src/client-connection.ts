@@ -5,6 +5,7 @@ import {
   type AgentBindRejectReason,
   type AgentPinnedMessage,
   agentPinnedMessageSchema,
+  type ContextTreeBindingMessage,
   type InboxDeliverFrame,
   imagePayloadFrameSchema,
   inboxDeliverFrameSchema,
@@ -13,6 +14,9 @@ import {
   type SessionEvent,
   type SessionState,
   serverWelcomeFrameSchema,
+  type TreeWriteTaskResult,
+  type TreeWriteTaskStart,
+  treeWriteTaskStartSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
@@ -90,6 +94,7 @@ type ClientConnectionEvents = {
    * advertises `wsInboxDeliver`. Falls back silently on legacy paths.
    */
   "inbox:deliver": [agentId: string, frame: InboxDeliverFrame];
+  "task:tree_write:start": [agentId: string, task: TreeWriteTaskStart];
   "agent:bind:rejected": [reason: AgentBindRejectReason, agentId: string];
   /**
    * Server announced that an agent has been pinned to this client (either
@@ -348,6 +353,16 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   reportRuntimeState(agentId: string, runtimeState: RuntimeState): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState }));
+  }
+
+  reportContextTreeBinding(agentId: string, binding: ContextTreeBindingMessage): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "context_tree:binding", agentId, ...binding }));
+  }
+
+  reportTreeWriteTaskResult(agentId: string, result: TreeWriteTaskResult): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ ...result, agentId }));
   }
 
   reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
@@ -789,6 +804,18 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       } else {
         emit();
       }
+      return;
+    }
+
+    if (type === "task:tree_write:start") {
+      const parsed = treeWriteTaskStartSchema.safeParse(msg);
+      if (!parsed.success) {
+        this.wsLogger.warn({ err: parsed.error.flatten() }, "malformed task:tree_write:start frame — dropping");
+        return;
+      }
+      const agentId = typeof msg.agentId === "string" ? msg.agentId : null;
+      if (!agentId) return;
+      this.emit("task:tree_write:start", agentId, parsed.data);
       return;
     }
 

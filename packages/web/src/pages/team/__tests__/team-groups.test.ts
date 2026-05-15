@@ -28,6 +28,7 @@ function agent(input: {
     managerId: input.managerId ?? "member-1",
     clientId: input.type === "human" ? null : "client-1",
     runtimeProvider: "claude-code",
+    treeWriteOnArchive: false,
     avatarColorToken: null,
     avatarImageUrl: null,
     createdAt: input.createdAt ?? "2026-01-01T00:00:00.000Z",

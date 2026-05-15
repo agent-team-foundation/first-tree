@@ -64,7 +64,7 @@ function isScpLikeSshUrl(value: string): boolean {
   return SCP_LIKE_SSH_RE.test(value);
 }
 
-const repoUrlSchema = z
+export const repoUrlSchema = z
   .string()
   .min(1)
   .superRefine((value, ctx) => {

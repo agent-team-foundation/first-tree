@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ContextTreeVerificationStatus } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import type { AgentIdentity } from "./handler.js";
@@ -14,9 +15,10 @@ const CONTEXT_TREE_DIR = join(DEFAULT_DATA_DIR, "context-tree");
  * the skill cannot pull/push later).
  */
 export type ContextTreeBinding = {
-  path: string;
-  repoUrl: string;
-  branch: string;
+  path: string | null;
+  repoUrl: string | null;
+  branch: string | null;
+  verificationStatus: ContextTreeVerificationStatus;
 };
 
 /**
@@ -30,13 +32,13 @@ export async function syncContextTree(
   getAccessToken: AccessTokenProvider,
   log: (msg: string) => void,
   userAgent?: string,
-): Promise<ContextTreeBinding | null> {
+): Promise<ContextTreeBinding> {
   // 1. Check git is available
   try {
     execFileSync("git", ["--version"], { stdio: "ignore" });
   } catch {
     log("Context Tree sync skipped: git is not installed");
-    return null;
+    return { path: null, repoUrl: null, branch: null, verificationStatus: "unknown" };
   }
 
   // 2. Fetch repo config from server
@@ -47,14 +49,14 @@ export async function syncContextTree(
     const config = await sdk.getContextTreeConfig();
     if (!config.repo) {
       log("Context Tree sync skipped: not configured on server");
-      return null;
+      return { path: null, repoUrl: null, branch: null, verificationStatus: "unknown" };
     }
     repo = config.repo;
     branch = config.branch ?? "main";
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Context Tree sync skipped: failed to fetch config from server (${msg})`);
-    return null;
+    return { path: null, repoUrl: null, branch: null, verificationStatus: "unknown" };
   }
 
   // 3. Clone or pull
@@ -91,7 +93,7 @@ export async function syncContextTree(
       });
       log(`Context Tree cloned from ${repo} (branch: ${branch})`);
     }
-    return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
+    return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch, verificationStatus: "verified" };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Context Tree sync failed: ${msg}`);
@@ -113,7 +115,7 @@ export async function syncContextTree(
           timeout: 60_000,
         });
         log("Context Tree re-cloned successfully");
-        return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
+        return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch, verificationStatus: "verified" };
       } catch {
         log("Context Tree re-clone also failed, continuing without context");
       }
@@ -122,10 +124,10 @@ export async function syncContextTree(
     // Return existing clone path if available (preserves local work on transient errors)
     if (existsSync(join(CONTEXT_TREE_DIR, ".git"))) {
       log("Using existing Context Tree clone despite sync failure");
-      return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
+      return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch, verificationStatus: "unverified" };
     }
 
-    return null;
+    return { path: null, repoUrl: repo, branch, verificationStatus: "unverified" };
   }
 }
 

@@ -124,6 +124,8 @@ export const createAgentSchema = z.object({
    * pinned client's reported capabilities (or be force-overridden).
    */
   runtimeProvider: runtimeProviderSchema.optional(),
+  /** Archive-triggered Context Tree write automation. Default OFF. */
+  treeWriteOnArchive: z.boolean().optional(),
   /**
    * Initial gitRepos seed for the runtime config. When provided, the service
    * layer writes them into the version=1 agent_configs row instead of the
@@ -162,6 +164,8 @@ export const updateAgentSchema = z.object({
    * to the deterministic hash). Omitting the field leaves the row untouched.
    */
   avatarColorToken: avatarColorTokenSchema.nullable().optional(),
+  /** Archive-triggered Context Tree write automation. */
+  treeWriteOnArchive: z.boolean().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 
@@ -204,6 +208,8 @@ export const agentSchema = z.object({
   clientId: z.string().nullable(),
   /** Which runtime provider drives this agent. NOT NULL post-0026. */
   runtimeProvider: runtimeProviderSchema,
+  /** Archive-triggered Context Tree write automation. */
+  treeWriteOnArchive: z.boolean(),
   /**
    * Manager-selected avatar color token (one of `AVATAR_COLOR_TOKENS`).
    * NULL means "auto" — the web renderer falls back to the deterministic

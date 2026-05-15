@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { repoUrlSchema } from "./org-settings.js";
+import { contextTreeVerificationStatusSchema } from "./tree-write.js";
 
 export const PRESENCE_STATUSES = {
   ONLINE: "online",
@@ -57,6 +59,14 @@ export const runtimeStateMessageSchema = z.object({
 });
 export type RuntimeStateMessage = z.infer<typeof runtimeStateMessageSchema>;
 
+/** Client-reported Context Tree binding state (client → server, per-agent). */
+export const contextTreeBindingMessageSchema = z.object({
+  contextTreeRepoUrl: repoUrlSchema.nullable(),
+  contextTreeBranch: z.string().nullable(),
+  verificationStatus: contextTreeVerificationStatusSchema,
+});
+export type ContextTreeBindingMessage = z.infer<typeof contextTreeBindingMessageSchema>;
+
 // -- Agent Bind Payload (client → server) --
 // v2: token removed; authorization derives from the WS-level JWT and the
 // client_id pinned to the agent (Rule R-RUN).
@@ -104,6 +114,10 @@ export const agentPresenceSchema = z.object({
   activeSessions: z.number().int().nullable().optional(),
   totalSessions: z.number().int().nullable().optional(),
   runtimeUpdatedAt: z.string().nullable().optional(),
+  contextTreeRepoUrl: z.string().nullable().optional(),
+  contextTreeBranch: z.string().nullable().optional(),
+  contextTreeVerificationStatus: contextTreeVerificationStatusSchema.nullable().optional(),
+  contextTreeUpdatedAt: z.string().nullable().optional(),
 });
 export type AgentPresence = z.infer<typeof agentPresenceSchema>;
 

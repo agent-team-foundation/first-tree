@@ -4,6 +4,7 @@ import {
   agentBindRequestSchema,
   agentPinnedMessageSchema,
   clientRegisterSchema,
+  contextTreeBindingMessageSchema,
   type InboxEntryWithMessage,
   inboxAckFrameSchema,
   inboxDeliverFrameSchema,
@@ -11,6 +12,7 @@ import {
   sessionEventMessageSchema,
   sessionReconcileRequestSchema,
   sessionStateMessageSchema,
+  treeWriteTaskResultSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
@@ -39,6 +41,7 @@ import * as notificationService from "../../services/notification.js";
 import type { InboxPushHandler, Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
 import * as sessionEventService from "../../services/session-event.js";
+import * as treeWriteService from "../../services/tree-write.js";
 
 /**
  * Default per-agent in-flight cap when `server.inbox.maxInFlightPerAgent` is
@@ -787,6 +790,24 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               } else if (payload.runtimeState === "idle" || payload.runtimeState === "working") {
                 notificationService.markAgentFaultsResolved(app.db, agentId).catch(() => {});
               }
+            } else if (type === "context_tree:binding") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
+
+              const payload = contextTreeBindingMessageSchema.parse(msg);
+              await presenceService.setContextTreeBinding(app.db, agentId, payload);
+            } else if (type === "task:tree_write:result") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
+
+              const payload = treeWriteTaskResultSchema.parse(msg);
+              await treeWriteService.finalizeTreeWriteTaskResult(app.db, agentId, payload);
             } else if (type === "session:event") {
               const agentId = parsed.data.agentId;
               if (!agentId || !boundAgents.has(agentId)) {

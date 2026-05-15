@@ -30,4 +30,12 @@ export const agentPresence = pgTable("agent_presence", {
   totalSessions: integer("total_sessions"),
   /** When runtime_state was last updated */
   runtimeUpdatedAt: timestamp("runtime_updated_at", { withTimezone: true }),
+  /** Repo URL the client runtime resolved for this agent's Context Tree binding. */
+  contextTreeRepoUrl: text("context_tree_repo_url"),
+  /** Branch the client runtime resolved for this agent's Context Tree binding. */
+  contextTreeBranch: text("context_tree_branch"),
+  /** Client-reported verification status for the resolved Context Tree binding. */
+  contextTreeVerificationStatus: text("context_tree_verification_status"),
+  /** When the client last reported Context Tree binding status. */
+  contextTreeUpdatedAt: timestamp("context_tree_updated_at", { withTimezone: true }),
 });

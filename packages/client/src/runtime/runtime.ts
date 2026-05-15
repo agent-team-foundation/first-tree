@@ -114,10 +114,12 @@ export class AgentRuntime {
       (msg) => contextTreeLogger.info(msg),
       this.userAgent,
     );
-    if (!contextTreeBinding) {
+    if (contextTreeBinding.verificationStatus === "unknown") {
       this.logger.info(
         "context tree not configured or sync skipped — agents will start without organizational context",
       );
+    } else if (contextTreeBinding.verificationStatus === "unverified") {
+      this.logger.warn("context tree sync degraded — agents will start with an unverified local binding");
     }
 
     // Attach before connecting so the first welcome frame on a stale Client

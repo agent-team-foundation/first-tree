@@ -17,6 +17,7 @@ const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   agent_error: "Error",
   agent_blocked: "Blocked",
   agent_stale: "Stale",
+  tree_write_completed: "Tree write",
 };
 
 function severityColor(severity: string): string {

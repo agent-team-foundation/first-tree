@@ -125,19 +125,44 @@ export async function setChatEngagement(
   chatId: string,
   agentId: string,
   status: ChatEngagementStatus,
-): Promise<void> {
+): Promise<{ previousStatus: ChatEngagementStatus; engagementStatus: ChatEngagementStatus }> {
+  // Ensure the row exists so every transition runs as an UPDATE under a
+  // row lock even when a never-touched chat is archived for the first time.
   await db
     .insert(chatUserState)
     .values({
       chatId,
       agentId,
       unreadMentionCount: 0,
+      engagementStatus: ACTIVE,
+    })
+    .onConflictDoNothing();
+
+  const rows = await db.execute<{ engagement_status: string }>(sql`
+    SELECT engagement_status
+    FROM chat_user_state
+    WHERE chat_id = ${chatId}
+      AND agent_id = ${agentId}
+    FOR UPDATE
+  `);
+  const current = rows[0];
+  if (!current) {
+    throw new Error("Unexpected: chat_user_state row missing after lazy materialisation");
+  }
+
+  const previousStatus = current.engagement_status as ChatEngagementStatus;
+
+  await db
+    .update(chatUserState)
+    .set({
       engagementStatus: status,
     })
-    .onConflictDoUpdate({
-      target: [chatUserState.chatId, chatUserState.agentId],
-      set: { engagementStatus: status },
-    });
+    .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, agentId)));
+
+  return {
+    previousStatus,
+    engagementStatus: status,
+  };
 }
 
 /**
