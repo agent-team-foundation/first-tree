@@ -91,6 +91,14 @@ export const meChatRowSchema = z.object({
   chatId: z.string(),
   type: z.string(),
   membershipKind: meChatMembershipKindSchema,
+  /**
+   * Origin classification — mirrors the projection that drives
+   * `listMeChatsQuery.source` (see `chatSourceSqlExpression` in
+   * `services/me-chat.ts`). Surfaced on the row so the rail can render
+   * a per-source leading icon and group rows by origin without a
+   * second lookup.
+   */
+  source: chatSourceSchema,
   title: z.string(),
   topic: z.string().nullable(),
   participants: z.array(meChatParticipantSchema),
