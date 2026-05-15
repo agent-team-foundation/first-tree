@@ -95,6 +95,57 @@ describe("maybeBindGithubEntityFromToolCall", () => {
     expect(rows[0]?.delegateAgentId).toBe(delegate);
   });
 
+  it("prefers a human whose delegateMention points at the reporter over id-sorted-first", async () => {
+    // Selection order is "delegateMention-linked first, id-sorted fallback".
+    // Force the id ordering to disagree with the delegate link: create the
+    // linked human AFTER the unlinked one so id-sorted-first would pick the
+    // unlinked one. The representative pick must override that with the
+    // linked human regardless.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+    });
+
+    // Build two extra humans, then pick whichever sorts smaller as the
+    // unlinked one and the other as the linked one. Guarantees the linked
+    // human is NOT id-sorted-first against the unlinked extra.
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `hA-${randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+    const humanB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `hB-${randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+    const [smallerHuman, largerHuman] = humanA < humanB ? [humanA, humanB] : [humanB, humanA];
+    // Point the larger-id human at the reporter via delegateMention.
+    await app.db.update(agents).set({ delegateMention: delegate }).where(eq(agents.uuid, largerHuman));
+
+    const chatId = await seedChat(app, admin.organizationId, "group", [smallerHuman, largerHuman, delegate]);
+
+    await maybeBindGithubEntityFromToolCall(
+      app.db,
+      delegate,
+      chatId,
+      prCreatePayload("https://github.com/owner/repo/pull/506"),
+    );
+
+    const rows = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.chatId, chatId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.humanAgentId).toBe(largerHuman);
+  });
+
   it("writes exactly ONE mapping in a group chat (representative human, no fan-out)", async () => {
     // Without the representative-pick logic, a group with N humans would
     // produce N mapping rows -> N subscribed audience targets on the next

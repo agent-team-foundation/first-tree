@@ -1,17 +1,26 @@
 import type { ToolCallEventPayload } from "@agent-team-foundation/first-tree-hub-shared";
 
 /**
- * Detect "the agent just created a PR or Issue" from a tool_call session event.
+ * Phase 1 fallback path for chat ↔ GitHub entity binding.
  *
- * Phase 1 allowlist only — `Bash gh pr create` / `Bash gh issue create`. These
- * two tools emit a single-line URL on stdout (well under the 400-char
- * `resultPreview` cap), so detection is lossless. curl / GitHub MCP tools are
- * out of scope until Phase 2 (their JSON responses can overflow the preview).
+ * The long-term direction is *not* to extend this whitelist indefinitely —
+ * see `docs/github-entity-chat-binding-design.md` for the four-family
+ * framing (declaration / outbound proxy / webhook backfill / stdout
+ * extraction). Stdout extraction is the cheapest first cut, not the
+ * canonical entry point; once an explicit `bind_chat_to_github_entity`
+ * API lands, prefer adding callers there over expanding this file.
  *
- * Returning a value tells `maybeBindGithubEntityFromToolCall` to write an
- * `agent_created` mapping row so the upcoming `pull_request.opened` /
- * `issues.opened` webhook routes back to the agent's current chat instead of
- * fanning out a fresh one.
+ * Detect "the agent just created a PR or Issue" from a tool_call session
+ * event. Phase 1 allowlist only — `Bash gh pr create` / `Bash gh issue
+ * create`. These two tools emit a single-line URL on stdout (well under
+ * the 400-char `resultPreview` cap), so detection is lossless. curl /
+ * GitHub MCP tools are out of scope until Phase 2 (their JSON responses
+ * can overflow the preview).
+ *
+ * Returning a value tells `maybeBindGithubEntityFromToolCall` to write
+ * an `agent_created` mapping row so the upcoming `pull_request.opened`
+ * / `issues.opened` webhook routes back to the agent's current chat
+ * instead of fanning out a fresh one.
  */
 export type ExtractedEntity = {
   entityType: "pull_request" | "issue";

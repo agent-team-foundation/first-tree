@@ -9,15 +9,22 @@ import { resolveTargetChat as resolveTargetChatRaw } from "../services/github-en
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
- * Test-only thin wrapper: every existing case in this file expects a
- * non-null resolution (none of them exercise the creation-event guard's
- * `null` branch). Wrap the service so the existing assertions still
- * compile after the signature change.
+ * Test-only thin wrapper: every existing case in this file simulates the
+ * mention path (none of them exercise the creation-event guard's null
+ * branch). The wrapper defaults `isMentionMatched: true` so the legacy
+ * assertions still compile after `isMentionMatched` became required, and
+ * throws on null because that would be a real regression for these cases.
  */
 async function resolveTargetChat(
-  ...args: Parameters<typeof resolveTargetChatRaw>
+  db: Parameters<typeof resolveTargetChatRaw>[0],
+  params: Omit<Parameters<typeof resolveTargetChatRaw>[1], "isMentionMatched"> & {
+    isMentionMatched?: boolean;
+  },
 ): Promise<NonNullable<Awaited<ReturnType<typeof resolveTargetChatRaw>>>> {
-  const result = await resolveTargetChatRaw(...args);
+  const result = await resolveTargetChatRaw(db, {
+    ...params,
+    isMentionMatched: params.isMentionMatched ?? true,
+  });
   if (!result) throw new Error("resolveTargetChat returned null in legacy test path");
   return result;
 }

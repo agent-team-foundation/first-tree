@@ -78,14 +78,25 @@ export async function resolveTargetChat(
      * mention-driven targets are allowed to create a fresh chat from a
      * creation webhook (`pull_request.opened` / `issues.opened`); subscription
      * fall-through is rejected so opened events can't proliferate chats.
-     * Defaults to `true` to preserve legacy behaviour for callers that don't
-     * carry the flag.
+     *
+     * Required, not optional: the guard is fail-closed by design so any
+     * future caller that forgets to plumb the signal lands in the safer
+     * "drop, don't invent" branch instead of silently re-enabling the old
+     * chat-proliferation behaviour.
      */
-    isMentionMatched?: boolean;
+    isMentionMatched: boolean;
   },
 ): Promise<{ chatId: string; created: boolean; boundVia: BoundVia } | null> {
-  const { organizationId, humanAgentId, delegateAgentId, entity, relatedEntities, eventType, action } = params;
-  const isMentionMatched = params.isMentionMatched ?? true;
+  const {
+    organizationId,
+    humanAgentId,
+    delegateAgentId,
+    entity,
+    relatedEntities,
+    eventType,
+    action,
+    isMentionMatched,
+  } = params;
 
   // (a) Direct hit.
   const direct = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, entity);
@@ -258,10 +269,15 @@ async function createEntityChat(
  * Pick the (org, human, delegate) tuple to bind a tool_call-driven entity to.
  *
  * The reporting agent is the delegate side. The human side is the
- * representative human member of the chat — id-sorted to keep the choice
- * deterministic across concurrent webhooks. Picking one representative
- * (rather than fan-out to every human) keeps subscription-driven webhook
- * delivery from duplicating the same card N times in a group chat.
+ * representative human member of the chat — exactly one row is written so
+ * group chats don't fan out into N duplicate cards on the next webhook.
+ *
+ * Selection order (deterministic across concurrent calls):
+ *   1. Active humans whose `delegateMention` already points at the reporter
+ *      —— these humans are the natural "owner" of the reporter's work; any
+ *      downstream code that reads `mapping.humanAgentId` (notification
+ *      recipient, card signatures, audit) sees a meaningful pairing.
+ *   2. Fallback: id-sorted-first among the remaining active humans.
  *
  * Returns null when:
  *   - the reporter isn't a member of the chat
@@ -283,6 +299,7 @@ async function resolveBindingPair(
       agentId: chatMembership.agentId,
       agentType: agents.type,
       agentStatus: agents.status,
+      delegateMention: agents.delegateMention,
     })
     .from(chatMembership)
     .innerJoin(chats, eq(chatMembership.chatId, chats.id))
@@ -299,7 +316,8 @@ async function resolveBindingPair(
   const humans = rows.filter((r) => r.agentType === "human" && r.agentStatus === "active");
   if (humans.length === 0) return null;
 
-  const representative = humans[0];
+  const linkedHuman = humans.find((h) => h.delegateMention === reporterAgentId);
+  const representative = linkedHuman ?? humans[0];
   if (!representative) return null;
   return {
     organizationId: representative.chatOrganizationId,

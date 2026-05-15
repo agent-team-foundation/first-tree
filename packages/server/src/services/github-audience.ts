@@ -36,9 +36,13 @@ export function evaluateDelegateTarget(
  *   - `agent`         — actor.login maps to one of this org's agents. Used
  *                       for echo suppression: the agent's own actions don't
  *                       fan back into their own chat.
- *   - `our-app-bot`   — actor is `<app-slug>[bot]`. Audience is forced empty
- *                       because the event is a downstream effect of Hub's own
- *                       outbound write, not a human/agent intent.
+ *   - `our-app-bot`   — actor is `<app-slug>[bot]`. The event is a downstream
+ *                       effect of Hub's own outbound write. `kind: "existing"`
+ *                       targets are kept (so PRs the agent opens via Hub's
+ *                       installation token still surface their comments / CI
+ *                       back to the agent's chat via the subscription path);
+ *                       `kind: "new"` mention rows are dropped — minting a
+ *                       fresh chat for our own write is never useful.
  *   - `external`      — anyone else (other humans, third-party bots like
  *                       dependabot, …). No echo filter applied.
  */
@@ -99,10 +103,14 @@ export type AudienceTarget = {
  * `delegate_mention`-configured agent whose target is eligible AND isn't
  * already subscribed, appends a `new` row.
  *
- * Echo filtering runs after the union: when the actor maps to an agent in
- * this org, rows where the actor is either the human or the delegate side
- * are dropped so the agent's own action doesn't bounce back. When the actor
- * is our App's bot user (DP13), the whole audience is suppressed.
+ * Echo filtering runs after the union:
+ *   - actor = `agent`: rows where the actor sits on either the human or
+ *     delegate side of an `existing` mapping are dropped. `kind: "new"`
+ *     mention rows are kept (explicit involves are intentional routing).
+ *   - actor = `our-app-bot`: `kind: "existing"` rows are kept so follow-up
+ *     events on entities the agent opened still reach the chat through the
+ *     subscription path; `kind: "new"` rows are dropped to avoid forking a
+ *     fresh chat just to echo Hub's own outbound write. See `ActorIdentity`.
  */
 export async function resolveAudience(
   db: Database,
