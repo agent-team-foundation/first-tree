@@ -14,9 +14,10 @@ import {
   type SessionEvent,
   type SessionState,
   serverWelcomeFrameSchema,
+  type TreeWriteTaskHeartbeat,
   type TreeWriteTaskResult,
   type TreeWriteTaskStart,
-  treeWriteTaskHeartbeatSchema,
+  treeWriteTaskAckSchema,
   treeWriteTaskStartSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
@@ -271,6 +272,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
    * that follows. Defer `new_message` emission until these settle.
    */
   private readonly pendingImageWrites = new Set<Promise<void>>();
+  private readonly pendingTreeWriteResults = new Map<string, { agentId: string; result: TreeWriteTaskResult }>();
+  private readonly pendingTreeWriteHeartbeats = new Map<
+    string,
+    { agentId: string; heartbeat: TreeWriteTaskHeartbeat }
+  >();
 
   constructor(config: ClientConnectionConfig) {
     super();
@@ -362,13 +368,17 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   }
 
   reportTreeWriteTaskResult(agentId: string, result: TreeWriteTaskResult): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ ...result, agentId }));
+    this.pendingTreeWriteHeartbeats.delete(result.taskId);
+    this.pendingTreeWriteResults.set(result.taskId, { agentId, result });
+    this.flushPendingTreeWriteFrames(agentId);
   }
 
-  reportTreeWriteTaskHeartbeat(agentId: string, taskId: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "task:tree_write:heartbeat", agentId, taskId }));
+  reportTreeWriteTaskHeartbeat(agentId: string, taskId: string, attemptCount: number): void {
+    this.pendingTreeWriteHeartbeats.set(taskId, {
+      agentId,
+      heartbeat: { type: "task:tree_write:heartbeat", taskId, attemptCount },
+    });
+    this.flushPendingTreeWriteFrames(agentId);
   }
 
   reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
@@ -414,6 +424,22 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         }),
       );
     });
+  }
+
+  private flushPendingTreeWriteFrames(agentId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.boundAgents.has(agentId)) return;
+
+    for (const [taskId, entry] of this.pendingTreeWriteHeartbeats) {
+      if (entry.agentId !== agentId) continue;
+      this.ws.send(JSON.stringify({ ...entry.heartbeat, agentId }));
+      this.pendingTreeWriteHeartbeats.delete(taskId);
+    }
+
+    for (const entry of this.pendingTreeWriteResults.values()) {
+      if (entry.agentId !== agentId) continue;
+      this.ws.send(JSON.stringify({ ...entry.result, agentId }));
+    }
   }
 
   // ---- WebSocket management ----------------------------------------------
@@ -687,6 +713,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         };
         this.boundAgents.set(agentId, agent);
         this.emit("agent:bound", agent);
+        this.flushPendingTreeWriteFrames(agentId);
         pending.resolve(agent);
       }
       return;
@@ -825,14 +852,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       return;
     }
 
-    if (type === "task:tree_write:heartbeat") {
-      const parsed = treeWriteTaskHeartbeatSchema.safeParse(msg);
-      if (!parsed.success) {
-        this.wsLogger.warn({ err: parsed.error.flatten() }, "malformed task:tree_write:heartbeat frame — dropping");
-      }
-      return;
-    }
-
     if (type === "error") {
       const errorMsg = msg.message as string;
       const ref = msg.ref as string | undefined;
@@ -843,6 +862,17 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       } else {
         this.emit("error", new Error(errorMsg));
       }
+      return;
+    }
+
+    if (type === "task:tree_write:ack") {
+      const parsed = treeWriteTaskAckSchema.safeParse(msg);
+      if (!parsed.success) {
+        this.wsLogger.warn({ err: parsed.error.flatten() }, "malformed task:tree_write:ack frame — dropping");
+        return;
+      }
+      this.pendingTreeWriteResults.delete(parsed.data.taskId);
+      this.pendingTreeWriteHeartbeats.delete(parsed.data.taskId);
     }
   }
 

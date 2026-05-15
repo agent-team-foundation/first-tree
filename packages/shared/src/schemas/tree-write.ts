@@ -33,14 +33,12 @@ export const TREE_WRITE_NO_WRITE_REASON_CODES = {
   NO_DURABLE_DECISION: "no_durable_decision",
   UNVERIFIED_TREE: "unverified_tree",
   INSUFFICIENT_CONTEXT: "insufficient_context",
-  UNSUPPORTED_CHAT_TOPOLOGY: "unsupported_chat_topology",
 } as const;
 
 export const treeWriteNoWriteReasonCodeSchema = z.enum([
   "no_durable_decision",
   "unverified_tree",
   "insufficient_context",
-  "unsupported_chat_topology",
 ]);
 export type TreeWriteNoWriteReasonCode = z.infer<typeof treeWriteNoWriteReasonCodeSchema>;
 
@@ -86,6 +84,7 @@ export type TreeWriteTask = z.infer<typeof treeWriteTaskSchema>;
 export const treeWriteTaskStartSchema = z.object({
   type: z.literal("task:tree_write:start"),
   taskId: z.string(),
+  attemptCount: z.number().int().positive(),
   execChatId: z.string(),
   sourceChatId: z.string(),
   prompt: z.string().min(1),
@@ -95,12 +94,20 @@ export type TreeWriteTaskStart = z.infer<typeof treeWriteTaskStartSchema>;
 export const treeWriteTaskHeartbeatSchema = z.object({
   type: z.literal("task:tree_write:heartbeat"),
   taskId: z.string(),
+  attemptCount: z.number().int().positive(),
 });
 export type TreeWriteTaskHeartbeat = z.infer<typeof treeWriteTaskHeartbeatSchema>;
+
+export const treeWriteTaskAckSchema = z.object({
+  type: z.literal("task:tree_write:ack"),
+  taskId: z.string(),
+});
+export type TreeWriteTaskAck = z.infer<typeof treeWriteTaskAckSchema>;
 
 export const treeWriteTaskResultDoneSchema = z.object({
   type: z.literal("task:tree_write:result"),
   taskId: z.string(),
+  attemptCount: z.number().int().positive(),
   kind: z.literal("done"),
   prUrl: z.string().url(),
 });
@@ -108,6 +115,7 @@ export const treeWriteTaskResultDoneSchema = z.object({
 export const treeWriteTaskResultNoWriteSchema = z.object({
   type: z.literal("task:tree_write:result"),
   taskId: z.string(),
+  attemptCount: z.number().int().positive(),
   kind: z.literal("no_write"),
   reason: treeWriteNoWriteReasonSchema,
 });
@@ -115,6 +123,7 @@ export const treeWriteTaskResultNoWriteSchema = z.object({
 export const treeWriteTaskResultFailedSchema = z.object({
   type: z.literal("task:tree_write:result"),
   taskId: z.string(),
+  attemptCount: z.number().int().positive(),
   kind: z.literal("failed"),
   error: treeWriteErrorSchema,
 });

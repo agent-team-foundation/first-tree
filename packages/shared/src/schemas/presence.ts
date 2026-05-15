@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { repoUrlSchema } from "./org-settings.js";
 import { contextTreeVerificationStatusSchema } from "./tree-write.js";
 
 export const PRESENCE_STATUSES = {
@@ -60,7 +61,7 @@ export type RuntimeStateMessage = z.infer<typeof runtimeStateMessageSchema>;
 
 /** Client-reported Context Tree binding state (client → server, per-agent). */
 export const contextTreeBindingMessageSchema = z.object({
-  contextTreeRepoUrl: z.string().url().nullable(),
+  contextTreeRepoUrl: repoUrlSchema.nullable(),
   contextTreeBranch: z.string().nullable(),
   verificationStatus: contextTreeVerificationStatusSchema,
 });

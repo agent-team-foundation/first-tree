@@ -20,9 +20,11 @@ type TreeWriteBackgroundRunnerConfig = {
   handlerConfig: HandlerConfig;
   sdk: SessionContext["sdk"];
   log: SessionContext["log"];
-  onHeartbeat: (taskId: string) => void;
+  onHeartbeat: (taskId: string, attemptCount: number) => void;
   onResult: (result: TreeWriteTaskResult) => void;
 };
+
+const TREE_WRITE_RUNNER_TIMEOUT_MS = 30 * 60_000;
 
 function stripJsonCodeFence(text: string): string {
   const trimmed = text.trim();
@@ -33,24 +35,27 @@ function stripJsonCodeFence(text: string): string {
     .trim();
 }
 
-function parseTreeWriteTaskResult(taskId: string, text: string): TreeWriteTaskResult {
+function parseTreeWriteTaskResultForAttempt(taskId: string, attemptCount: number, text: string): TreeWriteTaskResult {
   const raw = stripJsonCodeFence(text);
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   return treeWriteTaskResultSchema.parse({
     type: "task:tree_write:result",
     taskId,
+    attemptCount,
     ...parsed,
   });
 }
 
 function treeWriteFailure(
   taskId: string,
+  attemptCount: number,
   code: keyof typeof TREE_WRITE_ERROR_CODES,
   message: string,
 ): TreeWriteTaskResult {
   return {
     type: "task:tree_write:result",
     taskId,
+    attemptCount,
     kind: "failed",
     error: { code: TREE_WRITE_ERROR_CODES[code], message },
   };
@@ -94,7 +99,7 @@ export class TreeWriteBackgroundRunner {
 
   private async run(task: TreeWriteTaskStart): Promise<void> {
     this.runningTaskId = task.taskId;
-    this.startHeartbeat(task.taskId);
+    this.startHeartbeat(task.taskId, task.attemptCount);
     let finished = false;
     let resolveResult: ((result: TreeWriteTaskResult) => void) | null = null;
     const resultPromise = new Promise<TreeWriteTaskResult>((resolve) => {
@@ -118,10 +123,10 @@ export class TreeWriteBackgroundRunner {
       emitEvent: () => {},
       forwardResult: async (text: string) => {
         try {
-          finish(parseTreeWriteTaskResult(task.taskId, text));
+          finish(parseTreeWriteTaskResultForAttempt(task.taskId, task.attemptCount, text));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          finish(treeWriteFailure(task.taskId, "INVALID_RESULT_PAYLOAD", message));
+          finish(treeWriteFailure(task.taskId, task.attemptCount, "INVALID_RESULT_PAYLOAD", message));
         }
       },
       buildAgentEnv: (parentEnv) =>
@@ -144,11 +149,25 @@ export class TreeWriteBackgroundRunner {
       const handler = this.config.handlerFactory(this.config.handlerConfig);
       this.currentHandler = handler;
       await handler.start(syntheticMessage, sessionCtx);
-      const result = await resultPromise;
+      const result = await Promise.race([
+        resultPromise,
+        new Promise<TreeWriteTaskResult>((resolve) => {
+          setTimeout(() => {
+            resolve(
+              treeWriteFailure(
+                task.taskId,
+                task.attemptCount,
+                "TREE_WRITE_TOOL_ERROR",
+                "tree-write background task timed out before producing a terminal result",
+              ),
+            );
+          }, TREE_WRITE_RUNNER_TIMEOUT_MS);
+        }),
+      ]);
       if (!finished) finish(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      finish(treeWriteFailure(task.taskId, "TREE_WRITE_TOOL_ERROR", message));
+      finish(treeWriteFailure(task.taskId, task.attemptCount, "TREE_WRITE_TOOL_ERROR", message));
     } finally {
       this.stopHeartbeat();
       if (this.currentHandler) {
@@ -164,10 +183,10 @@ export class TreeWriteBackgroundRunner {
     }
   }
 
-  private startHeartbeat(taskId: string): void {
+  private startHeartbeat(taskId: string, attemptCount: number): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      this.config.onHeartbeat(taskId);
+      this.config.onHeartbeat(taskId, attemptCount);
     }, 60_000);
   }
 

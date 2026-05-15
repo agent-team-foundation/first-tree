@@ -46,6 +46,7 @@ describe("TreeWriteBackgroundRunner", () => {
     runner.enqueue({
       type: "task:tree_write:start",
       taskId: "task-1",
+      attemptCount: 1,
       execChatId: "exec-chat-1",
       sourceChatId: "source-chat-1",
       prompt: "test prompt",
@@ -55,6 +56,7 @@ describe("TreeWriteBackgroundRunner", () => {
       expect(onResult).toHaveBeenCalledWith({
         type: "task:tree_write:result",
         taskId: "task-1",
+        attemptCount: 1,
         kind: "done",
         prUrl: "https://github.com/agent-team-foundation/first-tree-context/pull/999",
       });
@@ -81,6 +83,7 @@ describe("TreeWriteBackgroundRunner", () => {
     runner.enqueue({
       type: "task:tree_write:start",
       taskId: "task-2",
+      attemptCount: 1,
       execChatId: "exec-chat-2",
       sourceChatId: "source-chat-2",
       prompt: "test prompt",
@@ -90,6 +93,7 @@ describe("TreeWriteBackgroundRunner", () => {
       expect(onResult).toHaveBeenCalledWith({
         type: "task:tree_write:result",
         taskId: "task-2",
+        attemptCount: 1,
         kind: "failed",
         error: {
           code: "invalid_result_payload",
