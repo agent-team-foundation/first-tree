@@ -740,10 +740,11 @@ export class SessionManager {
     // to other places that want structured fields.
     const log = (msg: string) => sessionLog.info(msg);
 
-    // One participant cache per session — shared by result-sink (for the
-    // direct-vs-group default-mention decision) and formatInboundContent
-    // (for resolving `[From: <name>]`). First use triggers a fetch;
-    // subsequent calls in either consumer hit memory.
+    // One participant cache per session — consumed by formatInboundContent
+    // (for resolving `[From: <name>]`). First use triggers a fetch; subsequent
+    // calls hit memory. v1 §四 改造 4 removed result-sink's dependency on
+    // this cache (the trigger-sender mention branch is gone), so the cache
+    // now flows only into the inbound-formatter path.
     const participants = createParticipantCache(this.config.sdk, chatId, log);
 
     const forwardResult = createResultSink({
@@ -755,7 +756,6 @@ export class SessionManager {
         this.currentTrigger.delete(chatId);
       },
       log,
-      participants,
       getDocumentBasePath: () => this.resolveDocumentBasePath(log),
     });
 

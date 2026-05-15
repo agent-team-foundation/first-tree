@@ -36,6 +36,25 @@ export const messageFormatSchema = z.enum([
 ]);
 export type MessageFormat = z.infer<typeof messageFormatSchema>;
 
+/**
+ * Optional intent tag set by the client when posting through
+ * `POST /agent/chats/:id/messages`. Tells the server *why* this write is
+ * happening so it can pick the right enforcement profile.
+ *
+ *   - `"agent-final-text"`: handler-initiated forward of an agent's final
+ *     reply text (today: `runtime/result-sink.ts`) OR an `AskUserQuestion`
+ *     payload posted via the canUseTool bridge. Both should land in chat
+ *     history so human observers in the web UI can see what the agent is
+ *     doing, but neither should wake other agents and neither should be
+ *     subject to the group-chat `@mention required` guard — they are not
+ *     a user-typed group broadcast. v1 §四 改造 4 (b) bypass channel.
+ *
+ * Default-`undefined` means a regular agent-initiated send (CLI `chat send`,
+ * adapter, etc.) and goes through the normal enforcement profile.
+ */
+export const messagePurposeSchema = z.enum(["agent-final-text"]);
+export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
+
 export const sendMessageSchema = z.object({
   format: messageFormatSchema.default("text"),
   content: z.unknown(),
@@ -44,6 +63,7 @@ export const sendMessageSchema = z.object({
   replyToInbox: z.string().optional(),
   replyToChat: z.string().optional(),
   source: messageSourceSchema.optional(),
+  purpose: messagePurposeSchema.optional(),
 });
 export type SendMessage = z.infer<typeof sendMessageSchema>;
 
@@ -54,6 +74,17 @@ export const sendToAgentSchema = z.object({
   replyToInbox: z.string().optional(),
   replyToChat: z.string().optional(),
   source: messageSourceSchema.optional(),
+  /**
+   * v1 §四 改造 1: when true, force the legacy "open/reuse a direct chat
+   * with the recipient" routing path even if the recipient is not a member
+   * of the caller's current chat. Default false — non-member sends ERROR
+   * with `AGENT_SEND_NON_MEMBER` so accidental side-channel chats are no
+   * longer created silently (issue #311).
+   *
+   * The name is intentionally identical at every layer (service / API /
+   * CLI / shared type) — see v1 design §二 决策表.
+   */
+  direct: z.boolean().optional(),
 });
 export type SendToAgent = z.infer<typeof sendToAgentSchema>;
 

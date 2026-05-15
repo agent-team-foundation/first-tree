@@ -3,6 +3,7 @@ import {
   type Agent,
   type AgentRuntimeConfig,
   type Chat,
+  type ChatDetail,
   type ChatParticipantDetail,
   type ClientCapabilities,
   type InboxEntryWithMessage,
@@ -265,6 +266,17 @@ export class FirstTreeHubSDK {
 
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
+  }
+
+  /**
+   * Fetch full chat detail (topic + participant membership rows). Used by the
+   * runtime bootstrap path to assemble a chat-level identity block injected
+   * into CLAUDE.md / AGENTS.md so the agent knows the chat's topic and who
+   * else is in the room. Participant rows here lack name/displayName/type —
+   * call `listChatParticipants` for that.
+   */
+  async getChatDetail(chatId: string): Promise<ChatDetail> {
+    return this.requestJson<ChatDetail>(`/api/v1/agent/chats/${chatId}`);
   }
 
   async listMessages(chatId: string, options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Message>> {

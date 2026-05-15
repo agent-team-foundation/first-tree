@@ -27,6 +27,8 @@ import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, installFirstTreeIntegration } from "../runtime/bootstrap.js";
+import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { renderChatContextSection } from "../runtime/chat-context-section.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
@@ -538,6 +540,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
           format: "question",
           content: questionContent,
+          // Same bypass channel result-sink uses: an AskUserQuestion is a
+          // handler-initiated post, not a user-typed group broadcast — it
+          // must not be rejected by the group-chat `@mention required`
+          // guard and must not wake other agents in the chat. v1 §四 改造 4
+          // (b) bypass channel.
+          purpose: "agent-final-text",
         });
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -898,16 +906,51 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
   }
 
-  /** Bootstrap workspace and generate CLAUDE.md. */
-  function runBootstrap(workspace: string, sessionCtx: SessionContext): void {
+  /**
+   * Best-effort chat-context fetch for the identity-injection path. Failures
+   * are logged but never bubble — bootstrap continues with `undefined` and
+   * the agent simply loses the "Current Chat Context" block (graceful
+   * degradation; the Communication Rules in tools.md still tell it to fall
+   * back to conservative mode).
+   */
+  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
+    try {
+      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
+    } catch (err) {
+      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Refresh the workspace's identity.json + CLAUDE.md from the latest chat
+   * context. v1.7 fix: chat-context must NOT be frozen at first bootstrap.
+   * When new participants join later, every resume re-fetches and rewrites
+   * the "Current Chat Context" section so the agent sees the live roster.
+   * Skips the expensive `first-tree tree integrate` shell-out — that part
+   * stays sentinel-protected and runs only on a fresh bootstrap.
+   */
+  function refreshIdentityAndPrompt(
+    workspace: string,
+    sessionCtx: SessionContext,
+    chatContext: ChatContext | undefined,
+  ): void {
     bootstrapWorkspace({
       workspacePath: workspace,
       identity: sessionCtx.agent,
       contextTreePath,
       serverUrl: sessionCtx.sdk.serverUrl,
       chatId: sessionCtx.chatId,
+      chatContext,
     });
-    generateClaudeMd(workspace, sessionCtx.agent, contextTreePath);
+    generateClaudeMd(workspace, sessionCtx.agent, contextTreePath, chatContext);
+  }
+
+  /** Full bootstrap: refresh identity/prompt + run the expensive
+   *  `first-tree tree integrate` shell-out. Used on `start()` and on
+   *  `resume()` when the stage-2 sentinel is missing. */
+  function runBootstrap(workspace: string, sessionCtx: SessionContext, chatContext: ChatContext | undefined): void {
+    refreshIdentityAndPrompt(workspace, sessionCtx, chatContext);
 
     // Install the first-tree skill + FIRST-TREE-SOURCE-INTEGRATION block into
     // the workspace by shelling out to `first-tree tree integrate`. Best-effort:
@@ -932,7 +975,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
 
       // Always bootstrap on start
-      runBootstrap(cwd, sessionCtx);
+      const chatContext = await fetchChatContextOrLog(sessionCtx);
+      runBootstrap(cwd, sessionCtx, chatContext);
 
       // Materialise gitRepos into `<cwd>/<localPath>` worktrees before the
       // child process starts — failures here abort session creation (D10/D13).
@@ -961,12 +1005,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       retryCount = 0;
       cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
 
-      // Bootstrap on resume only if the stage-2 sentinel is missing. Pre-F3
-      // this check looked at `.agent/identity.json`; now `.agent/init-complete`
-      // is the authoritative "stage 2 finished" signal, written by
-      // `markWorkspaceInitComplete` after worktrees materialise.
+      // v1.7: always re-fetch chat-context + rewrite CLAUDE.md + identity.json
+      // on resume so newly-added participants surface in the agent's prompt.
+      // The sentinel still gates the expensive `first-tree tree integrate`
+      // shell-out (only re-runs on fresh bootstrap), but the cheap
+      // identity/prompt refresh now happens every time. See
+      // proposals/hub-chat-message-v1-design §四 改造 3 v1.7 dogfood follow-up.
+      const chatContext = await fetchChatContextOrLog(sessionCtx);
       if (!existsSync(join(cwd, INIT_COMPLETE_SENTINEL_REL))) {
-        runBootstrap(cwd, sessionCtx);
+        runBootstrap(cwd, sessionCtx, chatContext);
+      } else {
+        refreshIdentityAndPrompt(cwd, sessionCtx, chatContext);
       }
 
       // Re-run git preparation: ensureMirror short-circuits if already cloned;
@@ -1105,7 +1154,12 @@ function isHubWorktreeMarker(path: string): boolean {
  * `agent_configs.payload.prompt.append` and are passed to the Claude SDK via
  * `systemPrompt.append` — not through this file.
  */
-function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): void {
+function generateClaudeMd(
+  workspacePath: string,
+  identity: AgentIdentity,
+  contextTreePath: string | null,
+  chatContext: ChatContext | undefined,
+): void {
   const sections: string[] = [];
   const contextDir = join(workspacePath, ".agent", "context");
 
@@ -1115,6 +1169,12 @@ function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contex
     sections.push(`# Agent Identity\n\nYou are ${name}, a personal assistant agent.\n`);
   } else {
     sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
+  }
+
+  // --- Current Chat Context (when injection succeeded) ---
+  const chatContextSection = renderChatContextSection(chatContext);
+  if (chatContextSection) {
+    sections.push(chatContextSection);
   }
 
   // --- Context Tree operating instructions (AGENT.md) ---
