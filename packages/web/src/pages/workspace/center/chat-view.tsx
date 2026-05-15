@@ -43,7 +43,6 @@ import {
   type QuestionStatus,
 } from "../../../components/chat/question-message.js";
 import { WorkingBubble } from "../../../components/chat/working-bubble.js";
-import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import {
   ambiguousDisplayNames,
   groupAndSortCandidates,
@@ -126,7 +125,7 @@ function AssistantTextRow({
         opacity: 0.85,
       }}
     >
-      <Avatar name={senderName} isSelf={false} imageUrl={agentAvatarFn(agentId)} />
+      <Avatar name={senderName} imageUrl={agentAvatarFn(agentId)} seed={agentId} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
@@ -184,36 +183,31 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
 }
 
 /**
- * Small inline avatar used in the message timeline. When `imageUrl` is
- * present (human GitHub avatar, agent manager-uploaded image), renders
- * the real image via the shared `<Avatar>` component. Otherwise keeps
- * the existing visual treatment: a green gradient + initials for
- * self-authored messages, and the FirstTree logo for other speakers.
+ * Small inline avatar used in the message timeline. Always renders via
+ * the shared `<Avatar>` component so every speaker — self, peer agents,
+ * humans — gets the same visual treatment: uploaded image when present,
+ * otherwise a hue-seeded color disc + first initial. `seed` is the
+ * sender's agent UUID, which makes the fallback color stable across
+ * reloads and identical to the left-rail `ChatRowAvatar` for the same
+ * agent.
+ *
+ * `name` is typed as required but accepts `undefined` defensively:
+ * `useAgentNameMap` should always return a string (uuid fallback), but a
+ * version-skewed backend can leak partial message rows where the wire
+ * `senderId` is missing entirely. Falling back to "?" keeps the timeline
+ * rendering instead of crashing the whole chat view.
  */
-function Avatar({ name, isSelf, imageUrl }: { name: string; isSelf: boolean; imageUrl?: string | null }) {
-  if (imageUrl) {
-    return <RealAvatar src={imageUrl} name={name} size={20} />;
-  }
-  const initials = name.slice(0, 2).toUpperCase();
-  return (
-    <div
-      className="mono text-eyebrow font-bold"
-      style={{
-        width: 20,
-        height: 20,
-        borderRadius: "var(--radius-input)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        background: isSelf ? "linear-gradient(135deg, var(--accent), oklch(0.58 0.14 170))" : "var(--bg-active)",
-        border: isSelf ? "none" : "var(--hairline) solid var(--border-strong)",
-        color: isSelf ? "oklch(0.14 0.01 150)" : "var(--fg-2)",
-      }}
-    >
-      {isSelf ? initials : <FirstTreeLogo width={9} height={10} style={{ color: "var(--accent)" }} />}
-    </div>
-  );
+function Avatar({
+  name,
+  imageUrl,
+  seed,
+}: {
+  name: string;
+  imageUrl?: string | null;
+  seed?: string;
+}) {
+  const safeName = name ?? "?";
+  return <RealAvatar src={imageUrl ?? null} name={safeName} seed={seed ?? safeName} size={20} />;
 }
 
 function TextRow({
@@ -282,7 +276,7 @@ function TextRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={isSelf} imageUrl={agentAvatarFn(msg.senderId)} />
+      <Avatar name={senderName} imageUrl={agentAvatarFn(msg.senderId)} seed={msg.senderId} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
@@ -435,7 +429,7 @@ function QuestionMessageRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={false} imageUrl={agentAvatarFn(msg.senderId)} />
+      <Avatar name={senderName} imageUrl={agentAvatarFn(msg.senderId)} seed={msg.senderId} />
       <div className="min-w-0 flex flex-col" style={{ gap: "var(--sp-1)" }}>
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--accent)" }}>
@@ -478,7 +472,7 @@ function QuestionAnswerRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf imageUrl={agentAvatarFn(msg.senderId)} />
+      <Avatar name={senderName} imageUrl={agentAvatarFn(msg.senderId)} seed={msg.senderId} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--fg)" }}>
