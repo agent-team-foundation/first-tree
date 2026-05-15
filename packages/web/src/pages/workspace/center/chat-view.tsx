@@ -43,7 +43,6 @@ import {
   type QuestionStatus,
 } from "../../../components/chat/question-message.js";
 import { WorkingBubble } from "../../../components/chat/working-bubble.js";
-import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import {
   ambiguousDisplayNames,
   groupAndSortCandidates,
@@ -106,11 +105,13 @@ function AssistantTextRow({
   event,
   agentNameFn,
   agentAvatarFn,
+  agentColorTokenFn,
   agentId,
 }: {
   event: SessionEventRow;
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
   agentId: string;
 }) {
   const payload = asAssistantTextPayload(event.payload);
@@ -126,7 +127,12 @@ function AssistantTextRow({
         opacity: 0.85,
       }}
     >
-      <Avatar name={senderName} isSelf={false} imageUrl={agentAvatarFn(agentId)} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(agentId)}
+        seed={agentId}
+        colorToken={agentColorTokenFn(agentId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
@@ -184,35 +190,40 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
 }
 
 /**
- * Small inline avatar used in the message timeline. When `imageUrl` is
- * present (human GitHub avatar, agent manager-uploaded image), renders
- * the real image via the shared `<Avatar>` component. Otherwise keeps
- * the existing visual treatment: a green gradient + initials for
- * self-authored messages, and the FirstTree logo for other speakers.
+ * Small inline avatar used in the message timeline. Always renders via
+ * the shared `<Avatar>` component so every speaker — self, peer agents,
+ * humans — gets the same visual treatment: uploaded image when present,
+ * otherwise a hue-seeded color disc + first initial. `seed` is the
+ * sender's agent UUID, which makes the fallback color stable across
+ * reloads and identical to the left-rail `ChatRowAvatar` for the same
+ * agent.
+ *
+ * `name` is typed as required but accepts `undefined` defensively:
+ * `useAgentNameMap` should always return a string (uuid fallback), but a
+ * version-skewed backend can leak partial message rows where the wire
+ * `senderId` is missing entirely. Falling back to "?" keeps the timeline
+ * rendering instead of crashing the whole chat view.
  */
-function Avatar({ name, isSelf, imageUrl }: { name: string; isSelf: boolean; imageUrl?: string | null }) {
-  if (imageUrl) {
-    return <RealAvatar src={imageUrl} name={name} size={20} />;
-  }
-  const initials = name.slice(0, 2).toUpperCase();
+function Avatar({
+  name,
+  imageUrl,
+  seed,
+  colorToken,
+}: {
+  name: string;
+  imageUrl?: string | null;
+  seed?: string;
+  colorToken?: string | null;
+}) {
+  const safeName = name ?? "?";
   return (
-    <div
-      className="mono text-eyebrow font-bold"
-      style={{
-        width: 20,
-        height: 20,
-        borderRadius: "var(--radius-input)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        background: isSelf ? "linear-gradient(135deg, var(--accent), oklch(0.58 0.14 170))" : "var(--bg-active)",
-        border: isSelf ? "none" : "var(--hairline) solid var(--border-strong)",
-        color: isSelf ? "oklch(0.14 0.01 150)" : "var(--fg-2)",
-      }}
-    >
-      {isSelf ? initials : <FirstTreeLogo width={9} height={10} style={{ color: "var(--accent)" }} />}
-    </div>
+    <RealAvatar
+      src={imageUrl ?? null}
+      name={safeName}
+      seed={seed ?? safeName}
+      colorToken={colorToken ?? null}
+      size={20}
+    />
   );
 }
 
@@ -221,11 +232,13 @@ function TextRow({
   myAgentId,
   agentNameFn,
   agentAvatarFn,
+  agentColorTokenFn,
 }: {
   msg: MessageWithDelivery;
   myAgentId: string | null;
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -304,7 +317,12 @@ function TextRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={isSelf} imageUrl={agentAvatarFn(msg.senderId)} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
@@ -465,6 +483,7 @@ function QuestionMessageRow({
   status,
   agentNameFn,
   agentAvatarFn,
+  agentColorTokenFn,
 }: {
   msg: MessageWithDelivery;
   chatId: string;
@@ -473,6 +492,7 @@ function QuestionMessageRow({
   status: QuestionStatus;
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
 }) {
   const senderName = agentNameFn(msg.senderId);
   return (
@@ -484,7 +504,12 @@ function QuestionMessageRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={false} imageUrl={agentAvatarFn(msg.senderId)} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0 flex flex-col" style={{ gap: "var(--sp-1)" }}>
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--accent)" }}>
@@ -506,10 +531,12 @@ function QuestionAnswerRow({
   msg,
   agentNameFn,
   agentAvatarFn,
+  agentColorTokenFn,
 }: {
   msg: MessageWithDelivery;
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
 }) {
   const parsed = isQuestionAnswerContent(msg.content) ? msg.content : null;
   const senderName = agentNameFn(msg.senderId);
@@ -527,7 +554,12 @@ function QuestionAnswerRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf imageUrl={agentAvatarFn(msg.senderId)} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--fg)" }}>
@@ -621,9 +653,18 @@ export function ChatView({
    * sender's resolved avatar (uploaded agent image, or — for human
    * agents — the backing user's GitHub avatar). `null` when the agent
    * is missing from the identity map or has no avatar; the timeline
-   * row's `<Avatar>` then falls back to the FirstTree logo / initials.
+   * row's `<Avatar>` then falls back to a hue-seeded color disc +
+   * initial.
    */
   const agentAvatar = useCallback((id: string) => agentIdentity(id)?.avatarImageUrl ?? null, [agentIdentity]);
+  /**
+   * Manager-selected hue override (`hue-0..7`) for the sender. `null`
+   * when no override is set, in which case the fallback hue is derived
+   * from a deterministic djb2 hash on the agent UUID. Threading this
+   * through the timeline keeps a manager's color choice in sync with
+   * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
+   */
+  const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
   const { agentId: myAgentId } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -1432,6 +1473,7 @@ export function ChatView({
                         agentId={agentId}
                         agentNameFn={chatScopedAgentName}
                         agentAvatarFn={agentAvatar}
+                        agentColorTokenFn={agentColorToken}
                       />
                     );
                   case "error":
@@ -1456,6 +1498,7 @@ export function ChatView({
                     status={status}
                     agentNameFn={chatScopedAgentName}
                     agentAvatarFn={agentAvatar}
+                    agentColorTokenFn={agentColorToken}
                   />
                 );
               }
@@ -1466,6 +1509,7 @@ export function ChatView({
                     msg={msg}
                     agentNameFn={chatScopedAgentName}
                     agentAvatarFn={agentAvatar}
+                    agentColorTokenFn={agentColorToken}
                   />
                 );
               }
@@ -1476,6 +1520,7 @@ export function ChatView({
                   myAgentId={myAgentId}
                   agentNameFn={chatScopedAgentName}
                   agentAvatarFn={agentAvatar}
+                  agentColorTokenFn={agentColorToken}
                 />
               );
             })}

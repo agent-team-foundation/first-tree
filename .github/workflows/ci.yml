@@ -89,6 +89,27 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    # Sidecar Postgres started by the runner in parallel with checkout / install,
+    # so the test process never pays a `docker pull postgres:17` cost on its
+    # critical path. `global-setup.ts` reads `CI_DATABASE_URL` and skips the
+    # testcontainers spin-up; locally that env is unset and the original
+    # testcontainers path stays intact.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI_DATABASE_URL: postgres://test:test@localhost:5432/test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
