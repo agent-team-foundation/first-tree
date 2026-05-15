@@ -174,8 +174,14 @@ export const meChatRowSchema = z.object({
    * `GITHUB_ENTITY_TYPES` in `chat-metadata.ts` — the row schema picks
    * the new value up automatically through the shared
    * `githubEntityTypeSchema`.
+   *
+   * Defaulted to `null` for the same defence-in-depth reason `source`
+   * carries a default: an older server build that doesn't yet include
+   * this column would otherwise produce `undefined`, which fails a
+   * runtime Zod parse (if web ever adopts one) and could surprise
+   * `SourceIcon`'s null-check. The default keeps the contract closed.
    */
-  entityType: githubEntityTypeSchema.nullable(),
+  entityType: githubEntityTypeSchema.nullable().default(null),
   title: z.string(),
   topic: z.string().nullable(),
   participants: z.array(meChatParticipantSchema),
