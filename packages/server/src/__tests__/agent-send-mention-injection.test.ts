@@ -534,9 +534,12 @@ describe("group-chat mention enforcement + content normalisation", () => {
       const target = await createTestAgent(app, { name: `dm-t-${uid}` });
       if (!target.agent.name) throw new Error("target name missing");
 
+      // No shared chat between sender and target — v1 §四 改造 1 requires
+      // `direct: true` to fall through to findOrCreateDirectChat.
       const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
         format: "text",
         content: "ping",
+        direct: true,
       });
       expect(result.message.content).toBe(`@${target.agent.name} ping`);
       const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
@@ -553,6 +556,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
       const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
         format: "text",
         content: `@${target.agent.name} please review`,
+        direct: true,
       });
       expect(result.message.content).toBe(`@${target.agent.name} please review`);
     });
@@ -568,6 +572,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
       const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
         format: "card",
         content: card,
+        direct: true,
       });
       expect(result.message.content).toEqual(card);
       const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
@@ -588,6 +593,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         format: "text",
         content: "ping",
         metadata: { mentions: [ghost] },
+        direct: true,
       });
       const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
       expect(meta.mentions).toEqual(expect.arrayContaining([ghost, target.agent.uuid]));

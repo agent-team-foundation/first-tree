@@ -1,30 +1,32 @@
 import { documentContextSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
-import type { ParticipantCache } from "./agent-io.js";
 import type { AgentIdentity } from "./handler.js";
 
 /**
  * Forward-to-chat sink — the single place that owns "handler produced a final
- * text, now turn it into a wire message". Lives in the runtime layer so
- * every handler (Claude Code today, Gemini / Cursor / custom tomorrow) reuses
- * the same enrichment:
+ * text, now turn it into a wire message". Lives in the runtime layer so every
+ * handler (Claude Code today, Gemini / Cursor / custom tomorrow) reuses the
+ * same enrichment:
  *
  * - `inReplyTo` is pulled from the current trigger (the message that kicked
  *   off this turn), so peers that threaded via reply routing see the answer
  *   in their waiting chat — see proposals/hub-agent-messaging-reply-and-mentions §3.4.
- * - For `mention_only` peers the trigger sender is added to the outbound
- *   mention list so the server's fan-out filter routes the reply back to them
- *   even if the handler didn't explicitly `@` them. This applies in groups
- *   AND in agent↔agent direct chats (both participants are `mention_only`
- *   under migration 0029 to break A↔B reply loops); we skip it in
- *   human↔agent direct chats where the human stays `full` and the prefix
- *   would just be UI noise.
+ * - `metadata.documentContext` is populated (when the handler has a
+ *   document base path) so the web markdown preview can resolve repo-local
+ *   doc links — see PR #356.
+ *
+ * The sink deliberately does NOT auto-mention the trigger sender. v1
+ * (`proposals/hub-chat-message-v1-design §四 改造 4`) removed that branch
+ * because it was the structural fuel for agent ↔ agent echo loops: a final
+ * text always woke the trigger sender, so a courteous "thanks / got it"
+ * reply kept the conversation alive forever. Final text now reaches the
+ * chat for **human observers** only; to make another agent take action,
+ * the agent must explicitly call `first-tree-hub chat send <name>` (see
+ * the "Communication Rules" section in `tools.md`).
  *
  * Content-level `@<name>` resolution (extracting tokens and cross-validating
  * against the participant list) is the server's job — see
- * `services/message.ts sendMessage`. The server merges its resolved mentions
- * with whatever we pass in metadata, so this sink only needs to contribute
- * the *default* mention a handler can't know about (the trigger sender).
+ * `services/message.ts sendMessage`.
  */
 
 export type Trigger = { messageId: string; senderId: string };
@@ -43,12 +45,6 @@ export type ResultSinkDeps = {
   clearTrigger: () => void;
   log: (msg: string) => void;
   /**
-   * Shared participant cache (also consumed by formatInboundContent) — the
-   * runtime owns a single fetch per session so both "is this a group?"
-   * and "what's the sender's name?" questions share one round-trip.
-   */
-  participants: ParticipantCache;
-  /**
    * Optional repo-local base path for markdown document links emitted by the
    * handler. When present, web preview resolves `docs/foo.md` inside that
    * worktree instead of the per-chat workspace root.
@@ -59,31 +55,17 @@ export type ResultSinkDeps = {
 export type ResultSink = (text: string) => Promise<void>;
 
 export function createResultSink(deps: ResultSinkDeps): ResultSink {
-  async function buildMetadata(trigger: Trigger | null): Promise<Record<string, unknown> | undefined> {
+  async function buildMetadata(): Promise<Record<string, unknown> | undefined> {
     const metadata: Record<string, unknown> = {};
     const documentBasePath = await deps.getDocumentBasePath?.();
     if (documentBasePath) {
       metadata.documentContext = documentContextSchema.parse({ basePath: documentBasePath });
     }
 
-    // Default-mention the trigger sender so the server's fan-out wakes them
-    // regardless of whether the handler text contains an explicit `@`. Skip
-    // when the peer is `full` AND we're 1:1: the message reaches them
-    // anyway, so the prefix would just be UI noise (typically a human in a
-    // human↔agent direct chat). In groups we always emit the @ — it's the
-    // visual cue that says "this reply is for X" and the routing guarantee
-    // for any `mention_only` participant who happens to be the trigger.
-    if (trigger && trigger.senderId !== deps.agent.agentId) {
-      const participants = await deps.participants.get();
-      if (participants.length <= 2) {
-        const peer = participants.find((p) => p.agentId === trigger.senderId);
-        if (!peer || peer.mode === "mention_only") {
-          metadata.mentions = [trigger.senderId];
-        }
-      } else {
-        metadata.mentions = [trigger.senderId];
-      }
-    }
+    // v1 §四 改造 4: the trigger-sender mention auto-injection that used to
+    // live here was deleted to break the agent ↔ agent echo loop. Final
+    // text reaches the chat for human observers only; agent-to-agent
+    // wake-ups now require an explicit `first-tree-hub chat send <name>`.
 
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   }
@@ -105,11 +87,17 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // isn't accidentally attached to this outbound reply.
     deps.clearTrigger();
 
-    const metadata = await buildMetadata(trigger);
+    const metadata = await buildMetadata();
 
     await deps.sdk.sendMessage(deps.chatId, {
       format: "text",
       content: text,
+      // `purpose: "agent-final-text"` tells the server to skip the
+      // group-chat `@mention required` guard and force every fan-out row
+      // to `notify=false`. final text lands in chat history so human
+      // observers see what the agent did, but it never wakes another
+      // session — see v1 §四 改造 4 (b) bypass channel.
+      purpose: "agent-final-text",
       ...(trigger ? { inReplyTo: trigger.messageId } : {}),
       ...(metadata ? { metadata } : {}),
     });

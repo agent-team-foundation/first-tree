@@ -1,3 +1,4 @@
+import { AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
@@ -77,6 +78,13 @@ describe("direct chat default mode (migration 0029)", () => {
       const uid = crypto.randomUUID().slice(0, 6);
       const auto = await createTestAgent(app, { name: `dc-au-${uid}`, type: "autonomous_agent" });
       const { agent: pa } = await createTestAgent(app, { name: `dc-pa-${uid}`, type: "personal_assistant" });
+      // `personal_assistant` defaults to `visibility=private` (see
+      // `services/agent.ts::defaultVisibility`); flip it to organization
+      // so the cross-owner direct-chat owner-exclusive gate doesn't
+      // pre-empt this test. This case targets the mode-seeding rule,
+      // not the visibility gate covered in
+      // `chat-private-mention-visibility.test.ts`.
+      await app.db.update(agents).set({ visibility: AGENT_VISIBILITY.ORGANIZATION }).where(eq(agents.uuid, pa.uuid));
 
       const chat = await findOrCreateDirectChat(app.db, auto.agent.uuid, pa.uuid);
       const modes = await loadModes(chat.id);

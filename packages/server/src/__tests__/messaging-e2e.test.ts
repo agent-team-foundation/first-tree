@@ -86,11 +86,14 @@ describe("messaging E2E — proposal §六 scenarios", () => {
     expect(humanMsg.message.inReplyToSnapshot).toBeNull();
     expect(suppressEcho(humanMsg, b1.uuid)).toBe(false);
 
+    // b2 is not a member of c1; v1 §四 改造 1 routes this through the
+    // explicit direct-chat path via `direct: true`.
     await sendToAgent(app.db, b1.uuid, b2.name as string, {
       format: "text",
       content: "please summarize",
       replyToInbox: b1.inboxId,
       replyToChat: c1.id,
+      direct: true,
     });
     await ackAll(app, b1PulledInit, b1.inboxId);
 

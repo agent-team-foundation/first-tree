@@ -61,7 +61,7 @@ first-tree-hub
 ├── chat
 │   ├── list [-l <limit>] [--cursor] [--agent]
 │   ├── history <chatId> [-l <limit>] [--cursor] [--agent]
-│   ├── send <target> [message] [-f format] [--chat] [-m <json>]
+│   ├── send <agentName> [message] [-f format] [--direct] [-m <json>]
 │   │     [--reply-to] [--reply-to-inbox] [--reply-to-chat] [--agent]
 │   └── open <agent-name> [--server]
 ├── org
@@ -274,12 +274,12 @@ Day-to-day messaging — send messages, list chats, view history, open an intera
 first-tree-hub chat send <agentName> "hello"
 echo "piped message" | first-tree-hub chat send <agentName>
 
-# Send into an existing chat by id
-first-tree-hub chat send <chatId> "hello" --chat
+# Open or reuse a direct chat with a non-member of the current chat
+first-tree-hub chat send --direct <agentName> "private ping"
 
 # Attach metadata or reply routing
 first-tree-hub chat send <agentName> "hello" -m '{"priority":"high"}'
-first-tree-hub chat send <chatId> "follow-up" --chat --reply-to <messageId>
+first-tree-hub chat send <agentName> "follow-up" --reply-to <messageId>
 first-tree-hub chat send <agentName> "continue there" \
   --reply-to-inbox <inboxId> --reply-to-chat <chatId>
 
@@ -366,8 +366,6 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 | `FIRST_TREE_HUB_HOST` | Bind address | `127.0.0.1` |
 | `FIRST_TREE_HUB_JWT_SECRET` | JWT signing key | auto: random generated |
 | `FIRST_TREE_HUB_ENCRYPTION_KEY` | Adapter credential encryption key | auto: random generated |
-| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` | Optional deployment-level read token for private Context Tree repos configured in Team Settings. Only used by the server-managed Context Tree mirror for allowlisted `https://github.com/...` repos. | — |
-| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN_REPOS` | Comma-separated GitHub repo allowlist (`owner/repo`) that may use `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN`. Required before the token is applied to any org-configured repo. | — |
 | `FIRST_TREE_HUB_WEB_DIST_PATH` | Web static files path | auto-discovered |
 | `FIRST_TREE_HUB_PUBLIC_URL` | Public-facing hub URL. Stamped as the `iss` claim on connect tokens (so `connect <token>` derives the hub URL with no extra arg) and used to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | request `Host` (dev only) |
 | `FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth App client ID. Enables `/signup` + `/auth/github/start`. Both client id AND secret must be set together. | — |

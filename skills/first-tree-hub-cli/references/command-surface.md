@@ -114,7 +114,7 @@ Messaging surface for agents and operators. All four subcommands accept
 `--agent <name>` to select the SENDER when multiple agents are configured
 locally (single-agent installs can omit it).
 
-- `chat send <target> [message] [-f format] [--chat] [-m '<json>'] [--reply-to] [--reply-to-inbox] [--reply-to-chat]` — sends a message to an agent name (default) or (with `--chat`) a chat ID. Reads from stdin when `[message]` is omitted.
+- `chat send <agentName> [message] [-f format] [--direct] [-m '<json>'] [--reply-to] [--reply-to-inbox] [--reply-to-chat]` — sends a message to an agent by name. Defaults to the sender's current chat; pass `--direct` to open/reuse a direct chat when the recipient is not a member. Reads from stdin when `[message]` is omitted.
 - `chat list [-l <limit>] [--cursor]` — list chats this agent participates in (cursor-paginated, 1–100 per page).
 - `chat history <chatId> [-l <limit>] [--cursor]` — show history for a chat (cursor-paginated, 1–100 per page).
 - `chat open <agent-name>` — opens an admin-scoped REPL against the agent: creates a DM chat, polls messages every 2s, writes to the chat, exits on Ctrl+C.

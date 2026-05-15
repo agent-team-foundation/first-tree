@@ -283,6 +283,27 @@ function normalizeRemoteRepoUrl(value: string): string {
   return value;
 }
 
+/**
+ * Whether this binding actually drives a GitHub-hosted remote fetch — the
+ * only case where minting a GitHub App installation token is meaningful.
+ *
+ * Returns false when:
+ *  - `localPath` is set (sync code short-circuits to the local checkout
+ *    before ever looking at `repo`)
+ *  - `repo` is missing
+ *  - `repo` is a file:// URL, a non-GitHub HTTPS URL, or otherwise
+ *    unparseable
+ *
+ * Used by the snapshot routes to gate the "install the GitHub App"
+ * guidance — without this gate, every unavailable snapshot (missing repo,
+ * bad branch, …) gets a misleading App-install hint appended.
+ */
+export function isGithubRemoteBinding(binding: { repo?: string; localPath?: string }): boolean {
+  if (binding.localPath && binding.localPath.trim().length > 0) return false;
+  if (!binding.repo) return false;
+  return isGithubHttpsRepo(normalizeRemoteRepoUrl(binding.repo));
+}
+
 function managedContextTreeCacheRoot(): string {
   return join(DEFAULT_DATA_DIR, "context-tree-repos");
 }
@@ -478,7 +499,7 @@ function errorMessage(error: unknown): string {
 function redactSecret(message: string): string {
   return message
     .replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@")
-    .replace(/\bghp_[A-Za-z0-9_]+/g, "[redacted]")
+    .replace(/\b(?:ghp|ghs|ghu|gho|ghr)_[A-Za-z0-9_]+/g, "[redacted]")
     .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "[redacted]");
 }
 
