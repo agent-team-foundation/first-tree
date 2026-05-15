@@ -6,9 +6,10 @@ export const NOTIFICATION_TYPES = {
   AGENT_ERROR: "agent_error",
   AGENT_BLOCKED: "agent_blocked",
   AGENT_STALE: "agent_stale",
+  TREE_WRITE_COMPLETED: "tree_write_completed",
 } as const;
 
-export const notificationTypeSchema = z.enum(["agent_error", "agent_blocked", "agent_stale"]);
+export const notificationTypeSchema = z.enum(["agent_error", "agent_blocked", "agent_stale", "tree_write_completed"]);
 export type NotificationType = z.infer<typeof notificationTypeSchema>;
 
 // -- Notification Severity --

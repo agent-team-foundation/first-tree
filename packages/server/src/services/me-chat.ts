@@ -124,19 +124,50 @@ export async function setChatEngagement(
   chatId: string,
   agentId: string,
   status: ChatEngagementStatus,
-): Promise<void> {
+): Promise<{ previousStatus: ChatEngagementStatus; engagementStatus: ChatEngagementStatus; archiveSeq: number }> {
+  // Ensure the row exists so every transition runs as an UPDATE under a
+  // row lock. This keeps `archive_seq` monotonic even when a never-touched
+  // chat is archived for the first time.
   await db
     .insert(chatUserState)
     .values({
       chatId,
       agentId,
       unreadMentionCount: 0,
-      engagementStatus: status,
+      engagementStatus: ACTIVE,
+      archiveSeq: 0,
     })
-    .onConflictDoUpdate({
-      target: [chatUserState.chatId, chatUserState.agentId],
-      set: { engagementStatus: status },
-    });
+    .onConflictDoNothing();
+
+  const rows = await db.execute<{ engagement_status: string; archive_seq: number }>(sql`
+    SELECT engagement_status, archive_seq
+    FROM chat_user_state
+    WHERE chat_id = ${chatId}
+      AND agent_id = ${agentId}
+    FOR UPDATE
+  `);
+  const current = rows[0];
+  if (!current) {
+    throw new Error("Unexpected: chat_user_state row missing after lazy materialisation");
+  }
+
+  const previousStatus = current.engagement_status as ChatEngagementStatus;
+  const nextArchiveSeq =
+    previousStatus === ACTIVE && status === ARCHIVED ? current.archive_seq + 1 : current.archive_seq;
+
+  await db
+    .update(chatUserState)
+    .set({
+      engagementStatus: status,
+      archiveSeq: nextArchiveSeq,
+    })
+    .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, agentId)));
+
+  return {
+    previousStatus,
+    engagementStatus: status,
+    archiveSeq: nextArchiveSeq,
+  };
 }
 
 /**

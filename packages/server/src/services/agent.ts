@@ -412,6 +412,7 @@ export async function createAgent(
           managerId,
           clientId,
           runtimeProvider,
+          treeWriteOnArchive: data.treeWriteOnArchive ?? false,
         })
         .returning();
 
@@ -530,6 +531,7 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      treeWriteOnArchive: agents.treeWriteOnArchive,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
       createdAt: agents.createdAt,
@@ -583,6 +585,7 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      treeWriteOnArchive: agents.treeWriteOnArchive,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
       createdAt: agents.createdAt,
@@ -639,6 +642,7 @@ export async function listAgentsForMember(
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      treeWriteOnArchive: agents.treeWriteOnArchive,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
       createdAt: agents.createdAt,
@@ -712,6 +716,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   // Explicit null clears the override (renderer falls back to djb2 hash).
   // Omitting the field leaves the column untouched.
   if (data.avatarColorToken !== undefined) updates.avatarColorToken = data.avatarColorToken;
+  if (data.treeWriteOnArchive !== undefined) updates.treeWriteOnArchive = data.treeWriteOnArchive;
 
   if (data.managerId !== undefined) {
     if (data.managerId === null) {

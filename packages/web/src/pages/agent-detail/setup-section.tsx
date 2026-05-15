@@ -24,6 +24,9 @@ export type SetupSectionProps = {
   /** When set, the bound-computer card surfaces a "Re-bind" button that
    *  opens the unified ReBindDialog (UX U2). Available only on bound agents. */
   onRebind?: () => void;
+  treeWriteOnArchive?: boolean;
+  treeWritePending?: boolean;
+  onToggleTreeWriteOnArchive?: (checked: boolean) => void;
   /** Slot for the Model dropdown — we reuse the existing ModelSection via composition. */
   modelSlot: ReactNode;
 };
@@ -54,6 +57,14 @@ export function SetupSection(props: SetupSectionProps) {
         onBindComputer={props.onBindComputer}
         onRebind={props.onRebind}
       />
+
+      {props.onToggleTreeWriteOnArchive && (
+        <ArchiveAutomationCard
+          checked={props.treeWriteOnArchive ?? false}
+          pending={props.treeWritePending ?? false}
+          onToggle={props.onToggleTreeWriteOnArchive}
+        />
+      )}
 
       {props.modelSlot}
     </div>
@@ -142,6 +153,32 @@ function ComputerCard(props: {
             via the button above.
           </p>
         )}
+      </PanelBody>
+    </Panel>
+  );
+}
+
+function ArchiveAutomationCard(props: { checked: boolean; pending: boolean; onToggle: (checked: boolean) => void }) {
+  return (
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Archive automation</PanelTitle>
+      </PanelHeader>
+      <PanelBody className="space-y-2 text-body">
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={props.checked}
+            onChange={(e) => props.onToggle(e.target.checked)}
+            disabled={props.pending}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>When this agent's manager archives a chat, enqueue a background Context Tree write task.</span>
+        </label>
+        <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+          Requires a verified Context Tree binding on the running client. The default outcome is no write unless the
+          archived chat produced a durable decision worth preserving.
+        </p>
       </PanelBody>
     </Panel>
   );

@@ -16,6 +16,7 @@ import type { SessionConfig } from "./config.js";
 import { createGitMirrorManager } from "./git-mirror-manager.js";
 import type { HandlerFactory } from "./handler.js";
 import { SessionManager } from "./session-manager.js";
+import { TreeWriteBackgroundRunner } from "./tree-write-runner.js";
 
 export type AgentSlotConfig = {
   name: string;
@@ -35,6 +36,10 @@ export type AgentSlotConfig = {
 type ConnectionListener =
   | { event: "agent:message"; fn: (agentId: string, data: unknown) => void }
   | { event: "inbox:deliver"; fn: (inboxId: string, frame: InboxDeliverFrame) => void }
+  | {
+      event: "task:tree_write:start";
+      fn: (agentId: string, task: import("@agent-team-foundation/first-tree-hub-shared").TreeWriteTaskStart) => void;
+    }
   | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
   | { event: "session:command"; fn: (cmd: { agentId: string; chatId: string; type: string }) => void }
   | { event: "session:reconcile:result"; fn: (result: SessionReconcileResult) => void };
@@ -48,6 +53,7 @@ export class AgentSlot {
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private listeners: ConnectionListener[] = [];
+  private treeWriteRunner: TreeWriteBackgroundRunner | null = null;
   /**
    * The inbox this slot's agent owns — used to filter `inbox:deliver`
    * frames addressed to other agents on the same client. Captured at
@@ -79,6 +85,14 @@ export class AgentSlot {
    */
   getQuietGateSnapshot(): { activeCount: number; lastActivityMs: number } {
     return this.sessionManager?.getQuietGateSnapshot() ?? { activeCount: 0, lastActivityMs: 0 };
+  }
+
+  private reportContextTreeBinding(contextTreeBinding?: ContextTreeBinding | null): void {
+    this.clientConnection.reportContextTreeBinding(this.config.agentId, {
+      contextTreeRepoUrl: contextTreeBinding?.repoUrl ?? null,
+      contextTreeBranch: contextTreeBinding?.branch ?? null,
+      verificationStatus: contextTreeBinding?.verificationStatus ?? "unknown",
+    });
   }
 
   async start(contextTreeBinding?: ContextTreeBinding | null): Promise<RegisterResult> {
@@ -122,6 +136,7 @@ export class AgentSlot {
     const onBound = (boundAgent: { agentId: string }) => {
       if (boundAgent.agentId === this.config.agentId) {
         this.fullStateSync();
+        this.reportContextTreeBinding(contextTreeBinding);
         // One-shot post-bind reconcile catches operator-terminates that
         // landed while this client was offline; a duplicate tick is harmless.
         setTimeout(() => this.reconcileNow(), 5000);
@@ -169,17 +184,19 @@ export class AgentSlot {
         }
       : undefined;
 
+    const handlerCfg = {
+      workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name),
+      agentName: this.config.name,
+      contextTreePath: contextTreeBinding?.path ?? undefined,
+      contextTreeRepoUrl: contextTreeBinding?.repoUrl ?? undefined,
+      gitMirrorManager,
+    };
+
     this.sessionManager = new SessionManager({
       session: this.config.session,
       concurrency: this.config.concurrency,
       handlerFactory: this.config.handlerFactory,
-      handlerConfig: {
-        workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name),
-        agentName: this.config.name,
-        contextTreePath: contextTreeBinding?.path,
-        contextTreeRepoUrl: contextTreeBinding?.repoUrl,
-        gitMirrorManager,
-      },
+      handlerConfig: handlerCfg,
       agentIdentity: {
         agentId: agent.agentId,
         inboxId: agent.inboxId,
@@ -198,6 +215,23 @@ export class AgentSlot {
       onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
     });
 
+    this.treeWriteRunner = new TreeWriteBackgroundRunner({
+      agent: {
+        agentId: agent.agentId,
+        inboxId: agent.inboxId,
+        displayName: agent.displayName,
+        type: agent.type,
+        delegateMention: agent.delegateMention,
+        metadata: agent.metadata,
+      },
+      handlerFactory: this.config.handlerFactory,
+      handlerConfig: handlerCfg,
+      sdk,
+      log: (msg) => this.logger.info(msg),
+      onHeartbeat: (taskId) => this.clientConnection.reportTreeWriteTaskHeartbeat(this.config.agentId, taskId),
+      onResult: (result) => this.clientConnection.reportTreeWriteTaskResult(this.config.agentId, result),
+    });
+
     const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
       if (cmd.agentId === this.config.agentId && this.sessionManager) {
         this.sessionManager
@@ -207,11 +241,23 @@ export class AgentSlot {
           });
       }
     };
+    const onTreeWriteTask = (
+      agentId: string,
+      task: import("@agent-team-foundation/first-tree-hub-shared").TreeWriteTaskStart,
+    ) => {
+      if (agentId !== this.config.agentId || !this.treeWriteRunner) return;
+      this.treeWriteRunner.enqueue(task);
+    };
     this.clientConnection.on("session:command", onCommand);
-    this.listeners.push({ event: "session:command", fn: onCommand });
+    this.clientConnection.on("task:tree_write:start", onTreeWriteTask);
+    this.listeners.push(
+      { event: "session:command", fn: onCommand },
+      { event: "task:tree_write:start", fn: onTreeWriteTask },
+    );
 
     this.startPolling();
     this.startReconcileLoop();
+    this.reportContextTreeBinding(contextTreeBinding);
 
     return agent;
   }
@@ -225,9 +271,11 @@ export class AgentSlot {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
     }
+    await this.treeWriteRunner?.shutdown();
     for (const entry of this.listeners) {
       if (entry.event === "agent:message") this.clientConnection.off(entry.event, entry.fn);
       else if (entry.event === "inbox:deliver") this.clientConnection.off(entry.event, entry.fn);
+      else if (entry.event === "task:tree_write:start") this.clientConnection.off(entry.event, entry.fn);
       else if (entry.event === "agent:bound") this.clientConnection.off(entry.event, entry.fn);
       else if (entry.event === "session:reconcile:result") this.clientConnection.off(entry.event, entry.fn);
       else this.clientConnection.off(entry.event, entry.fn);

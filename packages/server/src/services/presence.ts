@@ -12,6 +12,10 @@ export function runtimeFieldsReset(now: Date) {
     activeSessions: null,
     totalSessions: null,
     runtimeUpdatedAt: now,
+    contextTreeRepoUrl: null,
+    contextTreeBranch: null,
+    contextTreeVerificationStatus: null,
+    contextTreeUpdatedAt: now,
     lastSeenAt: now,
   } as const;
 }
@@ -144,6 +148,28 @@ export async function setRuntimeState(
   }
 }
 
+export async function setContextTreeBinding(
+  db: Database,
+  agentId: string,
+  data: {
+    contextTreeRepoUrl: string | null;
+    contextTreeBranch: string | null;
+    verificationStatus: string;
+  },
+): Promise<void> {
+  const now = new Date();
+  await db
+    .update(agentPresence)
+    .set({
+      contextTreeRepoUrl: data.contextTreeRepoUrl,
+      contextTreeBranch: data.contextTreeBranch,
+      contextTreeVerificationStatus: data.verificationStatus,
+      contextTreeUpdatedAt: now,
+      lastSeenAt: now,
+    })
+    .where(eq(agentPresence.agentId, agentId));
+}
+
 /** Touch agent last_seen_at on heartbeat (per-agent liveness). */
 export async function touchAgent(db: Database, agentId: string): Promise<void> {
   await db.update(agentPresence).set({ lastSeenAt: new Date() }).where(eq(agentPresence.agentId, agentId));
@@ -177,7 +203,11 @@ export async function markStaleAgents(db: Database, staleSeconds = 60): Promise<
       runtime_state = NULL,
       active_sessions = NULL,
       total_sessions = NULL,
-      runtime_updated_at = NOW()
+      runtime_updated_at = NOW(),
+      context_tree_repo_url = NULL,
+      context_tree_branch = NULL,
+      context_tree_verification_status = NULL,
+      context_tree_updated_at = NOW()
     WHERE status = 'online'
     AND last_seen_at < NOW() - make_interval(secs => ${staleSeconds})
     RETURNING agent_id
@@ -190,7 +220,11 @@ export async function cleanupStalePresence(db: Database, staleSeconds = 60): Pro
     UPDATE agent_presence SET status = 'offline', instance_id = NULL,
       runtime_state = NULL,
       active_sessions = NULL, total_sessions = NULL,
-      runtime_updated_at = NOW()
+      runtime_updated_at = NOW(),
+      context_tree_repo_url = NULL,
+      context_tree_branch = NULL,
+      context_tree_verification_status = NULL,
+      context_tree_updated_at = NOW()
     WHERE instance_id IN (
       SELECT instance_id FROM server_instances
       WHERE last_heartbeat < NOW() - make_interval(secs => ${staleSeconds})

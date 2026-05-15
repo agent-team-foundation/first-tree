@@ -1,4 +1,4 @@
-import { customType, index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { boolean, customType, index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { clients } from "./clients.js";
 import { organizations } from "./organizations.js";
 
@@ -58,6 +58,8 @@ export const agents = pgTable(
      * rows created before 0026.
      */
     runtimeProvider: text("runtime_provider").notNull().default("claude-code"),
+    /** Archive-triggered Context Tree write automation. Default OFF. */
+    treeWriteOnArchive: boolean("tree_write_on_archive").notNull().default(false),
     /**
      * Manager-selected avatar color token. One of "hue-0".."hue-7"
      * (matching --avatar-hue-* CSS tokens). NULL means "auto" — the web

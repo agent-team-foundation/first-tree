@@ -220,6 +220,13 @@ export function AgentDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
   });
+  const treeWriteToggleMutation = useMutation({
+    mutationFn: (checked: boolean) => updateAgent(uuid, { treeWriteOnArchive: checked }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+  });
 
   // Lifecycle mutations
   const suspendMutation = useMutation({
@@ -691,6 +698,9 @@ export function AgentDetailPage() {
                     bindComputerPending={bindClientMutation.isPending}
                     onBindComputer={() => setBindClientOpen(true)}
                     onRebind={agent.clientId ? () => setReBindOpen(true) : undefined}
+                    treeWriteOnArchive={agent.treeWriteOnArchive}
+                    treeWritePending={treeWriteToggleMutation.isPending}
+                    onToggleTreeWriteOnArchive={(checked) => treeWriteToggleMutation.mutate(checked)}
                     modelSlot={
                       <ModelSection
                         value={draft.draft.model}
