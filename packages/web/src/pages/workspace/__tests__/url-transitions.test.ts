@@ -1,47 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { nextParamsForEngagement, nextParamsForSource } from "../index.js";
+import { nextParamsForEngagement, nextParamsForGroup, nextParamsForUnread, nextParamsForWatching } from "../index.js";
 
 function paramsOf(search: string): URLSearchParams {
   return new URLSearchParams(search);
 }
 
-describe("nextParamsForSource", () => {
-  it("clears the chat selection so the right pane can't receive misrouted input", () => {
-    // Regression: issue 388 — switching the source tag bar previously left
-    // `?c=` pointing at a chat from the old tag, leaving the right pane on
-    // the wrong conversation while the rail showed a different list.
-    const result = nextParamsForSource(paramsOf("c=abc-123&source=manual"), "github_pull_request");
-    expect(result.has("c")).toBe(false);
-    expect(result.get("source")).toBe("github_pull_request");
-  });
-
-  it("drops the source key for the default `manual` tab to keep `/` canonical", () => {
-    const result = nextParamsForSource(paramsOf("source=feishu&c=xyz"), "manual");
-    expect(result.has("source")).toBe(false);
-    expect(result.has("c")).toBe(false);
-  });
-
-  it("clears any doc-preview overlay along with the chat selection", () => {
-    const result = nextParamsForSource(
-      paramsOf("c=abc&source=manual&docChat=a&docAgent=b&docPath=p&docBase=base"),
-      "github_issue",
-    );
-    expect(result.has("docChat")).toBe(false);
-    expect(result.has("docAgent")).toBe(false);
-    expect(result.has("docPath")).toBe(false);
-    expect(result.has("docBase")).toBe(false);
-  });
-
-  it("preserves unrelated params (engagement, filter, etc.)", () => {
-    const result = nextParamsForSource(paramsOf("c=x&source=manual&engagement=archived"), "github_pull_request");
-    expect(result.get("engagement")).toBe("archived");
-  });
-});
-
 describe("nextParamsForEngagement", () => {
   it("clears the chat selection when switching engagement tabs", () => {
-    // Same misrouted-input risk as the source tab: an active chat is hidden
-    // when you flip to Archived, so the right pane must reset too.
+    // An active chat is hidden when you flip to Archived, so the right
+    // pane must reset too — otherwise input lands on a row no longer
+    // visible in the rail.
     const result = nextParamsForEngagement(paramsOf("c=abc&engagement=active"), "archived");
     expect(result.has("c")).toBe(false);
     expect(result.get("engagement")).toBe("archived");
@@ -64,8 +32,67 @@ describe("nextParamsForEngagement", () => {
     expect(result.has("docBase")).toBe(false);
   });
 
-  it("preserves unrelated params (source, etc.)", () => {
-    const result = nextParamsForEngagement(paramsOf("c=x&source=feishu&engagement=active"), "archived");
-    expect(result.get("source")).toBe("feishu");
+  it("preserves unrelated params", () => {
+    const result = nextParamsForEngagement(paramsOf("c=x&group=source&engagement=active"), "archived");
+    expect(result.get("group")).toBe("source");
+  });
+});
+
+describe("nextParamsForUnread", () => {
+  it("sets unread=1 when enabling", () => {
+    const result = nextParamsForUnread(paramsOf(""), true);
+    expect(result.get("unread")).toBe("1");
+  });
+
+  it("removes unread when disabling", () => {
+    const result = nextParamsForUnread(paramsOf("unread=1"), false);
+    expect(result.has("unread")).toBe(false);
+  });
+
+  it("clears watching when enabling unread (server filter enum is single-valued)", () => {
+    // Enabling both `unread` and `watching` would require a single-valued
+    // server enum to hold two states; flipping the other off keeps the
+    // URL representable on the wire.
+    const result = nextParamsForUnread(paramsOf("watching=1"), true);
+    expect(result.get("unread")).toBe("1");
+    expect(result.has("watching")).toBe(false);
+  });
+
+  it("preserves the chat selection (unlike scope toggles)", () => {
+    // Unread doesn't hide the selected chat from the rail, so leaving
+    // `?c=` alone keeps the reading position stable.
+    const result = nextParamsForUnread(paramsOf("c=abc"), true);
+    expect(result.get("c")).toBe("abc");
+  });
+});
+
+describe("nextParamsForWatching", () => {
+  it("sets watching=1 when enabling and clears unread", () => {
+    const result = nextParamsForWatching(paramsOf("unread=1"), true);
+    expect(result.get("watching")).toBe("1");
+    expect(result.has("unread")).toBe(false);
+  });
+
+  it("removes watching when disabling", () => {
+    const result = nextParamsForWatching(paramsOf("watching=1"), false);
+    expect(result.has("watching")).toBe(false);
+  });
+});
+
+describe("nextParamsForGroup", () => {
+  it("drops the param for the default `recency` mode", () => {
+    // Default omitted from URL so the canonical home page stays `/`.
+    const result = nextParamsForGroup(paramsOf("group=source"), "recency");
+    expect(result.has("group")).toBe(false);
+  });
+
+  it("sets non-default modes", () => {
+    expect(nextParamsForGroup(paramsOf(""), "source").get("group")).toBe("source");
+    expect(nextParamsForGroup(paramsOf(""), "none").get("group")).toBe("none");
+  });
+
+  it("preserves the chat selection (grouping is purely visual)", () => {
+    const result = nextParamsForGroup(paramsOf("c=abc"), "source");
+    expect(result.get("c")).toBe("abc");
   });
 });
