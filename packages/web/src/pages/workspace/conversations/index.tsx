@@ -118,16 +118,16 @@ export function ConversationList({
   // changes the group basis (e.g. day rollover) invalidates the keys.
   const [bucketCollapse, setBucketCollapse] = useState<Map<string, boolean>>(() => new Map());
 
-  // Server still accepts a single `filter` enum. The URL splits unread /
-  // watching into two toggles; collapse them back into the enum for the
-  // wire. `setUnread`/`setWatching` in WorkspacePage enforce mutual
-  // exclusivity, so the priority here just disambiguates the impossible
-  // case if it ever showed up.
-  const filter: "all" | "unread" | "watching" = unread ? "unread" : watching ? "watching" : "all";
+  // Phase B: `filter` carries only the unread axis. The `watching`
+  // dimension travels as an independent boolean — `unread` and
+  // `watching` can compose ("unread chats I'm watching"), which the
+  // pre-Phase-B single-enum couldn't express.
+  const filter: "all" | "unread" = unread ? "unread" : "all";
+  const watchingParam = watching ? true : undefined;
 
   const { data, isLoading } = useQuery({
-    queryKey: ["me", "chats", filter, engagement] as const,
-    queryFn: () => listMeChats({ filter, engagement }),
+    queryKey: ["me", "chats", filter, engagement, watchingParam ?? false] as const,
+    queryFn: () => listMeChats({ filter, engagement, watching: watchingParam }),
     refetchInterval: 15_000,
   });
 
@@ -175,7 +175,7 @@ export function ConversationList({
     setLoadingMore(true);
     setMoreError(null);
     try {
-      const next = await listMeChats({ filter, engagement, cursor });
+      const next = await listMeChats({ filter, engagement, watching: watchingParam, cursor });
       setExtraPages((prev) => [...prev, ...next.rows]);
       setNextCursor(next.nextCursor);
     } catch (err) {

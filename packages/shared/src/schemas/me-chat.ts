@@ -7,7 +7,16 @@ import { chatSourceSchema } from "./chat-metadata.js";
  * See docs/chat-first-workspace-product-design.md "API Contract".
  */
 
-export const ME_CHAT_FILTERS = ["all", "unread", "watching"] as const;
+/**
+ * Conversation-list inbox filter. Phase B narrows the enum from the
+ * pre-existing `["all", "unread", "watching"]` to `["all", "unread"]` —
+ * the old "watching" value conflated two orthogonal dimensions (unread
+ * state + the user's membership kind) onto a single enum slot. Phase B
+ * lifts `watching` out as an independent boolean (see
+ * `listMeChatsQuerySchema.watching`) so the wire can express
+ * "unread AND watching" or "watching only" without overloading filter.
+ */
+export const ME_CHAT_FILTERS = ["all", "unread"] as const;
 export const meChatFilterSchema = z.enum(ME_CHAT_FILTERS);
 export type MeChatFilter = z.infer<typeof meChatFilterSchema>;
 
@@ -27,17 +36,63 @@ export const CHAT_ENGAGEMENT_VIEWS = ["active", "archived", "all"] as const;
 export const chatEngagementViewSchema = z.enum(CHAT_ENGAGEMENT_VIEWS);
 export type ChatEngagementView = z.infer<typeof chatEngagementViewSchema>;
 
+/**
+ * Coerce a CSV string like `"manual,pr,issue"` to an array of trimmed
+ * non-empty tokens. Lets the wire accept both repeated query params
+ * (`?origin=manual&origin=pr`) and the comma-joined form the workspace
+ * URL uses (`?origin=manual,pr`). Returns `undefined` when the input is
+ * missing or empty so the caller can treat "no filter" and "filter to
+ * empty array" identically.
+ */
+function csvArrayPreprocess(input: unknown): unknown {
+  if (typeof input !== "string") return input;
+  const trimmed = input.trim();
+  if (trimmed === "") return undefined;
+  return trimmed
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 export const listMeChatsQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(ME_CHAT_MAX_LIMIT).default(ME_CHAT_DEFAULT_LIMIT),
   filter: meChatFilterSchema.default("all"),
   engagement: chatEngagementViewSchema.default("active"),
   /**
-   * Restrict the conversation list to a single source tag (Manual, GitHub PR,
-   * GitHub Issue, …). Omitted — i.e. unfiltered — returns every source the
-   * caller is in; the workspace UI defaults to `manual`.
+   * Restrict the conversation list to one or more origin tags (Manual,
+   * GitHub PR, GitHub Issue, …). Omitted — i.e. unfiltered — returns
+   * every origin the caller is in. The wire accepts both repeated
+   * query params (`?origin=manual&origin=pr`) and the comma-joined
+   * form (`?origin=manual,pr`) the workspace URL uses.
+   *
+   * Replaces the Phase A `source` single-enum field. Web parsers
+   * upgrade `?source=foo` → `?origin=foo` for backward compatibility
+   * with shared links and bookmarks; this schema deliberately does NOT
+   * accept the legacy single-value name so the wire stays canonical.
    */
-  source: chatSourceSchema.optional(),
+  origin: z.preprocess(csvArrayPreprocess, z.array(chatSourceSchema).optional()),
+  /**
+   * Restrict the conversation list to chats the named agents
+   * participate in (speakers only — watcher membership is excluded
+   * because the list itself surfaces watcher rows via
+   * `MeChatRow.membershipKind`). Same CSV-or-repeated wire shape as
+   * `origin`. Resolved server-side via a `chat_membership` subquery.
+   */
+  with: z.preprocess(csvArrayPreprocess, z.array(z.string().min(1)).optional()),
+  /**
+   * When `true`, restrict to chats where the caller's own membership is
+   * `'watcher'`. Independent of `filter` — the two can compose
+   * ("unread AND watching"). Accepts the strings `"1"` / `"true"` from
+   * URL query, plus the JSON boolean for direct API calls.
+   */
+  watching: z.preprocess((v) => {
+    if (typeof v === "string") {
+      if (v === "1" || v.toLowerCase() === "true") return true;
+      if (v === "0" || v.toLowerCase() === "false" || v === "") return false;
+    }
+    return v;
+  }, z.boolean().optional()),
 });
 export type ListMeChatsQuery = z.infer<typeof listMeChatsQuerySchema>;
 

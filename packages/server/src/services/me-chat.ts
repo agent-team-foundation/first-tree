@@ -227,6 +227,53 @@ function sourceFilterSql(source: ChatSource): SQL {
   }
 }
 
+/**
+ * WHERE predicate for the multi-select origin filter (Phase B). Returns
+ * a disjunction over each requested origin's `sourceFilterSql` arm, so
+ * `["manual", "github_pull_request"]` becomes
+ * `(manual_predicate OR pr_predicate)`. Empty / undefined input returns
+ * `TRUE` so callers can blanket it onto the WHERE clause without a
+ * conditional. Deduplicates input via `Set` defensively — a user
+ * selecting the same chip twice shouldn't expand into duplicate OR arms.
+ */
+function originsFilterSql(origins: ReadonlyArray<ChatSource>): SQL {
+  const unique = Array.from(new Set(origins));
+  if (unique.length === 0) return sql`TRUE`;
+  if (unique.length === 1) {
+    const only = unique[0];
+    if (only === undefined) return sql`TRUE`;
+    return sourceFilterSql(only);
+  }
+  return sql`(${sql.join(
+    unique.map((o) => sourceFilterSql(o)),
+    sql.raw(" OR "),
+  )})`;
+}
+
+/**
+ * WHERE predicate for the participants filter (Phase B). Returns chats
+ * where any of the named speaker agents is in the membership — OR
+ * semantics, matching the way users typically select multiple
+ * participant chips ("show chats with @a or @b" rather than the
+ * stricter "with both"). Empty / undefined input returns `TRUE`.
+ *
+ * Implemented as a `chat_id IN (subquery)` rather than an extra JOIN
+ * so the result row is still 1:1 with the outer chat and the existing
+ * cursor pagination is unaffected.
+ */
+function participantsFilterSql(agentIds: ReadonlyArray<string>): SQL {
+  const unique = Array.from(new Set(agentIds.filter((id) => id.length > 0)));
+  if (unique.length === 0) return sql`TRUE`;
+  return sql`c.id IN (
+    SELECT chat_id FROM chat_membership
+    WHERE access_mode = 'speaker'
+      AND agent_id IN (${sql.join(
+        unique.map((id) => sql`${id}`),
+        sql.raw(", "),
+      )})
+  )`;
+}
+
 // ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
@@ -261,9 +308,10 @@ export async function listMeChats(
   }
 
   const filterUnreadOnly = query.filter === "unread";
-  const filterWatchingOnly = query.filter === "watching";
+  const filterWatchingOnly = query.watching === true;
   const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
-  const sourcePredicate = query.source ? sourceFilterSql(query.source) : sql`TRUE`;
+  const originPredicate = query.origin ? originsFilterSql(query.origin) : sql`TRUE`;
+  const participantsPredicate = query.with ? participantsFilterSql(query.with) : sql`TRUE`;
 
   // Cursor predicate (sort: last_message_at DESC NULLS LAST, chat_id DESC).
   // See the original commentary in git history for the case-by-case
@@ -313,7 +361,8 @@ export async function listMeChats(
        AND (${!filterUnreadOnly}::bool OR COALESCE(cus.unread_mention_count, 0) > 0)
        AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
        AND ${engagementPredicate}
-       AND ${sourcePredicate}
+       AND ${originPredicate}
+       AND ${participantsPredicate}
        AND ${cursorPredicate}
      ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
      LIMIT ${limit + 1}

@@ -123,7 +123,7 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "all",
       engagement: "active",
-      source: "manual",
+      origin: ["manual"],
     });
     expect(manualOnly.rows.map((r) => r.chatId)).toEqual([manualChatId]);
 
@@ -131,7 +131,7 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "all",
       engagement: "active",
-      source: "github_pull_request",
+      origin: ["github_pull_request"],
     });
     expect(prOnly.rows.map((r) => r.chatId)).toEqual([prChatId]);
 
@@ -139,7 +139,7 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "all",
       engagement: "active",
-      source: "github_issue",
+      origin: ["github_issue"],
     });
     expect(issueOnly.rows.map((r) => r.chatId)).toEqual([issueChatId]);
 
@@ -147,7 +147,7 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "all",
       engagement: "active",
-      source: "feishu",
+      origin: ["feishu"],
     });
     expect(feishuOnly.rows.map((r) => r.chatId)).toEqual([feishuChatId]);
   });
@@ -240,7 +240,7 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "all",
       engagement: "active",
-      source: "manual",
+      origin: ["manual"],
     });
     expect(list.rows.map((r) => r.chatId)).toEqual([unknownChatId]);
   });
@@ -278,7 +278,7 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "unread",
       engagement: "active",
-      source: "github_pull_request",
+      origin: ["github_pull_request"],
     });
     expect(res.rows.map((r) => r.chatId)).toEqual([prUnread]);
   });
@@ -325,7 +325,7 @@ describe("conversation-list source tags", () => {
       limit: 50,
       filter: "all",
       engagement: "archived",
-      source: "github_pull_request",
+      origin: ["github_pull_request"],
     });
     expect(archivedList.rows.map((r) => r.chatId)).toEqual([prChatId]);
   });
@@ -385,12 +385,15 @@ describe("conversation-list source tags", () => {
     });
     expect(counts.github_pull_request).toEqual({ chatCount: 1, unreadChatCount: 0 });
 
-    // Filtering by source AND `filter=watching` surfaces the watcher row.
+    // Filtering by origin AND `watching=true` surfaces the watcher row.
+    // Phase B lifted `watching` out of the filter enum into an
+    // independent boolean — the two now compose freely.
     const watchingPr = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
       limit: 50,
-      filter: "watching",
+      filter: "all",
       engagement: "active",
-      source: "github_pull_request",
+      origin: ["github_pull_request"],
+      watching: true,
     });
     expect(watchingPr.rows.map((r) => r.chatId)).toEqual([chatId]);
     expect(watchingPr.rows[0]?.membershipKind).toBe("watching");
