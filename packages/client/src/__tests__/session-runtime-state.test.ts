@@ -25,12 +25,13 @@ function defined<T>(value: T | undefined, label = "value"): T {
 function mockSdk(): FirstTreeHubSDK {
   return {
     register: vi.fn(),
-    pull: vi.fn(),
-    ack: vi.fn().mockResolvedValue(undefined),
-    renew: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
     sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
   } as unknown as FirstTreeHubSDK;
+}
+
+function mockAckEntry() {
+  return vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
 }
 
 function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
@@ -48,6 +49,7 @@ function createSessionManager(opts: {
   sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
   handlerFactory?: HandlerFactory;
+  ackEntry?: (entryId: number) => Promise<void>;
   session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
   concurrency?: number;
   log?: pino.Logger;
@@ -72,6 +74,7 @@ function createSessionManager(opts: {
     },
     sdk,
     log: opts.log ?? silentLogger(),
+    ackEntry: opts.ackEntry ?? mockAckEntry(),
     onRuntimeStateChange: opts.onRuntimeStateChange,
   });
 }
@@ -330,8 +333,8 @@ describe("SessionManager: getAggregateRuntimeState()", () => {
 
 describe("SessionManager: ackEntry handles entryId correctly", () => {
   it("ACKs entryId from pending queue after concurrency preemption", async () => {
-    const sdk = mockSdk();
-    const sm = createSessionManager({ sdk, concurrency: 1 });
+    const ackEntry = mockAckEntry();
+    const sm = createSessionManager({ ackEntry, concurrency: 1 });
 
     // Fill concurrency
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
@@ -339,8 +342,8 @@ describe("SessionManager: ackEntry handles entryId correctly", () => {
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
 
     // Both should be ACKed
-    expect(sdk.ack).toHaveBeenCalledWith(1);
-    expect(sdk.ack).toHaveBeenCalledWith(2);
+    expect(ackEntry).toHaveBeenCalledWith(1);
+    expect(ackEntry).toHaveBeenCalledWith(2);
 
     await sm.shutdown();
   });

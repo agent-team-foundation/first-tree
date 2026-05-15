@@ -530,7 +530,8 @@ console.log("\n[e2e-askuser] case 6: agent inbox.pull surfaces question_answer e
   });
 
   // The peer agent's inbox should now hold the answer message — exactly
-  // what SessionManager.dispatch would receive via WS push or HTTP poll.
+  // what SessionManager.dispatch would receive via the `inbox:deliver` WS
+  // push frame.
   const polled = await pollInbox(app.db, peer.inboxId, 10);
   const answerEntry = polled.find((e) => e.message?.format === "question_answer");
   expect(answerEntry !== undefined, "agent inbox poll returns the question_answer entry");

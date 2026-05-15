@@ -51,13 +51,20 @@ export type Client = z.infer<typeof clientSchema>;
  * Optional opt-in flags the client carries on `client:register` to advertise
  * which negotiable wire-protocol features it implements. Distinct from
  * `clientCapabilitiesSchema` (per-runtime-provider availability — different
- * concept). Older clients omit the field; the server treats every unset flag
- * as `false` and falls back to the legacy path. See proposal
- * hub-inbox-ws-data-plane §3.6.
+ * concept).
+ *
+ * 0.10.4 ~ 0.14.x clients still send this block (with `wsInboxDeliver: true`
+ * hard-coded). The 0.15.0+ runtime omits it. The schema is retained so that
+ * middle-version `client:register` frames still parse, even though the
+ * server no longer reads any of these fields — the WS inbox data plane is
+ * mandatory on this server build.
  */
 export const clientWireCapabilitiesSchema = z
   .object({
-    /** Client implements `inbox:deliver` / `inbox:ack` WS frames. */
+    /**
+     * Historical opt-in for the `inbox:deliver` push path. The server now
+     * ignores the value; 0.10.4 ~ 0.14.x clients still emit it as `true`.
+     */
     wsInboxDeliver: z.boolean().default(false),
   })
   .partial();

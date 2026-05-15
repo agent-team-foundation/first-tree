@@ -15,9 +15,6 @@ import { mockEntry } from "./test-helpers.js";
 function mockSdk(): FirstTreeHubSDK {
   return {
     register: vi.fn(),
-    pull: vi.fn(),
-    ack: vi.fn().mockResolvedValue(undefined),
-    renew: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
     sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
   } as unknown as FirstTreeHubSDK;
@@ -62,6 +59,7 @@ function createSessionManager(opts: {
     },
     sdk,
     log: opts.log ?? silentLogger(),
+    ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     onStateChange: opts.onStateChange,
   });
 }

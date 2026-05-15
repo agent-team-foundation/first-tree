@@ -2,7 +2,7 @@ import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hu
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../services/chat.js";
-import { ackEntry, pollInbox } from "../services/inbox.js";
+import { ackEntryByIdForBoundAgents, pollInbox } from "../services/inbox.js";
 import { listMessages, sendMessage, sendToAgent } from "../services/message.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -40,9 +40,13 @@ function skipForMode(entry: Entry, myAgentId: string): boolean {
   return !raw.some((m) => m === myAgentId);
 }
 
-async function ackAll(app: { db: Parameters<typeof ackEntry>[0] }, entries: Entry[], inboxId: string) {
+async function ackAll(
+  app: { db: Parameters<typeof ackEntryByIdForBoundAgents>[0] },
+  entries: Entry[],
+  inboxId: string,
+) {
   for (const e of entries) {
-    await ackEntry(app.db, e.id, inboxId);
+    await ackEntryByIdForBoundAgents(app.db, e.id, [inboxId]);
   }
 }
 

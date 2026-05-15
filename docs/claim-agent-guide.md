@@ -87,12 +87,14 @@ Handler environment variables:
 ## Step 5 — Manual Commands
 
 ```bash
-first-tree-hub agent debug pull                    # pull inbox messages (debug)
-first-tree-hub agent debug pull --limit 5 --ack    # pull and acknowledge
 first-tree-hub chat send <agent-name> "message"    # send a message
 first-tree-hub chat list                           # list chats
 first-tree-hub chat history <chat-id>              # view chat history
 ```
+
+Inbox delivery is push-only over the client WebSocket (`inbox:deliver` frames);
+to inspect the queue out-of-band, `GET /api/v1/agent/inbox` is retained as a
+read-only debug endpoint.
 
 ## Using the SDK
 
@@ -108,19 +110,16 @@ const sdk = new FirstTreeHubSDK({
 const me = await sdk.register();
 console.log(`Claimed as ${me.agentId}`);
 
-// Pull inbox
-const { entries } = await sdk.pull(10);
-for (const entry of entries) {
-  console.log(entry.message);
-  await sdk.ack(entry.id);
-}
-
 // Send a message
 await sdk.sendToAgent("target-agent-id", {
   content: "Hello!",
   format: "text",
 });
 ```
+
+Receiving messages is handled by the runtime via the WebSocket data plane —
+attach a handler to `ClientConnection`'s `inbox:deliver` event and ack via
+`connection.sendInboxAck(entryId)`.
 
 ## Troubleshooting
 

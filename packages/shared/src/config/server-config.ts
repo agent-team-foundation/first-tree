@@ -200,11 +200,13 @@ export const serverConfigSchema = defineConfig({
      * ack arrives — leftover entries stay `pending` in the DB and get
      * replayed via the post-ack backlog scan. See proposal §3.5.
      *
-     * The WS data plane itself is always on; cross-version compatibility is
-     * handled by the per-socket `wireCapabilities.wsInboxDeliver` opt-in
-     * negotiated during `client:register` (proposal §3.6). An old client
-     * that doesn't send the flag automatically gets the legacy `new_message`
-     * doorbell + HTTP poll; a new client gets push frames.
+     * The WS data plane is the only delivery path on this server build. The
+     * legacy `new_message` doorbell + HTTP poll fallback was removed in
+     * `@agent-team-foundation/first-tree-hub@0.15.0`. Clients older than
+     * 0.10.4 (before the WS push data plane was introduced) are no longer
+     * supported; clients in 0.10.4 ~ 0.14.x continue to work because they
+     * read `server:welcome.capabilities.wsInboxDeliver` to skip their own
+     * poll path on bootstrap.
      */
     maxInFlightPerAgent: field(z.number().int().min(1).max(1024).default(32), {
       env: "FIRST_TREE_HUB_INBOX_MAX_IN_FLIGHT_PER_AGENT",

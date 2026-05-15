@@ -43,8 +43,7 @@ import * as sessionEventService from "../../services/session-event.js";
 /**
  * Default per-agent in-flight cap when `server.inbox.maxInFlightPerAgent` is
  * unset. Mirrors the schema default so a hub running without an explicit
- * `inbox` block still gets reasonable backpressure once `wsDataPlane` is
- * flipped on. See proposal hub-inbox-ws-data-plane §3.5.
+ * `inbox` block still gets reasonable backpressure.
  */
 const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT = 32;
 /**
@@ -134,25 +133,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       const boundAgents = new Map<string, { agentId: string; inboxId: string; organizationId: string }>();
 
       /**
-       * Whether the connected client opted into the WS inbox data plane via
-       * `client:register.wireCapabilities.wsInboxDeliver`. Set per-socket
-       * because client SDKs are upgraded independently — an old client
-       * connecting to a new server must keep receiving the legacy
-       * `new_message` doorbell + HTTP poll path (proposal §3.6).
-       */
-      let clientWantsWsInboxDeliver = false;
-
-      /**
        * Per-agent in-flight `inbox:deliver` counter for backpressure. Lives on
        * the socket — when the WS closes it goes with it; that's intentional,
        * because re-counting on a fresh connection would bias the cap against
-       * a healthy reconnect (proposal §3.5).
+       * a healthy reconnect.
        */
       const inboxInFlight = new Map<string, number>();
-
-      function pushUseWsDataPlane(): boolean {
-        return clientWantsWsInboxDeliver;
-      }
 
       /**
        * Returns `false` when the socket has already moved out of `OPEN` —
@@ -241,7 +227,8 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             return;
           }
           if (entries.length === 0) {
-            // Benign race — HTTP poll or another instance claimed it first.
+            // Benign race — another instance (or the post-ack backlog drain)
+            // claimed it first.
             return;
           }
 
@@ -417,10 +404,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             socket.send(JSON.stringify({ type: "auth:ok" }));
             // Wire-additive: older clients drop the unknown type; newer ones
             // use it to detect version drift. `capabilities.wsInboxDeliver`
-            // is unconditionally true on this build — the data plane is
-            // always available; whether it's actually used per-connection
-            // depends on the client's own `wireCapabilities` opt-in on
-            // `client:register` (proposal hub-inbox-ws-data-plane §3.6).
+            // must stay `true` here so 0.10.4 ~ 0.14.x clients suppress
+            // their local 5s HTTP poll on bootstrap — without this flag they
+            // would fall back to `GET /inbox` + `POST /inbox/:id/ack` and
+            // the missing ack endpoint would loop messages forever. 0.15.0+
+            // clients ignore the field entirely.
             socket.send(
               JSON.stringify({
                 type: "server:welcome",
@@ -444,11 +432,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           try {
             if (type === "client:register") {
               const data = clientRegisterSchema.parse(msg);
-
-              // Record opt-in for the WS inbox data plane. Per-socket so a
-              // legacy client on a pushed-enabled server still works (proposal
-              // §3.6). Default false — only an explicit `true` activates push.
-              clientWantsWsInboxDeliver = data.wireCapabilities?.wsInboxDeliver === true;
 
               // Resolve a placeholder `organizationId` for the legacy NOT NULL
               // column on `clients`. The column is no longer read by any path
@@ -642,16 +625,9 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 organizationId: agent.organizationId,
               });
 
-              // Subscribe to NOTIFY traffic. When both server config and the
-              // client's wire-capability opt-in are true, register a push
-              // handler so NOTIFYs land as `inbox:deliver` frames. Otherwise
-              // legacy `new_message` doorbell — old clients keep working.
-              const wsPushActive = pushUseWsDataPlane();
-              if (wsPushActive) {
-                notifier.subscribe(agent.inboxId, socket, makeInboxPushHandler(agent.id, agent.inboxId));
-              } else {
-                notifier.subscribe(agent.inboxId, socket);
-              }
+              // Subscribe to NOTIFY traffic with a per-socket push handler so
+              // NOTIFYs land as `inbox:deliver` frames on this connection.
+              notifier.subscribe(agent.inboxId, socket, makeInboxPushHandler(agent.id, agent.inboxId));
 
               socket.send(
                 JSON.stringify({
@@ -663,15 +639,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 }),
               );
 
-              // Reconnect/recovery: if we're on the WS push path, drain any
-              // pending entries that piled up while this socket was offline
-              // (or while another instance held the subscription). Failures
-              // are logged inside the helper — don't crash the bind path.
-              if (wsPushActive) {
-                drainBacklogForAgent(agent.id, agent.inboxId).catch((err) => {
-                  app.log.error({ err, agentId: agent.id }, "post-bind backlog drain crashed");
-                });
-              }
+              // Reconnect/recovery: drain any pending entries that piled up
+              // while this socket was offline (or while another instance held
+              // the subscription). Failures are logged inside the helper —
+              // don't crash the bind path.
+              drainBacklogForAgent(agent.id, agent.inboxId).catch((err) => {
+                app.log.error({ err, agentId: agent.id }, "post-bind backlog drain crashed");
+              });
             } else if (type === "agent:unbind") {
               const agentId = parsed.data.agentId;
               if (!agentId || !boundAgents.has(agentId)) {

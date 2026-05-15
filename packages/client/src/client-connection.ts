@@ -81,13 +81,10 @@ type ClientConnectionEvents = {
   error: [error: Error];
   "agent:bound": [agent: BoundAgent];
   "agent:unbound": [agentId: string];
-  "agent:message": [agentId: string, data: unknown];
   /**
    * Server pushed a fully-assembled inbox entry over the WS data plane.
    * Listeners must call `connection.sendInboxAck(frame.entryId)` once the
-   * entry has been durably handed to the session manager. Replaces the
-   * legacy `agent:message` → HTTP-poll round-trip when the server
-   * advertises `wsInboxDeliver`. Falls back silently on legacy paths.
+   * entry has been durably handed to the session manager.
    */
   "inbox:deliver": [agentId: string, frame: InboxDeliverFrame];
   "agent:bind:rejected": [reason: AgentBindRejectReason, agentId: string];
@@ -146,17 +143,6 @@ const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
-/**
- * Client-side opt-in for the WS inbox data plane. Gates BOTH the
- * `wireCapabilities.wsInboxDeliver` flag we declare on `client:register`
- * AND how we interpret the server's welcome capability — without this AND,
- * a future client kill-switch could land in a half-state where we tell the
- * server "no thanks" but still treat welcome's `wsInboxDeliver:true` as
- * authoritative and stop the 5s HTTP poll, leaving messages stuck if a
- * NOTIFY ever drops. Hard-coded `true` for now; flip to a config knob if
- * you need a runtime kill-switch.
- */
-const WS_INBOX_DELIVER_OPT_IN = true;
 /**
  * Unified-user-token C5: reconnect PROACTIVELY this many ms before the JWT's
  * `exp` claim so the client rotates to a fresh JWT without ever hitting the
@@ -220,15 +206,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
   private welcomeFramesReceived = 0;
   /**
-   * Whether the most recent `server:welcome` frame advertised
-   * `capabilities.wsInboxDeliver`. The runtime (AgentSlot) reads this
-   * (via {@link supportsWsInboxDeliver}) to decide whether to keep the
-   * legacy 5s HTTP poll or rely entirely on `inbox:deliver` push frames.
-   * Re-evaluated on every reconnect — the welcome frame is the source of
-   * truth, never assumed sticky across connections.
-   */
-  private wsInboxDeliverActive = false;
-  /**
    * Last handshake error, stashed for the `close` handler to surface a typed
    * reason (e.g. {@link ClientOrgMismatchError}) instead of a generic
    * "closed before ready" when `connect()` is pending.
@@ -258,11 +235,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   >();
 
   /**
-   * In-flight image writes from recent `image_payload` frames. The server
-   * pushes `image_payload` immediately before firing the `new_message`
-   * notification, but WS message handlers run through EventEmitter (sync
-   * dispatch, no await), so the disk write can still race the HTTP poll
-   * that follows. Defer `new_message` emission until these settle.
+   * In-flight image writes from recent `image_payload` frames. `image_payload`
+   * arrives on the WS just before `inbox:deliver` for the same message, but
+   * the EventEmitter dispatch is sync — so without gating, the deliver
+   * handler can fire before the image bytes hit disk. Block `inbox:deliver`
+   * emission until these settle.
    */
   private readonly pendingImageWrites = new Set<Promise<void>>();
 
@@ -292,22 +269,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   }
 
   /**
-   * True when the current connection's `server:welcome` advertised
-   * `capabilities.wsInboxDeliver` — meaning the server will push
-   * `inbox:deliver` frames and accept `inbox:ack` frames over this WS.
-   * Resets to false on every reconnect until the new welcome arrives.
-   */
-  get supportsWsInboxDeliver(): boolean {
-    return this.wsInboxDeliverActive;
-  }
-
-  /**
-   * Ack a delivered inbox entry over the WS data plane. Replaces the legacy
-   * `sdk.ack()` HTTP call when the connection has negotiated
-   * `wsInboxDeliver`. Safe to call when the WS is closed — the frame is
-   * dropped silently and the entry will time out and re-deliver on
-   * reconnect, mirroring how the legacy timeout reaper handles HTTP
-   * ack-loss.
+   * Ack a delivered inbox entry over the WS data plane. Safe to call when the
+   * WS is closed — the frame is dropped silently and the entry will time out
+   * and re-deliver on reconnect.
    */
   sendInboxAck(entryId: number): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -501,9 +465,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.clearAuthRefreshTimer();
         const wasRegistered = this.registered;
         this.registered = false;
-        // Capability is per-connection — never assume it survives a reconnect.
-        // The next `server:welcome` will re-derive it from the server's flag.
-        this.wsInboxDeliverActive = false;
         this.rejectAllPendingBinds("WebSocket closed");
 
         if (!settled) {
@@ -540,11 +501,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
     if (type === "auth:ok") {
       this.authLogger.info("auth accepted, registering client");
-      // Advertise wire-capability opt-in so a `wsDataPlane`-enabled server
-      // routes NOTIFY traffic through `inbox:deliver` frames instead of
-      // legacy `new_message` doorbells. Gated by WS_INBOX_DELIVER_OPT_IN —
-      // see its definition for why both the wire flag and the welcome-cap
-      // gate below need to share a single source of truth.
       this.ws?.send(
         JSON.stringify({
           type: "client:register",
@@ -552,7 +508,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           hostname: getHostname(),
           os: platform(),
           sdkVersion: this.sdkVersion,
-          wireCapabilities: { wsInboxDeliver: WS_INBOX_DELIVER_OPT_IN },
         }),
       );
       return;
@@ -570,18 +525,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         );
         return;
       }
-      // Cache the negotiated push capability for this connection. Reset on
-      // every welcome — if a reconnect lands on an older server with the
-      // flag off, we transparently fall back to the HTTP poll path.
-      // ANDed with WS_INBOX_DELIVER_OPT_IN so a future client kill-switch
-      // (flip the const to false) takes effect symmetrically: we tell the
-      // server "no thanks" via wireCapabilities AND keep the 5s HTTP poll
-      // running. Without the AND, an opt-out client would see welcome's
-      // `wsInboxDeliver:true` and stop polling, but the server — having
-      // received `wireCapabilities.wsInboxDeliver:false` — would keep
-      // sending doorbells and never push deliver frames, leaving messages
-      // stuck if any NOTIFY were ever lost.
-      this.wsInboxDeliverActive = parsed.data.capabilities?.wsInboxDeliver === true && WS_INBOX_DELIVER_OPT_IN;
       const isReconnect = this.welcomeFramesReceived > 0;
       this.welcomeFramesReceived++;
       this.emit("server:welcome", { frame: parsed.data, isReconnect });
@@ -742,22 +685,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       return;
     }
 
-    if (type === "new_message") {
-      const inboxId = msg.inboxId as string | undefined;
-      if (!inboxId) return;
-      if (this.pendingImageWrites.size > 0) {
-        // Defer until recent image writes flush — the HTTP poll for this
-        // message would otherwise race the disk write and surface the
-        // "not available on this device" placeholder.
-        Promise.all([...this.pendingImageWrites]).finally(() => {
-          this.emit("agent:message", inboxId, msg);
-        });
-      } else {
-        this.emit("agent:message", inboxId, msg);
-      }
-      return;
-    }
-
     if (type === "inbox:deliver") {
       const parsed = inboxDeliverFrameSchema.safeParse(msg);
       if (!parsed.success) {
@@ -780,9 +707,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         );
         return;
       }
-      // Same image-write race guard as `new_message`: server pushes
-      // `image_payload` immediately before `inbox:deliver`, so make sure
-      // disk writes flush before the runtime tries to render the message.
+      // Image-write race guard: server pushes `image_payload` immediately
+      // before `inbox:deliver`, so make sure disk writes flush before the
+      // runtime tries to render the message.
       const emit = () => this.emit("inbox:deliver", parsed.data.inboxId, parsed.data);
       if (this.pendingImageWrites.size > 0) {
         Promise.all([...this.pendingImageWrites]).finally(emit);

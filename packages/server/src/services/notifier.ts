@@ -50,9 +50,8 @@ export type AdminBroadcastHandler = (payload: Record<string, unknown>) => void;
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
  * `inbox_notifications` for a subscribed inbox, the notifier hands the
- * `messageId` to this handler instead of sending the legacy `new_message`
- * doorbell frame. The handler owns claim-row + build-payload + send-frame
- * + in-flight bookkeeping (see proposal hub-inbox-ws-data-plane §3.2).
+ * `messageId` to this handler. The handler owns claim-row + build-payload +
+ * send-frame + in-flight bookkeeping.
  *
  * Handlers are fire-and-forget — the notifier swallows their resolution; any
  * errors are the handler's responsibility to log. Returning a Promise lets
@@ -62,14 +61,10 @@ export type InboxPushHandler = (messageId: string) => Promise<void> | void;
 
 export type Notifier = {
   /**
-   * Subscribe a WebSocket for an inbox. If `pushHandler` is provided, NOTIFY
-   * traffic for this inbox routes to the handler instead of the legacy
-   * `new_message` doorbell. Multiple sockets per inbox are supported; each
-   * one is keyed independently so a doorbell client and a push client can
-   * co-exist (think mid-rollout where one organisation upgrades before
-   * another).
+   * Subscribe a WebSocket for an inbox. NOTIFY traffic for the inbox is
+   * dispatched to `pushHandler`. Multiple sockets per inbox are supported.
    */
-  subscribe(inboxId: string, ws: WebSocket, pushHandler?: InboxPushHandler): void;
+  subscribe(inboxId: string, ws: WebSocket, pushHandler: InboxPushHandler): void;
   /** Unsubscribe a WebSocket connection */
   unsubscribe(inboxId: string, ws: WebSocket): void;
   /** Notify that new messages are available for an inbox */
@@ -117,10 +112,7 @@ export type Notifier = {
 };
 
 export function createNotifier(listenClient: postgres.Sql): Notifier {
-  // Each subscription stores either a push handler (WS data-plane path) or
-  // null (legacy `new_message` doorbell). A single inbox may have a mix of
-  // both during gradual rollout — the LISTEN handler dispatches per-socket.
-  const subscriptions = new Map<string, Map<WebSocket, InboxPushHandler | null>>();
+  const subscriptions = new Map<string, Map<WebSocket, InboxPushHandler>>();
   const configChangeHandlers: ConfigChangeHandler[] = [];
   const sessionStateChangeHandlers: SessionStateChangeHandler[] = [];
   const sessionEventHandlers: SessionEventChangeHandler[] = [];
@@ -145,34 +137,27 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
     const sockets = subscriptions.get(inboxId);
     if (!sockets) return;
 
-    const doorbellFrame = JSON.stringify({ type: "new_message", inboxId, messageId });
     for (const [ws, pushHandler] of sockets) {
       if (ws.readyState !== ws.OPEN) continue;
-      if (pushHandler) {
-        // WS data-plane path: defer DB + frame work to the per-socket handler.
-        // It owns capability gating, in-flight backpressure, claim, build, and
-        // send. Resolution is intentionally not awaited — the LISTEN loop must
-        // not stall on slow consumers.
-        Promise.resolve(pushHandler(messageId)).catch(() => {
-          // Handler-side errors are logged by the handler; swallow here so a
-          // single misbehaving socket does not break notification fan-out for
-          // the rest of the subscribers.
-        });
-      } else {
-        // Legacy doorbell path: kick the client to HTTP-poll.
-        ws.send(doorbellFrame);
-      }
+      // Defer DB + frame work to the per-socket handler. It owns in-flight
+      // backpressure, claim, build, and send. Resolution is intentionally
+      // not awaited — the LISTEN loop must not stall on slow consumers.
+      Promise.resolve(pushHandler(messageId)).catch(() => {
+        // Handler-side errors are logged by the handler; swallow here so a
+        // single misbehaving socket does not break notification fan-out for
+        // the rest of the subscribers.
+      });
     }
   }
 
   return {
-    subscribe(inboxId: string, ws: WebSocket, pushHandler?: InboxPushHandler) {
+    subscribe(inboxId: string, ws: WebSocket, pushHandler: InboxPushHandler) {
       let map = subscriptions.get(inboxId);
       if (!map) {
         map = new Map();
         subscriptions.set(inboxId, map);
       }
-      map.set(ws, pushHandler ?? null);
+      map.set(ws, pushHandler);
     },
 
     unsubscribe(inboxId: string, ws: WebSocket) {
