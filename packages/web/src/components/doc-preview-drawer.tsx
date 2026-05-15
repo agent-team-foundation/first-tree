@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -14,6 +14,7 @@ import { useSearchParams } from "react-router";
 import { getMeDoc } from "../api/me-docs.js";
 import { docPreviewPathFromHref } from "../lib/doc-preview-links.js";
 import { cn } from "../lib/utils.js";
+import { type DocSnapshotEntry, docSnapshotQueryKey } from "../pages/workspace/center/chat-view.js";
 import { Button } from "./ui/button.js";
 import { Markdown } from "./ui/markdown.js";
 
@@ -54,11 +55,21 @@ function useIsMobileDocPreview(): boolean {
 
 export function DocPreviewDrawer() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const docChatId = searchParams.get("docChat");
   const docAgentId = searchParams.get("docAgent");
   const docPath = searchParams.get("docPath");
   const docBasePath = searchParams.get("docBase") ?? undefined;
+  const docMsgId = searchParams.get("docMsg");
   const hasDocRef = Boolean(docChatId && docAgentId && docPath);
+  // Inline snapshot takes precedence: when the chat-view click handler tagged
+  // the URL with `docMsg`, it also seeded the React Query cache under
+  // `docSnapshotQueryKey` so we can render the markdown straight from
+  // memory without hitting the legacy path-based endpoint.
+  const inlineSnapshot =
+    docMsgId && docChatId && docPath
+      ? queryClient.getQueryData<DocSnapshotEntry>(docSnapshotQueryKey(docChatId, docMsgId, docPath))
+      : undefined;
   const isMobile = useIsMobileDocPreview();
   const [drawerWidth, setDrawerWidth] = useState(defaultDrawerWidth);
   const drawerRef = useRef<HTMLElement | null>(null);
@@ -71,6 +82,7 @@ export function DocPreviewDrawer() {
     next.delete("docAgent");
     next.delete("docPath");
     next.delete("docBase");
+    next.delete("docMsg");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -104,10 +116,12 @@ export function DocPreviewDrawer() {
         basePath: docBasePath,
         path: docPath ?? "",
       }),
-    enabled: hasDocRef,
+    // Skip the network round-trip when we already have an inline snapshot
+    // pre-staged in the React Query cache — see chat-view click handler.
+    enabled: hasDocRef && !inlineSnapshot,
   });
-  const resolvedDocPath = previewQuery.data?.ref.path ?? docPath;
-  const displayDocPath = previewQuery.data?.path ?? docPath;
+  const resolvedDocPath = inlineSnapshot?.path ?? previewQuery.data?.ref.path ?? docPath;
+  const displayDocPath = inlineSnapshot?.path ?? previewQuery.data?.path ?? docPath;
 
   const title = useMemo(() => {
     const path = displayDocPath ?? "";
@@ -263,20 +277,28 @@ export function DocPreviewDrawer() {
       </header>
 
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {previewQuery.isLoading ? (
-          <div className="flex h-full items-center justify-center text-body text-text-secondary">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-            Loading preview
-          </div>
-        ) : null}
+        {inlineSnapshot ? (
+          <Markdown components={markdownComponents}>{inlineSnapshot.content}</Markdown>
+        ) : (
+          <>
+            {previewQuery.isLoading ? (
+              <div className="flex h-full items-center justify-center text-body text-text-secondary">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                Loading preview
+              </div>
+            ) : null}
 
-        {previewQuery.isError ? (
-          <div className="rounded-[var(--radius-panel)] border border-error bg-error-soft p-4 text-body text-error">
-            {previewQuery.error instanceof Error ? previewQuery.error.message : "Unable to load document"}
-          </div>
-        ) : null}
+            {previewQuery.isError ? (
+              <div className="rounded-[var(--radius-panel)] border border-error bg-error-soft p-4 text-body text-error">
+                {previewQuery.error instanceof Error ? previewQuery.error.message : "Unable to load document"}
+              </div>
+            ) : null}
 
-        {previewQuery.data ? <Markdown components={markdownComponents}>{previewQuery.data.content}</Markdown> : null}
+            {previewQuery.data ? (
+              <Markdown components={markdownComponents}>{previewQuery.data.content}</Markdown>
+            ) : null}
+          </>
+        )}
       </div>
     </aside>
   );

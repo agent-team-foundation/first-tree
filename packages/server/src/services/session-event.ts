@@ -8,7 +8,11 @@ import { and, asc, desc, eq, gt, gte, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { sessionEvents } from "../db/schema/session-events.js";
+import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
+import { maybeBindGithubEntityFromToolCall } from "./github-entity-chat.js";
+
+const log = createLogger("SessionEvent");
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
@@ -76,7 +80,7 @@ export async function appendEvent(
 
     const row = result[0];
     if (row) {
-      return rowToEvent({
+      const persisted = rowToEvent({
         id: row.id,
         agentId: row.agent_id,
         chatId: row.chat_id,
@@ -85,6 +89,21 @@ export async function appendEvent(
         payload: row.payload,
         createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
       });
+
+      // Side-effect: when a tool_call event reports the agent just created a
+      // GitHub PR/Issue, write the chat ↔ entity mapping eagerly so the
+      // incoming `*.opened` webhook routes back to this chat instead of
+      // forking a fresh one. Fire-and-forget — the main session-event write
+      // has already succeeded and must not be unwound on bookkeeping
+      // failures. Status filter avoids spurious DB queries: only `ok` events
+      // carry a stdout preview worth extracting from.
+      if (validated.kind === "tool_call" && validated.payload.status === "ok") {
+        maybeBindGithubEntityFromToolCall(db, agentId, chatId, validated.payload).catch((err) => {
+          log.warn({ err, agentId, chatId }, "agent_binding side-effect failed");
+        });
+      }
+
+      return persisted;
     }
   }
 

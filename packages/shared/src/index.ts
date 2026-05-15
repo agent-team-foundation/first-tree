@@ -1,6 +1,7 @@
 // Schemas
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
+export { isCanonicalDocLinkPath, normalizeDocLinkPath } from "./lib/doc-path.js";
 export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
 // -- Single source of truth for chat_membership.mode derivation --
 export { defaultParticipantMode } from "./participant-mode.js";
@@ -332,6 +333,11 @@ export {
   type GetMeDocResponse,
   getMeDocResponseSchema,
   getMeDocSchema,
+  MAX_DOC_SNAPSHOT_BYTES,
+  MAX_DOC_SNAPSHOTS_PER_MESSAGE,
+  MAX_TOTAL_DOC_SNAPSHOT_BYTES,
+  type SnapshotDoc,
+  snapshotDocSchema,
   type WorkspaceDocRef,
   workspaceDocRefSchema,
 } from "./schemas/me-doc.js";

@@ -18,8 +18,12 @@ import { questionAnswerMessageContentSchema } from "@agent-team-foundation/first
  *      user had typed those answers directly.
  *
  * The Map is process-wide so a session that suspends/resumes during the wait
- * window keeps the same correlation key working — `agentId` is only used to
- * scope the {@link rejectPendingForAgent} cleanup on full handler shutdown.
+ * window keeps the same correlation key working — `(agentId, chatId)` is the
+ * scope key used by {@link rejectPendingForChat} on full handler shutdown
+ * and {@link clearPendingForChat} on idle suspend. Scoping by `agentId`
+ * alone caused issue #418: one chat suspending wiped out another chat's
+ * pending askuser entries for the same agent (handlers are per-(agent,
+ * chat), but the bridge cleanup was per-agent).
  *
  * The Promise contract is `{ status: "answered", answers }` for a normal
  * answer or `{ status: "denied", reason }` when the question has been
@@ -97,11 +101,17 @@ export function hasPendingForChat(agentId: string, chatId: string): boolean {
   return false;
 }
 
-/** Cleanup hook used by handler.shutdown() to fail-fast every in-flight question. */
-export function rejectPendingForAgent(agentId: string, reason: string): number {
+/**
+ * Cleanup hook used by `handler.shutdown()` to fail-fast every in-flight
+ * question for THIS (agent, chat) handler. Scoping by chatId as well as
+ * agentId matters when the same agent is bound to multiple concurrent chats
+ * (each chat has its own handler): tearing down one handler must not nuke
+ * the other handler's still-live askuser awaiters (#418).
+ */
+export function rejectPendingForChat(agentId: string, chatId: string, reason: string): number {
   let count = 0;
   for (const [correlationId, entry] of pending) {
-    if (entry.agentId !== agentId) continue;
+    if (entry.agentId !== agentId || entry.chatId !== chatId) continue;
     pending.delete(correlationId);
     entry.resolve({ status: "denied", reason });
     count++;
@@ -110,20 +120,25 @@ export function rejectPendingForAgent(agentId: string, reason: string): number {
 }
 
 /**
- * Silent cleanup for `handler.suspend()`. Removes pending entries WITHOUT
- * resolving the Promise — the SDK process is being torn down anyway, and
- * resolving would unblock the canUseTool callback whose return value the
- * SDK then writes to a now-closed transport (the symptom: 'ProcessTransport
- * is not ready for writing' uncaught). The orphaned Promise stack frame is
- * GC'd alongside the SDK process exit. When the user eventually answers,
- * SessionManager.dispatch sees no matching waiter (`tryResolveQuestionAnswer`
- * returns false) and routes the answer message through the normal dispatch
- * path so the suspended session resumes with the answer as fresh input.
+ * Silent cleanup for `handler.suspend()`. Removes pending entries for this
+ * (agent, chat) handler WITHOUT resolving the Promise — the SDK process is
+ * being torn down anyway, and resolving would unblock the canUseTool
+ * callback whose return value the SDK then writes to a now-closed transport
+ * (the symptom: 'ProcessTransport is not ready for writing' uncaught). The
+ * orphaned Promise stack frame is GC'd alongside the SDK process exit. When
+ * the user eventually answers, SessionManager.dispatch sees no matching
+ * waiter (`tryResolveQuestionAnswer` returns false) and routes the answer
+ * message through the normal dispatch path so the suspended session resumes
+ * with the answer as fresh input.
+ *
+ * Per-chat scoping (#418): suspend of chat B must not clear chat A's
+ * pending entries — both belong to the same agentId but have independent
+ * lifecycles.
  */
-export function clearPendingForAgent(agentId: string): number {
+export function clearPendingForChat(agentId: string, chatId: string): number {
   let count = 0;
   for (const [correlationId, entry] of pending) {
-    if (entry.agentId !== agentId) continue;
+    if (entry.agentId !== agentId || entry.chatId !== chatId) continue;
     pending.delete(correlationId);
     count++;
   }

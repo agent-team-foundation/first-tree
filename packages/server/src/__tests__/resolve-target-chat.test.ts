@@ -5,8 +5,29 @@ import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
-import { resolveTargetChat } from "../services/github-entity-chat.js";
+import { resolveTargetChat as resolveTargetChatRaw } from "../services/github-entity-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
+
+/**
+ * Test-only thin wrapper: every existing case in this file simulates the
+ * mention path (none of them exercise the creation-event guard's null
+ * branch). The wrapper defaults `isMentionMatched: true` so the legacy
+ * assertions still compile after `isMentionMatched` became required, and
+ * throws on null because that would be a real regression for these cases.
+ */
+async function resolveTargetChat(
+  db: Parameters<typeof resolveTargetChatRaw>[0],
+  params: Omit<Parameters<typeof resolveTargetChatRaw>[1], "isMentionMatched"> & {
+    isMentionMatched?: boolean;
+  },
+): Promise<NonNullable<Awaited<ReturnType<typeof resolveTargetChatRaw>>>> {
+  const result = await resolveTargetChatRaw(db, {
+    ...params,
+    isMentionMatched: params.isMentionMatched ?? true,
+  });
+  if (!result) throw new Error("resolveTargetChat returned null in legacy test path");
+  return result;
+}
 
 async function seedDelegate(
   app: ReturnType<ReturnType<typeof useTestApp>>,

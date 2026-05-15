@@ -309,7 +309,15 @@ describe("resolveAudience", () => {
     expect(audience[0]?.chatId).toBe(chatId);
   });
 
-  it("returns [] when actor is our-app-bot (DP13 silences whole audience)", async () => {
+  it("keeps subscribed targets when actor is our-app-bot (route Hub's own writes back to existing chats)", async () => {
+    // Background: when an agent creates a PR via Hub's GitHub App token, the
+    // resulting `pull_request.opened` webhook arrives with `sender = <app>[bot]`.
+    // Pre-agent-binding behaviour silenced the whole audience here, which
+    // meant PR comments / CI changes on bot-authored entities never reached
+    // the chat the agent worked in. The new behaviour keeps `kind: "existing"`
+    // rows so subscribed chats still get the event; `kind: "new"` rows are
+    // dropped because minting a fresh chat just to echo our own write is
+    // never useful.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -342,6 +350,41 @@ describe("resolveAudience", () => {
         actorLogin: "first-tree-hub[bot]",
         actorIsBot: true,
         kind: "synchronized",
+      }),
+      "first-tree-hub",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.chatId).toBe(chatId);
+  });
+
+  it("drops mention-only targets when actor is our-app-bot (no fresh chat for our own write)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `human-${randomUUID().slice(0, 6)}`;
+    await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#104",
+        actorLogin: "first-tree-hub[bot]",
+        actorIsBot: true,
+        involves: [{ githubLogin: humanName, reason: "mentioned" }],
+        kind: "opened",
       }),
       "first-tree-hub",
     );

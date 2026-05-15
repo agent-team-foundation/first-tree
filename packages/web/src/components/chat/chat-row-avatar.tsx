@@ -146,13 +146,19 @@ export function ChatRowAvatar({
   size?: number;
 }) {
   const isDirect = type === "direct";
-  const peers = participants.filter((p) => p.agentId !== selfAgentId);
+  // Defensive: older server builds may omit `participants` / `engagedAgentIds`
+  // from the me/chats payload. Schema marks them required, but a version-skewed
+  // backend (or a partial cache from a prior schema) should not crash the
+  // entire conversation list — fall back to empty arrays.
+  const safeParticipants = participants ?? [];
+  const safeEngagedAgentIds = engagedAgentIds ?? [];
+  const peers = safeParticipants.filter((p) => p.agentId !== selfAgentId);
 
   // Ring fires whenever any non-self speaker has an active per-(agent, chat)
   // session — works equally for direct and group chats since the derivation
   // is now per-pair.
   const peer = peers[0];
-  const anyPeerEngaged = peers.some((p) => engagedAgentIds.includes(p.agentId));
+  const anyPeerEngaged = peers.some((p) => safeEngagedAgentIds.includes(p.agentId));
 
   const ariaLabel = buildAvatarAriaLabel({ engaged: anyPeerEngaged, unread: unreadCount });
   const a11yProps: { role?: string; "aria-label"?: string; "aria-hidden"?: boolean } =

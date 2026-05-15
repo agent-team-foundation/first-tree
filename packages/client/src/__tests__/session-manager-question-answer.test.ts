@@ -104,6 +104,94 @@ afterEach(() => {
   clearAllPendingQuestionsForTest();
 });
 
+describe("SessionManager.evictIdle — askuser-in-flight guard (#418)", () => {
+  it("does NOT suspend a chat that has a pending AskUserQuestion when its idle_timeout elapses", async () => {
+    // Reproduces the #418 client-side root cause 2: idle_timeout fires
+    // while the asker is still waiting on a `canUseTool` Promise, the
+    // handler.suspend tears down the SDK transport, and the bridge entry
+    // is silently dropped — making the eventual answer arrive at a chat
+    // with no live waiter. With the `hasPendingForChat` guard in
+    // `evictIdle`, suspend is skipped for as long as the awaiter is alive.
+    vi.useFakeTimers();
+    try {
+      const handler = createMockHandler();
+      const sdk = mockSdk();
+      const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+      const factory: HandlerFactory = () => handler;
+      const sm = new SessionManager({
+        // 1-second idle timeout so a single 10s evictIdle tick is plenty.
+        session: { idle_timeout: 1, max_sessions: 10, reconcile_interval_seconds: 300 },
+        concurrency: 5,
+        handlerFactory: factory,
+        handlerConfig: { workspaceRoot: "/tmp/test" },
+        agentIdentity: {
+          agentId: "agent-1",
+          inboxId: "inbox-agent-1",
+          displayName: "Agent",
+          type: "autonomous_agent",
+          delegateMention: null,
+          metadata: {},
+        },
+        sdk,
+        log: silentLogger(),
+        ackEntry,
+      });
+
+      // Build an active session for chat-pending, then register a pending
+      // AskUserQuestion against it.
+      await sm.dispatch({
+        id: 1,
+        inboxId: "inbox-test",
+        messageId: "msg-trigger",
+        chatId: "chat-pending",
+        status: "delivered",
+        retryCount: 0,
+        createdAt: new Date().toISOString(),
+        deliveredAt: new Date().toISOString(),
+        ackedAt: null,
+        message: {
+          id: "msg-trigger",
+          chatId: "chat-pending",
+          senderId: "sender-human",
+          format: "text",
+          content: "Please ask me something",
+          metadata: {},
+          replyToInbox: null,
+          replyToChat: null,
+          inReplyTo: null,
+          source: null,
+          createdAt: new Date().toISOString(),
+          configVersion: 1,
+          recipientMode: "full",
+          inReplyToSnapshot: null,
+          precedingMessages: [],
+        },
+      });
+      void registerPendingQuestion({
+        correlationId: "tu_idle_guard",
+        agentId: "agent-1",
+        chatId: "chat-pending",
+      });
+
+      // Advance well past idle_timeout — the 10s evictIdle interval will
+      // fire at least once. Without the guard, handler.suspend would have
+      // been invoked.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(handler.suspend).not.toHaveBeenCalled();
+
+      // Once the awaiter is gone (e.g. the answer landed), the next tick
+      // suspends as usual.
+      clearAllPendingQuestionsForTest();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(handler.suspend).toHaveBeenCalledTimes(1);
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("SessionManager.dispatch — question_answer short-circuit", () => {
   it("resolves the bridge waiter and acks the entry without invoking the handler", async () => {
     const handler = createMockHandler();
