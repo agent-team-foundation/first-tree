@@ -34,6 +34,7 @@ import {
   type SessionEventRow,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import {
   isQuestionAnswerContent,
   isQuestionContent,
@@ -103,10 +104,12 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
 function AssistantTextRow({
   event,
   agentNameFn,
+  agentAvatarFn,
   agentId,
 }: {
   event: SessionEventRow;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
   agentId: string;
 }) {
   const payload = asAssistantTextPayload(event.payload);
@@ -122,7 +125,7 @@ function AssistantTextRow({
         opacity: 0.85,
       }}
     >
-      <Avatar name={senderName} isSelf={false} />
+      <Avatar name={senderName} isSelf={false} imageUrl={agentAvatarFn(agentId)} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
@@ -179,7 +182,17 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
   );
 }
 
-function Avatar({ name, isSelf }: { name: string; isSelf: boolean }) {
+/**
+ * Small inline avatar used in the message timeline. When `imageUrl` is
+ * present (human GitHub avatar, agent manager-uploaded image), renders
+ * the real image via the shared `<Avatar>` component. Otherwise keeps
+ * the existing visual treatment: a green gradient + initials for
+ * self-authored messages, and the FirstTree logo for other speakers.
+ */
+function Avatar({ name, isSelf, imageUrl }: { name: string; isSelf: boolean; imageUrl?: string | null }) {
+  if (imageUrl) {
+    return <RealAvatar src={imageUrl} name={name} size={20} />;
+  }
   const initials = name.slice(0, 2).toUpperCase();
   return (
     <div
@@ -206,10 +219,12 @@ function TextRow({
   msg,
   myAgentId,
   agentNameFn,
+  agentAvatarFn,
 }: {
   msg: MessageWithDelivery;
   myAgentId: string | null;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const senderName = agentNameFn(msg.senderId);
@@ -266,7 +281,7 @@ function TextRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={isSelf} />
+      <Avatar name={senderName} isSelf={isSelf} imageUrl={agentAvatarFn(msg.senderId)} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
@@ -399,6 +414,7 @@ function QuestionMessageRow({
   answer,
   status,
   agentNameFn,
+  agentAvatarFn,
 }: {
   msg: MessageWithDelivery;
   chatId: string;
@@ -406,6 +422,7 @@ function QuestionMessageRow({
   answer: QuestionAnswerMessageContent | null;
   status: QuestionStatus;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
 }) {
   const senderName = agentNameFn(msg.senderId);
   return (
@@ -417,7 +434,7 @@ function QuestionMessageRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={false} />
+      <Avatar name={senderName} isSelf={false} imageUrl={agentAvatarFn(msg.senderId)} />
       <div className="min-w-0 flex flex-col" style={{ gap: "var(--sp-1)" }}>
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--accent)" }}>
@@ -435,7 +452,15 @@ function QuestionMessageRow({
 
 /** Compact recap row for `format=question_answer`. Mirrors the style of a
  *  user text reply but flagged so it's clear this came from the answer card. */
-function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; agentNameFn: (id: string) => string }) {
+function QuestionAnswerRow({
+  msg,
+  agentNameFn,
+  agentAvatarFn,
+}: {
+  msg: MessageWithDelivery;
+  agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+}) {
   const parsed = isQuestionAnswerContent(msg.content) ? msg.content : null;
   const senderName = agentNameFn(msg.senderId);
   const summary = parsed
@@ -452,7 +477,7 @@ function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; age
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf />
+      <Avatar name={senderName} isSelf imageUrl={agentAvatarFn(msg.senderId)} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--fg)" }}>
@@ -541,6 +566,14 @@ export function ChatView({
   const queryClient = useQueryClient();
   const agentName = useAgentNameMap();
   const agentIdentity = useAgentIdentityMap();
+  /**
+   * Avatar URL resolver derived from the identity map: returns the
+   * sender's resolved avatar (uploaded agent image, or — for human
+   * agents — the backing user's GitHub avatar). `null` when the agent
+   * is missing from the identity map or has no avatar; the timeline
+   * row's `<Avatar>` then falls back to the FirstTree logo / initials.
+   */
+  const agentAvatar = useCallback((id: string) => agentIdentity(id)?.avatarImageUrl ?? null, [agentIdentity]);
   const { agentId: myAgentId } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -896,10 +929,19 @@ export function ChatView({
    * mention picker. Same precedence rule as `chatScopedAgentName`.
    */
   const chatScopedAgentIdentity = useCallback(
-    (id: string | null | undefined): { name: string | null; displayName: string } | null => {
+    (
+      id: string | null | undefined,
+    ): { name: string | null; displayName: string; avatarImageUrl: string | null } | null => {
       if (!id) return null;
       const p = chatParticipantById.get(id);
-      if (p) return { name: p.name, displayName: p.displayName };
+      if (p) {
+        // Labels come from the chat-membership-authoritative source, but
+        // the avatar URL is org-scoped — pull it from the identity map
+        // when present. A private agent visible only through chat
+        // membership won't have an `agentIdentity` entry; we surface a
+        // null URL so the chip falls back to color + initial.
+        return { name: p.name, displayName: p.displayName, avatarImageUrl: agentIdentity(id)?.avatarImageUrl ?? null };
+      }
       return agentIdentity(id);
     },
     [chatParticipantById, agentIdentity],
@@ -1298,7 +1340,13 @@ export function ChatView({
                 switch (ev.kind) {
                   case "assistant_text":
                     return (
-                      <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={chatScopedAgentName} />
+                      <AssistantTextRow
+                        key={item.key}
+                        event={ev}
+                        agentId={agentId}
+                        agentNameFn={chatScopedAgentName}
+                        agentAvatarFn={agentAvatar}
+                      />
                     );
                   case "error":
                     return <ErrorRow key={item.key} event={ev} />;
@@ -1321,13 +1369,29 @@ export function ChatView({
                     answer={answer}
                     status={status}
                     agentNameFn={chatScopedAgentName}
+                    agentAvatarFn={agentAvatar}
                   />
                 );
               }
               if (msg.format === "question_answer") {
-                return <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={chatScopedAgentName} />;
+                return (
+                  <QuestionAnswerRow
+                    key={item.key}
+                    msg={msg}
+                    agentNameFn={chatScopedAgentName}
+                    agentAvatarFn={agentAvatar}
+                  />
+                );
               }
-              return <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={chatScopedAgentName} />;
+              return (
+                <TextRow
+                  key={item.key}
+                  msg={msg}
+                  myAgentId={myAgentId}
+                  agentNameFn={chatScopedAgentName}
+                  agentAvatarFn={agentAvatar}
+                />
+              );
             })}
           </div>
           <div ref={messagesEndRef} />
@@ -1701,8 +1765,11 @@ function ParticipantsHeader({
   candidates: MentionCandidate[];
   /** Identity resolver covering ALL agents (incl. the viewer's own,
    *  which `mentionCandidates` excludes). Lets the chip row label
-   *  self correctly instead of falling back to a UUID prefix. */
-  agentIdentity: (uuid: string | null | undefined) => { name: string | null; displayName: string } | null;
+   *  self correctly instead of falling back to a UUID prefix. The
+   *  `avatarImageUrl` field is consumed for the chip's leading avatar. */
+  agentIdentity: (
+    uuid: string | null | undefined,
+  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
   onAdded: () => void;
   readOnly?: boolean;
 }) {
@@ -1747,12 +1814,14 @@ function ParticipantsHeader({
             key={id}
             className="inline-flex items-center text-label"
             style={{
-              padding: "var(--sp-0_5) var(--sp-1_5)",
+              padding: "var(--sp-0_5) var(--sp-1_5) var(--sp-0_5) var(--sp-0_5)",
               borderRadius: "var(--radius-chip)",
               background: "var(--bg-sunken)",
               color: "var(--fg-2)",
+              gap: 6,
             }}
           >
+            <RealAvatar src={ident?.avatarImageUrl ?? null} name={label} seed={id} size={16} />
             {label}
           </span>
         );

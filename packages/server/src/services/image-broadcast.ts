@@ -25,11 +25,11 @@ import type { Notifier } from "./notifier.js";
  *      {imageId, mimeType, filename, size}
  *
  * The push is fire-and-forget: `ws.send()` queues the frame into the socket's
- * send buffer synchronously, which is the only ordering guarantee we need
- * — the subsequent `new_message` notification travels a strictly slower PG
- * NOTIFY round trip, so the image lands first on the wire. Awaiting the TCP
- * flush here would put a slow subscriber's backpressure on the sender's
- * HTTP response for a feature that is already best-effort.
+ * send buffer synchronously, which is the only ordering guarantee we need —
+ * the subsequent `inbox:deliver` frame is driven by a PG NOTIFY round trip,
+ * so the image lands first on the wire. Awaiting the TCP flush here would
+ * put a slow subscriber's backpressure on the sender's HTTP response for a
+ * feature that is already best-effort.
  *
  * Non-image messages are returned unchanged. Missing-subscriber / wrong-
  * instance cases are acceptable loss per the image-out-of-messages design

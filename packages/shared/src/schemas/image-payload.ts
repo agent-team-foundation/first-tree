@@ -47,8 +47,8 @@ export type ImageRefContent = z.infer<typeof imageRefContentSchema>;
 
 /**
  * Server → client WS frame carrying the full image bytes for an image
- * message. Pushed before the corresponding `new_message` notification so
- * the client has the file on disk by the time it polls the message.
+ * message. Pushed before the corresponding `inbox:deliver` frame so the
+ * client has the file on disk by the time it renders the message.
  *
  * Best-effort: if the target client WS lives on a different server
  * instance (or is offline), the frame is lost and the reference message

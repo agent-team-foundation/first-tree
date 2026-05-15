@@ -68,16 +68,10 @@ type SessionManagerConfig = {
   agentConfigCache?: AgentConfigCache;
   /**
    * Ack channel used by `dispatch` when an entry transitions out of `delivered`.
-   * Defaults to `sdk.ack` (HTTP `POST /inbox/:id/ack`) — the legacy poll path.
-   * The WS push path (proposal hub-inbox-ws-data-plane §3.4) overrides this
-   * with `clientConnection.sendInboxAck` so the entry is acked over the same
-   * socket that delivered it. Without this hook a push-mode slot would
-   * silently double-ack: HTTP first (status `delivered → acked`) followed by
-   * WS (no-op against the now-acked row), and the server-side per-agent
-   * in-flight counter — which only decrements on a successful WS ack —
-   * would leak to the cap and stop pushing.
+   * Wired to `clientConnection.sendInboxAck` so the entry is acked over the
+   * same socket that delivered it.
    */
-  ackEntry?: (entryId: number) => Promise<void>;
+  ackEntry: (entryId: number) => Promise<void>;
   /** Callback when a session state changes (per-session granularity). */
   onStateChange?: (chatId: string, state: SessionState) => void;
   /** Callback when aggregated runtime state changes. */
@@ -713,21 +707,13 @@ export class SessionManager {
   }
 
   /**
-   * ACK an inbox entry — delayed until handler starts processing.
-   *
-   * Routes through `config.ackEntry` when set (WS push path) or falls back to
-   * `sdk.ack` (HTTP poll path). One ack per entry, one channel per slot —
-   * mixing channels in one slot would leak the server's per-agent in-flight
-   * counter (proposal hub-inbox-ws-data-plane §3.5).
+   * ACK an inbox entry — delayed until handler starts processing. Routes
+   * through `config.ackEntry`, which is wired to the WS data plane.
    */
   private async ackEntry(entryId: number | undefined, chatId: string): Promise<void> {
     if (entryId === undefined) return;
     try {
-      if (this.config.ackEntry) {
-        await this.config.ackEntry(entryId);
-      } else {
-        await this.config.sdk.ack(entryId);
-      }
+      await this.config.ackEntry(entryId);
     } catch {
       this.config.log.warn({ chatId, entryId }, "ACK failed, continuing");
     }

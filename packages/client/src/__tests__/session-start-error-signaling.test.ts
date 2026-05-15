@@ -34,9 +34,6 @@ function mockSdk(): {
   return {
     sdk: {
       register: vi.fn(),
-      pull: vi.fn(),
-      ack: vi.fn().mockResolvedValue(undefined),
-      renew: vi.fn().mockResolvedValue(undefined),
       sendMessage,
       sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
       listChatParticipants,
@@ -70,6 +67,7 @@ function makeSessionManager(opts: {
     },
     sdk: opts.sdk ?? mockSdk().sdk,
     log: silentLogger(),
+    ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     onStateChange: opts.onStateChange,
   });
 }
@@ -199,6 +197,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       },
       sdk: opts.sdk ?? mockSdk().sdk,
       log: silentLogger(),
+      ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
       onStateChange: opts.onStateChange,
     });
   }

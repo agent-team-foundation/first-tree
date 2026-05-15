@@ -4,7 +4,12 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
-import { ackEntry, PRECEDING_CONTEXT_MAX_ENTRIES, pollInbox, pruneStaleSilentEntries } from "../services/inbox.js";
+import {
+  ackEntryByIdForBoundAgents,
+  PRECEDING_CONTEXT_MAX_ENTRIES,
+  pollInbox,
+  pruneStaleSilentEntries,
+} from "../services/inbox.js";
 import { sendMessage } from "../services/message.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -118,7 +123,7 @@ describe("silent inbox + preceding context", () => {
       "third silent",
     ]);
 
-    // Pin the runtime types of the bigserial / integer columns. The HTTP poll
+    // Pin the runtime types of the bigserial / integer columns. The claim
     // path historically returned `id` and `retryCount` as JS strings because
     // the raw-SQL `tx.execute` bypassed Drizzle's column-mode conversion;
     // anything downstream that strictly validated `z.number()` would reject
@@ -153,7 +158,7 @@ describe("silent inbox + preceding context", () => {
     const firstEntry = firstPull[0];
     if (!firstEntry) throw new Error("first entry missing");
     expect(firstEntry.message.precedingMessages.map((p) => p.content)).toEqual(["m1", "m2"]);
-    await ackEntry(app.db, firstEntry.id, observer.inboxId);
+    await ackEntryByIdForBoundAgents(app.db, firstEntry.id, [observer.inboxId]);
 
     // Second wave: M4 (silent), M5 (silent), M6 (mentions observer).
     // m1/m2 have been acked, so they should NOT appear again.
