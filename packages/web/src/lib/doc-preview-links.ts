@@ -1,5 +1,11 @@
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:(?!\d)/i;
 const MARKDOWN_PATH_RE = /^(?<path>.*?\.md)(?::\d+(?::\d+)?)?$/i;
+const DOC_PATH_TOKEN_RE =
+  /(^|[\s([{"'])(?<path>(?:\.{1,2}\/|\/)?(?:[A-Za-z0-9_.~+@%-]+\/)*[A-Za-z0-9_.~+@%-]+\.md(?::\d+(?::\d+)?)?)(?=$|[\s)\]}"',.;!?])/g;
+const DOMAIN_LIKE_PATH_RE = /^[a-z][a-z0-9.-]*\.[a-z]{2,}\//i;
+const HTML_TAG_RE = /<\/?[A-Za-z][^>\n]*>/g;
+const INLINE_MARKDOWN_LINK_RE = /\[[^\]\n]*\]\([^)\n]*\)/g;
+const REFERENCE_LINK_DEFINITION_RE = /^\s*\[[^\]\n]+\]:\s*\S+/;
 
 export type DocPreviewPathOptions = {
   currentDocPath?: string | null;
@@ -35,6 +41,75 @@ export function docPreviewPathFromHref(
   }
 
   return normalizeDocPath(candidate);
+}
+
+export function linkifyMarkdownDocPaths(markdown: string, options: DocPreviewPathOptions = {}): string {
+  const lines = markdown.split(/(\r?\n)/);
+  let inFence = false;
+
+  return lines
+    .map((line) => {
+      if (line === "\n" || line === "\r\n") return line;
+
+      if (/^\s*(```|~~~)/.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence) return line;
+      if (/^(?: {4}|\t)/.test(line) || REFERENCE_LINK_DEFINITION_RE.test(line)) return line;
+
+      return linkifyMarkdownDocPathsInLine(line, options);
+    })
+    .join("");
+}
+
+function linkifyMarkdownDocPathsInLine(line: string, options: DocPreviewPathOptions): string {
+  const skipRanges = findInlineSkipRanges(line);
+  return line.replace(DOC_PATH_TOKEN_RE, (match, boundary: string, path: string, offset: number) => {
+    const pathStart = offset + boundary.length;
+    if (isInsideAnyRange(pathStart, skipRanges) || !isLikelyPreviewableDocPath(path, options)) {
+      return match;
+    }
+    return `${boundary}[${path}](${path})`;
+  });
+}
+
+function findInlineSkipRanges(line: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+
+  for (const match of line.matchAll(INLINE_MARKDOWN_LINK_RE)) {
+    if (match.index !== undefined) ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+
+  for (const match of line.matchAll(HTML_TAG_RE)) {
+    if (match.index !== undefined) ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+
+  for (let idx = 0; idx < line.length; ) {
+    if (line[idx] !== "`") {
+      idx += 1;
+      continue;
+    }
+    const start = idx;
+    while (line[idx] === "`") idx += 1;
+    const ticks = line.slice(start, idx);
+    const end = line.indexOf(ticks, idx);
+    if (end === -1) continue;
+    ranges.push({ start, end: end + ticks.length });
+    idx = end + ticks.length;
+  }
+
+  return ranges;
+}
+
+function isInsideAnyRange(index: number, ranges: Array<{ start: number; end: number }>): boolean {
+  return ranges.some((range) => index >= range.start && index < range.end);
+}
+
+function isLikelyPreviewableDocPath(path: string, options: DocPreviewPathOptions): boolean {
+  const firstSegment = path.split("/", 1).at(0) ?? "";
+  if (!firstSegment.endsWith(".md") && DOMAIN_LIKE_PATH_RE.test(path)) return false;
+  return docPreviewPathFromHref(path, options) !== null;
 }
 
 function stripBasePathPrefix(path: string, basePath: string): string {

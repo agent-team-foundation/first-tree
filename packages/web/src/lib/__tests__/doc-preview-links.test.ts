@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { docPreviewPathFromHref } from "../doc-preview-links.js";
+import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../doc-preview-links.js";
 
 describe("docPreviewPathFromHref", () => {
   it("accepts markdown paths and strips query/hash fragments", () => {
@@ -42,5 +42,58 @@ describe("docPreviewPathFromHref", () => {
     expect(docPreviewPathFromHref("//example.com/readme.md")).toBeNull();
     expect(docPreviewPathFromHref("#heading")).toBeNull();
     expect(docPreviewPathFromHref("docs/readme.txt")).toBeNull();
+  });
+});
+
+describe("linkifyMarkdownDocPaths", () => {
+  it("links plain markdown document paths in chat text", () => {
+    expect(linkifyMarkdownDocPaths("Created docs/intro.md, README.md:12, and docs/api.md:42:13.")).toBe(
+      "Created [docs/intro.md](docs/intro.md), [README.md:12](README.md:12), and [docs/api.md:42:13](docs/api.md:42:13).",
+    );
+  });
+
+  it("links repo-local absolute paths when a base path is available", () => {
+    const path = "/Users/gandy/.first-tree/hub/data/workspaces/coder/chat-1/first-tree-hub/docs/intro.md:7";
+    expect(linkifyMarkdownDocPaths(`Created ${path}`, { basePath: "first-tree-hub" })).toBe(
+      `Created [${path}](${path})`,
+    );
+  });
+
+  it("does not rewrite existing links, inline code, fenced code, external urls, or non-markdown paths", () => {
+    expect(
+      linkifyMarkdownDocPaths(
+        [
+          "Already [intro](docs/intro.md)",
+          "Inline `docs/code.md`",
+          'HTML <a href="docs/html.md">link</a>',
+          '[ref]: docs/reference.md "Reference"',
+          "    docs/indented.md",
+          "```",
+          "docs/fenced.md",
+          "```",
+          "External https://example.com/readme.md",
+          "Text docs/readme.txt",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
+        "Already [intro](docs/intro.md)",
+        "Inline `docs/code.md`",
+        'HTML <a href="docs/html.md">link</a>',
+        '[ref]: docs/reference.md "Reference"',
+        "    docs/indented.md",
+        "```",
+        "docs/fenced.md",
+        "```",
+        "External https://example.com/readme.md",
+        "Text docs/readme.txt",
+      ].join("\n"),
+    );
+  });
+
+  it("does not treat markdown-named directories as domains", () => {
+    expect(linkifyMarkdownDocPaths("See notes.md/follow-up.md")).toBe(
+      "See [notes.md/follow-up.md](notes.md/follow-up.md)",
+    );
   });
 });

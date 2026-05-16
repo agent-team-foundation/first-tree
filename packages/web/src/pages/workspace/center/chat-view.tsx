@@ -52,7 +52,7 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
-import { docPreviewPathFromHref } from "../../../lib/doc-preview-links.js";
+import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
@@ -335,6 +335,17 @@ function TextRow({
   const senderName = agentNameFn(msg.senderId);
   const isSelf = myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
+  const shouldLinkifyDocPaths = msg.source !== "hub_ui";
+  const rawTextContent =
+    msg.format === "text" || msg.format === "markdown"
+      ? typeof msg.content === "string"
+        ? msg.content
+        : JSON.stringify(msg.content)
+      : null;
+  const textContent =
+    rawTextContent && shouldLinkifyDocPaths
+      ? linkifyMarkdownDocPaths(rawTextContent, { basePath: docBasePath })
+      : rawTextContent;
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -420,9 +431,7 @@ function TextRow({
           ) : msg.format === "file" && isImageRefContent(msg.content) ? (
             <ImageFromRef content={msg.content} />
           ) : msg.format === "text" || msg.format === "markdown" ? (
-            <Markdown components={markdownComponents}>
-              {typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}
-            </Markdown>
+            <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
           ) : (
             <pre
               className="mono text-label"
