@@ -5,7 +5,7 @@ import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { ConfigSection } from "./flat-section.js";
 import { ListRow } from "./list-row.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
@@ -28,19 +28,19 @@ export function GitSection(props: GitSectionProps) {
   const [dialog, setDialog] = useState<{ mode: "add" } | { mode: "edit"; key: string; initial: GitRepo } | null>(null);
   const activeCount = props.items.filter((i) => i.status !== "deleted").length;
 
+  const action = !props.disabled ? (
+    <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
+      <Plus className="h-3 w-3" /> Add
+    </Button>
+  ) : null;
+
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>Git repositories ({activeCount})</PanelTitle>
-        {!props.disabled && (
-          <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-3 w-3" /> Add
-          </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="space-y-2">
+    <ConfigSection eyebrow="resources" title="Git repositories" count={activeCount} action={action}>
+      <div>
         {props.items.length === 0 ? (
-          <p className="text-body text-muted-foreground">No Git repositories.</p>
+          <p className="text-body text-muted-foreground" style={{ padding: "var(--sp-3) 0" }}>
+            No Git repositories.
+          </p>
         ) : (
           props.items.map((item) => {
             const path = item.value.localPath ?? deriveRepoLocalPath(item.value.url);
@@ -60,7 +60,7 @@ export function GitSection(props: GitSectionProps) {
             );
           })
         )}
-      </PanelBody>
+      </div>
       {dialog && (
         <GitDialog
           open={!!dialog}
@@ -74,7 +74,7 @@ export function GitSection(props: GitSectionProps) {
           }}
         />
       )}
-    </Panel>
+    </ConfigSection>
   );
 }
 

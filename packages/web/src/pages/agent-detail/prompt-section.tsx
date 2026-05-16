@@ -2,7 +2,7 @@ import { Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { ConfigSection } from "./flat-section.js";
 
 /**
  * System Prompt Append — inline editor, no dialog. `Done` collapses the editor
@@ -27,25 +27,25 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
     if (editing) taRef.current?.focus();
   }, [editing]);
 
+  const action =
+    !editing && !disabled ? (
+      <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
+        <Pencil className="h-3 w-3" /> Edit
+      </Button>
+    ) : null;
+
   return (
-    <Panel
-      style={{
-        borderColor: dirty ? "color-mix(in oklch, var(--state-blocked) 70%, transparent)" : undefined,
-      }}
-    >
-      <PanelHeader>
-        <PanelTitle>
+    <ConfigSection
+      eyebrow="prompt"
+      title={
+        <span className="inline-flex items-center gap-2">
           System prompt append
           {dirty && <ChangedChip />}
-        </PanelTitle>
-        {!editing && !disabled && (
-          <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
-            <Pencil className="h-3 w-3" /> Edit
-          </Button>
-        )}
-      </PanelHeader>
-
-      <PanelBody>
+        </span>
+      }
+      action={action}
+    >
+      <div style={{ padding: "var(--sp-3) 0" }}>
         {editing ? (
           <div className="space-y-2">
             <textarea
@@ -80,13 +80,10 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
                 Done
               </Button>
             </div>
-            <p className="text-caption text-muted-foreground">
-              `Done` collapses this editor. The change is saved only when you click Save in the bar at the bottom of the
-              page.
-            </p>
+            <p className="text-caption text-muted-foreground">Use Save below to apply this prompt change.</p>
           </div>
         ) : (
-          <div className="rounded bg-muted p-3 text-body max-h-64 overflow-auto min-h-8">
+          <div className="text-body max-h-64 overflow-auto min-h-8">
             {value ? (
               <Markdown>{value}</Markdown>
             ) : (
@@ -94,8 +91,8 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
             )}
           </div>
         )}
-      </PanelBody>
-    </Panel>
+      </div>
+    </ConfigSection>
   );
 }
 

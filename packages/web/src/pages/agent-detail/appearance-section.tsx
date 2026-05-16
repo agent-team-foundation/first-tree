@@ -11,7 +11,7 @@ import { resolveAvatarHue } from "../../components/chat/chat-row-avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Label } from "../../components/ui/label.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { ConfigRow, ConfigSection } from "./flat-section.js";
 
 /**
  * Appearance — manager-configurable avatar color + image.
@@ -81,38 +81,33 @@ export function AppearanceSection({ agent, canEdit = true, onSave, onRefresh }: 
   const colorLabel =
     typeof agent.avatarColorToken === "string" && agent.avatarColorToken.length > 0 ? agent.avatarColorToken : "auto";
 
+  const action =
+    canEdit && agent.status === "active" ? (
+      <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
+        <Pencil className="h-3 w-3" /> Edit
+      </Button>
+    ) : null;
+
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>Appearance</PanelTitle>
-        {canEdit && agent.status === "active" && (
-          <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
-            <Pencil className="h-3 w-3" /> Edit
-          </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="text-body">
-        <div className="flex items-center gap-3">
-          <AvatarPreview agent={agent} size={48} />
-          <div className="flex flex-col">
-            <div className="flex items-baseline gap-2">
-              <span className="text-body">Color</span>
-              <span className="mono text-caption text-muted-foreground">{colorLabel}</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-body">Image</span>
-              <span className="mono text-caption text-muted-foreground">
-                {agent.avatarImageUrl ? "custom" : "none"}
-              </span>
-            </div>
-          </div>
-        </div>
-      </PanelBody>
+    <ConfigSection eyebrow="profile" title="Appearance" action={action}>
+      <ConfigRow
+        label="Avatar"
+        value={
+          <span className="inline-flex items-center gap-3">
+            <AvatarPreview agent={agent} size={40} />
+            <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+              {agent.avatarImageUrl ? "custom image" : `color ${colorLabel}`}
+            </span>
+          </span>
+        }
+      />
+      <ConfigRow label="Image" value={agent.avatarImageUrl ? "custom" : "none"} />
+      <ConfigRow label="Color" value={<span className="font-mono">{colorLabel}</span>} />
 
       {canEdit && (
         <AppearanceEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} onRefresh={onRefresh} />
       )}
-    </Panel>
+    </ConfigSection>
   );
 }
 
