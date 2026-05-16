@@ -1,17 +1,15 @@
 import type { ReactNode } from "react";
 
 /**
- * Section frame for Settings master-detail pages. The first section in a
- * page renders without a top divider (it sits flush against the page
- * header); every subsequent section gets a hairline rule above so the
- * page reads as a clean vertical stack of related-but-distinct
- * configuration groups, not a jumble of forms.
+ * Section frame for Settings pages. Mirrors the agent configuration
+ * sections: compact heading, optional metadata at the right, then a single
+ * hairline before the fields/list rows. The page reads as a clean stack
+ * without card frames or sidebar-era visual weight.
  *
  * Title sits as a normal H2 with optional one-line description below;
  * the optional `right` slot is for inline metadata (e.g. count badge).
- * Form-style sections put their Save button at the *bottom* of the
- * children, not in the right slot — see the existing Settings panels
- * for the pattern.
+ * Form-style sections put their Save button next to the relevant field,
+ * not in the right slot — see the existing Settings panels for the pattern.
  */
 export function SettingsSection({
   title,
@@ -30,11 +28,11 @@ export function SettingsSection({
   return (
     <section
       style={{
-        padding: "var(--sp-6) 0",
+        padding: "var(--sp-4) 0",
         borderTop: isFirst ? undefined : "var(--hairline) solid var(--border-faint)",
       }}
     >
-      <div className="flex items-baseline justify-between" style={{ gap: "var(--sp-3)" }}>
+      <div className="flex items-end justify-between" style={{ gap: "var(--sp-3)" }}>
         <div style={{ minWidth: 0 }}>
           <h2 className="text-subtitle font-medium m-0" style={{ color: "var(--fg)" }}>
             {title}
@@ -47,7 +45,15 @@ export function SettingsSection({
         </div>
         {right}
       </div>
-      <div style={{ marginTop: "var(--sp-4)" }}>{children}</div>
+      <div
+        style={{
+          marginTop: "var(--sp-2)",
+          paddingTop: "var(--sp-3)",
+          borderTop: "var(--hairline) solid var(--border)",
+        }}
+      >
+        {children}
+      </div>
     </section>
   );
 }
