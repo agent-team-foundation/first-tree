@@ -12,7 +12,7 @@ import { SettingsSection } from "../components/ui/settings-section.js";
  * (display name) — already a friendly default — so there's no separate
  * "rename hint" surface; admins who want to customize just edit the form.
  */
-export function TeamIdentityPanel({ isFirst = false }: { isFirst?: boolean }) {
+export function TeamIdentityPanel() {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
 
@@ -53,7 +53,7 @@ export function TeamIdentityPanel({ isFirst = false }: { isFirst?: boolean }) {
   };
 
   return (
-    <SettingsSection title="Identity" isFirst={isFirst}>
+    <SettingsSection title="Identity">
       {orgQuery.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
           Loading…

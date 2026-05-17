@@ -45,7 +45,6 @@ export function SettingsOnboardingPage() {
               : "The stepper is shown above your workspace. You can hide it any time once your agent is set up."
           }
           right={isDismissed ? null : <ActiveBadge />}
-          isFirst
         >
           {isDismissed ? (
             <Button type="button" size="sm" onClick={() => void restoreOnboarding()}>
