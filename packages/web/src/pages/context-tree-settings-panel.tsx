@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { getContextTreeSetting, putContextTreeSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
+import { Section } from "../components/ui/section.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
-import { SettingsSection } from "../components/ui/settings-section.js";
 
 /**
  * Admin-only section for the per-org Context Tree binding (repo / branch).
@@ -55,7 +55,7 @@ export function ContextTreeSettingsPanel() {
   };
 
   return (
-    <SettingsSection
+    <Section
       title="Context tree"
       description="Changes apply to new agent sessions. Members should restart agents to pick up updated tree contents."
     >
@@ -94,6 +94,6 @@ export function ContextTreeSettingsPanel() {
           )}
         </form>
       )}
-    </SettingsSection>
+    </Section>
   );
 }

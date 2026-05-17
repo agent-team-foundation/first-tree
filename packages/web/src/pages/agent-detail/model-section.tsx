@@ -39,10 +39,8 @@ const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
 };
 
 const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
-  "claude-code":
-    "Choose which Claude model powers this agent. Aliases (opus / sonnet / haiku) follow the CLI's latest-in-family mapping and may shift across releases. Applies to new sessions immediately; active sessions switch on their next message. Unset falls back to the operator's local ~/.claude/settings.json model preference, then the CLI default.",
-  codex:
-    "Pick a Codex model. Slugs come from the Codex CLI bundled with @openai/codex-sdk; ChatGPT-account auth currently only accepts gpt-5.5, while API-key auth accepts the wider set. Applies to new sessions immediately; active sessions switch on their next message. Unset lets the codex CLI choose a model that matches the user's auth mode.",
+  "claude-code": "Applies to new sessions immediately. Unset falls back to the CLI default.",
+  codex: "Applies to new sessions immediately. Unset lets the CLI pick by auth mode.",
 };
 
 export type ModelSectionProps = {
@@ -79,6 +77,7 @@ export function ModelSection({
   return (
     <ConfigRow
       label="Model"
+      helpText={MODEL_HELP_BY_PROVIDER[provider]}
       meta={dirty ? <ChangedChip /> : null}
       action={
         dirty ? (
@@ -88,10 +87,7 @@ export function ModelSection({
         ) : null
       }
     >
-      <div className="space-y-2">
-        <ModelDropdown items={items} value={value} onChange={onChange} disabled={disabled} />
-        <p className="text-caption text-muted-foreground">{MODEL_HELP_BY_PROVIDER[provider]}</p>
-      </div>
+      <ModelDropdown items={items} value={value} onChange={onChange} disabled={disabled} />
     </ConfigRow>
   );
 }

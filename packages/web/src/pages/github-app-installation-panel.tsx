@@ -4,7 +4,7 @@ import { Building2, ExternalLink, PauseCircle, User } from "lucide-react";
 import { ApiError } from "../api/client.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../api/github-app.js";
 import { useAuth } from "../auth/auth-context.js";
-import { SettingsSection } from "../components/ui/settings-section.js";
+import { Section } from "../components/ui/section.js";
 
 /**
  * Settings → Integrations panel for the GitHub App installation.
@@ -33,7 +33,7 @@ export function GithubAppInstallationPanel() {
   });
 
   return (
-    <SettingsSection
+    <Section
       title="GitHub App"
       description="One installation unlocks user sign-in, webhook ingestion, and (later) server-side write access."
     >
@@ -53,7 +53,7 @@ export function GithubAppInstallationPanel() {
       ) : (
         <InstalledState data={installationQuery.data} />
       )}
-    </SettingsSection>
+    </Section>
   );
 }
 

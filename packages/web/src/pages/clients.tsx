@@ -5,7 +5,7 @@ import {
   type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, type LucideIcon, Plus, User, Users } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   type ClientWithCapabilities,
@@ -22,7 +22,6 @@ import { ApiError } from "../api/client.js";
 import { listMembers } from "../api/members.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { DenseBadge } from "../components/ui/dense-badge.js";
 import {
   DenseTable,
   DenseTableBody,
@@ -32,8 +31,8 @@ import {
   DenseTableRow,
 } from "../components/ui/dense-table.js";
 import { PageHeader } from "../components/ui/page-header.js";
-import { Panel } from "../components/ui/panel.js";
-import { SectionHeader, UppercaseLabel } from "../components/ui/section-header.js";
+import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
+import { UppercaseLabel } from "../components/ui/section-header.js";
 import { StateChip } from "../components/ui/state-chip.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate } from "../lib/utils.js";
@@ -351,16 +350,15 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         )}
 
         {!clients || clients.length === 0 ? (
-          <Panel>
+          <div>
             {teamLoadError && <TeamLoadErrorBanner />}
             <div className="text-center py-10 text-body" style={{ color: "var(--fg-3)" }}>
               No computers connected. Use the button above to generate a connect command.
             </div>
-          </Panel>
+          </div>
         ) : (
-          <Panel>
+          <div>
             {teamLoadError && <TeamLoadErrorBanner />}
-            <SectionHeader>Registered · {clients.length}</SectionHeader>
             <DenseTable>
               <DenseTableHeader>
                 <DenseTableRow>
@@ -378,12 +376,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               <DenseTableBody>
                 {grouped ? (
                   <>
-                    <GroupHeaderRow
-                      icon={User}
-                      title="Your computers"
-                      count={mineList.length}
-                      colSpan={ADMIN_COLSPAN}
-                    />
+                    <GroupHeaderRow title="Your computers" count={mineList.length} colSpan={ADMIN_COLSPAN} />
                     {mineList.length === 0 ? (
                       <EmptyGroupRow colSpan={ADMIN_COLSPAN} message="No computers of your own." />
                     ) : (
@@ -417,12 +410,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                         );
                       })
                     )}
-                    <GroupHeaderRow
-                      icon={Users}
-                      title="Team computers"
-                      count={teamList.length}
-                      colSpan={ADMIN_COLSPAN}
-                    />
+                    <GroupHeaderRow title="Team computers" count={teamList.length} colSpan={ADMIN_COLSPAN} />
                     {teamList.length === 0 ? (
                       <EmptyGroupRow colSpan={ADMIN_COLSPAN} message="No other team computers." />
                     ) : (
@@ -493,7 +481,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 )}
               </DenseTableBody>
             </DenseTable>
-          </Panel>
+          </div>
         )}
       </div>
     </div>
@@ -668,26 +656,17 @@ function TeamLoadErrorBanner() {
   );
 }
 
-function GroupHeaderRow({
-  icon: Icon,
-  title,
-  count,
-  colSpan,
-}: {
-  icon: LucideIcon;
-  title: string;
-  count: number;
-  colSpan: number;
-}) {
+function GroupHeaderRow({ title, count, colSpan }: { title: string; count: number; colSpan: number }) {
   return (
     <DenseTableRow>
       <td colSpan={colSpan} style={{ padding: "var(--sp-6) var(--sp-3_5) var(--sp-2) 0" }}>
-        <span className="inline-flex items-center" style={{ gap: "var(--sp-2)" }}>
-          <Icon className="h-4 w-4" aria-hidden style={{ color: "var(--fg-3)" }} />
+        <span className="inline-flex items-baseline" style={{ gap: "var(--sp-2)" }}>
           <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
             {title}
           </span>
-          <DenseBadge tone="outline">{count}</DenseBadge>
+          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+            · {count}
+          </span>
         </span>
       </td>
     </DenseTableRow>
@@ -790,50 +769,24 @@ function ClientRow({
           {client.connectedAt ? formatDate(client.connectedAt) : "—"}
         </DenseTableCell>
         <DenseTableCell>{authBroken ? <AuthExpiredChip /> : <StateChip state={statusState} />}</DenseTableCell>
-        {/* Plain text actions, always visible. The row already gives them a
-            dedicated rightmost cell with whitespace-nowrap, so the three
-            options sit in their own column rather than crowding the data.
-            Team rows in admin view render an empty cell — the underlying
-            ops are owner-checked server-side (DELETE /clients/:id 403s on
-            non-owners), so surfacing them here would just produce errors. */}
+        {/* Overflow menu for row actions. Reconnect / Disconnect / Retire
+            are all low-frequency operations (Retire is destructive and
+            once-off, Disconnect is rare, Reconnect only matters when offline)
+            so a kebab menu keeps the table clean. Team rows in admin view
+            get no menu — the underlying ops are owner-checked server-side
+            (DELETE /clients/:id 403s on non-owners), so surfacing them here
+            would just produce errors. */}
         <DenseTableCell style={{ width: 1, whiteSpace: "nowrap" }}>
           {restricted ? null : (
-            <div className="flex items-center justify-end text-label" style={{ gap: "var(--sp-3_5)" }}>
-              {isOffline && (
-                <button
-                  type="button"
-                  className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  style={{ color: authBroken ? "var(--state-error)" : "var(--fg-2)" }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onReconnect();
-                  }}
-                >
-                  Reconnect
-                </button>
-              )}
-              <button
-                type="button"
-                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                style={{ color: "var(--fg-2)" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDisconnect();
-                }}
-              >
-                Disconnect
-              </button>
-              <button
-                type="button"
-                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                style={{ color: "var(--fg-4)" }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRetire();
-                }}
-              >
-                Retire
-              </button>
+            <div className="flex items-center justify-end">
+              <RowActionsMenu
+                ariaLabel="Computer actions"
+                actions={[
+                  ...(isOffline ? [{ key: "reconnect", label: "Reconnect", onSelect: onReconnect }] : []),
+                  { key: "disconnect", label: "Disconnect", onSelect: onDisconnect },
+                  { key: "retire", label: "Retire", destructive: true, onSelect: onRetire },
+                ]}
+              />
             </div>
           )}
         </DenseTableCell>

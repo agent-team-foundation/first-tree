@@ -11,7 +11,8 @@ import { resolveAvatarHue } from "../../components/chat/chat-row-avatar.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Label } from "../../components/ui/label.js";
-import { ConfigRow, ConfigSection } from "./flat-section.js";
+import { Section } from "../../components/ui/section.js";
+import { ConfigRow } from "./flat-section.js";
 
 /**
  * Appearance — manager-configurable avatar color + image.
@@ -89,7 +90,7 @@ export function AppearanceSection({ agent, canEdit = true, onSave, onRefresh }: 
     ) : null;
 
   return (
-    <ConfigSection eyebrow="profile" title="Appearance" action={action}>
+    <Section title="Appearance" action={action}>
       <ConfigRow
         label="Avatar"
         value={
@@ -107,7 +108,7 @@ export function AppearanceSection({ agent, canEdit = true, onSave, onRefresh }: 
       {canEdit && (
         <AppearanceEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} onRefresh={onRefresh} />
       )}
-    </ConfigSection>
+    </Section>
   );
 }
 

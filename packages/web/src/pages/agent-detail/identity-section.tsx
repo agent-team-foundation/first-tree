@@ -10,9 +10,11 @@ import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
+import { Section } from "../../components/ui/section.js";
+import { humanizeAgentType, humanizeVisibility } from "../../lib/agent-labels.js";
 import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
-import { ConfigRow, ConfigSection } from "./flat-section.js";
+import { ConfigRow } from "./flat-section.js";
 
 /**
  * Redesign §5.3 Identity — a compact two-line summary plus a dedicated
@@ -37,7 +39,7 @@ export function IdentitySection({ agent, canEdit = true, onSave }: IdentitySecti
   const domains = Array.isArray(treeMeta?.domains)
     ? (treeMeta?.domains as unknown[]).filter((d): d is string => typeof d === "string")
     : [];
-  const ownerName = agent.managerId ? resolveMember(agent.managerId) : null;
+  const managerName = agent.managerId ? resolveMember(agent.managerId) : null;
   const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
 
   const action =
@@ -48,27 +50,19 @@ export function IdentitySection({ agent, canEdit = true, onSave }: IdentitySecti
     ) : null;
 
   return (
-    <ConfigSection eyebrow="profile" title="Identity" action={action}>
+    <Section title="Identity" action={action}>
       <ConfigRow label="Display name" value={<span className="font-semibold">{agent.displayName}</span>} />
-      <ConfigRow label="Handle" value={agent.name ? <span className="font-mono">@{agent.name}</span> : "—"} />
+      <ConfigRow label="Agent name" value={agent.name ? <span className="font-mono">@{agent.name}</span> : "—"} />
       {delegateIdentity && (
         <ConfigRow
           label="Delegate"
           value={<AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />}
         />
       )}
-      <ConfigRow label="Owner" value={ownerName ?? "—"} />
+      <ConfigRow label="Manager" value={managerName ?? "—"} />
       {role && <ConfigRow label="Role" value={role} />}
-      <ConfigRow
-        label="Type"
-        value={<DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>{agent.type}</DenseBadge>}
-      />
-      <ConfigRow
-        label="Visibility"
-        value={
-          <DenseBadge tone={agent.visibility === "organization" ? "accent" : "outline"}>{agent.visibility}</DenseBadge>
-        }
-      />
+      <ConfigRow label="Type" value={humanizeAgentType(agent.type)} />
+      <ConfigRow label="Visibility" value={humanizeVisibility(agent.visibility)} />
       {domains.length > 0 && (
         <ConfigRow
           label="Domains"
@@ -85,7 +79,7 @@ export function IdentitySection({ agent, canEdit = true, onSave }: IdentitySecti
       )}
 
       {canEdit && <IdentityEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} />}
-    </ConfigSection>
+    </Section>
   );
 }
 
@@ -170,7 +164,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
             </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="id-display">Display Name</Label>
+            <Label htmlFor="id-display">Display name</Label>
             <Input
               id="id-display"
               value={displayName}

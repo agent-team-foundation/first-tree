@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { getSourceReposSetting, putSourceReposSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
-import { SettingsSection } from "../components/ui/settings-section.js";
+import { Section } from "../components/ui/section.js";
 
 /**
  * Team Settings section showing the team-level list of source
@@ -53,14 +53,14 @@ export function SourceReposSettingsPanel() {
     ) : null;
 
   return (
-    <SettingsSection
+    <Section
       title="Source repos"
       description={
         isAdmin
           ? "Repos your team's agents are bound to. New repos are added during agent onboarding."
           : "Repos your team's agents are bound to. Read-only — only admins can edit."
       }
-      right={countBadge}
+      action={countBadge}
     >
       {settingQuery.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
@@ -101,7 +101,7 @@ export function SourceReposSettingsPanel() {
           {removeMutation.error.message}
         </div>
       )}
-    </SettingsSection>
+    </Section>
   );
 }
 
