@@ -2,7 +2,7 @@ import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shar
 import { Link2, Lock, Play } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { ConfigRow, ConfigSection } from "./flat-section.js";
 
 /**
  * Setup section — "where it runs" pick (locked here, re-bindable via the
@@ -42,10 +42,9 @@ const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> =
 export function SetupSection(props: SetupSectionProps) {
   const copy = RUNTIME_COPY[props.runtimeProvider];
   return (
-    <div className="space-y-3">
-      <RuntimeCard name={copy.name} caption={copy.caption} locked />
-
-      <ComputerCard
+    <ConfigSection eyebrow="setup" title="Runtime">
+      <RuntimeRow name={copy.name} caption={copy.caption} locked />
+      <ComputerRow
         computerLabel={props.computerLabel}
         statusLoading={props.computerStatusLoading ?? false}
         statusError={props.computerStatusError ?? null}
@@ -54,42 +53,30 @@ export function SetupSection(props: SetupSectionProps) {
         onBindComputer={props.onBindComputer}
         onRebind={props.onRebind}
       />
-
       {props.modelSlot}
-    </div>
+    </ConfigSection>
   );
 }
 
-function RuntimeCard({ name, caption, locked }: { name: string; caption: string; locked: boolean }) {
+function RuntimeRow({ name, caption, locked }: { name: string; caption: string; locked: boolean }) {
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>
-          Where it runs
-          {locked && (
-            <span
-              className="mono uppercase text-caption inline-flex items-center gap-1"
-              style={{ color: "var(--fg-4)" }}
-            >
-              <Lock className="h-3 w-3" aria-hidden /> locked
-            </span>
-          )}
-        </PanelTitle>
-      </PanelHeader>
-      <PanelBody className="space-y-1 text-body">
-        <div className="inline-flex items-center gap-2">
-          <Play className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--accent)" }} />
-          <span className="font-medium">{name}</span>
-        </div>
-        <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-          {caption}
-        </p>
-      </PanelBody>
-    </Panel>
+    <ConfigRow
+      label="Provider"
+      icon={<Play className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--accent)" }} />}
+      value={name}
+      description={caption}
+      meta={
+        locked ? (
+          <span className="mono uppercase text-caption inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
+            <Lock className="h-3 w-3" aria-hidden /> locked
+          </span>
+        ) : null
+      }
+    />
   );
 }
 
-function ComputerCard(props: {
+function ComputerRow(props: {
   computerLabel: string | null;
   statusLoading: boolean;
   statusError: string | null;
@@ -100,49 +87,37 @@ function ComputerCard(props: {
 }) {
   const bound = !!props.computerLabel;
   const canShowActions = !props.statusLoading && !props.statusError;
-  return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>Bound computer</PanelTitle>
-        {canShowActions && props.canBindComputer && props.onBindComputer && !bound && (
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={props.onBindComputer}
-            disabled={props.bindPending}
-            title={props.bindPending ? "Binding computer…" : "Pick a connected computer for this agent"}
-          >
-            <Link2 className="h-3 w-3" />
-            {props.bindPending ? "Binding…" : "Bind computer"}
-          </Button>
-        )}
-        {canShowActions && bound && props.onRebind && (
-          <Button size="xs" variant="outline" onClick={props.onRebind} title="Move this agent to another computer">
-            <Link2 className="h-3 w-3" />
-            Re-bind
-          </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="text-body">
-        {props.statusLoading ? (
-          <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-            Checking computer binding…
-          </p>
-        ) : props.statusError ? (
-          <p className="text-caption" style={{ color: "var(--state-error)" }}>
-            Could not verify computer binding: {props.statusError}
-          </p>
-        ) : bound ? (
-          <div className="mono" style={{ color: "var(--fg-2)" }}>
-            {props.computerLabel}
-          </div>
-        ) : (
-          <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-            No computer bound. A computer claims this agent on its first WebSocket connect, or you can pick one manually
-            via the button above.
-          </p>
-        )}
-      </PanelBody>
-    </Panel>
-  );
+  const action =
+    canShowActions && props.canBindComputer && props.onBindComputer && !bound ? (
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={props.onBindComputer}
+        disabled={props.bindPending}
+        title={props.bindPending ? "Binding computer…" : "Pick a connected computer for this agent"}
+      >
+        <Link2 className="h-3 w-3" />
+        {props.bindPending ? "Binding…" : "Bind computer"}
+      </Button>
+    ) : canShowActions && bound && props.onRebind ? (
+      <Button size="xs" variant="outline" onClick={props.onRebind} title="Move this agent to another computer">
+        <Link2 className="h-3 w-3" />
+        Re-bind
+      </Button>
+    ) : null;
+
+  let value: ReactNode = props.computerLabel;
+  let description: ReactNode = "The computer environment and tool access for this agent.";
+  if (props.statusLoading) {
+    value = "Checking computer binding…";
+    description = null;
+  } else if (props.statusError) {
+    value = <span style={{ color: "var(--state-error)" }}>Could not verify computer binding: {props.statusError}</span>;
+    description = null;
+  } else if (!bound) {
+    value = "No computer bound";
+    description = "A computer claims this agent on first WebSocket connect, or you can pick one manually.";
+  }
+
+  return <ConfigRow label="Computer" value={value} description={description} action={action} />;
 }

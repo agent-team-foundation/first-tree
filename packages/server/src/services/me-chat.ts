@@ -296,7 +296,8 @@ export async function listMeChats(
         WHERE chat_id = c.id AND access_mode = 'speaker') AS participant_count,
       cm.access_mode AS access_mode,
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
-      COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status
+      COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
+      ${chatSourceSqlExpression} AS source
       FROM chats c
       JOIN chat_membership cm
         ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
@@ -327,6 +328,7 @@ export async function listMeChats(
     access_mode: "speaker" | "watcher";
     unread_mention_count: number;
     engagement_status: ChatEngagementStatus;
+    source: ChatSource;
   }>;
 
   const toDate = (v: Date | string | null): Date | null => {
@@ -437,6 +439,7 @@ export async function listMeChats(
       chatId: r.chat_id,
       type: r.type,
       membershipKind: isSpeaker ? "participant" : "watching",
+      source: r.source,
       title,
       topic: r.topic,
       participants,

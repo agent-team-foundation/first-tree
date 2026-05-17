@@ -3,7 +3,7 @@ import { Check, ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../../components/ui/button.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { ConfigRow } from "./flat-section.js";
 
 /**
  * Model — an inline dropdown with a "changed" hint and Revert. No inline save:
@@ -77,39 +77,38 @@ export function ModelSection({
   }, [presetOptions, value]);
 
   return (
-    <Panel
-      style={{
-        borderColor: dirty ? "color-mix(in oklch, var(--state-blocked) 70%, transparent)" : undefined,
-      }}
-    >
-      <PanelHeader>
-        <PanelTitle>
-          Model
-          {dirty && (
-            <span
-              className="mono uppercase text-caption"
-              style={{
-                padding: "var(--hairline) var(--sp-1_5)",
-                borderRadius: "var(--radius-chip)",
-                background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
-                color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
-              }}
-            >
-              changed
-            </span>
-          )}
-        </PanelTitle>
-        {dirty && (
+    <ConfigRow
+      label="Model"
+      meta={dirty ? <ChangedChip /> : null}
+      action={
+        dirty ? (
           <Button size="xs" variant="ghost" onClick={onRevert} disabled={disabled}>
             Revert
           </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="space-y-2">
+        ) : null
+      }
+    >
+      <div className="space-y-2">
         <ModelDropdown items={items} value={value} onChange={onChange} disabled={disabled} />
         <p className="text-caption text-muted-foreground">{MODEL_HELP_BY_PROVIDER[provider]}</p>
-      </PanelBody>
-    </Panel>
+      </div>
+    </ConfigRow>
+  );
+}
+
+function ChangedChip() {
+  return (
+    <span
+      className="mono uppercase text-caption"
+      style={{
+        padding: "var(--hairline) var(--sp-1_5)",
+        borderRadius: "var(--radius-chip)",
+        background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
+        color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
+      }}
+    >
+      changed
+    </span>
   );
 }
 

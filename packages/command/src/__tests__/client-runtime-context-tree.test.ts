@@ -41,6 +41,24 @@ vi.mock("@first-tree-hub/client", () => {
       disconnect = connectionMock.disconnect;
     },
     UpdateManager: { attach: vi.fn(() => ({ dispose: vi.fn() })) },
+    createGitMirrorManager: vi.fn(() => ({
+      ensureMirror: vi.fn(),
+      fetchMirror: vi.fn(),
+      createWorktree: vi.fn(),
+      removeWorktree: vi.fn(),
+      gcMirrors: vi.fn(async () => ({ removed: [] })),
+      gcOrphanSessionBranches: vi.fn(async () => ({ scanned: 0, deleted: 0, failed: 0 })),
+      mirrorsRoot: "/tmp/fake-mirrors",
+    })),
+    createLogger: vi.fn(() => ({
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      fatal: vi.fn(),
+      child: vi.fn().mockReturnThis(),
+    })),
     getHandlerFactory: vi.fn(() => vi.fn()),
     registerBuiltinHandlers: vi.fn(),
   };

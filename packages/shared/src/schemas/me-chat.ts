@@ -91,6 +91,24 @@ export const meChatRowSchema = z.object({
   chatId: z.string(),
   type: z.string(),
   membershipKind: meChatMembershipKindSchema,
+  /**
+   * Origin classification — mirrors the projection that drives
+   * `listMeChatsQuery.source` (see `chatSourceSqlExpression` in
+   * `services/me-chat.ts`). Surfaced on the row so the rail can render
+   * a per-source leading icon and group rows by origin without a
+   * second lookup.
+   *
+   * Defaulted to `"manual"` for parse-side defence-in-depth: this
+   * schema is consumed by web clients that may briefly be ahead of an
+   * old server build (web rolls before server). Without the default, a
+   * server response missing `source` would fail validation and blank
+   * the rail. With the default, the row decodes and the icon falls
+   * back to the Manual placeholder until the server catches up. Live
+   * server responses always populate `source` via
+   * `chatSourceSqlExpression`, so the default is only ever observed
+   * across version skew.
+   */
+  source: chatSourceSchema.default("manual"),
   title: z.string(),
   topic: z.string().nullable(),
   participants: z.array(meChatParticipantSchema),

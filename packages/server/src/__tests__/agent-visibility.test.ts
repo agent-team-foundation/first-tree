@@ -216,6 +216,55 @@ describe("Agent Visibility", () => {
       const res = await member.req("GET", `/api/v1/agents/${myAgent.uuid}`);
       expect(res.statusCode).toBe(200);
     });
+
+    it("admin can access a private agent managed by another member", async () => {
+      const app = getApp();
+      const { req: adminReq } = await authedRequest(app);
+      const otherMemberBundle = await authedRequest(app);
+      const otherMember = await createMemberAndLogin(app, otherMemberBundle);
+
+      const privateAgent = await seedAgent(app, {
+        name: "admin-cross-priv",
+        type: "personal_assistant",
+        managerId: otherMember.memberId,
+      });
+
+      const res = await adminReq("GET", `/api/v1/agents/${privateAgent.uuid}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ uuid: string }>().uuid).toBe(privateAgent.uuid);
+    });
+
+    it("admin can list sessions of a private agent managed by another member", async () => {
+      const app = getApp();
+      const { req: adminReq } = await authedRequest(app);
+      const otherMemberBundle = await authedRequest(app);
+      const otherMember = await createMemberAndLogin(app, otherMemberBundle);
+
+      const privateAgent = await seedAgent(app, {
+        name: "admin-cross-priv-sessions",
+        type: "personal_assistant",
+        managerId: otherMember.memberId,
+      });
+
+      const res = await adminReq("GET", `/api/v1/agents/${privateAgent.uuid}/sessions`);
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("admin can read client-status of a private agent managed by another member", async () => {
+      const app = getApp();
+      const { req: adminReq } = await authedRequest(app);
+      const otherMemberBundle = await authedRequest(app);
+      const otherMember = await createMemberAndLogin(app, otherMemberBundle);
+
+      const privateAgent = await seedAgent(app, {
+        name: "admin-cross-priv-status",
+        type: "personal_assistant",
+        managerId: otherMember.memberId,
+      });
+
+      const res = await adminReq("GET", `/api/v1/agents/${privateAgent.uuid}/client-status`);
+      expect(res.statusCode).toBe(200);
+    });
   });
 
   describe("managerId authorization for PATCH", () => {
@@ -267,6 +316,49 @@ describe("Agent Visibility", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().displayName).toBe("Admin Updated");
+    });
+  });
+
+  describe("assertAllAgentsVisibleInOrg admin short-circuit (chat-create)", () => {
+    // Visibility (can see) and ownership (can use) are intentionally two
+    // layers. The admin short-circuit only opens the visibility gate so the
+    // chat-create error is the precise owner-exclusive 403 from
+    // me-chat.ts:645 (RFC §4.4.2/§4.5) instead of a misleading 404 — admins
+    // can already list the row via `/agents/all`, so 404 here would be
+    // false enumeration defense, not real defense.
+    it("admin sees the precise owner-exclusive 403 (not visibility 404) when including another member's private agent", async () => {
+      const app = getApp();
+      const adminBundle = await authedRequest(app);
+      const otherMember = await createMemberAndLogin(app, adminBundle);
+
+      const privateAgent = await seedAgent(app, {
+        name: "admin-cross-priv-chat",
+        type: "personal_assistant",
+        managerId: otherMember.memberId,
+      });
+
+      const res = await adminBundle.req("POST", `/api/v1/orgs/${adminBundle.admin.organizationId}/chats`, {
+        participantIds: [privateAgent.uuid],
+      });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("non-admin member still gets the visibility 404 — the agent is invisible to them", async () => {
+      const app = getApp();
+      const adminBundle = await authedRequest(app);
+      const memberA = await createMemberAndLogin(app, adminBundle);
+      const memberB = await createMemberAndLogin(app, adminBundle);
+
+      const privateAgent = await seedAgent(app, {
+        name: "non-admin-cross-priv-chat",
+        type: "personal_assistant",
+        managerId: memberA.memberId,
+      });
+
+      const res = await memberB.req("POST", `/api/v1/orgs/${adminBundle.admin.organizationId}/chats`, {
+        participantIds: [privateAgent.uuid],
+      });
+      expect(res.statusCode).toBe(404);
     });
   });
 

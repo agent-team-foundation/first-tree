@@ -50,7 +50,6 @@ import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
-import { orgNotificationRoutes } from "./api/orgs/notifications.js";
 import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
@@ -76,7 +75,7 @@ import {
   rootLogger,
 } from "./observability/index.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
-import { broadcastToAdmins, registerCrossInstanceBroadcaster } from "./services/admin-broadcast.js";
+import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
@@ -129,9 +128,7 @@ function namePlugin<T extends FastifyPluginAsync>(name: string, fn: T): T {
 export async function buildApp(config: Config) {
   // Validate token-lifetime config eagerly so a typo in
   // `FIRST_TREE_HUB_AUTH_*_EXPIRY` fails the boot, not the first
-  // /connect-tokens call hours later. Both server entry points
-  // (the standalone bin and the CLI's `server start`) flow through
-  // buildApp, so this single check covers both.
+  // /connect-tokens call hours later.
   try {
     expiryToSeconds(config.auth.accessTokenExpiry);
     expiryToSeconds(config.auth.refreshTokenExpiry);
@@ -145,9 +142,8 @@ export async function buildApp(config: Config) {
 
   // GitHub App config sanity (PEM header / blank-secret / half-config).
   // Runs here so a misconfigured App env block fails the boot, not the
-  // first App JWT call hours later. Both server entry points (standalone
-  // bin and CLI `server start`) flow through buildApp, so this single
-  // check covers both — cheap, only fires when the App block is present.
+  // first App JWT call hours later. Cheap; only fires when the App
+  // block is present.
   assertBootConfigValid(config);
 
   applyLoggerConfig({
@@ -287,21 +283,6 @@ export async function buildApp(config: Config) {
   // Notifier: dedicated PG connection for LISTEN/NOTIFY
   const listenClient = postgres(config.database.url, { max: 1, ...sslOptions(config.database.url) });
   const notifier = createNotifier(listenClient);
-
-  // Cross-instance admin-broadcast wiring. Producers call
-  // `broadcastAdminsCrossInstance` which routes through pg_notify; every
-  // server instance LISTENs and feeds the envelope back into its own
-  // per-instance fanout (`broadcastToAdmins`). Registering both ends here
-  // keeps the bootstrap ordering obvious — producer -> NOTIFY -> LISTEN ->
-  // local fanout — without scattering wiring across services.
-  registerCrossInstanceBroadcaster((payload) => {
-    notifier.notifyAdminBroadcast(payload).catch(() => {
-      // fire-and-forget: admin UI tolerates an occasional dropped frame
-    });
-  });
-  notifier.onAdminBroadcast((payload) => {
-    broadcastToAdmins(payload);
-  });
 
   // WebSocket plugin. `maxPayload` caps a single inbound frame so a hostile
   // or buggy client cannot OOM the server with one giant message. Frames in
@@ -476,7 +457,6 @@ export async function buildApp(config: Config) {
           await scope.register(orgOverviewRoutes, { prefix: "/overview" });
           await scope.register(orgActivityRoutes, { prefix: "/activity" });
           await scope.register(orgSessionRoutes, { prefix: "/sessions" });
-          await scope.register(orgNotificationRoutes, { prefix: "/notifications" });
           await scope.register(orgClientRoutes, { prefix: "/clients" });
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
           await scope.register(orgMemberRoutes, { prefix: "/members" });

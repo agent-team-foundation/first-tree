@@ -6,6 +6,11 @@ import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
 import { ToastProvider } from "./components/ui/toast.js";
 import { PulseProvider } from "./hooks/pulse-context.js";
+import { ProfileTab } from "./pages/agent-detail/profile-tab.js";
+import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
+import { ResourcesTab } from "./pages/agent-detail/resources-tab.js";
+import { SetupTab } from "./pages/agent-detail/setup-tab.js";
+import { ToolsTab } from "./pages/agent-detail/tools-tab.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { ContextPage } from "./pages/context.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
@@ -85,7 +90,14 @@ export function App() {
                 >
                   <Route index element={<WorkspacePage />} />
                   <Route path="context" element={<ContextPage />} />
-                  <Route path="agents/:uuid" element={<AgentDetailPage />} />
+                  <Route path="agents/:uuid" element={<AgentDetailPage />}>
+                    <Route index element={<Navigate to="profile" replace />} />
+                    <Route path="profile" element={<ProfileTab />} />
+                    <Route path="setup" element={<SetupTab />} />
+                    <Route path="prompt" element={<PromptTab />} />
+                    <Route path="tools" element={<ToolsTab />} />
+                    <Route path="resources" element={<ResourcesTab />} />
+                  </Route>
 
                   {/* Team — flat roster page, no sub-nav. Org-scoped admin
                       configuration lives under /settings/team (it's a Settings

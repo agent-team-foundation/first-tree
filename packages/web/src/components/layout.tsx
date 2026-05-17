@@ -5,7 +5,6 @@ import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
-import { NotificationBell } from "./notification-bell.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
 import { UserMenu } from "./user-menu.js";
 
@@ -115,7 +114,6 @@ export function Layout() {
               margin: "0 var(--sp-1)",
             }}
           />
-          <NotificationBell />
           <ThemeToggle />
           <span
             style={{
@@ -136,7 +134,18 @@ export function Layout() {
         <Outlet />
       ) : (
         <main className="flex-1 overflow-auto">
-          <div className="p-6 mx-auto" style={{ maxWidth: 1280 }}>
+          {/* Canvas width 960 is the single shared content width across
+              Context / Team / Settings / Agent Detail. Chosen as the
+              comfortable upper bound for configuration- and editing-heavy
+              admin pages (GitHub uses ~896, Vercel ~880, Linear ~960). Below
+              the lg breakpoint padding tightens so 960 + p-6 = 1008 logical
+              units doesn't force a horizontal scrollbar on smaller viewports.
+              The Team table's column widths sum to ~870 — at viewports
+              narrower than ~810 the table overflows into main's own scroll;
+              that's the standard "wide table → local horizontal scroll"
+              pattern (GitHub, Stripe both do this), and the page chrome
+              never scrolls horizontally. */}
+          <div className="p-4 lg:p-6 mx-auto" style={{ maxWidth: 960 }}>
             <Outlet />
           </div>
         </main>

@@ -1,8 +1,10 @@
+import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { ClientConnection } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { AccessTokenProvider } from "../sdk.js";
 import { AgentSlot } from "./agent-slot.js";
 import type { RuntimeConfig } from "./config.js";
+import { createGitMirrorManager, type GitMirrorManager } from "./git-mirror-manager.js";
 import { getHandlerFactory } from "./handler.js";
 import { type UpdateHooks, UpdateManager } from "./update-manager.js";
 
@@ -41,6 +43,7 @@ export class AgentRuntime {
   private readonly config: RuntimeConfig;
   private readonly shutdownTimeout: number;
   private readonly clientConnection: ClientConnection;
+  private readonly gitMirrorManager: GitMirrorManager;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly currentVersion: string | undefined;
   private readonly updateHooks: UpdateHooks | undefined;
@@ -69,6 +72,16 @@ export class AgentRuntime {
     // recovery; a process-wide crash guard lives in ClientConnection itself.
     this.clientConnection.on("error", (err) => this.logger.error({ err }, "client connection error"));
 
+    // Single GitMirrorManager per runtime. Its per-URL serial queue is the
+    // only thing preventing concurrent `git worktree add` on the shared bare
+    // mirror's `config` from racing on `config.lock`; one manager per slot
+    // would defeat the lock the moment two agents in the same chat boot
+    // simultaneously.
+    this.gitMirrorManager = createGitMirrorManager({
+      dataDir: DEFAULT_DATA_DIR,
+      log: createLogger("git-mirror"),
+    });
+
     for (const [name, agentConfig] of Object.entries(this.config.agents)) {
       const handlerFactory = getHandlerFactory(agentConfig.type);
       this.slots.push(
@@ -81,6 +94,7 @@ export class AgentRuntime {
           session: agentConfig.session,
           concurrency: agentConfig.concurrency,
           clientConnection: this.clientConnection,
+          gitMirrorManager: this.gitMirrorManager,
           runtimeType: agentConfig.type,
         }),
       );
@@ -99,6 +113,21 @@ export class AgentRuntime {
   }
 
   async start(): Promise<void> {
+    // Sweep orphan `hub-session-*` branches left over from previous runs
+    // before any slot can race a `git worktree add`. The session-branch
+    // config segments would otherwise accumulate forever — Hub sessions
+    // suspend on idle rather than terminate, so `removeWorktree` (which
+    // deletes branches) only fires on explicit terminate/eviction.
+    // Failures are advisory: log and continue startup.
+    try {
+      const sweep = await this.gitMirrorManager.gcOrphanSessionBranches();
+      if (sweep.scanned > 0) {
+        this.logger.info(sweep, "swept orphan session branches");
+      }
+    } catch (err) {
+      this.logger.warn({ err }, "gcOrphanSessionBranches threw — continuing startup");
+    }
+
     // Attach before connecting so the first welcome frame on a stale Client
     // is acted on rather than missed until the next reconnect.
     if (this.currentVersion && this.updateHooks) {

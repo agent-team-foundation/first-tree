@@ -17,6 +17,7 @@ import { createLogger, messageAttrs, withSpan } from "../observability/index.js"
 import { upsertSessionState } from "./activity.js";
 import { findOrCreateDirectChat, isParticipant } from "./chat.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
+import { validateDocumentContext } from "./doc-snapshots.js";
 import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from "./questions.js";
 
 const log = createLogger("message");
@@ -51,6 +52,27 @@ export type SendMessageOptions = {
    * human-typed content.
    */
   normalizeMentionsInContent?: boolean;
+  /**
+   * Agent IDs that this message is **addressed to** by construction — used
+   * for system-routed messages whose recipient is fixed at write time and
+   * not derivable from `@<name>` tokens in the content. Within the
+   * non-silenced fan-out branch, addressed agents always receive
+   * `notify=true` regardless of their chat membership mode (`mention_only`)
+   * or `metadata.mentions`.
+   *
+   * Canonical use: a `question_answer` from a human submitter is addressed
+   * to the original asker. Without this override, a chat that upgraded
+   * `direct → group` after the question was posted would silently re-grade
+   * the asker to `mention_only`, and the answer's structured content (an
+   * object, not a string with `@<name>`) would produce no mentions and
+   * therefore no notify=true row — leaving the asker's `canUseTool` Promise
+   * dangling forever.
+   *
+   * `isSilentSend` and `isAgentFinalText` still take precedence (they force
+   * notify=false for everyone); this only widens the notify set within the
+   * non-silenced branch.
+   */
+  addressedToAgentIds?: readonly string[];
 };
 
 export async function sendMessage(
@@ -145,6 +167,11 @@ async function sendMessageInner(
     //    by the caller are preserved verbatim — server resolution is
     //    additive, not authoritative.
     const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+    // Server-side bottom-line on `metadata.documentContext`: shape via shared
+    // schema + byte budgets and sha256 calibration. Snapshot content arrives
+    // from a trusted runtime, but server still has to verify so a client bug
+    // can't lodge mismatched hash/size into immutable message history.
+    validateDocumentContext(incomingMeta);
     const explicitMentionsRaw = incomingMeta.mentions;
     const explicitMentions = Array.isArray(explicitMentionsRaw)
       ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
@@ -354,6 +381,7 @@ async function sendMessageInner(
     //    so a `mention_only` agent that gets @mentioned later can still see
     //    the chat history it missed — see proposals/group-chat-ux-improvements §1.
     const mentionSet = new Set(mergedMentions);
+    const addressedSet = new Set(options.addressedToAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
     // inbox row. agentId is needed by the post-tx session-activation step
     // (Step 1b) but is not part of the inbox_entries schema — it's stripped
@@ -367,7 +395,12 @@ async function sendMessageInner(
         // force every fan-out row to notify=false regardless of mode /
         // mentions. Inbox entries are still written so history replay still
         // works; nobody is woken.
-        notify: !isSilentSend && !isAgentFinalText && (p.mode !== "mention_only" || mentionSet.has(p.agentId)),
+        // `addressedToAgentIds` widens the notify set within the non-silenced
+        // branch — see option doc on `SendMessageOptions`.
+        notify:
+          !isSilentSend &&
+          !isAgentFinalText &&
+          (addressedSet.has(p.agentId) || p.mode !== "mention_only" || mentionSet.has(p.agentId)),
       }));
 
     if (fanout.length > 0) {

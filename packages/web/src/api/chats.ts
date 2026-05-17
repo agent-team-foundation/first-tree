@@ -1,4 +1,10 @@
-import type { Chat, ChatDetail, ChatEngagementStatus, Message } from "@agent-team-foundation/first-tree-hub-shared";
+import type {
+  Chat,
+  ChatDetail,
+  ChatEngagementStatus,
+  ChatGithubEntityListResponse,
+  Message,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { api, withOrg } from "./client.js";
 
 type PaginatedChats = {
@@ -25,6 +31,15 @@ export function listChats(params?: { limit?: number; cursor?: string }): Promise
 
 export function getChat(chatId: string): Promise<ChatDetail> {
   return api.get<ChatDetail>(`/chats/${encodeURIComponent(chatId)}`);
+}
+
+/**
+ * List the GitHub entities bound to this chat. Server fetches live state
+ * from GitHub on every request — nothing is cached server-side — so the
+ * client should rely on React Query's `staleTime` to keep this gentle.
+ */
+export function listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
+  return api.get<ChatGithubEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/github-entities`);
 }
 
 export function renameChat(chatId: string, topic: string | null): Promise<Chat> {
