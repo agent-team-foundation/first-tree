@@ -1,10 +1,14 @@
+import { Navigate } from "react-router";
 import { useAgentDetailContext } from "./layout-context.js";
 import { PromptSection } from "./prompt-section.js";
 import { sectionAnchorId } from "./save-bar.js";
 
 export function PromptTab() {
   const ctx = useAgentDetailContext();
-  if (!ctx.canEditConfig || !ctx.config) return null;
+  // Hidden from buildTabs for non-config-editable agents; redirect stale
+  // deep links to Profile so we don't render a blank page.
+  if (!ctx.canEditConfig) return <Navigate to="../profile" replace />;
+  if (!ctx.config) return null;
   return (
     <div id={sectionAnchorId("prompt")}>
       <PromptSection

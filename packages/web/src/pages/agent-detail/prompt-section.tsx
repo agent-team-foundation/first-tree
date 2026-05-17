@@ -2,7 +2,7 @@ import { Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
-import { ConfigSection } from "./flat-section.js";
+import { Section } from "../../components/ui/section.js";
 
 /**
  * System Prompt Append — inline editor, no dialog. `Done` collapses the editor
@@ -24,7 +24,12 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
   const dirty = value !== baseline;
 
   useEffect(() => {
-    if (editing) taRef.current?.focus();
+    if (!editing) return;
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.focus();
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
   }, [editing]);
 
   const action =
@@ -35,8 +40,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
     ) : null;
 
   return (
-    <ConfigSection
-      eyebrow="prompt"
+    <Section
       title={
         <span className="inline-flex items-center gap-2">
           System prompt append
@@ -51,15 +55,19 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
             <textarea
               ref={taRef}
               value={value}
-              onChange={(e) => onChange(e.target.value)}
+              onChange={(e) => {
+                onChange(e.target.value);
+                e.currentTarget.style.height = "auto";
+                e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
                   setEditing(false);
                 }
               }}
-              rows={10}
-              className="w-full rounded border bg-transparent p-2 font-mono text-body shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              className="w-full resize-none overflow-hidden rounded border bg-transparent p-2 font-mono text-body shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              style={{ minHeight: "10rem" }}
               placeholder="Appended to Claude Code's default system prompt."
               maxLength={32_000}
               spellCheck={false}
@@ -83,7 +91,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
             <p className="text-caption text-muted-foreground">Use Save below to apply this prompt change.</p>
           </div>
         ) : (
-          <div className="text-body max-h-64 overflow-auto min-h-8">
+          <div className="text-body min-h-8">
             {value ? (
               <Markdown>{value}</Markdown>
             ) : (
@@ -92,7 +100,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
           </div>
         )}
       </div>
-    </ConfigSection>
+    </Section>
   );
 }
 

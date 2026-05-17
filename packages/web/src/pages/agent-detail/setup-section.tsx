@@ -1,8 +1,9 @@
 import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
-import { Link2, Lock, Play } from "lucide-react";
+import { Link2, Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
-import { ConfigRow, ConfigSection } from "./flat-section.js";
+import { Section } from "../../components/ui/section.js";
+import { ConfigRow } from "./flat-section.js";
 
 /**
  * Setup section — "where it runs" pick (locked here, re-bindable via the
@@ -31,19 +32,18 @@ export type SetupSectionProps = {
 const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> = {
   "claude-code": {
     name: "Claude Code",
-    caption: "Anthropic's Claude Code runtime. Re-bind via the agent's settings to switch computer or runtime.",
+    caption: "Anthropic's Claude Code runtime.",
   },
   codex: {
     name: "Codex",
-    caption: "OpenAI's Codex CLI runtime. Re-bind via the agent's settings to switch computer or runtime.",
+    caption: "OpenAI's Codex CLI runtime.",
   },
 };
 
 export function SetupSection(props: SetupSectionProps) {
   const copy = RUNTIME_COPY[props.runtimeProvider];
   return (
-    <ConfigSection eyebrow="setup" title="Runtime">
-      <RuntimeRow name={copy.name} caption={copy.caption} locked />
+    <Section title="Runtime">
       <ComputerRow
         computerLabel={props.computerLabel}
         statusLoading={props.computerStatusLoading ?? false}
@@ -53,8 +53,9 @@ export function SetupSection(props: SetupSectionProps) {
         onBindComputer={props.onBindComputer}
         onRebind={props.onRebind}
       />
+      <RuntimeRow name={copy.name} caption={copy.caption} locked />
       {props.modelSlot}
-    </ConfigSection>
+    </Section>
   );
 }
 
@@ -62,13 +63,16 @@ function RuntimeRow({ name, caption, locked }: { name: string; caption: string; 
   return (
     <ConfigRow
       label="Provider"
-      icon={<Play className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--accent)" }} />}
       value={name}
-      description={caption}
+      helpText={caption}
       meta={
         locked ? (
-          <span className="mono uppercase text-caption inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
-            <Lock className="h-3 w-3" aria-hidden /> locked
+          <span
+            className="text-caption inline-flex items-center gap-1"
+            style={{ color: "var(--fg-4)" }}
+            title="Re-bind via the Re-bind dialog to switch runtime"
+          >
+            <Lock className="h-3 w-3" aria-hidden /> Read-only
           </span>
         ) : null
       }
@@ -107,17 +111,22 @@ function ComputerRow(props: {
     ) : null;
 
   let value: ReactNode = props.computerLabel;
-  let description: ReactNode = "The computer environment and tool access for this agent.";
+  // Bound state has no inline description — the hostname speaks for itself.
+  // Unbound state keeps the inline guidance so new operators see it without
+  // having to discover the ? tooltip.
+  let description: ReactNode = null;
+  let helpText: string | undefined = "The computer environment and tool access for this agent.";
   if (props.statusLoading) {
     value = "Checking computer binding…";
-    description = null;
+    helpText = undefined;
   } else if (props.statusError) {
     value = <span style={{ color: "var(--state-error)" }}>Could not verify computer binding: {props.statusError}</span>;
-    description = null;
+    helpText = undefined;
   } else if (!bound) {
     value = "No computer bound";
     description = "A computer claims this agent on first WebSocket connect, or you can pick one manually.";
+    helpText = undefined;
   }
 
-  return <ConfigRow label="Computer" value={value} description={description} action={action} />;
+  return <ConfigRow label="Computer" value={value} description={description} helpText={helpText} action={action} />;
 }

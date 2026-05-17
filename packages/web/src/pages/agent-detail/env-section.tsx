@@ -5,7 +5,7 @@ import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
-import { ConfigSection } from "./flat-section.js";
+import { Section } from "../../components/ui/section.js";
 import { ListRow } from "./list-row.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
@@ -48,7 +48,7 @@ export function EnvSection(props: EnvSectionProps) {
   ) : null;
 
   return (
-    <ConfigSection eyebrow="resources" title="Environment variables" count={activeCount} action={action}>
+    <Section title="Environment variables" count={activeCount} action={action}>
       <div>
         {props.items.length === 0 ? (
           <p className="text-body text-muted-foreground" style={{ padding: "var(--sp-3) 0" }}>
@@ -121,7 +121,7 @@ export function EnvSection(props: EnvSectionProps) {
           }}
         />
       )}
-    </ConfigSection>
+    </Section>
   );
 }
 

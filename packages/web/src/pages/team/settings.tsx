@@ -23,7 +23,7 @@ export function TeamSettingsPage() {
 
   return (
     <>
-      <PageHeader title="Team settings" subtitle={subtitle} />
+      <PageHeader title="Team" subtitle={subtitle} />
       <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
         <OrgSettingsPage />
       </div>

@@ -3,7 +3,7 @@ import { Navigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { PageHeader } from "../../components/ui/page-header.js";
-import { SettingsSection } from "../../components/ui/settings-section.js";
+import { Section } from "../../components/ui/section.js";
 
 /**
  * Settings → Onboarding. Surfaces the onboarding stepper's enable/disable
@@ -37,14 +37,14 @@ export function SettingsOnboardingPage() {
     <>
       <PageHeader title="Onboarding" subtitle="Guided setup controls" />
       <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
-        <SettingsSection
+        <Section
           title="Onboarding guide"
           description={
             isDismissed
               ? "The stepper is hidden. Bring it back if you want to walk through Step 3 (build your context-tree)."
               : "The stepper is shown above your workspace. You can hide it any time once your agent is set up."
           }
-          right={isDismissed ? null : <ActiveBadge />}
+          action={isDismissed ? null : <ActiveBadge />}
         >
           {isDismissed ? (
             <Button type="button" size="sm" onClick={() => void restoreOnboarding()}>
@@ -62,7 +62,7 @@ export function SettingsOnboardingPage() {
               Hide onboarding guide
             </Button>
           )}
-        </SettingsSection>
+        </Section>
       </div>
     </>
   );

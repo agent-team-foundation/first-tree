@@ -1,47 +1,22 @@
+import { HelpCircle } from "lucide-react";
 import type { ReactNode } from "react";
-import { cn } from "../../lib/utils.js";
 
-type ConfigSectionProps = {
-  eyebrow?: ReactNode;
-  title: ReactNode;
-  count?: ReactNode;
-  action?: ReactNode;
-  children: ReactNode;
-  className?: string;
-};
-
-export function ConfigSection({ eyebrow, title, count, action, children, className }: ConfigSectionProps) {
-  return (
-    <section className={cn("space-y-2", className)}>
-      <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-end sm:gap-3">
-        <div className="min-w-0">
-          {eyebrow && (
-            <div className="mono uppercase text-eyebrow" style={{ color: "var(--fg-4)", marginBottom: "var(--sp-1)" }}>
-              {eyebrow}
-            </div>
-          )}
-          <div className="flex items-baseline gap-2">
-            <h2 className="text-subtitle" style={{ color: "var(--fg)" }}>
-              {title}
-            </h2>
-            {count != null && (
-              <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                {count}
-              </span>
-            )}
-          </div>
-        </div>
-        {action}
-      </div>
-      <div style={{ borderTop: "var(--hairline) solid var(--border)" }}>{children}</div>
-    </section>
-  );
-}
+// NOTE: The old `ConfigSection` was removed in favour of the unified
+// `Section` component at `components/ui/section.tsx` (shared with Settings).
+// This file now hosts only the row primitives — ConfigRow, the help-icon
+// tooltip, and the dense table header used by Tools / Resources tabs.
 
 type ConfigRowProps = {
   label: ReactNode;
   value?: ReactNode;
+  /** Inline hint rendered beneath the value (always visible). Use for warnings,
+   *  guidance that the user must see (e.g. unbound state). For background
+   *  explanations, prefer `helpText` (hover-tooltip via ? icon). */
   description?: ReactNode;
+  /** Hover-only help text. Rendered as a ? icon next to the value; the
+   *  browser shows the string via the native `title` tooltip. Use for
+   *  background context that experienced users don't need to re-read. */
+  helpText?: string;
   meta?: ReactNode;
   action?: ReactNode;
   icon?: ReactNode;
@@ -49,10 +24,20 @@ type ConfigRowProps = {
   children?: ReactNode;
 };
 
-export function ConfigRow({ label, value, description, meta, action, icon, danger = false, children }: ConfigRowProps) {
+export function ConfigRow({
+  label,
+  value,
+  description,
+  helpText,
+  meta,
+  action,
+  icon,
+  danger = false,
+  children,
+}: ConfigRowProps) {
   return (
     <div
-      className="grid grid-cols-1 gap-2 text-body md:gap-3 md:[grid-template-columns:minmax(10rem,0.7fr)_minmax(0,1.7fr)_auto_auto] md:items-center"
+      className="grid grid-cols-1 gap-2 text-body md:gap-3 md:[grid-template-columns:minmax(10rem,0.7fr)_minmax(0,1.7fr)_auto_auto] md:items-start"
       style={{
         padding: "var(--sp-2_5) 0",
         borderBottom: "var(--hairline) solid var(--border-faint)",
@@ -60,16 +45,26 @@ export function ConfigRow({ label, value, description, meta, action, icon, dange
     >
       <div className="flex min-w-0 items-center gap-2">
         {icon}
-        <span className="font-medium truncate" style={{ color: danger ? "var(--state-error)" : "var(--fg)" }}>
+        <span className="truncate" style={{ color: danger ? "var(--state-error)" : "var(--fg-2)" }}>
           {label}
         </span>
       </div>
       <div className="min-w-0 break-words">
-        {children ?? (
+        {children ? (
+          <div className="flex items-center" style={{ gap: "var(--sp-1_5)" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+            {helpText && <HelpIconTooltip text={helpText} />}
+          </div>
+        ) : (
           <>
-            {value != null && <div style={{ color: "var(--fg-2)" }}>{value}</div>}
+            {value != null && (
+              <div className="font-medium flex items-center" style={{ color: "var(--fg)", gap: "var(--sp-1_5)" }}>
+                <span>{value}</span>
+                {helpText && <HelpIconTooltip text={helpText} />}
+              </div>
+            )}
             {description && (
-              <div className="text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
+              <div className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-1)" }}>
                 {description}
               </div>
             )}
@@ -79,6 +74,20 @@ export function ConfigRow({ label, value, description, meta, action, icon, dange
       {meta && <div className="shrink-0 md:justify-self-end">{meta}</div>}
       {action && <div className="shrink-0 md:col-start-4 md:justify-self-end">{action}</div>}
     </div>
+  );
+}
+
+function HelpIconTooltip({ text }: { text: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={text}
+      title={text}
+      className="inline-flex items-center"
+      style={{ color: "var(--fg-4)", cursor: "help" }}
+    >
+      <HelpCircle className="h-3.5 w-3.5" aria-hidden />
+    </span>
   );
 }
 
