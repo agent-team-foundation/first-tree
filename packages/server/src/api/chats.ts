@@ -11,11 +11,15 @@ import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { agentAvatarImageUrl } from "../services/agent.js";
 import { ensureParticipant, joinChat, leaveChat } from "../services/chat.js";
+import { findInstallationByOrg } from "../services/github-app-installations.js";
+import { mintContextTreeInstallationToken } from "../services/github-app-token.js";
+import { resolveChatGithubEntity } from "../services/github-entity-live.js";
 import { prepareImageOutbound } from "../services/image-broadcast.js";
 import {
   addMeChatParticipants,
@@ -118,6 +122,67 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         joinedAt: p.joinedAt.toISOString(),
       })),
     };
+  });
+
+  /**
+   * List GitHub entities bound to this chat. Reads the binding rows from
+   * `github_entity_chat_mappings`, then fetches the live `title` / `state`
+   * for each from the GitHub REST API at request time — nothing is
+   * persisted. Per the right-sidebar plan, we deliberately did NOT add
+   * cached columns; freshness wins over a low-cost cache.
+   *
+   * Returns an empty list when the chat has no bindings. When the org
+   * has no GitHub App installation (or token mint fails), rows are
+   * still returned with `title: null` and `state: null` so the row
+   * remains a working link to GitHub.
+   */
+  app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
+    const { chat, scope } = await requireChatAccess(request, app.db);
+
+    // Pull every mapping row that points at this chat. A given chat can
+    // be the target of multiple bindings — e.g. the direct PR binding
+    // plus the `Fixes #N` linker pointing at the related Issue — so we
+    // expect 1..N rows here. Dedup by (entityType, entityKey) on the way
+    // out: the (humanAgent, delegateAgent) axes are an audit detail the
+    // sidebar doesn't surface, and they would otherwise produce visible
+    // duplicates when more than one delegate agent acts on the same
+    // entity in the same chat.
+    const rows = await app.db
+      .select({
+        entityType: githubEntityChatMappings.entityType,
+        entityKey: githubEntityChatMappings.entityKey,
+        boundVia: githubEntityChatMappings.boundVia,
+        boundAt: githubEntityChatMappings.boundAt,
+      })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.chatId, chat.id))
+      .orderBy(desc(githubEntityChatMappings.boundAt));
+
+    if (rows.length === 0) return { items: [] };
+
+    const dedup = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) {
+      const key = `${r.entityType}::${r.entityKey}`;
+      // Earliest-encountered row wins: rows arrive newest-first so the
+      // dedup keeps the **most recent** binding, which carries the
+      // `boundVia` the user actually triggered last.
+      if (!dedup.has(key)) dedup.set(key, r);
+    }
+
+    // Mint an installation token once and reuse it for every entity
+    // fetch. The token TTL is ~1h — well outside the request window —
+    // and minting per-entity would inflate latency proportional to
+    // mapping count.
+    const installation = await findInstallationByOrg(app.db, scope.organizationId);
+    const mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
+    const token = mintResult.ok ? mintResult.token : null;
+
+    const items = await Promise.all(
+      Array.from(dedup.values()).map((r) =>
+        resolveChatGithubEntity({ entityType: r.entityType, entityKey: r.entityKey, boundVia: r.boundVia }, token),
+      ),
+    );
+    return { items: items.filter((x): x is NonNullable<typeof x> => x !== null) };
   });
 
   app.post<{ Params: { chatId: string } }>(

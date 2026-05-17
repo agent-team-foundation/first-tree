@@ -12,6 +12,7 @@ import { CenterPanel } from "./center/index.js";
 import { OnboardingStepper } from "./center/onboarding-stepper.js";
 import { type GroupMode, parseGroupMode } from "./conversations/group-rows.js";
 import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
+import { ChatRightSidebar } from "./right-sidebar/index.js";
 
 /**
  * Workspace shell — chat-first. The left rail is `ConversationList`; the
@@ -241,6 +242,7 @@ export function WorkspacePage() {
         <OnboardingStepper />
         <CenterPanel selectedChatId={selectedChatId} onSelectChat={selectChat} />
       </main>
+      <ChatRightSidebar selectedChatId={selectedChatId === DRAFT_CHAT_ID ? null : selectedChatId} />
       <DocPreviewDrawer />
     </div>
   );
