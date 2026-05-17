@@ -3,8 +3,9 @@ import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 
 /**
- * Settings is a master-detail container. Flat aesthetic — no borders, no
- * contrasting sidebar bg; active state is a soft pill.
+ * Settings is a top-tab container. It follows the same flat rhythm as
+ * the agent configuration page: no secondary sidebar, one thin tab rule,
+ * and each sub-route owns its compact page header + sections.
  *
  * Sub-tabs:
  *   Team           — org-scoped Identity / Context Tree / Source repos
@@ -16,12 +17,20 @@ import { cn } from "../lib/utils.js";
  *   Messaging      — IM bridges (Feishu / Slack adapter CRUD)
  *   Onboarding     — guided-setup stepper enable / disable
  *
- * `GitHub` is hidden from the member sidebar because both reads and writes
+ * `GitHub` is hidden from the member tab bar because both reads and writes
  * are admin-gated server-side — surfacing the entry would just lead to a
  * 403 inside.
  */
 export function SettingsLayout() {
-  const { role, onboardingCompletedAt } = useAuth();
+  const { role, onboardingCompletedAt, meLoaded } = useAuth();
+  // Wait for `/me` to resolve before rendering the nav — otherwise a fresh
+  // direct hit on /settings/github would briefly paint the member-view tab
+  // set (no GitHub, plus Onboarding) before `role` flips to "admin". The
+  // sidebar-era variant tolerated that flash visually; the top-tab variant
+  // makes it obvious.
+  if (!meLoaded) {
+    return null;
+  }
   const isAdmin = role === "admin";
   // Once Step 3 succeeds (`onboarding_completed_at` stamped), the wizard
   // is a terminal — subsequent tree / source-repo edits live in Settings →
@@ -31,12 +40,19 @@ export function SettingsLayout() {
   const hasCompletedOnboarding = onboardingCompletedAt !== null;
 
   return (
-    <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
-      <aside
-        className="shrink-0 overflow-auto"
+    <div className="-m-6 flex flex-col" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
+      <nav
+        aria-label="Settings"
+        className="flex items-end overflow-x-auto"
         style={{
-          width: 200,
-          padding: "var(--sp-4) var(--sp-2)",
+          position: "sticky",
+          top: 0,
+          zIndex: 1,
+          gap: 2,
+          height: 34,
+          padding: "0 var(--sp-5)",
+          background: "var(--bg-raised)",
+          borderBottom: "var(--hairline) solid var(--border)",
         }}
       >
         <SubNavLink to="/settings/team" label="Team" />
@@ -44,9 +60,9 @@ export function SettingsLayout() {
         {isAdmin && <SubNavLink to="/settings/github" label="GitHub" />}
         <SubNavLink to="/settings/integrations" label="Messaging" />
         {!hasCompletedOnboarding && <SubNavLink to="/settings/onboarding" label="Onboarding" />}
-      </aside>
+      </nav>
 
-      <div className="flex-1 min-w-0 overflow-auto">
+      <div className="flex-1 min-w-0">
         <Outlet />
       </div>
     </div>
@@ -57,29 +73,29 @@ function SubNavLink({ to, label }: { to: string; label: string }) {
   return (
     <NavLink
       to={to}
-      className={({ isActive }) =>
-        cn(
-          "block w-full text-left bg-transparent text-body transition-colors",
-          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          !isActive && "hover:bg-accent",
-        )
-      }
-      style={{
-        borderRadius: "var(--radius-input)",
-      }}
+      className={cn(
+        "inline-flex items-center bg-transparent text-body font-medium",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+      )}
     >
       {({ isActive }) => (
         <span
-          className="flex items-center"
+          className="inline-flex items-center whitespace-nowrap"
           style={{
-            padding: "var(--sp-1_25) var(--sp-2_5)",
-            background: isActive ? "var(--bg-active)" : "transparent",
+            padding: "var(--sp-1_75) var(--sp-3)",
+            marginBottom: -1,
+            borderBottom: `var(--hairline-bold) solid ${isActive ? "var(--accent)" : "transparent"}`,
             color: isActive ? "var(--fg)" : "var(--fg-3)",
-            fontWeight: isActive ? 500 : 400,
-            borderRadius: "var(--radius-input)",
+            transition: "color 0.12s",
+          }}
+          onMouseEnter={(event) => {
+            if (!isActive) event.currentTarget.style.color = "var(--fg)";
+          }}
+          onMouseLeave={(event) => {
+            if (!isActive) event.currentTarget.style.color = "var(--fg-3)";
           }}
         >
-          <span className="flex-1 truncate">{label}</span>
+          {label}
         </span>
       )}
     </NavLink>
