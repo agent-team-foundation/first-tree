@@ -51,7 +51,8 @@ const OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const USER_API_URL = "https://api.github.com/user";
 const USER_EMAILS_API_URL = "https://api.github.com/user/emails";
-const USER_INSTALLATIONS_API_URL = "https://api.github.com/user/installations";
+const USER_MEMBERSHIPS_API_URL = (org: string) =>
+  `https://api.github.com/user/memberships/orgs/${encodeURIComponent(org)}`;
 
 /**
  * Errors from any GitHub API call this module makes. Carries the HTTP
@@ -162,56 +163,63 @@ export async function fetchInstallation(
 }
 
 /**
- * List the installation IDs the authenticated GitHub user can administer.
- * Wraps `GET /user/installations` — GitHub's documented "what installs is
- * this user allowed to touch" endpoint. Covers both User-type installs
- * (the user owns the personal account) and Organization-type installs
- * (the user has admin rights on the org).
+ * Verify the authenticated GitHub user can actually administer this
+ * installation. The OAuth callback and the manual `claim` endpoint both
+ * use this: `installation_id` arrives over insecure channels (browser
+ * address bar, API body) and isn't a secret, so we MUST prove the caller
+ * owns / admins the GitHub account the install lives under before
+ * binding it to a Hub org.
  *
- * Critical security primitive: the OAuth callback uses this to verify
- * that an `installation_id` query parameter — which arrives over an
- * insecure channel (the user's browser address bar) — actually belongs
- * to the authenticated user. Without this check, any signed-in user
- * could attach an arbitrary installation_id to their callback URL and
- * bind another team's installation to their own Hub org (installation
- * IDs are NOT secrets — they appear in webhook URLs, GitHub-side
- * Settings pages, and the install dialog's post-install redirect).
+ * Rules — strict, per GitHub's account model:
  *
- * Returns the bare ID set so callers can do O(1) membership checks. The
- * full installation metadata is fetched separately via `fetchInstallation`
- * once authorization has cleared.
+ *   - `accountType === "User"`: only the account owner counts. Compare
+ *     `installation.accountGithubId` to the caller's own GitHub ID. The
+ *     stable numeric ID survives login renames.
+ *
+ *   - `accountType === "Organization"`: require `role === "admin"` and
+ *     `state === "active"` on the org via `GET /user/memberships/orgs/{login}`.
+ *     A pending invite (state=pending) does NOT grant admin rights even
+ *     when role=admin. Non-admins can't lie because the token only sees
+ *     the caller's own membership. Requires the App's
+ *     `organization:members:read` permission.
+ *
+ * Why NOT `GET /user/installations`: it lists installs the user has
+ * `:read` / `:write` / `:admin` access to — plain org membership is
+ * enough to appear, no admin role required. Membership alone is what
+ * made the original primitive forgeable.
+ *
+ * Throws `GithubAppApiError` on transient upstream failures (callers
+ * should fail closed and refuse the bind). Returns `false` cleanly for
+ * the "not allowed" path (404 on org membership, ID mismatch on User
+ * installs).
  */
-export async function listUserAccessibleInstallationIds(
+export async function verifyUserCanAdministerInstallation(
   userAccessToken: string,
-  opts: { fetcher?: typeof fetch; perPage?: number; maxPages?: number } = {},
-): Promise<Set<number>> {
-  const fetcher = opts.fetcher ?? fetch;
-  const perPage = opts.perPage ?? 100;
-  const maxPages = opts.maxPages ?? 5;
-  const out = new Set<number>();
-  for (let page = 1; page <= maxPages; page++) {
-    const url = `${USER_INSTALLATIONS_API_URL}?per_page=${perPage}&page=${page}`;
-    const res = await fetcher(url, {
-      headers: {
-        Authorization: `Bearer ${userAccessToken}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
-    if (!res.ok) {
-      throw new GithubAppApiError(res.status, `GitHub /user/installations failed (${res.status})`);
-    }
-    const body = (await res.json()) as {
-      total_count?: number;
-      installations?: Array<{ id: number }>;
-    };
-    const installs = body.installations ?? [];
-    for (const inst of installs) {
-      if (typeof inst.id === "number") out.add(inst.id);
-    }
-    if (installs.length < perPage) break;
+  userGithubId: number,
+  installation: { accountType: "User" | "Organization"; accountLogin: string; accountGithubId: number },
+  opts: { fetcher?: typeof fetch } = {},
+): Promise<boolean> {
+  if (installation.accountType === "User") {
+    return installation.accountGithubId === userGithubId;
   }
-  return out;
+  const fetcher = opts.fetcher ?? fetch;
+  const res = await fetcher(USER_MEMBERSHIPS_API_URL(installation.accountLogin), {
+    headers: {
+      Authorization: `Bearer ${userAccessToken}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  // 404 = not a member of this org. Clean negative answer; not an error.
+  if (res.status === 404) return false;
+  if (!res.ok) {
+    throw new GithubAppApiError(
+      res.status,
+      `GitHub /user/memberships/orgs/${installation.accountLogin} failed (${res.status})`,
+    );
+  }
+  const body = (await res.json()) as { state?: string; role?: string };
+  return body.state === "active" && body.role === "admin";
 }
 
 export type InstallationToken = {

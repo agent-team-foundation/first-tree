@@ -53,9 +53,21 @@ export function GitSection(props: GitSectionProps) {
                 onUndo={() => props.onUndoDelete(item.key)}
                 disabled={props.disabled}
               >
-                <span className="font-mono text-caption">{item.value.url}</span>
-                {item.value.ref && <span className="text-caption text-muted-foreground">@ {item.value.ref}</span>}
-                <span className="text-caption text-muted-foreground">→ {path || "./"}</span>
+                {/* URL is the primary long token (GitHub URLs run 60-120
+                    chars); flex-1 + min-w-0 + truncate keeps it contained
+                    inside the row instead of pushing past the page canvas. */}
+                <span className="font-mono text-caption truncate min-w-0 flex-1" title={item.value.url}>
+                  {item.value.url}
+                </span>
+                {item.value.ref && (
+                  <span className="text-caption text-muted-foreground shrink-0">@ {item.value.ref}</span>
+                )}
+                <span
+                  className="text-caption text-muted-foreground truncate min-w-0 max-w-xs"
+                  title={`→ ${path || "./"}`}
+                >
+                  → {path || "./"}
+                </span>
               </ListRow>
             );
           })

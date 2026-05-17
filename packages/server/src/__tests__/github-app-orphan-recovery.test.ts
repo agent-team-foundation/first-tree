@@ -13,18 +13,30 @@ import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
- * Stub `globalThis.fetch` so the manual-claim endpoint's `/user/installations`
- * access check resolves deterministically (no network). Returns the supplied
- * ids; anything else falls through to the real fetch.
+ * Stub `globalThis.fetch` so the manual-claim endpoint's GitHub admin proof
+ * (#312) resolves deterministically. For each `(login, role)` entry the
+ * stub answers `GET /user/memberships/orgs/{login}` with that role + an
+ * "active" state; logins not in the map return 404 (non-member). Other
+ * URLs fall through to the real fetch.
+ *
+ * User-type installs don't reach the network at all (the helper compares
+ * GitHub IDs in-process), so this stub is only consulted for Org-type
+ * claims.
  */
-function stubUserInstallations(ids: number[]) {
+function stubGithubMemberships(memberships: Record<string, "admin" | "member">) {
   const original = globalThis.fetch;
   type FetchInput = Parameters<typeof globalThis.fetch>[0];
   type FetchInit = Parameters<typeof globalThis.fetch>[1];
   const spy = vi.fn(async (input: FetchInput, init?: FetchInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.startsWith("https://api.github.com/user/installations")) {
-      return new Response(JSON.stringify({ total_count: ids.length, installations: ids.map((id) => ({ id })) }), {
+    const match = url.match(/^https:\/\/api\.github\.com\/user\/memberships\/orgs\/([^/?]+)/);
+    if (match) {
+      const login = decodeURIComponent(match[1] ?? "");
+      const role = memberships[login];
+      if (!role) {
+        return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      }
+      return new Response(JSON.stringify({ state: "active", role }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -170,28 +182,37 @@ describe("OAuth sign-in orphan-install reclaim (codex P1-5 + H1)", () => {
 describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
   const getApp = useTestApp();
 
-  async function seedAdminWithGithubToken(): Promise<{
+  async function seedAdminWithGithubToken(opts: { userGithubId?: number } = {}): Promise<{
     accessToken: string;
     organizationId: string;
     userId: string;
+    userGithubId: number;
   }> {
     const app = getApp();
     const admin = await createTestAdmin(app, { username: `claim-${uuidv7().slice(0, 8)}` });
-    // The claim endpoint reads the caller's stored GitHub token; createTestAdmin
-    // doesn't make a github auth_identity, so add one with a stub encrypted token.
+    // The claim endpoint reads the caller's stored GitHub token AND the
+    // numeric GitHub ID off `auth_identities.identifier` (so the
+    // User-type admin proof can ID-compare). identifier must therefore be
+    // a valid number string, mirroring the real OAuth callback's behavior.
+    const userGithubId = opts.userGithubId ?? Math.floor(700_000 + Math.random() * 99_999);
     await app.db.insert(authIdentities).values({
       id: uuidv7(),
       userId: admin.userId,
       provider: "github",
-      identifier: `gh-${admin.userId.slice(0, 8)}`,
+      identifier: String(userGithubId),
       email: null,
       verifiedAt: new Date(),
       metadata: { login: "claimer", accessToken: encryptValue("gho_stub", app.config.secrets.encryptionKey) },
     });
-    return { accessToken: admin.accessToken, organizationId: admin.organizationId, userId: admin.userId };
+    return {
+      accessToken: admin.accessToken,
+      organizationId: admin.organizationId,
+      userId: admin.userId,
+      userGithubId,
+    };
   }
 
-  it("binds an unbound installation the caller administers on GitHub", async () => {
+  it("binds an Org-type install when the caller is a GitHub org admin", async () => {
     const app = getApp();
     const { accessToken, organizationId } = await seedAdminWithGithubToken();
     const installationId = 9_301;
@@ -207,7 +228,7 @@ describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
       },
     });
 
-    const restore = stubUserInstallations([installationId]);
+    const restore = stubGithubMemberships({ acme: "admin" });
     try {
       const res = await app.inject({
         method: "POST",
@@ -223,7 +244,92 @@ describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
     expect((await findInstallationByGithubId(app.db, installationId))?.hubOrganizationId).toBe(organizationId);
   });
 
-  it("403s when the caller doesn't administer the installation on GitHub", async () => {
+  it("binds a User-type install when the caller's GitHub ID matches the account", async () => {
+    const app = getApp();
+    const userGithubId = 760_001;
+    const { accessToken, organizationId } = await seedAdminWithGithubToken({ userGithubId });
+    const installationId = 9_311;
+    await upsertInstallationFromMetadata(app.db, {
+      installation: {
+        id: installationId,
+        accountType: "User",
+        accountLogin: "alice",
+        accountGithubId: userGithubId,
+        permissions: {},
+        events: [],
+        suspendedAt: null,
+      },
+    });
+    // No HTTP stub needed — User-type proof is purely ID-based.
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${organizationId}/github-app-installation/claim`,
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { installationId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((await findInstallationByGithubId(app.db, installationId))?.hubOrganizationId).toBe(organizationId);
+  });
+
+  it("403s when the caller is a non-admin member of the GitHub org install", async () => {
+    // Hijack vector — the legacy `/user/installations` primitive would
+    // have returned the install for a plain member. The new admin proof
+    // rejects it.
+    const app = getApp();
+    const { accessToken, organizationId } = await seedAdminWithGithubToken();
+    const installationId = 9_312;
+    await upsertInstallationFromMetadata(app.db, {
+      installation: {
+        id: installationId,
+        accountType: "Organization",
+        accountLogin: "victim",
+        accountGithubId: 880_099,
+        permissions: {},
+        events: [],
+        suspendedAt: null,
+      },
+    });
+    const restore = stubGithubMemberships({ victim: "member" });
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/orgs/${organizationId}/github-app-installation/claim`,
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { installationId },
+      });
+      expect(res.statusCode).toBe(403);
+    } finally {
+      restore();
+    }
+    expect((await findInstallationByGithubId(app.db, installationId))?.hubOrganizationId).toBeNull();
+  });
+
+  it("403s on a User-type install when the caller's GitHub ID doesn't match", async () => {
+    const app = getApp();
+    const { accessToken, organizationId } = await seedAdminWithGithubToken({ userGithubId: 760_010 });
+    const installationId = 9_313;
+    await upsertInstallationFromMetadata(app.db, {
+      installation: {
+        id: installationId,
+        accountType: "User",
+        accountLogin: "someoneelse",
+        accountGithubId: 999_999,
+        permissions: {},
+        events: [],
+        suspendedAt: null,
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${organizationId}/github-app-installation/claim`,
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { installationId },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((await findInstallationByGithubId(app.db, installationId))?.hubOrganizationId).toBeNull();
+  });
+
+  it("403s when the caller is not a member of the GitHub org at all (404 from memberships)", async () => {
     const app = getApp();
     const { accessToken, organizationId } = await seedAdminWithGithubToken();
     const installationId = 9_302;
@@ -231,14 +337,15 @@ describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
       installation: {
         id: installationId,
         accountType: "Organization",
-        accountLogin: "other",
+        accountLogin: "stranger",
         accountGithubId: 880_002,
         permissions: {},
         events: [],
         suspendedAt: null,
       },
     });
-    const restore = stubUserInstallations([12_345]); // does not include installationId
+    // Empty memberships map → /user/memberships/orgs/stranger answers 404.
+    const restore = stubGithubMemberships({});
     try {
       const res = await app.inject({
         method: "POST",
@@ -271,7 +378,7 @@ describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
       },
       hubOrganizationId: otherOrgId,
     });
-    const restore = stubUserInstallations([installationId]);
+    const restore = stubGithubMemberships({ taken: "admin" });
     try {
       const res = await app.inject({
         method: "POST",
@@ -288,18 +395,15 @@ describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
   it("404s when there is no installation row with that id", async () => {
     const app = getApp();
     const { accessToken, organizationId } = await seedAdminWithGithubToken();
-    const restore = stubUserInstallations([9_304]);
-    try {
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/v1/orgs/${organizationId}/github-app-installation/claim`,
-        headers: { authorization: `Bearer ${accessToken}` },
-        payload: { installationId: 9_304 },
-      });
-      expect(res.statusCode).toBe(404);
-    } finally {
-      restore();
-    }
+    // No upsert — the claim endpoint short-circuits with 404 before any
+    // membership API call.
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${organizationId}/github-app-installation/claim`,
+      headers: { authorization: `Bearer ${accessToken}` },
+      payload: { installationId: 9_304 },
+    });
+    expect(res.statusCode).toBe(404);
   });
 
   it("403s when the caller has no GitHub token on file", async () => {

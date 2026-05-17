@@ -7,9 +7,9 @@ import {
   exchangeCodeForAppUserProfile,
   fetchInstallation,
   GithubAppApiError,
-  listUserAccessibleInstallationIds,
   mintInstallationToken,
   refreshAppUserToken,
+  verifyUserCanAdministerInstallation,
 } from "../services/github-app.js";
 
 /**
@@ -205,81 +205,112 @@ describe("services/github-app", () => {
     });
   });
 
-  describe("listUserAccessibleInstallationIds (P0-2 authz primitive)", () => {
-    it("returns the set of installation IDs from a single-page /user/installations", async () => {
+  describe("verifyUserCanAdministerInstallation", () => {
+    it("User-type: returns true when the caller's GitHub ID matches the install account", async () => {
+      // No HTTP call needed for User-type — the comparison is purely ID-based.
+      const fakeFetch: typeof fetch = async () => {
+        throw new Error("fetch must not be called for User-type installs");
+      };
+      const ok = await verifyUserCanAdministerInstallation(
+        "ghu_token",
+        770_001,
+        { accountType: "User", accountLogin: "alice", accountGithubId: 770_001 },
+        { fetcher: fakeFetch },
+      );
+      expect(ok).toBe(true);
+    });
+
+    it("User-type: returns false when the IDs don't match (hijack attempt)", async () => {
+      const ok = await verifyUserCanAdministerInstallation(
+        "ghu_token",
+        12_345,
+        { accountType: "User", accountLogin: "alice", accountGithubId: 770_001 },
+        { fetcher: async () => new Response(null, { status: 200 }) },
+      );
+      expect(ok).toBe(false);
+    });
+
+    it("Org-type: returns true on state=active + role=admin", async () => {
       const calls: Array<{ url: string; init?: RequestInit }> = [];
       const fakeFetch: typeof fetch = async (url, init) => {
         calls.push({ url: String(url), init });
-        return new Response(
-          JSON.stringify({
-            total_count: 2,
-            installations: [{ id: 1001 }, { id: 1002 }],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ state: "active", role: "admin" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       };
-      const ids = await listUserAccessibleInstallationIds("ghu_token", { fetcher: fakeFetch });
-      expect(ids).toEqual(new Set([1001, 1002]));
+      const ok = await verifyUserCanAdministerInstallation(
+        "ghu_token",
+        0,
+        { accountType: "Organization", accountLogin: "acme", accountGithubId: 880_001 },
+        { fetcher: fakeFetch },
+      );
+      expect(ok).toBe(true);
       expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://api.github.com/user/memberships/orgs/acme");
       const headers = new Headers(calls[0]?.init?.headers);
       expect(headers.get("authorization")).toBe("Bearer ghu_token");
       expect(headers.get("x-github-api-version")).toBe("2022-11-28");
-      expect(calls[0]?.url).toContain("/user/installations?per_page=");
     });
 
-    it("paginates until a short page is seen", async () => {
-      const pages = [
-        // Page 1: full
-        Array.from({ length: 100 }, (_, i) => ({ id: 5000 + i })),
-        // Page 2: partial (terminates the loop)
-        [{ id: 6001 }, { id: 6002 }],
-      ];
-      let pageIdx = 0;
-      const fakeFetch: typeof fetch = async () => {
-        const installations = pages[pageIdx++] ?? [];
-        return new Response(JSON.stringify({ installations }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      };
-      const ids = await listUserAccessibleInstallationIds("t", { fetcher: fakeFetch, perPage: 100 });
-      expect(ids.size).toBe(102);
-      expect(ids.has(5000)).toBe(true);
-      expect(ids.has(6002)).toBe(true);
-    });
-
-    it("returns an empty set when the user has no installations", async () => {
+    it("Org-type: returns false when role=member (the hijack vector)", async () => {
+      // Plain org member triggered the original bug — `/user/installations`
+      // returned the install, but the user isn't an admin. The new check
+      // catches it.
       const fakeFetch: typeof fetch = async () =>
-        new Response(JSON.stringify({ total_count: 0, installations: [] }), {
+        new Response(JSON.stringify({ state: "active", role: "member" }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
-      const ids = await listUserAccessibleInstallationIds("t", { fetcher: fakeFetch });
-      expect(ids.size).toBe(0);
+      const ok = await verifyUserCanAdministerInstallation(
+        "ghu_token",
+        0,
+        { accountType: "Organization", accountLogin: "acme", accountGithubId: 880_001 },
+        { fetcher: fakeFetch },
+      );
+      expect(ok).toBe(false);
     });
 
-    it("throws GithubAppApiError on 401 (stale or revoked user token)", async () => {
+    it("Org-type: returns false when state=pending (invite not accepted yet)", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ state: "pending", role: "admin" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const ok = await verifyUserCanAdministerInstallation(
+        "ghu_token",
+        0,
+        { accountType: "Organization", accountLogin: "acme", accountGithubId: 880_001 },
+        { fetcher: fakeFetch },
+      );
+      expect(ok).toBe(false);
+    });
+
+    it("Org-type: returns false on 404 (non-member)", async () => {
+      // GitHub returns 404 (not 200 with role=null) when the user isn't a
+      // member of the org. Treat as clean negative answer, not an error.
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+      const ok = await verifyUserCanAdministerInstallation(
+        "ghu_token",
+        0,
+        { accountType: "Organization", accountLogin: "stranger", accountGithubId: 880_002 },
+        { fetcher: fakeFetch },
+      );
+      expect(ok).toBe(false);
+    });
+
+    it("Org-type: throws GithubAppApiError on 401 (stale or revoked user token)", async () => {
       const fakeFetch: typeof fetch = async () =>
         new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 });
-      await expect(listUserAccessibleInstallationIds("stale", { fetcher: fakeFetch })).rejects.toMatchObject({
-        name: "GithubAppApiError",
-        status: 401,
-      });
-    });
-
-    it("authz semantics: hostile installation_id not in the set is correctly excluded", async () => {
-      // Models the P0-2 hijack attempt — user passes installation_id of an
-      // org they don't admin. /user/installations returns only the orgs
-      // they actually admin, so the .has(hostileId) check returns false
-      // and the OAuth callback drops the install rather than binding it.
-      const fakeFetch: typeof fetch = async () =>
-        new Response(JSON.stringify({ installations: [{ id: 100 }, { id: 200 }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      const ids = await listUserAccessibleInstallationIds("t", { fetcher: fakeFetch });
-      expect(ids.has(100)).toBe(true);
-      expect(ids.has(9999_999)).toBe(false); // attacker's installation_id
+      await expect(
+        verifyUserCanAdministerInstallation(
+          "stale",
+          0,
+          { accountType: "Organization", accountLogin: "acme", accountGithubId: 880_001 },
+          { fetcher: fakeFetch },
+        ),
+      ).rejects.toMatchObject({ name: "GithubAppApiError", status: 401 });
     });
   });
 
