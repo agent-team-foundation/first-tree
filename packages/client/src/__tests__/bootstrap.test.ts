@@ -36,6 +36,20 @@ function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
   };
 }
 
+describe("contextTreeCloneDir", () => {
+  it("isolates local checkouts by repo URL and branch", async () => {
+    const { contextTreeCloneDir } = await import("../runtime/bootstrap.js");
+    const main = contextTreeCloneDir("https://github.com/example/context-tree", "main");
+    const release = contextTreeCloneDir("https://github.com/example/context-tree", "release");
+    const otherOrg = contextTreeCloneDir("https://github.com/other/context-tree", "main");
+
+    expect(main).not.toBe(release);
+    expect(main).not.toBe(otherOrg);
+    expect(main).toContain("context-tree-repos");
+    expect(main.split("/").at(-1)).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
+
 describe("bootstrapWorkspace", () => {
   it("writes identity.json with correct fields", () => {
     const workspace = join(tmpBase, "ws-identity");

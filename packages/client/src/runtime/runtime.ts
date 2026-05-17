@@ -3,7 +3,6 @@ import { ClientConnection } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { AccessTokenProvider } from "../sdk.js";
 import { AgentSlot } from "./agent-slot.js";
-import { syncContextTree } from "./bootstrap.js";
 import type { RuntimeConfig } from "./config.js";
 import { createGitMirrorManager, type GitMirrorManager } from "./git-mirror-manager.js";
 import { getHandlerFactory } from "./handler.js";
@@ -27,12 +26,7 @@ export type AgentRuntimeOptions = {
    * The UpdateManager only engages when both this and `update` are set.
    */
   currentVersion?: string;
-  /**
-   * Optional `User-Agent` forwarded to every per-agent SDK and to the
-   * Context-Tree config fetch in `start()`. Issue #246: without this trace
-   * backends only see Node's default `User-Agent: node` and can't distinguish
-   * installs / CLI versions when investigating refresh storms or auth failures.
-   */
+  /** Optional `User-Agent` forwarded to every per-agent SDK. */
   userAgent?: string;
   /**
    * Self-update config + command-layer callbacks. Grouped so half-wired
@@ -52,7 +46,6 @@ export class AgentRuntime {
   private readonly gitMirrorManager: GitMirrorManager;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly currentVersion: string | undefined;
-  private readonly userAgent: string | undefined;
   private readonly updateHooks: UpdateHooks | undefined;
   private updateManager: UpdateManager | null = null;
   private stopping = false;
@@ -63,7 +56,6 @@ export class AgentRuntime {
     this.shutdownTimeout = options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT;
     this.getAccessToken = options.getAccessToken;
     this.currentVersion = options.currentVersion;
-    this.userAgent = options.userAgent;
     this.updateHooks = options.update;
     this.logger = createLogger("runtime");
 
@@ -136,19 +128,6 @@ export class AgentRuntime {
       this.logger.warn({ err }, "gcOrphanSessionBranches threw — continuing startup");
     }
 
-    const contextTreeLogger = createLogger("context-tree");
-    const contextTreeBinding = await syncContextTree(
-      this.config.server,
-      this.getAccessToken,
-      (msg) => contextTreeLogger.info(msg),
-      this.userAgent,
-    );
-    if (!contextTreeBinding) {
-      this.logger.info(
-        "context tree not configured or sync skipped — agents will start without organizational context",
-      );
-    }
-
     // Attach before connecting so the first welcome frame on a stale Client
     // is acted on rather than missed until the next reconnect.
     if (this.currentVersion && this.updateHooks) {
@@ -174,7 +153,7 @@ export class AgentRuntime {
 
     this.logger.info({ count: this.slots.length }, "starting agents");
 
-    const results = await Promise.allSettled(this.slots.map((slot) => slot.start(contextTreeBinding)));
+    const results = await Promise.allSettled(this.slots.map((slot) => slot.start()));
 
     let failed = 0;
     const failures: Array<{ agentName: string; agentId: string; reason: string }> = [];
