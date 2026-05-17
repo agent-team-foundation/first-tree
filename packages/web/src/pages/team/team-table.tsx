@@ -89,12 +89,12 @@ type Props = {
 };
 
 const COLUMNS = [
-  // Name (220) holds displayName + @handle. The internal NameCell already
-  // truncates both lines with a `title` tooltip on overflow, so 220 covers
-  // the realistic 90th-percentile name pair and longer names degrade
-  // gracefully. Down from 260 — the freed width is redistributed to
-  // Delegate / Manager which were causing 2-line wraps at 160.
-  { key: "name", label: "Name", width: 220 },
+  // Column widths sum to ~870 so the table renders without horizontal
+  // compression inside the shared 960 page canvas (960 − 48 layout padding
+  // − 40 page padding ≈ 872 content width). Every populated cell already
+  // truncates with a `title` tooltip, so realistic long names degrade
+  // gracefully without forcing the column wider.
+  { key: "name", label: "Name", width: 200 },
   // Delegate and Manager are split into separate columns so each header
   // carries exactly one meaning. Human rows fill Delegate (the assistant
   // acting on their behalf) and leave Manager as `—`; agent rows fill
@@ -105,30 +105,15 @@ const COLUMNS = [
   // one column and leaves the other empty — the half-blank pattern reads
   // as section structure, not missing data, and neither column has to
   // mean two things at once.
-  //
-  // 180 (up from 160): the cell renders an AgentChip ("Display Name
-  // @handle") which at 160 wrapped onto two lines for typical agent names
-  // — the bump keeps it on one line and the inner truncate handles the
-  // long tail, mirroring Runs on.
-  { key: "delegate", label: "Delegate", width: 180 },
-  { key: "manager", label: "Manager", width: 180 },
-  // The cell renders `<runtime-provider> @ <host>` in one line — covers
-  // both framework and host together (plain "Runtime" only described the
-  // framework half). Wider than the other middle columns because the
-  // combined `claude-code @ alice-macbook` form runs roughly 25-30 chars;
-  // this wider column fits most everyday cases, and longer corporate
-  // FQDNs gracefully truncate with the `title` tooltip showing full value.
-  // Status (live operational state) is the orthogonal axis and stays in
-  // its own column so config and live state don't share a cell. Both
-  // blank for human rows.
-  { key: "runtime", label: "Runs on", width: 220 },
-  { key: "status", label: "Status", width: 160 },
-  { key: "created", label: "Created", width: 160 },
-  // Middle columns mostly pin to 160-180 for grid rhythm. Runs on opts out
-  // at 220 because its content (provider + host) is denser than the
-  // others. Name stays wider (variable display-name + @handle) and Actions
-  // stays narrow (single kebab icon) — those sit at the content-density
-  // extremes.
+  { key: "delegate", label: "Delegate", width: 140 },
+  { key: "manager", label: "Manager", width: 140 },
+  // Runtime cell renders `<runtime-provider> @ <host>` truncated with a
+  // tooltip — 170 fits the typical `claude-code @ alice-macbook` form on
+  // one line and longer FQDNs ellipsize cleanly. Status (live operational
+  // state) is the orthogonal axis and stays in its own column.
+  { key: "runtime", label: "Runs on", width: 170 },
+  { key: "status", label: "Status", width: 88 },
+  { key: "created", label: "Created", width: 88 },
   { key: "actions", label: "", width: 44 },
 ] as const;
 

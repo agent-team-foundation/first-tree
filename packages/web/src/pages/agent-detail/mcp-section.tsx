@@ -75,10 +75,21 @@ export function McpSection(props: McpSectionProps) {
                 onUndo={() => props.onUndoDelete(item.key)}
                 disabled={props.disabled}
               >
-                <span className="text-caption rounded bg-muted px-1.5 py-0.5 font-mono">{item.value.transport}</span>
-                <span className="font-medium font-mono">{item.value.name}</span>
+                <span className="text-caption rounded bg-muted px-1.5 py-0.5 font-mono shrink-0">
+                  {item.value.transport}
+                </span>
+                <span className="font-medium font-mono shrink-0">{item.value.name}</span>
                 {health && <DenseBadge tone={toolHealthBadgeTone(health)}>{health}</DenseBadge>}
-                <span className="text-caption text-muted-foreground truncate">{describeMcp(item.value)}</span>
+                {/* Long URLs / commands must truncate inside their flex slot;
+                    without flex-1 + min-w-0 the span hugs its content width
+                    and pushes the row past its parent. title surfaces the
+                    full value on hover. */}
+                <span
+                  className="text-caption text-muted-foreground truncate flex-1 min-w-0"
+                  title={describeMcp(item.value)}
+                >
+                  {describeMcp(item.value)}
+                </span>
               </ListRow>
             );
           })
