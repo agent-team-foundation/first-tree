@@ -72,9 +72,7 @@ function broadcast(msg: WsMessage) {
     }
   }
   if (latestQc) {
-    if (msg.type === "notification") {
-      latestQc.invalidateQueries({ queryKey: ["notifications"] });
-    } else if (msg.type === "session:state") {
+    if (msg.type === "session:state") {
       latestQc.invalidateQueries({ queryKey: ["activity"] });
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
       // `MeChatRow.engagedAgentIds` is derived from
@@ -151,13 +149,12 @@ function connect() {
     const isReconnect = reconnectAttempt > 0;
     reconnectAttempt = 0;
     // Catch up on every (re)open — including initial connect after a
-    // sleep / network partition. Without this, push-only consumers like
-    // the notification bell would miss any frame that fired while the WS
-    // was down: the next inbound push would invalidate, but until then the
-    // local cache is stale. Invalidating broadly keeps every push-driven
-    // query (notifications, sessions, chat list) in sync on reconnect.
+    // sleep / network partition. Without this, push-only consumers would
+    // miss any frame that fired while the WS was down: the next inbound
+    // push would invalidate, but until then the local cache is stale.
+    // Invalidating broadly keeps every push-driven query (sessions, chat
+    // list, chat detail) in sync on reconnect.
     if (latestQc) {
-      latestQc.invalidateQueries({ queryKey: ["notifications"] });
       latestQc.invalidateQueries({ queryKey: ["activity"] });
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
       latestQc.invalidateQueries({ queryKey: ["me", "chats"] });

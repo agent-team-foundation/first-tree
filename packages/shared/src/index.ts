@@ -142,6 +142,16 @@ export {
   updateChatSchema,
 } from "./schemas/chat.js";
 export {
+  type ChatGithubEntity,
+  type ChatGithubEntityListResponse,
+  chatGithubEntityListResponseSchema,
+  chatGithubEntitySchema,
+  type GithubEntityBoundVia,
+  type GithubEntityLiveState,
+  githubEntityBoundViaSchema,
+  githubEntityLiveStateSchema,
+} from "./schemas/chat-github-entities.js";
+export {
   CHAT_SOURCES,
   type ChatMetadata,
   type ChatSource,
@@ -412,12 +422,8 @@ export {
 export {
   NOTIFICATION_SEVERITIES,
   NOTIFICATION_TYPES,
-  type Notification,
-  type NotificationQuery,
   type NotificationSeverity,
   type NotificationType,
-  notificationQuerySchema,
-  notificationSchema,
   notificationSeveritySchema,
   notificationTypeSchema,
 } from "./schemas/notification.js";

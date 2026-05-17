@@ -21,32 +21,3 @@ export const NOTIFICATION_SEVERITIES = {
 
 export const notificationSeveritySchema = z.enum(["high", "medium", "low"]);
 export type NotificationSeverity = z.infer<typeof notificationSeveritySchema>;
-
-// -- Notification --
-
-export const notificationSchema = z.object({
-  id: z.string(),
-  organizationId: z.string(),
-  type: notificationTypeSchema,
-  severity: notificationSeveritySchema,
-  agentId: z.string().nullable(),
-  chatId: z.string().nullable(),
-  message: z.string(),
-  read: z.boolean(),
-  createdAt: z.string(),
-});
-export type Notification = z.infer<typeof notificationSchema>;
-
-// -- Notification Query --
-
-export const notificationQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  cursor: z.string().optional(),
-  severity: notificationSeveritySchema.optional(),
-  read: z
-    .enum(["true", "false"])
-    .transform((v) => v === "true")
-    .optional(),
-  agentId: z.string().optional(),
-});
-export type NotificationQuery = z.infer<typeof notificationQuerySchema>;

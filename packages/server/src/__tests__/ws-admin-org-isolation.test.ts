@@ -5,7 +5,6 @@ import WebSocket from "ws";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
-import * as notificationService from "../services/notification.js";
 import { createOrganization, resolveDefaultOrgId } from "../services/organization.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestApp } from "./helpers.js";
@@ -13,16 +12,15 @@ import { createTestApp } from "./helpers.js";
 /**
  * S0 — Admin WebSocket cross-org isolation.
  *
- * Before this slice the admin WS filter fell through a `!orgId` branch that
- * silently broadcast every payload without a top-level organizationId to every
- * connected admin socket regardless of org. Two pieces tighten the contract:
+ * The admin WS broadcaster requires a top-level `organizationId` on every
+ * envelope and only routes the envelope to admin sockets attached to that
+ * org. This test exercises the broadcaster seam directly so the contract
+ * stays under test even as concrete frame types come and go.
  *
- *   1. `notification` envelopes hoist `organizationId` to the top of the payload.
- *   2. `session_state_changes` NOTIFY payloads now carry `organizationId` so the
- *      forwarded `session:state` frame is org-scoped end-to-end.
- *
- * This test asserts that a notification created for org A only reaches the
- * admin socket authenticated as org A — and never org B.
+ *   1. An envelope with `organizationId = orgA` reaches org A's admin
+ *      socket and never org B's.
+ *   2. An envelope missing `organizationId` is dropped — pre-S0 behaviour
+ *      silently fanned such payloads out to every connected admin socket.
  */
 describe("Admin WS — cross-org isolation (S0)", () => {
   let app: FastifyInstance;
@@ -124,7 +122,7 @@ describe("Admin WS — cross-org isolation (S0)", () => {
     await app?.close();
   });
 
-  it("routes a notification for org A only to org A's admin socket", async () => {
+  it("routes an envelope tagged with orgA only to org A's admin socket", async () => {
     const orgAId = await resolveDefaultOrgId(app.db);
     const orgB = await createOrganization(app.db, {
       name: `org-b-${crypto.randomUUID().slice(0, 6)}`,
@@ -138,26 +136,24 @@ describe("Admin WS — cross-org isolation (S0)", () => {
     const wsB = await openAdminSocket(adminB.token, adminB.organizationId);
 
     try {
-      // Start collectors first so the listeners are attached before the
-      // broadcast fires, then kick the notification and await both windows.
       const msgsAPromise = collectMessages(wsA, 1000);
       const msgsBPromise = collectMessages(wsB, 1000);
 
-      await notificationService.createNotification(app.db, {
+      const { broadcastToAdmins } = await import("../services/admin-broadcast.js");
+      broadcastToAdmins({
+        type: "iso:probe",
         organizationId: orgAId,
-        type: "agent_error",
-        severity: "high",
-        message: "Isolation test — org A only",
+        marker: "Isolation test — org A only",
       });
 
       const [receivedA, receivedB] = await Promise.all([msgsAPromise, msgsBPromise]);
 
-      const notesA = receivedA.filter((m) => m.type === "notification");
-      const notesB = receivedB.filter((m) => m.type === "notification");
+      const probesA = receivedA.filter((m) => m.type === "iso:probe");
+      const probesB = receivedB.filter((m) => m.type === "iso:probe");
 
-      expect(notesA).toHaveLength(1);
-      expect(notesA[0]).toMatchObject({ type: "notification", organizationId: orgAId });
-      expect(notesB).toHaveLength(0);
+      expect(probesA).toHaveLength(1);
+      expect(probesA[0]).toMatchObject({ type: "iso:probe", organizationId: orgAId });
+      expect(probesB).toHaveLength(0);
     } finally {
       wsA.close();
       wsB.close();
@@ -179,9 +175,9 @@ describe("Admin WS — cross-org isolation (S0)", () => {
     try {
       const { broadcastToAdmins } = await import("../services/admin-broadcast.js");
       const collected = collectMessages(wsA, 500);
-      broadcastToAdmins({ type: "notification", data: { stray: true } });
+      broadcastToAdmins({ type: "iso:probe", data: { stray: true } });
       const msgs = await collected;
-      expect(msgs.filter((m) => m.type === "notification")).toHaveLength(0);
+      expect(msgs.filter((m) => m.type === "iso:probe")).toHaveLength(0);
     } finally {
       wsA.close();
       await new Promise<void>((r) => wsA.once("close", () => r()));
