@@ -2,6 +2,7 @@ import { Link2 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { Button } from "../../components/ui/button.js";
 import { AppearanceSection } from "./appearance-section.js";
+import { ConfigRow, ConfigSection } from "./flat-section.js";
 import { IdentitySection } from "./identity-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 
@@ -18,17 +19,23 @@ export function ProfileTab() {
         onRefresh={ctx.refreshAgent}
       />
       {ctx.canManageAgent && (
-        <div className="flex justify-end">
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={() => navigate(`/settings/integrations?agent=${ctx.agent.uuid}`)}
-            title="Manage platform bindings in Integrations"
-          >
-            <Link2 className="h-3 w-3" />
-            Manage platform bindings
-          </Button>
-        </div>
+        <ConfigSection
+          eyebrow="profile"
+          title="Platform bindings"
+          action={
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => navigate(`/settings/integrations?agent=${ctx.agent.uuid}`)}
+              title="Manage platform bindings in Integrations"
+            >
+              <Link2 className="h-3 w-3" />
+              Manage
+            </Button>
+          }
+        >
+          <ConfigRow label="Integrations" value="Manage external platform bindings for this agent." />
+        </ConfigSection>
       )}
     </>
   );

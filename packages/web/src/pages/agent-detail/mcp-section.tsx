@@ -6,7 +6,7 @@ import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { ConfigSection } from "./flat-section.js";
 import { ListRow } from "./list-row.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
@@ -46,19 +46,19 @@ export function McpSection(props: McpSectionProps) {
   );
   const activeCount = props.items.filter((i) => i.status !== "deleted").length;
 
+  const action = !props.disabled ? (
+    <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
+      <Plus className="h-3 w-3" /> Add
+    </Button>
+  ) : null;
+
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>MCP servers ({activeCount})</PanelTitle>
-        {!props.disabled && (
-          <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-3 w-3" /> Add
-          </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="space-y-2">
+    <ConfigSection eyebrow="tools" title="MCP servers" count={activeCount} action={action}>
+      <div>
         {props.items.length === 0 ? (
-          <p className="text-body text-muted-foreground">No MCP servers. Add one to extend the agent's tools.</p>
+          <p className="text-body text-muted-foreground" style={{ padding: "var(--sp-3) 0" }}>
+            No MCP servers. Add one to extend the agent's tools.
+          </p>
         ) : (
           props.items.map((item) => {
             const health: McpToolHealth | null = props.toolHealth
@@ -94,7 +94,7 @@ export function McpSection(props: McpSectionProps) {
             );
           })
         )}
-      </PanelBody>
+      </div>
 
       {dialog && (
         <McpDialog
@@ -109,7 +109,7 @@ export function McpSection(props: McpSectionProps) {
           }}
         />
       )}
-    </Panel>
+    </ConfigSection>
   );
 }
 
