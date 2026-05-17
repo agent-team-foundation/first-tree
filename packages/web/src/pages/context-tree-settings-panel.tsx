@@ -14,7 +14,7 @@ import { SettingsSection } from "../components/ui/settings-section.js";
  * binding at startup, existing sessions keep the value they were spun up
  * with. Admins should advise members to restart agents after editing.
  */
-export function ContextTreeSettingsPanel({ isFirst = false }: { isFirst?: boolean }) {
+export function ContextTreeSettingsPanel() {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
 
@@ -58,7 +58,6 @@ export function ContextTreeSettingsPanel({ isFirst = false }: { isFirst?: boolea
     <SettingsSection
       title="Context tree"
       description="Changes apply to new agent sessions. Members should restart agents to pick up updated tree contents."
-      isFirst={isFirst}
     >
       {settingQuery.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>

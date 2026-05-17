@@ -20,7 +20,7 @@ import { SettingsSection } from "../components/ui/settings-section.js";
  * GitHub picker and that lives in the onboarding flow today. A second
  * pass will extract the picker into a reusable component.
  */
-export function SourceReposSettingsPanel({ isFirst = false }: { isFirst?: boolean }) {
+export function SourceReposSettingsPanel() {
   const { organizationId, role } = useAuth();
   const isAdmin = role === "admin";
   const queryClient = useQueryClient();
@@ -61,7 +61,6 @@ export function SourceReposSettingsPanel({ isFirst = false }: { isFirst?: boolea
           : "Repos your team's agents are bound to. Read-only — only admins can edit."
       }
       right={countBadge}
-      isFirst={isFirst}
     >
       {settingQuery.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>

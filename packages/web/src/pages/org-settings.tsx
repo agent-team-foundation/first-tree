@@ -33,9 +33,9 @@ export function OrgSettingsPage() {
 
   return (
     <div>
-      {isAdmin && <TeamIdentityPanel isFirst />}
+      {isAdmin && <TeamIdentityPanel />}
       {isAdmin && <ContextTreeSettingsPanel />}
-      <SourceReposSettingsPanel isFirst={!isAdmin} />
+      <SourceReposSettingsPanel />
     </div>
   );
 }
