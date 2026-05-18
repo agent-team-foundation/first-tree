@@ -2,16 +2,23 @@ import type {
   ContextTreeChangeType,
   ContextTreeNode,
   ContextTreeSnapshot,
+  ContextTreeUsageEvent,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
 import { AlertTriangle, Network, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
 
 const CONTEXT_WINDOW = "7d";
+// Live-feed refetch cadence. The usage feed inside the snapshot is what wants
+// to feel "live" — admins glancing at the page should see timestamps tick and
+// new sessions arrive. 20s = 3 req/min sits comfortably under the 6/min rate
+// limit even with two Context Tabs open simultaneously (4/min combined).
+const CONTEXT_REFETCH_MS = 20_000;
 
 export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTreeSnapshot } = {}) {
   const { organizationId } = useAuth();
@@ -25,6 +32,8 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
       return getContextTreeSnapshot(organizationId, CONTEXT_WINDOW);
     },
     enabled: !preview && !!organizationId,
+    refetchInterval: preview ? false : CONTEXT_REFETCH_MS,
+    refetchIntervalInBackground: false,
   });
 
   const snapshot = previewSnapshot ?? query.data;
@@ -68,6 +77,7 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
               }}
             />
             <ContextSignal snapshot={snapshot} />
+            <ContextUsageFeed snapshot={snapshot} />
           </>
         )
       ) : null}
@@ -210,6 +220,131 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
       </span>
     </div>
   );
+}
+
+const CONTEXT_USAGE_FEED_DEFAULT_LIMIT = 10;
+// Re-render every 30s so "Xm ago" labels tick without a fresh server roundtrip.
+// Pairs with the 15s snapshot refetch above — together they keep the feed
+// feeling like a live stream even when no new events arrive.
+const CONTEXT_USAGE_TIME_TICK_MS = 30_000;
+// CSS animation duration on .fresh — keep this in sync with index.css so the
+// className is removed exactly when the flash finishes (no lingering tint when
+// React re-renders for an unrelated reason).
+const CONTEXT_USAGE_FRESH_MS = 1_200;
+
+function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const navigate = useNavigate();
+  const [showAll, setShowAll] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set());
+  // Tracks the previous event-id set across renders so we can diff for
+  // arrivals on each snapshot refresh without re-flashing on every render.
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const events = snapshot.usage.recentEvents;
+
+  // Tick the displayed `Xm ago` labels every 30s. Cheap — only forces a
+  // re-render of this subtree.
+  useEffect(() => {
+    const handle = setInterval(() => setNow(Date.now()), CONTEXT_USAGE_TIME_TICK_MS);
+    return () => clearInterval(handle);
+  }, []);
+
+  // On every snapshot change, diff against the previously-seen event ids.
+  // Anything new gets the `fresh` className for one animation cycle, then is
+  // removed so a later unrelated re-render does not retrigger the flash.
+  useEffect(() => {
+    const currentIds = new Set(events.map((event) => event.id));
+    const seen = seenIdsRef.current;
+    const newlyArrived = new Set<string>();
+    for (const id of currentIds) {
+      if (!seen.has(id)) newlyArrived.add(id);
+    }
+    seenIdsRef.current = currentIds;
+    // First mount has no "fresh" — every event is just history. Only after
+    // the seen set has been populated once do new ids count as arrivals.
+    if (seen.size === 0 || newlyArrived.size === 0) return;
+    setFreshIds((prev) => {
+      const next = new Set(prev);
+      for (const id of newlyArrived) next.add(id);
+      return next;
+    });
+    const handle = setTimeout(() => {
+      setFreshIds((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        for (const id of newlyArrived) next.delete(id);
+        return next;
+      });
+    }, CONTEXT_USAGE_FRESH_MS);
+    return () => clearTimeout(handle);
+  }, [events]);
+
+  if (events.length === 0) return null;
+
+  const visible = showAll ? events : events.slice(0, CONTEXT_USAGE_FEED_DEFAULT_LIMIT);
+  const remaining = events.length - visible.length;
+
+  return (
+    <section className="context-usage-feed" aria-label="Recent agent usage of the Context Tree">
+      <div className="context-usage-feed-header">
+        <span className="context-usage-feed-live-dot" aria-hidden="true" />
+        <span className="context-usage-feed-live-label">LIVE</span>
+        <span className="context-usage-feed-live-sublabel">· streaming agent activity</span>
+      </div>
+      <ul className="context-usage-feed-list">
+        {visible.map((event) => {
+          // Pin chatId to a local const so the truthiness narrow survives
+          // into the onClick closure — `event.chatId` is `string | null` and
+          // TS does not preserve the narrow across a function boundary.
+          const chatId = event.chatId;
+          const isFresh = freshIds.has(event.id);
+          return (
+            <li key={event.id} className={isFresh ? "context-usage-feed-row is-fresh" : "context-usage-feed-row"}>
+              <span className="context-usage-feed-dot" aria-hidden="true" />
+              <span className="context-usage-feed-text">
+                <span className="context-usage-feed-agent">{event.agentName}</span>
+                <span className="context-usage-feed-action"> used tree </span>
+                {chatId ? (
+                  <button
+                    type="button"
+                    className="context-usage-feed-chat"
+                    onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
+                  >
+                    {chatLabel(event)}
+                  </button>
+                ) : null}
+              </span>
+              <span className="context-usage-feed-time">{relativeTimeLabel(event.createdAt, now)}</span>
+            </li>
+          );
+        })}
+      </ul>
+      {remaining > 0 ? (
+        <button type="button" className="context-usage-feed-more" onClick={() => setShowAll(true)}>
+          Show all {events.length} ›
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+function chatLabel(event: ContextTreeUsageEvent): string {
+  const trimmed = event.chatTitle?.trim();
+  if (trimmed && trimmed.length > 0) return `#${trimmed}`;
+  if (event.chatId) return `#${event.chatId.slice(-6)}`;
+  return "";
+}
+
+function relativeTimeLabel(value: string, nowMs: number): string {
+  const diffMs = nowMs - new Date(value).getTime();
+  if (Number.isNaN(diffMs) || diffMs < 0) return "just now";
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 function LoadingState() {
