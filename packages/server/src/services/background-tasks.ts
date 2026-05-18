@@ -96,6 +96,16 @@ export function createBackgroundTasks(
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
       });
+
+      // Initial adapter / kael reload — fire-and-forget so server.listen() is not
+      // blocked by remote handshakes. Subsequent reloads come from PG NOTIFY
+      // (hot reload path). See docs/server-bootstrap-resilience-design.md.
+      adapterManager.reload().catch((err) => {
+        log.error({ err }, "initial adapter reload failed");
+      });
+      kaelRuntime?.reload().catch((err) => {
+        log.error({ err }, "initial kael reload failed");
+      });
     },
 
     stop() {

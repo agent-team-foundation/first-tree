@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { initConfig, serverConfigSchema } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { buildApp } from "./app.js";
+import { markReady } from "./bootstrap-state.js";
+import { runStage } from "./bootstrap-utils.js";
 import type { Config } from "./config.js";
 import { runMigrations } from "./db/migrate.js";
-import { applyLoggerConfig, createLogger, initTelemetry, shutdownTelemetry } from "./observability/index.js";
+import { applyLoggerConfig, createLogger, initTelemetry, shutdownTelemetry, withSpan } from "./observability/index.js";
 
 const log = createLogger("Bootstrap");
 
@@ -34,16 +36,29 @@ async function main() {
   // bootstrap (e.g. notifier.start) will then be captured. instanceId is
   // carried as service.instance.id so replicas are distinguishable in the
   // trace backend.
-  await initTelemetry(serverConfig.observability.tracing, config.instanceId);
+  await runStage("initTelemetry", () => initTelemetry(serverConfig.observability.tracing, config.instanceId), 10_000);
 
-  // Run Drizzle migrations before the app comes up. Idempotent under
-  // multi-replica startup (Drizzle journal table); cold-start cost is
-  // a few hundred ms when there's nothing new to apply.
-  const tableCount = await runMigrations(serverConfig.database.url);
-  log.info({ tableCount }, "migrations applied");
+  // Wrap post-telemetry stages in a `server.bootstrap` root span so Logfire
+  // shows a single bootstrap flamegraph. `initTelemetry` itself can't be
+  // traced — it's the call that wires up the tracer — and is covered by the
+  // stage logs instead. See server-bootstrap-resilience-design.md §3 (T8).
+  const app = await withSpan("server.bootstrap", { "service.instance.id": config.instanceId }, async () => {
+    // Run Drizzle migrations before the app comes up. Idempotent under
+    // multi-replica startup (Drizzle journal table); cold-start cost is
+    // a few hundred ms when there's nothing new to apply. The 20s budget
+    // matches the Dockerfile HEALTHCHECK start-period so a migration that
+    // truly exceeds it fails the boot fast rather than letting docker
+    // judge unhealthy mid-migration. If a future migration is known to
+    // run longer, raise both this and the HEALTHCHECK start-period
+    // together.
+    const tableCount = await runStage("runMigrations", () => runMigrations(serverConfig.database.url), 20_000);
+    log.info({ tableCount }, "migrations applied");
 
-  const app = await buildApp(config);
-  await app.listen({ host: config.server.host, port: config.server.port });
+    const built = await runStage("buildApp", () => buildApp(config), 30_000);
+    await runStage("appListen", () => built.listen({ host: config.server.host, port: config.server.port }), 10_000);
+    return built;
+  });
+  markReady();
   log.info(`server listening on http://${config.server.host}:${config.server.port}`);
 
   const shutdown = async (signal: string) => {
