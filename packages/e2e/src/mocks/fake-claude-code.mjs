@@ -166,6 +166,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fake-claude-code: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+  process.stderr.write(`fake-claude-code: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
   process.exit(2);
 });

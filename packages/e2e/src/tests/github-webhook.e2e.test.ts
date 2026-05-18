@@ -49,7 +49,7 @@ describe("M2 github-webhook — signed POST → server side-effects", () => {
     // bypassing the mock and crafting the request ourselves — easier than
     // adding a knob to the mock just for the failure path.
     const badBody = Buffer.from(JSON.stringify({ zen: "tampered" }), "utf8");
-    const wrongSignature = "sha256=" + "a".repeat(64);
+    const wrongSignature = `sha256=${"a".repeat(64)}`;
     const res = await fetch(`${handle.serverBaseUrl}/api/v1/webhooks/github-app`, {
       method: "POST",
       headers: {

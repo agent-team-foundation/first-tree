@@ -79,9 +79,7 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
   const pg = new PgClient({ connectionString: opts.databaseUrl });
   await pg.connect();
   try {
-    const orgRow = await pg.query<{ id: string }>(
-      "SELECT id FROM organizations WHERE name = 'default' LIMIT 1",
-    );
+    const orgRow = await pg.query<{ id: string }>("SELECT id FROM organizations WHERE name = 'default' LIMIT 1");
     const resolved = orgRow.rows[0]?.id;
     if (!resolved) {
       throw new Error(
@@ -102,10 +100,12 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
     // register? If no, leave it to the DB default.
     await pg.query("BEGIN");
     try {
-      await pg.query(
-        "INSERT INTO users (id, username, password_hash, display_name) VALUES ($1, $2, $3, $4)",
-        [userId, username, E2E_PASSWORD_SENTINEL, "E2E Test User"],
-      );
+      await pg.query("INSERT INTO users (id, username, password_hash, display_name) VALUES ($1, $2, $3, $4)", [
+        userId,
+        username,
+        E2E_PASSWORD_SENTINEL,
+        "E2E Test User",
+      ]);
 
       // The human agent is left nameless (`agents.name` is nullable) and
       // sourceless. `admin-api` would be misleading — this row didn't go
@@ -131,10 +131,11 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
     // Pre-seed the clients row so the spawned CLI's WS register CLAIMS this
     // id rather than INSERTing a fresh row. status / last_seen_at have
     // defaults; the WS handshake flips status to 'connected' on register.
-    await pg.query(
-      "INSERT INTO clients (id, user_id, organization_id) VALUES ($1, $2, $3)",
-      [clientId, userId, organizationId],
-    );
+    await pg.query("INSERT INTO clients (id, user_id, organization_id) VALUES ($1, $2, $3)", [
+      clientId,
+      userId,
+      organizationId,
+    ]);
   } finally {
     await pg.end();
   }
@@ -167,11 +168,9 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
   // and uses our pre-seeded clients.id — otherwise it would invent a new
   // client_<rand> and any test that pins an agent to `clientId` would miss
   // the WS push.
-  writeFileSync(
-    resolve(configDir, "client.yaml"),
-    `server:\n  url: ${opts.serverUrl}\nclient:\n  id: ${clientId}\n`,
-    { mode: 0o600 },
-  );
+  writeFileSync(resolve(configDir, "client.yaml"), `server:\n  url: ${opts.serverUrl}\nclient:\n  id: ${clientId}\n`, {
+    mode: 0o600,
+  });
 
   return {
     userId,

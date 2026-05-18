@@ -20,7 +20,10 @@ import { FAKE_CLAUDE_CODE_EXECUTABLE } from "../framework/agent-mock.js";
  * No globalSetup dependencies — the SDK + fake binary are self-contained.
  */
 
-async function collect(prompt: string, opts?: Partial<Options>): Promise<{ assistantText: string[]; result: string | null }> {
+async function collect(
+  prompt: string,
+  opts?: Partial<Options>,
+): Promise<{ assistantText: string[]; result: string | null }> {
   const inputs: SDKUserMessage[] = [
     {
       type: "user",

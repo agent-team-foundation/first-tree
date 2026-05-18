@@ -8,7 +8,7 @@ import { type GitHubAppFixture, makeGitHubAppFixture } from "./github-app-fixtur
 import { makeRunIdentity, type RunIdentity } from "./isolation.js";
 import { type ComponentLogger, createComponentLogger, dumpTailToConsole } from "./logging.js";
 import { allocatePorts } from "./ports.js";
-import { type ServerProcess, spawnServer, type ServerSpawnOptions } from "./server-process.js";
+import { type ServerProcess, type ServerSpawnOptions, spawnServer } from "./server-process.js";
 
 /**
  * M2 boots `pg + server` and — when `withClient: true` — provisions a real
