@@ -118,3 +118,34 @@ jobs:
         run: npm publish --tag latest --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Send feishu message
+        if: always()
+        env:
+          ACTIONS_FEISHU_TAG: "v1.3.1"
+          INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
+          INPUT_MESSAGE_TYPE: "post"
+          INPUT_TITLE: ${{ job.status == 'success' && 'npm latest publish ✅ 成功' || 'npm latest publish ❌ 失败' }}
+          INPUT_CONTENT: |
+            发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
+            Package: ${{ steps.release.outputs.package_name || '@agent-team-foundation/first-tree-hub' }}
+            Version: ${{ steps.release.outputs.package_version || 'unresolved' }}
+            Install: npm install -g @agent-team-foundation/first-tree-hub@latest
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "${INPUT_WEBHOOK:-}" ]]; then
+            echo "::warning::RELEASE_BOT_URL is not configured; skipping Feishu notification."
+            exit 0
+          fi
+
+          if ! wget -q "https://github.com/xiachufang/actions-feishu/releases/download/${ACTIONS_FEISHU_TAG}/linux-amd64-actions-feishu.tar.gz"; then
+            echo "::warning::Failed to download actions-feishu."
+            exit 0
+          fi
+          if ! tar zxf linux-amd64-actions-feishu.tar.gz feishu; then
+            echo "::warning::Failed to extract actions-feishu."
+            exit 0
+          fi
+          if ! ./feishu; then
+            echo "::warning::Failed to send Feishu notification."
+          fi
