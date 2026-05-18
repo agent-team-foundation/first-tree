@@ -7,6 +7,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { backfillSilentContextForNewParticipants } from "./inbox.js";
 import { resolveChatTitle } from "./me-chat.js";
@@ -142,6 +143,8 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
       name: agents.name,
       displayName: agents.displayName,
       type: agents.type,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
@@ -160,9 +163,10 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
   const firstMessagePreview = firstMessageRow ? extractSummary(firstMessageRow.content) : null;
   const title = resolveChatTitle(chat.topic, firstMessagePreview, participantRows, selfAgentId ?? "");
 
-  // Preserve the resolved name / displayName / type fields on the wire
-  // (PR #402 identity-rendering contract). Earlier wire consumers also
-  // continue to see chatId / agentId / role / mode / joinedAt.
+  // Preserve the resolved name / displayName / type / avatar fields on
+  // the wire (PR #402 identity-rendering contract; avatar fields added
+  // so the chat-detail surface renders manager-configured hue + image
+  // — see `meChatParticipantSchema` for the matching field on the rail).
   const participants = participantRows.map((p) => ({
     chatId,
     agentId: p.agentId,
@@ -172,6 +176,8 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
     name: p.name,
     displayName: p.displayName,
     type: p.type,
+    avatarColorToken: p.avatarColorToken ?? null,
+    avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
   }));
 
   // Match the chatDetailSchema wire contract — the chat-first workspace
@@ -250,6 +256,8 @@ export async function listChatParticipantsWithNames(db: Database, chatId: string
       name: agents.name,
       displayName: agents.displayName,
       type: agents.type,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))

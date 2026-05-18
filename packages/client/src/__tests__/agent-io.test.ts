@@ -20,6 +20,8 @@ function mkParticipant(agentId: string, name: string | null, displayName?: strin
     // back to a synthetic label when the caller doesn't provide one.
     displayName: displayName ?? `agent-${agentId}`,
     type: "autonomous_agent",
+    avatarColorToken: null,
+    avatarImageUrl: null,
   };
 }
 

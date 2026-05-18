@@ -1016,9 +1016,22 @@ export function ChatView({
    * `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
    */
   const chatParticipantById = useMemo(() => {
-    const map = new Map<string, { name: string | null; displayName: string }>();
+    const map = new Map<
+      string,
+      {
+        name: string | null;
+        displayName: string;
+        avatarImageUrl: string | null;
+        avatarColorToken: string | null;
+      }
+    >();
     for (const p of chatDetail?.participants ?? []) {
-      map.set(p.agentId, { name: p.name, displayName: p.displayName });
+      map.set(p.agentId, {
+        name: p.name,
+        displayName: p.displayName,
+        avatarImageUrl: p.avatarImageUrl ?? null,
+        avatarColorToken: p.avatarColorToken ?? null,
+      });
     }
     return map;
   }, [chatDetail?.participants]);
@@ -1047,16 +1060,27 @@ export function ChatView({
   const chatScopedAgentIdentity = useCallback(
     (
       id: string | null | undefined,
-    ): { name: string | null; displayName: string; avatarImageUrl: string | null } | null => {
+    ): {
+      name: string | null;
+      displayName: string;
+      avatarImageUrl: string | null;
+      avatarColorToken: string | null;
+    } | null => {
       if (!id) return null;
       const p = chatParticipantById.get(id);
       if (p) {
-        // Labels come from the chat-membership-authoritative source, but
-        // the avatar URL is org-scoped — pull it from the identity map
-        // when present. A private agent visible only through chat
-        // membership won't have an `agentIdentity` entry; we surface a
-        // null URL so the chip falls back to color + initial.
-        return { name: p.name, displayName: p.displayName, avatarImageUrl: agentIdentity(id)?.avatarImageUrl ?? null };
+        // Labels come from the chat-membership-authoritative source. The
+        // avatar fields are now projected onto `ChatParticipantDetail`
+        // too (server JOIN on agents), so prefer the chat-scoped value
+        // and only fall back to the org-scoped identity map when the
+        // chat row is missing them (older server build, version skew).
+        const ident = agentIdentity(id);
+        return {
+          name: p.name,
+          displayName: p.displayName,
+          avatarImageUrl: p.avatarImageUrl ?? ident?.avatarImageUrl ?? null,
+          avatarColorToken: p.avatarColorToken ?? ident?.avatarColorToken ?? null,
+        };
       }
       return agentIdentity(id);
     },
@@ -1897,10 +1921,15 @@ function ParticipantsHeader({
   /** Identity resolver covering ALL agents (incl. the viewer's own,
    *  which `mentionCandidates` excludes). Lets the chip row label
    *  self correctly instead of falling back to a UUID prefix. The
-   *  `avatarImageUrl` field is consumed for the chip's leading avatar. */
-  agentIdentity: (
-    uuid: string | null | undefined,
-  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
+   *  `avatarImageUrl` and `avatarColorToken` fields are threaded into
+   *  the chip's leading avatar so a manager-configured image / hue
+   *  shows up here as well as on the left-rail row. */
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
   onAdded: () => void;
   readOnly?: boolean;
 }) {
@@ -1952,7 +1981,13 @@ function ParticipantsHeader({
               gap: 6,
             }}
           >
-            <RealAvatar src={ident?.avatarImageUrl ?? null} name={label} seed={id} size={16} />
+            <RealAvatar
+              src={ident?.avatarImageUrl ?? null}
+              name={label}
+              seed={id}
+              colorToken={ident?.avatarColorToken ?? null}
+              size={16}
+            />
             {label}
           </span>
         );
