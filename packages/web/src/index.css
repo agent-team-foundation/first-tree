@@ -1025,9 +1025,10 @@
  * Colored avatar disc with the agent's initials. The hue comes from
  * resolveAvatarHue() (manager-set token, or deterministic hash of
  * agentId) so the same agent shows the same disc everywhere in the
- * dashboard. Initials are a fallback for the rare "agent has no
- * uploaded avatar image" path; if we ever decide to render the real
- * image, only the markup changes — this class stays as the chip frame.
+ * dashboard. Token / typography are kept in lock-step with the inline
+ * styles in chat-row-avatar.tsx's SingleAvatar — same `--fg-on-vivid`
+ * foreground and `letter-spacing: -0.02em` tightening — so a future
+ * design tweak to one surface ports to the other without re-deriving.
  */
 .context-usage-feed-avatar {
   width: 22px;
@@ -1036,14 +1037,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--fg-on-vivid);
   font-weight: 700;
   font-size: 10px;
-  letter-spacing: 0;
+  line-height: 1;
+  letter-spacing: -0.02em;
   flex: 0 0 auto;
-  /* Same anti-aliasing trick the chat-row avatars use for legibility on
-     light backgrounds — text shadow keeps the 10px initials crisp. */
-  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
 }
 
 .context-usage-feed-text {
