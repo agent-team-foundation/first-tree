@@ -14,6 +14,7 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     type: overrides.type ?? "direct",
     membershipKind: overrides.membershipKind ?? "participant",
     source: overrides.source ?? "manual",
+    entityType: overrides.entityType ?? null,
     title: overrides.title ?? overrides.id,
     topic: overrides.topic ?? null,
     participants: overrides.participants ?? [],
@@ -118,14 +119,19 @@ describe("groupRows — recency", () => {
 describe("groupRows — source", () => {
   it("buckets rows by ChatSource in canonical order", () => {
     const rows = [
-      row({ id: "i", source: "github_issue", lastMessageAt: offsetIso(-1) }),
+      row({ id: "g1", source: "github", entityType: "issue", lastMessageAt: offsetIso(-1) }),
       row({ id: "m", source: "manual", lastMessageAt: offsetIso(-1) }),
-      row({ id: "p", source: "github_pull_request", lastMessageAt: offsetIso(-1) }),
+      row({ id: "g2", source: "github", entityType: "pull_request", lastMessageAt: offsetIso(-1) }),
+      row({ id: "f", source: "feishu", lastMessageAt: offsetIso(-1) }),
     ];
     const buckets = groupRows(rows, "source", NOW);
     // Canonical order is the one declared inside `group-rows.ts`:
-    // manual → PR → issue → discussion → commit → feishu.
-    expect(buckets.map((b) => b.key)).toEqual(["manual", "github_pull_request", "github_issue"]);
+    // manual → github → feishu.
+    expect(buckets.map((b) => b.key)).toEqual(["manual", "github", "feishu"]);
+    // Both github rows land in the single `github` bucket regardless
+    // of inner entityType — the popover collapse is a per-origin axis,
+    // not a per-entity one.
+    expect(buckets.find((b) => b.key === "github")?.rows.length).toBe(2);
   });
 
   it("omits source buckets with no rows", () => {
@@ -133,5 +139,38 @@ describe("groupRows — source", () => {
     const buckets = groupRows(rows, "source", NOW);
     expect(buckets).toHaveLength(1);
     expect(buckets[0]?.key).toBe("manual");
+  });
+});
+
+describe("groupRows — type", () => {
+  it("buckets direct vs group chats with IM-style labels", () => {
+    const rows = [
+      row({ id: "d1", type: "direct", lastMessageAt: offsetIso(-1) }),
+      row({ id: "g1", type: "group", lastMessageAt: offsetIso(-1) }),
+      row({ id: "d2", type: "direct", lastMessageAt: offsetIso(-1) }),
+    ];
+    const buckets = groupRows(rows, "type", NOW);
+    expect(buckets.map((b) => b.key)).toEqual(["direct", "group"]);
+    expect(buckets[0]?.label).toBe("1:1");
+    expect(buckets[1]?.label).toBe("Team");
+    expect(buckets[0]?.rows.length).toBe(2);
+    expect(buckets[1]?.rows.length).toBe(1);
+  });
+
+  it("omits type buckets with no rows", () => {
+    const rows = [row({ id: "d", type: "direct", lastMessageAt: offsetIso(-1) })];
+    const buckets = groupRows(rows, "type", NOW);
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0]?.key).toBe("direct");
+  });
+
+  it("sinks unknown chat type into an Other bucket so the row stays visible", () => {
+    const rows = [
+      row({ id: "u", type: "future-channel-kind", lastMessageAt: offsetIso(-1) }),
+      row({ id: "d", type: "direct", lastMessageAt: offsetIso(-1) }),
+    ];
+    const buckets = groupRows(rows, "type", NOW);
+    expect(buckets.map((b) => b.key)).toEqual(["direct", "other"]);
+    expect(buckets[1]?.label).toBe("Other");
   });
 });
