@@ -1,5 +1,6 @@
 import { importPKCS8, SignJWT } from "jose";
 import type { GithubProfile } from "./auth-identity.js";
+import { GITHUB_API_BASE } from "./github-api-base.js";
 
 /**
  * GitHub App service helpers. Two surfaces that ride on top of an App's
@@ -45,14 +46,13 @@ const APP_JWT_EXPIRY = "9m";
  */
 const APP_JWT_IAT_SKEW_SECONDS = 60;
 
-const APP_INSTALLATION_TOKEN_URL = (id: number) => `https://api.github.com/app/installations/${id}/access_tokens`;
-const APP_INSTALLATION_URL = (id: number) => `https://api.github.com/app/installations/${id}`;
+const APP_INSTALLATION_TOKEN_URL = (id: number) => `${GITHUB_API_BASE}/app/installations/${id}/access_tokens`;
+const APP_INSTALLATION_URL = (id: number) => `${GITHUB_API_BASE}/app/installations/${id}`;
 const OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
-const USER_API_URL = "https://api.github.com/user";
-const USER_EMAILS_API_URL = "https://api.github.com/user/emails";
-const USER_MEMBERSHIPS_API_URL = (org: string) =>
-  `https://api.github.com/user/memberships/orgs/${encodeURIComponent(org)}`;
+const USER_API_URL = `${GITHUB_API_BASE}/user`;
+const USER_EMAILS_API_URL = `${GITHUB_API_BASE}/user/emails`;
+const USER_MEMBERSHIPS_API_URL = (org: string) => `${GITHUB_API_BASE}/user/memberships/orgs/${encodeURIComponent(org)}`;
 
 /**
  * Errors from any GitHub API call this module makes. Carries the HTTP
