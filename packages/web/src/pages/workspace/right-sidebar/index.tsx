@@ -1,6 +1,5 @@
 import { X } from "lucide-react";
 import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
-import { ChatActionsSection } from "./chat-actions-section.js";
 import { GitHubSection } from "./github-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 
@@ -17,8 +16,11 @@ import { ParticipantsSection } from "./participants-section.js";
  *      legacy AgentRow capability).
  *   2. GitHub bindings — read-only list of PRs / Issues bound to this
  *      chat. Hidden entirely when there are no bindings.
- *   3. Chat actions — Archive / Delete, reusing the same
- *      `patchChatEngagement` mutation as the conversation-list row menu.
+ *
+ * Archive / Delete are intentionally NOT in this rail — the
+ * conversation-list row kebab (row-engagement-menu.tsx) is the single
+ * canonical entry, so the sidebar copy that used to live here was just
+ * duplication.
  */
 export function ChatRightSidebar({
   chatId,
@@ -38,12 +40,8 @@ export function ChatRightSidebar({
   } | null;
   onAdded: () => void;
   onClose: () => void;
-  /** Watcher mode: hide write surfaces. Archive / Delete in
-   *  ChatActionsSection are per-caller engagement mutations (not
-   *  chat-level moderation), so the same `!readOnly` gate the
-   *  conversation-list row menu implicitly uses (only speakers see
-   *  the kebab) is the right level here too — no separate admin
-   *  check, the rail Chat actions stay symmetric with the row menu. */
+  /** Watcher mode: hide write surfaces. Currently gates the inline
+   *  "Add participant" affordance inside ParticipantsSection. */
   readOnly: boolean;
 }) {
   return (
@@ -89,7 +87,6 @@ export function ChatRightSidebar({
           readOnly={readOnly}
         />
         <GitHubSection chatId={chatId} />
-        {readOnly ? null : <ChatActionsSection chatId={chatId} />}
       </div>
     </aside>
   );

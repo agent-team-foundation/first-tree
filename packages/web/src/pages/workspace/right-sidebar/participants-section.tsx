@@ -22,11 +22,14 @@ import { AgentRow } from "./agent-row.js";
  * Remove / Change role are deferred to a future iteration alongside the
  * missing backend routes for member-side participant removal).
  *
- * The "+ Add participant" affordance at the bottom mirrors the header
- * quick-add icon — both go through the same `addMeChatParticipants`
- * mutation and the same one-way-door notice (membership is currently
- * non-revocable; see chat-view.tsx ParticipantsHeader for the canonical
- * inline copy and the design-doc reference).
+ * The bottom "Add" affordance mirrors the header quick-add icon —
+ * both go through the same `addMeChatParticipants` mutation.
+ * Membership is currently non-revocable; only the header dropdown
+ * still surfaces the one-way-door notice inline (see chat-view.tsx
+ * ParticipantsHeader for the canonical copy and the design-doc
+ * reference). The sidebar dropdown drops the notice — users opening
+ * the sidebar are already in management mode and the repeated banner
+ * was visual noise.
  */
 export function ParticipantsSection({
   chatId,
@@ -154,11 +157,18 @@ function HumanRow({ participant }: { participant: ChatParticipantDetail }) {
 }
 
 /**
- * Inline "+ Add participant" button that opens a dropdown of org-wide
- * addable agents — same data source as the header quick-add icon
- * (`addableCandidates` derived in chat-view). The pick triggers the
- * shared `addMeChatParticipants` mutation; the v1 one-way-door notice
- * lives at the top of the dropdown so users see it before they pick.
+ * Inline "Add" row at the bottom of the Participants section. Visually
+ * folds into the participant list — same row padding and an avatar-sized
+ * dashed-circle stand-in (so the left edge lines up with HumanRow /
+ * AgentRow) so the eye reads it as the list's next row, not a separate
+ * button.
+ *
+ * States:
+ *   - default:  "Add"        (clickable, opens the picker dropdown)
+ *   - pending:  "Adding…"    (spinner in the slot, disabled)
+ *   - all in:   "All added"  (disabled, dimmed, no dropdown)
+ *
+ * Shares `addMeChatParticipants` with the header quick-add icon.
  */
 function AddParticipantInlineButton({
   chatId,
@@ -187,6 +197,24 @@ function AddParticipantInlineButton({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
+  // Esc must close the dropdown without leaking to chat-view's
+  // sidebar-level Esc handler. The trigger button keeps focus while the
+  // menu is open, so a React-level handler scoped to the menu div never
+  // sees the keystroke. Attaching to `document` in capture phase fires
+  // before chat-view's bubble-phase listener, so stopPropagation here
+  // peels off only the dropdown and leaves a closed dropdown's Esc free
+  // to bubble and collapse the sidebar as before.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("keydown", handler, true);
+    return () => document.removeEventListener("keydown", handler, true);
+  }, [open]);
 
   const addMut = useMutation({
     mutationFn: (agentId: string) => addMeChatParticipants(chatId, { participantIds: [agentId] }),
@@ -200,7 +228,9 @@ function AddParticipantInlineButton({
     () => candidates.filter((c) => !participantIds.includes(c.agentId)),
     [candidates, participantIds],
   );
-  const disabled = outsideCandidates.length === 0 || addMut.isPending;
+  const allAdded = outsideCandidates.length === 0;
+  const disabled = allAdded || addMut.isPending;
+  const label = addMut.isPending ? "Adding…" : allAdded ? "All added" : "Add";
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
@@ -212,63 +242,53 @@ function AddParticipantInlineButton({
         aria-expanded={open}
         className="flex w-full items-center transition-colors hover:bg-[var(--bg-hover)]"
         style={{
-          gap: "var(--sp-2)",
+          gap: "var(--sp-2_5)",
           padding: "var(--sp-1_75) var(--sp-2)",
           borderRadius: "var(--radius-input)",
-          border: "var(--hairline) solid var(--border)",
+          border: 0,
           background: "transparent",
-          color: disabled ? "var(--fg-4)" : "var(--fg-2)",
+          color: disabled ? "var(--fg-4)" : "var(--fg-3)",
           cursor: disabled ? "not-allowed" : "pointer",
+          opacity: allAdded ? 0.55 : 1,
         }}
-        title={outsideCandidates.length === 0 ? "All available agents are already in this chat" : "Add participant"}
       >
-        {addMut.isPending ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-        ) : (
-          <Plus className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <span className="text-body">{addMut.isPending ? "Adding…" : "Add participant"}</span>
+        {/* Dashed-circle avatar stand-in — keeps the row left edge
+            aligned with the avatars on participant rows above. */}
+        <span
+          aria-hidden="true"
+          className="flex shrink-0 items-center justify-center"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 999,
+            border: "var(--hairline) dashed var(--border)",
+            color: "inherit",
+          }}
+        >
+          {addMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+        </span>
+        <span className="text-body">{label}</span>
       </button>
-      {open && outsideCandidates.length > 0 && (
+      {open && !allAdded && (
         <div
           role="menu"
           aria-label="Add participant"
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
-              setOpen(false);
-            }
-          }}
-          className="absolute z-20 max-h-72 overflow-auto rounded-md border shadow-lg"
+          className="absolute z-20 max-h-72 overflow-auto border shadow-lg"
           style={{
             bottom: "calc(100% + var(--sp-1))",
             left: 0,
             right: 0,
             background: "var(--bg-raised)",
             borderColor: "var(--border)",
+            borderRadius: "var(--radius-input)",
           }}
         >
-          <div
-            role="note"
-            className="text-caption"
-            style={{
-              padding: "var(--sp-1) var(--sp-3)",
-              color: "var(--fg-3)",
-              borderBottom: "var(--hairline) solid var(--border-faint)",
-              background: "var(--bg-sunken)",
-              whiteSpace: "normal",
-              lineHeight: 1.4,
-            }}
-          >
-            Adding is a one-way door — V1 has no remove flow yet.
-          </div>
           {(() => {
             const ambiguous = ambiguousDisplayNames(outsideCandidates);
             return outsideCandidates.map((cand) => {
               const ident = agentIdentity(cand.agentId);
               const avatarUrl = ident?.avatarImageUrl ?? null;
-              const label = cand.displayName ?? cand.name ?? cand.agentId.slice(0, 8);
+              const fallback = cand.displayName ?? cand.name ?? cand.agentId.slice(0, 8);
               return (
                 <button
                   key={cand.agentId}
@@ -278,14 +298,14 @@ function AddParticipantInlineButton({
                   disabled={addMut.isPending}
                   className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
                   style={{
-                    gap: "var(--sp-2)",
-                    padding: "var(--sp-1_5) var(--sp-3)",
+                    gap: "var(--sp-2_5)",
+                    padding: "var(--sp-1_75) var(--sp-2)",
                     border: 0,
                     background: "transparent",
                     cursor: addMut.isPending ? "default" : "pointer",
                   }}
                 >
-                  <RealAvatar src={avatarUrl} name={label} seed={cand.agentId} size={20} />
+                  <RealAvatar src={avatarUrl} name={fallback} seed={cand.agentId} size={28} />
                   <MentionLabel candidate={cand} ambiguous={ambiguous} />
                 </button>
               );
