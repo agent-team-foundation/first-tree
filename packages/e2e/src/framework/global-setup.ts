@@ -3,17 +3,18 @@ import { HANDLE_PATH } from "./current-handle.js";
 import { startRunWorld, stopRunWorld } from "./lifecycle.js";
 
 /**
- * Vitest globalSetup hook. Boots one shared `pg + server` per vitest run
- * and (when M2 lands the connect-token helper) also a `client`. Tests use
- * HTTP / WS to talk to that world. The world handle is dumped to
- * `.e2e-runs/current.json` so individual tests can pick up `baseUrl` / port
- * info without going through globalThis hacks.
+ * Vitest globalSetup hook. Boots one shared `pg + server [+ client]` per
+ * vitest run. Whether the spawned client comes up is gated by
+ * `E2E_WITH_CLIENT=1` so the existing smoke test (M1) keeps the cheaper
+ * server-only path while messaging / github-webhook / agent-runtime tests
+ * opt into a real authenticated client.
  *
- * M1 default: server-only. Flip `withClient: true` in M2 once credentials
- * provisioning is wired up — see `lifecycle.ts` StartRunOptions.
+ * The world handle is dumped to `.e2e-runs/current.json`; individual tests
+ * read it via `readCurrentHandle()` and reach into HTTP / WS / PG directly.
  */
 export default async function setup(): Promise<() => Promise<void>> {
-  const world = await startRunWorld({ withClient: false });
+  const withClient = process.env.E2E_WITH_CLIENT === "1";
+  const world = await startRunWorld({ withClient });
   writeFileSync(
     HANDLE_PATH,
     JSON.stringify(
@@ -22,6 +23,9 @@ export default async function setup(): Promise<() => Promise<void>> {
         serverBaseUrl: world.server.baseUrl,
         databaseUrl: world.pg.databaseUrl,
         clientHome: world.identity.home,
+        jwtSecret: world.jwtSecret,
+        githubWebhookSecret: world.githubApp.webhookSecret,
+        credentials: world.credentials,
       },
       null,
       2,

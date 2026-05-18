@@ -108,3 +108,65 @@ const claudeCodeExecutable =
 | Three-track LLM interception spike runtime validation | Not exercised in M1 (agent runtime not driven) | Deferred to M2 entry condition |
 
 No proposal-breaking finding. M1 proceeds.
+
+---
+
+## M2 agent-mock spike outcome (added 2026-05-18, post-M2 first segment)
+
+Per proposal §九 / G1, M2 was supposed to run the three-track interception
+spike (fake binary / `ANTHROPIC_BASE_URL` / `HTTP_PROXY`) and freeze the
+first one that worked. **Track 1 (fake binary) wins on the first try** —
+no need to exercise the other two:
+
+- **What we built**: `src/mocks/fake-claude-code.mjs` — a 130-line Node
+  script that reads `--input-format stream-json` on stdin and emits
+  `--output-format stream-json` on stdout. Handles `--session-id`,
+  `--model`, ignores all other flags. Env knobs for canned reply / induced
+  failures so tests can drive both happy and error paths without rebuilding.
+- **Wire surface**: `framework/agent-mock.ts` exposes
+  `FAKE_CLAUDE_CODE_EXECUTABLE` — consumers point either
+  `CLAUDE_CODE_EXECUTABLE` env or the SDK's `pathToClaudeCodeExecutable`
+  option at it.
+- **Validation**: `src/tests/agent-runtime.e2e.test.ts` drives
+  `@anthropic-ai/claude-agent-sdk@0.2.84`'s `query()` against the fake
+  binary directly. Confirms the SDK accepts our `system:init` → `assistant`
+  → `result:success` sequence and surfaces the assistant text + final
+  result string back to the caller. 2/2 green.
+
+### What is NOT yet covered (deferred to M3)
+
+The M2 test exercises the agent-mock at the **SDK layer**, not the **hub
+client runtime layer**. A full hub round-trip — chat-send → server inbox →
+client WS push → AgentSlot dispatch → claude-code handler → fake binary →
+assistant response back into chat — needs:
+
+1. **Agent yaml materialisation**: the client runtime loads agents from
+   `${HOME}/config/agents/<name>.yaml`. credentials helper plants the
+   PG row + `client.yaml`, but not the per-agent file. Adding it requires
+   knowing the exact config shape `agentConfigSchema` expects — touching
+   that surface is M3 work because the schema changes routinely as runtime
+   config evolves (model, prompt, MCP, env, gitRepos, ...).
+2. **`agent:pinned` reaction path**: even with the agent yaml, the client's
+   reaction to a server-pushed `agent:pinned` for an agent not in the
+   local agents dir is "log a warning and skip" rather than "auto-create
+   slot". Closing that gap is its own change.
+3. **Workspace bootstrap**: the claude-code handler calls
+   `bootstrapWorkspace()` which inits a git repo, fetches context-tree
+   docs, installs the first-tree integration. For e2e this either needs to
+   be stubbed out (an env flag) or the test runs the real thing against a
+   throwaway dir — both are M3 design calls.
+
+Recording this gap explicitly so M3 picks it up rather than discovering it
+the hard way. The agent-mock binary itself is production-ready for the
+moment hub runtime is plumbed in.
+
+### Why ANTHROPIC_BASE_URL / HTTP_PROXY didn't need to be tried
+
+`pathToClaudeCodeExecutable` is a first-class SDK option that bypasses
+binary resolution entirely — there is no advantage to wrapping the real
+binary + redirecting its outbound HTTP calls when we can replace the
+binary outright. The other two tracks were always backstops for the case
+where the SDK refused to honour `pathToClaudeCodeExecutable`; it does,
+so they stay un-exercised. If a future SDK release tightens the path
+option (signature check, allowlist, whatever), Track 2 / 3 become the
+fallback plan — but until then the spike result is "Track 1 only".

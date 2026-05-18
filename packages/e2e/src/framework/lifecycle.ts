@@ -1,23 +1,36 @@
+import { randomBytes } from "node:crypto";
 import { type ClientProcess, spawnClient } from "./client-process.js";
+import { type ProvisionedCredentials, provisionTestCredentials } from "./credentials.js";
 import { bestEffortCleanupStaleContainers, type PgProcess, startDockerPg } from "./docker-pg.js";
 import { runDoctor } from "./doctor.js";
 import { type E2EEnv, loadE2EEnv, PACKAGE_E2E_ROOT, REPO_ROOT } from "./env.js";
+import { type GitHubAppFixture, makeGitHubAppFixture } from "./github-app-fixture.js";
 import { makeRunIdentity, type RunIdentity } from "./isolation.js";
 import { type ComponentLogger, createComponentLogger, dumpTailToConsole } from "./logging.js";
 import { allocatePorts } from "./ports.js";
-import { type ServerProcess, spawnServer } from "./server-process.js";
+import { type ServerProcess, spawnServer, type ServerSpawnOptions } from "./server-process.js";
 
 /**
- * M1 boots `pg + server` and stops there. Booting the client requires either
- * a real user JWT (issued by `first-tree-hub connect <token>`, which itself
- * needs a manual `--invite-token` flow) or a hand-rolled credentials.json —
- * both belong with the M2 mock surface so the framework can mint test tokens
- * via an admin-side helper. Until then, lifecycle accepts a `withClient`
- * toggle so M2 can flip it on without rewriting the entry path.
+ * M2 boots `pg + server` and — when `withClient: true` — provisions a real
+ * user via raw-SQL helper + JWT minting, writes credentials.json into the
+ * run-scoped home, and spawns `client start --foreground` against the live
+ * server. The provisioned identifiers (userId / orgId / agentIds / clientId)
+ * are surfaced on the returned world so tests can drive real HTTP requests
+ * without re-deriving them.
  */
 export type StartRunOptions = {
-  /** When true, spawn `client start --foreground`. M1 default: false. */
+  /**
+   * When true, spawn `client start --foreground` after provisioning a real
+   * user + connecting credentials. M1 default: false.
+   */
   withClient?: boolean;
+  /**
+   * Extra env injected into the spawned server process. Used by mocks (e.g.
+   * `github-mock` sets `FIRST_TREE_HUB_GITHUB_API_BASE_URL` +
+   * `FIRST_TREE_HUB_GITHUB_APP_*`) so the server's outbound calls land on
+   * the mock instead of api.github.com.
+   */
+  serverExtraEnv?: ServerSpawnOptions["extraEnv"];
 };
 
 export type RunWorld = {
@@ -27,6 +40,12 @@ export type RunWorld = {
   server: ServerProcess;
   /** Present only when `startRunWorld({ withClient: true })`. */
   client: ClientProcess | null;
+  /** Present only when `startRunWorld({ withClient: true })`. */
+  credentials: ProvisionedCredentials | null;
+  /** JWT secret the server was spawned with — exposed so tests can mint extra tokens. */
+  jwtSecret: string;
+  /** Ephemeral GitHub App credentials the server was booted with. */
+  githubApp: GitHubAppFixture;
   loggers: ComponentLogger[];
 };
 
@@ -58,6 +77,15 @@ export async function startRunWorld(opts: StartRunOptions = {}): Promise<RunWorl
   let pg: PgProcess | undefined;
   let server: ServerProcess | undefined;
   let client: ClientProcess | undefined;
+  let credentials: ProvisionedCredentials | null = null;
+
+  // Generate JWT secret + GitHub App fixture up here (instead of inside
+  // `spawnServer`) so the framework can mint tokens / sign webhook payloads
+  // that the same server will validate. The github-app block is set
+  // unconditionally — server boot guards refuse a half-configured block, so
+  // even server-only smoke needs the bundle to be coherent.
+  const jwtSecret = randomBytes(32).toString("base64url");
+  const githubApp = makeGitHubAppFixture();
 
   try {
     const [pgPort, serverPort] = await allocatePorts(env.E2E_PORT_MIN, env.E2E_PORT_MAX, 2);
@@ -79,9 +107,18 @@ export async function startRunWorld(opts: StartRunOptions = {}): Promise<RunWorl
       port: serverPort,
       databaseUrl: pg.databaseUrl,
       logger: serverLogger,
+      jwtSecret,
+      extraEnv: { ...githubApp.toServerEnv(), ...opts.serverExtraEnv },
     });
 
     if (withClient) {
+      credentials = await provisionTestCredentials({
+        databaseUrl: pg.databaseUrl,
+        jwtSecret,
+        serverUrl: server.baseUrl,
+        home: identity.home,
+      });
+
       const clientLogger = createComponentLogger(identity.runDir, "client");
       loggers.push(clientLogger);
       client = await spawnClient({
@@ -91,7 +128,17 @@ export async function startRunWorld(opts: StartRunOptions = {}): Promise<RunWorl
       });
     }
 
-    activeWorld = { identity, env, pg, server, client: client ?? null, loggers };
+    activeWorld = {
+      identity,
+      env,
+      pg,
+      server,
+      client: client ?? null,
+      credentials,
+      jwtSecret,
+      githubApp,
+      loggers,
+    };
     return activeWorld;
   } catch (err) {
     dumpTailToConsole(loggers);

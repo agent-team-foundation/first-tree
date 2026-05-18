@@ -24,6 +24,13 @@ export type ServerSpawnOptions = {
   extraEnv?: NodeJS.ProcessEnv;
   /** Healthz wait budget. Default 30s. */
   readyTimeoutMs?: number;
+  /**
+   * Optional pre-generated JWT secret. When omitted a fresh one is minted —
+   * but in that case nothing else can sign tokens that the server will
+   * accept. Provide a value when the framework needs to mint tokens itself
+   * (e.g. the credentials helper).
+   */
+  jwtSecret?: string;
 };
 
 export async function spawnServer(opts: ServerSpawnOptions): Promise<ServerProcess> {
@@ -39,7 +46,7 @@ export async function spawnServer(opts: ServerSpawnOptions): Promise<ServerProce
     FIRST_TREE_HUB_DATABASE_URL: opts.databaseUrl,
     FIRST_TREE_HUB_PORT: String(opts.port),
     FIRST_TREE_HUB_HOST: "127.0.0.1",
-    FIRST_TREE_HUB_JWT_SECRET: randomBytes(32).toString("base64url"),
+    FIRST_TREE_HUB_JWT_SECRET: opts.jwtSecret ?? randomBytes(32).toString("base64url"),
     FIRST_TREE_HUB_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
     FIRST_TREE_HUB_WORKSPACES_ROOT: resolve(opts.identity.home, "workspaces"),
     ...opts.extraEnv,
