@@ -87,6 +87,18 @@ jobs:
         with:
           node-version: "22"
           cache: "pnpm"
+      # Persist Turborepo's task cache between runs. With this, an unchanged
+      # `build` / `typecheck` task hashes the same and turbo replays the
+      # cached result instead of re-running. Cache key is sha-scoped so each
+      # run writes its own entry; `restore-keys` falls back to the most
+      # recent prefix match (any prior run on this OS).
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build
@@ -125,5 +137,12 @@ jobs:
         with:
           node-version: "22"
           cache: "pnpm"
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
