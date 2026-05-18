@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { GripHorizontal, Loader2, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -18,17 +18,20 @@ import { type DocSnapshotEntry, docSnapshotQueryKey } from "../pages/workspace/c
 import { Button } from "./ui/button.js";
 import { Markdown } from "./ui/markdown.js";
 
-const DEFAULT_MAX_WIDTH = 720;
-const DEFAULT_VIEWPORT_RATIO = 0.45;
+const DEFAULT_MAX_WIDTH = 1200;
+const DEFAULT_VIEWPORT_RATIO = 0.55;
 const MIN_DRAWER_WIDTH = 360;
-const MIN_DRAWER_HEIGHT = 280;
-const DEFAULT_TOP = 80;
-const DEFAULT_RIGHT_GAP = 24;
+/**
+ * Reserved layout width the drawer must NOT eat into when it expands.
+ * Covers the fixed left conversation rail (320 wide, see
+ * `packages/web/src/pages/workspace/conversations/index.tsx`) plus the
+ * minimum readable chat column (about 320). Without this the drawer can
+ * drag itself wide enough to squash the chat composer / reading column
+ * into a few characters per line on common laptop viewports.
+ */
+const RESERVED_MAIN_WIDTH = 640;
 const RESIZE_KEY_STEP = 24;
-const SCREEN_PADDING = 8;
-const RECT_STORAGE_KEY = "first-tree-hub:doc-preview-drawer:v1";
-
-type FloatingRect = { top: number; left: number; width: number; height: number };
+const WIDTH_STORAGE_KEY = "first-tree-hub:doc-preview-drawer:width:v1";
 
 function defaultDrawerWidth(): number {
   if (typeof window === "undefined") return DEFAULT_MAX_WIDTH;
@@ -38,51 +41,28 @@ function defaultDrawerWidth(): number {
   );
 }
 
-function defaultRect(): FloatingRect {
-  const width = defaultDrawerWidth();
-  if (typeof window === "undefined") {
-    return { top: DEFAULT_TOP, left: 320, width, height: 540 };
-  }
-  const height = Math.min(640, Math.max(MIN_DRAWER_HEIGHT, Math.round(window.innerHeight * 0.72)));
-  const left = Math.max(SCREEN_PADDING, window.innerWidth - width - DEFAULT_RIGHT_GAP);
-  return { top: DEFAULT_TOP, left, width, height };
+function clampDrawerWidth(width: number): number {
+  if (typeof window === "undefined") return Math.max(MIN_DRAWER_WIDTH, width);
+  const maxWidth = Math.max(MIN_DRAWER_WIDTH, window.innerWidth - RESERVED_MAIN_WIDTH);
+  return Math.min(Math.max(width, MIN_DRAWER_WIDTH), maxWidth);
 }
 
-function clampRect(rect: FloatingRect): FloatingRect {
-  if (typeof window === "undefined") return rect;
-  const maxAvailableWidth = Math.max(MIN_DRAWER_WIDTH, window.innerWidth - SCREEN_PADDING * 2);
-  const maxAvailableHeight = Math.max(MIN_DRAWER_HEIGHT, window.innerHeight - SCREEN_PADDING * 2);
-  const width = Math.max(MIN_DRAWER_WIDTH, Math.min(maxAvailableWidth, rect.width));
-  const height = Math.max(MIN_DRAWER_HEIGHT, Math.min(maxAvailableHeight, rect.height));
-  const left = Math.max(SCREEN_PADDING, Math.min(window.innerWidth - width - SCREEN_PADDING, rect.left));
-  const top = Math.max(SCREEN_PADDING, Math.min(window.innerHeight - height - SCREEN_PADDING, rect.top));
-  return { top, left, width, height };
-}
-
-function loadPersistedRect(): FloatingRect | null {
+function loadPersistedWidth(): number | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(RECT_STORAGE_KEY);
+    const raw = window.localStorage.getItem(WIDTH_STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<FloatingRect>;
-    if (
-      typeof parsed.top !== "number" ||
-      typeof parsed.left !== "number" ||
-      typeof parsed.width !== "number" ||
-      typeof parsed.height !== "number"
-    ) {
-      return null;
-    }
-    return { top: parsed.top, left: parsed.left, width: parsed.width, height: parsed.height };
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   } catch {
     return null;
   }
 }
 
-function savePersistedRect(rect: FloatingRect): void {
+function savePersistedWidth(width: number): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(RECT_STORAGE_KEY, JSON.stringify(rect));
+    window.localStorage.setItem(WIDTH_STORAGE_KEY, String(width));
   } catch {
     // localStorage may be unavailable (private mode, disk quota); silently ignore.
   }
@@ -104,6 +84,36 @@ function useIsMobileDocPreview(): boolean {
   return isMobile;
 }
 
+/**
+ * Markdown preview rail that sits to the right of the chat reading column.
+ *
+ * Layout:
+ *   - Desktop: a `relative shrink-0` flex sibling inside chat-view's flex
+ *     container. The chat main column flexes around it, so the drawer
+ *     coexists with the chat instead of overlaying it. The left edge is
+ *     a draggable col-resize handle (mouse + keyboard via Arrow Left /
+ *     Right) so the user can widen or shrink the rail toward the chat
+ *     main column.
+ *   - Mobile (`max-width: 47.999rem`): full-screen fixed inset-0 modal
+ *     with focus trap, so the same component covers both surfaces
+ *     without rendering two competing rails on a narrow viewport.
+ *
+ * Data source priority:
+ *   - Inline snapshot via React Query cache (PR 415). chat-view seeds the
+ *     whole message's `docs[]` when the user clicks any `.md` link, so
+ *     opening the drawer is a synchronous cache read with no network
+ *     round-trip — load-bearing on the cloud topology where the server
+ *     cannot read the local agent workspace.
+ *   - Falls back to `GET /me/docs/preview` (path variant) when no inline
+ *     snapshot is attached. Useful for single-host deployments where the
+ *     server can still read workspace files directly.
+ *
+ * Slot semantics — the drawer is rendered by chat-view in the same right
+ * slot as `<ChatRightSidebar>`. chat-view enforces mutual exclusion so the
+ * two rails never compete for space; see `chat-view.tsx` for the slot
+ * decision and the auto-restore behaviour that re-opens the sidebar when
+ * the drawer closes.
+ */
 export function DocPreviewDrawer() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -122,28 +132,28 @@ export function DocPreviewDrawer() {
       ? queryClient.getQueryData<DocSnapshotEntry>(docSnapshotQueryKey(docChatId, docMsgId, docPath))
       : undefined;
   const isMobile = useIsMobileDocPreview();
-  // Persisted floating rectangle (top/left/width/height). Loaded once from
-  // localStorage so the drawer reopens in the same spot the user left it.
-  // Mobile mode ignores this — it always renders fixed inset-0.
-  const [rect, setRect] = useState<FloatingRect>(() => clampRect(loadPersistedRect() ?? defaultRect()));
+  const [drawerWidth, setDrawerWidth] = useState<number>(() =>
+    clampDrawerWidth(loadPersistedWidth() ?? defaultDrawerWidth()),
+  );
   const drawerRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
-  // Persist rect changes (debounced via React's batching). Skip mobile —
-  // the rect state isn't used there and we don't want a fullscreen modal
-  // session to overwrite a previously-saved desktop position.
+  // Persist width changes (skip mobile — width has no meaning when the
+  // drawer is a fullscreen modal and we don't want a portrait-mode
+  // session to overwrite the user's desktop width preference).
   useEffect(() => {
     if (isMobile) return;
-    savePersistedRect(rect);
-  }, [isMobile, rect]);
+    savePersistedWidth(drawerWidth);
+  }, [isMobile, drawerWidth]);
 
-  // Re-clamp when the viewport shrinks below the saved rect (e.g. window
-  // resize, devtools open). Without this the drawer could be parked
-  // off-screen with no way to drag it back.
+  // Re-clamp when the viewport shrinks below the saved width (e.g. window
+  // resize, devtools open). Without this the drawer could end up wider
+  // than the viewport - RESERVED_MAIN_WIDTH and squeeze the chat column
+  // below usable size.
   useEffect(() => {
     if (isMobile) return;
-    const onResize = () => setRect((current) => clampRect(current));
+    const onResize = () => setDrawerWidth((current) => clampDrawerWidth(current));
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, [isMobile]);
@@ -241,65 +251,24 @@ export function DocPreviewDrawer() {
     [openDocPath, resolvedDocPath],
   );
 
-  // Drag the floating drawer by its header. The header element opts into
-  // dragging via this handler; interactive children (close button, etc.)
-  // short-circuit on mousedown so they retain their own click semantics.
-  const startDrag = useCallback((event: ReactMouseEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
-    if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) {
-      return;
-    }
-    event.preventDefault();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const previousUserSelect = document.body.style.userSelect;
-    const previousCursor = document.body.style.cursor;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "grabbing";
-
-    let startRect: FloatingRect | null = null;
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      setRect((current) => {
-        if (!startRect) startRect = current;
-        return clampRect({
-          ...current,
-          top: startRect.top + (moveEvent.clientY - startY),
-          left: startRect.left + (moveEvent.clientX - startX),
-        });
-      });
-    };
-    const onMouseUp = () => {
-      document.body.style.userSelect = previousUserSelect;
-      document.body.style.cursor = previousCursor;
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-  }, []);
-
-  // Resize via the bottom-right corner grip. Tracks the initial rect at
-  // drag-start so cumulative drag deltas stay stable across React state
-  // updates (avoids the classic "rect drifts" bug from reading stale state).
+  // Resize via the left edge. The drawer lives on the right of the chat
+  // main column, so growing left = wider drawer (= narrower chat). Track
+  // the starting width at mousedown and apply (startX - clientX) to the
+  // delta so cumulative drags stay stable across React state updates.
   const startResize = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
     const startX = event.clientX;
-    const startY = event.clientY;
     const previousUserSelect = document.body.style.userSelect;
     const previousCursor = document.body.style.cursor;
     document.body.style.userSelect = "none";
-    document.body.style.cursor = "nwse-resize";
+    document.body.style.cursor = "col-resize";
 
-    let startRect: FloatingRect | null = null;
+    let startWidth: number | null = null;
     const onMouseMove = (moveEvent: MouseEvent) => {
-      setRect((current) => {
-        if (!startRect) startRect = current;
-        return clampRect({
-          ...current,
-          width: startRect.width + (moveEvent.clientX - startX),
-          height: startRect.height + (moveEvent.clientY - startY),
-        });
+      setDrawerWidth((current) => {
+        if (startWidth === null) startWidth = current;
+        return clampDrawerWidth(startWidth + (startX - moveEvent.clientX));
       });
     };
     const onMouseUp = () => {
@@ -312,24 +281,16 @@ export function DocPreviewDrawer() {
     window.addEventListener("mouseup", onMouseUp);
   }, []);
 
-  // Keyboard a11y for resize: ArrowLeft / Right adjust width, ArrowUp /
-  // Down adjust height. The previous left-edge resize affordance went
-  // away with the float, so the grip in the bottom-right corner takes
-  // over its keyboard role.
+  // Keyboard a11y for the resize handle. Arrow Left widens the drawer
+  // (it lives on the right, so "left" means "push the resize edge
+  // leftward into the chat column"); Arrow Right narrows it.
   const resizeWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    const step = RESIZE_KEY_STEP;
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      setRect((current) => clampRect({ ...current, width: current.width - step }));
+      setDrawerWidth((current) => clampDrawerWidth(current + RESIZE_KEY_STEP));
     } else if (event.key === "ArrowRight") {
       event.preventDefault();
-      setRect((current) => clampRect({ ...current, width: current.width + step }));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setRect((current) => clampRect({ ...current, height: current.height - step }));
-    } else if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setRect((current) => clampRect({ ...current, height: current.height + step }));
+      setDrawerWidth((current) => clampDrawerWidth(current - RESIZE_KEY_STEP));
     }
   }, []);
 
@@ -368,32 +329,37 @@ export function DocPreviewDrawer() {
       aria-modal={isMobile}
       data-doc-preview-drawer=""
       className={cn(
-        "z-40 flex flex-col bg-surface-raised text-text-primary shadow-2xl",
-        "animate-in fade-in duration-150",
+        "z-40 flex flex-col bg-surface-raised text-text-primary",
+        "animate-in slide-in-from-right duration-200",
         isMobile
           ? "fixed inset-0 w-full border-l border-border"
-          : "fixed overflow-hidden rounded-[var(--radius-dialog)] border border-border",
+          : "relative h-auto shrink-0 overflow-hidden border-l border-border-faint max-w-[calc(100vw-var(--sp-8))]",
       )}
       onKeyDown={trapMobileFocus}
       ref={drawerRef}
       role="dialog"
-      style={isMobile ? undefined : { top: rect.top, left: rect.left, width: rect.width, height: rect.height }}
+      style={isMobile ? undefined : { width: drawerWidth }}
     >
-      {/* Drag handle. The whole header opts into pointer-drag so the user
-         can grab anywhere in the title strip, not just the grip glyph.
-         Mouse-only by design: dragging a panel with the keyboard is an
-         unusual pattern and would compete with the existing
-         keyboard-resize handle in the bottom-right corner; keyboard
-         users can rely on the persisted-rect default position instead. */}
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard-equivalent provided by the bottom-right resize handle + persisted default position */}
+      {isMobile ? null : (
+        <button
+          aria-label="Resize document preview"
+          className="group absolute top-0 left-0 z-10 h-full w-3 -translate-x-1/2 cursor-col-resize"
+          onMouseDown={startResize}
+          onKeyDown={resizeWithKeyboard}
+          type="button"
+        >
+          {/* Always-on hairline so the user can see the rail is draggable.
+              Hover bumps to full opacity for affirmative feedback. */}
+          <div className="mx-auto h-full w-px bg-border-faint opacity-60 transition-all group-hover:w-1 group-hover:bg-accent group-hover:opacity-100" />
+        </button>
+      )}
+
       <header
-        className={cn(
-          "flex min-h-12 items-center gap-3 px-4 pt-3 pb-2",
-          !isMobile && "cursor-grab select-none active:cursor-grabbing",
-        )}
-        onMouseDown={isMobile ? undefined : startDrag}
+        className="flex shrink-0 items-center gap-3 px-4"
+        // Match chat-view's header sizing + raised background so the two
+        // headers share one continuous chrome row across the panel split.
+        style={{ height: 52, background: "var(--bg-raised)" }}
       >
-        {isMobile ? null : <GripHorizontal aria-hidden="true" className="h-4 w-4 shrink-0 text-text-tertiary" />}
         <div className="min-w-0 flex-1">
           <div className="truncate text-body font-medium">{title}</div>
           {subtitle ? <div className="truncate text-caption text-text-tertiary">{subtitle}</div> : null}
@@ -410,7 +376,7 @@ export function DocPreviewDrawer() {
         </Button>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-5 py-4">
+      <div className="flex-1 overflow-y-auto px-4 py-3">
         {inlineSnapshot ? (
           <Markdown components={markdownComponents}>{inlineSnapshot.content}</Markdown>
         ) : (
@@ -434,27 +400,6 @@ export function DocPreviewDrawer() {
           </>
         )}
       </div>
-
-      {isMobile ? null : (
-        <button
-          aria-label="Resize document preview"
-          className="absolute right-0 bottom-0 z-10 flex h-4 w-4 cursor-nwse-resize items-end justify-end p-0.5 text-text-tertiary hover:text-text-primary"
-          onKeyDown={resizeWithKeyboard}
-          onMouseDown={startResize}
-          type="button"
-        >
-          <svg
-            aria-hidden="true"
-            className="h-2.5 w-2.5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.25"
-            viewBox="0 0 10 10"
-          >
-            <path d="M0 9 L9 0 M3.5 9 L9 3.5 M7 9 L9 7" />
-          </svg>
-        </button>
-      )}
     </aside>
   );
 }

@@ -1,6 +1,7 @@
 // Schemas
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
+export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export { isCanonicalDocLinkPath, normalizeDocLinkPath } from "./lib/doc-path.js";
 export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
 // -- Single source of truth for chat_membership.mode derivation --
