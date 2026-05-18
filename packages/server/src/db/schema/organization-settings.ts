@@ -15,9 +15,9 @@ import { users } from "./users.js";
  * and is currently set unconditionally. We keep it on the table from day
  * one so tightening to compare-and-swap later is a code-only change.
  *
- * Sensitive fields inside `value` (e.g. `github_integration.webhookSecret`)
- * are AES-256-GCM-encrypted at the service layer using `crypto.ts`'s
- * `encryptValue` / `decryptValue` — same pattern as `adapter_configs`.
+ * Sensitive fields inside `value` are AES-256-GCM-encrypted at the service
+ * layer using `crypto.ts`'s `encryptValue` / `decryptValue` — same pattern
+ * as `adapter_configs`.
  */
 export const organizationSettings = pgTable(
   "organization_settings",
@@ -25,7 +25,7 @@ export const organizationSettings = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    /** e.g. "context_tree" | "github_integration"; validated by shared registry. */
+    /** e.g. "context_tree" | "source_repos"; validated by shared registry. */
     namespace: text("namespace").notNull(),
     /** Whole-group config JSON; schema-validated by namespace at the service layer. */
     value: jsonb("value").$type<Record<string, unknown>>().notNull().default({}),

@@ -91,28 +91,39 @@ export function AgentRow({
           colorToken={participant.avatarColorToken}
           size={28}
         />
-        <span
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            right: -1,
-            bottom: -1,
-            width: 9,
-            height: 9,
-            borderRadius: 999,
-            background: view.dotBg,
-            border: view.dotBorder,
-            boxShadow: "0 0 0 var(--hairline-bold) var(--bg-raised)",
-          }}
-        />
+        {state !== "none" && state !== "loading" ? (
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              right: -1,
+              bottom: -1,
+              width: 9,
+              height: 9,
+              borderRadius: 999,
+              background: view.dotBg,
+              border: view.dotBorder,
+              boxShadow: "0 0 0 var(--hairline-bold) var(--bg-raised)",
+            }}
+          />
+        ) : null}
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 2 }}>
         <div className="truncate text-subtitle">{participant.displayName}</div>
-        <div className="mono flex items-center text-caption" style={{ gap: "var(--sp-1)", color: "var(--fg-3)" }}>
-          <DenseBadge tone={view.tone}>{view.label}</DenseBadge>
-          {view.subText ? <span>{view.subText}</span> : null}
-        </div>
+        {state === "none" ? (
+          <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+            no session
+          </div>
+        ) : state === "loading" ? (
+          <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+            loading…
+          </div>
+        ) : (
+          <div className="mono flex items-center text-caption" style={{ color: "var(--fg-3)" }}>
+            <DenseBadge tone={view.tone}>{view.label}</DenseBadge>
+          </div>
+        )}
       </div>
 
       {showSuspend ? <SuspendButton onClick={() => suspendMut.mutate()} isPending={isSuspending} /> : null}
@@ -223,8 +234,8 @@ function SuspendButton({ onClick, isPending }: { onClick: () => void; isPending:
         padding: "var(--sp-0_5) var(--sp-2_25)",
         borderRadius: "var(--radius-input)",
         border: "var(--hairline) solid var(--border)",
-        background: "var(--bg-raised)",
-        color: "var(--fg-warn-strong)",
+        background: "transparent",
+        color: "var(--fg-3)",
       }}
       title="Suspend this agent's session in this chat"
     >

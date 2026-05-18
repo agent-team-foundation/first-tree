@@ -25,8 +25,7 @@ import { pickDefaultMembership } from "./auth.js";
  *
  * The generic getter returns the masked output. Per-namespace plaintext
  * accessors live alongside this module when a secret needs to leave the
- * encrypted-at-rest boundary (none today after the github_integration
- * webhook secret was retired — DP12).
+ * encrypted-at-rest boundary (none today).
  */
 
 function assertNamespace(ns: string): asserts ns is OrgSettingNamespace {

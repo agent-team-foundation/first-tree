@@ -6,8 +6,8 @@ import { z } from "zod";
  *
  * Each namespace has three schemas:
  *   - `storage` — what is persisted in `organization_settings.value`. For
- *     namespaces with secrets, the storage schema names the *cipher* field
- *     (e.g. `webhookSecretCipher`); plaintext never touches the row.
+ *     namespaces with secrets, the storage schema names the *cipher* field;
+ *     plaintext never touches the row.
  *   - `input`   — what the admin API accepts in PUT bodies. For namespaces
  *     with secrets, `webhookSecret` is plaintext; the service layer
  *     encrypts it before merging into storage.
@@ -129,12 +129,6 @@ export const orgContextTreeOutputSchema = z.object({
   repo: z.string().optional(),
   branch: z.string().optional(),
 });
-
-// `github_integration` (per-org webhook secret cipher) was retired with the
-// GitHub App ingestion cutover — webhook secrets now live in server env, and
-// installations bind via `github_app_installations` instead. The JSONB key
-// `webhookSecretCipher` is left untouched on legacy rows; a follow-up release
-// drops the orphan rows in a separate migration (DP12).
 
 // -- source_repos --
 

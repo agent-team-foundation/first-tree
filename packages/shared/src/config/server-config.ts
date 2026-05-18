@@ -77,9 +77,8 @@ export const serverConfigSchema = defineConfig({
   // no global token belongs here.
   oauth: optional({
     /**
-     * GitHub App credentials — the sign-in surface introduced by PR 2/3 of
-     * the GitHub App migration split. A single App installation simultaneously
-     * unlocks user-OAuth, the webhook stream (PR 3/3), and installation-token
+     * GitHub App credentials. A single App installation simultaneously
+     * unlocks user-OAuth, the webhook stream, and installation-token
      * minting. All five required fields must be set together; partial
      * configuration is rejected at boot for the same reason as the legacy
      * block — a half-wired App is worse than no App.
