@@ -7,6 +7,8 @@ import {
   MAX_TOTAL_DOC_SNAPSHOT_BYTES,
   normalizeDocLinkPath,
   type SnapshotDoc,
+  scanBareDocPathTokens,
+  stripDocPathLineSuffix,
 } from "@agent-team-foundation/first-tree-hub-shared";
 
 /**
@@ -31,18 +33,24 @@ export async function buildMessageDocumentSnapshots(
   text: string,
   root: string,
 ): Promise<{ docs: SnapshotDoc[]; skipped: number }> {
-  const links = scanInlineMarkdownLinks(text);
-  if (links.length === 0) return { docs: [], skipped: 0 };
+  // Inline links are scanned first so a path that appears both as
+  // `[label](docs/foo.md)` AND as a bare mention later in the text is
+  // recorded once, keyed by the same canonical path the web cache lookup
+  // will produce when the user clicks either occurrence.
+  const inline = scanInlineMarkdownLinks(text);
+  const bare = scanBareDocPathTokens(text).map((m) => stripDocPathLineSuffix(m.raw));
+  const candidates = [...inline, ...bare];
+  if (candidates.length === 0) return { docs: [], skipped: 0 };
 
   const rootReal = await safeRealpath(root);
-  if (!rootReal) return { docs: [], skipped: links.length };
+  if (!rootReal) return { docs: [], skipped: candidates.length };
 
   const docs: SnapshotDoc[] = [];
   let totalBytes = 0;
   let skipped = 0;
   const seenCanonical = new Set<string>();
 
-  for (const rawPath of links) {
+  for (const rawPath of candidates) {
     if (docs.length >= MAX_DOC_SNAPSHOTS_PER_MESSAGE) {
       skipped += 1;
       continue;

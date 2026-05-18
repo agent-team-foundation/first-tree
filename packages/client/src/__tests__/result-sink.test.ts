@@ -161,6 +161,38 @@ describe("createResultSink — forwardResult enrichment", () => {
       expect(doc?.sha256).toMatch(/^[0-9a-f]{64}$/);
     });
 
+    it("emits kind=snapshot for a bare `.md` mention (no inline markdown link wrapping)", async () => {
+      // Web-side `linkifyMarkdownDocPaths` wraps the same bare token as
+      // `[design.md](design.md)` before rendering — both sides must produce
+      // the same canonical key so the click hits the snapshot in cache.
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("created design.md just now");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: { documentContext?: { kind?: string; docs?: Array<{ path: string }> } };
+      };
+      expect(body.metadata?.documentContext?.kind).toBe("snapshot");
+      expect(body.metadata?.documentContext?.docs?.map((d) => d.path)).toEqual(["design.md"]);
+    });
+
+    it("strips :line[:col] from bare paths so snapshot keys match what the click handler resolves", async () => {
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      await sink("see docs/intro.md:42:1 for details");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: { documentContext?: { kind?: string; docs?: Array<{ path: string }> } };
+      };
+      expect(body.metadata?.documentContext?.docs?.map((d) => d.path)).toEqual(["docs/intro.md"]);
+    });
+
     it("rejects dotfiles / hidden dirs and falls back to path variant when no docs survive", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
