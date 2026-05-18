@@ -40,13 +40,8 @@ export function GitHubSection({ chatId }: { chatId: string }) {
 
   return (
     <section>
-      <div className="flex items-center justify-between" style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-1)" }}>
-        <div className="text-eyebrow" style={{ color: "var(--fg-4)" }}>
-          GitHub
-        </div>
-        <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-          {items.length}
-        </div>
+      <div className="text-eyebrow" style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-1)", color: "var(--fg-4)" }}>
+        GitHub <span className="mono">· {items.length}</span>
       </div>
 
       <div className="flex flex-col" style={{ padding: "0 var(--sp-2) var(--sp-2)", gap: 2 }}>
@@ -102,8 +97,8 @@ function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
             {entity.title}
           </div>
         ) : null}
-        <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-          via {entity.boundVia}
+        <div className="text-caption" style={{ color: "var(--fg-4)" }}>
+          via {humanizeBoundVia(entity.boundVia)}
         </div>
       </div>
       <ExternalLink
@@ -135,6 +130,25 @@ function iconColor(state: GithubEntityLiveState | null): string {
       return "var(--fg-success-strong)";
     default:
       return "var(--fg-3)";
+  }
+}
+
+/**
+ * Map the wire-level `bound_via` enum (`direct` / `fixes_link` /
+ * `agent_created`) to a phrase users can read at a glance. Falling back
+ * to the raw key preserves forward-compatibility for any new boundVia
+ * value the server might emit before this map catches up.
+ */
+function humanizeBoundVia(boundVia: string): string {
+  switch (boundVia) {
+    case "direct":
+      return "Direct mention";
+    case "fixes_link":
+      return "Fixes link";
+    case "agent_created":
+      return "Agent created";
+    default:
+      return boundVia;
   }
 }
 
