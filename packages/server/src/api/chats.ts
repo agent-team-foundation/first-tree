@@ -120,6 +120,8 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         displayName: p.displayName,
         type: p.type,
         joinedAt: p.joinedAt.toISOString(),
+        avatarColorToken: p.avatarColorToken ?? null,
+        avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
       })),
     };
   });
