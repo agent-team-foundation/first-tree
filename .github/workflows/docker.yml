@@ -71,3 +71,33 @@ jobs:
           app: ${{ vars.CAPROVER_APP }}
           token: ${{ secrets.CAPROVER_APP_TOKEN }}
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Send feishu message
+        env:
+          ACTIONS_FEISHU_TAG: "v1.3.1"
+          INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
+          INPUT_MESSAGE_TYPE: "post"
+          INPUT_TITLE: Hub 测试环境更新 ✅ 成功
+          INPUT_CONTENT: |
+            部署结果: ✅ 成功
+            环境: Hub 测试环境
+            Image: ghcr.io/${{ github.repository }}:${{ github.sha }}
+            Commit: ${{ github.sha }}
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "${INPUT_WEBHOOK:-}" ]]; then
+            echo "::warning::RELEASE_BOT_URL is not configured; skipping Feishu notification."
+            exit 0
+          fi
+
+          if ! wget -q "https://github.com/xiachufang/actions-feishu/releases/download/${ACTIONS_FEISHU_TAG}/linux-amd64-actions-feishu.tar.gz"; then
+            echo "::warning::Failed to download actions-feishu."
+            exit 0
+          fi
+          if ! tar zxf linux-amd64-actions-feishu.tar.gz feishu; then
+            echo "::warning::Failed to extract actions-feishu."
+            exit 0
+          fi
+          if ! ./feishu; then
+            echo "::warning::Failed to send Feishu notification."
+          fi
