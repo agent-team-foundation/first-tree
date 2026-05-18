@@ -1,0 +1,4 @@
+.e2e-runs/
+.env.e2e
+node_modules/
+dist/

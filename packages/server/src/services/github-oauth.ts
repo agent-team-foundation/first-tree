@@ -1,3 +1,5 @@
+import { GITHUB_API_BASE } from "./github-api-base.js";
+
 /**
  * Direct GitHub API helpers — what used to be the legacy-OAuth client
  * module, now trimmed to just the bits still needed after the App
@@ -61,7 +63,7 @@ export async function listUserRepos(
   const maxPages = opts.maxPages ?? 3;
   const out: GithubRepo[] = [];
   for (let page = 1; page <= maxPages; page++) {
-    const url = `https://api.github.com/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=${perPage}&page=${page}`;
+    const url = `${GITHUB_API_BASE}/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=${perPage}&page=${page}`;
     const res = await fetcher(url, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/vnd.github+json" },
     });
