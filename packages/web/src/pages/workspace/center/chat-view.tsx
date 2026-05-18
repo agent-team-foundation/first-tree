@@ -67,7 +67,7 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
-import { docPreviewPathFromHref } from "../../../lib/doc-preview-links.js";
+import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
@@ -281,6 +281,18 @@ function TextRow({
   const isSelf = myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
   const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
+  // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
+  // user typed in the web composer (`source === "hub_ui"`) is left untouched
+  // so paths that humans write — code-fence walkthroughs, quoted snippets,
+  // intentional bare references — render exactly as authored. The scan rules
+  // mirror the runtime snapshot scanner, so every link this rewrites has a
+  // matching `documentContext.docs[]` entry to power the preview drawer
+  // without a server round-trip.
+  const textContent = useMemo<string | null>(() => {
+    if (msg.format !== "text" && msg.format !== "markdown") return null;
+    if (typeof msg.content !== "string") return JSON.stringify(msg.content);
+    return msg.source === "hub_ui" ? msg.content : linkifyMarkdownDocPaths(msg.content);
+  }, [msg.format, msg.content, msg.source]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -391,9 +403,7 @@ function TextRow({
           ) : msg.format === "file" && isImageRefContent(msg.content) ? (
             <ImageFromRef content={msg.content} />
           ) : msg.format === "text" || msg.format === "markdown" ? (
-            <Markdown components={markdownComponents}>
-              {typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}
-            </Markdown>
+            <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
           ) : (
             <pre
               className="mono text-label"
@@ -681,6 +691,7 @@ export function ChatView({
   };
 }) {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const agentName = useAgentNameMap();
   const agentIdentity = useAgentIdentityMap();
   /**
@@ -713,13 +724,52 @@ export function ChatView({
   useEffect(() => {
     saveSidebarOpen(showSidebar);
   }, [showSidebar]);
-  const toggleSidebar = useCallback(() => setShowSidebar((v) => !v), []);
+  // Doc-preview opens to the right of chat-view (mounted at workspace level);
+  // we render two right rails on the same row, so when the user clicks a doc
+  // link we collapse this sidebar to give the preview the right slot it
+  // expects. Stash whether the sidebar was visible at the moment doc-preview
+  // opened so we can auto-restore it when the preview closes — the user did
+  // not ask to dismiss the sidebar, they only opened a doc.
+  const hasDocPreview = Boolean(searchParams.get("docChat") && searchParams.get("docPath"));
+  const sidebarBeforeDocPreviewRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (hasDocPreview) {
+      if (sidebarBeforeDocPreviewRef.current === null) {
+        sidebarBeforeDocPreviewRef.current = showSidebar;
+        if (showSidebar) setShowSidebar(false);
+      }
+    } else if (sidebarBeforeDocPreviewRef.current !== null) {
+      const restore = sidebarBeforeDocPreviewRef.current;
+      sidebarBeforeDocPreviewRef.current = null;
+      if (restore) setShowSidebar(true);
+    }
+  }, [hasDocPreview, showSidebar]);
+  const toggleSidebar = useCallback(() => {
+    // When doc-preview is open the sidebar icon means "swap to chat
+    // details": close the preview AND open the sidebar in one click.
+    // Without this branch the click would only flip showSidebar, which
+    // the auto-restore effect above would immediately revert because
+    // hasDocPreview is still true.
+    if (hasDocPreview) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("docChat");
+      next.delete("docAgent");
+      next.delete("docPath");
+      next.delete("docBase");
+      next.delete("docMsg");
+      setSearchParams(next, { replace: true });
+      sidebarBeforeDocPreviewRef.current = true;
+      return;
+    }
+    setShowSidebar((v) => !v);
+  }, [hasDocPreview, searchParams, setSearchParams]);
   // Esc closes the rail when it's open AND the focus is not inside an
   // editable element (textarea / input). Otherwise pressing Esc to
   // dismiss an IME composition or clear a draft would unexpectedly
-  // collapse the rail too.
+  // collapse the rail too. Skip while doc-preview owns the right rail —
+  // its own component handles Esc to close itself.
   useEffect(() => {
-    if (!showSidebar) return;
+    if (!showSidebar || hasDocPreview) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
       const active = document.activeElement;
@@ -731,7 +781,7 @@ export function ChatView({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [showSidebar]);
+  }, [hasDocPreview, showSidebar]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
