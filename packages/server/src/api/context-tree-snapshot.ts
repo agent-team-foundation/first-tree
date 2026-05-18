@@ -14,7 +14,7 @@ import {
   decorateSnapshotWithMintGuidance,
   mintContextTreeInstallationToken,
 } from "../services/github-app-token.js";
-import { getOrgContextTree, resolveUserPrimaryMembership } from "../services/org-settings.js";
+import { getOrgContextTree, resolveUserPrimaryOrgId } from "../services/org-settings.js";
 import { summarizeContextTreeUsage } from "../services/session-event.js";
 
 const querySchema = z
@@ -38,8 +38,7 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
     async (request) => {
       const query = querySchema.parse(request.query);
       const { userId } = requireUser(request);
-      const membership = await resolveUserPrimaryMembership(app.db, userId);
-      const orgId = membership?.organizationId ?? null;
+      const orgId = await resolveUserPrimaryOrgId(app.db, userId);
       const binding: ContextTreeBinding = orgId ? await getOrgContextTree(app.db, orgId) : {};
       let mintResult: ContextTreeInstallationTokenResult | null = null;
       if (orgId && isGithubRemoteBinding(binding)) {
@@ -50,13 +49,9 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       const window = query.window ?? "7d";
       const rawSnapshot = await getContextTreeSnapshot({ ...binding, githubToken }, window);
       const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
-      const usage =
-        orgId && membership
-          ? await summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window), {
-              humanAgentId: membership.humanAgentId,
-              memberId: membership.memberId,
-            })
-          : snapshot.usage;
+      const usage = orgId
+        ? await summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window))
+        : snapshot.usage;
       return contextTreeSnapshotSchema.parse({ ...snapshot, usage });
     },
   );

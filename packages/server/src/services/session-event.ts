@@ -5,10 +5,9 @@ import type {
   SessionEventKind,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { sessionEventSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { createLogger } from "../observability/index.js";
@@ -170,24 +169,24 @@ export async function clearEvents(db: Database, agentId: string, chatId: string)
 const CONTEXT_TREE_USAGE_FEED_LIMIT = 50;
 
 /**
- * Caller identity needed to decide which chats in the org-wide usage feed
- * the requesting user can see. Matches the membership/supervisor semantics
- * of `requireChatAccess`: a chat is visible if the caller's `humanAgentId`
- * has any `chat_membership` row, or any agent the caller manages (via
- * `memberId`) is a speaker in that chat. Either field may be null when the
- * caller has no human agent / no member row in the org — both branches
- * just yield no visibility.
+ * Org-wide aggregate counts + the most recent context-tree usage events
+ * for the org. The Context Tab is an org-wide transparency surface — any
+ * member can see who has been using the tree, including the chat topic
+ * each session belongs to. Chat *content* stays gated by
+ * `requireChatAccess` on the chat-detail route; this feed only exposes
+ * the topic label (and id, for routing).
+ *
+ * The only chat-related gate here is **cross-org**: an event whose
+ * `chat_id` points at a chat outside this org has both `chatId` and
+ * `chatTitle` masked to null. `chats` is left-joined under an explicit
+ * `organization_id = $org` predicate so the planner cannot accidentally
+ * surface a foreign org's topic; the resulting `joinedChatId` is the
+ * authoritative signal for "this chat lives in this org".
  */
-export type ContextTreeUsageViewer = {
-  humanAgentId: string | null;
-  memberId: string | null;
-};
-
 export async function summarizeContextTreeUsage(
   db: Database,
   organizationId: string,
   windowDays: number,
-  viewer: ContextTreeUsageViewer,
 ): Promise<ContextTreeUsageSummary> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const [aggregate] = await db
@@ -205,18 +204,18 @@ export async function summarizeContextTreeUsage(
       ),
     );
 
-  // chats is joined under the SAME org as agents — a stale/forged event whose
-  // chat_id points at a chat from another org must not leak that chat's topic
-  // through this feed. The org filter is duplicated on the chats predicate
-  // (rather than relying on the agents-side filter) so the planner cannot
-  // pick a join order that exposes the wrong topic. left join keeps the row
-  // when the chat is missing or out-of-org — chatTitle degrades to null.
   const recentRows = await db
     .select({
       id: sessionEvents.id,
       agentId: sessionEvents.agentId,
       agentName: agents.displayName,
-      chatId: sessionEvents.chatId,
+      agentAvatarColorToken: agents.avatarColorToken,
+      rawChatId: sessionEvents.chatId,
+      // chats.id from a left join is null iff the join did not match —
+      // distinct from chats.topic being null (chat exists but the manager
+      // has not set a topic). We branch on this to decide whether the chat
+      // lives in the same org as the caller's snapshot.
+      joinedChatId: chats.id,
       chatTopic: chats.topic,
       createdAt: sessionEvents.createdAt,
     })
@@ -233,24 +232,19 @@ export async function summarizeContextTreeUsage(
     .orderBy(desc(sessionEvents.createdAt))
     .limit(CONTEXT_TREE_USAGE_FEED_LIMIT);
 
-  const visibleChatIds = await resolveVisibleChats(
-    db,
-    [...new Set(recentRows.map((row) => row.chatId))],
-    viewer,
-    organizationId,
-  );
-
   const recentEvents: ContextTreeUsageEvent[] = recentRows.map((row) => {
-    const visible = visibleChatIds.has(row.chatId);
+    const sameOrgChat = row.joinedChatId !== null;
     return {
       id: row.id,
       agentId: row.agentId,
       agentName: row.agentName,
-      // Mask both fields together — the chatId itself is identifying
-      // information even without the topic. Aggregates above still count
-      // every event, only the per-row chat coordinates are gated.
-      chatId: visible ? row.chatId : null,
-      chatTitle: visible ? row.chatTopic : null,
+      agentAvatarColorToken: row.agentAvatarColorToken,
+      // Mask both together when the chat is not in this org — chatId is
+      // identifying info on its own. Topic being null for an in-org chat
+      // is a legitimate "no topic set" signal and stays as `chatTitle: null`
+      // with a non-null `chatId`.
+      chatId: sameOrgChat ? row.rawChatId : null,
+      chatTitle: sameOrgChat ? row.chatTopic : null,
       createdAt: row.createdAt.toISOString(),
     };
   });
@@ -261,55 +255,4 @@ export async function summarizeContextTreeUsage(
     usageCount: aggregate?.usageCount ?? 0,
     recentEvents,
   };
-}
-
-/**
- * Returns the subset of `chatIds` the viewer can see, using the same rules
- * as `requireChatAccess`: direct chat_membership (speaker OR watcher) on
- * the viewer's human agent, OR any speaker in the chat is managed by the
- * viewer's member id. Both branches also anchor on `chats.organization_id`
- * so a stale/cross-org `chat_membership` row cannot promote a chatId from
- * another org into visibility — `requireChatAccess` resolves the caller
- * inside the chat's own org, so a chat that does not belong to this summary
- * org would never have passed that gate either. Empty input short-circuits
- * before any query is issued.
- */
-async function resolveVisibleChats(
-  db: Database,
-  chatIds: string[],
-  viewer: ContextTreeUsageViewer,
-  organizationId: string,
-): Promise<Set<string>> {
-  const visible = new Set<string>();
-  if (chatIds.length === 0) return visible;
-
-  if (viewer.humanAgentId) {
-    const directRows = await db
-      .select({ chatId: chatMembership.chatId })
-      .from(chatMembership)
-      .innerJoin(chats, and(eq(chats.id, chatMembership.chatId), eq(chats.organizationId, organizationId)))
-      .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.agentId, viewer.humanAgentId)));
-    for (const row of directRows) visible.add(row.chatId);
-  }
-
-  if (viewer.memberId) {
-    const remaining = chatIds.filter((id) => !visible.has(id));
-    if (remaining.length > 0) {
-      const supervisedRows = await db
-        .select({ chatId: chatMembership.chatId })
-        .from(chatMembership)
-        .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
-        .innerJoin(chats, and(eq(chats.id, chatMembership.chatId), eq(chats.organizationId, organizationId)))
-        .where(
-          and(
-            inArray(chatMembership.chatId, remaining),
-            eq(chatMembership.accessMode, "speaker"),
-            eq(agents.managerId, viewer.memberId),
-          ),
-        );
-      for (const row of supervisedRows) visible.add(row.chatId);
-    }
-  }
-
-  return visible;
 }

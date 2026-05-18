@@ -125,11 +125,22 @@ export const contextTreeUsageEventSchema = z.object({
   id: z.string(),
   agentId: z.string(),
   agentName: z.string(),
-  // chatId and chatTitle are masked to null when the requesting caller cannot
-  // pass the same visibility gate as requireChatAccess (direct chat_membership
-  // or supervised speaker). The org-wide aggregate counts always reflect every
-  // event, but chat identifiers are only revealed to callers who could otherwise
-  // open the chat.
+  // Manager-selected avatar color token ("hue-0".."hue-7"). NULL means
+  // "auto" — the web client falls back to a deterministic hash of agentId.
+  // Mirrors the agents.avatar_color_token column so the feed can render
+  // the same avatar disc the rest of the UI uses.
+  agentAvatarColorToken: z.string().nullable(),
+  // chatId and chatTitle are exposed for every event whose chat lives in
+  // the same organization as the caller — Context Tab is an org-wide
+  // transparency surface where members see how the tree is being used,
+  // including the chat each session belongs to. Chat *content* remains
+  // private (requireChatAccess still gates the chat-detail route);
+  // only the topic label is shared.
+  //
+  // Both fields mask to null together when the chat does not belong to
+  // this organization (a defensive guard against stale / forged
+  // cross-org session_events.chat_id values — chatId itself is
+  // identifying info, so it is masked alongside chatTitle).
   chatId: z.string().nullable(),
   chatTitle: z.string().nullable(),
   createdAt: z.string(),
