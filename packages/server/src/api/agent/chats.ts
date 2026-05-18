@@ -6,6 +6,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
+import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
 
 const log = createLogger("AgentChatsRoute");
@@ -72,6 +73,8 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       displayName: r.displayName,
       type: r.type,
       joinedAt: r.joinedAt.toISOString(),
+      avatarColorToken: r.avatarColorToken ?? null,
+      avatarImageUrl: agentAvatarImageUrl(r.agentId, r.avatarImageUpdatedAt ?? null),
     }));
   });
 
