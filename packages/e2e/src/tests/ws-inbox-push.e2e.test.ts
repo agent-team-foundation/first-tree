@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { InboxDeliverFrame } from "@agent-team-foundation/first-tree-hub-shared";
 import { Client as PgClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CurrentRunHandle, readCredentialsOrThrow, readCurrentHandle } from "../framework/current-handle.js";
@@ -115,19 +116,16 @@ describe("ws inbox push — chat-send → PG NOTIFY → inbox:deliver frame", ()
     // subscriber writes the frame, socket pushes. 5s is conservative; on a
     // warm local stack we usually see it under 50ms.
     const frame = await listener.waitFor(
-      (f) => f.type === "inbox:deliver" && (f as { message?: { id?: string } }).message?.id === sent.id,
+      (f) => f.type === "inbox:deliver" && (f as Partial<InboxDeliverFrame>).message?.id === sent.id,
       5_000,
     );
 
-    const payload = frame as {
-      type: string;
-      entryId: string;
-      inboxId: string;
-      chatId: string;
-      message: { id: string; chatId: string; senderId: string; format: string; content: unknown };
-    };
+    const payload = frame as unknown as InboxDeliverFrame;
     expect(payload.chatId).toBe(chatId);
-    expect(payload.entryId).toBeTruthy();
+    expect(typeof payload.entryId).toBe("number");
+    // `entryId` is the `inbox_entries.id` bigserial — schema allows 0, in
+    // practice always ≥ 1.
+    expect(payload.entryId).toBeGreaterThan(0);
     expect(payload.inboxId).toBe(`inbox_${testAgentId}`);
     expect(payload.message.id).toBe(sent.id);
     expect(payload.message.format).toBe("text");
@@ -148,10 +146,10 @@ describe("ws inbox push — chat-send → PG NOTIFY → inbox:deliver frame", ()
     const sent = (await sendRes.json()) as { id: string };
 
     const frame = await listener.waitFor(
-      (f) => f.type === "inbox:deliver" && (f as { message?: { id?: string } }).message?.id === sent.id,
+      (f) => f.type === "inbox:deliver" && (f as Partial<InboxDeliverFrame>).message?.id === sent.id,
       5_000,
     );
-    const payload = frame as unknown as { message: { content: unknown } };
+    const payload = frame as unknown as InboxDeliverFrame;
     expect(payload.message.content).toBe(text);
   });
 });

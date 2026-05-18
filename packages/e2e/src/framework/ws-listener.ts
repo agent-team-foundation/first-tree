@@ -5,7 +5,7 @@ import { WebSocket } from "ws";
  * (mainly `inbox:deliver` frames) without spawning the real CLI. Mirrors
  * the handshake order enforced by `packages/server/src/api/agent/ws-client.ts`:
  *
- *   1. open WS at `${serverBaseUrl}/api/v1/agent/ws`
+ *   1. open WS at `${serverBaseUrl}/api/v1/agent/ws/client`
  *   2. send `{type:"auth", token}` → wait for `{type:"auth:ok"}`
  *   3. send `{type:"client:register", clientId}` → wait for `{type:"client:registered"}`
  *   4. (optional) send `{type:"agent:bind", agentId, runtimeType}` →
@@ -104,9 +104,12 @@ export async function connectWsListener(opts: ConnectOptions): Promise<WsListene
   }
 
   send({ type: "auth", token: opts.accessToken });
-  await waitFor((f) => f.type === "auth:ok" || f.type === "auth:rejected");
-  const authResult = frames[frames.length - 1];
-  if (authResult?.type === "auth:rejected") {
+  // Use the predicate result directly — the server sends `server:welcome`
+  // right after `auth:ok` (see `ws-client.ts:404-419`), so reading
+  // `frames[len-1]` would surface that extra frame and silently miss any
+  // future reject-path frames.
+  const authResult = await waitFor((f) => f.type === "auth:ok" || f.type === "auth:rejected");
+  if (authResult.type === "auth:rejected") {
     ws.close();
     throw new Error(`ws auth rejected: ${JSON.stringify(authResult)}`);
   }
