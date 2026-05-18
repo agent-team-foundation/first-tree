@@ -54,6 +54,7 @@ import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
+import { readyzRoutes } from "./api/readyz.js";
 import { sessionRoutes } from "./api/sessions.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
@@ -410,8 +411,12 @@ export async function buildApp(config: Config) {
     return reply.status(500).send({ error: "Internal server error", ...traceField });
   });
 
-  // Root-level health check for container orchestration (outside /api/v1)
+  // Root-level health checks for container orchestration (outside /api/v1).
+  // `/healthz` checks process + DB reachability (used by Docker HEALTHCHECK).
+  // `/readyz` checks full readiness — all bootstrap stages done + all adapter
+  // bots connected. See docs/server-bootstrap-resilience-design.md §3 (T6).
   await app.register(healthzRoutes);
+  await app.register(readyzRoutes);
 
   // All API routes under /api/v1 prefix
   await app.register(
@@ -611,15 +616,16 @@ export async function buildApp(config: Config) {
       .catch((err) => createLogger("chat-message-kick").warn({ err, chatId, messageId }, "chat:message kick failed"));
   });
 
-  // Start notifier and background tasks on server start
+  // Start notifier and background tasks on server start.
+  // Adapter / kael initial reload happens inside backgroundTasks.start() as a
+  // fire-and-forget task so app.listen() is not blocked by remote handshakes —
+  // see docs/server-bootstrap-resilience-design.md (T1/T2).
   app.addHook("onReady", async () => {
     // Ensure the default organization exists (idempotent)
     await ensureDefaultOrganization(db);
     await notifier.start();
     backgroundTasks.start();
     pulseAggregator.start();
-    await adapterManager.reload();
-    await kaelRuntime?.reload();
   });
 
   // Cleanup on close
