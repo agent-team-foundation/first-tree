@@ -1,3 +1,12 @@
+// MIGRATION NOTE (2026-05-18): one-off smoke kept for now. Long-term home
+// is the cross-process E2E framework under `packages/e2e/` — once M2 lands
+// its chat-send + question/answer surface, this script collapses into a
+// `packages/e2e/src/tests/askuser.e2e.test.ts`. Until then it stays as the
+// AskUserQuestion regression net. Do not extend it; add new scenarios to
+// `packages/server/src/__tests__/` (component) or `packages/e2e/src/tests/`
+// (cross-process) instead. Source proposal:
+// `proposals/hub-local-e2e-framework.20260518.md`.
+//
 // End-to-end smoke for the AskUserQuestion roundtrip — runs the real Hub
 // server (with the migrated DB) in-process, drives a real `format=question`
 // message from an "agent" identity, drives a real answer POST from the
