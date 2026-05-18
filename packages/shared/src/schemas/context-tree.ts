@@ -121,10 +121,26 @@ export const contextTreeSummarySchema = z.object({
 });
 export type ContextTreeSummary = z.infer<typeof contextTreeSummarySchema>;
 
+export const contextTreeUsageEventSchema = z.object({
+  id: z.string(),
+  agentId: z.string(),
+  agentName: z.string(),
+  // chatId and chatTitle are masked to null when the requesting caller cannot
+  // pass the same visibility gate as requireChatAccess (direct chat_membership
+  // or supervised speaker). The org-wide aggregate counts always reflect every
+  // event, but chat identifiers are only revealed to callers who could otherwise
+  // open the chat.
+  chatId: z.string().nullable(),
+  chatTitle: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type ContextTreeUsageEvent = z.infer<typeof contextTreeUsageEventSchema>;
+
 export const contextTreeUsageSummarySchema = z.object({
   windowDays: z.number().int().positive(),
   agentCount: z.number().int().nonnegative(),
   usageCount: z.number().int().nonnegative(),
+  recentEvents: z.array(contextTreeUsageEventSchema),
 });
 export type ContextTreeUsageSummary = z.infer<typeof contextTreeUsageSummarySchema>;
 
