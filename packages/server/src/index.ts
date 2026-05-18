@@ -45,8 +45,13 @@ async function main() {
   const app = await withSpan("server.bootstrap", { "service.instance.id": config.instanceId }, async () => {
     // Run Drizzle migrations before the app comes up. Idempotent under
     // multi-replica startup (Drizzle journal table); cold-start cost is
-    // a few hundred ms when there's nothing new to apply.
-    const tableCount = await runStage("runMigrations", () => runMigrations(serverConfig.database.url), 60_000);
+    // a few hundred ms when there's nothing new to apply. The 20s budget
+    // matches the Dockerfile HEALTHCHECK start-period so a migration that
+    // truly exceeds it fails the boot fast rather than letting docker
+    // judge unhealthy mid-migration. If a future migration is known to
+    // run longer, raise both this and the HEALTHCHECK start-period
+    // together.
+    const tableCount = await runStage("runMigrations", () => runMigrations(serverConfig.database.url), 20_000);
     log.info({ tableCount }, "migrations applied");
 
     const built = await runStage("buildApp", () => buildApp(config), 30_000);

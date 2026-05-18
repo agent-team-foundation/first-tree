@@ -72,11 +72,15 @@ function validateJournalOrder(migrationsFolder: string): void {
  * behavior using the same key.
  */
 const MIGRATION_LOCK_KEY_SQL = "hashtext('drizzle_migrations')";
-const DEFAULT_MIGRATION_LOCK_TIMEOUT_MS = 30_000;
+// Sits inside the 20s `runMigrations` stage budget set in `index.ts`; 15s
+// preflight + ≥5s for the actual drizzle migrate call. If you raise either,
+// raise the other in lockstep (and re-evaluate the Dockerfile HEALTHCHECK
+// `--start-period`).
+const DEFAULT_MIGRATION_LOCK_TIMEOUT_MS = 15_000;
 const MIGRATION_LOCK_POLL_INTERVAL_MS = 1_000;
 
 export type RunMigrationsOptions = {
-  /** Override the preflight advisory-lock timeout. Default 30s. */
+  /** Override the preflight advisory-lock timeout. Default 15s. */
   lockTimeoutMs?: number;
 };
 
