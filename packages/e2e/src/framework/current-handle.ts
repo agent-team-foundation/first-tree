@@ -9,6 +9,8 @@ export type ProvisionedCredentialsHandle = {
   organizationId: string;
   memberId: string;
   humanAgentId: string;
+  /** Lowercase `agents.name` of the human agent — usable as a mention/assignee login. */
+  humanAgentName: string;
   clientId: string;
   accessToken: string;
   refreshToken: string;

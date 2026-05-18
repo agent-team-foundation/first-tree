@@ -40,6 +40,15 @@ export type ProvisionedCredentials = {
   /** Human agent representing the user in the org. */
   humanAgentId: string;
   /**
+   * Lowercase `agents.name` of the human agent. Set to a unique-per-run
+   * slug so tests that need to drive an `@mention` or PR assignee against
+   * this agent (e.g. the github PR delivery test) can match it via the
+   * audience resolver's `lower(agents.name) = login` filter. The agent
+   * update API doesn't allow renaming, so the name has to be assigned
+   * here at fixture insert time.
+   */
+  humanAgentName: string;
+  /**
    * Pre-seeded `clients` row id. The spawned CLI's `client.yaml` is
    * planted with this same id so it claims the row on first WS register
    * (rather than inventing a fresh `client_<rand>`).
@@ -74,6 +83,9 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
   const humanAgentId = randomUUID();
   const clientId = `client_${randomBytes(4).toString("hex")}`;
   const username = `e2e-${randomBytes(4).toString("hex")}`;
+  // Use the username as the agent name — it already satisfies
+  // AGENT_NAME_REGEX (`^[a-z0-9][a-z0-9_-]{0,63}$`) and is unique-per-run.
+  const humanAgentName = username;
 
   let organizationId: string;
   const pg = new PgClient({ connectionString: opts.databaseUrl });
@@ -107,14 +119,15 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
         "E2E Test User",
       ]);
 
-      // The human agent is left nameless (`agents.name` is nullable) and
-      // sourceless. `admin-api` would be misleading — this row didn't go
-      // through the admin API. NULL accurately says "fixture-created".
+      // `source` is left NULL — `admin-api` would be misleading; this row
+      // didn't go through the admin API. `name` is set so tests can drive
+      // `@mention` / PR-assignee flows against this human (see the
+      // `github-pr-delivery` test).
       await pg.query(
         `INSERT INTO agents
-           (uuid, organization_id, type, display_name, inbox_id, manager_id)
-         VALUES ($1, $2, 'human', $3, $4, $5)`,
-        [humanAgentId, organizationId, "E2E Test User", `inbox_${humanAgentId}`, memberId],
+           (uuid, name, organization_id, type, display_name, inbox_id, manager_id)
+         VALUES ($1, $2, $3, 'human', $4, $5, $6)`,
+        [humanAgentId, humanAgentName, organizationId, "E2E Test User", `inbox_${humanAgentId}`, memberId],
       );
 
       await pg.query(
@@ -177,6 +190,7 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
     organizationId,
     memberId,
     humanAgentId,
+    humanAgentName,
     clientId,
     accessToken,
     refreshToken,
