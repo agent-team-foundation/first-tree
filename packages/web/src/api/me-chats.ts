@@ -21,7 +21,7 @@ import { api, withOrg } from "./client.js";
  */
 
 export type ListMeChatsParams = Partial<
-  Pick<ListMeChatsQuery, "cursor" | "limit" | "filter" | "engagement" | "source">
+  Pick<ListMeChatsQuery, "cursor" | "limit" | "filter" | "engagement" | "origin" | "with" | "watching">
 >;
 
 export function listMeChats(params?: ListMeChatsParams): Promise<ListMeChatsResponse> {
@@ -30,7 +30,13 @@ export function listMeChats(params?: ListMeChatsParams): Promise<ListMeChatsResp
   if (params?.cursor) qs.set("cursor", params.cursor);
   if (params?.filter) qs.set("filter", params.filter);
   if (params?.engagement) qs.set("engagement", params.engagement);
-  if (params?.source) qs.set("source", params.source);
+  // Multi-value `origin` / `with` go on the wire as comma-joined strings.
+  // The server schema's `csvArrayPreprocess` accepts both this and the
+  // repeated-query-param form, but comma-joined keeps the URL compact
+  // and matches the workspace UI's URL contract.
+  if (params?.origin && params.origin.length > 0) qs.set("origin", params.origin.join(","));
+  if (params?.with && params.with.length > 0) qs.set("with", params.with.join(","));
+  if (params?.watching) qs.set("watching", "1");
   const query = qs.toString();
   return api.get<ListMeChatsResponse>(withOrg(`/chats${query ? `?${query}` : ""}`));
 }
