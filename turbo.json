@@ -12,6 +12,20 @@
     "typecheck": {
       "dependsOn": ["^build"]
     },
-    "test": {}
+    "test": {},
+    "e2e:doctor": {
+      "cache": false,
+      "passThroughEnv": ["E2E_*", "FIRST_TREE_HUB_*"]
+    },
+    "e2e:smoke": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "passThroughEnv": ["E2E_*", "FIRST_TREE_HUB_*"]
+    },
+    "e2e:full": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "passThroughEnv": ["E2E_*", "FIRST_TREE_HUB_*"]
+    }
   }
 }
