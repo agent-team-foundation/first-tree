@@ -3,83 +3,119 @@ import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 
 /**
- * Settings is a master-detail container. Flat aesthetic — no borders, no
- * contrasting sidebar bg; active state is a soft pill.
+ * Settings layout — sidebar + main content. Replaces the earlier double-tab
+ * pattern (global nav tabs + sub-tabs) which stacked two tab visuals against
+ * each other.
  *
- * Sub-tabs:
- *   Team           — org-scoped Identity / Context Tree / Source repos
- *                    (Source repos read-only for members; the rest are
- *                    admin-only and hidden from member's view of the page)
- *   Computers      — user-scoped: machines connected to Hub
- *   GitHub         — admin-only: webhook URL + secret for routing GitHub
- *                    issue / comment events to agents
- *   Messaging      — IM bridges (Feishu / Slack adapter CRUD)
- *   Onboarding     — guided-setup stepper enable / disable
+ * Why sidebar (and not another row of tabs / flat single page)?
+ *   - Settings is an *index of independent modules*, not multiple views of a
+ *     single entity. Industry pattern (GitHub / Linear / Stripe / Vercel) is
+ *     left sidebar for settings; top tabs for entity-detail views.
+ *   - Single-page flat layout scales poorly past ~5 sections; with Billing /
+ *     Security / API keys / Webhooks on the roadmap, sidebar lets the list
+ *     grow without redesign.
  *
- * `GitHub` is hidden from the member sidebar because both reads and writes
- * are admin-gated server-side — surfacing the entry would just lead to a
- * 403 inside.
+ * Width: the main column inside still respects the shared 960 canvas (see
+ * `components/layout.tsx`), the sidebar is an additional 200 on the left
+ * (sidebar 200 + main 960 = 1160 total).
+ * Layout opts out of the default 960 wrapper via `isSettings` so this whole
+ * shell can centre itself at ~1180.
+ *
+ * Sub-routes:
+ *   Computers     — user-scoped: machines connected to Hub (most-frequent
+ *                   entry point — placed first)
+ *   Team          — org-scoped Identity / Context Tree / Source repos
+ *   GitHub        — admin-only platform integration
+ *   Messaging     — IM bridges (Feishu / Slack)
+ *   Onboarding    — guided-setup stepper enable/disable (hidden once
+ *                   onboarding is permanently completed)
  */
+
+type Item = {
+  to: string;
+  label: string;
+  adminOnly?: boolean;
+};
+
+const ITEMS: Item[] = [
+  { to: "/settings/computers", label: "Computers" },
+  { to: "/settings/team", label: "Team" },
+  { to: "/settings/github", label: "GitHub", adminOnly: true },
+  { to: "/settings/integrations", label: "Messaging" },
+  { to: "/settings/onboarding", label: "Onboarding" },
+];
+
 export function SettingsLayout() {
-  const { role, onboardingCompletedAt } = useAuth();
+  const { role, onboardingCompletedAt, meLoaded } = useAuth();
+  // Wait for `/me` to resolve before rendering the nav — otherwise a fresh
+  // direct hit on /settings/github would briefly paint the member-view nav
+  // (no GitHub) before `role` flips to "admin".
+  if (!meLoaded) {
+    return null;
+  }
   const isAdmin = role === "admin";
-  // Once Step 3 succeeds (`onboarding_completed_at` stamped), the wizard
-  // is a terminal — subsequent tree / source-repo edits live in Settings →
-  // Team and /agents/:uuid, not back inside the onboarding flow. Hiding
-  // the sidebar entry is the gate; /settings/onboarding itself also
-  // redirects to /settings/team for direct URL access.
+  // Once onboarding completes, the wizard is terminal and the entry is
+  // hidden. Direct URL access to /settings/onboarding still redirects out
+  // via the page's own guard.
   const hasCompletedOnboarding = onboardingCompletedAt !== null;
 
+  const visible = ITEMS.filter((it) => {
+    if (it.adminOnly && !isAdmin) return false;
+    if (it.to === "/settings/onboarding" && hasCompletedOnboarding) return false;
+    return true;
+  });
+
   return (
-    <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
+    <div className="mx-auto flex" style={{ maxWidth: 1160, minHeight: "100%" }}>
       <aside
-        className="shrink-0 overflow-auto"
+        aria-label="Settings"
         style={{
           width: 200,
-          padding: "var(--sp-4) var(--sp-2)",
+          flexShrink: 0,
+          padding: "var(--sp-3) var(--sp-3) var(--sp-4) var(--sp-1)",
+          borderRight: "var(--hairline) solid var(--border)",
+          position: "sticky",
+          top: 0,
+          alignSelf: "flex-start",
+          maxHeight: "100vh",
+          overflowY: "auto",
         }}
       >
-        <SubNavLink to="/settings/team" label="Team" />
-        <SubNavLink to="/settings/computers" label="Computers" />
-        {isAdmin && <SubNavLink to="/settings/github" label="GitHub" />}
-        <SubNavLink to="/settings/integrations" label="Messaging" />
-        {!hasCompletedOnboarding && <SubNavLink to="/settings/onboarding" label="Onboarding" />}
+        <nav className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
+          {visible.map((item) => (
+            <SidebarLink key={item.to} to={item.to} label={item.label} />
+          ))}
+        </nav>
       </aside>
 
-      <div className="flex-1 min-w-0 overflow-auto">
+      <div className="flex-1 min-w-0">
         <Outlet />
       </div>
     </div>
   );
 }
 
-function SubNavLink({ to, label }: { to: string; label: string }) {
+function SidebarLink({ to, label }: { to: string; label: string }) {
   return (
     <NavLink
       to={to}
-      className={({ isActive }) =>
-        cn(
-          "block w-full text-left bg-transparent text-body transition-colors",
-          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          !isActive && "hover:bg-accent",
-        )
-      }
-      style={{
-        borderRadius: "var(--radius-input)",
-      }}
+      className={cn(
+        "block text-body transition-colors",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+      )}
     >
       {({ isActive }) => (
         <span
-          className="flex items-center"
+          className="block"
           style={{
-            padding: "var(--sp-1_25) var(--sp-2_5)",
-            background: isActive ? "var(--bg-active)" : "transparent",
-            color: isActive ? "var(--fg)" : "var(--fg-3)",
-            fontWeight: isActive ? 500 : 400,
+            padding: "var(--sp-2) var(--sp-3)",
             borderRadius: "var(--radius-input)",
+            color: isActive ? "var(--fg)" : "var(--fg-3)",
+            background: isActive ? "var(--bg-hover)" : "transparent",
+            fontWeight: isActive ? 500 : 400,
           }}
         >
-          <span className="flex-1 truncate">{label}</span>
+          {label}
         </span>
       )}
     </NavLink>

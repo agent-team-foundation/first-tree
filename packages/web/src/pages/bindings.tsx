@@ -18,8 +18,7 @@ import {
   DenseTableRow,
 } from "../components/ui/dense-table.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
-import { Panel } from "../components/ui/panel.js";
-import { SectionHeader } from "../components/ui/section-header.js";
+import { Section } from "../components/ui/section.js";
 import { StateDot } from "../components/ui/state-dot.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate } from "../lib/utils.js";
@@ -260,26 +259,25 @@ export function BindingsPage() {
         </div>
       )}
 
-      <Panel className="mb-3.5">
-        <SectionHeader
-          right={
-            <span className="inline-flex items-center gap-2">
-              <span className="inline-flex items-center gap-3 text-caption">
-                <span className="mono inline-flex items-center gap-1" style={{ color: "var(--state-idle)" }}>
-                  <StateDot state="idle" size={6} /> {onlineBots} online
-                </span>
-                <span className="mono inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
-                  <StateDot state="offline" size={6} /> {offlineBots} offline
-                </span>
+      <Section
+        title="Bot bindings"
+        count={adapters.length}
+        action={
+          <div className="inline-flex items-center gap-3">
+            <span className="inline-flex items-center gap-3 text-caption">
+              <span className="inline-flex items-center gap-1" style={{ color: "var(--state-idle)" }}>
+                <StateDot state="idle" size={6} /> {onlineBots} online
               </span>
-              <Button size="xs" variant="outline" onClick={() => openCreate("bot")}>
-                <Plus className="h-3 w-3" /> Bot binding
-              </Button>
+              <span className="inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
+                <StateDot state="offline" size={6} /> {offlineBots} offline
+              </span>
             </span>
-          }
-        >
-          Bot bindings · {adapters.length}
-        </SectionHeader>
+            <Button size="xs" variant="outline" onClick={() => openCreate("bot")}>
+              <Plus className="h-3 w-3" /> Bot binding
+            </Button>
+          </div>
+        }
+      >
         {isLoading ? (
           <EmptyRow>Loading…</EmptyRow>
         ) : !adapters.length ? (
@@ -355,18 +353,17 @@ export function BindingsPage() {
             </DenseTableBody>
           </DenseTable>
         )}
-      </Panel>
+      </Section>
 
-      <Panel>
-        <SectionHeader
-          right={
-            <Button size="xs" variant="outline" onClick={() => openCreate("user")}>
-              <Plus className="h-3 w-3" /> User binding
-            </Button>
-          }
-        >
-          User bindings · {mappings.length}
-        </SectionHeader>
+      <Section
+        title="User bindings"
+        count={mappings.length}
+        action={
+          <Button size="xs" variant="outline" onClick={() => openCreate("user")}>
+            <Plus className="h-3 w-3" /> User binding
+          </Button>
+        }
+      >
         {isLoading ? (
           <EmptyRow>Loading…</EmptyRow>
         ) : !mappings.length ? (
@@ -424,7 +421,7 @@ export function BindingsPage() {
             </DenseTableBody>
           </DenseTable>
         )}
-      </Panel>
+      </Section>
 
       {/* Pick agent → then open the real form. Skipped when ?agent=is set. */}
       <AgentPickerDialog

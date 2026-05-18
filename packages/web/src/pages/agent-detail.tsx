@@ -29,6 +29,7 @@ import { Button } from "./../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
 import { StateChip } from "./../components/ui/state-chip.js";
+import { humanizeAgentType, humanizeVisibility } from "./../lib/agent-labels.js";
 import { cn, formatDate } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
 import { getAgentTestActionState, isBindableClient } from "./agent-detail/action-state.js";
@@ -50,7 +51,7 @@ const SECTION_TO_TAB: Record<DraftSectionName, string> = {
 
 type TabDef = { key: string; label: string; path: string };
 
-function buildTabs(canEditConfig: boolean, canManage: boolean): TabDef[] {
+function buildTabs(canEditConfig: boolean): TabDef[] {
   const tabs: TabDef[] = [{ key: "profile", label: "Profile", path: "profile" }];
   if (canEditConfig) {
     tabs.push(
@@ -59,10 +60,10 @@ function buildTabs(canEditConfig: boolean, canManage: boolean): TabDef[] {
       { key: "tools", label: "Tools", path: "tools" },
       { key: "resources", label: "Resources", path: "resources" },
     );
-  } else if (canManage) {
-    // human agent + admin: only Lifecycle inside Setup, no Computer/Model.
-    tabs.push({ key: "setup", label: "Setup", path: "setup" });
   }
+  // Human agents have no runtime to configure. Danger zone (suspend / delete)
+  // lives on the Profile tab, so they don't need a Setup tab entry either —
+  // it would render blank without any rows to show.
   return tabs;
 }
 
@@ -273,7 +274,7 @@ export function AgentDetailPage() {
     return set;
   }, [draft.summary.dirtySections]);
 
-  const tabs = useMemo(() => buildTabs(canEditConfig, canManageAgent), [canEditConfig, canManageAgent]);
+  const tabs = useMemo(() => buildTabs(canEditConfig), [canEditConfig]);
   const currentTabKey = useMemo(() => {
     const segments = location.pathname.split("/");
     const last = segments[segments.length - 1] ?? "";
@@ -456,10 +457,9 @@ export function AgentDetailPage() {
             <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
               @{agent.name ?? shortId}
             </span>
-            <DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>
-              {agent.type}
-              {agent.visibility ? ` · ${agent.visibility}` : ""}
-            </DenseBadge>
+            <span className="text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+              · {humanizeAgentType(agent.type)} · {humanizeVisibility(agent.visibility)}
+            </span>
             {clientStatus?.offlineSince && (
               <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                 offline since {formatDate(clientStatus.offlineSince)}

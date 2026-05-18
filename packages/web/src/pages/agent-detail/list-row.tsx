@@ -37,9 +37,13 @@ export function ListRow({ status, onEdit, onDelete, onUndo, children, disabled }
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded border px-3 py-2 text-body",
-        isDeleted ? "bg-error-soft border-error text-error line-through decoration-error" : "bg-card",
+        "flex items-center gap-2 text-body transition-colors",
+        isDeleted ? "text-error line-through decoration-error" : "hover:bg-accent",
       )}
+      style={{
+        padding: "var(--sp-2_5) 0",
+        borderBottom: "var(--hairline) solid var(--border-faint)",
+      }}
     >
       <div className="flex-1 min-w-0 flex items-center gap-2">{children}</div>
       {badge.label && (

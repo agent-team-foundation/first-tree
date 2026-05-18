@@ -273,6 +273,11 @@ export class FirstTreeHubSDK {
     return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
   }
 
+  /** Fetch Context Tree configuration for this SDK's authenticated agent. */
+  async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
+    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
+  }
+
   private queryString(options?: { limit?: number; cursor?: string }): string {
     const params = new URLSearchParams();
     if (options?.limit !== undefined) params.set("limit", String(options.limit));

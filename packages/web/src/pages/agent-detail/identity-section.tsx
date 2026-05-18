@@ -10,9 +10,11 @@ import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { Section } from "../../components/ui/section.js";
+import { humanizeAgentType, humanizeVisibility } from "../../lib/agent-labels.js";
 import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
+import { ConfigRow } from "./flat-section.js";
 
 /**
  * Redesign §5.3 Identity — a compact two-line summary plus a dedicated
@@ -37,67 +39,47 @@ export function IdentitySection({ agent, canEdit = true, onSave }: IdentitySecti
   const domains = Array.isArray(treeMeta?.domains)
     ? (treeMeta?.domains as unknown[]).filter((d): d is string => typeof d === "string")
     : [];
-  const ownerName = agent.managerId ? resolveMember(agent.managerId) : null;
+  const managerName = agent.managerId ? resolveMember(agent.managerId) : null;
   const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
 
+  const action =
+    canEdit && agent.status === "active" ? (
+      <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
+        <Pencil className="h-3 w-3" /> Edit
+      </Button>
+    ) : null;
+
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>Profile</PanelTitle>
-        {canEdit && agent.status === "active" && (
-          <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
-            <Pencil className="h-3 w-3" /> Edit
-          </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="text-body space-y-1">
-        <div>
-          <span className="font-semibold">{agent.displayName}</span>
-          {agent.name && <span className="ml-2 font-mono text-caption text-muted-foreground">@{agent.name}</span>}
-          {delegateIdentity && (
-            <>
-              <span className="mx-2 text-muted-foreground">·</span>
-              <span className="text-muted-foreground">
-                delegate <AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />
-              </span>
-            </>
-          )}
-        </div>
-        <div className="text-caption text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span>
-            owner <span className="text-foreground">{ownerName ?? "—"}</span>
-          </span>
-          {role && (
-            <span>
-              role <span className="text-foreground">{role}</span>
+    <Section title="Identity" action={action}>
+      <ConfigRow label="Display name" value={<span className="font-semibold">{agent.displayName}</span>} />
+      <ConfigRow label="Agent name" value={agent.name ? <span className="font-mono">@{agent.name}</span> : "—"} />
+      {delegateIdentity && (
+        <ConfigRow
+          label="Delegate"
+          value={<AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />}
+        />
+      )}
+      <ConfigRow label="Manager" value={managerName ?? "—"} />
+      {role && <ConfigRow label="Role" value={role} />}
+      <ConfigRow label="Type" value={humanizeAgentType(agent.type)} />
+      <ConfigRow label="Visibility" value={humanizeVisibility(agent.visibility)} />
+      {domains.length > 0 && (
+        <ConfigRow
+          label="Domains"
+          value={
+            <span className="inline-flex flex-wrap gap-1 align-middle">
+              {domains.map((d) => (
+                <DenseBadge key={d} tone="outline">
+                  {d}
+                </DenseBadge>
+              ))}
             </span>
-          )}
-          <span>
-            type <DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>{agent.type}</DenseBadge>
-          </span>
-          <span>
-            visibility{" "}
-            <DenseBadge tone={agent.visibility === "organization" ? "accent" : "outline"}>
-              {agent.visibility}
-            </DenseBadge>
-          </span>
-          {domains.length > 0 && (
-            <span>
-              domains{" "}
-              <span className="inline-flex flex-wrap gap-1 align-middle">
-                {domains.map((d) => (
-                  <DenseBadge key={d} tone="outline">
-                    {d}
-                  </DenseBadge>
-                ))}
-              </span>
-            </span>
-          )}
-        </div>
-      </PanelBody>
+          }
+        />
+      )}
 
       {canEdit && <IdentityEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} />}
-    </Panel>
+    </Section>
   );
 }
 
@@ -182,7 +164,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
             </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="id-display">Display Name</Label>
+            <Label htmlFor="id-display">Display name</Label>
             <Input
               id="id-display"
               value={displayName}

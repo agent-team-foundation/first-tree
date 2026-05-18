@@ -11,7 +11,7 @@ import type { ClientConnection, SessionReconcileResult } from "../client-connect
 import { createLogger, type pino } from "../observability/logger.js";
 import type { RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
-import type { ContextTreeBinding } from "./bootstrap.js";
+import { syncAgentContextTree } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 import type { HandlerFactory } from "./handler.js";
@@ -85,7 +85,7 @@ export class AgentSlot {
     return this.sessionManager?.getQuietGateSnapshot() ?? { activeCount: 0, lastActivityMs: 0 };
   }
 
-  async start(contextTreeBinding?: ContextTreeBinding | null): Promise<RegisterResult> {
+  async start(): Promise<RegisterResult> {
     const bound = await this.clientConnection.bindAgent(
       this.config.agentId,
       this.config.runtimeType ?? this.config.type,
@@ -112,6 +112,10 @@ export class AgentSlot {
     }
 
     this.inboxId = agent.inboxId;
+    const contextTreeBinding = await syncAgentContextTree(sdk, (msg) => this.logger.info(msg));
+    if (!contextTreeBinding) {
+      this.logger.info("context tree not configured or sync skipped — agent will start without organizational context");
+    }
 
     const onInboxDeliver = (inboxId: string, frame: InboxDeliverFrame) => {
       if (inboxId !== this.inboxId) return;

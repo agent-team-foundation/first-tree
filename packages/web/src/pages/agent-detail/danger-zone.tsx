@@ -1,13 +1,22 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
-import { AlertTriangle, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
+import { Section } from "../../components/ui/section.js";
+import { ConfigRow } from "./flat-section.js";
 
 /**
- * Redesign §5.8 Danger Zone — visually isolated, GitHub-style confirm for delete.
- * Suspend also uses a proper Dialog (no native window.confirm).
+ * Danger Zone — destructive lifecycle controls (suspend / reactivate / delete).
+ *
+ * Visual: shares the flat Section / ConfigRow rhythm with the rest of
+ * Setup tab. The danger framing comes from the red section title and the
+ * destructive Delete button, not from a coloured panel — the older red-tinted
+ * card stood out so hard it looked detached from the rest of the page.
+ *
+ * Confirmation uses real Dialogs (no native window.confirm) so both Suspend
+ * and Delete can render typed-name confirmation copy and a labelled button.
  */
 
 export type DangerZoneProps = {
@@ -30,25 +39,12 @@ export function DangerZone(props: DangerZoneProps) {
   const canDelete = agent.status === "suspended";
 
   return (
-    <section
-      id="ad-danger"
-      style={{
-        background: "color-mix(in oklch, var(--state-error) 6%, var(--bg-raised))",
-        border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
-        borderRadius: "var(--radius-panel)",
-      }}
-    >
-      <header className="flex items-center gap-2" style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
-        <AlertTriangle className="h-3.5 w-3.5" style={{ color: "var(--state-error)" }} />
-        <h3 className="text-body font-semibold" style={{ color: "var(--state-error)" }}>
-          Danger zone
-        </h3>
-      </header>
-      <div>
+    <section id="ad-danger">
+      <Section title={<span style={{ color: "var(--state-error)" }}>Danger zone</span>}>
         {agent.status === "active" ? (
-          <DangerRow
-            title="Suspend agent"
-            body="Pause all active sessions. You can reactivate later; tokens stay revoked until then."
+          <ConfigRow
+            label="Suspend agent"
+            description="Pause all active sessions. You can reactivate later; tokens stay revoked until then."
             action={
               <Button variant="outline" size="xs" onClick={() => setSuspendOpen(true)} disabled={props.suspendPending}>
                 {props.suspendPending ? "Suspending…" : "Suspend"}
@@ -56,9 +52,9 @@ export function DangerZone(props: DangerZoneProps) {
             }
           />
         ) : (
-          <DangerRow
-            title="Reactivate agent"
-            body="Resume sessions. Tokens must be recreated — they are not restored."
+          <ConfigRow
+            label="Reactivate agent"
+            description="Resume sessions. Tokens must be recreated — they are not restored."
             action={
               <Button variant="outline" size="xs" onClick={props.onReactivate} disabled={props.reactivatePending}>
                 {props.reactivatePending ? "Reactivating…" : "Reactivate"}
@@ -66,9 +62,9 @@ export function DangerZone(props: DangerZoneProps) {
             }
           />
         )}
-        <DangerRow
-          title="Delete agent"
-          body={
+        <ConfigRow
+          label="Delete agent"
+          description={
             canDelete
               ? "Permanent. Configuration, bindings, tokens, and session history are all dropped."
               : "Suspend this agent before deleting it."
@@ -88,19 +84,12 @@ export function DangerZone(props: DangerZoneProps) {
             </Button>
           }
         />
-      </div>
-      {props.errorMessage && (
-        <div
-          className="text-body"
-          style={{
-            padding: "var(--sp-2_5) var(--sp-3_5)",
-            borderTop: "var(--hairline) solid color-mix(in oklch, var(--state-error) 14%, transparent)",
-            color: "var(--state-error)",
-          }}
-        >
-          {props.errorMessage}
-        </div>
-      )}
+        {props.errorMessage && (
+          <p className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
+            {props.errorMessage}
+          </p>
+        )}
+      </Section>
 
       <SuspendConfirmDialog
         open={suspendOpen}
@@ -123,28 +112,6 @@ export function DangerZone(props: DangerZoneProps) {
         deleting={props.deletePending}
       />
     </section>
-  );
-}
-
-function DangerRow(props: { title: string; body: string; action: React.ReactNode }) {
-  return (
-    <div
-      className="flex items-start justify-between gap-4 text-body"
-      style={{
-        padding: "var(--sp-2_5) var(--sp-3_5)",
-        borderTop: "var(--hairline) solid color-mix(in oklch, var(--state-error) 14%, transparent)",
-      }}
-    >
-      <div>
-        <p className="font-medium" style={{ color: "var(--fg)" }}>
-          {props.title}
-        </p>
-        <p className="text-label font-normal" style={{ color: "var(--fg-3)" }}>
-          {props.body}
-        </p>
-      </div>
-      <div>{props.action}</div>
-    </div>
   );
 }
 

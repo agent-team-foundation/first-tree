@@ -4,7 +4,7 @@ import { Building2, ExternalLink, PauseCircle, User } from "lucide-react";
 import { ApiError } from "../api/client.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../api/github-app.js";
 import { useAuth } from "../auth/auth-context.js";
-import { SettingsSection } from "../components/ui/settings-section.js";
+import { Section } from "../components/ui/section.js";
 
 /**
  * Settings → Integrations panel for the GitHub App installation.
@@ -23,7 +23,7 @@ import { SettingsSection } from "../components/ui/settings-section.js";
  * webhook delivery is paused on GitHub's side and the binding is
  * effectively inactive until unsuspended.
  */
-export function GithubAppInstallationPanel({ isFirst = false }: { isFirst?: boolean }) {
+export function GithubAppInstallationPanel() {
   const { organizationId } = useAuth();
 
   const installationQuery = useQuery({
@@ -33,10 +33,9 @@ export function GithubAppInstallationPanel({ isFirst = false }: { isFirst?: bool
   });
 
   return (
-    <SettingsSection
+    <Section
       title="GitHub App"
       description="One installation unlocks user sign-in, webhook ingestion, and (later) server-side write access."
-      isFirst={isFirst}
     >
       {installationQuery.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
@@ -54,7 +53,7 @@ export function GithubAppInstallationPanel({ isFirst = false }: { isFirst?: bool
       ) : (
         <InstalledState data={installationQuery.data} />
       )}
-    </SettingsSection>
+    </Section>
   );
 }
 

@@ -15,6 +15,7 @@ import { adapterMappingRoutes } from "./api/adapter-mappings.js";
 import { adapterRoutes } from "./api/adapters.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
+import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
 import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
@@ -493,6 +494,7 @@ export async function buildApp(config: Config) {
           await scope.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
+          await scope.register(agentContextTreeInfoRoutes);
 
           await scope.register(agentFeishuBotRoutes);
           await scope.register(agentFeishuUserRoutes, { prefix: "/delegated" });

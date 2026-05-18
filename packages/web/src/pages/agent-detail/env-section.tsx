@@ -5,7 +5,7 @@ import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { Section } from "../../components/ui/section.js";
 import { ListRow } from "./list-row.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
@@ -41,19 +41,19 @@ export function EnvSection(props: EnvSectionProps) {
     });
   const activeCount = props.items.filter((i) => i.status !== "deleted").length;
 
+  const action = !props.disabled ? (
+    <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
+      <Plus className="h-3 w-3" /> Add
+    </Button>
+  ) : null;
+
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>Environment variables ({activeCount})</PanelTitle>
-        {!props.disabled && (
-          <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-3 w-3" /> Add
-          </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="space-y-2">
+    <Section title="Environment variables" count={activeCount} action={action}>
+      <div>
         {props.items.length === 0 ? (
-          <p className="text-body text-muted-foreground">No environment variables.</p>
+          <p className="text-body text-muted-foreground" style={{ padding: "var(--sp-3) 0" }}>
+            No environment variables.
+          </p>
         ) : (
           props.items.map((item) => {
             const isSensitive = item.value.sensitive;
@@ -103,7 +103,7 @@ export function EnvSection(props: EnvSectionProps) {
             );
           })
         )}
-      </PanelBody>
+      </div>
       {dialog && (
         <EnvDialog
           open={!!dialog}
@@ -121,7 +121,7 @@ export function EnvSection(props: EnvSectionProps) {
           }}
         />
       )}
-    </Panel>
+    </Section>
   );
 }
 

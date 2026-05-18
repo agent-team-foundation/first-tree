@@ -3,7 +3,7 @@ import { Check, ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../../components/ui/button.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { ConfigRow } from "./flat-section.js";
 
 /**
  * Model — an inline dropdown with a "changed" hint and Revert. No inline save:
@@ -39,10 +39,8 @@ const MODEL_OPTIONS_BY_PROVIDER: Record<RuntimeProvider, ModelOption[]> = {
 };
 
 const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
-  "claude-code":
-    "Choose which Claude model powers this agent. Aliases (opus / sonnet / haiku) follow the CLI's latest-in-family mapping and may shift across releases. Applies to new sessions immediately; active sessions switch on their next message. Unset falls back to the operator's local ~/.claude/settings.json model preference, then the CLI default.",
-  codex:
-    "Pick a Codex model. Slugs come from the Codex CLI bundled with @openai/codex-sdk; ChatGPT-account auth currently only accepts gpt-5.5, while API-key auth accepts the wider set. Applies to new sessions immediately; active sessions switch on their next message. Unset lets the codex CLI choose a model that matches the user's auth mode.",
+  "claude-code": "Applies to new sessions immediately. Unset falls back to the CLI default.",
+  codex: "Applies to new sessions immediately. Unset lets the CLI pick by auth mode.",
 };
 
 export type ModelSectionProps = {
@@ -77,39 +75,36 @@ export function ModelSection({
   }, [presetOptions, value]);
 
   return (
-    <Panel
-      style={{
-        borderColor: dirty ? "color-mix(in oklch, var(--state-blocked) 70%, transparent)" : undefined,
-      }}
-    >
-      <PanelHeader>
-        <PanelTitle>
-          Model
-          {dirty && (
-            <span
-              className="mono uppercase text-caption"
-              style={{
-                padding: "var(--hairline) var(--sp-1_5)",
-                borderRadius: "var(--radius-chip)",
-                background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
-                color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
-              }}
-            >
-              changed
-            </span>
-          )}
-        </PanelTitle>
-        {dirty && (
+    <ConfigRow
+      label="Model"
+      helpText={MODEL_HELP_BY_PROVIDER[provider]}
+      meta={dirty ? <ChangedChip /> : null}
+      action={
+        dirty ? (
           <Button size="xs" variant="ghost" onClick={onRevert} disabled={disabled}>
             Revert
           </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="space-y-2">
-        <ModelDropdown items={items} value={value} onChange={onChange} disabled={disabled} />
-        <p className="text-caption text-muted-foreground">{MODEL_HELP_BY_PROVIDER[provider]}</p>
-      </PanelBody>
-    </Panel>
+        ) : null
+      }
+    >
+      <ModelDropdown items={items} value={value} onChange={onChange} disabled={disabled} />
+    </ConfigRow>
+  );
+}
+
+function ChangedChip() {
+  return (
+    <span
+      className="mono uppercase text-caption"
+      style={{
+        padding: "var(--hairline) var(--sp-1_5)",
+        borderRadius: "var(--radius-chip)",
+        background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
+        color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
+      }}
+    >
+      changed
+    </span>
   );
 }
 

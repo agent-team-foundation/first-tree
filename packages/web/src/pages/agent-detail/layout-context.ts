@@ -45,7 +45,7 @@ export type AgentDetailContext = {
   saveIdentity: (patch: UpdateAgent) => Promise<void>;
   refreshAgent: () => Promise<void>;
 
-  // Lifecycle (Setup tab bottom — suspend / reactivate / delete)
+  // Lifecycle (Profile tab bottom — suspend / reactivate / delete)
   suspendPending: boolean;
   reactivatePending: boolean;
   deletePending: boolean;
