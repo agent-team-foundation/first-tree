@@ -1001,9 +1001,9 @@
 
 .context-usage-feed-row {
   display: grid;
-  grid-template-columns: 16px 1fr auto;
+  grid-template-columns: 16px 22px 1fr auto;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-1_5);
   padding: var(--sp-1_5) 0;
   font-size: 13.5px;
   line-height: 1.4;
@@ -1019,6 +1019,31 @@
   z-index: 1;
   /* Page-bg ring "breaks" the dashed rail at this dot. */
   box-shadow: 0 0 0 3px var(--bg, transparent);
+}
+
+/*
+ * Colored avatar disc with the agent's initials. The hue comes from
+ * resolveAvatarHue() (manager-set token, or deterministic hash of
+ * agentId) so the same agent shows the same disc everywhere in the
+ * dashboard. Initials are a fallback for the rare "agent has no
+ * uploaded avatar image" path; if we ever decide to render the real
+ * image, only the markup changes — this class stays as the chip frame.
+ */
+.context-usage-feed-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0;
+  flex: 0 0 auto;
+  /* Same anti-aliasing trick the chat-row avatars use for legibility on
+     light backgrounds — text shadow keeps the 10px initials crisp. */
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
 }
 
 .context-usage-feed-text {
