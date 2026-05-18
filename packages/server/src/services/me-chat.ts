@@ -26,6 +26,7 @@ import {
   type ChatSource,
   type CreateMeChat,
   GITHUB_ENTITY_TYPES,
+  type GithubEntityType,
   LIVE_ACTIVITY_STALE_MS,
   type ListMeChatSourceCountsQuery,
   type ListMeChatsQuery,
@@ -159,72 +160,114 @@ export async function getCallerEngagement(
 }
 
 // ---------------------------------------------------------------------------
-// Source tag projection
+// Origin projection
 // ---------------------------------------------------------------------------
 //
-// The conversation-list tag bar splits chats by source — Manual / GitHub PR /
-// GitHub Issue / etc — using `chats.metadata`. All SQL below derives from
-// `GITHUB_ENTITY_TYPES` (the single source of truth for "which github
-// entities get their own tag"), so adding a new entity type means editing
-// `shared/src/schemas/chat-metadata.ts` once and not chasing literals across
-// three places. `ChatSource` follows the `github_{entityType}` naming
-// convention; the TypeScript switch over `ChatSource` is exhaustive so any
-// drift between the enum and the filter is a compile error.
+// The conversation-list filter popover splits chats by coarse-grained
+// origin — Manual / GitHub / Feishu (one per integration, not one per
+// entity type within an integration). The per-entity GitHub granularity
+// (PR / Issue / Discussion / Commit) is preserved on the row via the
+// separate `entity_type` SELECT so the rail's leading icon can still
+// render the right glyph.
 //
 //   - `sourceFilterSql(source)` — WHERE predicate for `listMeChats`.
-//   - `chatSourceSqlExpression` — CASE for the aggregate `GROUP BY` in
-//     `listMeChatSourceCounts`.
+//   - `chatSourceSqlExpression` — CASE projected into the response row
+//     and shared with `listMeChatSourceCounts` for the aggregate GROUP BY.
 //
-// Invariant: every github row covered by `chatSourceSqlExpression` MUST also
-// match `sourceFilterSql` for the same ChatSource, and vice versa — a
-// malformed row (e.g. `{source:"github", entityType:"some-new-thing"}`) goes
-// into `manual` consistently in both the count and the list. Pinned by the
-// "malformed github metadata falls into manual" test.
-
-const githubEntityList = sql.join(
-  GITHUB_ENTITY_TYPES.map((t) => sql`${t}`),
-  sql.raw(", "),
-);
+// Invariant: every row that `chatSourceSqlExpression` labels `github`
+// MUST also match `sourceFilterSql("github")`, and vice versa. The
+// classifier collapses any GitHub metadata into `github` regardless of
+// the inner `entityType`, so a malformed row like
+// `{source:"github", entityType:"some-new-thing"}` still lands in the
+// `github` bucket — by design, since the popover-level filter doesn't
+// care about the entity sub-type.
 
 const KNOWN_NON_MANUAL_PREDICATE = sql`(
-     (c.metadata->>'source' = 'github' AND c.metadata->>'entityType' IN (${githubEntityList}))
+     c.metadata->>'source' = 'github'
   OR c.metadata->>'source' = 'feishu'
 )`;
 
-const githubCaseArms = sql.join(
-  GITHUB_ENTITY_TYPES.map(
-    (t) => sql`WHEN c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = ${t} THEN ${`github_${t}`}`,
-  ),
-  sql.raw("\n    "),
-);
-
 const chatSourceSqlExpression = sql`CASE
-    ${githubCaseArms}
+    WHEN c.metadata->>'source' = 'github' THEN 'github'
     WHEN c.metadata->>'source' = 'feishu' THEN 'feishu'
     ELSE 'manual'
   END`;
 
+/**
+ * Set membership check for `chats.metadata->>'entityType'`. Used to
+ * narrow the raw text to the typed `GithubEntityType` literal union
+ * before handing it back to the web client — anything outside the
+ * known set decays to `null` so the row schema stays well-typed even
+ * if the DB picks up an unfamiliar value across version skew.
+ */
+const KNOWN_GITHUB_ENTITY_TYPE_SET: ReadonlySet<string> = new Set(GITHUB_ENTITY_TYPES);
+function isKnownGithubEntityType(value: string): value is GithubEntityType {
+  return KNOWN_GITHUB_ENTITY_TYPE_SET.has(value);
+}
+
 function sourceFilterSql(source: ChatSource): SQL {
   switch (source) {
     case "manual":
-      // Defined as the negation of every known-non-manual case so we stay
-      // in lock-step with `chatSourceSqlExpression`'s ELSE arm.
-      // `IS NOT TRUE` (not `NOT (...)`) because `metadata->>'source'` is
-      // NULL for the `{}` / NULL metadata cases — `NULL = 'github'` is
-      // NULL, and `NOT NULL` is still NULL in WHERE, which Postgres treats
-      // as FALSE and would silently drop every manual chat from the list.
+      // Defined as the negation of every known-non-manual case so we
+      // stay in lock-step with `chatSourceSqlExpression`'s ELSE arm.
+      // `IS NOT TRUE` (not `NOT (...)`) because `metadata->>'source'`
+      // is NULL for the `{}` / NULL metadata cases — `NULL = 'github'`
+      // is NULL, and `NOT NULL` is still NULL in WHERE, which Postgres
+      // treats as FALSE and would silently drop every manual chat
+      // from the list.
       return sql`(${KNOWN_NON_MANUAL_PREDICATE}) IS NOT TRUE`;
-    case "github_issue":
-      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'issue')`;
-    case "github_pull_request":
-      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'pull_request')`;
-    case "github_discussion":
-      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'discussion')`;
-    case "github_commit":
-      return sql`(c.metadata->>'source' = 'github' AND c.metadata->>'entityType' = 'commit')`;
+    case "github":
+      return sql`(c.metadata->>'source' = 'github')`;
     case "feishu":
       return sql`(c.metadata->>'source' = 'feishu')`;
   }
+}
+
+/**
+ * WHERE predicate for the multi-select origin filter (Phase B). Returns
+ * a disjunction over each requested origin's `sourceFilterSql` arm, so
+ * `["manual", "github_pull_request"]` becomes
+ * `(manual_predicate OR pr_predicate)`. Empty / undefined input returns
+ * `TRUE` so callers can blanket it onto the WHERE clause without a
+ * conditional. Deduplicates input via `Set` defensively — a user
+ * selecting the same chip twice shouldn't expand into duplicate OR arms.
+ */
+function originsFilterSql(origins: ReadonlyArray<ChatSource>): SQL {
+  const unique = Array.from(new Set(origins));
+  if (unique.length === 0) return sql`TRUE`;
+  if (unique.length === 1) {
+    const only = unique[0];
+    if (only === undefined) return sql`TRUE`;
+    return sourceFilterSql(only);
+  }
+  return sql`(${sql.join(
+    unique.map((o) => sourceFilterSql(o)),
+    sql.raw(" OR "),
+  )})`;
+}
+
+/**
+ * WHERE predicate for the participants filter (Phase B). Returns chats
+ * where any of the named speaker agents is in the membership — OR
+ * semantics, matching the way users typically select multiple
+ * participant chips ("show chats with @a or @b" rather than the
+ * stricter "with both"). Empty / undefined input returns `TRUE`.
+ *
+ * Implemented as a `chat_id IN (subquery)` rather than an extra JOIN
+ * so the result row is still 1:1 with the outer chat and the existing
+ * cursor pagination is unaffected.
+ */
+function participantsFilterSql(agentIds: ReadonlyArray<string>): SQL {
+  const unique = Array.from(new Set(agentIds.filter((id) => id.length > 0)));
+  if (unique.length === 0) return sql`TRUE`;
+  return sql`c.id IN (
+    SELECT chat_id FROM chat_membership
+    WHERE access_mode = 'speaker'
+      AND agent_id IN (${sql.join(
+        unique.map((id) => sql`${id}`),
+        sql.raw(", "),
+      )})
+  )`;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,9 +304,10 @@ export async function listMeChats(
   }
 
   const filterUnreadOnly = query.filter === "unread";
-  const filterWatchingOnly = query.filter === "watching";
+  const filterWatchingOnly = query.watching === true;
   const engagementPredicate = ENGAGEMENT_VIEW_PREDICATE[query.engagement];
-  const sourcePredicate = query.source ? sourceFilterSql(query.source) : sql`TRUE`;
+  const originPredicate = query.origin ? originsFilterSql(query.origin) : sql`TRUE`;
+  const participantsPredicate = query.with ? participantsFilterSql(query.with) : sql`TRUE`;
 
   // Cursor predicate (sort: last_message_at DESC NULLS LAST, chat_id DESC).
   // See the original commentary in git history for the case-by-case
@@ -297,7 +341,8 @@ export async function listMeChats(
       cm.access_mode AS access_mode,
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
       COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
-      ${chatSourceSqlExpression} AS source
+      ${chatSourceSqlExpression} AS source,
+      c.metadata->>'entityType' AS entity_type
       FROM chats c
       JOIN chat_membership cm
         ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
@@ -313,7 +358,8 @@ export async function listMeChats(
        AND (${!filterUnreadOnly}::bool OR COALESCE(cus.unread_mention_count, 0) > 0)
        AND (${!filterWatchingOnly}::bool OR cm.access_mode = 'watcher')
        AND ${engagementPredicate}
-       AND ${sourcePredicate}
+       AND ${originPredicate}
+       AND ${participantsPredicate}
        AND ${cursorPredicate}
      ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
      LIMIT ${limit + 1}
@@ -329,6 +375,7 @@ export async function listMeChats(
     unread_mention_count: number;
     engagement_status: ChatEngagementStatus;
     source: ChatSource;
+    entity_type: string | null;
   }>;
 
   const toDate = (v: Date | string | null): Date | null => {
@@ -435,11 +482,21 @@ export async function listMeChats(
     const participants = participantsByChat.get(r.chat_id) ?? [];
     const title = resolveChatTitle(r.topic, firstMessageSummary.get(r.chat_id) ?? null, participants, humanAgentId);
     const isSpeaker = r.access_mode === "speaker";
+    // Narrow the raw `metadata->>'entityType'` text to the
+    // `GithubEntityType` literal union when it matches a known value,
+    // otherwise null. Github rows always have a `entityType` set by
+    // the webhook writer (see `chat-metadata.ts`'s discriminated
+    // union); the explicit narrowing rejects values we don't ship —
+    // e.g. metadata hand-edited via SQL or an in-flight rollout that
+    // introduces a new entity type before shared/web learn about it.
+    const entityType: MeChatRow["entityType"] =
+      r.source === "github" && r.entity_type !== null && isKnownGithubEntityType(r.entity_type) ? r.entity_type : null;
     return {
       chatId: r.chat_id,
       type: r.type,
       membershipKind: isSpeaker ? "participant" : "watching",
       source: r.source,
+      entityType,
       title,
       topic: r.topic,
       participants,

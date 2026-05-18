@@ -1,15 +1,15 @@
 import type { ChatSource, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
 
-export type GroupMode = "recency" | "source" | "none";
+export type GroupMode = "recency" | "source" | "type" | "none";
 
 /**
  * Parse a `?group=` URL value into a `GroupMode`. Unknown / missing
  * values fall back to `recency` (the default). Exported so both the
- * URL-state side (`WorkspacePage`) and the `<select>`-onChange side
+ * URL-state side (`WorkspacePage`) and the headless dropdown
  * (`ConversationList`) share one canonical parser.
  */
 export function parseGroupMode(raw: string | null): GroupMode {
-  if (raw === "source" || raw === "none") return raw;
+  if (raw === "source" || raw === "type" || raw === "none") return raw;
   return "recency";
 }
 
@@ -40,6 +40,9 @@ export function groupRows(
   }
   if (mode === "recency") {
     return groupByRecency(rows, now);
+  }
+  if (mode === "type") {
+    return groupByType(rows);
   }
   return groupBySource(rows);
 }
@@ -115,10 +118,7 @@ function groupByRecency(rows: ReadonlyArray<MeChatRow>, now: Date): ReadonlyArra
 
 const SOURCE_BUCKETS: ReadonlyArray<{ key: ChatSource; label: string }> = [
   { key: "manual", label: "Manual" },
-  { key: "github_pull_request", label: "Pull requests" },
-  { key: "github_issue", label: "Issues" },
-  { key: "github_discussion", label: "Discussions" },
-  { key: "github_commit", label: "Commits" },
+  { key: "github", label: "GitHub" },
   { key: "feishu", label: "Feishu" },
 ];
 
@@ -138,6 +138,45 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
     const list = map.get(b.key);
     if (!list || list.length === 0) continue;
     buckets.push({ key: b.key, label: b.label, rows: list, defaultCollapsed: false });
+  }
+  return buckets;
+}
+
+// ---------------------------------------------------------------------------
+// Type (topology — direct vs group)
+// ---------------------------------------------------------------------------
+//
+// `chats.type` is `direct | group` (set when the chat is created based on
+// participant count). The bucket labels read in IM-style shorthand —
+// "1:1" / "Team" — because the raw `direct` / `group` values are
+// implementation jargon. Anything unknown sinks into the catch-all
+// "Other" bucket; in practice we never expect to see one.
+
+const TYPE_BUCKETS: ReadonlyArray<{ key: string; label: string; match: (t: string) => boolean }> = [
+  { key: "direct", label: "1:1", match: (t) => t === "direct" },
+  { key: "group", label: "Team", match: (t) => t === "group" },
+];
+
+function groupByType(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket> {
+  const byKey = new Map<string, MeChatRow[]>();
+  for (const r of rows) {
+    const bucket = TYPE_BUCKETS.find((b) => b.match(r.type));
+    const key = bucket?.key ?? "other";
+    const list = byKey.get(key);
+    if (list) list.push(r);
+    else byKey.set(key, [r]);
+  }
+  const buckets: GroupBucket[] = [];
+  for (const b of TYPE_BUCKETS) {
+    const list = byKey.get(b.key);
+    if (!list || list.length === 0) continue;
+    buckets.push({ key: b.key, label: b.label, rows: list, defaultCollapsed: false });
+  }
+  // `other` is a defensive bucket for any unknown topology — surfaced
+  // last so users can still see the row instead of having it vanish.
+  const other = byKey.get("other");
+  if (other && other.length > 0) {
+    buckets.push({ key: "other", label: "Other", rows: other, defaultCollapsed: false });
   }
   return buckets;
 }

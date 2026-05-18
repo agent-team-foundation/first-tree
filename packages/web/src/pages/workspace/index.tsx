@@ -1,4 +1,9 @@
-import { type ChatEngagementView, chatEngagementViewSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  CHAT_SOURCES,
+  type ChatEngagementView,
+  type ChatSource,
+  chatEngagementViewSchema,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
@@ -15,46 +20,101 @@ import { ChatRightSidebar } from "./right-sidebar/index.js";
  * an inline new-chat draft). All rail UI state is URL-backed:
  *
  *   - `?engagement=active|archived|all` (default `active`)
- *   - `?unread=1` (default off) — filter to chats with unread mentions
- *   - `?watching=1` (default off) — filter to chats where user is watching
+ *   - `?unread=1` (default off) — chats with unread mentions for the caller
+ *   - `?watching=1` (default off) — chats where the caller is a watcher
+ *   - `?origin=manual,pr,issue,…` (default empty = unfiltered) — multi-select
+ *   - `?with=agent-x,agent-y` (default empty = unfiltered) — participants
  *   - `?group=recency|source|none` (default `recency`) — list grouping
  *
- * Phase A does not consume the `?source=` URL param (the rail-header
- * source tab row was removed pending the Phase B filter popover);
- * a stray `?source=foo` in the URL is benign and ignored.
+ * Phase B replaces the Phase A single-value `?source=` with the multi-select
+ * `?origin=`; the legacy key is still accepted on first load and upgraded
+ * in-place so shared links / bookmarks keep working without expanding the
+ * wire surface.
  *
  * Legacy URL compat:
  *   - `?a=<agentId>&c=<chatId>` redirects to `?c=<chatId>` (a is ignored).
  *   - `?a=<agentId>` (no chat) clears to `/` — agents are no longer the
  *     primary navigation key.
+ *   - `?source=<value>` upgrades to `?origin=<value>` (single-value to
+ *     multi-select wire). Skipped if `?origin=` is already present.
  */
 const engagementViewParser = chatEngagementViewSchema.catch("active");
 
+// `CHAT_SOURCES.includes(x)` is rejected on a literal-typed tuple, so go
+// through a `Set<string>` and narrow with a user-defined type guard.
+const CHAT_SOURCE_SET: ReadonlySet<string> = new Set(CHAT_SOURCES);
+function isChatSource(value: string): value is ChatSource {
+  return CHAT_SOURCE_SET.has(value);
+}
+
 /**
- * Canonicalised parse of the mutually-exclusive `?unread=` / `?watching=`
- * pair. Exported for unit tests. The server `filter` enum can hold only
- * one of these at a time; if a hand-typed or shared URL arrives with
- * both flags set, `unread` wins and `watching` collapses to `false`.
- * Every downstream consumer (chip row, request payload, Clear handler)
- * thus reads from a single consistent state.
+ * Parse the mutually-independent `?unread=` / `?watching=` flags. Phase B
+ * removes the Phase A mutex (the server's `filter` enum no longer carries
+ * "watching", so the two dimensions compose freely on the wire).
  */
 export function parseUnreadWatching(params: URLSearchParams): { unread: boolean; watching: boolean } {
-  const unread = params.get("unread") === "1";
-  const watching = !unread && params.get("watching") === "1";
-  return { unread, watching };
+  return {
+    unread: params.get("unread") === "1",
+    watching: params.get("watching") === "1",
+  };
+}
+
+/**
+ * Parse the comma-joined `?origin=` URL value into a deduplicated, valid
+ * `ChatSource[]`. Unknown tokens are silently dropped — a hand-typed or
+ * future-rolled-back URL with an unfamiliar source string shouldn't break
+ * the rail. Returns `[]` when the key is absent so callers can treat
+ * "no filter" and "filter to empty" identically.
+ */
+export function parseOriginList(params: URLSearchParams): ChatSource[] {
+  const raw = params.get("origin");
+  if (!raw) return [];
+  const seen = new Set<ChatSource>();
+  const out: ChatSource[] = [];
+  for (const token of raw.split(",")) {
+    const t = token.trim();
+    if (!t || !isChatSource(t)) continue;
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Parse the comma-joined `?with=` URL value into a deduplicated agent-id
+ * list. No further validation here — agent ids are server-side validated.
+ */
+export function parseParticipantList(params: URLSearchParams): string[] {
+  const raw = params.get("with");
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const token of raw.split(",")) {
+    const t = token.trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
 }
 
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
+  const legacySource = searchParams.get("source");
   const engagement: ChatEngagementView = engagementViewParser.parse(searchParams.get("engagement"));
   const { unread, watching } = parseUnreadWatching(searchParams);
+  const origin = parseOriginList(searchParams);
+  const participants = parseParticipantList(searchParams);
   const group = parseGroupMode(searchParams.get("group"));
 
   useAdminWs();
 
-  // Legacy redirects: chat-first workspace navigates by `?c=` only.
+  // One-shot legacy redirects, all batched into a single setSearchParams so
+  // they don't race on stale `searchParams` snapshots. Each branch returns
+  // after staging its mutation; the effect re-runs once the URL settles.
   useEffect(() => {
     if (legacyAgentId && selectedChatId) {
       // `?a=&c=` → `?c=` — drop the agent hint, keep the chat.
@@ -70,8 +130,20 @@ export function WorkspacePage() {
       next.delete("a");
       next.delete("c");
       setSearchParams(next, { replace: true });
+      return;
     }
-  }, [legacyAgentId, searchParams, selectedChatId, setSearchParams]);
+    if (legacySource && !searchParams.has("origin")) {
+      // `?source=foo` → `?origin=foo`. The Phase B wire dropped the
+      // single-value name; this upgrade keeps Phase A bookmarks /
+      // shared links working without resurrecting the legacy key.
+      // Skipped if `?origin=` is already present — never overwrite a
+      // multi-select that the user (or an upstream redirect) has set.
+      const next = new URLSearchParams(searchParams);
+      next.delete("source");
+      next.set("origin", legacySource);
+      setSearchParams(next, { replace: true });
+    }
+  }, [legacyAgentId, legacySource, searchParams, selectedChatId, setSearchParams]);
 
   const selectChat = useCallback(
     (chatId: string) => {
@@ -113,6 +185,20 @@ export function WorkspacePage() {
     [searchParams, setSearchParams],
   );
 
+  const setOrigin = useCallback(
+    (next: ReadonlyArray<ChatSource>) => {
+      setSearchParams(nextParamsForOrigin(searchParams, next), { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  const setParticipants = useCallback(
+    (next: ReadonlyArray<string>) => {
+      setSearchParams(nextParamsForParticipants(searchParams, next), { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
   const setGroup = useCallback(
     (next: GroupMode) => {
       setSearchParams(nextParamsForGroup(searchParams, next), { replace: true });
@@ -122,10 +208,9 @@ export function WorkspacePage() {
 
   const clearFilters = useCallback(() => {
     // Single URLSearchParams mutation + single setSearchParams call.
-    // Calling `setUnread(false)` and `setWatching(false)` back to back
-    // would each build off the same render-stale `searchParams`, so the
-    // second `setSearchParams` would overwrite the first's `unread`
-    // deletion. Bundling the deletes here keeps Clear deterministic.
+    // Calling the per-flag setters in sequence would each build off the
+    // same render-stale `searchParams`, so only the last write would
+    // win and leave the URL in a half-cleared state.
     setSearchParams(nextParamsForClearFilters(searchParams), { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -141,6 +226,10 @@ export function WorkspacePage() {
         onUnreadChange={setUnread}
         watching={watching}
         onWatchingChange={setWatching}
+        origin={origin}
+        onOriginChange={setOrigin}
+        participants={participants}
+        onParticipantsChange={setParticipants}
         onClearFilters={clearFilters}
         group={group}
         onGroupChange={setGroup}
@@ -187,10 +276,9 @@ export function nextParamsForEngagement(current: URLSearchParams, view: ChatEnga
 
 /**
  * Pure URL transition for the `unread` toggle. Exported for unit tests.
- *
- * Mutually exclusive with `watching` because the underlying server filter
- * is a single enum (`all` | `unread` | `watching`); turning one on flips
- * the other off so the URL never encodes an impossible state.
+ * Phase B: `unread` and `watching` are now independent boolean dimensions
+ * (the server filter enum no longer overloads both onto one slot), so
+ * toggling one no longer clears the other.
  *
  * Selection is preserved here — toggling unread doesn't shift the user
  * out of the chat they're reading (unlike scope which does hide
@@ -198,27 +286,59 @@ export function nextParamsForEngagement(current: URLSearchParams, view: ChatEnga
  */
 export function nextParamsForUnread(current: URLSearchParams, on: boolean): URLSearchParams {
   const next = new URLSearchParams(current);
-  if (on) {
-    next.set("unread", "1");
-    next.delete("watching");
-  } else {
-    next.delete("unread");
-  }
+  if (on) next.set("unread", "1");
+  else next.delete("unread");
   return next;
 }
 
 /**
  * Pure URL transition for the `watching` toggle. Exported for unit tests.
- * Mutually exclusive with `unread` — see `nextParamsForUnread`.
+ * Independent of `unread` (Phase B — the two compose freely).
  */
 export function nextParamsForWatching(current: URLSearchParams, on: boolean): URLSearchParams {
   const next = new URLSearchParams(current);
-  if (on) {
-    next.set("watching", "1");
-    next.delete("unread");
-  } else {
-    next.delete("watching");
-  }
+  if (on) next.set("watching", "1");
+  else next.delete("watching");
+  return next;
+}
+
+/**
+ * Pure URL transition for the multi-select `?origin=` facet. Exported for
+ * unit tests. Empty array clears the key from the URL so the canonical
+ * "unfiltered" state stays as the bare home URL (no `?origin=` at all).
+ *
+ * The set is deduplicated and emitted in caller order; the workspace
+ * popover walks `CHAT_SOURCES` in its declared order so the resulting
+ * URL is stable across user actions even though the parameter is
+ * conceptually a set.
+ */
+export function nextParamsForOrigin(current: URLSearchParams, origins: ReadonlyArray<ChatSource>): URLSearchParams {
+  const next = new URLSearchParams(current);
+  const unique = Array.from(new Set(origins));
+  if (unique.length === 0) next.delete("origin");
+  else next.set("origin", unique.join(","));
+  // Origin narrowing can hide the currently-selected chat from the rail
+  // (e.g. flipping off PR origin while a PR chat is selected). Drop the
+  // selection so the right pane mirrors the new view — same rationale
+  // as the engagement transition.
+  next.delete("c");
+  clearDocPreviewParams(next);
+  return next;
+}
+
+/**
+ * Pure URL transition for the multi-select `?with=` participants filter.
+ * Same shape as `nextParamsForOrigin`. Exported for unit tests.
+ */
+export function nextParamsForParticipants(current: URLSearchParams, agents: ReadonlyArray<string>): URLSearchParams {
+  const next = new URLSearchParams(current);
+  const unique = Array.from(new Set(agents.filter((a) => a.length > 0)));
+  if (unique.length === 0) next.delete("with");
+  else next.set("with", unique.join(","));
+  // Participants narrowing can hide the currently-selected chat from
+  // the rail — drop the selection so the right pane stays consistent.
+  next.delete("c");
+  clearDocPreviewParams(next);
   return next;
 }
 
@@ -234,17 +354,23 @@ export function nextParamsForGroup(current: URLSearchParams, mode: GroupMode): U
 }
 
 /**
- * Pure URL transition that strips every Phase A filter dimension in one
+ * Pure URL transition that strips every rail filter dimension in one
  * shot. Used by the rail's "Clear" affordance. Exported for unit tests.
  *
- * Done in a single mutation because the rail filters that the user can
- * Clear (`?unread=`, `?watching=`) live on independent URL keys; running
- * the per-key setters back-to-back would re-derive each call from the
- * same stale `searchParams` snapshot, so only the last write would win.
+ * Done in a single mutation because the rail filters live on independent
+ * URL keys (`?unread=`, `?watching=`, `?origin=`, `?with=`); running the
+ * per-key setters back-to-back would re-derive each call from the same
+ * stale `searchParams` snapshot, so only the last write would win.
+ *
+ * Scope (`?engagement=`), grouping (`?group=`), and the selected chat
+ * (`?c=`) are deliberately preserved — they're not "filters" in the
+ * Clear sense; the user expects them to survive a Clear.
  */
 export function nextParamsForClearFilters(current: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(current);
   next.delete("unread");
   next.delete("watching");
+  next.delete("origin");
+  next.delete("with");
   return next;
 }
