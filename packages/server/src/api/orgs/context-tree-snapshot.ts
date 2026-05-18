@@ -53,6 +53,7 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
         app.db,
         scope.organizationId,
         contextTreeSnapshotWindowDays(window),
+        { humanAgentId: scope.humanAgentId, memberId: scope.memberId },
       );
       return contextTreeSnapshotSchema.parse({ ...snapshot, usage });
     },

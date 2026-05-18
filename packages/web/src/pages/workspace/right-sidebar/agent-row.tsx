@@ -2,7 +2,7 @@ import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hu
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pause } from "lucide-react";
 import { agentSessionsQueryKey, getSession, type SessionListItem, suspendSession } from "../../../api/sessions.js";
-import { pickAvatarHue } from "../../../components/chat/chat-row-avatar.js";
+import { Avatar } from "../../../components/avatar.js";
 import { DenseBadge } from "../../../components/ui/dense-badge.js";
 
 /**
@@ -68,8 +68,6 @@ export function AgentRow({
   // actively in, that first-render flash is misleading.
   const state = sessionQuery.isPending ? "loading" : (session?.state ?? "none");
   const view = describeState(state);
-  const hue = pickAvatarHue(participant.agentId);
-  const initial = (participant.displayName.trim()[0] ?? participant.name?.trim()[0] ?? "?").toUpperCase();
   // Suspend button is gated by: (a) caller permission and (b) the session
   // being in `active` — the server rejects any other transition, so
   // surfacing the button would just produce a 409 on click.
@@ -85,21 +83,14 @@ export function AgentRow({
         borderRadius: "var(--radius-input)",
       }}
     >
-      <div className="relative shrink-0">
-        <span
-          aria-hidden="true"
-          className="inline-flex items-center justify-center font-semibold"
-          style={{
-            width: 24,
-            height: 24,
-            borderRadius: 999,
-            background: hue,
-            color: "var(--fg-on-vivid)",
-            fontSize: 10,
-          }}
-        >
-          {initial}
-        </span>
+      <div className="relative shrink-0" style={{ width: 28, height: 28 }}>
+        <Avatar
+          src={participant.avatarImageUrl}
+          name={participant.displayName}
+          seed={participant.agentId}
+          colorToken={participant.avatarColorToken}
+          size={28}
+        />
         {state !== "none" && state !== "loading" ? (
           <span
             aria-hidden="true"
@@ -107,8 +98,8 @@ export function AgentRow({
               position: "absolute",
               right: -1,
               bottom: -1,
-              width: 8,
-              height: 8,
+              width: 9,
+              height: 9,
               borderRadius: 999,
               background: view.dotBg,
               border: view.dotBorder,

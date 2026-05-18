@@ -1,7 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
+import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import * as sessionEventService from "../services/session-event.js";
+import { uuidv7 } from "../uuid.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -225,9 +230,12 @@ describe("sessionEventService", () => {
     expect(remaining2).toHaveLength(1);
   });
 
-  it("summarizes Context Tree usage by organization", async () => {
+  it("summarizes Context Tree usage by organization, masking chat for non-members", async () => {
     const app = getApp();
-    const { agent, organizationId } = await createTestAgent(app);
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const [adminMember] = await app.db.select().from(members).where(eq(members.id, memberId)).limit(1);
+    if (!adminMember) throw new Error("admin member missing");
+    const humanAgentId = adminMember.agentId;
     const c = chatId();
 
     await sessionEventService.appendEvent(app.db, agent.uuid, c, {
@@ -247,10 +255,155 @@ describe("sessionEventService", () => {
       payload: { purpose: "design_decision", treeRepoUrl: null },
     });
 
-    await expect(sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3)).resolves.toEqual({
-      windowDays: 3,
-      agentCount: 1,
-      usageCount: 2,
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
     });
+    expect(summary.windowDays).toBe(3);
+    expect(summary.agentCount).toBe(1);
+    expect(summary.usageCount).toBe(2);
+    expect(summary.recentEvents).toHaveLength(2);
+    for (const event of summary.recentEvents) {
+      expect(event.agentId).toBe(agent.uuid);
+      expect(event.agentName).toBe(agent.displayName);
+      // Chat has no chat_membership row for this caller and no managed
+      // speaker either → both chat fields must be masked.
+      expect(event.chatId).toBeNull();
+      expect(event.chatTitle).toBeNull();
+      expect(typeof event.createdAt).toBe("string");
+    }
+    expect(new Date(summary.recentEvents[0]?.createdAt ?? 0).getTime()).toBeGreaterThanOrEqual(
+      new Date(summary.recentEvents[1]?.createdAt ?? 0).getTime(),
+    );
+  });
+
+  it("exposes chatId/chatTitle when the viewer is a direct member of the chat", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const [adminMember] = await app.db.select().from(members).where(eq(members.id, memberId)).limit(1);
+    if (!adminMember) throw new Error("admin member missing");
+    const humanAgentId = adminMember.agentId;
+    const c = chatId();
+
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design-spike" });
+    await app.db
+      .insert(chatMembership)
+      .values({ chatId: c, agentId: humanAgentId, role: "member", accessMode: "watcher" });
+
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
+    });
+    expect(summary.recentEvents).toHaveLength(1);
+    const event = summary.recentEvents[0];
+    expect(event?.chatId).toBe(c);
+    expect(event?.chatTitle).toBe("design-spike");
+  });
+
+  it("exposes chatId/chatTitle when a speaker in the chat is supervised by the viewer", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const c = chatId();
+
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "qa-run-42" });
+    // The viewer's human agent is NOT in chat_membership, but the supervised
+    // agent (created by createTestAgent with managerId=adminMember) is a
+    // speaker — the supervisor branch of requireChatAccess should pass.
+    await app.db
+      .insert(chatMembership)
+      .values({ chatId: c, agentId: agent.uuid, role: "member", accessMode: "speaker" });
+
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null },
+    });
+
+    // viewer's humanAgentId intentionally NOT in chat_membership — only the
+    // supervised-speaker branch can grant visibility here.
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId: null,
+      memberId,
+    });
+    expect(summary.recentEvents).toHaveLength(1);
+    const event = summary.recentEvents[0];
+    expect(event?.chatId).toBe(c);
+    expect(event?.chatTitle).toBe("qa-run-42");
+  });
+
+  it("masks chatId for a cross-org chat even when a stale chat_membership row would otherwise grant access", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const [adminMember] = await app.db.select().from(members).where(eq(members.id, memberId)).limit(1);
+    if (!adminMember) throw new Error("admin member missing");
+    const humanAgentId = adminMember.agentId;
+
+    // Set up a second org with its own chat — the viewer has no legitimate
+    // access to anything inside it. Then plant a dirty cross-org
+    // chat_membership row (chat lives in orgB, but agent_id is the viewer's
+    // humanAgent from orgA). Without the org anchor on the visibility query
+    // this would incorrectly mark orgB's chatId as visible.
+    const orgB = uuidv7();
+    await app.db.insert(organizations).values({
+      id: orgB,
+      name: `org-b-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Org B",
+    });
+    const crossOrgChatId = chatId();
+    await app.db
+      .insert(chats)
+      .values({ id: crossOrgChatId, organizationId: orgB, type: "direct", topic: "leaked-topic" });
+    await app.db
+      .insert(chatMembership)
+      .values({ chatId: crossOrgChatId, agentId: humanAgentId, role: "member", accessMode: "watcher" });
+
+    // The event itself is written by an orgA agent (since the aggregate
+    // query inner-joins agents on organizationId = orgA, only orgA agents
+    // can produce events that even reach `recentRows`). The chat_id points
+    // at orgB's chat — exactly the "dirty row" reviewer flagged.
+    await sessionEventService.appendEvent(app.db, agent.uuid, crossOrgChatId, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
+    });
+    expect(summary.recentEvents).toHaveLength(1);
+    const event = summary.recentEvents[0];
+    expect(event?.chatId).toBeNull();
+    expect(event?.chatTitle).toBeNull();
+  });
+
+  it("masks chatId/chatTitle when the viewer has no chat access and does not supervise any speaker", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+    const c = chatId();
+
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "private-chat" });
+    await app.db
+      .insert(chatMembership)
+      .values({ chatId: c, agentId: agent.uuid, role: "member", accessMode: "speaker" });
+
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null },
+    });
+
+    // A viewer with no human agent and no member id (e.g. a non-member of
+    // the org calling somehow) gets nothing — neither branch can match.
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId: null,
+      memberId: null,
+    });
+    expect(summary.recentEvents).toHaveLength(1);
+    const event = summary.recentEvents[0];
+    expect(event?.chatId).toBeNull();
+    expect(event?.chatTitle).toBeNull();
   });
 });

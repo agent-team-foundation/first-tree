@@ -26,13 +26,14 @@ const { ensureDefaultOrganization } = await import("../src/services/organization
 const { findOrCreateUserFromGithub } = await import("../src/services/auth-identity.ts");
 const { createPersonalTeam } = await import("../src/services/membership.ts");
 const sharedDbSchema = await import("../src/db/schema/index.ts");
-const { sql: drizzleSql, eq } = await import("drizzle-orm");
+const { eq } = await import("drizzle-orm");
 
 const JWT_SECRET = process.env.JWT_SECRET_KEY ?? process.env.JWT_SECRET ?? "demo-jwt-secret";
 
 const config = {
   database: { url: DB_URL, provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
+  workspace: { root: "/tmp/fth-seed-demo-workspaces" },
   secrets: {
     jwtSecret: JWT_SECRET,
     encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -62,20 +63,10 @@ const config = {
 const app = await buildApp(config);
 await app.ready();
 
-await app.db.execute(
-  drizzleSql.raw(`
-  TRUNCATE TABLE pending_questions, inbox_entries, messages,
-    agent_chat_sessions, agent_presence, chat_participants,
-    chat_subscriptions, chats, agents, members, clients,
-    users, organizations, auth_identities, agent_configs,
-    notifications, invitation_redemptions, invitations,
-    adapter_chat_mappings, adapter_agent_mappings,
-    adapter_message_references, adapter_configs,
-    session_events, server_instances, processed_events,
-    tasks, task_chats
-  RESTART IDENTITY CASCADE
-`),
-);
+// TRUNCATE block removed: schema has drifted since this seed was written
+// (chat_participants → chat_membership, tasks/task_chats gone). On a fresh
+// DB (up.sh just migrated) there's nothing to clear anyway; for repeated
+// seeds, run `./reset.sh` to drop the DB.
 await ensureDefaultOrganization(app.db);
 
 // Match the hardcoded login.tsx dev-callback href:
@@ -95,6 +86,7 @@ const { userId } = await findOrCreateUserFromGithub(app.db, githubProfile);
 const team = await createPersonalTeam(app.db, {
   userId,
   loginSeed: githubProfile.login,
+  teamDisplayName: `${githubProfile.displayName}'s team`,
   userDisplayName: githubProfile.displayName,
 });
 const orgId = team.organizationId;

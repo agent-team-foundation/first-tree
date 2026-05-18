@@ -26,19 +26,24 @@ export function ChatRightSidebar({
   agentIdentity,
   onAdded,
   onClose,
-  canManageEngagement,
   readOnly,
 }: {
   chatId: string;
   addParticipantsCandidates: MentionCandidate[];
-  agentIdentity: (
-    uuid: string | null | undefined,
-  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
   onAdded: () => void;
   onClose: () => void;
-  /** Permission flag — admin within this org. Drives Archive/Delete buttons. */
-  canManageEngagement: boolean;
-  /** Watcher mode: hide write surfaces (Add, Archive, Delete). */
+  /** Watcher mode: hide write surfaces. Archive / Delete in
+   *  ChatActionsSection are per-caller engagement mutations (not
+   *  chat-level moderation), so the same `!readOnly` gate the
+   *  conversation-list row menu implicitly uses (only speakers see
+   *  the kebab) is the right level here too — no separate admin
+   *  check, the rail Chat actions stay symmetric with the row menu. */
   readOnly: boolean;
 }) {
   return (
@@ -84,7 +89,7 @@ export function ChatRightSidebar({
           readOnly={readOnly}
         />
         <GitHubSection chatId={chatId} />
-        {canManageEngagement && !readOnly ? <ChatActionsSection chatId={chatId} /> : null}
+        {readOnly ? null : <ChatActionsSection chatId={chatId} />}
       </div>
     </aside>
   );

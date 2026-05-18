@@ -482,7 +482,7 @@ function withSnapshotStatus(
 }
 
 function emptyUsageSummary(window: ContextTreeSnapshotWindow): ContextTreeUsageSummary {
-  return { windowDays: WINDOW_DAYS[window], agentCount: 0, usageCount: 0 };
+  return { windowDays: WINDOW_DAYS[window], agentCount: 0, usageCount: 0, recentEvents: [] };
 }
 
 function isSafeBranchName(branch: string): boolean {

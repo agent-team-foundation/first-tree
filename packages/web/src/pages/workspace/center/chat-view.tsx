@@ -700,7 +700,7 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId, role } = useAuth();
+  const { agentId: myAgentId } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
@@ -1077,9 +1077,22 @@ export function ChatView({
    * `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
    */
   const chatParticipantById = useMemo(() => {
-    const map = new Map<string, { name: string | null; displayName: string }>();
+    const map = new Map<
+      string,
+      {
+        name: string | null;
+        displayName: string;
+        avatarImageUrl: string | null;
+        avatarColorToken: string | null;
+      }
+    >();
     for (const p of chatDetail?.participants ?? []) {
-      map.set(p.agentId, { name: p.name, displayName: p.displayName });
+      map.set(p.agentId, {
+        name: p.name,
+        displayName: p.displayName,
+        avatarImageUrl: p.avatarImageUrl ?? null,
+        avatarColorToken: p.avatarColorToken ?? null,
+      });
     }
     return map;
   }, [chatDetail?.participants]);
@@ -1108,16 +1121,27 @@ export function ChatView({
   const chatScopedAgentIdentity = useCallback(
     (
       id: string | null | undefined,
-    ): { name: string | null; displayName: string; avatarImageUrl: string | null } | null => {
+    ): {
+      name: string | null;
+      displayName: string;
+      avatarImageUrl: string | null;
+      avatarColorToken: string | null;
+    } | null => {
       if (!id) return null;
       const p = chatParticipantById.get(id);
       if (p) {
-        // Labels come from the chat-membership-authoritative source, but
-        // the avatar URL is org-scoped — pull it from the identity map
-        // when present. A private agent visible only through chat
-        // membership won't have an `agentIdentity` entry; we surface a
-        // null URL so the chip falls back to color + initial.
-        return { name: p.name, displayName: p.displayName, avatarImageUrl: agentIdentity(id)?.avatarImageUrl ?? null };
+        // Labels come from the chat-membership-authoritative source. The
+        // avatar fields are now projected onto `ChatParticipantDetail`
+        // too (server JOIN on agents), so prefer the chat-scoped value
+        // and only fall back to the org-scoped identity map when the
+        // chat row is missing them (older server build, version skew).
+        const ident = agentIdentity(id);
+        return {
+          name: p.name,
+          displayName: p.displayName,
+          avatarImageUrl: p.avatarImageUrl ?? ident?.avatarImageUrl ?? null,
+          avatarColorToken: p.avatarColorToken ?? ident?.avatarColorToken ?? null,
+        };
       }
       return agentIdentity(id);
     },
@@ -1992,7 +2016,6 @@ export function ChatView({
             agentIdentity={chatScopedAgentIdentity}
             onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
             onClose={() => setShowSidebar(false)}
-            canManageEngagement={role === "admin"}
             readOnly={readOnly}
           />
         ) : null}
@@ -2022,9 +2045,12 @@ function ParticipantsStats({
 }: {
   participants: ChatParticipantDetail[];
   chatId: string;
-  agentIdentity: (
-    uuid: string | null | undefined,
-  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
   onOpen: () => void;
 }) {
   if (participants.length === 0) return null;
@@ -2076,9 +2102,12 @@ function ParticipantAvatar({
 }: {
   participant: ChatParticipantDetail;
   chatId: string;
-  agentIdentity: (
-    uuid: string | null | undefined,
-  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
   stackIndex: number;
   onOpen: () => void;
 }) {
@@ -2134,7 +2163,13 @@ function ParticipantAvatar({
           overflow: "hidden",
         }}
       >
-        <RealAvatar src={ident?.avatarImageUrl ?? null} name={label} seed={participant.agentId} size={22} />
+        <RealAvatar
+          src={ident?.avatarImageUrl ?? null}
+          name={label}
+          seed={participant.agentId}
+          colorToken={ident?.avatarColorToken ?? null}
+          size={22}
+        />
       </span>
       {dot ? (
         <span
@@ -2196,9 +2231,18 @@ function AddParticipantQuickButton({
   chatId: string;
   participantIds: string[];
   candidates: MentionCandidate[];
-  agentIdentity: (
-    uuid: string | null | undefined,
-  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
+  /** Identity resolver covering ALL agents (incl. the viewer's own,
+   *  which `mentionCandidates` excludes). Lets the chip row label
+   *  self correctly instead of falling back to a UUID prefix. The
+   *  `avatarImageUrl` and `avatarColorToken` fields are threaded into
+   *  the chip's leading avatar so a manager-configured image / hue
+   *  shows up here as well as on the left-rail row. */
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
   onAdded: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -2251,7 +2295,6 @@ function AddParticipantQuickButton({
         <UserPlus size={16} />
       </button>
       {open && outsideCandidates.length > 0 && (
-        // biome-ignore lint/a11y/noStaticElementInteractions: keyboard handler delegates to children; container only swallows Escape to close the menu before the chat-view-level Escape closes the right rail
         <div
           role="menu"
           aria-label="Add participant"

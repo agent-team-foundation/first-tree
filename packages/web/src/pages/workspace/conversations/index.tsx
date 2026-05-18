@@ -1,4 +1,4 @@
-import type { ChatEngagementView, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatEngagementView, ChatSource, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -7,9 +7,12 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { SourceIcon } from "../../../components/chat/source-icon.js";
 import { WorkingChip } from "../../../components/chat/working-chip.js";
+import { Popover } from "../../../components/ui/popover.js";
 import { SegmentedControl } from "../../../components/ui/segmented-control.js";
+import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
-import { type GroupMode, groupRows, parseGroupMode } from "./group-rows.js";
+import { FilterPopover, originLabel } from "./filter-popover.js";
+import { type GroupMode, groupRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -37,6 +40,7 @@ const ENGAGEMENT_OPTIONS: ReadonlyArray<{ value: ChatEngagementView; label: stri
 const GROUP_OPTIONS: ReadonlyArray<{ value: GroupMode; label: string }> = [
   { value: "recency", label: "Recency" },
   { value: "source", label: "Source" },
+  { value: "type", label: "Type" },
   { value: "none", label: "None" },
 ];
 
@@ -85,6 +89,10 @@ export function ConversationList({
   onUnreadChange,
   watching,
   onWatchingChange,
+  origin,
+  onOriginChange,
+  participants,
+  onParticipantsChange,
   onClearFilters,
   group,
   onGroupChange,
@@ -99,10 +107,23 @@ export function ConversationList({
   watching: boolean;
   onWatchingChange: (next: boolean) => void;
   /**
-   * Clears every Phase A filter dimension (`unread`, `watching`) in one
-   * URL write. Calling the per-flag setters in sequence inside the Clear
-   * handler would race against React-router's stale `searchParams` (see
-   * `nextParamsForClearFilters` in `workspace/index.tsx`).
+   * Multi-select origin filter. Phase B's filter popover (forthcoming
+   * in the next commit) will mount its checkbox group against this
+   * pair; for now they thread through so the URL parser already has a
+   * place to land its state.
+   */
+  origin: ReadonlyArray<ChatSource>;
+  onOriginChange: (next: ReadonlyArray<ChatSource>) => void;
+  /**
+   * Multi-select participants filter. Same staging story as `origin`.
+   */
+  participants: ReadonlyArray<string>;
+  onParticipantsChange: (next: ReadonlyArray<string>) => void;
+  /**
+   * Clears every filter dimension (`unread`, `watching`, `origin`,
+   * `with`) in one URL write. Calling the per-flag setters in sequence
+   * inside the Clear handler would race against React-router's stale
+   * `searchParams` (see `nextParamsForClearFilters` in `workspace/index.tsx`).
    */
   onClearFilters: () => void;
   group: GroupMode;
@@ -118,16 +139,39 @@ export function ConversationList({
   // changes the group basis (e.g. day rollover) invalidates the keys.
   const [bucketCollapse, setBucketCollapse] = useState<Map<string, boolean>>(() => new Map());
 
-  // Server still accepts a single `filter` enum. The URL splits unread /
-  // watching into two toggles; collapse them back into the enum for the
-  // wire. `setUnread`/`setWatching` in WorkspacePage enforce mutual
-  // exclusivity, so the priority here just disambiguates the impossible
-  // case if it ever showed up.
-  const filter: "all" | "unread" | "watching" = unread ? "unread" : watching ? "watching" : "all";
+  // Phase B: `filter` carries only the unread axis. The `watching`
+  // dimension travels as an independent boolean — `unread` and
+  // `watching` can compose ("unread chats I'm watching"), which the
+  // pre-Phase-B single-enum couldn't express. `origin` and `with` ride
+  // through as multi-value filters; the wire serialises them as
+  // comma-joined strings (see `me-chats.ts`).
+  const filter: "all" | "unread" = unread ? "unread" : "all";
+  const watchingParam = watching ? true : undefined;
+  const originParam = origin.length > 0 ? [...origin] : undefined;
+  const withParam = participants.length > 0 ? [...participants] : undefined;
 
   const { data, isLoading } = useQuery({
-    queryKey: ["me", "chats", filter, engagement] as const,
-    queryFn: () => listMeChats({ filter, engagement }),
+    // `origin` / `with` are arrays — react-query needs a stable key
+    // signature, so we serialise them into the query key the same way
+    // the wire does. Empty array collapses to `null` so an unchanged
+    // "no filter" state doesn't churn the key.
+    queryKey: [
+      "me",
+      "chats",
+      filter,
+      engagement,
+      watchingParam ?? false,
+      originParam ? originParam.join(",") : null,
+      withParam ? withParam.join(",") : null,
+    ] as const,
+    queryFn: () =>
+      listMeChats({
+        filter,
+        engagement,
+        watching: watchingParam,
+        origin: originParam,
+        with: withParam,
+      }),
     refetchInterval: 15_000,
   });
 
@@ -139,11 +183,23 @@ export function ConversationList({
   // Mirror in an effect so a URL-only change (browser back/forward, deep
   // link, parent-driven toggle) can't bleed previous-view rows into the
   // new list. Identity-only deps; the body doesn't read them.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: filter/engagement are triggers, not reads
+  //
+  // Phase B caveat: `origin` and `participants` are arrays — their object
+  // identity changes on every render even when the contents are unchanged,
+  // which would re-fire the effect every paint. We collapse each into a
+  // stable string key (their canonical URL serialisation) so the effect
+  // only fires on actual content changes. Without this dep the new
+  // Phase B dimensions could `Load more` on Manual, then switch to PR
+  // origin, and the stale Manual tail would still render — same bug as
+  // Phase A's filter/engagement dependency was originally added to
+  // prevent (see commentary in chat-projection-dispatcher).
+  const originKey = origin.join(",");
+  const participantsKey = participants.join(",");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these are triggers, not reads
   useEffect(() => {
     setExtraPages((prev) => (prev.length > 0 ? [] : prev));
     setMoreError(null);
-  }, [filter, engagement]);
+  }, [filter, engagement, watching, originKey, participantsKey]);
 
   const baseRows = data?.rows ?? [];
   const allRows = useMemo(() => [...baseRows, ...extraPages], [baseRows, extraPages]);
@@ -175,7 +231,14 @@ export function ConversationList({
     setLoadingMore(true);
     setMoreError(null);
     try {
-      const next = await listMeChats({ filter, engagement, cursor });
+      const next = await listMeChats({
+        filter,
+        engagement,
+        watching: watchingParam,
+        origin: originParam,
+        with: withParam,
+        cursor,
+      });
       setExtraPages((prev) => [...prev, ...next.rows]);
       setNextCursor(next.nextCursor);
     } catch (err) {
@@ -217,7 +280,20 @@ export function ConversationList({
     });
   };
 
-  const hasActiveFilter = unread || watching;
+  // Total active filter dimensions — drives the Filter button badge and
+  // the chip-row visibility. Origin / participants count their list
+  // length so a multi-select "PR + Issue" shows 2.
+  const activeFilterCount = origin.length + participants.length + (unread ? 1 : 0) + (watching ? 1 : 0);
+  const hasActiveFilter = activeFilterCount > 0;
+
+  const resolveAgentName = useAgentNameMap();
+
+  const removeOrigin = (src: ChatSource): void => {
+    onOriginChange(origin.filter((s) => s !== src));
+  };
+  const removeParticipant = (id: string): void => {
+    onParticipantsChange(participants.filter((p) => p !== id));
+  };
 
   return (
     <aside
@@ -263,9 +339,9 @@ export function ConversationList({
             <span>New chat</span>
           </button>
 
-          {/* Unread toggle — right-aligned secondary action (next to Filter
-              in Phase B). Sits opposite New chat so the row reads as
-              "primary action ↔ filtering controls". */}
+          {/* Unread toggle. The two filter entries (Unread + Filter) sit
+              on the right of the toolbar opposite New chat so the row
+              reads as "primary action ↔ filtering controls". */}
           <button
             type="button"
             onClick={() => onUnreadChange(!unread)}
@@ -293,6 +369,15 @@ export function ConversationList({
               </span>
             )}
           </button>
+
+          <FilterPopover
+            origin={origin}
+            onOriginChange={onOriginChange}
+            watching={watching}
+            onWatchingChange={onWatchingChange}
+            onResetAll={onClearFilters}
+            activeCount={origin.length + participants.length + (watching ? 1 : 0)}
+          />
         </div>
 
         <div
@@ -317,35 +402,80 @@ export function ConversationList({
                 }
               }}
             />
-            <label
-              className="inline-flex items-center text-label"
-              style={{ marginLeft: "auto", gap: 4, color: "var(--fg-4)" }}
-            >
-              <span>Group</span>
-              <select
-                value={group}
-                onChange={(e) => onGroupChange(parseGroupMode(e.target.value))}
-                className="text-label cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
-                style={{
-                  padding: "var(--sp-0_5) var(--sp-1)",
-                  border: 0,
-                  borderRadius: 4,
-                  background: "transparent",
-                  color: "var(--fg-2)",
+            <div className="inline-flex items-center text-label" style={{ marginLeft: "auto", gap: 4 }}>
+              <span style={{ color: "var(--fg-4)" }}>Group</span>
+              {/* Custom dropdown built on the shared `Popover` primitive.
+                  Phase A used a native `<select>` here; reviewers flagged
+                  the OS-theme chrome (browser-rendered border + arrow) as
+                  visually inconsistent with the rest of the de-chipped
+                  toolbar. The headless replacement matches the ghost-button
+                  language and keeps `<select>`-style listbox semantics via
+                  `role="listbox" / role="option"`. */}
+              <Popover
+                align="end"
+                panelStyle={{ minWidth: 140, padding: "var(--sp-0_5)" }}
+                trigger={({ open, toggle }) => {
+                  const current = GROUP_OPTIONS.find((o) => o.value === group);
+                  return (
+                    <button
+                      type="button"
+                      onClick={toggle}
+                      aria-haspopup="listbox"
+                      aria-expanded={open}
+                      className="inline-flex items-center text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        gap: 4,
+                        padding: "var(--sp-0_5) var(--sp-1)",
+                        border: 0,
+                        borderRadius: 4,
+                        background: open ? "var(--bg-active)" : "transparent",
+                        color: "var(--fg-2)",
+                      }}
+                    >
+                      <span>{current?.label ?? "Recency"}</span>
+                      <ChevronDown size={12} strokeWidth={1.75} />
+                    </button>
+                  );
                 }}
               >
-                {GROUP_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                {({ close }) => (
+                  <div role="listbox" aria-label="Group by" className="flex flex-col">
+                    {GROUP_OPTIONS.map((opt) => {
+                      const selected = opt.value === group;
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          onClick={() => {
+                            if (!selected) onGroupChange(opt.value);
+                            close();
+                          }}
+                          className="text-label cursor-pointer transition-colors hover:bg-[var(--bg-hover)] text-left"
+                          style={{
+                            padding: "var(--sp-0_75) var(--sp-1_5)",
+                            border: 0,
+                            borderRadius: 4,
+                            background: selected ? "var(--bg-active)" : "transparent",
+                            color: selected ? "var(--fg)" : "var(--fg-2)",
+                            minWidth: 110,
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </Popover>
+            </div>
           </div>
 
-          {/* Filter chip row — only renders when at least one filter is
-            active. Phase A only surfaces unread / watching here; Phase B
-            will extend it with origin / participants chips. */}
+          {/* Filter chip row. Renders one chip per active filter
+              dimension. Each chip's × removes only that dimension; the
+              trailing "Clear" button strips every filter in a single
+              URL write (see `nextParamsForClearFilters`). */}
           {hasActiveFilter && (
             <div className="flex items-center flex-wrap" style={{ gap: 4 }}>
               <span className="text-label" style={{ color: "var(--fg-4)" }}>
@@ -358,6 +488,16 @@ export function ConversationList({
                 />
               )}
               {watching && <FilterChip label="Watching" onClear={() => onWatchingChange(false)} />}
+              {origin.map((src) => (
+                <FilterChip key={`origin-${src}`} label={originLabel(src)} onClear={() => removeOrigin(src)} />
+              ))}
+              {participants.map((agentId) => (
+                <FilterChip
+                  key={`with-${agentId}`}
+                  label={`@${resolveAgentName(agentId)}`}
+                  onClear={() => removeParticipant(agentId)}
+                />
+              ))}
               <button
                 type="button"
                 onClick={onClearFilters}
@@ -458,7 +598,7 @@ export function ConversationList({
                         />
                         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
                           <div className="flex items-center" style={{ gap: 6 }}>
-                            <SourceIcon source={row.source} emphasize={hasUnread} />
+                            <SourceIcon source={row.source} entityType={row.entityType} emphasize={hasUnread} />
                             <span
                               className="truncate text-subtitle"
                               style={{

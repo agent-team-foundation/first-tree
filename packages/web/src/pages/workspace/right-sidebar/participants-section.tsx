@@ -7,7 +7,6 @@ import { getChat } from "../../../api/chats.js";
 import { addMeChatParticipants } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
-import { pickAvatarHue } from "../../../components/chat/chat-row-avatar.js";
 import {
   ambiguousDisplayNames,
   type MentionCandidate,
@@ -123,8 +122,6 @@ export function ParticipantsSection({
 }
 
 function HumanRow({ participant }: { participant: ChatParticipantDetail }) {
-  const hue = pickAvatarHue(participant.agentId);
-  const initial = (participant.displayName.trim()[0] ?? participant.name?.trim()[0] ?? "?").toUpperCase();
   return (
     <div
       className="flex items-center"
@@ -134,20 +131,13 @@ function HumanRow({ participant }: { participant: ChatParticipantDetail }) {
         borderRadius: "var(--radius-input)",
       }}
     >
-      <span
-        aria-hidden="true"
-        className="inline-flex shrink-0 items-center justify-center font-semibold"
-        style={{
-          width: 24,
-          height: 24,
-          borderRadius: 999,
-          background: hue,
-          color: "var(--fg-on-vivid)",
-          fontSize: 10,
-        }}
-      >
-        {initial}
-      </span>
+      <RealAvatar
+        src={participant.avatarImageUrl}
+        name={participant.displayName}
+        seed={participant.agentId}
+        colorToken={participant.avatarColorToken}
+        size={28}
+      />
       <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 2 }}>
         <div className="truncate text-subtitle">{participant.displayName}</div>
         {/* Same DenseBadge slot as AgentRow's state badge — keeps the
@@ -240,7 +230,6 @@ function AddParticipantInlineButton({
         <span className="text-body">{addMut.isPending ? "Adding…" : "Add participant"}</span>
       </button>
       {open && outsideCandidates.length > 0 && (
-        // biome-ignore lint/a11y/noStaticElementInteractions: keyboard handler swallows Escape so the menu closes before the chat-view-level Escape collapses the rail
         <div
           role="menu"
           aria-label="Add participant"

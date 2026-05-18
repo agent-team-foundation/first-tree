@@ -12,6 +12,8 @@ function mkParticipant(extras: Partial<ChatParticipantDetail>): ChatParticipantD
     name: extras.name ?? "default-name",
     displayName: extras.displayName ?? "Default Name",
     type: extras.type ?? "autonomous_agent",
+    avatarColorToken: extras.avatarColorToken ?? null,
+    avatarImageUrl: extras.avatarImageUrl ?? null,
   };
 }
 

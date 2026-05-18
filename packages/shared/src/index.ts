@@ -220,6 +220,7 @@ export {
   type ContextTreeStatusSeverity,
   type ContextTreeSummary,
   type ContextTreeUpdate,
+  type ContextTreeUsageEvent,
   type ContextTreeUsageSummary,
   contextTreeChangeSchema,
   contextTreeChangeTypeSchema,
@@ -234,6 +235,7 @@ export {
   contextTreeStatusSeveritySchema,
   contextTreeSummarySchema,
   contextTreeUpdateSchema,
+  contextTreeUsageEventSchema,
   contextTreeUsageSummarySchema,
 } from "./schemas/context-tree.js";
 export {

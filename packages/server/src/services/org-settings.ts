@@ -237,3 +237,33 @@ export async function resolveUserPrimaryOrgId(db: Database, userId: string): Pro
     .where(and(eq(members.userId, userId), eq(members.status, "active")));
   return pickDefaultMembership(rows)?.organizationId ?? null;
 }
+
+/**
+ * Same membership-selection rule as `resolveUserPrimaryOrgId`, but returns
+ * the full anchor a caller needs to evaluate chat visibility on
+ * user-scoped routes — `memberId` + `humanAgentId`. Used by the legacy
+ * `/context-tree/snapshot` endpoint to pass viewer scope into the usage
+ * feed so per-row chat metadata can be masked the same way the org-scoped
+ * route does.
+ */
+export async function resolveUserPrimaryMembership(
+  db: Database,
+  userId: string,
+): Promise<{ organizationId: string; memberId: string; humanAgentId: string } | null> {
+  const rows = await db
+    .select({
+      id: members.id,
+      organizationId: members.organizationId,
+      agentId: members.agentId,
+      createdAt: members.createdAt,
+    })
+    .from(members)
+    .where(and(eq(members.userId, userId), eq(members.status, "active")));
+  const primary = pickDefaultMembership(rows);
+  if (!primary) return null;
+  return {
+    organizationId: primary.organizationId,
+    memberId: primary.id,
+    humanAgentId: primary.agentId,
+  };
+}

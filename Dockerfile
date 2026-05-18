@@ -50,7 +50,7 @@ ENV NODE_ENV=production
 ENV FIRST_TREE_HUB_WEB_DIST_PATH=/app/packages/server/web-dist
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -qO- http://localhost:8000/healthz || exit 1
 
 CMD ["node", "packages/server/dist/index.mjs"]

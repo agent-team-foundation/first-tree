@@ -63,6 +63,21 @@ export const chatParticipantDetailSchema = chatParticipantSchema.extend({
    */
   displayName: z.string(),
   type: z.string(),
+  /**
+   * Manager-selected avatar color token (one of `AVATAR_COLOR_TOKENS`).
+   * NULL = auto — renderer falls back to the deterministic djb2 hash of
+   * `agentId`. Kept as a loose string here (matching `type`) so DB rows
+   * with legacy / unrecognised values flow through harmlessly. Mirrors
+   * `meChatParticipantSchema` so the chat detail surface (header chips,
+   * right-sidebar agent rows) renders the same color the left rail does.
+   */
+  avatarColorToken: z.string().nullable(),
+  /**
+   * Synthesized URL for the manager-uploaded avatar image, or NULL when
+   * the agent has no image and the renderer should fall back to
+   * color + initial.
+   */
+  avatarImageUrl: z.string().nullable(),
 });
 export type ChatParticipantDetail = z.infer<typeof chatParticipantDetailSchema>;
 
