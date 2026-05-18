@@ -94,7 +94,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Send feishu message
-        if: always()
+        if: ${{ failure() || steps.version.outputs.publish == 'true' }}
         env:
           ACTIONS_FEISHU_TAG: "v1.3.1"
           INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
@@ -104,7 +104,6 @@ jobs:
             发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
             Package: @agent-team-foundation/first-tree-hub
             Version: ${{ steps.version.outputs.alpha_version || 'unresolved' }}
-            Publish: ${{ steps.version.outputs.publish || 'unknown' }}
             Install: npm install -g @agent-team-foundation/first-tree-hub@alpha
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -212,7 +211,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Send feishu message
-        if: always()
+        if: ${{ failure() || steps.version.outputs.publish == 'true' }}
         env:
           ACTIONS_FEISHU_TAG: "v1.3.1"
           INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
@@ -222,7 +221,6 @@ jobs:
             发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
             Package: @agent-team-foundation/first-tree-hub-shared
             Version: ${{ steps.version.outputs.alpha_version || 'unresolved' }}
-            Publish: ${{ steps.version.outputs.publish || 'unknown' }}
             Install: npm install @agent-team-foundation/first-tree-hub-shared@alpha
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
