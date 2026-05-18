@@ -919,6 +919,228 @@
   font-weight: 700;
 }
 
+/*
+ * Live usage feed under ContextSignal. Three layers of "live"-ness stack
+ * here so the page feels active even when no event arrives during the
+ * viewer's session:
+ *  1) the LIVE pip in the header pulses continuously,
+ *  2) the dashed vertical rail behind the list visually ties events into a
+ *     single descending stream,
+ *  3) each .is-fresh row slides in + flashes once on arrival.
+ * Heavy props are kept off the rows themselves (only color + transform)
+ * because the list re-renders every 30s for the "Xm ago" tick.
+ */
+.context-usage-feed {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.context-usage-feed-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-left: var(--sp-3);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.context-usage-feed-live-dot {
+  width: var(--sp-1);
+  height: var(--sp-1);
+  border-radius: 50%;
+  background: var(--ok);
+  animation: context-usage-feed-pulse 2.4s ease-in-out infinite;
+  flex: 0 0 auto;
+}
+
+.context-usage-feed-live-label {
+  color: var(--ok);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.context-usage-feed-live-sublabel {
+  color: var(--fg-3);
+}
+
+@keyframes context-usage-feed-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--ok) 50%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 var(--sp-1) color-mix(in oklch, var(--ok) 0%, transparent);
+  }
+}
+
+.context-usage-feed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+/*
+ * Dashed timeline rail. Lives one .feed-dot width from the edge so the dot
+ * sits exactly on the line. ::before on the <ul> draws it once and dots
+ * float on top with a small page-bg ring so the line appears "broken" at
+ * each event.
+ */
+.context-usage-feed-list::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1.5px dashed color-mix(in oklch, var(--ok) 25%, transparent);
+}
+
+.context-usage-feed-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1_5) 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.context-usage-feed-dot {
+  width: var(--sp-1);
+  height: var(--sp-1);
+  border-radius: 50%;
+  background: var(--ok);
+  margin-left: 3px;
+  position: relative;
+  z-index: 1;
+  /* Page-bg ring "breaks" the dashed rail at this dot. */
+  box-shadow: 0 0 0 3px var(--bg, transparent);
+}
+
+.context-usage-feed-text {
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-usage-feed-agent {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.context-usage-feed-action {
+  color: var(--fg-3);
+}
+
+.context-usage-feed-chat {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+  max-width: 220px;
+}
+
+.context-usage-feed-chat:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+
+.context-usage-feed-time {
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  min-width: 64px;
+  text-align: right;
+}
+
+/*
+ * Fresh-row arrival. is-fresh is applied for ~1.2s (see
+ * CONTEXT_USAGE_FRESH_MS) when the snapshot poll surfaces an event id not
+ * seen before. The two animations run in parallel:
+ *  - row slides down 12px while fading in (0.5s),
+ *  - background flashes green and fades back (1.2s).
+ * The dot also "pops" in scale so the eye latches onto it.
+ */
+.context-usage-feed-row.is-fresh {
+  animation:
+    context-usage-feed-slide 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both,
+    context-usage-feed-flash 1.2s ease-out both;
+}
+
+.context-usage-feed-row.is-fresh .context-usage-feed-dot {
+  animation: context-usage-feed-dot-pop 0.6s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+@keyframes context-usage-feed-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes context-usage-feed-flash {
+  0% {
+    background: color-mix(in oklch, var(--ok) 18%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@keyframes context-usage-feed-dot-pop {
+  0% {
+    transform: scale(0.3);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--ok) 60%, transparent);
+  }
+  60% {
+    transform: scale(1.3);
+    box-shadow: 0 0 0 8px color-mix(in oklch, var(--ok) 0%, transparent);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 3px var(--bg, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-usage-feed-live-dot {
+    animation: none;
+  }
+  .context-usage-feed-row.is-fresh,
+  .context-usage-feed-row.is-fresh .context-usage-feed-dot {
+    animation: none;
+  }
+}
+
+.context-usage-feed-more {
+  align-self: flex-start;
+  margin-left: var(--sp-3);
+  background: none;
+  border: 0;
+  padding: var(--sp-1) 0;
+  color: var(--fg-3);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.context-usage-feed-more:hover {
+  color: var(--fg);
+}
+
 @media (max-width: 760px) {
   .context-live-page {
     padding-right: var(--sp-3);

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 /**
@@ -28,5 +29,8 @@ export const sessionEvents = pgTable(
   (table) => [
     uniqueIndex("uq_session_events_chat_seq").on(table.agentId, table.chatId, table.seq),
     index("idx_session_events_chat_created").on(table.agentId, table.chatId, table.createdAt.desc()),
+    index("idx_session_events_context_tree_usage_recent")
+      .on(table.createdAt.desc())
+      .where(sql`${table.kind} = 'context_tree_usage'`),
   ],
 );
