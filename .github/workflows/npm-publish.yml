@@ -21,39 +21,75 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Check version
+      - name: Resolve alpha version
         id: version
         working-directory: packages/command
+        env:
+          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub"
         run: |
-          LOCAL=$(node -p "require('./package.json').version")
-          PUBLISHED=$(npm view @agent-team-foundation/first-tree-hub version 2>/dev/null || echo "0.0.0")
-          if [[ "$LOCAL" != "$PUBLISHED" ]]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Version changed: $PUBLISHED -> $LOCAL"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Version unchanged ($LOCAL), skipping publish"
+          BASE_VERSION=$(node -p "require('./package.json').version")
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Base version must be a stable semver version, got $BASE_VERSION"
+            exit 1
           fi
 
-      - if: steps.version.outputs.changed == 'true'
+          ALPHA_VERSION="${BASE_VERSION}-alpha.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "alpha_version=$ALPHA_VERSION" >> "$GITHUB_OUTPUT"
+
+          VIEW_ERROR=$(mktemp)
+          if npm view "${PACKAGE_NAME}@${ALPHA_VERSION}" version > /dev/null 2> "$VIEW_ERROR"; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Alpha version already exists: ${PACKAGE_NAME}@${ALPHA_VERSION}; skipping publish"
+          elif grep -q "E404" "$VIEW_ERROR"; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Publishing alpha version: ${PACKAGE_NAME}@${ALPHA_VERSION}"
+          else
+            echo "::error::Failed to check npm registry for ${PACKAGE_NAME}@${ALPHA_VERSION}"
+            cat "$VIEW_ERROR" >&2
+            exit 1
+          fi
+
+      - if: steps.version.outputs.publish == 'true'
         uses: pnpm/action-setup@v4
 
-      - if: steps.version.outputs.changed == 'true'
+      - name: Set alpha package version
+        if: steps.version.outputs.publish == 'true'
+        working-directory: packages/command
+        env:
+          ALPHA_VERSION: ${{ steps.version.outputs.alpha_version }}
+          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub"
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const packagePath = "package.json";
+          const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+          if (pkg.name !== process.env.PACKAGE_NAME) {
+            throw new Error(`Unexpected package name: ${pkg.name}`);
+          }
+          pkg.version = process.env.ALPHA_VERSION;
+          fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
+          echo "Set ${PACKAGE_NAME} version to ${ALPHA_VERSION}"
+
+      - if: steps.version.outputs.publish == 'true'
         run: pnpm install --frozen-lockfile
 
-      - if: steps.version.outputs.changed == 'true'
+      - if: steps.version.outputs.publish == 'true'
         run: pnpm build
 
       - name: Publish to npm
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.publish == 'true'
         working-directory: packages/command
-        run: npm publish
+        run: npm publish --tag alpha --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -63,38 +99,82 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Check version
+      - name: Resolve alpha version
         id: version
         working-directory: packages/shared
+        env:
+          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub-shared"
         run: |
-          LOCAL=$(node -p "require('./package.json').version")
-          PUBLISHED=$(npm view @agent-team-foundation/first-tree-hub-shared version 2>/dev/null || echo "0.0.0")
-          if [[ "$LOCAL" != "$PUBLISHED" ]]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Version changed: $PUBLISHED -> $LOCAL"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Version unchanged ($LOCAL), skipping publish"
+          IS_PRIVATE=$(node -p "require('./package.json').private === true ? 'true' : 'false'")
+          if [[ "$IS_PRIVATE" == "true" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "private=true" >> "$GITHUB_OUTPUT"
+            echo "${PACKAGE_NAME} is private; skipping npm publish"
+            exit 0
           fi
 
-      - if: steps.version.outputs.changed == 'true'
+          BASE_VERSION=$(node -p "require('./package.json').version")
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Base version must be a stable semver version, got $BASE_VERSION"
+            exit 1
+          fi
+
+          ALPHA_VERSION="${BASE_VERSION}-alpha.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "alpha_version=$ALPHA_VERSION" >> "$GITHUB_OUTPUT"
+
+          VIEW_ERROR=$(mktemp)
+          if npm view "${PACKAGE_NAME}@${ALPHA_VERSION}" version > /dev/null 2> "$VIEW_ERROR"; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Alpha version already exists: ${PACKAGE_NAME}@${ALPHA_VERSION}; skipping publish"
+          elif grep -q "E404" "$VIEW_ERROR"; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Publishing alpha version: ${PACKAGE_NAME}@${ALPHA_VERSION}"
+          else
+            echo "::error::Failed to check npm registry for ${PACKAGE_NAME}@${ALPHA_VERSION}"
+            cat "$VIEW_ERROR" >&2
+            exit 1
+          fi
+
+      - if: steps.version.outputs.publish == 'true'
         uses: pnpm/action-setup@v4
 
-      - if: steps.version.outputs.changed == 'true'
+      - name: Set alpha package version
+        if: steps.version.outputs.publish == 'true'
+        working-directory: packages/shared
+        env:
+          ALPHA_VERSION: ${{ steps.version.outputs.alpha_version }}
+          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub-shared"
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const packagePath = "package.json";
+          const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+          if (pkg.name !== process.env.PACKAGE_NAME) {
+            throw new Error(`Unexpected package name: ${pkg.name}`);
+          }
+          pkg.version = process.env.ALPHA_VERSION;
+          fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
+          echo "Set ${PACKAGE_NAME} version to ${ALPHA_VERSION}"
+
+      - if: steps.version.outputs.publish == 'true'
         run: pnpm install --frozen-lockfile
 
-      - if: steps.version.outputs.changed == 'true'
+      - if: steps.version.outputs.publish == 'true'
         run: pnpm build
 
       - name: Publish to npm
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.publish == 'true'
         working-directory: packages/shared
-        run: npm publish
+        run: npm publish --tag alpha --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
