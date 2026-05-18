@@ -224,7 +224,7 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
 
 const CONTEXT_USAGE_FEED_DEFAULT_LIMIT = 10;
 // Re-render every 30s so "Xm ago" labels tick without a fresh server roundtrip.
-// Pairs with the 15s snapshot refetch above — together they keep the feed
+// Pairs with the 20s snapshot refetch above — together they keep the feed
 // feeling like a live stream even when no new events arrive.
 const CONTEXT_USAGE_TIME_TICK_MS = 30_000;
 // CSS animation duration on .fresh — keep this in sync with index.css so the
