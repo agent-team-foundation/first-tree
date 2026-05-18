@@ -6,6 +6,7 @@ import {
   type GithubEntityType,
   githubEntityBoundViaSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
+import { GITHUB_API_BASE } from "./github-api-base.js";
 
 /**
  * Per-entity GitHub fetch timeout. GitHub's `api.github.com` is typically
@@ -72,8 +73,6 @@ export type FetchedEntityLiveFields = {
   title: string | null;
   state: GithubEntityLiveState | null;
 };
-
-const GITHUB_API_BASE = "https://api.github.com";
 
 /**
  * Fetch the live title + state for one entity. Returns `{ title: null,

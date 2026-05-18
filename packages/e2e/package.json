@@ -1,0 +1,30 @@
+{
+  "name": "@first-tree-hub/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-process E2E framework — real pg + server + client processes, no fastify.inject. Standalone package: `rm -rf packages/e2e` must leave the published CLI tarball untouched (see proposals/hub-local-e2e-framework.20260518.md §三).",
+  "scripts": {
+    "e2e:doctor": "tsx src/scripts/doctor.ts",
+    "e2e:smoke": "vitest run --config vitest.config.ts src/tests/smoke.e2e.test.ts",
+    "e2e:full": "vitest run --config vitest.config.ts",
+    "e2e:up": "tsx src/scripts/up.ts",
+    "e2e:clean": "tsx src/scripts/clean.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@agent-team-foundation/first-tree-hub": "workspace:*",
+    "@agent-team-foundation/first-tree-hub-shared": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.84",
+    "@first-tree-hub/server": "workspace:*",
+    "@types/node": "^22.16.0",
+    "@types/pg": "^8.11.10",
+    "fastify": "^5.2.0",
+    "get-port": "^7.1.0",
+    "jose": "^5.9.6",
+    "pg": "^8.13.1",
+    "tsx": "^4.19.0",
+    "vitest": "^3.2.0",
+    "zod": "^4.0.0"
+  }
+}

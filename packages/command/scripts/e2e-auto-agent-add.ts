@@ -1,4 +1,11 @@
 /**
+ * MIGRATION NOTE (2026-05-18): one-off smoke. Functionally a subset of what
+ * `packages/e2e/` will cover once M2 lands chat-send + admin-API agent
+ * creation; will be folded into `packages/e2e/src/tests/agent-add.e2e.test.ts`
+ * then. Keep until then; do not extend. New cross-process scenarios go in
+ * `packages/e2e/src/tests/`. Source proposal:
+ * `proposals/hub-local-e2e-framework.20260518.md`.
+ *
  * End-to-end verification for the auto agent-add fix.
  *
  *   1. Create a fresh database in the already-running local Postgres so state
