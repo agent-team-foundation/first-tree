@@ -1,0 +1,24 @@
+# Standalone compose file for the E2E framework.
+# Distinct from the repo-root `docker-compose.yml` so dev PG and e2e PG can
+# coexist (different project name, different volume, different port).
+# tmpfs storage: each run starts from an empty cluster; crashed runs leave
+# nothing behind on disk.
+
+services:
+  postgres:
+    image: ${E2E_PG_IMAGE:-postgres:16-alpine}
+    container_name: hub_e2e_${E2E_RUN_SHORT_ID:-default}_pg
+    ports:
+      - "${E2E_PG_PORT:-0}:5432"
+    environment:
+      POSTGRES_DB: firsttreehub_e2e
+      POSTGRES_USER: firsttreehub_e2e
+      POSTGRES_PASSWORD: firsttreehub_e2e
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U firsttreehub_e2e -d firsttreehub_e2e"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
