@@ -46,8 +46,6 @@ const POST_INSTALL_NEXT = "/settings/github";
  *
  * Admin-only: the installation block exposes account-level metadata
  * (login, permissions, events) that a regular member doesn't need.
- * Mirrors the readPolicy="admin" choice for `github_integration` in the
- * legacy settings.
  */
 export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
@@ -146,11 +144,10 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // an org account, where "the user is an org admin" isn't a strong enough
   // basis to auto-claim).
   //
-  // ⚠ This endpoint is **API-only** in PR 2/3 — there is no Settings UI
-  // that calls it yet. The orphan-list endpoint and the `Claim install`
-  // button per orphan are tracked in #318 and intentionally deferred to
-  // keep PR 2/3 focused. Until #318 ships, multi-orphan recovery requires
-  // the operator to POST to this endpoint directly.
+  // ⚠ This endpoint is **API-only** — there is no Settings UI that calls
+  // it yet. The orphan-list endpoint and the `Claim install` button per
+  // orphan are tracked in #318. Until #318 ships, multi-orphan recovery
+  // requires the operator to POST to this endpoint directly.
   //
   // Authorization mirrors the OAuth callback's `installation_id` check:
   // being an admin of the target Hub org isn't sufficient — installation

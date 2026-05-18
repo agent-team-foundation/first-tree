@@ -457,7 +457,7 @@ async function completeOauthFlow(
   // `/user/installations` check enforced when the row was first written),
   // and auto-claim if there's exactly one. Multiple → leave them for the
   // manual `POST /claim` endpoint to disambiguate (the Settings "Claim install"
-  // UI that drives that endpoint is tracked in #318 and not in PR 2/3 yet).
+  // UI that drives that endpoint is tracked in #318).
   if (resolvedOrganizationId) {
     try {
       const orphans = await findUnboundInstallationsByAccount(app.db, Number(profile.githubId));
