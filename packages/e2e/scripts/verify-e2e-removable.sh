@@ -26,24 +26,39 @@ if [[ ! -d packages/e2e ]]; then
 fi
 
 STASH_DIR="$(mktemp -d -t hub-e2e-stash-XXXXXX)"
-trap restore EXIT
 
 restore() {
-  # Restore root package.json + turbo.json first so a partial run never
-  # leaves them in the stripped state.
+  # Idempotent — trap may invoke this after a manual call once the stash dir
+  # is gone, so every step guards on its source existing.
+  if [[ ! -d "$STASH_DIR" ]]; then return 0; fi
+  # Restore root configs first so a partial run never leaves them in the
+  # stripped state. Lockfile is restored too because `pnpm install` rewrites
+  # it as a side-effect of the install steps below — without this the drill
+  # leaves the tree dirty even on a happy path.
   if [[ -f "$STASH_DIR/package.json" ]]; then
     cp "$STASH_DIR/package.json" package.json
   fi
   if [[ -f "$STASH_DIR/turbo.json" ]]; then
     cp "$STASH_DIR/turbo.json" turbo.json
   fi
+  if [[ -f "$STASH_DIR/pnpm-lock.yaml" ]]; then
+    cp "$STASH_DIR/pnpm-lock.yaml" pnpm-lock.yaml
+  fi
   if [[ -d "$STASH_DIR/e2e" ]]; then
     rm -rf packages/e2e
     mv "$STASH_DIR/e2e" packages/e2e
   fi
   rm -rf "$STASH_DIR"
-  echo "↩  packages/e2e + root configs restored."
+  # Intentionally NOT removing "$STASH_DIR.snapshot" here — the post-restore
+  # drift check below diffs against it. Snapshot is purged at script end (or
+  # by the EXIT trap on Ctrl-C, see below).
+  echo "↩  packages/e2e + root configs + lockfile restored."
 }
+
+cleanup_snapshot() {
+  rm -rf "$STASH_DIR.snapshot"
+}
+trap 'restore; cleanup_snapshot' EXIT
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -80,9 +95,16 @@ strip_root_configs() {
   '
 }
 
-echo "→  stashing packages/e2e + root configs at $STASH_DIR …"
+echo "→  stashing packages/e2e + root configs + lockfile at $STASH_DIR …"
 cp package.json "$STASH_DIR/package.json"
 cp turbo.json "$STASH_DIR/turbo.json"
+cp pnpm-lock.yaml "$STASH_DIR/pnpm-lock.yaml"
+# Sibling snapshot for the post-restore drift check (`restore()` deletes
+# STASH_DIR, so it can't double as the comparison source).
+mkdir -p "$STASH_DIR.snapshot"
+cp package.json "$STASH_DIR.snapshot/package.json"
+cp turbo.json "$STASH_DIR.snapshot/turbo.json"
+cp pnpm-lock.yaml "$STASH_DIR.snapshot/pnpm-lock.yaml"
 mv packages/e2e "$STASH_DIR/e2e"
 strip_root_configs
 
@@ -108,7 +130,8 @@ echo "    baseline hash: $BASELINE_HASH"
 
 echo "↩  restoring everything for the with-e2e build…"
 restore
-trap - EXIT
+# Leave the trap installed — it now becomes a no-op for `restore` (stash dir
+# is gone) but still wipes `$STASH_DIR.snapshot` after the drift check below.
 
 echo "→  pnpm install (packages/e2e present)…"
 pnpm install --frozen-lockfile=false >/dev/null
@@ -127,6 +150,23 @@ echo "    with-e2e hash: $WITH_E2E_HASH"
 if [[ "$BASELINE_HASH" != "$WITH_E2E_HASH" ]]; then
   echo "✗  CLI tarball hash differs with/without packages/e2e — the package leaked into the publish artifact!"
   exit 2
+fi
+
+# Final guard: the drill must leave each touched file byte-identical to its
+# pre-drill content. Compared against the stash (not against git HEAD) so a
+# tree that was already dirty when the user kicked the drill off isn't
+# misattributed to the drill itself.
+echo "→  asserting stashed files match their post-restore content…"
+DRIFT=()
+for f in package.json turbo.json pnpm-lock.yaml; do
+  if ! cmp -s "$f" "$STASH_DIR.snapshot/$f" 2>/dev/null; then
+    DRIFT+=("$f")
+  fi
+done
+if [[ ${#DRIFT[@]} -gt 0 ]]; then
+  echo "✗  restore left drift in:"
+  printf '    %s\n' "${DRIFT[@]}"
+  exit 3
 fi
 
 echo

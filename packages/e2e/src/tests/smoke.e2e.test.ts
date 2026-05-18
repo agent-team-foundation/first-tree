@@ -11,7 +11,7 @@ beforeAll(() => {
   handle = readCurrentHandle();
 });
 
-describe("M1 smoke — server + client come up against real pg", () => {
+describe("M1 smoke — server comes up against real pg", () => {
   it("server /healthz returns 200", async () => {
     const res = await fetch(`${handle.serverBaseUrl}/healthz`);
     expect(res.status).toBe(200);

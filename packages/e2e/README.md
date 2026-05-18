@@ -28,10 +28,16 @@ webhooks, or Feishu — those land in M2 alongside the three mocks
 
 ## Hard rules
 
-1. **Not published.** `private: true`. `turbo.json` excludes `packages/e2e/**`
-   from the `build` / `typecheck` / `test` cache inputs. The published CLI
-   tarball (`@agent-team-foundation/first-tree-hub`) never references this
-   package.
+1. **Not published.** `private: true`. Cache isolation comes from turbo's
+   default per-package hashing — each task hashes only its own package's
+   files, so edits inside `packages/e2e` cannot bust the build / typecheck /
+   test cache of any other package. `turbo.json` additionally pins this
+   intent via explicit `"inputs": ["$TURBO_DEFAULT$"]` on those tasks (the
+   visual-guard form of proposal §三.4; the cross-package `!packages/e2e/**`
+   glob the proposal mentions is package-local in turbo 2 semantics and a
+   no-op, but the per-package default already gives the same isolation).
+   The published CLI tarball (`@agent-team-foundation/first-tree-hub`) never
+   references this package.
 2. **Independently deletable.** `scripts/verify-e2e-removable.sh` proves this:
    it stashes `packages/e2e` aside, confirms `pnpm install / typecheck / test
    / build` still pass, and asserts the CLI tarball hash is identical with or
