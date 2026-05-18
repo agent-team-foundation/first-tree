@@ -5,7 +5,7 @@ import { markReady } from "./bootstrap-state.js";
 import { runStage } from "./bootstrap-utils.js";
 import type { Config } from "./config.js";
 import { runMigrations } from "./db/migrate.js";
-import { applyLoggerConfig, createLogger, initTelemetry, shutdownTelemetry, withSpan } from "./observability/index.js";
+import { applyLoggerConfig, createLogger, initTelemetry, shutdownTelemetry } from "./observability/index.js";
 
 const log = createLogger("Bootstrap");
 
@@ -38,26 +38,31 @@ async function main() {
   // trace backend.
   await runStage("initTelemetry", () => initTelemetry(serverConfig.observability.tracing, config.instanceId), 10_000);
 
-  // Wrap post-telemetry stages in a `server.bootstrap` root span so Logfire
-  // shows a single bootstrap flamegraph. `initTelemetry` itself can't be
-  // traced — it's the call that wires up the tracer — and is covered by the
-  // stage logs instead. See server-bootstrap-resilience-design.md §3 (T8).
-  const app = await withSpan("server.bootstrap", { "service.instance.id": config.instanceId }, async () => {
-    // Run Drizzle migrations before the app comes up. Idempotent under
-    // multi-replica startup (Drizzle journal table); cold-start cost is
-    // a few hundred ms when there's nothing new to apply. The 20s budget
-    // matches the Dockerfile HEALTHCHECK start-period so a migration that
-    // truly exceeds it fails the boot fast rather than letting docker
-    // judge unhealthy mid-migration. If a future migration is known to
-    // run longer, raise both this and the HEALTHCHECK start-period
-    // together.
-    const tableCount = await runStage("runMigrations", () => runMigrations(serverConfig.database.url), 20_000);
-    log.info({ tableCount }, "migrations applied");
+  // Bootstrap stages run at the ROOT OTel context — no enclosing span. An
+  // earlier version wrapped this block in `withSpan("server.bootstrap", …)`
+  // so Logfire would show a single bootstrap flamegraph, but AsyncLocalStorage
+  // propagates that span as the active context into every timer / event
+  // listener registered during `appListen` (notifier LISTEN handlers,
+  // `setInterval` background tasks, the net.Server's `connection` event
+  // chain). The result: every HTTP root span, ws.connection span, and
+  // background-task span across the process lifetime parents under that one
+  // ended span, collapsing the trace UI into a single bootstrap branch.
+  // Per-stage signals live in the structured `bootstrap.stage.{start,done,
+  // failed}` logs emitted by `runStage`, which are sufficient for boot
+  // analysis without dragging a context onto every downstream span.
 
-    const built = await runStage("buildApp", () => buildApp(config), 30_000);
-    await runStage("appListen", () => built.listen({ host: config.server.host, port: config.server.port }), 10_000);
-    return built;
-  });
+  // Run Drizzle migrations before the app comes up. Idempotent under
+  // multi-replica startup (Drizzle journal table); cold-start cost is a few
+  // hundred ms when there's nothing new to apply. The 20s budget matches
+  // the Dockerfile HEALTHCHECK start-period so a migration that truly
+  // exceeds it fails the boot fast rather than letting docker judge
+  // unhealthy mid-migration. If a future migration is known to run longer,
+  // raise both this and the HEALTHCHECK start-period together.
+  const tableCount = await runStage("runMigrations", () => runMigrations(serverConfig.database.url), 20_000);
+  log.info({ tableCount }, "migrations applied");
+
+  const app = await runStage("buildApp", () => buildApp(config), 30_000);
+  await runStage("appListen", () => app.listen({ host: config.server.host, port: config.server.port }), 10_000);
   markReady();
   log.info(`server listening on http://${config.server.host}:${config.server.port}`);
 
