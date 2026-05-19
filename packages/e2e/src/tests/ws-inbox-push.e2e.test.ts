@@ -3,7 +3,7 @@ import type { InboxDeliverFrame } from "@agent-team-foundation/first-tree-hub-sh
 import { Client as PgClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CurrentRunHandle, readCredentialsOrThrow, readCurrentHandle } from "../framework/current-handle.js";
-import { connectWsListener, type WsListener } from "../framework/ws-listener.js";
+import { connectWsListener, type WsListener } from "../framework/server-driver/ws.js";
 
 /**
  * WS inbox push e2e — exercises the **Server → Client** half of "Inbox is

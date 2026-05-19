@@ -14,7 +14,13 @@ import { startRunWorld, stopRunWorld } from "./lifecycle.js";
  */
 export default async function setup(): Promise<() => Promise<void>> {
   const withClient = process.env.E2E_WITH_CLIENT === "1";
-  const world = await startRunWorld({ withClient });
+  const world = await startRunWorld({
+    withClient,
+    // Tests that need a second-or-third user (client-claim, multi-org)
+    // mint via dev-callback. Always on for the e2e run — the route 404s
+    // unless this env is explicitly set, so it's still off in prod.
+    serverExtraEnv: { FIRST_TREE_HUB_DEV_CALLBACK_ENABLED: "1" },
+  });
   writeFileSync(
     HANDLE_PATH,
     JSON.stringify(

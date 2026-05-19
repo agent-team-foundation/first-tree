@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { type ClientProcess, spawnClient } from "./client-process.js";
+import { type ClientProcess, spawnClient } from "./cli-driver/client-foreground.js";
 import { type ProvisionedCredentials, provisionTestCredentials } from "./credentials.js";
 import { bestEffortCleanupStaleContainers, type PgProcess, startDockerPg } from "./docker-pg.js";
 import { runDoctor } from "./doctor.js";
