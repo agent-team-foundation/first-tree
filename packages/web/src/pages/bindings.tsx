@@ -303,10 +303,12 @@ export function BindingsPage() {
                       <span className="mono font-medium">{resolveAgentName(a.agentId)}</span>
                     </DenseTableCell>
                     <DenseTableCell>
-                      <DenseBadge>{a.platform}</DenseBadge>
+                      <DenseBadge>{humanizePlatform(a.platform)}</DenseBadge>
                     </DenseTableCell>
                     <DenseTableCell>
-                      <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
+                      <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>
+                        {humanizeAdapterStatus(a.status)}
+                      </DenseBadge>
                     </DenseTableCell>
                     <DenseTableCell>
                       <span className="inline-flex items-center gap-1.5 text-label">
@@ -390,7 +392,7 @@ export function BindingsPage() {
                     </span>
                   </DenseTableCell>
                   <DenseTableCell>
-                    <DenseBadge>{m.platform}</DenseBadge>
+                    <DenseBadge>{humanizePlatform(m.platform)}</DenseBadge>
                   </DenseTableCell>
                   <DenseTableCell>
                     <span className="mono text-label" style={{ color: "var(--fg-2)" }}>
@@ -399,7 +401,7 @@ export function BindingsPage() {
                   </DenseTableCell>
                   <DenseTableCell style={{ color: "var(--fg-2)" }}>{m.displayName ?? "—"}</DenseTableCell>
                   <DenseTableCell>
-                    <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
+                    <DenseBadge tone="outline">{humanizeBoundVia(m.boundVia)}</DenseBadge>
                   </DenseTableCell>
                   <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                     {formatDate(m.createdAt)}
@@ -514,6 +516,58 @@ function narrowPlatform(p: string): "feishu" | "slack" | "kael" {
 }
 function narrowStatus(s: string): "active" | "inactive" {
   return s === "inactive" ? "inactive" : "active";
+}
+
+/**
+ * Display label for the wire-level platform enum (`feishu` / `slack` /
+ * `kael`). Falls back to the raw value so any forward-compat platform the
+ * server emits still renders something, just unstyled.
+ */
+function humanizePlatform(platform: string): string {
+  switch (platform) {
+    case "feishu":
+      return "Feishu";
+    case "slack":
+      return "Slack";
+    case "kael":
+      return "Kael";
+    default:
+      return platform;
+  }
+}
+
+function humanizeAdapterStatus(status: string): string {
+  switch (status) {
+    case "active":
+      return "Active";
+    case "inactive":
+      return "Inactive";
+    default:
+      return status;
+  }
+}
+
+/**
+ * Map the wire-level adapter `bound_via` enum (`code` / `reverse_token` /
+ * `oauth` / `manual`) to a sentence-case phrase. Note: this is a DIFFERENT
+ * enum from the GitHub-entity `boundVia` used in the chat right sidebar —
+ * adapter mappings track how an IM user got bound, not how a PR/issue got
+ * linked, so we deliberately do NOT share the helper.
+ */
+function humanizeBoundVia(boundVia: string | null): string {
+  if (!boundVia) return "—";
+  switch (boundVia) {
+    case "code":
+      return "Code";
+    case "reverse_token":
+      return "Reverse token";
+    case "oauth":
+      return "OAuth";
+    case "manual":
+      return "Manual";
+    default:
+      return boundVia;
+  }
 }
 
 function EmptyRow({ children }: { children: ReactNode }) {

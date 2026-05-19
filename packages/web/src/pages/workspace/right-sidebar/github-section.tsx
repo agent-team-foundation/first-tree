@@ -98,7 +98,7 @@ function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
           </div>
         ) : null}
         <div className="text-caption" style={{ color: "var(--fg-4)" }}>
-          via {humanizeBoundVia(entity.boundVia)}
+          {humanizeBoundVia(entity.boundVia)}
         </div>
       </div>
       <ExternalLink
@@ -135,18 +135,20 @@ function iconColor(state: GithubEntityLiveState | null): string {
 
 /**
  * Map the wire-level `bound_via` enum (`direct` / `fixes_link` /
- * `agent_created`) to a phrase users can read at a glance. Falling back
- * to the raw key preserves forward-compatibility for any new boundVia
- * value the server might emit before this map catches up.
+ * `agent_created`) to a self-contained sentence — the row doesn't
+ * prepend "via " anymore, so each label has to read as a complete
+ * provenance hint on its own. Falling back to the raw key preserves
+ * forward-compatibility for any new boundVia value the server might
+ * emit before this map catches up.
  */
 function humanizeBoundVia(boundVia: string): string {
   switch (boundVia) {
     case "direct":
-      return "Direct mention";
+      return "Mentioned in chat";
     case "fixes_link":
-      return "Fixes link";
+      return "Auto-linked from \"Fixes #…\"";
     case "agent_created":
-      return "Agent created";
+      return "Created by an agent";
     default:
       return boundVia;
   }
@@ -156,16 +158,16 @@ function viewForState(state: GithubEntityLiveState | null): { label: string; ton
   if (!state) return null;
   switch (state) {
     case "open":
-      return { label: "OPEN", tone: "accent" };
+      return { label: "Open", tone: "accent" };
     case "closed":
-      return { label: "CLOSED", tone: "neutral" };
+      return { label: "Closed", tone: "neutral" };
     case "merged":
       // Mapped to `outline` since the DenseBadge palette doesn't carry a
       // purple/merged tone; the icon swap to GitMerge does the heavy
       // lifting for the visual signal.
-      return { label: "MERGED", tone: "outline" };
+      return { label: "Merged", tone: "outline" };
     case "draft":
-      return { label: "DRAFT", tone: "outline" };
+      return { label: "Draft", tone: "outline" };
     default:
       return null;
   }

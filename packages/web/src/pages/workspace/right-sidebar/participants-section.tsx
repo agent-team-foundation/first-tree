@@ -12,7 +12,6 @@ import {
   type MentionCandidate,
   MentionLabel,
 } from "../../../components/mention-autocomplete.js";
-import { DenseBadge } from "../../../components/ui/dense-badge.js";
 import { AgentRow } from "./agent-row.js";
 
 /**
@@ -24,12 +23,10 @@ import { AgentRow } from "./agent-row.js";
  *
  * The bottom "Add" affordance mirrors the header quick-add icon —
  * both go through the same `addMeChatParticipants` mutation.
- * Membership is currently non-revocable; only the header dropdown
- * still surfaces the one-way-door notice inline (see chat-view.tsx
- * ParticipantsHeader for the canonical copy and the design-doc
- * reference). The sidebar dropdown drops the notice — users opening
- * the sidebar are already in management mode and the repeated banner
- * was visual noise.
+ * Membership is currently non-revocable, but neither surface shows an
+ * inline notice — the banner read as noise once users were already
+ * in the picker, and the irreversibility lives in product docs / FAQs
+ * instead.
  */
 export function ParticipantsSection({
   chatId,
@@ -143,14 +140,6 @@ function HumanRow({ participant }: { participant: ChatParticipantDetail }) {
       />
       <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 2 }}>
         <div className="truncate text-subtitle">{participant.displayName}</div>
-        {/* Same DenseBadge slot as AgentRow's state badge — keeps the
-            two row variants visually symmetric so the eye doesn't have
-            to context-switch between "agent row" and "human row" styling
-            mid-list. Humans don't have runtime state, so the badge just
-            labels the kind. */}
-        <div className="mono flex items-center text-caption" style={{ color: "var(--fg-3)" }}>
-          <DenseBadge tone="outline">HUMAN</DenseBadge>
-        </div>
       </div>
     </div>
   );
@@ -275,7 +264,7 @@ function AddParticipantInlineButton({
           aria-label="Add participant"
           className="absolute z-20 max-h-72 overflow-auto border shadow-lg"
           style={{
-            bottom: "calc(100% + var(--sp-1))",
+            top: "calc(100% + var(--sp-1))",
             left: 0,
             right: 0,
             background: "var(--bg-raised)",
