@@ -1,23 +1,20 @@
 /**
- * Resolve `replyTo` envelope fields for `chat send`. When the CLI is invoked
- * from inside a claude-code session (the handler exports
- * `FIRST_TREE_HUB_CHAT_ID` + `FIRST_TREE_HUB_INBOX_ID`), default the reply
- * target to the calling session's own chat so the peer's reply routes back
- * to the caller rather than echoing in the peer-created direct chat.
+ * Resolve `replyToInbox` for `chat send`. When the CLI is invoked from inside
+ * a claude-code session (the handler exports `FIRST_TREE_HUB_INBOX_ID`),
+ * default the reply target to the calling session's own inbox row so the
+ * peer's reply lands on the right inbox row inside the same chat.
  *
- * Explicit `--reply-to-*` flags always win. See proposals/
- * hub-agent-messaging-reply-and-mentions §3.2.
+ * Cross-chat reply routing has been removed (see
+ * first-tree-context PR #281); only the same-chat `replyToInbox`
+ * envelope survives. Explicit `--reply-to-inbox` always wins.
  */
 export function resolveReplyToFromEnv(
   env: NodeJS.ProcessEnv,
-  override: { replyToInbox?: string; replyToChat?: string },
-): { replyToInbox: string | undefined; replyToChat: string | undefined } {
-  const envChatId = env.FIRST_TREE_HUB_CHAT_ID;
+  override: { replyToInbox?: string },
+): { replyToInbox: string | undefined } {
   const envInboxId = env.FIRST_TREE_HUB_INBOX_ID;
-  const envComplete = Boolean(envChatId && envInboxId);
   return {
-    replyToInbox: override.replyToInbox ?? (envComplete ? envInboxId : undefined),
-    replyToChat: override.replyToChat ?? (envComplete ? envChatId : undefined),
+    replyToInbox: override.replyToInbox ?? envInboxId,
   };
 }
 

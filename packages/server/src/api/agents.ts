@@ -3,10 +3,7 @@ import {
   rebindAgentSchema,
   updateAgentSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, gt, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { agents } from "../db/schema/agents.js";
-import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireAgentAccess } from "../scope/require-resource.js";
 import * as agentService from "../services/agent.js";
@@ -16,7 +13,7 @@ import {
   resolveAvatarImageUrl,
   SUPPORTED_AVATAR_IMAGE_MIMES,
 } from "../services/agent.js";
-import { createChat, findOrCreateDirectChat } from "../services/chat.js";
+import { createChat } from "../services/chat.js";
 import * as clientService from "../services/client.js";
 import {
   forceDisconnect,
@@ -24,8 +21,6 @@ import {
   hasActiveConnection,
   sendToClient,
 } from "../services/connection-manager.js";
-import { sendMessage } from "../services/message.js";
-import { notifyRecipients } from "../services/notifier.js";
 import * as presenceService from "../services/presence.js";
 
 type AgentRow = {
@@ -200,9 +195,18 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   // Public GET lives in `publicAgentAvatarRoutes` below (mounted outside the
   // auth scope) — `<img src>` cannot send Authorization headers.
 
+  /**
+   * POST /:uuid/test — health-only connection probe.
+   *
+   * Reports whether the agent's WS client is currently connected, stale
+   * (no heartbeat for STALE_THRESHOLD_MS), or offline, plus the client
+   * descriptor when known. Returns immediately — no chat is created, no
+   * LLM round-trip is exercised. Diagnosing end-to-end LLM behaviour is
+   * the user's own workflow, not an admin endpoint.
+   */
   app.post<{ Params: { uuid: string } }>("/:uuid/test", async (request, reply) => {
     const { uuid } = request.params;
-    const { agent: targetAgent } = await requireAgentAccess(request, app.db, "manage");
+    await requireAgentAccess(request, app.db, "manage");
 
     const presence = await presenceService.getPresence(app.db, uuid);
     const wsConnected = hasActiveConnection(uuid);
@@ -260,89 +264,9 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    // Sender must live in the target's org. Without this scope, the owner
-    // lookup (delegate_mention → uuid) or the fallback ("any other active
-    // agent") can pick up an agent from an unrelated org — `findOrCreateDirectChat`
-    // would then refuse the pair, and historically (before that guard) it
-    // produced cross-org chats unreachable by their nominal owner.
-    const [owner] = await app.db
-      .select({ uuid: agents.uuid })
-      .from(agents)
-      .where(
-        and(
-          eq(agents.delegateMention, uuid),
-          eq(agents.status, "active"),
-          eq(agents.organizationId, targetAgent.organizationId),
-        ),
-      )
-      .limit(1);
-
-    let senderId = owner?.uuid ?? null;
-    if (!senderId) {
-      const [other] = await app.db
-        .select({ uuid: agents.uuid })
-        .from(agents)
-        .where(
-          and(
-            ne(agents.uuid, uuid),
-            eq(agents.status, "active"),
-            eq(agents.organizationId, targetAgent.organizationId),
-          ),
-        )
-        .limit(1);
-      senderId = other?.uuid ?? null;
-    }
-
-    if (!senderId) {
-      return reply.status(200).send({
-        status: "error",
-        message: "No suitable sender found. Need at least one other active agent in the same organization.",
-        connection,
-      });
-    }
-
-    const chat = await findOrCreateDirectChat(app.db, senderId, uuid);
-
-    const testContent = `[System Test] Verify your connection. Respond with your identity and role. Time: ${new Date().toISOString()}`;
-    const result = await sendMessage(app.db, chat.id, senderId, {
-      format: "text",
-      content: testContent,
-    });
-    notifyRecipients(app.notifier, result.recipients, result.message.id);
-
-    const POLL_TIMEOUT = 30_000;
-    const POLL_INTERVAL = 1_000;
-    const threshold = result.message.createdAt;
-    const pollStart = Date.now();
-
-    while (Date.now() - pollStart < POLL_TIMEOUT) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-
-      const [response] = await app.db
-        .select()
-        .from(messages)
-        .where(and(eq(messages.chatId, chat.id), eq(messages.senderId, uuid), gt(messages.createdAt, threshold)))
-        .limit(1);
-
-      if (response) {
-        const content =
-          typeof response.content === "string"
-            ? response.content.slice(0, 500)
-            : JSON.stringify(response.content).slice(0, 500);
-        return reply.status(200).send({
-          status: "success",
-          chatId: chat.id,
-          responseContent: content,
-          responseTime: response.createdAt.getTime() - threshold.getTime(),
-          connection,
-        });
-      }
-    }
-
     return reply.status(200).send({
-      status: "timeout",
-      chatId: chat.id,
-      message: "Agent is connected but did not respond within 30 seconds.",
+      status: "success",
+      message: "Agent client is connected and heartbeating.",
       connection,
     });
   });
@@ -355,7 +279,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     const { agent: targetAgent, scope } = await requireAgentAccess(request, app.db, "visible");
     await assertAllAgentsVisibleInOrg(app.db, scope, [targetAgent.uuid]);
     const result = await createChat(app.db, scope.humanAgentId, {
-      type: "direct",
+      type: "group",
       participantIds: [targetAgent.uuid],
     });
 

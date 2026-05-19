@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { addParticipant, createChat } from "../services/chat.js";
-import { sendMessage } from "../services/message.js";
 import { buildClientMessagePayload, buildClientMessagePayloadsForInbox } from "../services/message-dispatcher.js";
 import { createAdminContext, createTestApp } from "./helpers.js";
 
@@ -28,7 +27,6 @@ const RAW = {
   content: "hello",
   metadata: {},
   replyToInbox: null,
-  replyToChat: null,
   inReplyTo: null,
   source: null as string | null,
   createdAt: new Date().toISOString(),
@@ -111,11 +109,10 @@ describe("buildClientMessagePayload (Step 3)", () => {
 
 /**
  * Coverage for the proposal §3.3 fields added at dispatcher time: every
- * client-bound payload must carry `recipientMode` and (when applicable)
- * `inReplyToSnapshot` so the runtime can apply mention filtering and
- * echo suppression without a round-trip back to the Hub.
+ * client-bound payload must carry `recipientMode` so the runtime can apply
+ * mention filtering without a round-trip back to the Hub.
  */
-describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () => {
+describe("buildClientMessagePayload — recipientMode", () => {
   it("defaults recipientMode to 'full' when the agent is not a participant of the entry's chat", async () => {
     const agent = await createAgent(app.db, {
       name: `rmode-stranger-${Date.now()}`,
@@ -178,7 +175,7 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
-    const chat = await createChat(app.db, a1.uuid, { type: "direct", participantIds: [a2.uuid] });
+    const chat = await createChat(app.db, a1.uuid, { type: "group", participantIds: [a2.uuid] });
     const built = await buildClientMessagePayload(
       app.db,
       { kind: "agentId", agentId: a2.uuid },
@@ -200,7 +197,7 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
-    const chat = await createChat(app.db, human.uuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, human.uuid, { type: "group", participantIds: [agent.uuid] });
     const built = await buildClientMessagePayload(
       app.db,
       { kind: "agentId", agentId: agent.uuid },
@@ -210,78 +207,7 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
     expect(built.recipientMode).toBe("full");
   });
 
-  it("populates inReplyToSnapshot with the original message's senderId/chatId/replyToChat", async () => {
-    const a1 = await createAgent(app.db, {
-      name: `snap-a1-${Date.now()}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const a2 = await createAgent(app.db, {
-      name: `snap-a2-${Date.now()}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const chat = await createChat(app.db, a1.uuid, { type: "direct", participantIds: [a2.uuid] });
-
-    // a1 sends the original with replyTo pointing elsewhere (simulating
-    // Case A: b1's CLI-send from a session tied to c1).
-    const original = await sendMessage(app.db, chat.id, a1.uuid, {
-      format: "text",
-      content: "hi",
-      replyToInbox: a1.inboxId,
-      replyToChat: "c1-elsewhere",
-    });
-
-    const built = await buildClientMessagePayload(
-      app.db,
-      { kind: "agentId", agentId: a2.uuid },
-      {
-        ...RAW,
-        chatId: chat.id,
-        senderId: a2.uuid,
-        content: "ack",
-        inReplyTo: original.message.id,
-      },
-      chat.id,
-    );
-    expect(built.inReplyToSnapshot).toEqual({
-      senderId: a1.uuid,
-      chatId: chat.id,
-      replyToChat: "c1-elsewhere",
-    });
-  });
-
-  it("leaves inReplyToSnapshot null when there is no inReplyTo", async () => {
-    const agent = await createAgent(app.db, {
-      name: `snap-none-${Date.now()}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const built = await buildClientMessagePayload(app.db, { kind: "agentId", agentId: agent.uuid }, RAW);
-    expect(built.inReplyToSnapshot).toBeNull();
-  });
-
-  it("leaves inReplyToSnapshot null when inReplyTo points at a non-existent message", async () => {
-    const agent = await createAgent(app.db, {
-      name: `snap-missing-${Date.now()}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const built = await buildClientMessagePayload(
-      app.db,
-      { kind: "agentId", agentId: agent.uuid },
-      { ...RAW, inReplyTo: "msg-that-does-not-exist" },
-    );
-    expect(built.inReplyToSnapshot).toBeNull();
-  });
-
-  it("batch variant preserves per-entry recipientMode and snapshots under replyTo routing", async () => {
-    // Exercises the batch path end-to-end: one agent is a mention_only group
-    // participant AND the original sender's waiting inbox for a replyTo.
+  it("batch variant preserves per-entry recipientMode", async () => {
     const a1 = await createAgent(app.db, {
       name: `batch-a1-${Date.now()}`,
       type: "autonomous_agent",
@@ -301,13 +227,6 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
     // Phase 1: a non-human agent (a1) joining a group chat is auto-set to
     // `mention_only` by the server. No `mode` override needed (or accepted).
     await addParticipant(app.db, group.id, a2.uuid, { agentId: a1.uuid }).catch(() => void 0);
-    // a2 posts the "original" with replyTo routing
-    const original = await sendMessage(app.db, group.id, a2.uuid, {
-      format: "text",
-      content: "plz respond",
-      replyToInbox: a2.inboxId,
-      replyToChat: "external-chat",
-    });
 
     const built = await buildClientMessagePayloadsForInbox(app.db, a1.inboxId, [
       {
@@ -317,7 +236,7 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
           id: `msg-a-${Date.now()}`,
           chatId: group.id,
           senderId: a2.uuid,
-          content: "irrelevant plain text",
+          content: "first",
         },
       },
       {
@@ -327,8 +246,7 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
           id: `msg-b-${Date.now()}`,
           chatId: group.id,
           senderId: a2.uuid,
-          content: "irrelevant reply",
-          inReplyTo: original.message.id,
+          content: "second",
         },
       },
     ]);
@@ -337,17 +255,7 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
     const first = built[0];
     const second = built[1];
     if (!first || !second) throw new Error("expected two payloads");
-    // a1 is a group participant but his mode should already be... Actually
-    // addParticipant above was a no-op because a1 is already a participant
-    // (owner). We only assert the shape is consistent with the DB state —
-    // recipientMode must reflect whatever mode a1 has in this chat.
     expect(["full", "mention_only"]).toContain(first.recipientMode);
     expect(first.recipientMode).toBe(second.recipientMode);
-    expect(first.inReplyToSnapshot).toBeNull();
-    expect(second.inReplyToSnapshot).toEqual({
-      senderId: a2.uuid,
-      chatId: group.id,
-      replyToChat: "external-chat",
-    });
   });
 });

@@ -12,7 +12,7 @@ describe("Inbox Timeout Reset", () => {
     const a2 = await createTestAgent(app, { name: "timeout-a2" });
 
     const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;
@@ -47,7 +47,7 @@ describe("Inbox Timeout Reset", () => {
     const a2 = await createTestAgent(app, { name: "maxretry-a2" });
 
     const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;

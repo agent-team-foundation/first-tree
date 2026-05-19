@@ -61,8 +61,8 @@ export const PRECEDING_CONTEXT_WINDOW_SECONDS = 24 * 60 * 60;
  * **Caller responsibility — bulk batching**: writes a single
  * `INSERT VALUES (...)` of `newParticipants.length * PRECEDING_CONTEXT_MAX_ENTRIES`
  * tuples. v1's only caller (`addParticipant`) always passes 1 participant
- * (≤ 50 rows). Future bulk-add paths (sub-chat / spawn / etc.) should split
- * input into chunks (suggested: ≤ 512 rows per call) before passing here.
+ * (≤ 50 rows). Any future bulk-add caller should chunk input (suggested:
+ * ≤ 512 rows per call) before passing here.
  *
  * See proposals/hub-chat-message-v1-design §四 改造 2.
  */
@@ -184,7 +184,6 @@ export async function bundleDeliveryWithSilentContext(
           content: msg.content,
           metadata: msg.metadata,
           replyToInbox: msg.replyToInbox,
-          replyToChat: msg.replyToChat,
           inReplyTo: msg.inReplyTo,
           source: msg.source,
           createdAt: msg.createdAt.toISOString(),
@@ -214,10 +213,10 @@ export async function bundleDeliveryWithSilentContext(
 /**
  * Realistic upper bound on rows a single NOTIFY references. The unique
  * constraint `(inbox_id, message_id, chat_id)` caps a `(inbox, message)`
- * pair at one row per chatId; the only way to exceed 1 today is the replyTo
- * cross-chat path (`message.ts` writes a second row keyed by the original's
- * `replyToChat`). 8 leaves headroom for any future fan-out variant without
- * requiring a schema change here.
+ * pair at one row per chatId. With cross-chat reply routing removed
+ * (first-tree-context PR #281), a regular fan-out yields exactly one row;
+ * 8 leaves headroom for any future fan-out variant without requiring a
+ * schema change here.
  */
 const PUSH_CLAIM_BATCH_LIMIT = 8;
 
@@ -308,7 +307,7 @@ async function collectPrecedingContext(
   // Group triggers by chatId so we can split the silent timeline per chat.
   const byChat = new Map<string, Array<Pick<ClaimedEntry, "id" | "chatId" | "createdAt">>>();
   for (const t of triggers) {
-    if (t.chatId === null) continue; // replyTo cross-chat entries with no chatId can't have context
+    if (t.chatId === null) continue; // defensive: legacy / null-chatId rows can't have context
     const list = byChat.get(t.chatId) ?? [];
     list.push(t);
     byChat.set(t.chatId, list);

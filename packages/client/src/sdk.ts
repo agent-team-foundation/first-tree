@@ -273,6 +273,23 @@ export class FirstTreeHubSDK {
     return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
   }
 
+  /**
+   * Add a participant to a chat by uuid or by name. Names resolve within the
+   * chat's organization. Idempotent: re-adding an existing speaker returns
+   * the chat's current participant list (the server treats it as a conflict
+   * the caller can safely ignore — see `chat add-participant` CLI for the
+   * UX wrapper that swallows that case).
+   */
+  async addChatParticipant(
+    chatId: string,
+    target: { agentId: string } | { agentName: string },
+  ): Promise<ChatParticipantDetail[]> {
+    return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`, {
+      method: "POST",
+      body: JSON.stringify(target),
+    });
+  }
+
   /** Fetch Context Tree configuration for this SDK's authenticated agent. */
   async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
     return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");

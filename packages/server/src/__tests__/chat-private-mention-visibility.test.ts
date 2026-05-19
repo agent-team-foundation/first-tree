@@ -23,11 +23,7 @@
 import { AGENT_VISIBILITY, type ChatDetail } from "@agent-team-foundation/first-tree-hub-shared";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
-import {
-  addParticipant as agentAddParticipant,
-  createChat as agentCreateChat,
-  findOrCreateDirectChat,
-} from "../services/chat.js";
+import { addParticipant as agentAddParticipant, createChat as agentCreateChat } from "../services/chat.js";
 import { addMeChatParticipants, createMeChat } from "../services/me-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -220,45 +216,13 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     // Bob's agent first creates a chat with Bob (no private targets) —
     // legitimate so we can exercise the add-participant gate next.
     const chat = await agentCreateChat(app.db, bobsAgent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [bob.humanAgentUuid],
     });
     if (!chat.id) throw new Error("Unexpected: createChat returned no id");
 
     await expect(agentAddParticipant(app.db, chat.id, bobsAgent.uuid, { agentId: alicesPrivate.uuid })).rejects.toThrow(
       /private agent/i,
-    );
-  });
-
-  it("findOrCreateDirectChat refuses to open a new direct chat with a private agent across owners", async () => {
-    // Closes the `sendToAgent` fallback bypass: Bob's agent looking up
-    // Alice's private agent by name would otherwise create a direct
-    // chat with it and DM-spam past the discovery filter. Existing
-    // direct chats are intentionally not retroactively gated; this
-    // test pins the new-chat path only.
-    const app = getApp();
-    const alice = await createTestAdmin(app);
-    const bob = await createTestAdmin(app);
-
-    const bobsAgent = await createAgent(app.db, {
-      name: `bob-dm-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
-      displayName: "Bob's Agent",
-      managerId: bob.memberId,
-      organizationId: bob.organizationId,
-    });
-
-    const alicesPrivate = await createAgent(app.db, {
-      name: `alice-dm-priv-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
-      displayName: "Alice's Private Agent",
-      managerId: alice.memberId,
-      organizationId: alice.organizationId,
-      visibility: AGENT_VISIBILITY.PRIVATE,
-    });
-
-    await expect(findOrCreateDirectChat(app.db, bobsAgent.uuid, alicesPrivate.uuid)).rejects.toThrow(
-      /private agent across owners/i,
     );
   });
 });

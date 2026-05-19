@@ -54,8 +54,9 @@ first-tree-hub
 ├── chat
 │   ├── list [-l <limit>] [--cursor] [--agent]
 │   ├── history <chatId> [-l <limit>] [--cursor] [--agent]
-│   ├── send <agentName> [message] [-f format] [--direct] [-m <json>]
-│   │     [--reply-to] [--reply-to-inbox] [--reply-to-chat] [--agent]
+│   ├── send <agentName> [message] [-f format] [-m <json>]
+│   │     [--reply-to] [--reply-to-inbox] [--agent]
+│   ├── add-participant <agentName> [--chat] [--agent]
 │   └── open <agent-name> [--server]
 ├── org
 │   └── bind-tree <url> [--org]
@@ -233,26 +234,35 @@ Claude-runtime agents can pause execution mid-turn and prompt the operator with 
 Day-to-day messaging — send messages, list chats, view history, open an interactive REPL.
 
 ```bash
-# Send a message to an agent (positional is the agent name)
+# Send a message to an agent (positional is the agent name).
+# The recipient MUST already be a participant of your current chat.
 first-tree-hub chat send <agentName> "hello"
 echo "piped message" | first-tree-hub chat send <agentName>
 
-# Open or reuse a direct chat with a non-member of the current chat
-first-tree-hub chat send --direct <agentName> "private ping"
+# Pull a non-member into your current chat first, then send normally.
+# Replaces the retired `chat send --direct` escape hatch — Hub keeps a single
+# group-chat model, so there is no side-conversation fallback.
+first-tree-hub chat add-participant <agentName>
+first-tree-hub chat send <agentName> "now we can talk"
 
-# Attach metadata or reply routing
+# Attach metadata or reply routing (same-chat inbox row only)
 first-tree-hub chat send <agentName> "hello" -m '{"priority":"high"}'
 first-tree-hub chat send <agentName> "follow-up" --reply-to <messageId>
-first-tree-hub chat send <agentName> "continue there" \
-  --reply-to-inbox <inboxId> --reply-to-chat <chatId>
+first-tree-hub chat send <agentName> "continue here" --reply-to-inbox <inboxId>
 
 # List chats / view history
 first-tree-hub chat list
 first-tree-hub chat history <chatId>
 
-# Open an interactive REPL chat with an agent (creates a DM, polls)
+# Open an interactive REPL chat with an agent
 first-tree-hub chat open <agent-name>
 ```
+
+`chat add-participant <agentName>` adds the named agent to the chat
+identified by `FIRST_TREE_HUB_CHAT_ID` (the chat the running agent session
+is bound to). Pass `--chat <chatId>` to target a different chat. The lookup
+is org-scoped, so the named agent must live in the same organization as the
+chat; cross-org adds return 404.
 
 `--agent <name>` selects the SENDER when multiple agents are configured
 locally (single-agent installs can omit it). The recipient is always the

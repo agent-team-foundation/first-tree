@@ -18,9 +18,10 @@ import type { Notifier } from "./notifier.js";
  *
  *   1. Generate / adopt an `imageId`
  *   2. Push the bytes as an `image_payload` WS frame to every participant
- *      agent's inbox — plus the reply-to inbox when this is a cross-chat
- *      reply (matches sendMessage's extra fan-out). Best-effort, local
- *      instance only, no PG NOTIFY.
+ *      agent's inbox. Cross-chat reply routing has been removed (see
+ *      first-tree-context PR #281), so there is no extra reply-to fan-out
+ *      to match — the chat's own participant list is the full audience.
+ *      Best-effort, local instance only, no PG NOTIFY.
  *   3. Return a copy of `data` whose `content` is just the reference
  *      {imageId, mimeType, filename, size}
  *

@@ -403,7 +403,7 @@ describe("Chat Access Control", () => {
 
       // Create a chat between member's human agent and assistant
       await createChat(app.db, member.agentId, {
-        type: "direct",
+        type: "group",
         participantIds: [assistant.uuid],
       });
 
@@ -438,13 +438,13 @@ describe("Chat Access Control", () => {
 
       // Create a chat for A
       const chatA = await createChat(app.db, memberA.agentId, {
-        type: "direct",
+        type: "group",
         participantIds: [assistantA.uuid],
       });
 
       // Create a chat for B
       await createChat(app.db, memberB.agentId, {
-        type: "direct",
+        type: "group",
         participantIds: [assistantB.uuid],
       });
 
@@ -477,7 +477,7 @@ describe("Chat Access Control", () => {
 
       // Create a chat between the two agents (not including human agent)
       const chat = await createChat(app.db, agentA.uuid, {
-        type: "direct",
+        type: "group",
         participantIds: [agentB.uuid],
       });
 
@@ -509,7 +509,7 @@ describe("Chat Access Control", () => {
 
       // Create a chat between A's agents
       const chat = await createChat(app.db, agentA.uuid, {
-        type: "direct",
+        type: "group",
         participantIds: [agentA2.uuid],
       });
 
@@ -535,7 +535,7 @@ describe("Chat Access Control", () => {
 
       // Create chat with human agent as participant
       const chat = await createChat(app.db, member.agentId, {
-        type: "direct",
+        type: "group",
         participantIds: [assistant.uuid],
       });
 
@@ -560,7 +560,7 @@ describe("Chat Access Control", () => {
       });
 
       const chat = await createChat(app.db, memberA.agentId, {
-        type: "direct",
+        type: "group",
         participantIds: [assistant.uuid],
       });
 
@@ -584,7 +584,7 @@ describe("Chat Access Control", () => {
       });
 
       const chat = await createChat(app.db, memberA.agentId, {
-        type: "direct",
+        type: "group",
         participantIds: [assistant.uuid],
       });
 
@@ -607,7 +607,7 @@ describe("Chat Access Control", () => {
       });
 
       const chat = await createChat(app.db, memberA.agentId, {
-        type: "direct",
+        type: "group",
         participantIds: [assistant.uuid],
       });
 
@@ -630,7 +630,7 @@ describe("Chat Access Control", () => {
       });
 
       const chat = await createChat(app.db, memberA.agentId, {
-        type: "direct",
+        type: "group",
         participantIds: [assistant.uuid],
       });
 

@@ -386,8 +386,6 @@ export {
 export {
   type ClientMessage,
   clientMessageSchema,
-  type InReplyToSnapshot,
-  inReplyToSnapshotSchema,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   type Message,

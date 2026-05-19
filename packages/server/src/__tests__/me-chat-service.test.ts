@@ -613,9 +613,10 @@ describe("chat-first workspace service layer", () => {
     const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [peer.agent.uuid],
     });
-    // Forge a nested chat row anchored to the parent. `parent_chat_id` is
-    // currently unused at the product level but the listMeChats filter
-    // keeps nested rows out of the conversation list.
+    // Forge a row with non-null `parent_chat_id`. The column is decision-inert
+    // scaffolding (see first-tree-context PR #281) — the business layer
+    // never writes it, but listMeChats still defensively filters such rows out
+    // so any historical forged row stays hidden from the conversation list.
     await app.db.execute(sql`
       INSERT INTO chats (id, organization_id, type, parent_chat_id)
       VALUES ('nested-x', ${admin.organizationId}, 'group', ${chatId})

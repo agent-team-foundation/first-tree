@@ -6,8 +6,10 @@ import type { GitMirrorManager } from "./git-mirror-manager.js";
 export type AgentIdentity = {
   agentId: string;
   /**
-   * Agent's inbox ID. Threaded into the handler so child processes can build
-   * cross-chat `replyTo` envelopes without a per-call server round-trip.
+   * Agent's inbox ID. Threaded into the handler so child processes can attach
+   * a `replyToInbox` envelope (same-chat inbox-row routing) without a
+   * per-call server round-trip. Cross-chat routing has been removed (see
+   * first-tree-context PR #281).
    */
   inboxId: string;
   /**

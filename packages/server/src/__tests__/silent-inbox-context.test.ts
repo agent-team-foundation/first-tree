@@ -372,65 +372,6 @@ describe("silent inbox + preceding context", () => {
     expect(b.message.precedingMessages.map((p) => p.content)).toEqual(["silent-B"]);
   });
 
-  it("replyTo-routed entries do not pull silent context from the secondary chat", async () => {
-    // The replyTo cross-chat route writes an extra inbox row with a chat_id
-    // that's *not* the message's home chat. silent-context lookup keys on the
-    // entry's chat_id, so the routed entry must look at chat B's silent rows
-    // (where it lives) — not chat A's.
-    const app = getApp();
-    const uid = crypto.randomUUID().slice(0, 6);
-    const ctx = await createAdminContext(app, { username: `rt-${uid}` });
-    const sender = await createAgent(app.db, {
-      name: `rt-s-${uid}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const peer = await createAgent(app.db, {
-      name: `rt-p-${uid}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-
-    // Chat A: sender + peer. Sender will write the original message here with
-    // replyTo pointing at chat B (a private group with sender alone).
-    const chatA = await createChat(app.db, sender.uuid, { type: "direct", participantIds: [peer.uuid] });
-    const chatB = await createChat(app.db, sender.uuid, { type: "group", participantIds: [] });
-
-    // Original — establishes replyTo routing.
-    const original = await sendMessage(app.db, chatA.id, sender.uuid, {
-      format: "text",
-      content: "any progress?",
-      replyToInbox: sender.inboxId,
-      replyToChat: chatB.id,
-    });
-
-    // Peer drains the message they got in chat A.
-    await pollInbox(app.db, peer.inboxId, 10);
-
-    // Peer replies in chat A — fan-out drops a row in chat A for sender (full
-    // mode here, not mention_only) AND replyTo routing drops a second row in
-    // chat B with chat_id=B.
-    const reply = await sendMessage(app.db, chatA.id, peer.uuid, {
-      format: "text",
-      content: "yes, almost done",
-      inReplyTo: original.message.id,
-    });
-
-    // Sender polls — should get both rows; neither carries any preceding
-    // silent context (no silent rows exist in either chat).
-    const pulled = await pollInbox(app.db, sender.inboxId, 10);
-    expect(pulled.length).toBeGreaterThanOrEqual(1);
-    for (const entry of pulled) {
-      expect(entry.messageId).toBe(reply.message.id);
-      expect(entry.message.precedingMessages).toEqual([]);
-    }
-    // Confirm the routed row exists on chat B's chat_id.
-    const chatIds = pulled.map((e) => e.chatId).sort();
-    expect(chatIds).toContain(chatB.id);
-  });
-
   it("pruneStaleSilentEntries deletes acked silent rows immediately and stale-pending rows past the age window", async () => {
     // GC keeps the inbox_entries table from growing forever in chats where a
     // mention_only agent is never @mentioned. Acked rows are deleted on any

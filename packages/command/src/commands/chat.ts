@@ -136,11 +136,9 @@ async function resolveAgent(serverUrl: string, adminToken: string, agentName: st
 
 interface SendOptions {
   format: MessageFormat;
-  direct?: boolean;
   metadata?: string;
   replyTo?: string;
   replyToInbox?: string;
-  replyToChat?: string;
   agent?: string;
 }
 
@@ -149,16 +147,13 @@ export function registerChatCommands(program: Command): void {
 
   chat
     .command("send <agentName> [message]")
-    .description("Send a message to an agent. Defaults to your current chat; use --direct for a side conversation.")
-    .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
-    .option(
-      "--direct",
-      "Open or reuse a direct chat with the recipient (bypass member check). Use only when intentionally starting a side conversation with a non-member.",
+    .description(
+      "Send a message to an agent. The recipient must already be a participant of your current chat; use `chat add-participant` first if they are not.",
     )
+    .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
     .option("--reply-to <messageId>", "Message ID to reply to")
-    .option("--reply-to-inbox <inboxId>", "Cross-chat reply target inbox")
-    .option("--reply-to-chat <chatId>", "Cross-chat reply target chat")
+    .option("--reply-to-inbox <inboxId>", "Inbox row to route the reply back to (same chat)")
     .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .action(async (agentName: string, message: string | undefined, options: SendOptions) => {
       try {
@@ -176,9 +171,8 @@ export function registerChatCommands(program: Command): void {
           }
         }
 
-        const { replyToInbox, replyToChat } = resolveReplyToFromEnv(process.env, {
+        const { replyToInbox } = resolveReplyToFromEnv(process.env, {
           replyToInbox: options.replyToInbox,
-          replyToChat: options.replyToChat,
         });
 
         const sdk = createSdk(options.agent);
@@ -188,10 +182,33 @@ export function registerChatCommands(program: Command): void {
           content,
           metadata,
           replyToInbox,
-          replyToChat,
-          direct: options.direct ?? false,
         });
         success(result);
+      } catch (error) {
+        handleSdkError(error);
+      }
+    });
+
+  chat
+    .command("add-participant <agentName>")
+    .description(
+      "Add an agent to the caller's current chat (FIRST_TREE_HUB_CHAT_ID env). Replaces the legacy --direct side-conversation escape hatch.",
+    )
+    .option("--chat <chatId>", "Override the chat to add the participant to (defaults to FIRST_TREE_HUB_CHAT_ID env)")
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .action(async (agentName: string, options: { chat?: string; agent?: string }) => {
+      try {
+        const chatId = options.chat ?? process.env.FIRST_TREE_HUB_CHAT_ID;
+        if (!chatId) {
+          fail(
+            "NO_CHAT_CONTEXT",
+            "No chat context available. Pass --chat <chatId> or run from within an agent session that exports FIRST_TREE_HUB_CHAT_ID.",
+            2,
+          );
+        }
+        const sdk = createSdk(options.agent);
+        const participants = await sdk.addChatParticipant(chatId, { agentName });
+        success(participants);
       } catch (error) {
         handleSdkError(error);
       }

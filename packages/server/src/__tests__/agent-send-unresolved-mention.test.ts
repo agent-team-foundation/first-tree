@@ -15,8 +15,9 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  *
  * New invariant: on the agent path (`enforceGroupMention: true`), any raw
  * `@<token>` in content that doesn't resolve to a chat speaker fails the
- * write with 400 + a hint pointing at `--direct <name>`. Both `direct` and
- * `group` chat shapes are guarded so the dogfood gap is sealed.
+ * write with 400 + a hint pointing at `chat add-participant <name>` so the
+ * agent pulls the missing recipient into THIS chat and retries. Two-speaker
+ * and three+-speaker shapes are both guarded so the dogfood gap is sealed.
  *
  * Bypassed by `purpose: "agent-final-text"` (handler forwards, not user
  * routing — same as enforceGroupMention).
@@ -33,7 +34,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     if (!outsider.agent.name) throw new Error("outsider name missing");
 
     const chat = await createChat(app.db, sender.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [peer.agent.uuid],
     });
 
@@ -48,7 +49,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     ).rejects.toThrow(new RegExp(`Cannot @-mention "${outsider.agent.name}"`));
   });
 
-  it("hint recommends `--direct <name>` (not `add-participant`) for the typed token", async () => {
+  it("hint recommends `chat add-participant <name>` (not `--direct`) for the typed token", async () => {
     const app = getApp();
     const sender = await createTestAgent(app, { type: "autonomous_agent" });
     const peer = await createTestAgent(app, { type: "human" });
@@ -56,7 +57,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     if (!outsider.agent.name) throw new Error("outsider name missing");
 
     const chat = await createChat(app.db, sender.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [peer.agent.uuid],
     });
 
@@ -71,8 +72,8 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
       throw new Error("expected sendMessage to reject");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      expect(message).toContain(`--direct ${outsider.agent.name}`);
-      expect(message).not.toMatch(/add-participant/i);
+      expect(message).toContain(`add-participant ${outsider.agent.name}`);
+      expect(message).not.toMatch(/--direct/);
     }
   });
 
@@ -133,7 +134,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     if (!peer.agent.name) throw new Error("peer name missing");
 
     const chat = await createChat(app.db, sender.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [peer.agent.uuid],
     });
 
@@ -189,7 +190,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     if (!outsider.agent.name) throw new Error("outsider name missing");
 
     const chat = await createChat(app.db, sender.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [peer.agent.uuid],
     });
 

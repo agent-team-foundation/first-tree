@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { createChat, findOrCreateDirectChat } from "../services/chat.js";
+import { createChat } from "../services/chat.js";
 import { createMeChat, listMeChats } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
@@ -111,7 +111,10 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
     const a1 = await createTestAgent(app, { name: `aa1-${uid}` });
     const { agent: a2 } = await createTestAgent(app, { name: `aa2-${uid}` });
 
-    const chat = await findOrCreateDirectChat(app.db, a1.agent.uuid, a2.uuid);
+    const chat = await createChat(app.db, a1.agent.uuid, {
+      type: "group",
+      participantIds: [a2.uuid],
+    });
     await sendMessage(app.db, chat.id, a1.agent.uuid, {
       format: "text",
       content: "ok thanks",

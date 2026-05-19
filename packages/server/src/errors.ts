@@ -83,11 +83,15 @@ export class ClientUserMismatchError extends AppError {
 }
 
 /**
- * v1 §四 改造 1: `chat send <name>` was implicitly opening a direct chat
- * whenever the target wasn't a member of the caller's current chat (issue
- * #311). That auto-routing now requires `--direct`; otherwise the call
- * fails with this error and a hint pointing at both the `--direct` escape
- * hatch and the "ask a human in this chat to add the agent" workflow.
+ * Hub keeps a single group-chat model (see first-tree-context PR #281), so
+ * `chat send <name>` only works when the target is already a participant
+ * of the caller's current chat. When the recipient is missing, both
+ * `sendToAgent` (`POST /agent/agents/:name/messages`) and the unresolved-
+ * @-token guard in `sendMessage` throw this error with a hint pointing at
+ * `first-tree-hub chat add-participant <name>` so the caller pulls the
+ * recipient into the chat and retries. The retired `--direct` opt-in /
+ * implicit direct-chat fallback is gone — there is no side-conversation
+ * escape hatch.
  */
 export class AgentSendNonMemberError extends AppError {
   readonly code = "AGENT_SEND_NON_MEMBER";

@@ -85,6 +85,14 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 **UUID v7 as Message ID:** Time-ordered; messages are immutable after creation.
 
+**Single group-chat model — no sub-chat:** Hub does NOT have a sub-chat /
+nested-chat product layer. `chats.parent_chat_id` is decision-inert schema
+scaffolding only — do not write to it, do not branch business behaviour on
+it. Hierarchy is a Web-UI presentation concern, not a data-model one. Full
+rationale lives in upstream
+[first-tree-context PR #281](https://github.com/agent-team-foundation/first-tree-context/pull/281)
+(merged) — do not re-open this question from inside `first-tree-hub`.
+
 ## Coding Conventions
 
 - **No `any`**: Use `unknown` + type narrowing

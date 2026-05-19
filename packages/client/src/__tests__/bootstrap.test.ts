@@ -139,7 +139,7 @@ describe("bootstrapWorkspace", () => {
     expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
   });
 
-  it("tools.md shows --direct as a documented chat send option (v1 §四 改造 1)", () => {
+  it("tools.md teaches `chat add-participant` instead of the retired --direct escape hatch", () => {
     const workspace = join(tmpBase, "ws-tools-direct");
     mkdirSync(workspace, { recursive: true });
 
@@ -152,17 +152,21 @@ describe("bootstrapWorkspace", () => {
     });
 
     const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
-    // Sending Messages section must include a --direct example
-    expect(content).toContain("first-tree-hub chat send --direct");
-    // Member-default routing description (replaces the implicit-fallback note)
+    // Sending Messages section must teach the add-participant flow as the
+    // canonical way to reach a non-member of the current chat.
+    expect(content).toContain("first-tree-hub chat add-participant");
+    // Member-default routing description (the recipient must be in this chat).
     expect(content).toMatch(/recipient MUST be a participant/);
-    expect(content).toMatch(/--direct flag explicitly/);
+    // The retired escape hatches must NOT be taught — agents that try them
+    // would hit `unknown option` and loop. (Hub keeps a single group-chat
+    // model; non-members must be added first.)
+    expect(content).not.toMatch(/--direct/);
+    expect(content).not.toMatch(/auto-mentions the recipient/);
     // v1.7: agent surface is narrowed to "address an agent by name". The
     // `--chat <chatId>` foot-gun is gone from the CLI and from this prompt.
     expect(content).not.toMatch(/--chat <chatId>/);
     expect(content).not.toMatch(/--chat <directChatId>/);
     expect(content).toMatch(/Reaching another agent/);
-    expect(content).toMatch(/auto-mentions the recipient/);
     expect(content).toMatch(/only addresses agents by name/);
   });
 

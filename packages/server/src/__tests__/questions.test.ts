@@ -63,7 +63,7 @@ async function setupQuestionScenario(app: FastifyInstance, runtimeProvider: "cla
     { force: true },
   );
   const chat = await createChat(app.db, admin.humanAgentUuid, {
-    type: "direct",
+    type: "group",
     participantIds: [peerAgent.uuid],
   });
   return { admin, peerAgent, chatId: chat.id };

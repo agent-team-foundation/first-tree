@@ -353,10 +353,14 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
   // Verify requester is a participant
   await assertParticipant(db, chatId, requesterId);
 
-  // Verify target agent exists and is in the same org. `inboxId` is
-  // needed for the v1.7 silent-context backfill (`backfillSilentContext
-  // ForNewParticipants` writes inbox rows keyed by inbox id); `visibility`
-  // and `managerId` are needed for PR #402's owner-exclusive check.
+  // Resolve the target by uuid or by name. Name lookup is scoped to the
+  // chat's organization so an agent in another org can never be pulled in
+  // by name collision. `inboxId` is needed for the v1.7 silent-context
+  // backfill; `visibility` and `managerId` are needed for PR #402's
+  // owner-exclusive check.
+  const targetSelector = data.agentId
+    ? eq(agents.uuid, data.agentId)
+    : and(eq(agents.organizationId, chat.organizationId), eq(agents.name, data.agentName ?? ""));
   const [targetAgent] = await db
     .select({
       id: agents.uuid,
@@ -366,11 +370,12 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
       managerId: agents.managerId,
     })
     .from(agents)
-    .where(eq(agents.uuid, data.agentId))
+    .where(targetSelector)
     .limit(1);
 
   if (!targetAgent) {
-    throw new NotFoundError(`Agent "${data.agentId}" not found`);
+    const ref = data.agentId ?? data.agentName ?? "(unknown)";
+    throw new NotFoundError(`Agent "${ref}" not found`);
   }
 
   if (targetAgent.organizationId !== chat.organizationId) {
@@ -406,11 +411,11 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
   const [existing] = await db
     .select({ accessMode: chatMembership.accessMode })
     .from(chatMembership)
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, data.agentId)))
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, targetAgent.id)))
     .limit(1);
 
   if (existing?.accessMode === "speaker") {
-    throw new ConflictError(`Agent "${data.agentId}" is already a participant`);
+    throw new ConflictError(`Agent "${data.agentName ?? targetAgent.id}" is already a participant`);
   }
 
   // Direct chats become groups on the third speaker. Flip existing
@@ -435,7 +440,7 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
     // still constructing it). `upgradeWatcherToSpeaker` promotes any
     // pre-existing watcher row in place — chat_user_state is structurally
     // separate so read state is preserved without a state-carry transaction.
-    await addChatParticipants(tx, chatId, [{ agentId: data.agentId }], { upgradeWatcherToSpeaker: true });
+    await addChatParticipants(tx, chatId, [{ agentId: targetAgent.id }], { upgradeWatcherToSpeaker: true });
     await recomputeChatWatchers(tx, chatId);
     // v1 §四 改造 2: backfill the most recent N messages as silent
     // (notify=false) inbox rows for the new participant so a future trigger
@@ -716,117 +721,4 @@ export async function leaveChat(db: Database, chatId: string, humanAgentId: stri
     .select()
     .from(chatMembership)
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-}
-
-export async function findOrCreateDirectChat(db: Database, agentAId: string, agentBId: string) {
-  // Resolve both endpoints up front. Two reasons:
-  //   1. Reject cross-org pairs. A direct chat whose `chats.organization_id`
-  //      disagrees with one of its participants is unreachable by the chat
-  //      owner (org membership fails `requireChatAccess` → 404) yet still
-  //      leaks into the other side's chat list — exactly the breakage
-  //      observed when a caller (e.g. agent connection test, follow-up to
-  //      #288) handed us a cross-org pair.
-  //   2. Carry `organizationId` into the existing-chat lookup below so we
-  //      cannot reuse a historical dirty row whose participants happen to
-  //      include both ends but whose chat lives in another org.
-  const ends = await db
-    .select({
-      uuid: agents.uuid,
-      organizationId: agents.organizationId,
-      type: agents.type,
-      visibility: agents.visibility,
-      managerId: agents.managerId,
-    })
-    .from(agents)
-    .where(inArray(agents.uuid, [agentAId, agentBId]));
-
-  const agentA = ends.find((a) => a.uuid === agentAId);
-  if (!agentA) throw new NotFoundError(`Agent "${agentAId}" not found`);
-  const agentB = ends.find((a) => a.uuid === agentBId);
-  if (!agentB) throw new NotFoundError(`Agent "${agentBId}" not found`);
-  if (agentA.organizationId !== agentB.organizationId) {
-    throw new BadRequestError(
-      `Cannot create direct chat across organizations: agent "${agentAId}" (org "${agentA.organizationId}") vs agent "${agentBId}" (org "${agentB.organizationId}")`,
-    );
-  }
-  const orgId = agentA.organizationId;
-
-  // Find chats where BOTH agents are speakers. Single grouped query —
-  // `HAVING COUNT(DISTINCT agent_id) = 2` keeps us from matching chats that
-  // happen to have one of the two agents twice somehow (defensive; the
-  // (chat_id, agent_id) PK prevents that, but the DISTINCT costs nothing).
-  const commonRows = await db
-    .select({ chatId: chatMembership.chatId })
-    .from(chatMembership)
-    .where(and(inArray(chatMembership.agentId, [agentAId, agentBId]), eq(chatMembership.accessMode, "speaker")))
-    .groupBy(chatMembership.chatId)
-    .having(sql`COUNT(DISTINCT ${chatMembership.agentId}) = 2`);
-  const commonChatIds = commonRows.map((r) => r.chatId);
-
-  if (commonChatIds.length > 0) {
-    // Order by `created_at` for determinism across webhook re-deliveries
-    // and any other caller re-entering for the same pair (see #283).
-    // The `organizationId` predicate is what prevents reuse of historical
-    // cross-org dirty rows — without it, two new-org agents could resolve
-    // to an old-org chat just because both names sit in its participants.
-    const directChats = await db
-      .select()
-      .from(chats)
-      .where(and(inArray(chats.id, commonChatIds), eq(chats.type, "direct"), eq(chats.organizationId, orgId)))
-      .orderBy(chats.createdAt, chats.id)
-      .limit(1);
-
-    if (directChats.length > 0 && directChats[0]) {
-      return directChats[0];
-    }
-  }
-
-  // Owner-exclusive rule for new direct chats. Applied symmetrically:
-  // if either endpoint is a private agent and the two endpoints have
-  // different owners, refuse to materialise the direct chat. Covers
-  // the agent-SDK `sendToAgent` path — sender knowing only the
-  // target's `agents.name` (which is org-scoped, not secret) would
-  // otherwise create a direct chat with a private agent it has no
-  // owner relationship to (RFC §4.4.2 / §4.5 / §4.7 "Personal agent
-  // outbound DM to a stranger → forbidden"). Pre-existing direct
-  // chats are intentionally NOT retroactively gated: an existing
-  // membership row is already a scoped-consent artefact.
-  if (
-    (agentA.visibility === AGENT_VISIBILITY.PRIVATE || agentB.visibility === AGENT_VISIBILITY.PRIVATE) &&
-    agentA.managerId !== agentB.managerId
-  ) {
-    throw new ForbiddenError(
-      `Cannot open a direct chat with a private agent across owners: "${agentAId}" ↔ "${agentBId}"`,
-    );
-  }
-
-  // Create new direct chat. Mode is derived server-side from
-  // `(chats.type, agents.type)` via `addChatParticipants` — the "agent-only
-  // direct → mention_only" anti-echo rule from migration 0029 is encoded
-  // there, not redone here.
-  const chatId = randomUUID();
-  return db.transaction(async (tx) => {
-    const [chat] = await tx
-      .insert(chats)
-      .values({
-        id: chatId,
-        organizationId: orgId,
-        type: "direct",
-      })
-      .returning();
-
-    await addChatParticipants(tx, chatId, [
-      { agentId: agentAId, role: "member" },
-      { agentId: agentBId, role: "member" },
-    ]);
-
-    // Watcher rows: managers of either non-human end should immediately
-    // see this fresh chat under "Watching". Without this, agent-to-agent
-    // direct chats created via `sendToAgent` / webhooks never surfaced for
-    // the manager — design AC #8 silently broke.
-    await recomputeChatWatchers(tx, chatId);
-
-    if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
-    return chat;
-  });
 }

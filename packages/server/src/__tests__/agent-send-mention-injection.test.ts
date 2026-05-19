@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { messages } from "../db/schema/messages.js";
 import { createChat } from "../services/chat.js";
-import { sendMessage, sendToAgent } from "../services/message.js";
+import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -53,7 +53,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
     const sender = await createTestAgent(app, { name: `dt-s-${uid}` });
     const { agent: peer } = await createTestAgent(app, { name: `dt-p-${uid}` });
     const chat = await createChat(app.db, sender.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [peer.uuid],
     });
     return { sender, peer, chat };
@@ -524,81 +524,11 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
   });
 
-  // ─── Integration: sendToAgent (CLI `chat send <name>`) ────────────────
-
-  describe("integration — sendToAgent unified through step 2c", () => {
-    it("prepends @<name> via the unified normalisation path", async () => {
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `dm-s-${uid}` });
-      const target = await createTestAgent(app, { name: `dm-t-${uid}` });
-      if (!target.agent.name) throw new Error("target name missing");
-
-      // No shared chat between sender and target — v1 §四 改造 1 requires
-      // `direct: true` to fall through to findOrCreateDirectChat.
-      const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
-        format: "text",
-        content: "ping",
-        direct: true,
-      });
-      expect(result.message.content).toBe(`@${target.agent.name} ping`);
-      const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
-      expect(meta.mentions).toEqual([target.agent.uuid]);
-    });
-
-    it("does not double-prepend when the caller already wrote @<name>", async () => {
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `dm2-s-${uid}` });
-      const target = await createTestAgent(app, { name: `dm2-t-${uid}` });
-      if (!target.agent.name) throw new Error("target name missing");
-
-      const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
-        format: "text",
-        content: `@${target.agent.name} please review`,
-        direct: true,
-      });
-      expect(result.message.content).toBe(`@${target.agent.name} please review`);
-    });
-
-    it("leaves non-string content unchanged but still records the target uuid in mentions", async () => {
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `dm3-s-${uid}` });
-      const target = await createTestAgent(app, { name: `dm3-t-${uid}` });
-      if (!target.agent.name) throw new Error("target name missing");
-
-      const card = { kind: "card", title: "approval" };
-      const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
-        format: "card",
-        content: card,
-        direct: true,
-      });
-      expect(result.message.content).toEqual(card);
-      const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
-      expect(meta.mentions).toEqual([target.agent.uuid]);
-    });
-
-    it("merges with caller-provided metadata.mentions (additive, not replacing)", async () => {
-      // If a future agent runtime feeds an extra mention through `chat send`,
-      // we must not overwrite it with just the target.
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `dm4-s-${uid}` });
-      const target = await createTestAgent(app, { name: `dm4-t-${uid}` });
-      if (!target.agent.name) throw new Error("target name missing");
-      const ghost = "00000000-0000-0000-0000-deadbeefcafe";
-
-      const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
-        format: "text",
-        content: "ping",
-        metadata: { mentions: [ghost] },
-        direct: true,
-      });
-      const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
-      expect(meta.mentions).toEqual(expect.arrayContaining([ghost, target.agent.uuid]));
-    });
-  });
+  // sendToAgent no longer performs routing — it resolves the recipient name
+  // and refuses with AGENT_SEND_NON_MEMBER pointing callers at
+  // `chat add-participant` (see first-tree-context PR #281 and
+  // agent-send-to-agent.test.ts). Mention injection on the sendMessage path
+  // is exercised by the group/direct-chat suites above.
 
   // ─── Cross-cutting: persisted state matches API response ───────────────
 

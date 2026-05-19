@@ -72,7 +72,7 @@ describe("Admin sessions — chat-level access control", () => {
     const outsider = await createMember(app, admin.accessToken, admin.organizationId, "outsider");
 
     const chat = await createChat(app.db, participant.humanAgentId, {
-      type: "direct",
+      type: "group",
       participantIds: [targetAgent.uuid],
     });
 
@@ -128,7 +128,7 @@ describe("Admin sessions — chat-level access control", () => {
 
     const otherMember = await createMember(app, admin.accessToken, admin.organizationId, "other");
     const chat = await createChat(app.db, otherMember.humanAgentId, {
-      type: "direct",
+      type: "group",
       participantIds: [supervisedAgent.uuid],
     });
 

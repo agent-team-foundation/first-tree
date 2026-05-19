@@ -15,7 +15,6 @@ import { messages } from "../db/schema/messages.js";
 import { AgentSendNonMemberError, BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
 import { upsertSessionState } from "./activity.js";
-import { findOrCreateDirectChat, isParticipant } from "./chat.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext } from "./doc-snapshots.js";
 import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from "./questions.js";
@@ -146,15 +145,11 @@ async function sendMessageInner(
       }
     }
 
-    // `replyTo` is a sender-declared routing promise — the sender is saying
-    // "when someone replies to this, also deliver a copy to my own inbox in
-    // this other chat". Letting a caller put somebody else's inboxId here
-    // would let an agent spam a third party's inbox by baiting replies.
-    // Enforce that replyToInbox belongs to the sender. replyToChat is not
-    // validated against membership intentionally: cross-workspace reply
-    // routing would already require the sender to be a participant of the
-    // target chat when they *read* that reply, and we don't want to block
-    // legit "I'll come back to this later" envelopes.
+    // `replyToInbox` is a sender-declared routing promise — the sender is
+    // saying "when someone replies to this, also deliver a copy to my own
+    // inbox row". Letting a caller put somebody else's inboxId here would let
+    // an agent spam a third party's inbox by baiting replies. Enforce that
+    // replyToInbox belongs to the sender.
     if (data.replyToInbox !== undefined && data.replyToInbox !== null) {
       if (senderRow.inboxId !== data.replyToInbox) {
         throw new BadRequestError("replyToInbox must reference the sender's own inbox");
@@ -181,11 +176,18 @@ async function sendMessageInner(
     const mergedMentions = [...new Set([...explicitMentions, ...resolved])];
     const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
 
-    // Direct-chat auto-mention for the unread-counter projection (chat-first
-    // workspace). In a 1-on-1 the recipient is implicit, so the conversation
-    // list should red-dot every DM message — without this, `extractMentions`
-    // returns [] on plain text and `applyAfterFanOut` short-circuits the
-    // counter bump, leaving DM rows at zero unread.
+    // 1-on-1 auto-mention for the unread-counter projection (chat-first
+    // workspace). In a two-member chat the recipient is implicit, so the
+    // conversation list should red-dot every DM message — without this,
+    // `extractMentions` returns [] on plain text and `applyAfterFanOut`
+    // short-circuits the counter bump, leaving DM rows at zero unread.
+    //
+    // The 1-on-1 signal is membership shape (participants.length === 2)
+    // rather than `chats.type === "direct"`. Hub no longer writes new
+    // `direct` rows (see first-tree-context PR #281), and any existing
+    // `direct` row by construction has exactly two speakers — so the
+    // derived predicate matches both old and new chats without a column
+    // check.
     //
     // This list is **projection-only** — it deliberately does NOT join
     // `mergedMentions`. Folding it in would make the auto-mention also
@@ -198,16 +200,20 @@ async function sendMessageInner(
     // off — a silent turn whose entire text is `@<name>` tokens is meant
     // to land in history without bothering anyone; bumping unread
     // contradicts that intent.
-    const dmAutoProjection: string[] =
-      chatType === "direct"
-        ? [...new Set([...mergedMentions, ...participants.filter((p) => p.agentId !== senderId).map((p) => p.agentId)])]
-        : mergedMentions;
+    const isOneOnOne = participants.length === 2;
+    const dmAutoProjection: string[] = isOneOnOne
+      ? [...new Set([...mergedMentions, ...participants.filter((p) => p.agentId !== senderId).map((p) => p.agentId)])]
+      : mergedMentions;
 
     // 2b. Group-chat receiver enforcement (agent-only). Stop a misuse where an
     //     agent calls `send --chat <id>` against a group without naming who
     //     should pick it up — every mention_only participant would silently
     //     drop the message and the sender would assume delivery.
-    //     Uses the chat type pre-fetched in step 1 so this stays cheap.
+    //
+    //     Keys on membership shape rather than `chats.type` so post-Phase-1
+    //     `group` rows with size=2 (the new 1-on-1 shape) keep the legacy
+    //     "DM doesn't need an explicit @mention" UX. Three-plus-speaker
+    //     chats stay strict.
     //
     //     `purpose === "agent-final-text"` bypasses this guard: the message
     //     is a handler-initiated forward (result-sink final text, or an
@@ -217,7 +223,7 @@ async function sendMessageInner(
     //     every fan-out row is forced to `notify=false` further down so it
     //     never wakes another session. v1 §四 改造 4 (b) bypass channel.
     const isAgentFinalText = data.purpose === "agent-final-text";
-    if (options.enforceGroupMention && chatType === "group" && !isAgentFinalText) {
+    if (options.enforceGroupMention && chatType === "group" && !isOneOnOne && !isAgentFinalText) {
       const recipientMentions = mergedMentions.filter((id) => id !== senderId);
       if (recipientMentions.length === 0) {
         throw new BadRequestError(
@@ -240,10 +246,10 @@ async function sendMessageInner(
     //
     //   New behaviour: when this hook is active (agent path), every raw
     //   `@<token>` in the content must resolve to a speaker. Unresolved
-    //   tokens → 400 with a remedy hint pointing at `--direct <name>` /
-    //   ask a human to add them. Code-fenced `@` tokens are already
-    //   stripped by `scanMentionTokens` upstream, so legitimate quoted
-    //   `@<name>` in code blocks is unaffected.
+    //   tokens → 400 with a remedy hint pointing at `chat add-participant`
+    //   so the agent pulls the missing recipient into THIS chat and retries.
+    //   Code-fenced `@` tokens are already stripped by `scanMentionTokens`
+    //   upstream, so legitimate quoted `@<name>` in code blocks is unaffected.
     //
     //   `purpose === "agent-final-text"` bypasses for the same reason it
     //   bypasses enforceGroupMention: handler-initiated forwards are not
@@ -262,8 +268,9 @@ async function sendMessageInner(
           const sample = unresolved[0];
           throw new BadRequestError(
             `Cannot @-mention "${sample}" — they are not a participant of this chat. ` +
-              `Use \`first-tree-hub chat send --direct ${sample} "..."\` to message them in a side conversation, ` +
-              "or ask a human in this chat to add them as a participant first.",
+              "Add them first:\n" +
+              `  first-tree-hub chat add-participant ${sample}\n` +
+              "Then retry your send. Or ask a human in this chat to add them.",
           );
         }
       }
@@ -346,7 +353,6 @@ async function sendMessageInner(
         content: outboundContent,
         metadata: metadataToStore,
         replyToInbox: data.replyToInbox ?? null,
-        replyToChat: data.replyToChat ?? null,
         inReplyTo: data.inReplyTo ?? null,
         source: data.source ?? null,
       })
@@ -418,59 +424,6 @@ async function sendMessageInner(
     const notified = fanout.filter((f) => f.notify);
     const recipients = notified.map((f) => f.inboxId);
     const recipientAgentIds = notified.map((f) => f.agentId);
-
-    // 4. replyTo routing: if this message replies to another message that has a replyTo,
-    //    create an additional inbox entry for the original requester
-    if (data.inReplyTo) {
-      const [original] = await tx
-        .select({
-          replyToInbox: messages.replyToInbox,
-          replyToChat: messages.replyToChat,
-        })
-        .from(messages)
-        .where(eq(messages.id, data.inReplyTo))
-        .limit(1);
-
-      if (original?.replyToInbox && original?.replyToChat) {
-        // Cross-chat replyTo: when message N has `replyToInbox = X` +
-        // `replyToChat = C`, every reply (`inReplyTo = N`) gets a duplicate
-        // inbox row routed back to X in C. This is the delegation-closure
-        // primitive: A in c1 delegates to B in c2 → B's reply must wake A
-        // in c1 so the user-facing thread can continue. The flag is the
-        // original sender's promise; the reply path has to honor it.
-        //
-        // Mirror silent-send (§2e) into this route — a silent message has
-        // zero notify=true inbox rows by definition; leaking notify=true
-        // through this back-channel would break that invariant.
-        //
-        // **Do NOT** mirror `isAgentFinalText` (§四 改造 4 b bypass) here.
-        // Bypass's intent is "final text doesn't wake chat-internal peers"
-        // (correct for c2 fan-out). But the replyTo cross-chat route is
-        // delegation-closure, not chat-internal peer wake — silencing it
-        // strands B's reply in c2 and breaks the whole delegation loop.
-        // Empirically caught in PR #393 v1.7 dogfood: A in c1 → asks B in
-        // c2 → B's final text → cross-chat route went notify=false → A
-        // never woke in c1 → A "continued in c2" because that's the only
-        // path that surfaced anything. Fix: replyTo cross-chat is governed
-        // by silent-send only.
-        const replyNotify = !isSilentSend;
-        await tx
-          .insert(inboxEntries)
-          .values({
-            inboxId: original.replyToInbox,
-            messageId,
-            chatId: original.replyToChat,
-            notify: replyNotify,
-          })
-          .onConflictDoNothing();
-
-        // Only surface as a wake-up target when not silenced — `recipients`
-        // is what the route layer turns into PG NOTIFY wake-ups.
-        if (replyNotify && !recipients.includes(original.replyToInbox)) {
-          recipients.push(original.replyToInbox);
-        }
-      }
-    }
 
     // 5. Update chat.updatedAt so chat list sorting reflects latest activity
     await tx.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chatId));
@@ -684,7 +637,7 @@ export async function sendToAgent(
   db: Database,
   senderUuid: string,
   targetName: string,
-  data: SendToAgent,
+  _data: SendToAgent,
 ): Promise<SendMessageResult> {
   // Verify sender exists
   const [sender] = await db
@@ -715,84 +668,17 @@ export async function sendToAgent(
     throw new NotFoundError(`Agent "${targetName}" not found${hint}`);
   }
 
-  // Build the merged-mentions metadata once — both the current-chat routing
-  // branch and the direct-chat fallback need the receiver in `metadata.mentions`
-  // so sendMessage's step 2c will prepend `@<name>` to the content.
-  const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
-  const existingMentionsRaw = incomingMeta.mentions;
-  const existingMentions = Array.isArray(existingMentionsRaw)
-    ? existingMentionsRaw.filter((m): m is string => typeof m === "string")
-    : [];
-  const mergedMentions = existingMentions.includes(target.uuid) ? existingMentions : [...existingMentions, target.uuid];
-  const metadata = { ...incomingMeta, mentions: mergedMentions };
-
-  // Routing (v1 §四 改造 1):
-  //
-  //   - If the caller is sitting in a chat (CLI auto-injects
-  //     `FIRST_TREE_HUB_CHAT_ID` into `replyToChat` via resolveReplyToFromEnv)
-  //     AND BOTH sender and target are participants of that chat, deliver
-  //     the message there.
-  //   - Otherwise, if `data.direct === true`, fall through to the
-  //     find-or-create-direct-chat path (the legacy implicit fallback,
-  //     now explicit and opt-in).
-  //   - Otherwise, refuse with `AGENT_SEND_NON_MEMBER` + a hint. Implicit
-  //     side-channel chats are exactly the #311 trap we are closing.
-  //
-  // BOTH ends are membership-checked because `replyToChat` is caller-supplied
-  // (env or explicit flag); the /agent/chats/:id/messages path enforces
-  // sender membership via assertParticipant — this routing branch must hold
-  // the same invariant or it becomes a write-anywhere primitive.
-  if (data.replyToChat) {
-    const [targetIsMember, senderIsMember] = await Promise.all([
-      isParticipant(db, data.replyToChat, target.uuid),
-      isParticipant(db, data.replyToChat, senderUuid),
-    ]);
-    if (targetIsMember && senderIsMember) {
-      return sendMessage(
-        db,
-        data.replyToChat,
-        senderUuid,
-        {
-          format: data.format,
-          content: data.content,
-          metadata,
-          // The message lands in replyToChat itself, so the reply-routing
-          // envelope is redundant — strip it so future replies fan out via
-          // normal participant rules instead of self-referencing.
-          replyToInbox: undefined,
-          replyToChat: undefined,
-          source: data.source,
-        },
-        { normalizeMentionsInContent: true },
-      );
-    }
-  }
-
-  if (!data.direct) {
-    throw new AgentSendNonMemberError(
-      `Agent "${targetName}" is not a member of your current chat. ` +
-        "Either open or reuse a side-conversation explicitly with " +
-        `\`first-tree-hub chat send --direct ${targetName} "..."\`, ` +
-        `or ask a human in this chat to add ${targetName} as a participant.`,
-    );
-  }
-
-  // Direct-chat fallback: only reachable when the caller passed `direct=true`.
-  const chat = await findOrCreateDirectChat(db, senderUuid, target.uuid);
-
-  return sendMessage(
-    db,
-    chat.id,
-    senderUuid,
-    {
-      format: data.format,
-      content: data.content,
-      metadata,
-      replyToInbox: data.replyToInbox,
-      replyToChat: data.replyToChat,
-      source: data.source,
-    },
-    { normalizeMentionsInContent: true },
+  // Hub keeps a single group-chat model — see first-tree-context PR #281.
+  // `sendToAgent` is no longer a routing primitive; its only job is to map a
+  // recipient name to a uuid and refuse the send when that recipient is not
+  // already a participant of the caller's current chat. Agents pull the
+  // non-member into the room via `first-tree-hub chat add-participant`
+  // and retry through `POST /agent/chats/:chatId/messages`.
+  throw new AgentSendNonMemberError(
+    `Agent "${targetName}" is not a member of your current chat. ` +
+      "Add them first:\n" +
+      `  first-tree-hub chat add-participant ${targetName}\n` +
+      "Then retry your send.",
   );
 }
 

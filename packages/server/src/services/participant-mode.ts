@@ -21,9 +21,9 @@
  *
  * All callers that need to add a participant — `createChat`, `addParticipant`,
  * `ensureParticipant`, `joinChat`, `createMeChat`, `addMeChatParticipants`,
- * `findOrCreateDirectChat`, `findOrCreateChatForChannel`, `joinAsParticipant`,
- * … — go through `addChatParticipants`. The function performs ONE round-trip
- * to read `chats.type` + every involved `agents.type`, runs each row through
+ * `findOrCreateChatForChannel`, `joinAsParticipant`, … — go through
+ * `addChatParticipants`. The function performs ONE round-trip to read
+ * `chats.type` + every involved `agents.type`, runs each row through
  * `defaultParticipantMode`, and inserts the result. `agents.type` is parsed
  * through the shared `agentTypeSchema` so schema drift surfaces loudly
  * instead of silently coercing to a default.
@@ -126,7 +126,6 @@ export async function addChatParticipants(
   if (chat.type !== "direct" && chat.type !== "group") {
     throw new Error(`Unexpected chat type "${chat.type}" for chat "${chatId}"`);
   }
-  const chatType = chat.type;
 
   const agentIds = participants.map((p) => p.agentId);
   const agentRows = await tx
@@ -151,13 +150,20 @@ export async function addChatParticipants(
     }
   }
 
-  // For the `direct`-chat branch of `defaultParticipantMode`, peerAgentTypes
-  // is the set of EVERY OTHER active speaker on this chat. For `group`
-  // it's ignored, so skip the lookup when we can.
-  let existingAgentTypes: string[] = [];
-  if (chatType === "direct") {
-    existingAgentTypes = await loadExistingAgentTypes(tx, chatId, new Set(agentIds));
-  }
+  // The mode rule still depends on membership shape — Hub no longer writes
+  // `type='direct'` rows (see first-tree-context PR #281), so we derive
+  // the effective chat type from the post-insert speaker count instead of
+  // trusting `chats.type`:
+  //
+  //   - two-speaker chat (1-on-1)  → "direct" branch of defaultParticipantMode
+  //     (mode depends on whether the peers are agent-only)
+  //   - three+ speakers (group)    → "group" branch (non-humans get mention_only)
+  //
+  // Legacy `type='direct'` rows continue to behave correctly because their
+  // membership shape is two speakers by construction.
+  const existingAgentTypes = await loadExistingAgentTypes(tx, chatId, new Set(agentIds));
+  const totalSpeakerCount = existingAgentTypes.length + participants.length;
+  const effectiveChatType = totalSpeakerCount <= 2 ? "direct" : "group";
 
   const rows = participants.map((spec) => {
     const rawAgentType = agentTypeById.get(spec.agentId);
@@ -174,7 +180,7 @@ export async function addChatParticipants(
     // single-row enum check, no allocation beyond the throw path.
     const agentType = agentTypeSchema.parse(rawAgentType);
     const peerTypesForRow =
-      chatType === "direct"
+      effectiveChatType === "direct"
         ? [
             ...existingAgentTypes,
             ...participants
@@ -188,7 +194,7 @@ export async function addChatParticipants(
       agentId: spec.agentId,
       role: spec.role ?? ("member" as const),
       accessMode: "speaker" as const,
-      mode: defaultParticipantMode(chatType, agentType, peerTypesForRow),
+      mode: defaultParticipantMode(effectiveChatType, agentType, peerTypesForRow),
       source: "manual" as const,
     };
   });
@@ -213,6 +219,15 @@ export async function addChatParticipants(
   } else {
     await insert;
   }
+
+  // If this insert pushed the chat across the size=2 boundary, the existing
+  // speakers were seeded under the derived "direct" branch and may now hold
+  // `mode='full'` (the 1-on-1 human+agent shape). Force every non-human
+  // speaker to `mention_only` so the new group shape behaves identically to
+  // a chat that was born as size>=3.
+  if (existingAgentTypes.length <= 2 && totalSpeakerCount >= 3) {
+    await regradeNonHumansToMentionOnly(tx, chatId);
+  }
 }
 
 /**
@@ -232,6 +247,39 @@ async function loadExistingAgentTypes(tx: DbLike, chatId: string, excludeAgentId
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
   return rows.filter((r) => !excludeAgentIds.has(r.agentId)).map((r) => r.type);
+}
+
+/**
+ * Force every existing non-human speaker in `chatId` to `mode='mention_only'`.
+ * Used by `addChatParticipants` when an insert pushes the chat past the
+ * size=2 (1-on-1) boundary: prior rows were seeded under the derived
+ * "direct" branch (where a human peer kept them at `full`), but the new
+ * shape is a real group and every non-human must drop back to
+ * `mention_only`. Mirrors the re-grade `changeChatType` performs for
+ * legacy `direct → group` upgrades; the two stay in lockstep so a chat
+ * that crosses the threshold once leaves no row in a stale `full` mode.
+ *
+ * Idempotent — running it on a chat whose non-humans are already
+ * `mention_only` is a no-op write.
+ */
+async function regradeNonHumansToMentionOnly(tx: DbLike, chatId: string): Promise<void> {
+  const nonHumans = await tx
+    .select({ agentId: chatMembership.agentId })
+    .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"), ne(agents.type, "human")));
+  const ids = nonHumans.map((r) => r.agentId);
+  if (ids.length === 0) return;
+  await tx
+    .update(chatMembership)
+    .set({ mode: "mention_only" })
+    .where(
+      and(
+        eq(chatMembership.chatId, chatId),
+        inArray(chatMembership.agentId, ids),
+        eq(chatMembership.accessMode, "speaker"),
+      ),
+    );
 }
 
 /**
