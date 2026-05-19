@@ -103,7 +103,6 @@ packages/e2e/
 ├── README.md
 ├── M0-SPIKE.md                  # findings from the pre-implementation grep pass
 ├── scripts/
-│   ├── compose.e2e.yml          # standalone PG-only compose
 │   └── verify-e2e-removable.sh  # §三 removal drill
 └── src/
     ├── framework/
@@ -111,14 +110,15 @@ packages/e2e/
     │   ├── ports.ts             # get-port + local dedupe
     │   ├── isolation.ts         # runId / home / compose-project derivation
     │   ├── doctor.ts            # docker / node / dist presence checks
-    │   ├── docker-pg.ts         # compose up/down + best-effort cleanup
+    │   ├── docker-pg.ts         # `docker run` PG + best-effort cleanup
     │   ├── server-process.ts    # spawn server, wait on /healthz
     │   ├── client-process.ts    # spawn `client start --foreground`
+    │   ├── setup-devuser.ts     # M5 dev-user seed: dev-callback → connect-token → CLI client start → agent/chat/message (driven from up.ts, not tests)
     │   ├── readiness.ts         # waitForHttp + sleep utilities
     │   ├── logging.ts           # per-component log files + ring buffer
-    │   ├── lifecycle.ts         # full world up/down + exit hooks
+    │   ├── lifecycle.ts         # full world up/down + exit hooks + pre-teardown hooks
     │   ├── current-handle.ts    # tests read serverBaseUrl from disk
-    │   ├── credentials.ts       # M2: provisions user/member/agent/client/token
+    │   ├── credentials.ts       # M5 fixture: single-user PG seed for tests (paired with setup-devuser.ts above; one is the fixture, the other is the live-seed)
     │   ├── github-mock.ts       # M2: signs + delivers webhooks, stubs /api/*
     │   ├── github-app-fixture.ts# M2: GitHub App key + installation token fixture
     │   ├── agent-mock.ts        # M2: stand-in for the agent runtime side

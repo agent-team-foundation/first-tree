@@ -52,6 +52,23 @@ export type RunWorld = {
 let activeWorld: RunWorld | null = null;
 let teardownHooksRegistered = false;
 
+/**
+ * Extra teardown hooks invoked **before** `stopRunWorld()` when the process
+ * receives SIGINT / SIGTERM. Used by callers (e.g. `scripts/up.ts`) that
+ * spawn their own children outside the core `pg + server + client` triad
+ * — they need to take down those children first instead of racing the
+ * `process.exit(130)` that follows `stopRunWorld()`.
+ *
+ * Hooks run sequentially. Each one is wrapped in try/catch internally;
+ * failures are logged but do not block the rest of teardown.
+ */
+type TeardownHook = () => Promise<void>;
+const preTeardownHooks: TeardownHook[] = [];
+
+export function registerPreTeardownHook(hook: TeardownHook): void {
+  preTeardownHooks.push(hook);
+}
+
 export async function startRunWorld(opts: StartRunOptions = {}): Promise<RunWorld> {
   if (activeWorld) {
     throw new Error("E2E run world is already active — global setup is not reentrant");
@@ -97,7 +114,6 @@ export async function startRunWorld(opts: StartRunOptions = {}): Promise<RunWorl
       identity,
       port: pgPort,
       pgImage: env.E2E_PG_IMAGE,
-      composeBin,
     });
 
     const serverLogger = createComponentLogger(identity.runDir, "server");
@@ -195,10 +211,20 @@ async function safeStop(component: { stop: () => Promise<void> } | undefined, na
 function registerProcessExitHooks(): void {
   if (teardownHooksRegistered) return;
   teardownHooksRegistered = true;
-  const handler = (signal: NodeJS.Signals) => {
+  const handler = async (signal: NodeJS.Signals) => {
     console.error(`[lifecycle] received ${signal}, tearing down e2e world`);
-    void stopRunWorld().finally(() => process.exit(130));
+    for (const hook of preTeardownHooks) {
+      try {
+        await hook();
+      } catch (err) {
+        console.error("[lifecycle] pre-teardown hook failed:", err);
+      }
+    }
+    await stopRunWorld().catch((err) => {
+      console.error("[lifecycle] stopRunWorld failed:", err);
+    });
+    process.exit(130);
   };
-  process.once("SIGINT", () => handler("SIGINT"));
-  process.once("SIGTERM", () => handler("SIGTERM"));
+  process.once("SIGINT", () => void handler("SIGINT"));
+  process.once("SIGTERM", () => void handler("SIGTERM"));
 }
