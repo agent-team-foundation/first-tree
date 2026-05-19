@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * End-to-end agent messaging flow. Hub keeps a single group-chat model
- * (see first-tree-context PR #281), so workflows that historically
- * relied on `sendToAgent --direct` to auto-open a side chat are exercised
- * here through the canonical `POST /agent/chats` + `chat send` /
- * `chat invite` path instead.
+ * End-to-end agent messaging flow against the canonical
+ * `POST /api/v1/agent/chats/:chatId/messages` path. Hub keeps a single
+ * group-chat model (see first-tree-context PR #281) and the by-name
+ * `sendToAgent` primitive has been retired — these tests exercise the
+ * `create chat → send → list → history` flow without relying on it.
  */
 describe("Agent Messaging Flow (create → send → chats → history)", () => {
   const getApp = useTestApp();

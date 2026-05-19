@@ -9,7 +9,6 @@ import {
   type Message,
   type RuntimeProvider,
   type SendMessage,
-  type SendToAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
 
 /**
@@ -234,13 +233,6 @@ export class FirstTreeHubSDK {
 
   async sendMessage(chatId: string, data: SendMessage): Promise<Message> {
     return this.requestJson<Message>(`/api/v1/agent/chats/${chatId}/messages`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async sendToAgent(agentName: string, data: SendToAgent): Promise<Message> {
-    return this.requestJson<Message>(`/api/v1/agent/agents/${agentName}/messages`, {
       method: "POST",
       body: JSON.stringify(data),
     });

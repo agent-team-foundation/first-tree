@@ -284,9 +284,8 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
 }
 
 /**
- * Non-throwing membership check. Used by routing logic that needs to fall
- * back to a different chat when the candidate target isn't a member of the
- * caller's current chat (see `sendToAgent`'s current-chat routing branch).
+ * Non-throwing membership check. Used by callers that need a boolean
+ * "is this agent a speaker of this chat?" answer without raising.
  */
 export async function isParticipant(db: Database, chatId: string, agentId: string): Promise<boolean> {
   const [row] = await db

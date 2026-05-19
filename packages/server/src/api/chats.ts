@@ -313,6 +313,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
     const result = await sendMessage(app.db, request.params.chatId, scope.humanAgentId, prepared, {
       enforceGroupMention: true,
+      // Human web endpoint: typed `@<name>` is the user's intent expression
+      // — the only path where the message *itself* is the routing decision.
+      extractMentionsFromContent: true,
     });
 
     notifyRecipients(app.notifier, result.recipients, result.message.id);

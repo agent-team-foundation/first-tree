@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createChat } from "../services/chat.js";
-import { sendMessage, sendToAgent } from "../services/message.js";
+import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("sendMessage returns recipients", () => {
@@ -78,23 +78,5 @@ describe("sendMessage returns recipients", () => {
     expect(result.recipients).toContain(a3.inboxId);
     // Sender should not be in recipients
     expect(result.recipients).not.toContain(a1.inboxId);
-  });
-
-  it("sendToAgent rejects non-member targets with AGENT_SEND_NON_MEMBER", async () => {
-    const app = getApp();
-    const { agent: a1 } = await createTestAgent(app, { name: `recip-dm1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a2 } = await createTestAgent(app, { name: `recip-dm2-${crypto.randomUUID().slice(0, 6)}` });
-    if (!a2.name) throw new Error("Expected a2.name to be set");
-
-    // Cross-chat reply routing and the `--direct` escape hatch have been
-    // removed (see first-tree-context PR #281). The only routing path
-    // for `chat send <name>` is "already a participant", so a non-member
-    // send must throw AGENT_SEND_NON_MEMBER pointing at `chat invite`.
-    await expect(
-      sendToAgent(app.db, a1.uuid, a2.name, {
-        format: "text",
-        content: "direct message",
-      }),
-    ).rejects.toMatchObject({ code: "AGENT_SEND_NON_MEMBER" });
   });
 });

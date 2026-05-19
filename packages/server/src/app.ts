@@ -20,7 +20,7 @@ import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
-import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
+import { agentMessageRoutes } from "./api/agent/messages.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { agentActivityRoutes } from "./api/agent-activity.js";
 import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
@@ -496,7 +496,6 @@ export async function buildApp(config: Config) {
           await scope.register(agentMeRoutes);
           await scope.register(agentChatRoutes, { prefix: "/chats" });
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
-          await scope.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);

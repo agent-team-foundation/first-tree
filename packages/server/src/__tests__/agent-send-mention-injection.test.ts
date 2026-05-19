@@ -149,7 +149,12 @@ describe("group-chat mention enforcement + content normalisation", () => {
       expect(result.message).toBeDefined();
     });
 
-    it("accepts when both content and metadata have mentions (additive merge)", async () => {
+    it("explicit metadata.mentions overrides content-extracted mentions (explicit-wins)", async () => {
+      // When the caller declares `metadata.mentions`, the server trusts
+      // that list and skips content `@<name>` extraction so a narrative
+      // `@<peer>` in the body can never silently widen the recipient set.
+      // To wake both peers, the caller must list both uuids in
+      // `metadata.mentions` (or declare via `receiverNames`).
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, peerB, chat } = await setupGroup(uid);
@@ -161,7 +166,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         { enforceGroupMention: true },
       );
       const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
-      expect(meta.mentions).toEqual(expect.arrayContaining([peerA.uuid, peerB.uuid]));
+      expect(meta.mentions).toEqual([peerB.uuid]);
     });
 
     it("does NOT enforce on direct chats even when the flag is on", async () => {
@@ -524,11 +529,11 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
   });
 
-  // sendToAgent no longer performs routing — it resolves the recipient name
-  // and refuses with AGENT_SEND_NON_MEMBER pointing callers at
-  // `chat invite` (see first-tree-context PR #281 and
-  // agent-send-to-agent.test.ts). Mention injection on the sendMessage path
-  // is exercised by the group/direct-chat suites above.
+  // sendToAgent is gone — the by-name routing primitive has been retired
+  // (see first-tree-context PR #281). CLI `chat send <name>` now goes
+  // through `POST /api/v1/agent/chats/:chatId/messages` with the
+  // recipient name declared in `receiverNames`. Mention injection on the
+  // sendMessage path is exercised by the group/direct-chat suites above.
 
   // ─── Cross-cutting: persisted state matches API response ───────────────
 

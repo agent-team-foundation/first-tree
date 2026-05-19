@@ -62,16 +62,19 @@ export const sendMessageSchema = z.object({
   inReplyTo: z.string().optional(),
   source: messageSourceSchema.optional(),
   purpose: messagePurposeSchema.optional(),
+  /**
+   * Recipient agent names that the server should resolve to uuids against
+   * the chat's participant list and add to the message's `mentions`. Lets
+   * a caller who knows the recipient by name (CLI `chat send <name>`,
+   * tool integrations, etc.) declare routing intent without having to
+   * pre-resolve uuids client-side. Server cross-validates each name
+   * against the chat's speakers — an unknown name fails the write with
+   * a hint pointing at `chat invite`. Agent-typed clients should always
+   * prefer this over relying on `@<name>` extraction from `content`.
+   */
+  receiverNames: z.array(z.string().min(1)).optional(),
 });
 export type SendMessage = z.infer<typeof sendMessageSchema>;
-
-export const sendToAgentSchema = z.object({
-  format: messageFormatSchema.default("text"),
-  content: z.unknown(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  source: messageSourceSchema.optional(),
-});
-export type SendToAgent = z.infer<typeof sendToAgentSchema>;
 
 export const messageSchema = z.object({
   id: z.string(),
