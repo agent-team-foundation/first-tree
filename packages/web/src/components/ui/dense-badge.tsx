@@ -13,10 +13,12 @@ type DenseBadgeProps = HTMLAttributes<HTMLSpanElement> & {
 };
 
 // Mirrors the Badge atom in design-canvas/atoms.jsx:
-//   mono / var(--sp-2_5) / uppercase / padding var(--hairline) var(--sp-1_75) / radius 3 / var(--hairline) border.
+//   mono / var(--sp-2_5) / padding var(--hairline) var(--sp-1_75) / radius 3 / var(--hairline) border.
 // shadcn Badge is var(--sp-3) + rounded-md and reads as "chunky" in dense panels.
 // Typography is bound to the `text-caption` token from index.css; tones are
 // resolved via the shared tones map so chips stay in sync with state chips.
+// Casing is the caller's responsibility — pass sentence-case labels for
+// reading flow ("Working", "Open"), uppercase only for true codes.
 export function DenseBadge({ tone = "neutral", className, style, ...rest }: DenseBadgeProps) {
   const t = TONE_STYLES[tone];
   const merged: CSSProperties = {
@@ -27,7 +29,7 @@ export function DenseBadge({ tone = "neutral", className, style, ...rest }: Dens
   };
   return (
     <span
-      className={cn("mono inline-flex items-center uppercase text-caption leading-[1.6]", className)}
+      className={cn("mono inline-flex items-center text-caption leading-[1.6]", className)}
       style={{
         padding: "var(--hairline) var(--sp-1_75)",
         borderRadius: "var(--radius-chip)",

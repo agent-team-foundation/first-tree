@@ -70,7 +70,7 @@ export function IdentitySection({ agent, canEdit = true, onSave }: IdentitySecti
             <span className="inline-flex flex-wrap gap-1 align-middle">
               {domains.map((d) => (
                 <DenseBadge key={d} tone="outline">
-                  {d}
+                  {humanizeDomain(d)}
                 </DenseBadge>
               ))}
             </span>
@@ -223,4 +223,19 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Domain tags come from `metadata.tree.domains` and mirror the Context
+ * Tree's top-level directory names (`kael`, `agent-hub`, `first-tree-skill-cli`,
+ * …). They're free-form strings, not a closed enum, so we lean on a
+ * lightweight transform instead of a hard-coded map: kebab/snake → spaces,
+ * then capitalize the first letter so the chip reads as sentence-case
+ * ("Agent hub", "First tree skill cli") rather than as a code token.
+ */
+function humanizeDomain(domain: string): string {
+  if (!domain) return domain;
+  const spaced = domain.replace(/[-_]+/g, " ").trim();
+  if (!spaced) return domain;
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
