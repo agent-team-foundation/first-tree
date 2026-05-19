@@ -110,28 +110,37 @@ packages/e2e/
     │   ├── ports.ts             # get-port + local dedupe
     │   ├── isolation.ts         # runId / home / compose-project derivation
     │   ├── doctor.ts            # docker / node / dist presence checks
-    │   ├── docker-pg.ts         # `docker run` PG + best-effort cleanup
-    │   ├── server-process.ts    # spawn server, wait on /healthz
-    │   ├── client-process.ts    # spawn `client start --foreground`
+    │   ├── docker-pg.ts         # M1: `docker run` PG + best-effort cleanup
+    │   ├── server-process.ts    # M1: spawn server, wait on /healthz
+    │   ├── readiness.ts         # M1: waitForHttp + sleep utilities
+    │   ├── logging.ts           # M1: per-component log files + ring buffer
+    │   ├── lifecycle.ts         # M1: full world up/down + exit hooks + pre-teardown hooks
+    │   ├── current-handle.ts    # M1: tests read serverBaseUrl from disk
+    │   ├── db-migrate.ts        # M1: apply drizzle migrations against the run's PG
+    │   ├── global-setup.ts      # M1: vitest globalSetup entrypoint
+    │   ├── server-driver/
+    │   │   ├── http.ts          # M3: authedFetch + authedJson — baseUrl + Bearer plumbing only
+    │   │   ├── ws.ts            # M3: agent:ws client (auth → register → bind) + frame waiter + raw send
+    │   │   └── dev-callback.ts  # M3: mint extra user JWTs via the dev-callback bypass
+    │   ├── cli-driver/
+    │   │   ├── exec.ts          # M3: execCli (one-shot) + spawnCli (long-running) + ambient FIRST_TREE_HUB_* sanitization
+    │   │   └── client-foreground.ts # M3: thin spawnCli wrapper for `client start --foreground`
+    │   ├── credentials.ts       # M5 fixture: single-user PG seed for tests (paired with setup-devuser.ts; one is the fixture, the other is the live-seed)
     │   ├── setup-devuser.ts     # M5 dev-user seed: dev-callback → connect-token → CLI client start → agent/chat/message (driven from up.ts, not tests)
-    │   ├── readiness.ts         # waitForHttp + sleep utilities
-    │   ├── logging.ts           # per-component log files + ring buffer
-    │   ├── lifecycle.ts         # full world up/down + exit hooks + pre-teardown hooks
-    │   ├── current-handle.ts    # tests read serverBaseUrl from disk
-    │   ├── credentials.ts       # M5 fixture: single-user PG seed for tests (paired with setup-devuser.ts above; one is the fixture, the other is the live-seed)
-    │   ├── github-mock.ts       # M2: signs + delivers webhooks, stubs /api/*
-    │   ├── github-app-fixture.ts# M2: GitHub App key + installation token fixture
-    │   ├── agent-mock.ts        # M2: stand-in for the agent runtime side
-    │   ├── ws-listener.ts       # M2: agent:ws client + frame waiter
-    │   ├── db-migrate.ts        # apply drizzle migrations against the run's PG
-    │   └── global-setup.ts      # vitest globalSetup entrypoint
+    │   ├── github-mock.ts       # M4: signs + delivers webhooks, stubs /api/*
+    │   ├── github-app-fixture.ts# M4: GitHub App key + installation token fixture
+    │   └── agent-mock.ts        # M4: stand-in for the agent runtime side
     ├── tests/
-    │   ├── smoke.e2e.test.ts          # /healthz + /api/v1/health
-    │   ├── messaging.e2e.test.ts      # chat-send + replyTo over HTTP
-    │   ├── github-webhook.e2e.test.ts # inbound webhook → PG side-effects
-    │   ├── github-pr-delivery.e2e.test.ts # PR event → chat + mapping
-    │   ├── ws-inbox-push.e2e.test.ts  # PG NOTIFY → inbox:deliver WS frame
-    │   └── agent-runtime.e2e.test.ts  # client spawn → agent bind smoke
+    │   ├── smoke.e2e.test.ts                # /healthz + /api/v1/health
+    │   ├── messaging.e2e.test.ts            # chat-send + replyTo over HTTP
+    │   ├── github-webhook.e2e.test.ts       # inbound webhook → PG side-effects
+    │   ├── github-pr-delivery.e2e.test.ts   # PR event → chat + mapping
+    │   ├── ws-inbox-push.e2e.test.ts        # PG NOTIFY → inbox:deliver WS frame
+    │   ├── agent-runtime.e2e.test.ts        # client spawn → agent bind smoke
+    │   ├── agent-lifecycle.e2e.test.ts      # POST → PATCH → suspend → reactivate → DELETE
+    │   ├── client-claim.e2e.test.ts         # POST /clients/:id/claim transfers ownership + unpins agents
+    │   ├── inbox-pull-resume.e2e.test.ts    # at-least-once redelivery on WS reconnect
+    │   └── cli-chat-send.e2e.test.ts        # spawn dist CLI `chat send …` and verify the message lands
     ├── mocks/
     │   └── fake-claude-code.mjs # offline replacement for @anthropic-ai/claude-agent-sdk
     └── scripts/
@@ -139,6 +148,14 @@ packages/e2e/
         ├── up.ts
         └── clean.ts
 ```
+
+Module legend in the comments above (M1 / M3 / M4 / M5) maps each file to
+the six-module abstraction pinned in
+[`/agent-hub/e2e-framework.md`](https://github.com/agent-team-foundation/first-tree-context/blob/main/agent-hub/e2e-framework.md).
+M2 (PG data plane) stays at "use `new PgClient(handle.databaseUrl)`
+directly in the test" — no module file today. M6 (Toolkit) is the
+random-bytes / HMAC / JWT primitives we inline at call sites until they
+need a second user.
 
 ## Writing a new e2e test
 

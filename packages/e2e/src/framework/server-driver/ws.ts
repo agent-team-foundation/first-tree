@@ -1,19 +1,28 @@
 import { WebSocket } from "ws";
 
 /**
- * Minimal `agent:ws` client used by e2e tests to listen for server pushes
- * (mainly `inbox:deliver` frames) without spawning the real CLI. Mirrors
- * the handshake order enforced by `packages/server/src/api/agent/ws-client.ts`:
+ * Minimal `agent:ws` client used by e2e tests to drive and observe the
+ * server's `/api/v1/agent/ws/client` socket without spawning the real CLI.
+ *
+ * Handshake order (mirrors `packages/server/src/api/agent/ws-client.ts`):
  *
  *   1. open WS at `${serverBaseUrl}/api/v1/agent/ws/client`
  *   2. send `{type:"auth", token}` → wait for `{type:"auth:ok"}`
  *   3. send `{type:"client:register", clientId}` → wait for `{type:"client:registered"}`
- *   4. (optional) send `{type:"agent:bind", agentId, runtimeType}` →
- *      `{type:"agent:bound"}` / `{type:"agent:bind:rejected"}`
+ *   4. (optional) bind 0+ agents → wait per-agent for `{type:"agent:bound"}` /
+ *      `{type:"agent:bind:rejected"}`
  *
- * The listener exposes a `waitFor(predicate, timeoutMs?)` so tests can do
- * `listener.waitFor((f) => f.type === "inbox:deliver" && f.chatId === id)`
- * without re-implementing the frame-buffer dance every time.
+ * The listener exposes:
+ *
+ *   - `waitFor(predicate, timeoutMs?)` — wait for the next frame matching
+ *     a predicate, also scanning frames already buffered before the call,
+ *   - `send(frame)` — push a raw protocol frame (e.g. `inbox:ack`),
+ *   - `close()` — initiate a clean WS close,
+ *
+ * and re-exposes the frame buffer for assertions. Higher-level helpers
+ * (reconnect, inbox-ack loops, etc.) compose these primitives in the test
+ * file — the driver itself stays a thin protocol adapter, not a business
+ * SDK, per the M3 contract in `packages/e2e/README.md`.
  */
 
 export type WsFrame = Record<string, unknown> & { type: string };
@@ -29,8 +38,10 @@ export type ConnectOptions = {
 };
 
 export type WsListener = {
-  /** Wait for a frame matching `predicate`, ignoring frames sent earlier. */
+  /** Wait for a frame matching `predicate`, scanning the buffered frames first. */
   waitFor: (predicate: (f: WsFrame) => boolean, timeoutMs?: number) => Promise<WsFrame>;
+  /** Push a raw frame. Caller owns the wire-shape contract. */
+  send: (frame: WsFrame) => void;
   /** Frames received so far (in arrival order). Mutated as new ones land. */
   readonly frames: ReadonlyArray<WsFrame>;
   close: () => Promise<void>;
@@ -63,7 +74,6 @@ export async function connectWsListener(opts: ConnectOptions): Promise<WsListene
     }
   });
 
-  // Open
   await new Promise<void>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error("ws open timeout")), stepTimeoutMs);
     ws.once("open", () => {
@@ -81,7 +91,6 @@ export async function connectWsListener(opts: ConnectOptions): Promise<WsListene
   }
 
   function waitFor(predicate: (f: WsFrame) => boolean, timeoutMs?: number): Promise<WsFrame> {
-    // Scan already-buffered frames first.
     for (const f of frames) if (predicate(f)) return Promise.resolve(f);
     return new Promise((resolve, reject) => {
       const w = { predicate, resolve };
@@ -91,7 +100,9 @@ export async function connectWsListener(opts: ConnectOptions): Promise<WsListene
         if (idx >= 0) waiters.splice(idx, 1);
         reject(
           new Error(
-            `ws waitFor timeout after ${timeoutMs ?? stepTimeoutMs}ms — frames seen: ${frames.map((f) => f.type).join(", ")}`,
+            `ws waitFor timeout after ${timeoutMs ?? stepTimeoutMs}ms — frames seen: ${frames
+              .map((f) => f.type)
+              .join(", ")}`,
           ),
         );
       }, timeoutMs ?? stepTimeoutMs);
@@ -105,9 +116,8 @@ export async function connectWsListener(opts: ConnectOptions): Promise<WsListene
 
   send({ type: "auth", token: opts.accessToken });
   // Use the predicate result directly — the server sends `server:welcome`
-  // right after `auth:ok` (see `ws-client.ts:404-419`), so reading
-  // `frames[len-1]` would surface that extra frame and silently miss any
-  // future reject-path frames.
+  // right after `auth:ok`, so reading `frames[len-1]` would surface that
+  // extra frame and silently miss future reject-path frames.
   const authResult = await waitFor((f) => f.type === "auth:ok" || f.type === "auth:rejected");
   if (authResult.type === "auth:rejected") {
     ws.close();
@@ -136,6 +146,7 @@ export async function connectWsListener(opts: ConnectOptions): Promise<WsListene
 
   return {
     waitFor,
+    send,
     get frames() {
       return frames;
     },

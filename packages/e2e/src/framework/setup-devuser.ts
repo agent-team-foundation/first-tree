@@ -1,12 +1,10 @@
-import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Client as PgClient } from "pg";
-import { REPO_ROOT } from "./env.js";
+import { type SpawnedCli, spawnCli } from "./cli-driver/exec.js";
 import type { ComponentLogger } from "./logging.js";
-
-const CLI_ENTRY = resolve(REPO_ROOT, "packages/command/dist/cli/index.mjs");
+import { authedJson } from "./server-driver/http.js";
 
 export type DevUserSession = {
   /** PID of the long-running `client start --foreground` process. */
@@ -64,7 +62,8 @@ export type SetupDevUserOptions = {
  * `FIRST_TREE_HUB_DEV_CALLBACK_ENABLED=1` — otherwise dev-callback returns 404.
  */
 export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSession> {
-  // Step 1: dev-callback → access/refresh in URL fragment.
+  // Step 1: dev-callback → access/refresh in URL fragment. `authedFetch`
+  // isn't right here (no bearer yet), so we go through `fetch` directly.
   const devCallbackUrl = new URL("/api/v1/auth/github/dev-callback", opts.serverBaseUrl);
   devCallbackUrl.searchParams.set("githubId", "1");
   devCallbackUrl.searchParams.set("login", "devuser");
@@ -88,16 +87,17 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
   }
 
   // Step 2: /me/connect-tokens → connect-token.
-  const ctRes = await fetch(new URL("/api/v1/me/connect-tokens", opts.serverBaseUrl), {
-    method: "POST",
-    headers: { Authorization: `Bearer ${devAccess}`, "Content-Type": "application/json" },
-    body: "{}",
-  });
-  if (!ctRes.ok) throw new Error(`POST /me/connect-tokens failed (HTTP ${ctRes.status}): ${await ctRes.text()}`);
-  const { token: connectToken } = (await ctRes.json()) as { token: string };
+  const { token: connectToken } = await authedJson<{ token: string }>(
+    opts.serverBaseUrl,
+    devAccess,
+    "POST",
+    "/api/v1/me/connect-tokens",
+    {},
+  );
 
-  // Step 3: /auth/connect-token → access/refresh user JWT pair, exactly what
-  // the CLI's `exchangeToken` does.
+  // Step 3: /auth/connect-token → access/refresh user JWT pair, the same
+  // exchange the CLI's own `connect <token>` command performs. No bearer
+  // header — the connect-token is the credential.
   const exRes = await fetch(new URL("/api/v1/auth/connect-token", opts.serverBaseUrl), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -125,34 +125,20 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
     { mode: 0o600 },
   );
 
-  // Step 5: spawn `client start --foreground --no-interactive`. We strip
-  // ambient FIRST_TREE_HUB_* env so a parent process running inside another
-  // agent runtime (e.g. an agent on prod hub) doesn't leak its server URL
-  // into the spawned CLI via env-over-file config priority.
-  const sanitized: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (k.startsWith("FIRST_TREE_HUB_")) continue;
-    sanitized[k] = v;
-  }
-  const env: NodeJS.ProcessEnv = {
-    ...sanitized,
-    NODE_ENV: "test",
-    FIRST_TREE_HUB_HOME: devHome,
-    FIRST_TREE_HUB_SERVER_URL: opts.serverBaseUrl,
-  };
-
-  const child = spawn(process.execPath, [CLI_ENTRY, "client", "start", "--foreground", "--no-interactive"], {
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-    cwd: REPO_ROOT,
+  // Step 5: spawn `client start --foreground --no-interactive`. `spawnCli`
+  // sanitizes ambient `FIRST_TREE_HUB_*` env so the per-run client.yaml
+  // wins over any parent-process server URL.
+  const client: SpawnedCli = await spawnCli({
+    home: devHome,
+    serverBaseUrl: opts.serverBaseUrl,
+    args: ["client", "start", "--foreground", "--no-interactive"],
+    logger: opts.logger,
   });
-  child.stdout?.on("data", (c) => opts.logger.pipe(c));
-  child.stderr?.on("data", (c) => opts.logger.pipe(c));
 
   // Step 6: poll PG until the CLI's WS handshake landed AND the capabilities
   // upload completed. Without the metadata gate the web onboarding flow
   // still shows "No runtime ready" because clients.metadata is NULL right
-  // up until reconcile finishes.
+  // up until the runtime-reconcile PATCH finishes.
   const pg = new PgClient({ connectionString: opts.databaseUrl });
   await pg.connect();
   let userRow: { id: string } | undefined;
@@ -160,8 +146,8 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
   try {
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
-      if (child.exitCode !== null) {
-        throw new Error(`devuser client process exited early (code=${child.exitCode})`);
+      if (client.child.exitCode !== null) {
+        throw new Error(`devuser client process exited early (code=${client.child.exitCode})`);
       }
       const u = await pg.query<{ id: string }>("SELECT id FROM users WHERE username = $1 LIMIT 1", ["devuser"]);
       userRow = u.rows[0];
@@ -195,46 +181,43 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
   // R-RUN, manager-in-org, etc.
   const orgId = clientRow.organization_id;
   const agentName = `devuser-asst-${randomBytes(3).toString("hex")}`;
-  const agentRes = await fetch(`${opts.serverBaseUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({
+  const { uuid: agentId } = await authedJson<{ uuid: string }>(
+    opts.serverBaseUrl,
+    accessToken,
+    "POST",
+    `/api/v1/orgs/${encodeURIComponent(orgId)}/agents`,
+    {
       name: agentName,
       type: "autonomous_agent",
       displayName: "Dev User's Assistant",
       clientId: clientRow.id,
-    }),
-  });
-  if (agentRes.status !== 201) {
-    throw new Error(`POST /agents failed (HTTP ${agentRes.status}): ${await agentRes.text()}`);
-  }
-  const { uuid: agentId } = (await agentRes.json()) as { uuid: string };
+    },
+    201,
+  );
 
-  const chatRes = await fetch(`${opts.serverBaseUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/chats`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({ participantIds: [agentId] }),
-  });
-  if (chatRes.status !== 201) {
-    throw new Error(`POST /chats failed (HTTP ${chatRes.status}): ${await chatRes.text()}`);
-  }
-  const { chatId } = (await chatRes.json()) as { chatId: string };
+  const { chatId } = await authedJson<{ chatId: string }>(
+    opts.serverBaseUrl,
+    accessToken,
+    "POST",
+    `/api/v1/orgs/${encodeURIComponent(orgId)}/chats`,
+    { participantIds: [agentId] },
+    201,
+  );
 
-  const msgRes = await fetch(`${opts.serverBaseUrl}/api/v1/chats/${encodeURIComponent(chatId)}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({
+  const { id: firstMessageId } = await authedJson<{ id: string }>(
+    opts.serverBaseUrl,
+    accessToken,
+    "POST",
+    `/api/v1/chats/${encodeURIComponent(chatId)}/messages`,
+    {
       format: "text",
       content: "Hello from the e2e environment — this message was posted via POST /chats/:id/messages.",
-    }),
-  });
-  if (msgRes.status !== 201) {
-    throw new Error(`POST /chats/:id/messages failed (HTTP ${msgRes.status}): ${await msgRes.text()}`);
-  }
-  const { id: firstMessageId } = (await msgRes.json()) as { id: string };
+    },
+    201,
+  );
 
   return {
-    pid: child.pid ?? -1,
+    pid: client.pid,
     home: devHome,
     userId: userRow.id,
     username: "devuser",
@@ -244,19 +227,6 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
     agentName,
     chatId,
     firstMessageId,
-    stop: () => killChild(child),
+    stop: client.stop,
   };
-}
-
-async function killChild(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill(signal);
-  const done = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  const timer = new Promise<void>((resolve) =>
-    setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      resolve();
-    }, 5_000),
-  );
-  await Promise.race([done, timer]);
 }
