@@ -97,7 +97,6 @@ export async function startRunWorld(opts: StartRunOptions = {}): Promise<RunWorl
       identity,
       port: pgPort,
       pgImage: env.E2E_PG_IMAGE,
-      composeBin,
     });
 
     const serverLogger = createComponentLogger(identity.runDir, "server");

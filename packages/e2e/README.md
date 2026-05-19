@@ -103,7 +103,6 @@ packages/e2e/
 ├── README.md
 ├── M0-SPIKE.md                  # findings from the pre-implementation grep pass
 ├── scripts/
-│   ├── compose.e2e.yml          # standalone PG-only compose
 │   └── verify-e2e-removable.sh  # §三 removal drill
 └── src/
     ├── framework/
@@ -111,9 +110,10 @@ packages/e2e/
     │   ├── ports.ts             # get-port + local dedupe
     │   ├── isolation.ts         # runId / home / compose-project derivation
     │   ├── doctor.ts            # docker / node / dist presence checks
-    │   ├── docker-pg.ts         # compose up/down + best-effort cleanup
+    │   ├── docker-pg.ts         # `docker run` PG + best-effort cleanup
     │   ├── server-process.ts    # spawn server, wait on /healthz
     │   ├── client-process.ts    # spawn `client start --foreground`
+    │   ├── setup-devuser.ts     # provision dev-user via real HTTP flow
     │   ├── readiness.ts         # waitForHttp + sleep utilities
     │   ├── logging.ts           # per-component log files + ring buffer
     │   ├── lifecycle.ts         # full world up/down + exit hooks
