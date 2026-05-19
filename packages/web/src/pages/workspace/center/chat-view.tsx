@@ -2370,20 +2370,6 @@ function AddParticipantQuickButton({
             borderColor: "var(--border)",
           }}
         >
-          <div
-            role="note"
-            className="text-caption"
-            style={{
-              padding: "var(--sp-1) var(--sp-3)",
-              color: "var(--fg-3)",
-              borderBottom: "var(--hairline) solid var(--border-faint)",
-              background: "var(--bg-sunken)",
-              whiteSpace: "normal",
-              lineHeight: 1.4,
-            }}
-          >
-            Adding is final in V1 — participants can't be removed yet.
-          </div>
           {(() => {
             const ambiguous = ambiguousDisplayNames(outsideCandidates);
             return groupAndSortCandidates(outsideCandidates).map((item) => {

@@ -40,6 +40,17 @@ function toolHealthBadgeTone(h: McpToolHealth): "accent" | "error" | "outline" {
   return "outline";
 }
 
+function toolHealthLabel(h: McpToolHealth): string {
+  switch (h) {
+    case "working":
+      return "Working";
+    case "error":
+      return "Error";
+    case "unknown":
+      return "Unknown";
+  }
+}
+
 export function McpSection(props: McpSectionProps) {
   const [dialog, setDialog] = useState<{ mode: "add" } | { mode: "edit"; key: string; initial: McpServer } | null>(
     null,
@@ -79,7 +90,7 @@ export function McpSection(props: McpSectionProps) {
                   {item.value.transport}
                 </span>
                 <span className="font-medium font-mono shrink-0">{item.value.name}</span>
-                {health && <DenseBadge tone={toolHealthBadgeTone(health)}>{health}</DenseBadge>}
+                {health && <DenseBadge tone={toolHealthBadgeTone(health)}>{toolHealthLabel(health)}</DenseBadge>}
                 {/* Long URLs / commands must truncate inside their flex slot;
                     without flex-1 + min-w-0 the span hugs its content width
                     and pushes the row past its parent. title surfaces the

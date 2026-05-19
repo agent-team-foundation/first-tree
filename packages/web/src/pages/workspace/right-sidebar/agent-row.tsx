@@ -13,7 +13,7 @@ import { DenseBadge } from "../../../components/ui/dense-badge.js";
  * — a Suspend button that flips an active session to `suspended`.
  *
  * Session data comes from `GET /agents/:uuid/sessions/:chatId`. A 404
- * (no row) collapses to `noSession` and renders an em-dash style row.
+ * (no row) collapses to the "none" state and renders an "Idle" caption.
  */
 export function AgentRow({
   participant,
@@ -64,7 +64,7 @@ export function AgentRow({
   const session = sessionQuery.data;
   // While the first fetch is in flight `data` is `undefined`. Distinguish
   // "loading" from "fetched but no row" so the row doesn't briefly flash
-  // "no session" before the real state lands — for a chat the user is
+  // "Idle" before the real state lands — for a chat the user is
   // actively in, that first-render flash is misleading.
   const state = sessionQuery.isPending ? "loading" : (session?.state ?? "none");
   const view = describeState(state);
@@ -113,11 +113,11 @@ export function AgentRow({
         <div className="truncate text-subtitle">{participant.displayName}</div>
         {state === "none" ? (
           <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            no session
+            Idle
           </div>
         ) : state === "loading" ? (
           <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            loading…
+            Loading…
           </div>
         ) : (
           <div className="mono flex items-center text-caption" style={{ color: "var(--fg-3)" }}>
@@ -139,40 +139,35 @@ function describeState(state: string): {
   tone: "accent" | "neutral" | "warn" | "error" | "outline";
   dotBg: string;
   dotBorder: string;
-  subText: string | null;
 } {
   switch (state) {
     case "active":
       return {
-        label: "ACTIVE",
+        label: "Working",
         tone: "accent",
         dotBg: "var(--state-idle)",
         dotBorder: "none",
-        subText: "running",
       };
     case "suspended":
       return {
-        label: "SUSPENDED",
+        label: "Paused",
         tone: "neutral",
         dotBg: "var(--bg-raised)",
         dotBorder: "var(--hairline-bold) solid var(--fg-4)",
-        subText: "idle",
       };
     case "errored":
       return {
-        label: "ERRORED",
+        label: "Failed",
         tone: "error",
         dotBg: "var(--state-error)",
         dotBorder: "none",
-        subText: null,
       };
     case "evicted":
       return {
-        label: "EVICTED",
+        label: "Offline",
         tone: "outline",
         dotBg: "var(--state-offline)",
         dotBorder: "none",
-        subText: null,
       };
     case "loading":
       return {
@@ -180,7 +175,6 @@ function describeState(state: string): {
         tone: "outline",
         dotBg: "transparent",
         dotBorder: "var(--hairline-bold) solid var(--fg-4)",
-        subText: null,
       };
     default:
       return {
@@ -188,7 +182,6 @@ function describeState(state: string): {
         tone: "outline",
         dotBg: "transparent",
         dotBorder: "var(--hairline-bold) solid var(--fg-4)",
-        subText: "no session",
       };
   }
 }
@@ -206,7 +199,7 @@ function SuspendButton({ onClick, isPending }: { onClick: () => void; isPending:
       <button
         type="button"
         disabled
-        aria-label="Suspending agent session"
+        aria-label="Pausing agent"
         className="text-label inline-flex shrink-0 items-center"
         style={{
           gap: "var(--sp-1)",
@@ -218,7 +211,7 @@ function SuspendButton({ onClick, isPending }: { onClick: () => void; isPending:
         }}
       >
         <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
-        Suspending
+        Pausing
       </button>
     );
   }
@@ -227,7 +220,7 @@ function SuspendButton({ onClick, isPending }: { onClick: () => void; isPending:
     <button
       type="button"
       onClick={onClick}
-      aria-label="Suspend agent session"
+      aria-label="Pause agent"
       className="text-label inline-flex shrink-0 items-center transition-colors hover:bg-[var(--bg-warn-soft)] hover:text-[var(--fg-warn-strong)] hover:border-[var(--fg-warn-strong)]"
       style={{
         gap: "var(--sp-1)",
@@ -237,10 +230,10 @@ function SuspendButton({ onClick, isPending }: { onClick: () => void; isPending:
         background: "transparent",
         color: "var(--fg-3)",
       }}
-      title="Suspend this agent's session in this chat"
+      title="Pause this agent in this chat"
     >
       <Pause className="h-3 w-3" aria-hidden="true" fill="currentColor" strokeWidth={0} />
-      Suspend
+      Pause
     </button>
   );
 }
