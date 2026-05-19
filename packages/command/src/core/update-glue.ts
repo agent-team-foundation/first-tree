@@ -8,7 +8,12 @@ export const SELF_RESTART_EXIT_CODE = 75;
 
 /** Interactive update prompt. Defaults to N on timeout. */
 export const promptUpdate: UpdatePromptFn = async ({ currentVersion, targetVersion, timeoutSeconds }) => {
-  const message = `A newer First Tree Hub client is available.\n  You: ${currentVersion}\n  Server bundled with: ${targetVersion}\n  Will install: latest on npm (>= ${targetVersion})\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
+  // Phrasing matches the post-poller install path: we install the exact
+  // version the server advertised, not whatever `@latest` happens to point
+  // at. "Server recommends" (rather than "bundled with") because the version
+  // now comes from the server's npm-registry poll for the configured
+  // channel, not from the server image build.
+  const message = `A newer First Tree Hub client is available.\n  You: ${currentVersion}\n  Server recommends: ${targetVersion}\n  Will install: ${targetVersion}\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
