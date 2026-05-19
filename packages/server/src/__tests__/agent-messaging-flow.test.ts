@@ -6,7 +6,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  * (see first-tree-context PR #281), so workflows that historically
  * relied on `sendToAgent --direct` to auto-open a side chat are exercised
  * here through the canonical `POST /agent/chats` + `chat send` /
- * `chat add-participant` path instead.
+ * `chat invite` path instead.
  */
 describe("Agent Messaging Flow (create → send → chats → history)", () => {
   const getApp = useTestApp();

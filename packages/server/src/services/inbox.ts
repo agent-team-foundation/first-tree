@@ -183,7 +183,6 @@ export async function bundleDeliveryWithSilentContext(
           format: msg.format,
           content: msg.content,
           metadata: msg.metadata,
-          replyToInbox: msg.replyToInbox,
           inReplyTo: msg.inReplyTo,
           source: msg.source,
           createdAt: msg.createdAt.toISOString(),
@@ -228,13 +227,13 @@ const PUSH_CLAIM_BATCH_LIMIT = 8;
  * (or the debug `GET /inbox` endpoint) that already claimed the entry.
  * NOTIFY is fire-and-forget (proposal §3.2).
  *
- * Why an array, not a single row: `sendMessage` can write **two** rows for
- * the same `(inbox, messageId)` pair when the recipient is both a chat
- * participant and the `replyToInbox` of an earlier message — the unique key
- * is `(inbox_id, message_id, chat_id)`, so the rows differ by chatId. The
- * old `LIMIT 1` shape would only push the first; the second sat `pending`
- * until reconnect. Aligning with `pollInboxInner`'s `LIMIT N` shape closes
- * that gap and keeps push/poll behaviour interchangeable.
+ * Why an array, not a single row: kept defensive after the cross-chat
+ * reply-routing fan-out (which previously wrote a second `(inbox, message)`
+ * row keyed by chatId) was removed. The unique key is still
+ * `(inbox_id, message_id, chat_id)`, so any future fan-out variant that
+ * legitimately produces more than one row per NOTIFY drops in without a
+ * shape change. Aligning with `pollInboxInner`'s `LIMIT N` shape also keeps
+ * push/poll behaviour interchangeable.
  */
 export async function claimAndBuildForPush(
   db: Database,

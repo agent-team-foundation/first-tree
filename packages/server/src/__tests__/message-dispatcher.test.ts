@@ -26,7 +26,6 @@ const RAW = {
   format: "text",
   content: "hello",
   metadata: {},
-  replyToInbox: null,
   inReplyTo: null,
   source: null as string | null,
   createdAt: new Date().toISOString(),

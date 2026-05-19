@@ -88,7 +88,7 @@ export class ClientUserMismatchError extends AppError {
  * of the caller's current chat. When the recipient is missing, both
  * `sendToAgent` (`POST /agent/agents/:name/messages`) and the unresolved-
  * @-token guard in `sendMessage` throw this error with a hint pointing at
- * `first-tree-hub chat add-participant <name>` so the caller pulls the
+ * `first-tree-hub chat invite <name>` so the caller pulls the
  * recipient into the chat and retries. The retired `--direct` opt-in /
  * implicit direct-chat fallback is gone — there is no side-conversation
  * escape hatch.

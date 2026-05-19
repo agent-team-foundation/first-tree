@@ -15,7 +15,15 @@ export const messages = pgTable(
     format: text("format").notNull(),
     content: jsonb("content").$type<unknown>().notNull(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-    /** Inbox-row-level reply routing: target inbox row for the reply (same chat). */
+    /**
+     * Decision-inert column. Originally an inbox-row-level reply-routing
+     * envelope paired with the now-removed `replyToChat` cross-chat hint;
+     * once cross-chat routing went away there were no consumers left (the
+     * receive-side `shouldSuppressEcho` was deleted with it). The column
+     * survives as schema scaffolding only — the business layer never writes
+     * a non-null value. Do NOT reintroduce reply-routing envelopes here;
+     * inbox fan-out is sufficient, see first-tree-context PR #281.
+     */
     replyToInbox: text("reply_to_inbox"),
     /**
      * Decision-inert column. Originally part of a cross-chat reply-routing

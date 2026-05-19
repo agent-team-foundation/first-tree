@@ -145,17 +145,6 @@ async function sendMessageInner(
       }
     }
 
-    // `replyToInbox` is a sender-declared routing promise — the sender is
-    // saying "when someone replies to this, also deliver a copy to my own
-    // inbox row". Letting a caller put somebody else's inboxId here would let
-    // an agent spam a third party's inbox by baiting replies. Enforce that
-    // replyToInbox belongs to the sender.
-    if (data.replyToInbox !== undefined && data.replyToInbox !== null) {
-      if (senderRow.inboxId !== data.replyToInbox) {
-        throw new BadRequestError("replyToInbox must reference the sender's own inbox");
-      }
-    }
-
     // 2. Resolve `@<name>` tokens in the content against the participant
     //    list. Merge the result into `metadata.mentions` so mention_only
     //    participants get fanned out on step 4. Explicit mentions passed
@@ -246,7 +235,7 @@ async function sendMessageInner(
     //
     //   New behaviour: when this hook is active (agent path), every raw
     //   `@<token>` in the content must resolve to a speaker. Unresolved
-    //   tokens → 400 with a remedy hint pointing at `chat add-participant`
+    //   tokens → 400 with a remedy hint pointing at `chat invite`
     //   so the agent pulls the missing recipient into THIS chat and retries.
     //   Code-fenced `@` tokens are already stripped by `scanMentionTokens`
     //   upstream, so legitimate quoted `@<name>` in code blocks is unaffected.
@@ -269,7 +258,7 @@ async function sendMessageInner(
           throw new BadRequestError(
             `Cannot @-mention "${sample}" — they are not a participant of this chat. ` +
               "Add them first:\n" +
-              `  first-tree-hub chat add-participant ${sample}\n` +
+              `  first-tree-hub chat invite ${sample}\n` +
               "Then retry your send. Or ask a human in this chat to add them.",
           );
         }
@@ -352,7 +341,6 @@ async function sendMessageInner(
         format: data.format,
         content: outboundContent,
         metadata: metadataToStore,
-        replyToInbox: data.replyToInbox ?? null,
         inReplyTo: data.inReplyTo ?? null,
         source: data.source ?? null,
       })
@@ -672,12 +660,12 @@ export async function sendToAgent(
   // `sendToAgent` is no longer a routing primitive; its only job is to map a
   // recipient name to a uuid and refuse the send when that recipient is not
   // already a participant of the caller's current chat. Agents pull the
-  // non-member into the room via `first-tree-hub chat add-participant`
+  // non-member into the room via `first-tree-hub chat invite`
   // and retry through `POST /agent/chats/:chatId/messages`.
   throw new AgentSendNonMemberError(
     `Agent "${targetName}" is not a member of your current chat. ` +
       "Add them first:\n" +
-      `  first-tree-hub chat add-participant ${targetName}\n` +
+      `  first-tree-hub chat invite ${targetName}\n` +
       "Then retry your send.",
   );
 }

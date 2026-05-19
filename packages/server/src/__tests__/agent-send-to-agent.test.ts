@@ -6,7 +6,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  * group-chat model (see first-tree-context PR #281) and the legacy
  * `--direct` opt-in / `findOrCreateDirectChat` fallback are gone. The
  * endpoint's only job now is to resolve the recipient name and refuse with
- * `AGENT_SEND_NON_MEMBER` pointing callers at `chat add-participant`. The
+ * `AGENT_SEND_NON_MEMBER` pointing callers at `chat invite`. The
  * canonical send path is `POST /api/v1/agent/chats/:chatId/messages`
  * against a chat the caller has already joined.
  */
@@ -63,6 +63,6 @@ describe("Agent Send-to-Agent API — name-resolve + non-member refusal", () => 
       content: "no hint",
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/add-participant/);
+    expect(res.json().error).toMatch(/chat invite/);
   });
 });

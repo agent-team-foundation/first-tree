@@ -277,7 +277,7 @@ export class FirstTreeHubSDK {
    * Add a participant to a chat by uuid or by name. Names resolve within the
    * chat's organization. Idempotent: re-adding an existing speaker returns
    * the chat's current participant list (the server treats it as a conflict
-   * the caller can safely ignore — see `chat add-participant` CLI for the
+   * the caller can safely ignore — see `chat invite` CLI for the
    * UX wrapper that swallows that case).
    */
   async addChatParticipant(

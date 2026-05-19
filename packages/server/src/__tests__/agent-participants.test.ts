@@ -32,7 +32,7 @@ describe("Agent Participants API", () => {
     expect(participants.map((p: { agentId: string }) => p.agentId)).toContain(a3.agent.uuid);
   });
 
-  it("adds a participant by name (chat add-participant CLI path)", async () => {
+  it("adds a participant by name (chat invite CLI path)", async () => {
     const app = getApp();
     const { a1, a3, chatId } = await setupChat(app);
     if (!a3.agent.name) throw new Error("a3 name missing");

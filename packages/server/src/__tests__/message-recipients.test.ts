@@ -80,27 +80,6 @@ describe("sendMessage returns recipients", () => {
     expect(result.recipients).not.toContain(a1.inboxId);
   });
 
-  it("rejects replyToInbox that does not belong to the sender", async () => {
-    // Sender-ownership guard: the `replyTo` envelope is a sender-declared
-    // routing promise, not a free-form attachment. Letting a caller name
-    // someone else's inbox would let an agent spam a third party's inbox by
-    // baiting replies — see proposals/hub-agent-messaging-reply-and-mentions §3.1.
-    const app = getApp();
-    const { agent: a1 } = await createTestAgent(app, { name: `recip-rti1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a2 } = await createTestAgent(app, { name: `recip-rti2-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a3 } = await createTestAgent(app, { name: `recip-rti3-${crypto.randomUUID().slice(0, 6)}` });
-
-    const chat = await createChat(app.db, a1.uuid, { type: "group", participantIds: [a2.uuid] });
-
-    await expect(
-      sendMessage(app.db, chat.id, a1.uuid, {
-        format: "text",
-        content: "original",
-        replyToInbox: a3.inboxId, // NOT a1's inbox — should be rejected.
-      }),
-    ).rejects.toThrow(/replyToInbox/);
-  });
-
   it("sendToAgent rejects non-member targets with AGENT_SEND_NON_MEMBER", async () => {
     const app = getApp();
     const { agent: a1 } = await createTestAgent(app, { name: `recip-dm1-${crypto.randomUUID().slice(0, 6)}` });
@@ -110,7 +89,7 @@ describe("sendMessage returns recipients", () => {
     // Cross-chat reply routing and the `--direct` escape hatch have been
     // removed (see first-tree-context PR #281). The only routing path
     // for `chat send <name>` is "already a participant", so a non-member
-    // send must throw AGENT_SEND_NON_MEMBER pointing at `chat add-participant`.
+    // send must throw AGENT_SEND_NON_MEMBER pointing at `chat invite`.
     await expect(
       sendToAgent(app.db, a1.uuid, a2.name, {
         format: "text",

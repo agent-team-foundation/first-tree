@@ -73,7 +73,6 @@ export function mockEntry(
       format: "text",
       content: opts.content ?? "hello",
       metadata: opts.metadata ?? {},
-      replyToInbox: null,
       inReplyTo: opts.inReplyTo ?? null,
       source: null,
       createdAt: new Date().toISOString(),

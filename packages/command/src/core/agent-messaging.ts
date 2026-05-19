@@ -1,24 +1,4 @@
 /**
- * Resolve `replyToInbox` for `chat send`. When the CLI is invoked from inside
- * a claude-code session (the handler exports `FIRST_TREE_HUB_INBOX_ID`),
- * default the reply target to the calling session's own inbox row so the
- * peer's reply lands on the right inbox row inside the same chat.
- *
- * Cross-chat reply routing has been removed (see
- * first-tree-context PR #281); only the same-chat `replyToInbox`
- * envelope survives. Explicit `--reply-to-inbox` always wins.
- */
-export function resolveReplyToFromEnv(
-  env: NodeJS.ProcessEnv,
-  override: { replyToInbox?: string },
-): { replyToInbox: string | undefined } {
-  const envInboxId = env.FIRST_TREE_HUB_INBOX_ID;
-  return {
-    replyToInbox: override.replyToInbox ?? envInboxId,
-  };
-}
-
-/**
  * Resolve which locally-configured agent the CLI should authenticate as
  * (the SENDER) for an outbound `chat send` / `chat list` / etc. call.
  *

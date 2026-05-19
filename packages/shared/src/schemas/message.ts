@@ -60,7 +60,6 @@ export const sendMessageSchema = z.object({
   content: z.unknown(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   inReplyTo: z.string().optional(),
-  replyToInbox: z.string().optional(),
   source: messageSourceSchema.optional(),
   purpose: messagePurposeSchema.optional(),
 });
@@ -70,7 +69,6 @@ export const sendToAgentSchema = z.object({
   format: messageFormatSchema.default("text"),
   content: z.unknown(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-  replyToInbox: z.string().optional(),
   source: messageSourceSchema.optional(),
 });
 export type SendToAgent = z.infer<typeof sendToAgentSchema>;
@@ -82,7 +80,6 @@ export const messageSchema = z.object({
   format: z.string(),
   content: z.unknown(),
   metadata: z.record(z.string(), z.unknown()),
-  replyToInbox: z.string().nullable(),
   inReplyTo: z.string().nullable(),
   source: messageSourceSchema.nullable(),
   createdAt: z.string(),

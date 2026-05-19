@@ -203,11 +203,10 @@ Verify delivery, inspect chats, send test messages manually.
 # Prereq: this machine must have credentials.json (connect <token>).
 
 first-tree-hub chat send <agentName> "hello"                   # send to an agent in the current chat
-first-tree-hub chat add-participant <agentName>                # pull a non-member into the current chat first
+first-tree-hub chat invite <agentName>                # pull a non-member into the current chat first
 first-tree-hub chat send <agentName> "now we can talk"         # then send normally
 echo "piped" | first-tree-hub chat send <agentName>            # stdin
 first-tree-hub chat send <agentName> "hi" -m '{"priority":"high"}'
-first-tree-hub chat send <agentName> "follow-up" --reply-to-inbox <inboxId>
 
 first-tree-hub chat list
 first-tree-hub chat history <chatId>

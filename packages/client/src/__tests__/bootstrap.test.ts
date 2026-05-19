@@ -139,7 +139,7 @@ describe("bootstrapWorkspace", () => {
     expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
   });
 
-  it("tools.md teaches `chat add-participant` instead of the retired --direct escape hatch", () => {
+  it("tools.md teaches `chat invite` instead of the retired --direct escape hatch", () => {
     const workspace = join(tmpBase, "ws-tools-direct");
     mkdirSync(workspace, { recursive: true });
 
@@ -154,7 +154,7 @@ describe("bootstrapWorkspace", () => {
     const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
     // Sending Messages section must teach the add-participant flow as the
     // canonical way to reach a non-member of the current chat.
-    expect(content).toContain("first-tree-hub chat add-participant");
+    expect(content).toContain("first-tree-hub chat invite");
     // Member-default routing description (the recipient must be in this chat).
     expect(content).toMatch(/recipient MUST be a participant/);
     // The retired escape hatches must NOT be taught — agents that try them

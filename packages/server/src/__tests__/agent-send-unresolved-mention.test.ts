@@ -15,7 +15,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  *
  * New invariant: on the agent path (`enforceGroupMention: true`), any raw
  * `@<token>` in content that doesn't resolve to a chat speaker fails the
- * write with 400 + a hint pointing at `chat add-participant <name>` so the
+ * write with 400 + a hint pointing at `chat invite <name>` so the
  * agent pulls the missing recipient into THIS chat and retries. Two-speaker
  * and three+-speaker shapes are both guarded so the dogfood gap is sealed.
  *
@@ -49,7 +49,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     ).rejects.toThrow(new RegExp(`Cannot @-mention "${outsider.agent.name}"`));
   });
 
-  it("hint recommends `chat add-participant <name>` (not `--direct`) for the typed token", async () => {
+  it("hint recommends `chat invite <name>` (not `--direct`) for the typed token", async () => {
     const app = getApp();
     const sender = await createTestAgent(app, { type: "autonomous_agent" });
     const peer = await createTestAgent(app, { type: "human" });
@@ -72,7 +72,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
       throw new Error("expected sendMessage to reject");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      expect(message).toContain(`add-participant ${outsider.agent.name}`);
+      expect(message).toContain(`chat invite ${outsider.agent.name}`);
       expect(message).not.toMatch(/--direct/);
     }
   });

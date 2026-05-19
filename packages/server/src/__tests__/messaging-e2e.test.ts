@@ -187,7 +187,6 @@ describe("messaging E2E — group-chat mention scenarios", () => {
     const m1 = await sendMessage(app.db, c1.id, b1.uuid, {
       format: "text",
       content: "first cut",
-      replyToInbox: b1.inboxId,
       metadata: { mentions: [b2.uuid] },
     });
 
@@ -203,13 +202,11 @@ describe("messaging E2E — group-chat mention scenarios", () => {
     const b2After = await pollInbox(app.db, b2.inboxId, 10);
     expect(b2After).toHaveLength(0);
 
-    // The on-disk message row retains its original envelope, and
     // `metadata.editedAt` is the only observable trace of the edit.
     const msgs = await listMessages(app.db, c1.id, 10);
     const edited = msgs.items.find((m) => m.id === m1.message.id);
     if (!edited) throw new Error("edited message missing");
     expect(edited.content).toBe("first cut — revised");
-    expect(edited.replyToInbox).toBe(b1.inboxId);
     expect((edited.metadata as { editedAt?: string }).editedAt).toBeTypeOf("string");
   });
 });

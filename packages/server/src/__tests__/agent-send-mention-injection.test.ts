@@ -526,7 +526,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
 
   // sendToAgent no longer performs routing — it resolves the recipient name
   // and refuses with AGENT_SEND_NON_MEMBER pointing callers at
-  // `chat add-participant` (see first-tree-context PR #281 and
+  // `chat invite` (see first-tree-context PR #281 and
   // agent-send-to-agent.test.ts). Mention injection on the sendMessage path
   // is exercised by the group/direct-chat suites above.
 

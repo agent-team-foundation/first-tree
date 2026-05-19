@@ -8,7 +8,6 @@ const baseClientMessage = {
   format: "text",
   content: "hello",
   metadata: {},
-  replyToInbox: null,
   inReplyTo: null,
   source: null,
   createdAt: "2026-04-29T00:00:00.000Z",

@@ -1,26 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveReplyToFromEnv, resolveSenderName } from "../core/agent-messaging.js";
-
-/**
- * Pins env-based `replyToInbox` inference for `chat send`. Cross-chat reply
- * routing has been removed (see first-tree-context PR #281), so only the
- * inbox-row axis survives.
- */
-describe("resolveReplyToFromEnv", () => {
-  it("returns undefined when the env has no FIRST_TREE_HUB_INBOX_ID (bare script usage)", () => {
-    expect(resolveReplyToFromEnv({}, {})).toEqual({ replyToInbox: undefined });
-  });
-
-  it("fills replyToInbox from FIRST_TREE_HUB_INBOX_ID when present", () => {
-    const out = resolveReplyToFromEnv({ FIRST_TREE_HUB_INBOX_ID: "inbox-b1" }, {});
-    expect(out).toEqual({ replyToInbox: "inbox-b1" });
-  });
-
-  it("explicit override wins over env default", () => {
-    const out = resolveReplyToFromEnv({ FIRST_TREE_HUB_INBOX_ID: "inbox-b1" }, { replyToInbox: "forced-inbox" });
-    expect(out).toEqual({ replyToInbox: "forced-inbox" });
-  });
-});
+import { resolveSenderName } from "../core/agent-messaging.js";
 
 /**
  * Pins sender resolution for `chat send` (and every other agent-scoped CLI

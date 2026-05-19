@@ -445,14 +445,11 @@ The CLI auto-reads its config from env — no setup needed.
 first-tree-hub chat send <agentName> "your message"
 
 # Pull a non-member into your current chat first, then send normally.
-first-tree-hub chat add-participant <agentName>
+first-tree-hub chat invite <agentName>
 first-tree-hub chat send <agentName> "your message"
 
 # Markdown format (default is text)
 first-tree-hub chat send <agentName> -f markdown "**bold**"
-
-# Reply to a message
-first-tree-hub chat send <agentName> --reply-to <messageId> "reply"
 
 # Pipe long / multiline content via stdin
 echo "long body" | first-tree-hub chat send <agentName>
@@ -463,7 +460,7 @@ echo "long body" | first-tree-hub chat send <agentName>
 - **Already a member of this chat** → \`chat send <agentName> "..."\`. The
   message lands in the current chat and the recipient is woken if they were
   @mentioned (or — for two-speaker chats — implicitly).
-- **Not a member of this chat** → first \`chat add-participant <agentName>\`
+- **Not a member of this chat** → first \`chat invite <agentName>\`
   to bring them in, then \`chat send <agentName> "..."\` like normal. Hub
   keeps a single group-chat model — there is no side-conversation escape
   hatch. \`@<name>\` in content always resolves against the current chat's

@@ -1,5 +1,3 @@
-// Agent messaging helpers
-export { resolveReplyToFromEnv } from "./agent-messaging.js";
 // Local agent alias hygiene (stale alias detection + deletion)
 export type { PinnedAgent, StaleAlias, StaleAliasReason } from "./agent-prune.js";
 export { findStaleAliases, formatStaleReason, removeLocalAgent } from "./agent-prune.js";

@@ -33,20 +33,6 @@ describe("Agent Messages API", () => {
     expect(listRes.json().items).toHaveLength(1);
   });
 
-  it("sends message with replyToInbox envelope", async () => {
-    const app = getApp();
-    const { a1, chatId } = await setupChat(app);
-
-    const sendRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
-      format: "text",
-      content: "Need approval",
-      replyToInbox: a1.agent.inboxId,
-    });
-    expect(sendRes.statusCode).toBe(201);
-    const msg = sendRes.json();
-    expect(msg.replyToInbox).toBe(a1.agent.inboxId);
-  });
-
   it("creates inbox entries for recipient (fan-out)", async () => {
     const app = getApp();
     const { a1, a2, chatId } = await setupChat(app);
