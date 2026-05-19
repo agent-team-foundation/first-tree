@@ -135,6 +135,18 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       presenceCleanupSeconds: 60,
       notificationWebhookUrl: undefined,
     },
+    update: {
+      // Pin a deterministic version so welcome-frame tests can assert
+      // exact equality without coupling to the in-tree package.json.
+      channel: "latest",
+      commandVersion: "test.version",
+      // Long enough that the timer never fires inside a test run — we
+      // call `refresh()` manually when a test needs a forced poll.
+      pollIntervalMinutes: 1440,
+      // Point at an unreachable host so a stray refresh during tests
+      // logs-and-skips instead of hitting the real npm registry.
+      registryUrl: "https://localhost.invalid",
+    },
     instanceId: "test-instance",
   };
   const app = await buildApp(config);

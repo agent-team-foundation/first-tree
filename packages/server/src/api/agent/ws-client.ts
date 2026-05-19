@@ -412,7 +412,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             socket.send(
               JSON.stringify({
                 type: "server:welcome",
-                serverCommandVersion: app.commandVersion,
+                serverCommandVersion: app.commandVersion(),
                 serverTimeMs: Date.now(),
                 capabilities: { wsInboxDeliver: true },
               }),

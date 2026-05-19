@@ -1,7 +1,7 @@
 import type { ExecuteUpdateFn, UpdatePromptFn } from "@first-tree-hub/client";
 import { confirm } from "@inquirer/prompts";
 import { print } from "./output.js";
-import { detectInstallMode, installGlobalLatest } from "./update.js";
+import { detectInstallMode, installGlobalSpec } from "./update.js";
 
 /** Reserved exit code that means "clean self-restart, service manager please bring me back". */
 export const SELF_RESTART_EXIT_CODE = 75;
@@ -46,7 +46,7 @@ export const declineUpdate: UpdatePromptFn = async () => false;
  * operator restarts manually.
  */
 export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteUpdateFn {
-  return async () => {
+  return async ({ targetVersion }) => {
     const mode = detectInstallMode();
     if (mode === "source") {
       print.line("  [update] Running from source checkout — self-update skipped. Use `git pull` instead.\n");
@@ -59,14 +59,20 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       return { installed: false };
     }
 
-    print.line("  [update] Running `npm install -g @agent-team-foundation/first-tree-hub@latest`...\n");
-    const result = await installGlobalLatest();
+    // Auto-update installs the *exact* version the server advertised in
+    // `server:welcome.serverCommandVersion`. Using `@latest` here would
+    // mis-resolve once the server starts advertising alpha builds (alpha
+    // lives on a different dist-tag), and even on the stable track it could
+    // race to a different version than the one drift-check approved. The
+    // server is the authoritative source of "what should this client run".
+    print.line(`  [update] Running \`npm install -g @agent-team-foundation/first-tree-hub@${targetVersion}\`...\n`);
+    const result = await installGlobalSpec(targetVersion);
     if (!result.ok) {
       print.line(`  [update] Install failed: ${result.reason}\n`);
       return { installed: false };
     }
 
-    const installed = result.installedVersion ?? "latest";
+    const installed = result.installedVersion ?? targetVersion;
     if (managed) {
       print.line(`  [update] Installed ${installed}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
       process.exit(SELF_RESTART_EXIT_CODE);
