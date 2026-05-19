@@ -81,8 +81,12 @@ export type SendMessageOptions = {
    * requires a runtime-side parser rewrite that is out of scope for the
    * current PR). The unresolved-@-token guard is gated on the same flag.
    *
-   * Adapter / webhook / programmatic callers leave this off (the default)
-   * — they always declare recipients explicitly.
+   * Default when omitted: ON (`undefined !== false` evaluates to true).
+   * Adapter / webhook / programmatic callers don't need to opt out — they
+   * already declare recipients via `metadata.mentions` or `receiverNames`,
+   * which is explicit-wins and skips content extraction regardless of
+   * this flag. Pass `false` only to forcibly suppress the fallback even
+   * when no explicit declaration was made.
    */
   extractMentionsFromContent?: boolean;
 };
