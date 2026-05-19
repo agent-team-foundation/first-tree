@@ -31,6 +31,16 @@ RUN pnpm install --frozen-lockfile --prod \
 FROM node:24-alpine
 WORKDIR /app
 
+# Bootstrap Command-package version baked into the image. CI passes this as
+# `--build-arg COMMAND_VERSION=$(node -p "require('./packages/command/package.json').version")`,
+# so a freshly-built image always advertises the in-tree CLI version BEFORE
+# the npm-registry poller takes over at runtime. Default `0.0.0` keeps local
+# `docker build` (without the build-arg) from crashing — it's SemVer-valid so
+# the welcome frame stays well-formed, and the poller overwrites it within a
+# poll interval anyway.
+ARG COMMAND_VERSION=0.0.0
+ENV FIRST_TREE_HUB_COMMAND_VERSION=$COMMAND_VERSION
+
 # Production node_modules (includes compiled bcrypt, workspace links)
 COPY --from=prod-deps /app ./
 

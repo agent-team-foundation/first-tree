@@ -72,7 +72,13 @@ export {
 export type { ExecuteUpdateResult, InstallMode } from "./update.js";
 // Self-update glue — exported so both `client start` and `connect <token>`
 // can pass identical prompt / install callbacks to the ClientRuntime.
-export { detectInstallMode, fetchLatestVersion, installGlobalLatest, PACKAGE_NAME } from "./update.js";
+export {
+  detectInstallMode,
+  fetchLatestVersion,
+  installGlobalLatest,
+  installGlobalSpec,
+  PACKAGE_NAME,
+} from "./update.js";
 export { createExecuteUpdate, declineUpdate, promptUpdate, SELF_RESTART_EXIT_CODE } from "./update-glue.js";
 // Command package version (bundle self-identification)
 export { CLI_USER_AGENT, COMMAND_VERSION } from "./version.js";

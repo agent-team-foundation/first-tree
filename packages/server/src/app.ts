@@ -80,6 +80,7 @@ import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
+import { COMMAND_PACKAGE_NAME, createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
@@ -97,13 +98,24 @@ export type AppContext = {
 };
 
 /**
- * Resolve the Command-package version advertised to clients. Prefers the
- * value the Command CLI explicitly injected; otherwise falls back to the
- * server workspace's own package.json (dev mode, `pnpm --filter … dev`).
- * Returning a string (rather than undefined) keeps the welcome frame well-
- * formed — the client treats the value advisorily.
+ * Resolve the bootstrap Command-package version advertised before the first
+ * successful npm-registry poll lands. Priority order:
+ *
+ *  1. `config.update.commandVersion` — explicit injection. Set by the
+ *     Dockerfile at build time (via `COMMAND_VERSION` build-arg, which CI
+ *     reads from `packages/command/package.json.version`), so a fresh image
+ *     boots with a sane version even when the npm registry is unreachable
+ *     at startup.
+ *  2. Server workspace's own `package.json` — kept only for `pnpm --filter
+ *     … dev` runs where no build-arg path exists. Server's package.json
+ *     never bumps (it's `private: true`), so this is intentionally a weak
+ *     fallback — at runtime the poller will overwrite it within minutes.
+ *  3. `"0.0.0"` — last-resort sentinel that keeps the welcome frame
+ *     well-formed. SemVer-valid; clients drop into the "ahead" branch and
+ *     skip update, which is the right failure mode (better than crashing
+ *     clients with an invalid version string).
  */
-function resolveCommandVersion(injected: string | undefined): string {
+function resolveBootstrapCommandVersion(injected: string | undefined): string {
   if (injected && injected.trim().length > 0) return injected;
   try {
     const req = createRequire(import.meta.url);
@@ -276,10 +288,29 @@ export async function buildApp(config: Config) {
   app.decorate("config", config);
 
   // Advisory Command-package version broadcast to every Client via the
-  // `server:welcome` WS frame — lets clients detect version drift.
-  const commandVersion = resolveCommandVersion(config.commandVersion);
-  app.decorate("commandVersion", commandVersion);
-  app.log.info({ commandVersion }, "Hub server advertising command version");
+  // `server:welcome` WS frame. The poller refreshes the advertised value
+  // from the npm registry on `config.update.pollIntervalMinutes`, so the
+  // server's deploy cadence no longer gates client auto-update. Bootstrap
+  // value is the build-arg-injected version; the poller takes over on
+  // `onReady`.
+  const bootstrapCommandVersion = resolveBootstrapCommandVersion(config.update.commandVersion);
+  const commandVersionPoller = createCommandVersionPoller({
+    logger: app.log,
+    registryUrl: config.update.registryUrl,
+    packageName: COMMAND_PACKAGE_NAME,
+    channel: config.update.channel,
+    intervalMs: config.update.pollIntervalMinutes * 60_000,
+    initialVersion: bootstrapCommandVersion,
+  });
+  app.decorate("commandVersion", () => commandVersionPoller.get());
+  app.log.info(
+    {
+      bootstrapCommandVersion,
+      channel: config.update.channel,
+      pollIntervalMinutes: config.update.pollIntervalMinutes,
+    },
+    "Hub server advertising command version (poller bootstrap)",
+  );
 
   // Notifier: dedicated PG connection for LISTEN/NOTIFY
   const listenClient = postgres(config.database.url, { max: 1, ...sslOptions(config.database.url) });
@@ -626,10 +657,12 @@ export async function buildApp(config: Config) {
     await notifier.start();
     backgroundTasks.start();
     pulseAggregator.start();
+    commandVersionPoller.start();
   });
 
   // Cleanup on close
   app.addHook("onClose", async () => {
+    commandVersionPoller.stop();
     pulseAggregator.stop();
     backgroundTasks.stop();
     adapterManager.shutdown();

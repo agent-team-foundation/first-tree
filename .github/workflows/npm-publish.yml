@@ -41,8 +41,22 @@ jobs:
             exit 1
           fi
 
-          ALPHA_VERSION="${BASE_VERSION}-alpha.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          # Bump base to the next patch BEFORE attaching the alpha pre-release
+          # tag. SemVer ranks `X.Y.Z-alpha.*` *lower* than `X.Y.Z`, so naming
+          # an alpha after the same base as the last stable would publish
+          # versions that auto-update treats as older than what's already
+          # installed (the "Server advertises 0.14.7-alpha.X, running 0.14.7
+          # (ahead)" symptom). Aligning the base with next-patch makes
+          # `0.14.8-alpha.X > 0.14.7` and gives alpha its intended "preview
+          # of the upcoming release" semantics. The split into MAJOR/MINOR/
+          # PATCH is safe because the regex above already guaranteed three
+          # numeric components.
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          ALPHA_VERSION="${NEXT_VERSION}-alpha.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "next_version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
           echo "alpha_version=$ALPHA_VERSION" >> "$GITHUB_OUTPUT"
 
           VIEW_ERROR=$(mktemp)
@@ -150,8 +164,22 @@ jobs:
             exit 1
           fi
 
-          ALPHA_VERSION="${BASE_VERSION}-alpha.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          # Bump base to the next patch BEFORE attaching the alpha pre-release
+          # tag. SemVer ranks `X.Y.Z-alpha.*` *lower* than `X.Y.Z`, so naming
+          # an alpha after the same base as the last stable would publish
+          # versions that auto-update treats as older than what's already
+          # installed (the "Server advertises 0.14.7-alpha.X, running 0.14.7
+          # (ahead)" symptom). Aligning the base with next-patch makes
+          # `0.14.8-alpha.X > 0.14.7` and gives alpha its intended "preview
+          # of the upcoming release" semantics. The split into MAJOR/MINOR/
+          # PATCH is safe because the regex above already guaranteed three
+          # numeric components.
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          ALPHA_VERSION="${NEXT_VERSION}-alpha.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "next_version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
           echo "alpha_version=$ALPHA_VERSION" >> "$GITHUB_OUTPUT"
 
           IS_PRIVATE=$(node -p "require('./package.json').private === true ? 'true' : 'false'")

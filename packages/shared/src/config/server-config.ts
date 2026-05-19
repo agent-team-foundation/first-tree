@@ -282,6 +282,43 @@ export const serverConfigSchema = defineConfig({
     }),
   },
   /**
+   * Command-package version advertisement. The server broadcasts a version
+   * string to every Client via `server:welcome` so clients can detect drift
+   * and self-update. We resolve the value at runtime by polling the npm
+   * registry for the configured channel's current `dist-tag` —
+   * decoupling "what version clients should run" from the server's own
+   * build/deploy cadence (otherwise prod auto-update silently stalls
+   * whenever the server image lags behind a fresh CLI publish).
+   *
+   * - `channel`: which npm `dist-tag` to track. Staging deployments set
+   *   `alpha` so clients automatically follow CI's preview builds; prod stays
+   *   on `latest`.
+   * - `commandVersion`: bootstrap fallback used until the first successful
+   *   poll, and the cache value when the registry is unreachable.
+   *   Docker images inject `packages/command/package.json.version` at build
+   *   time via the `COMMAND_VERSION` build-arg.
+   * - `pollIntervalMinutes`: refresh cadence. 60 minutes is the safe default
+   *   for both prod (slow stable cadence) and staging (frequent alpha
+   *   publishes still get picked up within an hour). Tune lower on staging
+   *   for tighter alpha rollout.
+   * - `registryUrl`: lets corp deployments point at a Verdaccio/Artifactory
+   *   mirror with the same dist-tags.
+   */
+  update: {
+    channel: field(z.enum(["latest", "alpha"]).default("latest"), {
+      env: "FIRST_TREE_HUB_UPDATE_CHANNEL",
+    }),
+    commandVersion: field(z.string().optional(), {
+      env: "FIRST_TREE_HUB_COMMAND_VERSION",
+    }),
+    pollIntervalMinutes: field(z.coerce.number().int().min(1).max(1440).default(60), {
+      env: "FIRST_TREE_HUB_UPDATE_POLL_INTERVAL_MINUTES",
+    }),
+    registryUrl: field(z.string().url().default("https://registry.npmjs.org"), {
+      env: "FIRST_TREE_HUB_UPDATE_REGISTRY_URL",
+    }),
+  },
+  /**
    * Runtime tunables. Replaced the deleted `/admin/system/config` HTTP
    * surface (proposal hub-strip-jwt-ambient-scope §3.5) — these knobs are
    * deployment-level, not customer-tunable, and get baked in via the

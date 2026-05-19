@@ -117,15 +117,51 @@ export type ExecuteUpdateResult =
   | { ok: false; mode: InstallMode; reason: string };
 
 /**
- * Install `<pkg>@latest` globally. Returns after the child exits. Does not
- * exit the parent process — callers are expected to handle that (so the
- * UpdateManager can attempt the restart itself while this function remains
- * side-effect-scoped).
+ * Validate an npm install spec (the part after `@` in `<pkg>@<spec>`). We
+ * accept either a known dist-tag string (`latest`, `alpha`, …) or an exact
+ * SemVer version (`0.14.7`, `0.14.8-alpha.286.1`). The intent is purely
+ * defensive: the spec is concatenated into the npm CLI args, and we never
+ * want to forward an attacker-controlled shell metacharacter from a
+ * (compromised) server welcome frame straight into `spawn`. spawn() already
+ * argv-escapes, but a `--registry=...` style spec would still be
+ * interpreted as an npm flag — refusing leading dashes and whitespace
+ * collapses the surface unambiguously.
  */
-export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
+function isSafeInstallSpec(spec: string): boolean {
+  if (typeof spec !== "string" || spec.length === 0 || spec.length > 128) return false;
+  // Allow letters, digits, dot, plus, hyphen — covers every legal SemVer +
+  // dist-tag. Crucially excludes whitespace, `@`, `/`, `=`, shell quotes.
+  // Hyphens inside the body are fine (`0.14.8-alpha.286.1`), but a leading
+  // hyphen would let the spec smuggle in as an npm flag.
+  if (spec.startsWith("-")) return false;
+  return /^[A-Za-z0-9.+-]+$/.test(spec);
+}
+
+/**
+ * Install `<pkg>@<spec>` globally. `spec` is either a dist-tag (e.g. `latest`)
+ * or an exact version (e.g. `0.14.7-alpha.286.1`). Returns after the child
+ * exits. Does not exit the parent process — callers are expected to handle
+ * that (so the UpdateManager can attempt the restart itself while this
+ * function remains side-effect-scoped).
+ *
+ * Why both shapes exist: the auto-update path receives `targetVersion` from
+ * the server `welcome` frame and MUST install that exact version — using
+ * `@latest` from auto-update would silently mis-resolve once the server
+ * starts advertising alpha builds (alpha lives on a different dist-tag).
+ * The manual `first-tree-hub update` CLI keeps the dist-tag form so users
+ * who type the command without args still get "newest stable on npm".
+ */
+export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResult> {
+  if (!isSafeInstallSpec(spec)) {
+    return {
+      ok: false,
+      mode: "global",
+      reason: `Refusing to install: invalid npm spec ${JSON.stringify(spec)}`,
+    };
+  }
   return new Promise((resolvePromise) => {
     const npmCmd = resolveNpmCommand();
-    const npmArgs = ["install", "-g", `${PACKAGE_NAME}@latest`];
+    const npmArgs = ["install", "-g", `${PACKAGE_NAME}@${spec}`];
     const child = spawn(npmCmd, npmArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
     const stdoutChunks: Buffer[] = [];
@@ -154,6 +190,16 @@ export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
       }
     });
   });
+}
+
+/**
+ * Back-compat shim: install `<pkg>@latest`. The manual `first-tree-hub
+ * update` CLI uses this so an operator-typed `update` keeps the
+ * "newest stable on npm" behaviour. Auto-update prefers `installGlobalSpec`
+ * with the welcome frame's `targetVersion`.
+ */
+export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
+  return installGlobalSpec("latest");
 }
 
 /**

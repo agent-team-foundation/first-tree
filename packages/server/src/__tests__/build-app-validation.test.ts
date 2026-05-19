@@ -29,6 +29,12 @@ const baseConfig: Config = {
     presenceCleanupSeconds: 60,
     notificationWebhookUrl: undefined,
   },
+  update: {
+    channel: "latest",
+    commandVersion: "test.version",
+    pollIntervalMinutes: 1440,
+    registryUrl: "https://localhost.invalid",
+  },
   instanceId: "test-instance",
 };
 
