@@ -29,8 +29,11 @@ export type DockerPgOptions = {
  * macOS (observed on docker engine 29.x) exhibits intermittent ECONNRESET
  * on port-forwarded TCP into compose-managed containers — both the default
  * user-defined bridge and an explicit `network_mode: bridge` reproduce; the
- * same image via plain `docker run` is stable. Compose was only buying us
- * "ports + healthcheck + naming" anyway, all of which we do directly here.
+ * same image via plain `docker run` is stable. Compose was buying us four
+ * features — ports, healthcheck, naming, tmpfs — and we now do all four
+ * directly here. The `--tmpfs` flag matches the original compose intent:
+ * each run starts from an empty cluster in memory, and crashed runs leave
+ * nothing behind on disk.
  *
  * `bestEffortCleanupStaleContainers` keeps its compose-project sweep (so old
  * runs from before this switch still get cleaned up) and adds a parallel
@@ -56,6 +59,8 @@ export async function startDockerPg(opts: DockerPgOptions): Promise<PgProcess> {
     "POSTGRES_USER=firsttreehub_e2e",
     "-e",
     "POSTGRES_PASSWORD=firsttreehub_e2e",
+    "--tmpfs",
+    "/var/lib/postgresql/data:rw",
     "--health-cmd",
     "pg_isready -U firsttreehub_e2e -d firsttreehub_e2e",
     "--health-interval",
@@ -74,24 +79,25 @@ export async function startDockerPg(opts: DockerPgOptions): Promise<PgProcess> {
     throw new Error(`docker run pg failed (status=${run.status}):\nstdout:\n${run.stdout}\nstderr:\n${run.stderr}`);
   }
 
-  // Poll healthcheck status until "healthy" or timeout.
+  // Poll healthcheck status until "healthy" or timeout, retaining the last
+  // observed status so the error path can report what we saw last.
   const deadline = Date.now() + waitMs;
+  let lastStatus = "";
   while (Date.now() < deadline) {
     const inspect = spawnSync("docker", ["inspect", "--format", "{{.State.Health.Status}}", containerName], {
       env,
       encoding: "utf8",
     });
-    if (inspect.status === 0 && inspect.stdout.trim() === "healthy") break;
+    lastStatus = inspect.status === 0 ? inspect.stdout.trim() : `inspect-exit-${inspect.status}`;
+    if (lastStatus === "healthy") break;
     await new Promise<void>((r) => setTimeout(r, 250));
   }
-  const final = spawnSync("docker", ["inspect", "--format", "{{.State.Health.Status}}", containerName], {
-    env,
-    encoding: "utf8",
-  });
-  if (final.status !== 0 || final.stdout.trim() !== "healthy") {
+  if (lastStatus !== "healthy") {
     const logs = spawnSync("docker", ["logs", containerName], { env, encoding: "utf8" });
     spawnSync("docker", ["rm", "-f", containerName], { env, encoding: "utf8" });
-    throw new Error(`pg container did not become healthy within ${waitMs}ms:\n${logs.stdout}\n${logs.stderr}`);
+    throw new Error(
+      `pg container did not become healthy within ${waitMs}ms (last status=${lastStatus}):\n${logs.stdout}\n${logs.stderr}`,
+    );
   }
 
   const databaseUrl = `postgres://firsttreehub_e2e:firsttreehub_e2e@127.0.0.1:${opts.port}/firsttreehub_e2e`;
@@ -137,12 +143,13 @@ export function bestEffortCleanupStaleContainers(composeBin: string): void {
   }
 
   // Sweep 2: standalone containers created by current `startDockerPg`.
+  // Single combined regex because `docker ps` ORs multiple --filter values
+  // of the same key — passing `name=^hub_e2e_` AND `name=_pg$` separately
+  // would also reap any unrelated container ending in `_pg`.
   try {
-    const out = execFileSync(
-      "docker",
-      ["ps", "-a", "--filter", "name=^hub_e2e_", "--filter", "name=_pg$", "--format", "{{.Names}}"],
-      { encoding: "utf8" },
-    );
+    const out = execFileSync("docker", ["ps", "-a", "--filter", "name=^hub_e2e_.*_pg$", "--format", "{{.Names}}"], {
+      encoding: "utf8",
+    });
     for (const name of out
       .split("\n")
       .map((s) => s.trim())

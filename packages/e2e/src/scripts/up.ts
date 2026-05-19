@@ -1,4 +1,4 @@
-import { startRunWorld, stopRunWorld } from "../framework/lifecycle.js";
+import { registerPreTeardownHook, startRunWorld } from "../framework/lifecycle.js";
 import { createComponentLogger } from "../framework/logging.js";
 import { type DevUserSession, setupDevUser } from "../framework/setup-devuser.js";
 
@@ -29,6 +29,15 @@ async function main(): Promise<void> {
     console.error("Environment kept alive for manual debugging. Press Ctrl-C to tear down.");
   }
 
+  // Stop the devuser CLI child before lifecycle tears down server/pg, so its
+  // WebSocket gets a clean close instead of a server-pulled-out-from-under-it
+  // EHOSTUNREACH. Registered via lifecycle's hook list rather than a
+  // parallel `process.once("SIGINT")` to avoid racing the lifecycle handler.
+  if (devSession) {
+    const session = devSession;
+    registerPreTeardownHook(() => session.stop().catch(() => undefined));
+  }
+
   console.log("e2e environment ready");
   console.log(`  runId:        ${world.identity.runId}`);
   console.log(`  serverBaseUrl: ${world.server.baseUrl}`);
@@ -47,6 +56,7 @@ async function main(): Promise<void> {
     console.log(`  devHome:      ${devSession.home}`);
     console.log(`  devAgent:     name=${devSession.agentName}  id=${devSession.agentId}`);
     console.log(`  devChat:      ${devSession.chatId}  (1 message)`);
+    console.log(`  devMsg:       ${devSession.firstMessageId}`);
   } else {
     console.log(`  devUser:      ** provisioning failed — see error above **`);
   }
@@ -56,21 +66,10 @@ async function main(): Promise<void> {
   if (devSession) console.log(`              settings should now list client ${devSession.clientId}`);
   console.log("\nPress Ctrl-C to tear down.");
 
-  await new Promise<void>((resolve) => {
-    let shuttingDown = false;
-    const handler = (signal: NodeJS.Signals) => {
-      if (shuttingDown) return;
-      shuttingDown = true;
-      console.error(`\nReceived ${signal}, shutting down…`);
-      (async () => {
-        if (devSession) await devSession.stop().catch(() => undefined);
-        await stopRunWorld();
-        resolve();
-      })();
-    };
-    process.once("SIGINT", () => handler("SIGINT"));
-    process.once("SIGTERM", () => handler("SIGTERM"));
-  });
+  // Park forever — lifecycle's SIGINT/SIGTERM handler (set up in
+  // registerProcessExitHooks) drives the actual shutdown via the
+  // pre-teardown hook registered above and then `process.exit(130)`.
+  await new Promise<never>(() => {});
 }
 
 main().catch((err) => {

@@ -79,8 +79,12 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
   if (hashIdx < 0) throw new Error(`dev-callback Location has no fragment: ${location}`);
   const frag = new URLSearchParams(location.slice(hashIdx + 1));
   const devAccess = frag.get("access");
-  if (!devAccess) {
-    throw new Error(`dev-callback fragment missing access: ${location}`);
+  const devRefresh = frag.get("refresh");
+  if (!devAccess || !devRefresh) {
+    // Refresh isn't used downstream right now (the connect-token step mints
+    // a fresh pair), but failing fast here catches an upstream contract
+    // change where dev-callback would silently drop one of the fields.
+    throw new Error(`dev-callback fragment missing access/refresh: ${location}`);
   }
 
   // Step 2: /me/connect-tokens → connect-token.
