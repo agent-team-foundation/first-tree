@@ -1,14 +1,19 @@
 import type { ExecuteUpdateFn, UpdatePromptFn } from "@first-tree-hub/client";
 import { confirm } from "@inquirer/prompts";
 import { print } from "./output.js";
-import { detectInstallMode, installGlobalLatest } from "./update.js";
+import { detectInstallMode, installGlobalSpec } from "./update.js";
 
 /** Reserved exit code that means "clean self-restart, service manager please bring me back". */
 export const SELF_RESTART_EXIT_CODE = 75;
 
 /** Interactive update prompt. Defaults to N on timeout. */
 export const promptUpdate: UpdatePromptFn = async ({ currentVersion, targetVersion, timeoutSeconds }) => {
-  const message = `A newer First Tree Hub client is available.\n  You: ${currentVersion}\n  Server bundled with: ${targetVersion}\n  Will install: latest on npm (>= ${targetVersion})\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
+  // Phrasing matches the post-poller install path: we install the exact
+  // version the server advertised, not whatever `@latest` happens to point
+  // at. "Server recommends" (rather than "bundled with") because the version
+  // now comes from the server's npm-registry poll for the configured
+  // channel, not from the server image build.
+  const message = `A newer First Tree Hub client is available.\n  You: ${currentVersion}\n  Server recommends: ${targetVersion}\n  Will install: ${targetVersion}\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
@@ -46,7 +51,7 @@ export const declineUpdate: UpdatePromptFn = async () => false;
  * operator restarts manually.
  */
 export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteUpdateFn {
-  return async () => {
+  return async ({ targetVersion }) => {
     const mode = detectInstallMode();
     if (mode === "source") {
       print.line("  [update] Running from source checkout — self-update skipped. Use `git pull` instead.\n");
@@ -59,14 +64,20 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       return { installed: false };
     }
 
-    print.line("  [update] Running `npm install -g @agent-team-foundation/first-tree-hub@latest`...\n");
-    const result = await installGlobalLatest();
+    // Auto-update installs the *exact* version the server advertised in
+    // `server:welcome.serverCommandVersion`. Using `@latest` here would
+    // mis-resolve once the server starts advertising alpha builds (alpha
+    // lives on a different dist-tag), and even on the stable track it could
+    // race to a different version than the one drift-check approved. The
+    // server is the authoritative source of "what should this client run".
+    print.line(`  [update] Running \`npm install -g @agent-team-foundation/first-tree-hub@${targetVersion}\`...\n`);
+    const result = await installGlobalSpec(targetVersion);
     if (!result.ok) {
       print.line(`  [update] Install failed: ${result.reason}\n`);
       return { installed: false };
     }
 
-    const installed = result.installedVersion ?? "latest";
+    const installed = result.installedVersion ?? targetVersion;
     if (managed) {
       print.line(`  [update] Installed ${installed}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
       process.exit(SELF_RESTART_EXIT_CODE);
