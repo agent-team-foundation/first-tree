@@ -146,7 +146,7 @@ function humanizeBoundVia(boundVia: string): string {
     case "direct":
       return "Mentioned in chat";
     case "fixes_link":
-      return "Auto-linked from \"Fixes #…\"";
+      return 'Auto-linked from "Fixes #…"';
     case "agent_created":
       return "Created by an agent";
     default:
