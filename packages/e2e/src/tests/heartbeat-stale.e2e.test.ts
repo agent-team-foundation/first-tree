@@ -28,6 +28,12 @@ import { connectWsListener, type WsListener } from "../framework/server-driver/w
  * background tick observe the staleness. The test budget caps at 45s so
  * the worst-case wait (one full interval + buffer) still fits.
  *
+ * CI flake debug: if this test starts failing intermittently on a slower
+ * runner, the first place to check is whether the 30s background tick
+ * interval in `services/background-tasks.ts` (`heartbeatTimer` setInterval)
+ * has been adjusted — `STALE_TEST_BUDGET_MS` below assumes one full tick
+ * + ~12s of slack and needs to grow in lockstep.
+ *
  * Requires `E2E_WITH_CLIENT=1`.
  */
 

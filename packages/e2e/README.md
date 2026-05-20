@@ -131,16 +131,21 @@ packages/e2e/
     │   ├── github-app-fixture.ts# M4: GitHub App key + installation token fixture
     │   └── agent-mock.ts        # M4: stand-in for the agent runtime side
     ├── tests/
-    │   ├── smoke.e2e.test.ts                # /healthz + /api/v1/health
-    │   ├── messaging.e2e.test.ts            # chat-send + replyTo over HTTP
-    │   ├── github-webhook.e2e.test.ts       # inbound webhook → PG side-effects
-    │   ├── github-pr-delivery.e2e.test.ts   # PR event → chat + mapping
-    │   ├── ws-inbox-push.e2e.test.ts        # PG NOTIFY → inbox:deliver WS frame
-    │   ├── agent-runtime.e2e.test.ts        # client spawn → agent bind smoke
-    │   ├── agent-lifecycle.e2e.test.ts      # POST → PATCH → suspend → reactivate → DELETE
-    │   ├── client-claim.e2e.test.ts         # POST /clients/:id/claim transfers ownership + unpins agents
-    │   ├── inbox-pull-resume.e2e.test.ts    # at-least-once redelivery on WS reconnect
-    │   └── cli-chat-send.e2e.test.ts        # spawn dist CLI `chat send …` and verify the message lands
+    │   ├── smoke.e2e.test.ts                       # /healthz + /api/v1/health
+    │   ├── messaging.e2e.test.ts                   # chat-send + replyTo over HTTP
+    │   ├── github-webhook.e2e.test.ts              # inbound webhook → PG side-effects
+    │   ├── github-pr-delivery.e2e.test.ts          # PR opened/synchronize → chat + mapping
+    │   ├── github-pr-secondary-events.e2e.test.ts  # issue_comment / review / review_comment → bound chat reuse
+    │   ├── ws-inbox-push.e2e.test.ts               # PG NOTIFY → inbox:deliver WS frame
+    │   ├── group-chat-fanout.e2e.test.ts           # one chat-send → one inbox_entries row + frame per non-sender
+    │   ├── agent-runtime.e2e.test.ts               # client spawn → agent bind smoke
+    │   ├── agent-lifecycle.e2e.test.ts             # POST → PATCH → suspend → reactivate → DELETE
+    │   ├── session-control.e2e.test.ts             # server → client session:suspend / session:terminate WS push
+    │   ├── heartbeat-stale.e2e.test.ts             # heartbeat + runtime:state + 30s background tick stale-detection
+    │   ├── client-claim.e2e.test.ts                # POST /clients/:id/claim transfers ownership + unpins agents
+    │   ├── inbox-pull-resume.e2e.test.ts           # at-least-once redelivery on WS reconnect
+    │   ├── pr-url-binding-from-stdout.e2e.test.ts  # session:event tool_call → github_entity_chat_mappings agent_created
+    │   └── cli-chat-send.e2e.test.ts               # spawn dist CLI `chat send …` and verify the message lands
     ├── mocks/
     │   └── fake-claude-code.mjs # offline replacement for @anthropic-ai/claude-agent-sdk
     └── scripts/

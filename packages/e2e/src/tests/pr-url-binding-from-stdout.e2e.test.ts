@@ -121,6 +121,23 @@ async function readMapping(): Promise<{
   return res.rows[0] ?? null;
 }
 
+async function readMaxSeq(): Promise<number> {
+  const res = await pg.query<{ max_seq: number | null }>(
+    "SELECT MAX(seq)::int AS max_seq FROM session_events WHERE agent_id = $1 AND chat_id = $2",
+    [reporterAgentId, chatId],
+  );
+  return res.rows[0]?.max_seq ?? 0;
+}
+
+async function readMappingCount(): Promise<number> {
+  const res = await pg.query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n FROM github_entity_chat_mappings
+     WHERE chat_id = $1 AND entity_type = 'pull_request' AND entity_key = $2`,
+    [chatId, ENTITY_KEY],
+  );
+  return Number(res.rows[0]?.n ?? "0");
+}
+
 describe("PR URL binding from tool_call stdout — Phase-1 agent-created mapping", () => {
   it("a successful `gh pr create` tool_call event writes a github_entity_chat_mappings row with bound_via='agent_created'", async () => {
     const creds = readCredentialsOrThrow(handle);
@@ -177,6 +194,16 @@ describe("PR URL binding from tool_call stdout — Phase-1 agent-created mapping
   });
 
   it("re-emitting the same tool_call doesn't duplicate the mapping (idempotency)", async () => {
+    // High-water mark on the events table: the second `session:event` is
+    // persisted strictly *before* `maybeBindGithubEntityFromToolCall`
+    // returns (the bind runs inside `appendEvent` itself — see
+    // services/session-event.ts:102-106 — fire-and-forget in the JS-
+    // promise sense but scheduled in the same tick as the INSERT). So
+    // by the time `seq` has grown on a fresh PG round-trip, the bind's
+    // ON-CONFLICT-DO-NOTHING attempt has already landed.
+    const seqBefore = await readMaxSeq();
+    expect(seqBefore).toBeGreaterThan(0);
+
     listener.send({
       type: "session:event",
       agentId: reporterAgentId,
@@ -193,15 +220,16 @@ describe("PR URL binding from tool_call stdout — Phase-1 agent-created mapping
       },
     });
 
-    // Let the side-effect run; mapping count must stay at 1. The unique
-    // constraint backing `insertMappingIfAbsent` (ON CONFLICT DO NOTHING)
-    // is the contract being asserted.
-    await new Promise<void>((r) => setTimeout(r, 750));
-    const count = await pg.query<{ n: string }>(
-      `SELECT COUNT(*)::text AS n FROM github_entity_chat_mappings
-       WHERE chat_id = $1 AND entity_type = 'pull_request' AND entity_key = $2`,
-      [chatId, ENTITY_KEY],
-    );
-    expect(Number(count.rows[0]?.n ?? "0")).toBe(1);
+    const deadline = Date.now() + 3_000;
+    let seqAfter = seqBefore;
+    while (Date.now() < deadline && seqAfter === seqBefore) {
+      await new Promise<void>((r) => setTimeout(r, 50));
+      seqAfter = await readMaxSeq();
+    }
+    expect(seqAfter).toBeGreaterThan(seqBefore);
+
+    // Count must stay at 1 — the unique constraint backing
+    // `insertMappingIfAbsent` (ON CONFLICT DO NOTHING) is the contract.
+    expect(await readMappingCount()).toBe(1);
   });
 });
