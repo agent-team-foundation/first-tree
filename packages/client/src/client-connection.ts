@@ -38,6 +38,19 @@ export type ClientConnectionConfig = {
    * HTTP traffic so trace backends can identify the install. See SdkConfig.userAgent.
    */
   userAgent?: string;
+  /**
+   * Override the heartbeat tick interval (default 30s). Lower values are
+   * primarily useful in tests that need to exercise the silence watchdog or
+   * proactive-refresh paths in sub-second budgets.
+   */
+  heartbeatIntervalMs?: number;
+  /**
+   * Override the silence watchdog timeout (default 90s — ~3 heartbeat ticks).
+   * Surfaces wedged sockets (OS-suspend resume, silent network drops) that
+   * leave readyState=OPEN but no bytes flowing. Test-friendly hook; the
+   * production default already handles real-world drops fine.
+   */
+  heartbeatTimeoutMs?: number;
 };
 
 export type BoundAgent = {
@@ -144,6 +157,15 @@ const RECONNECT_MAX_MS = 30_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 /**
+ * Silence watchdog: if no server frame (data message OR control-frame pong)
+ * arrives within this many ms, the socket is presumed dead and terminated so
+ * the close handler can drive a reconnect. Sized to ~3 heartbeat ticks so a
+ * single missed pong is tolerated, but a wedged socket (e.g. after the OS
+ * resumes from suspend with a half-open TCP connection) is broken within one
+ * minute of the next heartbeat tick.
+ */
+const HEARTBEAT_TIMEOUT_MS = 90_000;
+/**
  * Unified-user-token C5: reconnect PROACTIVELY this many ms before the JWT's
  * `exp` claim so the client rotates to a fresh JWT without ever hitting the
  * server-side `auth:expired` push. The provider's next `getAccessToken()` call
@@ -151,6 +173,29 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
  * `credentials.json` and the web app uses its refresh-on-401 loop.
  */
 const AUTH_REFRESH_LEAD_MS = 60_000;
+
+/**
+ * Sleep for `ms`, resolving early if the abort signal fires. Used by
+ * {@link ClientConnection.connect} so a `disconnect()` during the initial-
+ * connect backoff doesn't block for the full retry interval.
+ */
+function waitWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /** Decode a JWT payload without verifying. Returns null if malformed. */
 function decodeJwtExp(token: string): number | null {
@@ -186,6 +231,8 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private readonly sdkVersion: string | undefined;
   private readonly userAgent: string | undefined;
   private readonly getAccessToken: AccessTokenProvider;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
 
   private ws: WebSocket | null = null;
   private wsConnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -194,6 +241,22 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   /** Fires ~60s before JWT exp so we reconnect with a fresh token first. */
   private authRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  /**
+   * Monotonic timestamp of the last frame received from the server (data
+   * message OR pong control frame). Consulted by the heartbeat tick to
+   * detect a half-open socket (no FIN/RST yet, readyState still OPEN) so we
+   * can `terminate()` it and let the close handler reconnect. Required
+   * because nothing else surfaces "socket alive but peer gone" in time —
+   * Linux's default TCP keep-alive only probes after ~2h of idle.
+   */
+  private lastServerMessageAt = 0;
+  /**
+   * AbortController consumed by {@link connect}'s backoff sleep so a caller
+   * that runs {@link disconnect} while the initial-connect loop is between
+   * attempts isn't blocked for up to RECONNECT_MAX_MS waiting for the next
+   * tick to notice `closing`.
+   */
+  private connectAbort: AbortController | null = null;
   /**
    * If the most recent refresh attempt was rate-limited (HTTP 429), the
    * server-suggested wait in ms — consumed by the next `scheduleReconnect`
@@ -250,6 +313,8 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.sdkVersion = config.sdkVersion;
     this.userAgent = config.userAgent;
     this.getAccessToken = config.getAccessToken;
+    this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+    this.heartbeatTimeoutMs = config.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
     this.wsLogger = createLogger("ws").child({ clientId: this.clientId });
     this.authLogger = createLogger("auth").child({ clientId: this.clientId });
 
@@ -287,9 +352,41 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "inbox:ack", entryId }));
   }
 
+  /**
+   * Bring up the socket, retrying transient handshake failures with the same
+   * exponential schedule as {@link scheduleReconnect}. Resolves once the
+   * server has acknowledged `client:register`; rejects only when something
+   * unrecoverable has flipped `closing` (auth:fatal, register:rejected for
+   * user/org mismatch). Without this loop, a temporary DNS hiccup at startup
+   * propagated up to `client-runtime.start` and exited the process — which
+   * leaned on systemd's restart to recover instead of the in-process backoff
+   * the live reconnect path already uses.
+   */
   async connect(): Promise<void> {
     this.closing = false;
-    await this.openWebSocket();
+    this.connectAbort = new AbortController();
+    let attempt = 0;
+    try {
+      while (true) {
+        try {
+          await this.openWebSocket();
+          return;
+        } catch (err) {
+          if (this.closing) throw err;
+          attempt++;
+          const delayMs = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
+          this.wsLogger.warn(
+            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+            "initial connect failed, will retry",
+          );
+          this.emit("error", err instanceof Error ? err : new Error(String(err)));
+          await waitWithAbort(delayMs, this.connectAbort.signal);
+          if (this.closing) throw err;
+        }
+      }
+    } finally {
+      this.connectAbort = null;
+    }
   }
 
   /**
@@ -336,12 +433,21 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   async disconnect(): Promise<void> {
     this.closing = true;
+    this.connectAbort?.abort();
     this.clearTimers();
     this.rejectAllPendingBinds("Client disconnected");
     if (this.ws) {
       this.ws.removeAllListeners();
       if (this.ws.readyState === WebSocket.OPEN) {
         this.ws.close(1000, "Client disconnect");
+      } else if (this.ws.readyState === WebSocket.CONNECTING) {
+        // CONNECTING socket would otherwise sit on the kernel TCP timeout
+        // (~1–2 min) before resolving. With the new connect() retry loop the
+        // odds of disconnect racing an in-flight handshake go from "rare"
+        // (old behaviour: connect failure threw immediately) to "every shut-
+        // down during backoff is one tick away from this case", so reach for
+        // terminate to abort the handshake right now.
+        this.ws.terminate();
       }
       this.ws = null;
     }
@@ -461,12 +567,22 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       });
 
       ws.on("message", (data) => {
+        // Any inbound frame proves the peer is alive — refresh the silence
+        // watchdog before parsing so malformed frames still count.
+        this.lastServerMessageAt = Date.now();
         try {
           const msg = JSON.parse(data.toString()) as Record<string, unknown>;
           this.handleMessage(msg, () => settle(resolve));
         } catch {
           // ignore malformed messages
         }
+      });
+
+      // RFC 6455 pong: the ws library auto-replies to peer pings, but we also
+      // send our own pings from the heartbeat tick — those round-trips are
+      // what surface a wedged socket within HEARTBEAT_TIMEOUT_MS.
+      ws.on("pong", () => {
+        this.lastServerMessageAt = Date.now();
       });
 
       ws.on("close", (code) => {
@@ -548,7 +664,18 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.authLogger.info("token expired, reconnecting with fresh token");
         this.emit("auth:expired");
       } else {
+        // auth:rejected means the token itself was refused — retrying with
+        // the same token would just thrash. Mark closing so neither the
+        // close-handler reconnect path nor the initial-connect retry loop
+        // tries again, and reuse the auth:fatal channel so the consumer
+        // surfaces the same recovery prompt (re-run `connect <token>`) +
+        // `process.exit(75)` it already runs for AuthRefreshFailedError.
+        // Without the emit, both runtime and initial-handshake paths would
+        // die silently — process stays up, no recovery message, agents
+        // wedged.
         this.authLogger.warn("auth rejected by server");
+        this.closing = true;
+        this.emit("auth:fatal", new Error("Server rejected access token (auth:rejected)"));
       }
       this.ws?.close(4401, type);
       return;
@@ -799,11 +926,47 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
+    // Seed the watchdog so the first tick doesn't immediately trip on a fresh
+    // socket that has only seen the welcome frame.
+    this.lastServerMessageAt = Date.now();
     this.heartbeatTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: "heartbeat" }));
+      const ws = this.ws;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+      // Silence watchdog: if neither a data frame nor a pong has come back
+      // within HEARTBEAT_TIMEOUT_MS, the TCP half is presumably dead (this
+      // is exactly the OS-suspend / NAT-rebind / silent-router-drop shape
+      // where readyState stays OPEN but bytes never arrive). Force a close
+      // so the existing handler reschedules a reconnect — sending another
+      // heartbeat on a wedged socket would just queue bytes nobody reads.
+      const silenceMs = Date.now() - this.lastServerMessageAt;
+      if (silenceMs > this.heartbeatTimeoutMs) {
+        this.wsLogger.warn(
+          { silenceMs, timeoutMs: this.heartbeatTimeoutMs },
+          "no server activity within heartbeat timeout — terminating socket to force reconnect",
+        );
+        ws.terminate();
+        return;
       }
-    }, HEARTBEAT_INTERVAL_MS);
+
+      // Application-level heartbeat keeps server-side presence /
+      // last-seen counters fresh (clientService.heartbeatClient,
+      // presenceService.touchAgent). RFC 6455 ping is what the watchdog
+      // actually relies on — the ws library on the server side
+      // auto-replies with a pong, giving us a transport-level liveness
+      // check independent of any application handler. Both are wrapped:
+      // a send() race against readyState (e.g. the socket transitioned to
+      // CLOSING between the guard and the call) would otherwise propagate
+      // out of the interval callback as an unhandled exception. The
+      // silence watchdog above is the source of truth — losing a single
+      // send is fine.
+      try {
+        ws.send(JSON.stringify({ type: "heartbeat" }));
+        ws.ping();
+      } catch {
+        // ignore — the silence watchdog above is the source of truth
+      }
+    }, this.heartbeatIntervalMs);
   }
 
   private stopHeartbeat(): void {
