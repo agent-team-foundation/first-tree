@@ -184,6 +184,7 @@ export function registerChatCommands(program: Command): void {
           format: options.format,
           content: `@${agentName} ${content}`,
           metadata,
+          source: "cli",
           // Server resolves the name against the current chat's participant
           // list and adds it to mentions; an unknown name fails the write
           // with a `chat invite` hint.

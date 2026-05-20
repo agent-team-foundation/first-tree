@@ -24,6 +24,7 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     // predictive activation only fires for notify=true rows, so the message
     // must @ the recipient to count as an active fan-out target.
     await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: "hi",
       metadata: { mentions: [a2.uuid] },
@@ -45,6 +46,7 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
 
     // mention_only direct (migration 0029): @ to wake + revive.
     await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: "ping",
       metadata: { mentions: [a2.uuid] },
@@ -74,6 +76,7 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     });
 
     await sendMessage(app.db, chat.id, sender.uuid, {
+      source: "api",
       format: "text",
       content: `team! @${r1Name} @${r2Name}`,
     });
@@ -84,26 +87,37 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     expect(await readSessionState(app, sender.uuid, chat.id)).toBeNull();
   });
 
-  it("silent context (mention_only without mention) does NOT create an active session", async () => {
-    // Phase 1: non-human agents in a group are seeded `mention_only`
-    // automatically — no UPDATE needed. We keep one human peer as the
-    // `full` control (humans in groups stay `full` by design), so the
-    // assertion still differentiates "wakes on every message" (full)
-    // from "silent unless mentioned" (mention_only).
+  it("silent context (3+ speaker group, no mention) → no active session for non-mentioned peers", async () => {
+    // v2: `chat_membership.mode` is decision-inert. A group send with no
+    // explicit `@mention` / `receiverNames` / `addressedToAgentIds` produces
+    // zero `notify=true` fan-out rows (the 1:1 implicit wake does not apply
+    // — `participants.length > 2`), so no peer's session is activated.
+    // Only an explicitly mentioned peer flips to `active`.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
+    const r1Name = `s-r1-${uid}`;
     const { agent: sender } = await createTestAgent(app, { name: `s-snd-${uid}`, type: "human" });
-    const { agent: full } = await createTestAgent(app, { name: `s-full-${uid}`, type: "human" });
+    const { agent: mentioned } = await createTestAgent(app, { name: r1Name });
     const { agent: silent } = await createTestAgent(app, { name: `s-mo-${uid}` });
 
     const chat = await createChat(app.db, sender.uuid, {
       type: "group",
-      participantIds: [full.uuid, silent.uuid],
+      participantIds: [mentioned.uuid, silent.uuid],
     });
 
-    await sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: "hello team" });
+    // No @, no metadata.mentions → nobody wakes (silent fan-out).
+    await sendMessage(app.db, chat.id, sender.uuid, { source: "web", format: "text", content: "hello team" });
+    expect(await readSessionState(app, mentioned.uuid, chat.id)).toBeNull();
+    expect(await readSessionState(app, silent.uuid, chat.id)).toBeNull();
 
-    expect(await readSessionState(app, full.uuid, chat.id)).toBe("active");
+    // Now explicitly mention `mentioned` → only that peer wakes.
+    await sendMessage(app.db, chat.id, sender.uuid, {
+      source: "web",
+      format: "text",
+      content: `please look @${r1Name}`,
+      metadata: { mentions: [mentioned.uuid] },
+    });
+    expect(await readSessionState(app, mentioned.uuid, chat.id)).toBe("active");
     expect(await readSessionState(app, silent.uuid, chat.id)).toBeNull();
   });
 });

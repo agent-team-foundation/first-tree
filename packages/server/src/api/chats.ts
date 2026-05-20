@@ -32,6 +32,7 @@ import {
   setChatEngagement,
 } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
+import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { submitAnswer } from "../services/questions.js";
 import { extractSummary } from "../services/session.js";
@@ -52,11 +53,15 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     // discovery — we deliberately do **not** apply
     // `agentVisibilityCondition` here. See
     // `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
+    // v2: chat_membership.mode is decision-inert; we no longer SELECT it.
+    // The wire `mode` field is projected from `WIRE_RECIPIENT_MODE` below
+    // so already-deployed admin web clients see a stable constant. Drop
+    // together with the wire field in v3 (proposals/hub-chat-message-v2-
+    // simplify-mode.20260520.md §七).
     const participants = await app.db
       .select({
         agentId: chatMembership.agentId,
         role: chatMembership.role,
-        mode: chatMembership.mode,
         joinedAt: chatMembership.joinedAt,
         name: agents.name,
         displayName: agents.displayName,
@@ -115,7 +120,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       participants: participants.map((p) => ({
         agentId: p.agentId,
         role: p.role,
-        mode: p.mode,
+        mode: WIRE_RECIPIENT_MODE,
         name: p.name,
         displayName: p.displayName,
         type: p.type,
@@ -279,7 +284,8 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       participants: participants.map((p) => ({
         agentId: p.agentId,
         role: p.role,
-        mode: p.mode,
+        // v2: wire `mode` field is decision-inert. Project the constant.
+        mode: WIRE_RECIPIENT_MODE,
         joinedAt: p.joinedAt.toISOString(),
       })),
     });
@@ -293,7 +299,8 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       participants: participants.map((p) => ({
         agentId: p.agentId,
         role: p.role,
-        mode: p.mode,
+        // v2: wire `mode` field is decision-inert. Project the constant.
+        mode: WIRE_RECIPIENT_MODE,
         joinedAt: p.joinedAt.toISOString(),
       })),
     });
@@ -308,7 +315,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
     const prepared = await prepareImageOutbound(app.db, app.notifier, request.params.chatId, {
       ...body,
-      source: "hub_ui",
+      source: "web",
     });
 
     const result = await sendMessage(app.db, request.params.chatId, scope.humanAgentId, prepared, {

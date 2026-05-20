@@ -35,12 +35,18 @@ export const messages = pgTable(
     replyToChat: text("reply_to_chat"),
     /** Original message ID; threads replies in the same chat. */
     inReplyTo: text("in_reply_to"),
-    /** Entry point that created this message: hub_ui / cli / feishu / github / api */
-    source: text("source"),
+    /**
+     * Entry point that created this message: web / cli / feishu / github / api.
+     * NOT NULL after migration 0047 — every write path declares its
+     * caller-stack origin so observability / loop / egress diagnostics can
+     * group on it without a backfilling join.
+     */
+    source: text("source").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index("idx_messages_chat_time").on(table.chatId, table.createdAt),
     index("idx_messages_in_reply_to").on(table.inReplyTo),
+    index("idx_messages_chat_source_time").on(table.chatId, table.source, table.createdAt.desc()),
   ],
 );

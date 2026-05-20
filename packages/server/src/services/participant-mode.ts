@@ -5,46 +5,42 @@
  * (access_mode = 'speaker') into `chat_membership`.** Do not call
  * `tx.insert(chatMembership)` with `accessMode: 'speaker'` from anywhere
  * else. The original bug (docs/chat-participant-mode-fix-design.md §1.1)
- * was caused by mode-derivation logic scattered across ten insert sites,
- * several of which violated `group + non-human ⇒ mention_only`.
- * Re-introducing a second writer reopens that hole — please don't.
+ * was caused by mode-derivation logic scattered across ten insert sites;
+ * keeping a single writer remains the right shape even after v2 retired
+ * the `mode` field from the decision path — a future per-receiver wake
+ * policy will land here too.
  *
  * Watcher rows (access_mode = 'watcher') are written from
  * `services/watcher.ts::recomputeChatWatchers` via raw SQL; they don't
- * go through this service because the mode rule is `full` by construction
- * for watchers (they receive but don't fan out).
+ * go through this service because the historic mode rule was `full` by
+ * construction for watchers (they receive but don't fan out) and v2 made
+ * the column decision-inert anyway.
  *
- * Test fixtures under `src/__tests__/` that deliberately seed pathological
- * rows (e.g. cross-org pollution tests) may bypass this rule; they are
- * setting up "what bad data looks like" rather than exercising the
- * production write path.
+ * All callers that need to add a participant — `createChat`,
+ * `addParticipant`, `ensureParticipant`, `joinChat`, `createMeChat`,
+ * `addMeChatParticipants`, `findOrCreateChatForChannel`,
+ * `joinAsParticipant`, … — go through `addChatParticipants`.
  *
- * All callers that need to add a participant — `createChat`, `addParticipant`,
- * `ensureParticipant`, `joinChat`, `createMeChat`, `addMeChatParticipants`,
- * `findOrCreateChatForChannel`, `joinAsParticipant`, … — go through
- * `addChatParticipants`. The function performs ONE round-trip to read
- * `chats.type` + every involved `agents.type`, runs each row through
- * `defaultParticipantMode`, and inserts the result. `agents.type` is parsed
- * through the shared `agentTypeSchema` so schema drift surfaces loudly
- * instead of silently coercing to a default.
+ * v2 change (proposals/hub-chat-message-v2-simplify-mode.20260520.md):
  *
- * `changeChatType` complements it on the type-flip path: when a `direct`
- * chat is being upgraded to `group` by the very next participant insert, the
- * existing non-human speakers must be re-graded to `mention_only`. Callers
- * that trigger an upgrade are expected to invoke `changeChatType` BEFORE
- * `addChatParticipants`, inside the same transaction, so the new row picks
- * up the post-upgrade `chats.type` and existing rows get re-graded together.
+ *   - `chat_membership.mode` is **decision-inert**. fan-out / enforcement
+ *     / dispatcher no longer read it. The historical `defaultParticipantMode`
+ *     derivation has been removed; every freshly-written speaker row gets
+ *     `mode = "mention_only"` as a constant. The column itself is retained
+ *     as schema scaffolding for a future per-receiver wake-policy
+ *     extension (e.g. per-recipient push notifications).
  *
- * Read state (`last_read_at` / `unread_mention_count`) is no longer carried
- * here: per the chat-data-model-restructure (proposal §8), it lives in a
+ *   - `chats.type` is locked to `'group'` since first-tree-context
+ *     PR #465; speaker-write code no longer reads it.
+ *
+ * Read state (`last_read_at` / `unread_mention_count`) lives in a
  * structurally separate `chat_user_state` table whose rows survive
  * access_mode transitions untouched. A watcher → speaker promotion just
- * UPDATEs `chat_membership.access_mode`; the `chat_user_state` row (if any)
- * is unaffected — no state-carry transaction needed.
+ * UPSERTs `chat_membership.access_mode`; the `chat_user_state` row (if
+ * any) is unaffected — no state-carry transaction needed.
  */
 
-import { agentTypeSchema, defaultParticipantMode } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -74,9 +70,9 @@ export type AddChatParticipantsOptions = {
   /**
    * When true, an existing watcher row for the (chat, agent) pair is
    * promoted in place via `ON CONFLICT DO UPDATE`: `access_mode` flips to
-   * `speaker` and `mode` is updated to the derived value. Used by
-   * watcher → speaker transitions (join paths) where we want a single
-   * atomic UPSERT rather than DELETE + INSERT (avoids an ephemeral
+   * `speaker` and `mode` is rewritten to the v2 constant `"mention_only"`.
+   * Used by watcher → speaker transitions (join paths) where we want a
+   * single atomic UPSERT rather than DELETE + INSERT (avoids an ephemeral
    * "no membership row" window that recomputeChatWatchers could observe).
    */
   upgradeWatcherToSpeaker?: boolean;
@@ -84,23 +80,18 @@ export type AddChatParticipantsOptions = {
    * When true, every passed agent must be `type === 'human'`. Used by
    * `joinChat` / `joinAsParticipant` whose contracts only admit a manager's
    * human agent — anything else is a programming error that should crash
-   * loudly rather than silently insert with the wrong mode.
+   * loudly rather than silently insert with the wrong access mode.
    */
   assertHuman?: boolean;
 };
 
 /**
- * Insert speaker rows whose `mode` is derived from `(chats.type, agents.type)`.
+ * Insert speaker rows.
  *
  * Reads:
- *   - `chats.type` for the target chat (NotFoundError on missing)
- *   - `agents.type` for every requested participant (BadRequestError on missing)
- *
- * Mode derivation:
- *   - for each row, `peerAgentTypes` is the type of every OTHER participant
- *     being inserted in the same call PLUS every EXISTING speaker of
- *     the chat. This matters only for `direct` chats; the helper ignores
- *     it for `group`.
+ *   - `chats.id` for the target chat (NotFoundError on missing).
+ *   - `agents.uuid` for every requested participant (BadRequestError on
+ *     missing). When `assertHuman` is set, also validates `agents.type`.
  *
  * Writes one INSERT (multi-row) per call.
  *
@@ -108,6 +99,10 @@ export type AddChatParticipantsOptions = {
  * different entrypoints have different surrounding work (watcher recompute,
  * audience invalidation). Keeping this module side-effect-free makes it
  * testable from any tx context.
+ *
+ * v2: `chat_membership.mode` is written as the constant `"mention_only"`.
+ * No chat-type / agent-type / peer-shape derivation. See file-level
+ * comment + proposals/hub-chat-message-v2-simplify-mode.20260520.md.
  */
 export async function addChatParticipants(
   tx: DbLike,
@@ -117,14 +112,11 @@ export async function addChatParticipants(
 ): Promise<void> {
   if (participants.length === 0) return;
 
-  const [chat] = await tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1);
+  // Confirm the chat exists. We no longer SELECT `chats.type` — it's locked
+  // to 'group' and never read for membership decisions.
+  const [chat] = await tx.select({ id: chats.id }).from(chats).where(eq(chats.id, chatId)).limit(1);
   if (!chat) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
-  }
-  // `chats.type` is `text` in the DB; narrow it to the discriminated
-  // `ChatType` we accept. Any unknown value is a programming error.
-  if (chat.type !== "direct" && chat.type !== "group") {
-    throw new Error(`Unexpected chat type "${chat.type}" for chat "${chatId}"`);
   }
 
   const agentIds = participants.map((p) => p.agentId);
@@ -132,11 +124,8 @@ export async function addChatParticipants(
     .select({ uuid: agents.uuid, type: agents.type })
     .from(agents)
     .where(inArray(agents.uuid, agentIds));
-  const agentTypeById = new Map<string, string>();
-  for (const row of agentRows) {
-    agentTypeById.set(row.uuid, row.type);
-  }
-  const missing = agentIds.filter((id) => !agentTypeById.has(id));
+  const agentSet = new Set(agentRows.map((r) => r.uuid));
+  const missing = agentIds.filter((id) => !agentSet.has(id));
   if (missing.length > 0) {
     throw new BadRequestError(`Agents not found: ${missing.join(", ")}`);
   }
@@ -150,67 +139,27 @@ export async function addChatParticipants(
     }
   }
 
-  // The mode rule still depends on membership shape — Hub no longer writes
-  // `type='direct'` rows (see first-tree-context PR #281), so we derive
-  // the effective chat type from the post-insert speaker count instead of
-  // trusting `chats.type`:
-  //
-  //   - two-speaker chat (1-on-1)  → "direct" branch of defaultParticipantMode
-  //     (mode depends on whether the peers are agent-only)
-  //   - three+ speakers (group)    → "group" branch (non-humans get mention_only)
-  //
-  // Legacy `type='direct'` rows continue to behave correctly because their
-  // membership shape is two speakers by construction.
-  const existingAgentTypes = await loadExistingAgentTypes(tx, chatId, new Set(agentIds));
-  const totalSpeakerCount = existingAgentTypes.length + participants.length;
-  const effectiveChatType = totalSpeakerCount <= 2 ? "direct" : "group";
-
-  const rows = participants.map((spec) => {
-    const rawAgentType = agentTypeById.get(spec.agentId);
-    // `rawAgentType` is guaranteed defined here — we threw above if missing.
-    // Map.get widens to `string | undefined`, so guard explicitly rather
-    // than non-null assert.
-    if (rawAgentType === undefined) {
-      throw new Error("Unexpected: agent type lookup unset after presence check");
-    }
-    // Run the value through the shared Zod enum so any schema drift (a
-    // newly added `agents.type` not yet reflected in the helper's accepted
-    // set) crashes loudly here instead of silently coercing to a default
-    // and producing the wrong `mode`. The parse cost is negligible —
-    // single-row enum check, no allocation beyond the throw path.
-    const agentType = agentTypeSchema.parse(rawAgentType);
-    const peerTypesForRow =
-      effectiveChatType === "direct"
-        ? [
-            ...existingAgentTypes,
-            ...participants
-              .filter((p) => p.agentId !== spec.agentId)
-              .map((p) => agentTypeById.get(p.agentId))
-              .filter((t): t is string => t !== undefined),
-          ].map((t) => agentTypeSchema.parse(t))
-        : [];
-    return {
-      chatId,
-      agentId: spec.agentId,
-      role: spec.role ?? ("member" as const),
-      accessMode: "speaker" as const,
-      mode: defaultParticipantMode(effectiveChatType, agentType, peerTypesForRow),
-      source: "manual" as const,
-    };
-  });
+  const rows = participants.map((spec) => ({
+    chatId,
+    agentId: spec.agentId,
+    role: spec.role ?? ("member" as const),
+    accessMode: "speaker" as const,
+    mode: "mention_only" as const,
+    source: "manual" as const,
+  }));
 
   const insert = tx.insert(chatMembership).values(rows);
   if (options.upgradeWatcherToSpeaker) {
     // Promote watcher → speaker in place: chat_user_state row (if any) is
     // structurally separate so the user's read state survives untouched.
-    // Note: per-row `mode` is captured from the INSERT VALUES list so the
-    // derived mode flows through correctly. `excluded` references the
-    // would-have-been-inserted row from the VALUES clause.
+    // `excluded.<col>` would reach back into the INSERT VALUES row; with
+    // the constant `mode='mention_only'` there's nothing dynamic to carry
+    // and we can spell the literal directly.
     await insert.onConflictDoUpdate({
       target: [chatMembership.chatId, chatMembership.agentId],
       set: {
         accessMode: "speaker",
-        mode: sqlExcluded("mode"),
+        mode: "mention_only",
         source: "manual",
       },
     });
@@ -219,125 +168,4 @@ export async function addChatParticipants(
   } else {
     await insert;
   }
-
-  // If this insert pushed the chat across the size=2 boundary, the existing
-  // speakers were seeded under the derived "direct" branch and may now hold
-  // `mode='full'` (the 1-on-1 human+agent shape). Force every non-human
-  // speaker to `mention_only` so the new group shape behaves identically to
-  // a chat that was born as size>=3.
-  if (existingAgentTypes.length <= 2 && totalSpeakerCount >= 3) {
-    await regradeNonHumansToMentionOnly(tx, chatId);
-  }
-}
-
-/**
- * Drizzle helper: reference `excluded.<col>` in an UPSERT's UPDATE clause.
- * Returned as untyped SQL because Drizzle's type system doesn't model the
- * `excluded` pseudo-row, and we only use it for two simple text columns
- * here. Centralised so callers don't have to import `sql` just for this.
- */
-function sqlExcluded(column: string) {
-  return sql.raw(`excluded.${column}`);
-}
-
-async function loadExistingAgentTypes(tx: DbLike, chatId: string, excludeAgentIds: Set<string>): Promise<string[]> {
-  const rows = await tx
-    .select({ type: agents.type, agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-  return rows.filter((r) => !excludeAgentIds.has(r.agentId)).map((r) => r.type);
-}
-
-/**
- * Force every existing non-human speaker in `chatId` to `mode='mention_only'`.
- * Used by `addChatParticipants` when an insert pushes the chat past the
- * size=2 (1-on-1) boundary: prior rows were seeded under the derived
- * "direct" branch (where a human peer kept them at `full`), but the new
- * shape is a real group and every non-human must drop back to
- * `mention_only`. Mirrors the re-grade `changeChatType` performs for
- * legacy `direct → group` upgrades; the two stay in lockstep so a chat
- * that crosses the threshold once leaves no row in a stale `full` mode.
- *
- * Idempotent — running it on a chat whose non-humans are already
- * `mention_only` is a no-op write.
- */
-async function regradeNonHumansToMentionOnly(tx: DbLike, chatId: string): Promise<void> {
-  const nonHumans = await tx
-    .select({ agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"), ne(agents.type, "human")));
-  const ids = nonHumans.map((r) => r.agentId);
-  if (ids.length === 0) return;
-  await tx
-    .update(chatMembership)
-    .set({ mode: "mention_only" })
-    .where(
-      and(
-        eq(chatMembership.chatId, chatId),
-        inArray(chatMembership.agentId, ids),
-        eq(chatMembership.accessMode, "speaker"),
-      ),
-    );
-}
-
-/**
- * Upgrade `chats.type` from `direct` → `group` AND re-grade every existing
- * non-human speaker to `mention_only`. Idempotent: if `chat.type` is
- * already `group` (or any non-`direct` value), no-op.
- *
- * Callers that are about to insert a 3rd speaker on a `direct` chat
- * invoke this BEFORE `addChatParticipants` so the new row picks up the
- * post-upgrade `chats.type` and the existing rows are re-graded in the
- * same transaction.
- *
- * Re-grade is gated on `access_mode = 'speaker'` — watcher rows already
- * have `mode = 'full'` by construction (recompute writes that literal)
- * and don't participate in fan-out, so they need no touching.
- */
-export async function changeChatType(tx: DbLike, chatId: string, newType: "group"): Promise<void> {
-  const [chat] = await tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1);
-  if (!chat) {
-    throw new NotFoundError(`Chat "${chatId}" not found`);
-  }
-  if (chat.type === newType) return;
-  if (newType === "group" && chat.type !== "direct") {
-    // Only `direct → group` is allowed in Phase 1. `group → direct` is
-    // ill-defined.
-    throw new BadRequestError(`Cannot change chat type from "${chat.type}" to "${newType}"`);
-  }
-
-  await tx.update(chats).set({ type: newType, updatedAt: new Date() }).where(eq(chats.id, chatId));
-
-  // Re-grade existing non-human speakers to `mention_only` — the
-  // post-upgrade group rule. Humans stay `full`. The new participant that
-  // triggered the upgrade is inserted separately by `addChatParticipants`.
-  const nonHumans = await tx
-    .select({ agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"), ne(agents.type, "human")));
-  const ids = nonHumans.map((r) => r.agentId);
-  if (ids.length === 0) return;
-  await tx
-    .update(chatMembership)
-    .set({ mode: "mention_only" })
-    .where(
-      and(
-        eq(chatMembership.chatId, chatId),
-        inArray(chatMembership.agentId, ids),
-        eq(chatMembership.accessMode, "speaker"),
-      ),
-    );
-}
-
-/**
- * Heuristic for whether an insert about to happen would push the chat past
- * the direct → group threshold. Pure helper so callers can decide whether
- * to call `changeChatType` before `addChatParticipants` without re-deriving
- * the rule locally.
- */
-export function wouldUpgradeToGroup(currentSpeakerCount: number, newSpeakerCount: number): boolean {
-  return currentSpeakerCount + newSpeakerCount >= 3;
 }

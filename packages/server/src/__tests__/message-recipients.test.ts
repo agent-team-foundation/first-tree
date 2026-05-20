@@ -20,6 +20,7 @@ describe("sendMessage returns recipients", () => {
     // recipient is only included when explicitly @-mentioned. Pass the
     // mention so this stays a recipient-shape test rather than a mode test.
     const result = await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: "hello",
       metadata: { mentions: [a2.uuid] },
@@ -41,6 +42,7 @@ describe("sendMessage returns recipients", () => {
     });
 
     const result = await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: "talking to myself",
     });
@@ -69,6 +71,7 @@ describe("sendMessage returns recipients", () => {
     });
 
     const result = await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: `group msg @${name2} @${name3}`,
     });

@@ -47,6 +47,7 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
       participantIds: [peer.agent.uuid],
     });
     await sendMessage(app.db, chat.id, owner.agent.uuid, {
+      source: "api",
       format: "text",
       content: "Let's coordinate the design review tomorrow",
     });

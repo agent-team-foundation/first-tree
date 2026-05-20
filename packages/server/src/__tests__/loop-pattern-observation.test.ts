@@ -67,6 +67,7 @@ describe("L4 loop-pattern observation (services/message.ts)", () => {
         content: spec.content,
         metadata: {},
         inReplyTo: previousId,
+        source: "api",
         createdAt: new Date(now - spec.ageMs),
       });
       ids.push(id);
@@ -231,6 +232,7 @@ describe("L4 loop-pattern observation (services/message.ts)", () => {
         content: ".",
         metadata: {},
         inReplyTo: null,
+        source: "api",
         createdAt: new Date(now - (4 - i) * 1000),
       });
     }
@@ -289,6 +291,7 @@ describe("L4 loop-pattern observation (services/message.ts)", () => {
     // 4th send through the real service — the post-tx observer will fire
     // (loop matches) but must NOT touch any fan-out state.
     const result = await sendMessage(app.db, chat.id, b.uuid, {
+      source: "api",
       format: "text",
       content: `@${a.agent.name} .`,
       metadata: { mentions: [a.agent.uuid] },

@@ -78,6 +78,7 @@ describe("recordPendingQuestionFromMessage — sendMessage write hook", () => {
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     const result = await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -99,6 +100,7 @@ describe("recordPendingQuestionFromMessage — sendMessage write hook", () => {
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await expect(
       sendMessage(app.db, chatId, peerAgent.uuid, {
+        source: "api",
         format: "question",
         content: buildQuestionContent(correlationId),
       }),
@@ -115,6 +117,7 @@ describe("recordPendingQuestionFromMessage — sendMessage write hook", () => {
 
     await expect(
       sendMessage(app.db, chatId, peerAgent.uuid, {
+        source: "api",
         format: "question",
         // missing `correlationId`
         content: { questions: [], previewFormat: null, allowFreeText: true },
@@ -132,6 +135,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     const questionMsg = await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -167,6 +171,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -207,6 +212,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -234,6 +240,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -279,6 +286,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -306,6 +314,7 @@ describe("supersede hooks", () => {
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -325,6 +334,7 @@ describe("supersede hooks", () => {
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -413,6 +423,7 @@ describe("submitAnswer — group chat with mention_only asker (#404)", () => {
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chat.id, asker.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -465,6 +476,7 @@ describe("submitAnswer — asker left chat between publish and answer (#416)", (
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -531,7 +543,7 @@ describe("sendMessage — addressedToAgentIds option", () => {
       app.db,
       chatId,
       admin.humanAgentUuid,
-      { format: "text", content: "" },
+      { source: "api", format: "text", content: "" },
       { addressedToAgentIds: [peerAgent.uuid] },
     );
 
@@ -574,7 +586,7 @@ describe("sendMessage — addressedToAgentIds option", () => {
       app.db,
       chatId,
       admin.humanAgentUuid,
-      { format: "text", content: "hello" },
+      { source: "api", format: "text", content: "hello" },
       { addressedToAgentIds: [outsider.uuid] },
     );
 

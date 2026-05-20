@@ -176,6 +176,7 @@ await sendMessage(app.db, chat.id, peer.uuid, {
     previewFormat: "html",
     allowFreeText: true,
   },
+  source: "api",
 });
 
 await app.close();

@@ -124,7 +124,7 @@ describe("chat-first workspace service layer", () => {
     });
 
     // peer sends a message into the chat
-    await sendMessage(app.db, chatId, peer.agent.uuid, { format: "text", content: "hello @managed" });
+    await sendMessage(app.db, chatId, peer.agent.uuid, { source: "api", format: "text", content: "hello @managed" });
 
     // admin's human agent (the watcher) must NOT have an inbox entry for this chat
     const inboxRows = await app.db.execute<{ count: number }>(sql`
@@ -159,7 +159,7 @@ describe("chat-first workspace service layer", () => {
       app.db,
       chatId,
       peer.agent.uuid,
-      { format: "text", content: `@${managed.name} Please review` },
+      { source: "api", format: "text", content: `@${managed.name} Please review` },
       { enforceGroupMention: false },
     );
 
@@ -202,6 +202,7 @@ describe("chat-first workspace service layer", () => {
       participantIds: [managed.uuid],
     });
     await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
       format: "text",
       content: `@${managed.name} hi`,
     });
@@ -357,6 +358,7 @@ describe("chat-first workspace service layer", () => {
     });
     // Bump the watcher's unread counter via a mention of the managed agent.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
       format: "text",
       content: `@${managed.name} ping`,
     });
@@ -548,6 +550,7 @@ describe("chat-first workspace service layer", () => {
     // speakers only, so admin is NOT in the candidate set — the resulting
     // message must NOT bump admin's `unread_mention_count`.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
       format: "text",
       content: `Hi @${admin.username}, please look`,
     });
@@ -578,7 +581,7 @@ describe("chat-first workspace service layer", () => {
     const c3 = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [peer.agent.uuid],
     });
-    await sendMessage(app.db, c1.chatId, admin.humanAgentUuid, { format: "text", content: "hi" });
+    await sendMessage(app.db, c1.chatId, admin.humanAgentUuid, { source: "api", format: "text", content: "hi" });
 
     // Page size 2: first page is [c1, one of c2/c3]; second page returns
     // exactly the missing one.
@@ -729,7 +732,7 @@ describe("chat-first workspace service layer", () => {
     });
     await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "archived");
 
-    await sendMessage(app.db, chatId, peer.agent.uuid, { format: "text", content: "ping" });
+    await sendMessage(app.db, chatId, peer.agent.uuid, { source: "api", format: "text", content: "ping" });
 
     const [row] = await app.db.execute<{ engagement_status: string }>(
       sql`SELECT engagement_status FROM chat_user_state
@@ -748,7 +751,7 @@ describe("chat-first workspace service layer", () => {
     });
     await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "deleted");
 
-    await sendMessage(app.db, chatId, peer.agent.uuid, { format: "text", content: "ping" });
+    await sendMessage(app.db, chatId, peer.agent.uuid, { source: "api", format: "text", content: "ping" });
 
     const [row] = await app.db.execute<{ engagement_status: string }>(
       sql`SELECT engagement_status FROM chat_user_state

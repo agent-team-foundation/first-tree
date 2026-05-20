@@ -488,6 +488,7 @@ async function processInboundMessage(
   const { message: msg, recipients } = await sendMessage(db, chatId, senderAgentId, {
     format: event.messageType === "text" ? "text" : "card",
     content: event.messageType === "text" ? content : event.content,
+    source: "feishu",
     metadata: {
       source: "feishu",
       externalMessageId: event.messageId,

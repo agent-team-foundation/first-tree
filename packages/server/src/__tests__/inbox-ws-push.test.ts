@@ -108,10 +108,11 @@ describe("inbox WS data-plane claim helpers", () => {
       .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, observer.uuid)));
 
     // Three silent messages, then a trigger that @mentions observer.
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "first silent" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "second silent" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "third silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "first silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "second silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "third silent" });
     const trigger = await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@wsp-si-obs-${uid} please weigh in`,
     });

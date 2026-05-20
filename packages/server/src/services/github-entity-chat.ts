@@ -231,9 +231,9 @@ async function insertMappingIfAbsent(
  * canonical `createChat` so:
  *   - cross-org participants are rejected (BadRequestError)
  *   - the new chat is written as `type='group'` (first-tree-context PR #281
- *     locked the single-group-chat model in; non-human speakers are seeded
- *     by membership shape — a two-speaker chat with all-agent peers picks
- *     up `mode=mention_only` via `defaultParticipantMode`)
+ *     locked the single-group-chat model in; v2 made `chat_membership.mode`
+ *     decision-inert — every speaker row is written as the constant
+ *     `'mention_only'` regardless of peer shape).
  *   - watcher rows are recomputed
  */
 async function createEntityChat(

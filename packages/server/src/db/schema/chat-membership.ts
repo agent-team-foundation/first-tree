@@ -27,6 +27,21 @@ export const chatMembership = pgTable(
     agentId: text("agent_id").notNull(),
     role: text("role").notNull().default("member"),
     accessMode: text("access_mode").notNull(),
+    /**
+     * **v2 dead code** — written as the constant `'mention_only'` by every
+     * speaker write path; never read by fan-out / enforcement / dispatcher.
+     * The column is retained as schema scaffolding for a future
+     * per-receiver wake-policy extension point (e.g. push notifications
+     * for mentioned humans, per-recipient silent flags).
+     *
+     * The DB default stays `'full'` so any future caller that bypasses
+     * `addChatParticipants` and inserts without setting `mode` still
+     * satisfies NOT NULL; the value chosen there is harmless because no
+     * code path reads it. Drop migration is deferred until the wire-protocol
+     * `recipientMode` field is removed (requires a coordinated server +
+     * client release). See
+     * proposals/hub-chat-message-v2-simplify-mode.20260520.md.
+     */
     mode: text("mode").notNull().default("full"),
     source: text("source").notNull().default("manual"),
     joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),

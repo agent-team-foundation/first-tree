@@ -52,6 +52,7 @@ describe("sendMessage — N4-B: predictive activation failure does not block the
     // mention_only direct (migration 0029): @ to keep notify=true so the
     // upsert call site is reached (otherwise the silent fan-out skips it).
     const result = await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: "should still arrive",
       metadata: { mentions: [a2.uuid] },
