@@ -63,8 +63,17 @@ export const contextTreeUsageEventPayload = z.object({
   // `members/Gandy2025/NODE.md`). Null when the read target could not be
   // resolved to a node path. Emitted only when a view tool reads a file under
   // the configured Context Tree root — see the client handler's tool-call
-  // processor. (Pre-P0 events lack this field; the server surfaces null then.)
-  nodePath: z.string().nullable(),
+  // processor.
+  //
+  // `.default(null)`: tolerate a pre-P0 client (≤0.14.8) that still emits the
+  // old `{ purpose, treeRepoUrl }` payload during a server-ahead-of-client
+  // deploy window. There is no client min-version gate, and the server's
+  // `appendEvent` strict-parses every inbound event (ws-client.ts) — without
+  // the default, a missing `nodePath` would reject the event with an error
+  // frame and drop it. The default normalises absence to null instead. New
+  // clients always send the field explicitly; the inferred (output) type stays
+  // `string | null`, so consumers are unaffected.
+  nodePath: z.string().nullable().default(null),
 });
 export type ContextTreeUsageEventPayload = z.infer<typeof contextTreeUsageEventPayload>;
 

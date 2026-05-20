@@ -209,6 +209,10 @@ function readFilePathArg(input: unknown): string | null {
  * tree files by absolute path (CLAUDE.md points it at the full tree at
  * `contextTreePath`), so a prefix match on the normalised root is the filter.
  * The trailing-slash trim keeps `/a/tree` from matching `/a/tree-other/x`.
+ *
+ * Invariant: both `filePath` and `contextTreePath` are expected to be
+ * absolute. A relative `filePath` will not match the absolute root and returns
+ * null — i.e. it silently under-counts (fails safe) rather than mis-attributing.
  */
 export function treeNodePathOf(filePath: string, contextTreePath: string): string | null {
   if (!filePath || !contextTreePath) return null;
