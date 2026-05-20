@@ -26,10 +26,14 @@ import { authedJson } from "../framework/server-driver/http.js";
  *      sender. (`credentials.ts` only plants credentials.json + client.yaml;
  *      `agents/` is the per-agent registration the operator would normally
  *      add via `first-tree-hub agent add` after `connect`.)
- *   3. Spawn the dist CLI: `chat send <recipientName> "..."` with
+ *   3. Create a 2-party chat with [human, recipient] via the public API
+ *      and pass its id as `FIRST_TREE_HUB_CHAT_ID` — the CLI's new
+ *      group-chat-only model (PR #465) requires the sender's "current
+ *      chat" to be set + the recipient to already be a participant.
+ *   4. Spawn the dist CLI: `chat send <recipientName> "..."` with
  *      `--agent <senderName>`. The CLI's own SIGTERM handlers stay out of
  *      our way because this is one-shot (not `client start`).
- *   4. Assert exit code 0 and that the resulting message is visible via the
+ *   5. Assert exit code 0 and that the resulting message is visible via the
  *      same `GET /api/v1/chats/:id/messages` route the web uses.
  *
  * Requires `E2E_WITH_CLIENT=1` (we lean on the fixture credentials + home).
@@ -37,6 +41,7 @@ import { authedJson } from "../framework/server-driver/http.js";
 
 let handle: CurrentRunHandle;
 let recipientName: string;
+let chatId: string;
 let pg: PgClient;
 
 beforeAll(async () => {
@@ -46,7 +51,7 @@ beforeAll(async () => {
   // Recipient: a fresh autonomous agent pinned to the fixture client (so it
   // passes manager-in-org + clientId checks without needing a second user).
   recipientName = `e2e-cli-recipient-${randomBytes(3).toString("hex")}`;
-  await authedJson<{ uuid: string }>(
+  const recipient = await authedJson<{ uuid: string }>(
     handle.serverBaseUrl,
     creds.accessToken,
     "POST",
@@ -59,6 +64,21 @@ beforeAll(async () => {
     },
     201,
   );
+
+  // Pre-create the chat with both participants. With the v1 group-chat-only
+  // model the CLI no longer has a `--direct` flag to open a DM on the fly
+  // — the sender's current chat (via FIRST_TREE_HUB_CHAT_ID) must already
+  // contain the recipient. A 2-member chat is exempt from
+  // `enforceGroupMention`, so plain content body still works.
+  const chat = await authedJson<{ chatId: string }>(
+    handle.serverBaseUrl,
+    creds.accessToken,
+    "POST",
+    `/api/v1/orgs/${encodeURIComponent(creds.organizationId)}/chats`,
+    { participantIds: [recipient.uuid] },
+    201,
+  );
+  chatId = chat.chatId;
 
   // Plant the local agent.yaml for the fixture human agent. The CLI scans
   // `${FIRST_TREE_HUB_HOME}/config/agents/*/agent.yaml`; entry name = agent
@@ -81,15 +101,14 @@ describe("CLI `chat send` happy path against spawned dist CLI", () => {
     const creds = readCredentialsOrThrow(handle);
     const messageBody = `cli-send ${randomBytes(3).toString("hex")}`;
 
-    // `--direct` opens (or reuses) the human ↔ recipient DM and skips the
-    // "is the recipient a member of your current chat?" check. Without it
-    // the server returns 400 because the test doesn't pre-bind the human to
-    // the same chat first — exactly the error a user would hit running
-    // `chat send` from a fresh shell without a current-chat context.
+    // FIRST_TREE_HUB_CHAT_ID feeds the CLI's "current chat" resolver — the
+    // pre-created 2-party chat already lists recipientName as a member, so
+    // `chat send` lands without needing `chat add-participant` first.
     const result = await execCli({
       home: handle.clientHome,
       serverBaseUrl: handle.serverBaseUrl,
-      args: ["chat", "send", "--direct", recipientName, messageBody, "--agent", creds.humanAgentName],
+      args: ["chat", "send", recipientName, messageBody, "--agent", creds.humanAgentName],
+      extraEnv: { FIRST_TREE_HUB_CHAT_ID: chatId },
       timeoutMs: 15_000,
     });
     if (result.exitCode !== 0) {
@@ -98,25 +117,14 @@ describe("CLI `chat send` happy path against spawned dist CLI", () => {
       );
     }
 
-    // Verify via PG rather than `GET /chats/:id/messages`: the direct-chat
-    // path may open a fresh chat row we don't know the id of (chat type
-    // resolution is server-side; `--direct` doesn't echo it on stdout in a
-    // stable shape). Querying by `content` + `sender_id` pins the assertion
-    // to the durable contract (a row exists with the expected sender) and
-    // sidesteps direct-vs-dm chat-typing internals.
-    // `messages.content` is `jsonb` — a text message is stored as the
-    // JSON string `"the body"` (note the literal quotes). Match by casting
-    // a text-typed bind to jsonb so we compare apples to apples without
-    // needing a substring / `::text` ts-query workaround.
-    // `messages.content` is `jsonb`; the `--direct` path on `chat send`
-    // auto-prepends `@<recipientName> ` so the content stored is e.g.
-    // `"@e2e-cli-recipient-… cli-send abc"`, not the raw `messageBody`.
-    // Substring match through `content::text` is the most robust way to
-    // assert "the body we sent is in there" without leaking the
-    // mention-prepend behavior into the test contract.
+    // Verify via PG scoped to the pre-created chat so the assertion stays
+    // pinned even if another test happens to plant a message with the
+    // same random suffix. `messages.content` is `jsonb`; substring match
+    // through `content::text` survives the wrapping quotes and any
+    // future auto-prepend behavior the CLI might re-introduce.
     const row = await pg.query<{ id: string; sender_id: string; format: string }>(
-      "SELECT id, sender_id, format FROM messages WHERE content::text LIKE '%' || $1 || '%' LIMIT 1",
-      [messageBody],
+      "SELECT id, sender_id, format FROM messages WHERE chat_id = $1 AND content::text LIKE '%' || $2 || '%' LIMIT 1",
+      [chatId, messageBody],
     );
     expect(row.rows[0], `message "${messageBody}" not found in PG`).toBeDefined();
     expect(row.rows[0]?.sender_id).toBe(creds.humanAgentId);

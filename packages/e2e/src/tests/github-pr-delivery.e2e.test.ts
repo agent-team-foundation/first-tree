@@ -90,6 +90,14 @@ beforeAll(async () => {
   const pg = new PgClient({ connectionString: handle.databaseUrl });
   await pg.connect();
   try {
+    // Release any prior installation already bound to this org so the
+    // UPDATE below doesn't trip `uq_github_app_installations_hub_org`.
+    // Test file run order isn't deterministic — another github-* test may
+    // have claimed the org first.
+    await pg.query(
+      "UPDATE github_app_installations SET hub_organization_id = NULL WHERE hub_organization_id = $1 AND installation_id <> $2",
+      [creds.organizationId, INSTALLATION_ID],
+    );
     await pg.query("UPDATE github_app_installations SET hub_organization_id = $1 WHERE installation_id = $2", [
       creds.organizationId,
       INSTALLATION_ID,
