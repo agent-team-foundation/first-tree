@@ -56,8 +56,14 @@ export type ResultSinkDeps = {
 export type ResultSink = (text: string) => Promise<void>;
 
 export function createResultSink(deps: ResultSinkDeps): ResultSink {
-  async function buildMetadata(text: string): Promise<Record<string, unknown> | undefined> {
+  // Build the outbound payload: the (possibly rewritten) content + metadata.
+  // The content may differ from `text` when a referenced doc was written as an
+  // absolute-in-root path: `buildMessageDocumentSnapshots` rewrites that span
+  // to the canonical workspace-relative path so web's unchanged re-scan can
+  // match the snapshot. Relative mentions are returned verbatim.
+  async function prepareOutbound(text: string): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const metadata: Record<string, unknown> = {};
+    let content = text;
     const documentBasePath = await deps.getDocumentBasePath?.();
     if (documentBasePath) {
       // Embed the inline-snapshot variant only. This is the cloud-friendly
@@ -74,7 +80,8 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
       // messages may still hold `kind:"path"`; the web reader keeps handling
       // them for back-compat — this only stops emitting new ones.)
       try {
-        const { docs, skipped } = await buildMessageDocumentSnapshots(text, documentBasePath);
+        const { docs, skipped, rewrittenText } = await buildMessageDocumentSnapshots(text, documentBasePath);
+        content = rewrittenText;
         if (docs.length > 0) {
           metadata.documentContext = documentContextSchema.parse({ kind: "snapshot", docs });
         }
@@ -83,7 +90,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
         }
       } catch (err) {
         // Snapshot build failure must never block message delivery — log and
-        // attach no documentContext so the message still goes out.
+        // attach no documentContext so the message still goes out (verbatim).
         deps.log(`doc snapshot: build failed, no documentContext attached: ${(err as Error).message}`);
       }
     }
@@ -93,7 +100,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // text reaches the chat for human observers only; agent-to-agent
     // wake-ups now require an explicit `first-tree-hub chat send <name>`.
 
-    return Object.keys(metadata).length > 0 ? metadata : undefined;
+    return { content, metadata: Object.keys(metadata).length > 0 ? metadata : undefined };
   }
 
   return async function forwardResult(text: string): Promise<void> {
@@ -113,11 +120,11 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // isn't accidentally attached to this outbound reply.
     deps.clearTrigger();
 
-    const metadata = await buildMetadata(text);
+    const { content, metadata } = await prepareOutbound(text);
 
     await deps.sdk.sendMessage(deps.chatId, {
       format: "text",
-      content: text,
+      content,
       // `purpose: "agent-final-text"` tells the server to skip the
       // group-chat `@mention required` guard and force every fan-out row
       // to `notify=false`. final text lands in chat history so human

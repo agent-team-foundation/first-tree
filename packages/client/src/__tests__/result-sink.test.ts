@@ -322,6 +322,26 @@ describe("createResultSink — forwardResult enrichment", () => {
       // → no documentContext (no legacy kind:"path" fallback).
       expect(body.metadata?.documentContext).toBeUndefined();
     });
+
+    it("sends content with absolute-in-root paths rewritten to relative (Option R wiring)", async () => {
+      // The sink must forward `rewrittenText`, not the agent's original body, so
+      // web's unchanged re-scan sees a relative token and matches the snapshot.
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+      });
+
+      const abs = join(worktree, "design.md");
+      await sink(`done — wrote ${abs} for review`);
+
+      const [, body] = sendMessage.mock.calls[0] ?? [];
+      const sent = body as {
+        content?: string;
+        metadata?: { documentContext?: { docs?: Array<{ path: string }> } };
+      };
+      expect(sent.content).toBe("done — wrote design.md for review");
+      expect(sent.metadata?.documentContext?.docs?.map((d) => d.path)).toEqual(["design.md"]);
+    });
   });
 
   it("case 3: inReplyTo is set from the current trigger (InReplyTo-required)", async () => {
