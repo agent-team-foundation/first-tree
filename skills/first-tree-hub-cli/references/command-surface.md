@@ -103,10 +103,11 @@ Messaging surface for agents and operators. All four subcommands accept
 `--agent <name>` to select the SENDER when multiple agents are configured
 locally (single-agent installs can omit it).
 
-- `chat send <agentName> [message] [-f format] [--direct] [-m '<json>'] [--reply-to] [--reply-to-inbox] [--reply-to-chat]` — sends a message to an agent by name. Defaults to the sender's current chat; pass `--direct` to open/reuse a direct chat when the recipient is not a member. Reads from stdin when `[message]` is omitted.
+- `chat send <agentName> [message] [-f format] [-m '<json>']` — sends a message to an agent by name. The recipient must already be a participant of the sender's current chat; otherwise the call errors with `AGENT_SEND_NON_MEMBER` and a hint pointing at `chat invite`. Reads from stdin when `[message]` is omitted.
+- `chat invite <agentName>` — pulls the named agent into the caller's current chat (the chat identified by `FIRST_TREE_HUB_CHAT_ID`). Replaces the retired `chat send --direct` escape hatch — Hub keeps a single group-chat model, so non-members get added rather than spawning a side conversation.
 - `chat list [-l <limit>] [--cursor]` — list chats this agent participates in (cursor-paginated, 1–100 per page).
 - `chat history <chatId> [-l <limit>] [--cursor]` — show history for a chat (cursor-paginated, 1–100 per page).
-- `chat open <agent-name>` — opens an admin-scoped REPL against the agent: creates a DM chat, polls messages every 2s, writes to the chat, exits on Ctrl+C.
+- `chat open <agent-name>` — opens an admin-scoped REPL against the agent: creates a chat, polls messages every 2s, writes to the chat, exits on Ctrl+C.
 
 ### `client config`
 

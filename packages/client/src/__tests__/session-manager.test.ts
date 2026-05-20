@@ -1,8 +1,7 @@
-import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hub-shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext } from "../runtime/handler.js";
-import { SessionManager, shouldSuppressEcho } from "../runtime/session-manager.js";
+import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { recordingLogger, silentLogger } from "./_logger-helpers.js";
 import { mockEntry } from "./test-helpers.js";
@@ -103,10 +102,11 @@ describe("SessionManager", () => {
   });
 
   it("does NOT deduplicate same messageId delivered into different chats", async () => {
-    // replyTo cross-chat routing legitimately produces two inbox_entries with
-    // identical messageIds but different chatIds (one from fan-out, one from
-    // replyTo routing). Dedup key must be (chatId, messageId), otherwise the
-    // waiting chat's entry is silently dropped after the other copy arrives.
+    // Defensive dedup-key shape. Cross-chat reply routing has been removed
+    // (first-tree-context PR #281) so the production fan-out now produces
+    // one entry per (inbox, message), but the client still keys dedup by
+    // (chatId, messageId) to match the server-side identity tuple and to
+    // survive any legacy entry / future fan-out variant.
     const handlers: AgentHandler[] = [];
     const factory: HandlerFactory = () => {
       const h = createMockHandler();
@@ -145,10 +145,10 @@ describe("SessionManager", () => {
   });
 
   it("still deduplicates genuine redelivery within the same chat", async () => {
-    // Counterpart to the cross-chat test: within a single chat, at-least-once
-    // delivery must still be idempotent. Two entries with same (chatId,
-    // messageId) but different inbox entry ids must collapse to one handler
-    // invocation.
+    // Counterpart to the cross-chat-key test above: within a single chat,
+    // at-least-once delivery must still be idempotent. Two entries with the
+    // same (chatId, messageId) but different inbox entry ids must collapse
+    // to one handler invocation.
     const handler = createMockHandler();
     const sm = createSessionManager({ handler });
 
@@ -401,97 +401,12 @@ describe("SessionManager", () => {
 });
 
 /**
- * Pure-function tests for the two routing guards added in proposals/
- * hub-agent-messaging-reply-and-mentions §3.5. Each branch of the decision
- * tree is pinned so a later refactor can't silently widen suppression.
+ * Mention-only filtering lives on the server (see services/message.ts
+ * fan-out). With cross-chat reply routing removed (see
+ * first-tree-context PR #281), the client has no remaining routing
+ * guard — any entry that reaches dispatch must dispatch.
  */
-describe("shouldSuppressEcho", () => {
-  const ME = "agent-me";
-  function entry(over: Partial<InboxEntryWithMessage["message"]> & { chatId?: string }): InboxEntryWithMessage {
-    const base = mockEntry({ chatId: over.chatId ?? "c2" });
-    base.message = { ...base.message, ...over };
-    return base;
-  }
-
-  it("returns false when the message is not a reply (no snapshot)", () => {
-    expect(shouldSuppressEcho(entry({ inReplyToSnapshot: null }), ME)).toBe(false);
-  });
-
-  it("returns false when the original sender wasn't us", () => {
-    const e = entry({
-      inReplyTo: "M1",
-      inReplyToSnapshot: { senderId: "agent-other", chatId: "c2", replyToChat: "c1" },
-    });
-    expect(shouldSuppressEcho(e, ME)).toBe(false);
-  });
-
-  it("returns false when the original was posted in a different chat than this entry", () => {
-    // Case A — replyTo-routed copy: entry.chatId=c1, M1.chatId=c2 ≠ c1 → keep session (c1 should wake).
-    const e = entry({
-      chatId: "c1",
-      inReplyTo: "M1",
-      inReplyToSnapshot: { senderId: ME, chatId: "c2", replyToChat: "c1" },
-    });
-    expect(shouldSuppressEcho(e, ME)).toBe(false);
-  });
-
-  it("returns false when the original's replyTo points at this same chat (Case B — open chat here)", () => {
-    // b1 started the conversation in c2 itself, so echoes in c2 are legit
-    // continuations — suppression must NOT fire.
-    const e = entry({
-      chatId: "c2",
-      inReplyTo: "M1",
-      inReplyToSnapshot: { senderId: ME, chatId: "c2", replyToChat: "c2" },
-    });
-    expect(shouldSuppressEcho(e, ME)).toBe(false);
-  });
-
-  it("returns false when the original has no replyTo target at all", () => {
-    const e = entry({
-      chatId: "c2",
-      inReplyTo: "M1",
-      inReplyToSnapshot: { senderId: ME, chatId: "c2", replyToChat: null },
-    });
-    expect(shouldSuppressEcho(e, ME)).toBe(false);
-  });
-
-  it("returns true for the Case A fan-out copy (me + same chat + replyTo elsewhere)", () => {
-    // This is the exact shape that used to cause the echo loop.
-    const e = entry({
-      chatId: "c2",
-      inReplyTo: "M1",
-      inReplyToSnapshot: { senderId: ME, chatId: "c2", replyToChat: "c1" },
-    });
-    expect(shouldSuppressEcho(e, ME)).toBe(true);
-  });
-});
-
-/**
- * Integration: dispatch must ACK-and-drop when the echo guard fires — the
- * handler must never start a session for those entries. Mention-only
- * filtering has moved server-side (see services/message.ts fan-out), so the
- * client's only remaining routing guard is echo suppression.
- */
-describe("SessionManager routing guards — dispatch integration", () => {
-  it("ACKs and does NOT start a session when shouldSuppressEcho fires", async () => {
-    const handler = createMockHandler();
-    const ackEntry = mockAckEntry();
-    const sm = createSessionManager({ handler, ackEntry });
-
-    const echo = mockEntry({
-      id: 99,
-      chatId: "c2",
-      inReplyTo: "M1",
-      inReplyToSnapshot: { senderId: "agent-1", chatId: "c2", replyToChat: "c1" },
-    });
-    await sm.dispatch(echo);
-
-    expect(handler.start).not.toHaveBeenCalled();
-    expect(ackEntry).toHaveBeenCalledWith(99);
-
-    await sm.shutdown();
-  });
-
+describe("SessionManager dispatch integration", () => {
   it("starts a session for any mention_only entry that reaches dispatch — server already filtered", async () => {
     // The server's fan-out only writes an inbox_entry for a mention_only
     // participant if they were in `metadata.mentions`; anything that reaches
@@ -512,65 +427,6 @@ describe("SessionManager routing guards — dispatch integration", () => {
 
     expect(handler.start).toHaveBeenCalledTimes(1);
     expect(ackEntry).toHaveBeenCalledWith(101);
-
-    await sm.shutdown();
-  });
-
-  it("still starts a session for replyTo-routed entry in the waiting chat (not suppressed)", async () => {
-    // Case A: this is the entry with chatId=c1 (the original sender's waiting chat).
-    // Snapshot says the original lived in c2, so shouldSuppressEcho returns false.
-    const handler = createMockHandler();
-    const sm = createSessionManager({ handler });
-
-    const wake = mockEntry({
-      id: 102,
-      chatId: "c1",
-      inReplyTo: "M1",
-      inReplyToSnapshot: { senderId: "agent-1", chatId: "c2", replyToChat: "c1" },
-    });
-    await sm.dispatch(wake);
-
-    expect(handler.start).toHaveBeenCalledTimes(1);
-
-    await sm.shutdown();
-  });
-
-  it("suppresses the fan-out copy AND still dispatches the replyTo copy (Case A end-to-end)", async () => {
-    // Simulates b1 receiving both copies of b2's reply: server fan-out creates
-    // one inbox_entry with the original chatId=c2, and replyTo routing creates
-    // a second entry with chatId=c1 — SAME messageId, different chatIds. The
-    // c2 copy must be silently dropped (echo suppression) while the c1 copy
-    // wakes the waiting session. This is the core No-echo invariant.
-    const handler = createMockHandler();
-    const ackEntry = mockAckEntry();
-    const sm = createSessionManager({ handler, ackEntry });
-
-    const snapshot = { senderId: "agent-1", chatId: "c2", replyToChat: "c1" };
-    const sharedMessageId = "msg-shared-reply";
-    const fanOut = mockEntry({
-      id: 201,
-      chatId: "c2",
-      messageId: sharedMessageId,
-      inReplyTo: "M1",
-      inReplyToSnapshot: snapshot,
-    });
-    const replyRouted = mockEntry({
-      id: 202,
-      chatId: "c1",
-      messageId: sharedMessageId,
-      inReplyTo: "M1",
-      inReplyToSnapshot: snapshot,
-    });
-
-    await sm.dispatch(fanOut);
-    await sm.dispatch(replyRouted);
-
-    expect(handler.start).toHaveBeenCalledTimes(1);
-    const startArg = (handler.start as ReturnType<typeof vi.fn>).mock.calls[0];
-    const firstArg = startArg?.[0] as { chatId?: string } | undefined;
-    expect(firstArg?.chatId).toBe("c1");
-    expect(ackEntry).toHaveBeenCalledWith(201);
-    expect(ackEntry).toHaveBeenCalledWith(202);
 
     await sm.shutdown();
   });
@@ -629,25 +485,6 @@ describe("SessionManager ackEntry callback", () => {
     expect(ackEntry).toHaveBeenCalledTimes(2);
     expect(ackEntry).toHaveBeenNthCalledWith(1, 1);
     expect(ackEntry).toHaveBeenNthCalledWith(2, 2);
-
-    await sm.shutdown();
-  });
-
-  it("acks echo-suppressed entries via the callback", async () => {
-    const ackEntry = vi.fn().mockResolvedValue(undefined);
-    const handler = createMockHandler();
-    const { sm } = buildSm(ackEntry, handler);
-
-    const echo = mockEntry({
-      id: 99,
-      chatId: "c2",
-      inReplyTo: "M1",
-      inReplyToSnapshot: { senderId: "agent-1", chatId: "c2", replyToChat: "c1" },
-    });
-    await sm.dispatch(echo);
-
-    expect(handler.start).not.toHaveBeenCalled();
-    expect(ackEntry).toHaveBeenCalledWith(99);
 
     await sm.shutdown();
   });

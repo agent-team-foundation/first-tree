@@ -178,7 +178,7 @@ describe("Adapter mapping service", () => {
       const { sendMessage } = await import("../services/message.js");
 
       const chat = await createChat(app.db, agent.uuid, {
-        type: "direct",
+        type: "group",
         participantIds: [agent.uuid],
       });
       const { message: msg } = await sendMessage(app.db, chat.id, agent.uuid, {

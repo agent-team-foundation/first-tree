@@ -33,8 +33,16 @@ export const patchChatEngagementSchema = z.object({
 });
 export type PatchChatEngagement = z.infer<typeof patchChatEngagementSchema>;
 
+/**
+ * Hub keeps a single group-chat model (see first-tree-context PR #281),
+ * so every newly created chat MUST be a `group`. `chatTypeSchema` survives
+ * for the read path (legacy `direct` rows still exist on disk and must
+ * deserialise), but the write path is locked down to `"group"` — a caller
+ * that explicitly sends `type: "direct"` gets a 400 instead of silently
+ * minting a new `direct` row.
+ */
 export const createChatSchema = z.object({
-  type: chatTypeSchema,
+  type: z.literal("group"),
   topic: z.string().max(500).optional(),
   participantIds: z.array(z.string()).min(1),
   metadata: optionalChatMetadataSchema.optional(),
@@ -144,9 +152,19 @@ export type UpdateChat = z.infer<typeof updateChatSchema>;
  * telemetry counter increments — see `chat-participant-mode-fix-design.md`
  * §3.2 / §6.
  */
-export const addParticipantSchema = z.object({
-  agentId: z.string().min(1),
-});
+/**
+ * Identify the target by uuid (`agentId`) or by name (`agentName`). Names are
+ * resolved server-side within the chat's organization. Exactly one field
+ * must be supplied — both or neither is a 400.
+ */
+export const addParticipantSchema = z
+  .object({
+    agentId: z.string().min(1).optional(),
+    agentName: z.string().min(1).optional(),
+  })
+  .refine((v) => (v.agentId === undefined) !== (v.agentName === undefined), {
+    message: "addParticipant requires exactly one of `agentId` or `agentName`",
+  });
 export type AddParticipant = z.infer<typeof addParticipantSchema>;
 
 export const removeParticipantSchema = z.object({

@@ -232,8 +232,6 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         format: messages.format,
         content: messages.content,
         metadata: messages.metadata,
-        replyToInbox: messages.replyToInbox,
-        replyToChat: messages.replyToChat,
         inReplyTo: messages.inReplyTo,
         source: messages.source,
         createdAt: messages.createdAt,
@@ -264,8 +262,6 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         format: m.format,
         content: m.content,
         metadata: m.metadata,
-        replyToInbox: m.replyToInbox,
-        replyToChat: m.replyToChat,
         inReplyTo: m.inReplyTo,
         source: m.source,
         deliveryStatus: m.deliveryStatus,
@@ -317,6 +313,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
     const result = await sendMessage(app.db, request.params.chatId, scope.humanAgentId, prepared, {
       enforceGroupMention: true,
+      // Human web endpoint: typed `@<name>` is the user's intent expression
+      // — the only path where the message *itself* is the routing decision.
+      extractMentionsFromContent: true,
     });
 
     notifyRecipients(app.notifier, result.recipients, result.message.id);

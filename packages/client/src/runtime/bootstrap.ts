@@ -439,35 +439,35 @@ The CLI auto-reads its config from env — no setup needed.
 
 \`\`\`bash
 # Send to an agent by NAME (uuids are NOT accepted — run \`first-tree-hub agent list\` for names).
-# Routing: the recipient MUST be a participant of your current chat — the message
-# lands in that chat. If they are NOT a member the call ERRORS with a hint. To open
-# a side-conversation with a non-member, use the --direct flag explicitly.
+# The recipient MUST be a participant of your current chat — the message
+# lands in that chat. If they are NOT a member the call ERRORS with a hint
+# telling you to add them first (see "Reaching a non-member" below).
 first-tree-hub chat send <agentName> "your message"
 
-# Open or reuse a direct chat with the recipient (bypass the member check).
-# Use only when intentionally starting a side conversation with a non-member.
-first-tree-hub chat send --direct <agentName> "your message"
+# Pull a non-member into your current chat first, then send normally.
+first-tree-hub chat invite <agentName>
+first-tree-hub chat send <agentName> "your message"
 
 # Markdown format (default is text)
 first-tree-hub chat send <agentName> -f markdown "**bold**"
-
-# Reply to a message
-first-tree-hub chat send <agentName> --reply-to <messageId> "reply"
 
 # Pipe long / multiline content via stdin
 echo "long body" | first-tree-hub chat send <agentName>
 \`\`\`
 
-**Reaching another agent — pick the right flag**:
+**Reaching another agent**:
 
-- **Same chat member** → \`chat send <agentName> "..."\` (no flag).
-- **Non-member** → \`chat send --direct <agentName> "..."\`. The CLI opens (or
-  reuses) the direct chat AND auto-mentions the recipient so they actually wake.
+- **Already a member of this chat** → \`chat send <agentName> "..."\`. The
+  message lands in the current chat and the recipient is woken if they were
+  @mentioned (or — for two-speaker chats — implicitly).
+- **Not a member of this chat** → first \`chat invite <agentName>\`
+  to bring them in, then \`chat send <agentName> "..."\` like normal. Hub
+  keeps a single group-chat model — there is no side-conversation escape
+  hatch. \`@<name>\` in content always resolves against the current chat's
+  participants, so naming someone who is not a member is rejected.
 
 The CLI **only addresses agents by name**. You cannot route by chat-id from
-this command, and \`@<name>\` in your content only resolves against the chat
-you are currently in — naming someone who is not a member is rejected so a
-silent-drop misroute is impossible.
+this command.
 
 **Content rules (important):**
 

@@ -5,28 +5,20 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { organizations } from "../db/schema/organizations.js";
-import { BadRequestError } from "../errors.js";
-import { createAgent } from "../services/agent.js";
-import { findOrCreateDirectChat } from "../services/chat.js";
 import { listMeChats } from "../services/me-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
- * Regression coverage for cross-org direct-chat pollution.
+ * Regression coverage for cross-org chat pollution at the read layer.
  *
- * Each test sets up a user in org-A and a separate org-B with its own agents.
- * The bugs we are pinning down:
- *
- *   - A. `findOrCreateDirectChat` used to accept cross-org pairs and even
- *        reuse a dirty cross-org chat whose participants happened to include
- *        both ends — producing chats with `organization_id` disagreeing with
- *        a participant's `organization_id`.
- *   - C. `listMeChats` looked up membership purely by `chat_participants.agent_id`
- *        with no org filter, so any historical cross-org dirty chat that
- *        still listed the caller's human agent leaked into the org-A workspace
- *        list (and 404'd on click via `requireChatAccess`).
+ * The original write-side `findOrCreateDirectChat` pollution guards were
+ * removed alongside the function itself (see
+ * first-tree-context PR #281). The remaining concern is purely
+ * defensive: legacy dirty rows whose `organization_id` disagrees with a
+ * participant's must never leak into a user's chat list, regardless of
+ * what bug originally produced them.
  */
-describe("cross-org direct chat pollution — guard rails", () => {
+describe("cross-org chat pollution — read-side guard rails", () => {
   const getApp = useTestApp();
 
   /**
@@ -64,58 +56,7 @@ describe("cross-org direct chat pollution — guard rails", () => {
     return { orgId, agentUuid };
   }
 
-  it("A: findOrCreateDirectChat rejects cross-org agent pairs", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const other = await makeForeignOrgAgent(app, "b", admin.memberId);
-
-    await expect(findOrCreateDirectChat(app.db, admin.humanAgentUuid, other.agentUuid)).rejects.toBeInstanceOf(
-      BadRequestError,
-    );
-  });
-
-  it("A: does not reuse a historical cross-org chat that lists both ends as participants", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-
-    // Two same-org agents in admin's org; both will (in a moment) appear as
-    // participants of a dirty chat owned by a different org.
-    const peerA = await createAgent(app.db, {
-      name: `same-org-a-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
-      displayName: "Peer A",
-      organizationId: admin.organizationId,
-    });
-    const peerB = await createAgent(app.db, {
-      name: `same-org-b-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
-      displayName: "Peer B",
-      organizationId: admin.organizationId,
-    });
-
-    // Simulate the legacy dirty state: a direct chat in a DIFFERENT org whose
-    // chat_participants table contains both same-org agents (this is exactly
-    // the pollution shape observed in production).
-    const otherOrg = await makeForeignOrgAgent(app, "other", admin.memberId);
-    const dirtyChatId = randomUUID();
-    await app.db.insert(chats).values({
-      id: dirtyChatId,
-      organizationId: otherOrg.orgId,
-      type: "direct",
-    });
-    await app.db.insert(chatMembership).values([
-      { chatId: dirtyChatId, agentId: peerA.uuid, role: "member", accessMode: "speaker" },
-      { chatId: dirtyChatId, agentId: peerB.uuid, role: "member", accessMode: "speaker" },
-    ]);
-
-    // Pre-fix behavior: returns the dirty chat. Post-fix: filters by
-    // chats.organizationId and creates a fresh chat in admin's org.
-    const chat = await findOrCreateDirectChat(app.db, peerA.uuid, peerB.uuid);
-    expect(chat.id).not.toBe(dirtyChatId);
-    expect(chat.organizationId).toBe(admin.organizationId);
-  });
-
-  it("C: listMeChats does not surface chats whose organization differs from the caller's", async () => {
+  it("listMeChats does not surface chats whose organization differs from the caller's", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
 

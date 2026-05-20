@@ -283,7 +283,10 @@ function participantsFilterSql(agentIds: ReadonlyArray<string>): SQL {
  *     (speaker → "participant" / watcher → "watching"); the user
  *     state row supplies the unread counter (COALESCE → 0 when
  *     row is missing).
- *   - Filter `parent_chat_id IS NULL` (nested chats not surfaced in v1).
+ *   - Filter `parent_chat_id IS NULL` defensively. Hub has no sub-chat
+ *     product layer (see first-tree-context PR #281); the column is
+ *     decision-inert scaffolding, so any historical non-null row stays
+ *     hidden from the conversation list.
  *   - Filter `c.organization_id = ?` to defend against historical
  *     cross-org pollution rows that may still reference the caller
  *     (see fix/cross-org-direct-chat-pollution).
@@ -711,7 +714,12 @@ export async function createMeChat(
     );
   }
 
-  const chatType = distinctIds.length === 1 ? "direct" : "group";
+  // Hub keeps a single group-chat model (see first-tree-context PR #281).
+  // New chats are always `group`, regardless of participant count — the
+  // historical `direct` write path is gone. Reads still derive 1:1 / agent-
+  // only behaviour from membership shape (see Task 1.F), so existing
+  // `type='direct'` rows continue to behave correctly.
+  const chatType = "group";
 
   const chatId = randomUUID();
   const topic = body.topic ?? null;
@@ -860,11 +868,13 @@ export async function addMeChatParticipants(
       return;
     }
 
-    // Direct → group upgrade: 3+ speakers triggers it. Delegate the type
-    // flip + re-grading of existing non-human speakers to `changeChatType`
-    // so the rule lives in one place (`services/participant-mode.ts`).
-    const isUpgradingToGroup = existingSpeakers.length + toUpsert.length >= 3 && chat.type === "direct";
-    if (isUpgradingToGroup) {
+    // Historical direct chats upgrade to group on the 3rd speaker. New
+    // chats are already written as `group` (see Task 1.E and
+    // first-tree-context PR #281), so this branch is only reached by
+    // legacy `type='direct'` rows; `changeChatType` is a no-op when the
+    // chat is already a group, so we drop the explicit type guard and rely
+    // on the helper to stay idempotent.
+    if (existingSpeakers.length + toUpsert.length >= 3) {
       await changeChatType(tx, chatId, "group");
     }
 

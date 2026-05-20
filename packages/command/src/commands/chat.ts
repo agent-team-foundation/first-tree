@@ -4,7 +4,7 @@ import { agentConfigSchema, DEFAULT_CONFIG_DIR, loadAgents } from "@agent-team-f
 import { FirstTreeHubSDK, SdkError } from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
-import { resolveReplyToFromEnv, resolveSenderName } from "../core/agent-messaging.js";
+import { resolveSenderName } from "../core/agent-messaging.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../core/bootstrap.js";
 import { cliFetch } from "../core/cli-fetch.js";
 import { print } from "../core/output.js";
@@ -136,11 +136,7 @@ async function resolveAgent(serverUrl: string, adminToken: string, agentName: st
 
 interface SendOptions {
   format: MessageFormat;
-  direct?: boolean;
   metadata?: string;
-  replyTo?: string;
-  replyToInbox?: string;
-  replyToChat?: string;
   agent?: string;
 }
 
@@ -149,19 +145,25 @@ export function registerChatCommands(program: Command): void {
 
   chat
     .command("send <agentName> [message]")
-    .description("Send a message to an agent. Defaults to your current chat; use --direct for a side conversation.")
-    .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
-    .option(
-      "--direct",
-      "Open or reuse a direct chat with the recipient (bypass member check). Use only when intentionally starting a side conversation with a non-member.",
+    .description(
+      "Send a message to an agent in the caller's current chat (the chat identified by FIRST_TREE_HUB_CHAT_ID). The recipient must already be a participant; run `chat invite <agentName>` first if they are not.",
     )
+    .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
-    .option("--reply-to <messageId>", "Message ID to reply to")
-    .option("--reply-to-inbox <inboxId>", "Cross-chat reply target inbox")
-    .option("--reply-to-chat <chatId>", "Cross-chat reply target chat")
     .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .action(async (agentName: string, message: string | undefined, options: SendOptions) => {
       try {
+        const chatId = process.env.FIRST_TREE_HUB_CHAT_ID;
+        if (!chatId) {
+          fail(
+            "NO_CHAT_CONTEXT",
+            "`chat send` must be run from within an agent session that exports FIRST_TREE_HUB_CHAT_ID. " +
+              "Hub keeps a single group-chat model — there is no implicit direct chat to fall back to. " +
+              "To send from a shell, open the chat in the web UI instead.",
+            2,
+          );
+        }
+
         const content = message ?? (await readStdin());
         if (!content) {
           fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
@@ -176,22 +178,42 @@ export function registerChatCommands(program: Command): void {
           }
         }
 
-        const { replyToInbox, replyToChat } = resolveReplyToFromEnv(process.env, {
-          replyToInbox: options.replyToInbox,
-          replyToChat: options.replyToChat,
-        });
-
         const sdk = createSdk(options.agent);
 
-        const result = await sdk.sendToAgent(agentName, {
+        const result = await sdk.sendMessage(chatId, {
           format: options.format,
-          content,
+          content: `@${agentName} ${content}`,
           metadata,
-          replyToInbox,
-          replyToChat,
-          direct: options.direct ?? false,
+          // Server resolves the name against the current chat's participant
+          // list and adds it to mentions; an unknown name fails the write
+          // with a `chat invite` hint.
+          receiverNames: [agentName],
         });
         success(result);
+      } catch (error) {
+        handleSdkError(error);
+      }
+    });
+
+  chat
+    .command("invite <agentName>")
+    .description(
+      "Invite an agent into the caller's current chat (the chat identified by FIRST_TREE_HUB_CHAT_ID). Use before `chat send <agentName>` when the recipient is not yet a member.",
+    )
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .action(async (agentName: string, options: { agent?: string }) => {
+      try {
+        const chatId = process.env.FIRST_TREE_HUB_CHAT_ID;
+        if (!chatId) {
+          fail(
+            "NO_CHAT_CONTEXT",
+            "`chat invite` must be run from within an agent session that exports FIRST_TREE_HUB_CHAT_ID — there is no chat context to invite into otherwise.",
+            2,
+          );
+        }
+        const sdk = createSdk(options.agent);
+        const participants = await sdk.addChatParticipant(chatId, { agentName });
+        success(participants);
       } catch (error) {
         handleSdkError(error);
       }

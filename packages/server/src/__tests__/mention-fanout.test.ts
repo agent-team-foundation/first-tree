@@ -112,9 +112,13 @@ describe("server mention resolution + fan-out filter", () => {
     expect(obsAEntries).toHaveLength(1);
   });
 
-  it("merges explicit metadata.mentions with content-resolved mentions", async () => {
-    // Caller passes `mentions: [obsA]` explicitly AND text @obsB — both should
-    // receive. Server-side resolution is additive, not overriding.
+  it("explicit metadata.mentions overrides content-resolved mentions (explicit-wins)", async () => {
+    // Caller passes `mentions: [obsA]` explicitly AND text mentions obsB —
+    // ONLY obsA receives. Explicit declaration is treated as the routing
+    // truth; a narrative `@<peer>` in content is no longer additive
+    // (post-Phase-1 follow-up, see first-tree-context PR #281). To wake
+    // both, the caller must list both uuids in `metadata.mentions` (or
+    // declare via `receiverNames`).
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { sender, obsA, obsB, chat } = await setupGroup(app, uid);
@@ -128,7 +132,32 @@ describe("server mention resolution + fan-out filter", () => {
     const obsAEntries = await inboxEntriesFor(app, chat.id, obsA.uuid);
     const obsBEntries = await inboxEntriesFor(app, chat.id, obsB.uuid);
     expect(obsAEntries).toHaveLength(1);
-    expect(obsBEntries).toHaveLength(1);
+    expect(obsBEntries).toHaveLength(0);
+  });
+
+  it("`receiverNames` resolves recipient names server-side and wakes them", async () => {
+    // CLI / programmatic callers that know the recipient by name (but not
+    // uuid) pass `receiverNames`; server resolves against the chat's
+    // speaker list and adds the resolved uuids to `mentions`. Like
+    // `metadata.mentions`, explicit declaration overrides content
+    // extraction.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { sender, obsA, obsB, chat } = await setupGroup(app, uid);
+    if (!obsA.name) throw new Error("obsA name missing");
+
+    await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      format: "text",
+      // Narrative reference to obsB by `@<name>` in content — must NOT
+      // wake obsB because `receiverNames` was explicitly declared.
+      content: `(cc'd @mf-obsB-${uid} for context) please review`,
+      receiverNames: [obsA.name],
+    });
+
+    const obsAEntries = await inboxEntriesFor(app, chat.id, obsA.uuid);
+    const obsBEntries = await inboxEntriesFor(app, chat.id, obsB.uuid);
+    expect(obsAEntries).toHaveLength(1);
+    expect(obsBEntries).toHaveLength(0);
   });
 
   it("code-fenced `@name` does NOT trigger fan-out (three-gate algorithm)", async () => {

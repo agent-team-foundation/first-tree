@@ -230,10 +230,11 @@ async function insertMappingIfAbsent(
  * Create a fresh chat for a (human, delegate, entity) tuple. Goes through the
  * canonical `createChat` so:
  *   - cross-org participants are rejected (BadRequestError)
- *   - direct agent-only chats automatically get `mode=mention_only`
+ *   - the new chat is written as `type='group'` (first-tree-context PR #281
+ *     locked the single-group-chat model in; non-human speakers are seeded
+ *     by membership shape — a two-speaker chat with all-agent peers picks
+ *     up `mode=mention_only` via `defaultParticipantMode`)
  *   - watcher rows are recomputed
- *   - a future addParticipant call would upgrade the chat to `group` via
- *     the server's `changeChatType` service instead of raw INSERT shortcuts
  */
 async function createEntityChat(
   db: Database,
@@ -257,7 +258,7 @@ async function createEntityChat(
     ...(entity.url ? { entityUrl: entity.url } : {}),
   });
   const chat = await createChat(db, humanAgentId, {
-    type: "direct",
+    type: "group",
     participantIds: [delegateAgentId],
     topic: formatEntityTitle(entity, eventType, action),
     metadata,

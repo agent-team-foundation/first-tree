@@ -10,13 +10,13 @@ describe("Agent Chats API", () => {
     const { agent: a2 } = await createTestAgent(app, { name: "chat-a2" });
 
     const createRes = await a.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
       topic: "Test chat",
     });
     expect(createRes.statusCode).toBe(201);
     const chat = createRes.json();
-    expect(chat.type).toBe("direct");
+    expect(chat.type).toBe("group");
     expect(chat.participants).toHaveLength(2);
     expect(chat.participants.map((p: { agentId: string }) => p.agentId).sort()).toEqual([a.agent.uuid, a2.uuid].sort());
 
@@ -30,7 +30,7 @@ describe("Agent Chats API", () => {
     const a = await createTestAgent(app, { name: "list-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "list-a2" });
 
-    await a.request("POST", "/api/v1/agent/chats", { type: "direct", participantIds: [a2.uuid] });
+    await a.request("POST", "/api/v1/agent/chats", { type: "group", participantIds: [a2.uuid] });
 
     const res = await a.request("GET", "/api/v1/agent/chats");
     expect(res.statusCode).toBe(200);
@@ -42,7 +42,7 @@ describe("Agent Chats API", () => {
     const a = await createTestAgent(app, { name: "bad-a1" });
 
     const res = await a.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: ["non-existent"],
     });
     expect(res.statusCode).toBe(400);
@@ -55,7 +55,7 @@ describe("Agent Chats API", () => {
     const { agent: a3 } = await createTestAgent(app, { name: "deny-a3" });
 
     const createRes = await a2.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a3.uuid],
     });
     const chatId = createRes.json().id;
@@ -71,7 +71,7 @@ describe("Agent Chats API", () => {
     const { agent: a2 } = await createTestAgent(app, { name: `parts-a2-${uid}`, displayName: "Bob" });
 
     const createRes = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
     });
     const chatId = createRes.json().id;
@@ -105,7 +105,7 @@ describe("Agent Chats API", () => {
     const a3 = await createTestAgent(app, { name: `secret-a3-${uid}` });
 
     const createRes = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
     });
     const chatId = createRes.json().id;

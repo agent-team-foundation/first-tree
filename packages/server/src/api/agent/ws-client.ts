@@ -196,17 +196,18 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
        * The dropped row is replayed by `drainBacklogForAgent` once an ack
        * frees a slot, or by the next NOTIFY when we're back below cap (§3.5).
        *
-       * Multi-row claims: a single `(inboxId, messageId)` pair can map to
-       * more than one `inbox_entries` row (replyTo cross-chat case writes
-       * a second row with a different chatId). We push every row claimed
-       * by this NOTIFY in one go — see `claimAndBuildForPush`.
+       * Multi-row claims: a single `(inboxId, messageId)` pair maps to
+       * exactly one `inbox_entries` row now that cross-chat reply routing
+       * has been removed (see first-tree-context PR #281). The claim still
+       * returns an array — `claimAndBuildForPush` is defensive against
+       * legacy duplicates and any future fan-out variant.
        *
        * The cap is intentionally **soft**: claim happens after the gate
-       * check, so an N>1 claim can nudge in-flight slightly past
+       * check, so any N>1 future claim could nudge in-flight slightly past
        * `inboxMaxInFlightPerAgent`. N is bounded by the
-       * `(inbox_id, message_id, chat_id)` unique constraint (≤2 today),
-       * so worst-case overshoot is small and the memory headroom in §3.5's
-       * 64MB estimate covers it.
+       * `(inbox_id, message_id, chat_id)` unique constraint, so worst-case
+       * overshoot is small and the memory headroom in §3.5's 64MB estimate
+       * covers it.
        */
       function makeInboxPushHandler(agentId: string, inboxId: string): InboxPushHandler {
         return async (messageId: string) => {

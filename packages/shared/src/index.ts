@@ -388,8 +388,6 @@ export {
 export {
   type ClientMessage,
   clientMessageSchema,
-  type InReplyToSnapshot,
-  inReplyToSnapshotSchema,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   type Message,
@@ -405,9 +403,7 @@ export {
   participantModeSchema,
   precedingMessageSchema,
   type SendMessage,
-  type SendToAgent,
   sendMessageSchema,
-  sendToAgentSchema,
 } from "./schemas/message.js";
 export {
   GITHUB_EVENT_CARD_REASONS,

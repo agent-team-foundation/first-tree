@@ -24,7 +24,7 @@ describe("inbox WS data-plane claim helpers", () => {
     const a1 = await createTestAgent(app, { name: `wsp-a1-${uid}` });
     const a2 = await createTestAgent(app, { name: `wsp-a2-${uid}` });
     const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;
@@ -71,80 +71,6 @@ describe("inbox WS data-plane claim helpers", () => {
     // `[]`, NOT throw, otherwise a NOTIFY storm crashes the LISTEN loop.
     const second = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
     expect(second).toEqual([]);
-  });
-
-  it("claimAndBuildForPush returns BOTH rows when replyTo cross-chat fan-out wrote two entries", async () => {
-    // Regression for review issue #2: a single (inbox, messageId) pair can map
-    // to two inbox_entries rows differing only by chat_id when:
-    //   1. agent A is a chat participant (row 1, chatId = current chat)
-    //   2. agent A is also the replyToInbox of an earlier message
-    //      (row 2, chatId = original.replyToChat)
-    // Old `LIMIT 1` claim shape only pushed row 1; row 2 sat `pending` until
-    // reconnect. Aligning with poll's `LIMIT N` shape closes the gap.
-    const app = getApp();
-    const uid = crypto.randomUUID().slice(0, 6);
-    const ctx = await createAdminContext(app, { username: `wsp-rt-${uid}` });
-    const sender = await createAgent(app.db, {
-      name: `wsp-rt-s-${uid}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const peer = await createAgent(app.db, {
-      name: `wsp-rt-p-${uid}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-
-    // chatA: sender + peer (where the conversation lives).
-    // chatB: sender alone — the replyTo target.
-    const chatA = await createChat(app.db, sender.uuid, { type: "direct", participantIds: [peer.uuid] });
-    const chatB = await createChat(app.db, sender.uuid, { type: "group", participantIds: [] });
-
-    // chatA is mention_only on both ends (migration 0029), so explicit
-    // mentions on each leg keep the fan-out + replyTo rows both notify=true
-    // — this test is about the WS claim shape, not mode semantics.
-    const original = await sendMessage(app.db, chatA.id, sender.uuid, {
-      format: "text",
-      content: "any progress?",
-      replyToInbox: sender.inboxId,
-      replyToChat: chatB.id,
-      metadata: { mentions: [peer.uuid] },
-    });
-    // Drain peer's inbox so it doesn't muddy the assertions below.
-    await inboxService.pollInbox(app.db, peer.inboxId, 10);
-
-    // peer replies — fan-out writes one row to sender's inbox (chatId=A) AND
-    // replyTo routing writes a second row (chatId=B). Same messageId on both.
-    const reply = await sendMessage(app.db, chatA.id, peer.uuid, {
-      format: "text",
-      content: "yes, almost done",
-      inReplyTo: original.message.id,
-      metadata: { mentions: [sender.uuid] },
-    });
-
-    // Sanity check the seed: two pending rows exist before we claim.
-    const seeded = await app.db
-      .select({ chatId: inboxEntries.chatId, status: inboxEntries.status })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.inboxId, sender.inboxId), eq(inboxEntries.messageId, reply.message.id)));
-    expect(seeded).toHaveLength(2);
-
-    // The push path must claim BOTH rows in one call — proposal §3.2's
-    // "single NOTIFY → all matching pending rows".
-    const claimed = await inboxService.claimAndBuildForPush(app.db, sender.inboxId, reply.message.id);
-    expect(claimed).toHaveLength(2);
-    const claimedChatIds = claimed.map((e) => e.chatId).sort();
-    expect(claimedChatIds).toEqual([chatA.id, chatB.id].sort());
-    for (const e of claimed) expect(e.status).toBe("delivered");
-
-    // No pending row should be left behind.
-    const remaining = await app.db
-      .select({ status: inboxEntries.status })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.inboxId, sender.inboxId), eq(inboxEntries.messageId, reply.message.id)));
-    expect(remaining.every((r) => r.status === "delivered")).toBe(true);
   });
 
   it("claimAndBuildForPush bundles silent context for a mention_only trigger", async () => {
@@ -223,7 +149,7 @@ describe("inbox WS data-plane claim helpers", () => {
     const a1 = await createTestAgent(app, { name: `wspb-a1-${uid}` });
     const a2 = await createTestAgent(app, { name: `wspb-a2-${uid}` });
     const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;

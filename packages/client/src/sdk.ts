@@ -9,7 +9,6 @@ import {
   type Message,
   type RuntimeProvider,
   type SendMessage,
-  type SendToAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
 
 /**
@@ -239,13 +238,6 @@ export class FirstTreeHubSDK {
     });
   }
 
-  async sendToAgent(agentName: string, data: SendToAgent): Promise<Message> {
-    return this.requestJson<Message>(`/api/v1/agent/agents/${agentName}/messages`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
   }
@@ -271,6 +263,23 @@ export class FirstTreeHubSDK {
    */
   async listChatParticipants(chatId: string): Promise<ChatParticipantDetail[]> {
     return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
+  }
+
+  /**
+   * Add a participant to a chat by uuid or by name. Names resolve within the
+   * chat's organization. Idempotent: re-adding an existing speaker returns
+   * the chat's current participant list (the server treats it as a conflict
+   * the caller can safely ignore — see `chat invite` CLI for the
+   * UX wrapper that swallows that case).
+   */
+  async addChatParticipant(
+    chatId: string,
+    target: { agentId: string } | { agentName: string },
+  ): Promise<ChatParticipantDetail[]> {
+    return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`, {
+      method: "POST",
+      body: JSON.stringify(target),
+    });
   }
 
   /** Fetch Context Tree configuration for this SDK's authenticated agent. */

@@ -10,7 +10,7 @@ describe("Agent Messages API", () => {
     const a2 = await createTestAgent(app, { name: `msg-a2-${crypto.randomUUID().slice(0, 6)}` });
 
     const res = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.agent.uuid],
     });
     const chat = res.json();
@@ -31,22 +31,6 @@ describe("Agent Messages API", () => {
     const listRes = await a1.request("GET", `/api/v1/agent/chats/${chatId}/messages`);
     expect(listRes.statusCode).toBe(200);
     expect(listRes.json().items).toHaveLength(1);
-  });
-
-  it("sends message with replyTo fields", async () => {
-    const app = getApp();
-    const { a1, chatId } = await setupChat(app);
-
-    const sendRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
-      format: "text",
-      content: "Need approval",
-      replyToInbox: a1.agent.inboxId,
-      replyToChat: chatId,
-    });
-    expect(sendRes.statusCode).toBe(201);
-    const msg = sendRes.json();
-    expect(msg.replyToInbox).toBe(a1.agent.inboxId);
-    expect(msg.replyToChat).toBe(chatId);
   });
 
   it("creates inbox entries for recipient (fan-out)", async () => {

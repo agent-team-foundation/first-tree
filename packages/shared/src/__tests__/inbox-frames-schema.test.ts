@@ -8,14 +8,11 @@ const baseClientMessage = {
   format: "text",
   content: "hello",
   metadata: {},
-  replyToInbox: null,
-  replyToChat: null,
   inReplyTo: null,
   source: null,
   createdAt: "2026-04-29T00:00:00.000Z",
   configVersion: 1,
   recipientMode: "full" as const,
-  inReplyToSnapshot: null,
   precedingMessages: [],
 };
 
@@ -31,7 +28,7 @@ describe("inboxDeliverFrameSchema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("accepts a null chatId (replyTo cross-chat entries)", () => {
+  it("accepts a null chatId (legacy / future fan-out variants — defensive)", () => {
     const res = inboxDeliverFrameSchema.safeParse({
       type: "inbox:deliver",
       entryId: 1,

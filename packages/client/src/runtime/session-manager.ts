@@ -130,17 +130,11 @@ export class SessionManager {
    * not on pull. `delivered` = pulled but not yet processing,
    * `acked` = handler has started processing (read receipt).
    *
-   * One routing guard fires before any session lookup (see
-   * proposals/hub-agent-messaging-reply-and-mentions §3.5):
-   *
-   * - **Echo suppression** — in direct chats, a peer's reply to a message
-   *   *we* sent here but whose `replyTo` points elsewhere would otherwise
-   *   bounce our session back on. Suppress it so the reply routes only to
-   *   the external chat where we're actually waiting.
-   *
-   * The mention filter used to live here too, but it moved server-side to
-   * the fan-out step — see `services/message.ts sendMessage`. Anything
-   * reaching dispatch has already passed that check.
+   * No routing guards run client-side any more: the cross-chat
+   * reply-routing mechanism (`replyToChat` / `shouldSuppressEcho`) has been
+   * removed (see first-tree-context PR #281), and the mention filter moved
+   * server-side to fan-out (`services/message.ts sendMessage`). Anything
+   * reaching dispatch is, by construction, meant for this agent.
    */
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
@@ -178,12 +172,12 @@ export class SessionManager {
       // Fall through to normal dispatch.
     }
 
-    // 1. Deduplication — key by (chatId, messageId), not messageId alone.
-    // replyTo cross-chat routing legitimately fan-outs the same message into
-    // two inbox_entries with different chatIds (one in the original chat,
-    // one in the replyTo target chat); server-side identity is (inboxId,
-    // messageId, chatId) and client dedup must mirror that, otherwise the
-    // second entry is silently dropped.
+    // 1. Deduplication — key by (chatId, messageId). Cross-chat reply
+    // routing has been removed (see first-tree-context PR #281) so a single
+    // message now produces exactly one inbox entry per recipient, but the
+    // server-side identity is still (inboxId, messageId, chatId) and we
+    // mirror it defensively in case a legacy entry surfaces or fan-out is
+    // ever extended again.
     const dedupKey = `${chatId}:${messageId}`;
     if (this.deduplicator.isDuplicate(dedupKey)) {
       this.config.log.debug({ chatId, messageId }, "duplicate message, skipping");
@@ -212,16 +206,6 @@ export class SessionManager {
           "config version mismatch — skipping refresh",
         );
       }
-    }
-
-    // 3. Routing guards — do not start a session for messages we must not answer.
-    if (shouldSuppressEcho(entry, this.config.agentIdentity.agentId)) {
-      this.config.log.info(
-        { chatId, messageId },
-        "suppressing echo — message replies to our own send whose replyTo points elsewhere",
-      );
-      await this.ackEntry(entry.id, chatId);
-      return;
     }
 
     // Note: the "mention_only" filter now lives on the server (see
@@ -882,34 +866,4 @@ export class SessionManager {
     }
     this.registry.save(entries);
   }
-}
-
-/**
- * Core echo rule: a reply to a message *we* sent in this same chat, whose
- * original carried a `replyTo` pointing to a *different* chat, must not wake
- * our session on this side. Server-side replyTo routing already delivers a
- * second entry in the target chat, so suppressing the fan-out copy here
- * leaves exactly one path from peer's reply to our waiting session.
- *
- * The four early-returns spell out "when this is NOT an echo":
- *  - no snapshot        → just a regular message, not a reply
- *  - sender isn't us    → replying to someone else's message, clearly not an echo
- *  - original chat != this chat
- *       → the reply arrived in a chat where we never sent the original;
- *         could only happen via replyTo fan-out of a different thread, so
- *         suppressing would silence a legit cross-chat handoff
- *  - original had no replyTo → sender didn't ask replies to route away, so
- *                              the peer's reply here is the canonical path
- *
- * Only when all four are satisfied AND the replyTo target is a different
- * chat do we suppress — that's exactly proposal §3.5 Case A.
- */
-export function shouldSuppressEcho(entry: InboxEntryWithMessage, myAgentId: string): boolean {
-  const snapshot = entry.message.inReplyToSnapshot;
-  if (!snapshot) return false;
-  const entryChatId = entry.chatId ?? entry.message.chatId;
-  if (snapshot.senderId !== myAgentId) return false;
-  if (snapshot.chatId !== entryChatId) return false;
-  if (snapshot.replyToChat === null) return false;
-  return snapshot.replyToChat !== entryChatId;
 }

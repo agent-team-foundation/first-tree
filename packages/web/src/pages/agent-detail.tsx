@@ -822,7 +822,6 @@ function BindClientList({
 
 const STATUS_LABELS: Record<TestResult["status"], string> = {
   success: "Connected",
-  timeout: "Timed out",
   offline: "Offline",
   stale: "Stale",
   error: "Error",
@@ -830,7 +829,6 @@ const STATUS_LABELS: Record<TestResult["status"], string> = {
 
 const TEST_RESULT_BORDER: Record<TestResult["status"], string> = {
   success: "var(--state-idle)",
-  timeout: "var(--state-blocked)",
   offline: "var(--state-offline)",
   stale: "var(--state-blocked)",
   error: "var(--state-error)",
@@ -838,10 +836,9 @@ const TEST_RESULT_BORDER: Record<TestResult["status"], string> = {
 
 const TEST_RESULT_TONE: Record<TestResult["status"], DenseBadgeTone> = {
   success: "accent",
-  timeout: "warn",
   stale: "warn",
-  error: "error",
   offline: "neutral",
+  error: "error",
 };
 
 function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: () => void }) {
@@ -864,11 +861,6 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
             <DenseBadge tone={badgeTone}>{STATUS_LABELS[result.status]}</DenseBadge>
-            {result.responseTime != null && (
-              <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
-                {(result.responseTime / 1000).toFixed(1)}s
-              </span>
-            )}
           </div>
           {result.message && (
             <p className="text-body" style={{ color: "var(--fg-3)" }}>
@@ -897,21 +889,6 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
               )}
               {conn.lastSeenAt && <div>Last seen: {new Date(conn.lastSeenAt).toLocaleString()}</div>}
             </div>
-          )}
-          {result.responseContent && (
-            <p
-              className="mono whitespace-pre-wrap text-label"
-              style={{
-                background: "var(--bg-sunken)",
-                border: "var(--hairline) solid var(--border-faint)",
-                borderRadius: "var(--radius-input)",
-                padding: 8,
-                maxHeight: 160,
-                overflow: "auto",
-              }}
-            >
-              {result.responseContent}
-            </p>
           )}
         </div>
         <Button variant="ghost" size="sm" onClick={onDismiss}>

@@ -38,4 +38,59 @@ elif [[ ! -f "$DIST" ]]; then
 fi
 
 export FIRST_TREE_HUB_HOME="${FIRST_TREE_HUB_DEV_HOME:-$HOME/.first-tree/hub-dev}"
+
+# Prepend the in-tree CLI wrapper to PATH so any process started directly
+# from this shell (e.g. ad-hoc `dev-cli.sh chat send ...`) resolves
+# `first-tree-hub` to the local dist instead of /usr/local/bin (the global
+# staging CLI). Note: when the client runs as a systemd/launchd service,
+# this export is IGNORED by the service manager — the unit/plist holds the
+# authoritative PATH. See ensure_dev_bin_in_service_path below.
+export PATH="$REPO_ROOT/scripts/dev-bin:$PATH"
+
+# systemd ignores shell-exported PATH and uses the `Environment=PATH=...`
+# in the unit file as the authoritative PATH for the service AND every
+# descendant process (agent runtime CLAUDE sessions). service-install
+# hardcodes that to `/usr/local/bin:/usr/bin:/bin`, so agent runtime
+# children resolve `first-tree-hub` to /usr/local/bin/first-tree-hub —
+# i.e. the globally-installed staging CLI — and call endpoints the local
+# dev server no longer exposes (HTTP 404).
+#
+# This function patches the dev client's unit file in place to prepend
+# scripts/dev-bin to its PATH and restarts the unit if it is active.
+# Idempotent: once patched, subsequent runs are no-ops.
+# Scoped: only touches units whose FIRST_TREE_HUB_HOME matches this dev
+# home, so the user's separate staging-client unit is left alone.
+ensure_dev_bin_in_service_path() {
+  case "$(uname -s)" in
+    Linux) ;;
+    Darwin)
+      # launchd uses ~/Library/LaunchAgents/*.plist; patch via PlistBuddy
+      # if/when service-install starts emitting a dev plist on macOS.
+      return 0 ;;
+    *) return 0 ;;
+  esac
+  local units_dir="$HOME/.config/systemd/user"
+  [[ -d "$units_dir" ]] || return 0
+  local dev_bin="$REPO_ROOT/scripts/dev-bin"
+  local home_marker="Environment=FIRST_TREE_HUB_HOME=${FIRST_TREE_HUB_HOME}"
+  shopt -s nullglob
+  local unit
+  for unit in "$units_dir"/first-tree-hub-client*.service; do
+    grep -qxF "$home_marker" "$unit" || continue
+    grep -q "^Environment=PATH=[^[:space:]]*${dev_bin}" "$unit" && continue
+    sed -i.bak "s|^Environment=PATH=|Environment=PATH=${dev_bin}:|" "$unit"
+    rm -f "${unit}.bak"
+    local name
+    name="$(basename "$unit")"
+    echo "[dev-cli] patched ${name}: prepended scripts/dev-bin to Environment=PATH" >&2
+    systemctl --user daemon-reload 2>/dev/null || true
+    if systemctl --user is-active --quiet "$name"; then
+      systemctl --user restart "$name" 2>/dev/null || true
+      echo "[dev-cli] restarted ${name} so its children inherit the new PATH" >&2
+    fi
+  done
+  shopt -u nullglob
+}
+ensure_dev_bin_in_service_path
+
 exec node "$DIST" "$@"

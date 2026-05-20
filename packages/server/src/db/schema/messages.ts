@@ -15,11 +15,25 @@ export const messages = pgTable(
     format: text("format").notNull(),
     content: jsonb("content").$type<unknown>().notNull(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-    /** Cross-chat reply routing: target inbox for the reply */
+    /**
+     * Decision-inert column. Originally an inbox-row-level reply-routing
+     * envelope paired with the now-removed `replyToChat` cross-chat hint;
+     * once cross-chat routing went away there were no consumers left (the
+     * receive-side `shouldSuppressEcho` was deleted with it). The column
+     * survives as schema scaffolding only — the business layer never writes
+     * a non-null value. Do NOT reintroduce reply-routing envelopes here;
+     * inbox fan-out is sufficient, see first-tree-context PR #281.
+     */
     replyToInbox: text("reply_to_inbox"),
-    /** Cross-chat reply routing: chat session the reply should be routed to on the receiver side */
+    /**
+     * Decision-inert column. Originally part of a cross-chat reply-routing
+     * mechanism that has been removed (see first-tree-context PR #281).
+     * The column is retained as schema scaffolding only — the business layer
+     * never writes a non-null value. Do NOT reintroduce cross-chat reply
+     * routing through this column.
+     */
     replyToChat: text("reply_to_chat"),
-    /** Original message ID; Delivery Engine uses this to trigger replyTo routing */
+    /** Original message ID; threads replies in the same chat. */
     inReplyTo: text("in_reply_to"),
     /** Entry point that created this message: hub_ui / cli / feishu / github / api */
     source: text("source"),
