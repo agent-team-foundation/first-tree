@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type {
   AgentRuntimeConfigPayload,
   GitRepo,
@@ -804,6 +804,12 @@ export class SessionManager {
       },
       log,
       getDocumentBasePath: () => this.resolveDocumentBasePath(log, chatId),
+      // Cross-agent doc preview: `workspaceRoot` is `<workspaces>/<agentSlug>`
+      // (see agent-slot.ts), so the shared common root is its parent and this
+      // agent's slug is its basename — derived from existing config, no new
+      // config surface (decision: config-ascent).
+      workspacesRoot: dirname(this.config.handlerConfig.workspaceRoot),
+      selfSlug: basename(this.config.handlerConfig.workspaceRoot),
     });
 
     const envCtx = { sdk: this.config.sdk, agent: this.config.agentIdentity, chatId };

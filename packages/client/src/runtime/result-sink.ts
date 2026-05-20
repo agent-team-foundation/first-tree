@@ -51,6 +51,16 @@ export type ResultSinkDeps = {
    * worktree instead of the per-chat workspace root.
    */
   getDocumentBasePath?: () => Promise<string | null>;
+  /**
+   * Shared `workspaces/` common root (parent of every `<agentSlug>/<chatId>`).
+   * Set alongside `selfSlug` to enable cross-agent doc snapshots: an absolute
+   * `.md` path that realpaths into ANOTHER agent's workspace under this root
+   * (same chat) is snapshotted with a global `<ownerSlug>/<chatId>/<rel>` key.
+   * Absent → self-only behaviour (pre-existing).
+   */
+  workspacesRoot?: string;
+  /** This agent's own dir name under `workspacesRoot` (excluded from cross). */
+  selfSlug?: string;
 };
 
 export type ResultSink = (text: string) => Promise<void>;
@@ -80,7 +90,14 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
       // messages may still hold `kind:"path"`; the web reader keeps handling
       // them for back-compat — this only stops emitting new ones.)
       try {
-        const { docs, skipped, rewrittenText } = await buildMessageDocumentSnapshots(text, documentBasePath);
+        // Enable cross-agent resolution only when the runtime supplied the
+        // shared common root + this agent's slug; otherwise fall back to the
+        // self-only path (e.g. legacy callers / tests).
+        const fence =
+          deps.workspacesRoot && deps.selfSlug
+            ? { workspacesRoot: deps.workspacesRoot, chatId: deps.chatId, selfSlug: deps.selfSlug }
+            : undefined;
+        const { docs, skipped, rewrittenText } = await buildMessageDocumentSnapshots(text, documentBasePath, fence);
         content = rewrittenText;
         if (docs.length > 0) {
           metadata.documentContext = documentContextSchema.parse({ kind: "snapshot", docs });

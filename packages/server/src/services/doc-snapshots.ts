@@ -3,6 +3,7 @@ import {
   documentContextSchema,
   MAX_DOC_SNAPSHOT_BYTES,
   MAX_TOTAL_DOC_SNAPSHOT_BYTES,
+  parseWorkspaceDocKey,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { BadRequestError } from "../errors.js";
 
@@ -22,8 +23,20 @@ import { BadRequestError } from "../errors.js";
  * Why throw BadRequestError instead of silently stripping: snapshot data
  * comes from a trusted runtime; a schema mismatch typically signals a
  * client bug, and surfacing it loudly is more useful than hiding it.
+ *
+ * `chatScope` (optional) enables cross-agent provenance authz: a snapshot key
+ * shaped like a global cross key `<ownerSlug>/<chatId>/<rel>` whose chatId
+ * segment matches the message's chat must name an owner that is a participant
+ * of that chat. This is defense-in-depth on top of the runtime's structural
+ * fence — a compromised runtime cannot embed (and broadcast) a non-participant
+ * agent's workspace doc. Self / legacy bare keys carry no owner segment for
+ * this chat and are unaffected. When omitted (other callers / tests), the
+ * provenance check is skipped.
  */
-export function validateDocumentContext(metadata: Record<string, unknown> | undefined): void {
+export function validateDocumentContext(
+  metadata: Record<string, unknown> | undefined,
+  chatScope?: { chatId: string; participantSlugs: ReadonlySet<string> },
+): void {
   if (!metadata) return;
   const raw = metadata.documentContext;
   if (raw === undefined || raw === null) return;
@@ -39,6 +52,34 @@ export function validateDocumentContext(metadata: Record<string, unknown> | unde
 
   let totalBytes = 0;
   for (const doc of ctx.docs) {
+    if (chatScope) {
+      const key = parseWorkspaceDocKey(doc.path);
+      if (key) {
+        const ownerIsParticipant = chatScope.participantSlugs.has(key.agentSlug.toLowerCase());
+        if (key.chatId === chatScope.chatId) {
+          // Cross-agent global key for THIS chat — the owner must be a speaker
+          // participant, else a doc from a non-member's workspace would be
+          // broadcast into the chat.
+          if (!ownerIsParticipant) {
+            throw new BadRequestError("Document snapshot references a non-participant agent workspace", {
+              "doc_snapshot.path": doc.path,
+              "doc_snapshot.owner_slug": key.agentSlug,
+            });
+          }
+        } else if (ownerIsParticipant) {
+          // Owner-shaped global key naming a DIFFERENT chat. A participant-owned
+          // key whose chat segment isn't this chat would pull another chat's
+          // private workspace doc past the `workspaces/*/<currentChatId>/` fence
+          // — reject it (review P1). A deep SELF path whose first segment isn't
+          // a participant slug (e.g. `docs/api/design.md`) is left alone.
+          throw new BadRequestError("Document snapshot references another chat's agent workspace", {
+            "doc_snapshot.path": doc.path,
+            "doc_snapshot.owner_slug": key.agentSlug,
+            "doc_snapshot.key_chat_id": key.chatId,
+          });
+        }
+      }
+    }
     const actualBytes = Buffer.byteLength(doc.content, "utf8");
     if (actualBytes > MAX_DOC_SNAPSHOT_BYTES) {
       throw new BadRequestError("Document snapshot exceeds per-file byte budget", {

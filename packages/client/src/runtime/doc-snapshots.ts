@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
+  buildWorkspaceDocKey,
   MAX_DOC_SNAPSHOT_BYTES,
   MAX_DOC_SNAPSHOTS_PER_MESSAGE,
   MAX_TOTAL_DOC_SNAPSHOT_BYTES,
@@ -42,9 +43,35 @@ import {
  * byte budgets + sha256 so a misbehaving runtime cannot lodge mismatched
  * data.
  */
+/**
+ * Fence that widens snapshotting from "the sender's own workspace root" to
+ * "any agent's workspace under the shared `workspaces/` common root, scoped to
+ * the current chat". Passed by the runtime; absent in legacy/unit call sites,
+ * in which case behaviour is exactly the pre-existing self-only path.
+ */
+export type WorkspaceFence = {
+  /** Shared `workspaces/` common root (parent of every `<agentSlug>/<chatId>`). */
+  workspacesRoot: string;
+  /** Current chat — only `<*>/<chatId>/…` files are in scope. */
+  chatId: string;
+  /** Sender's own dir name under `workspacesRoot`; excluded from cross-resolution. */
+  selfSlug: string;
+};
+
+type ResolvedOccurrence = DocPathOccurrence & {
+  kind: "self" | "cross" | null;
+  /** Snapshot key: bare base-relative for self, global `<slug>/<chatId>/<rel>` for cross. */
+  key: string | null;
+  /** Realpath of the file to read (cross only; self resolves against `root`). */
+  file: string | null;
+  /** Rewrite replacement for a cross mention: short `<ownerSlug>/<rel>`. */
+  shortForm: string;
+};
+
 export async function buildMessageDocumentSnapshots(
   text: string,
   root: string,
+  fence?: WorkspaceFence,
 ): Promise<{ docs: SnapshotDoc[]; skipped: number; rewrittenText: string }> {
   const occurrences = collectDocPathOccurrences(text);
   if (occurrences.length === 0) return { docs: [], skipped: 0, rewrittenText: text };
@@ -52,19 +79,31 @@ export async function buildMessageDocumentSnapshots(
   const rootReal = await safeRealpath(root);
   if (!rootReal) return { docs: [], skipped: occurrences.length, rewrittenText: text };
 
-  // Pass 1 — resolve every occurrence to its canonical workspace-relative key
-  // (or null). Absolute-in-root paths canonicalise to the same relative key
-  // web derives once the text is rewritten, so a click hits the snapshot.
-  const resolved = await Promise.all(
-    occurrences.map(async (occ) => ({
-      ...occ,
-      canonical: await canonicalizeWorkspacePath(rootReal, occ.writtenPath),
-    })),
+  const workspacesRootReal = fence ? await safeRealpath(fence.workspacesRoot) : null;
+
+  // Pass 1 — resolve every occurrence to a snapshot plan:
+  //   self  → bare key relative to `root` (unchanged from #474/#480); the
+  //           absolute-in-root case canonicalises to the same relative key web
+  //           derives once the text is rewritten.
+  //   cross → global key `<ownerSlug>/<chatId>/<rel>` for a file that realpaths
+  //           into ANOTHER agent's workspace under the shared common root.
+  const resolved: ResolvedOccurrence[] = await Promise.all(
+    occurrences.map(async (occ): Promise<ResolvedOccurrence> => {
+      const selfKey = await canonicalizeWorkspacePath(rootReal, occ.writtenPath);
+      if (selfKey) return { ...occ, kind: "self", key: selfKey, file: null, shortForm: "" };
+      // Only an ABSOLUTE path can escape the sender's own root into a sibling
+      // workspace; a relative mention always resolves under `root`.
+      if (workspacesRootReal && fence && isAbsolute(occ.writtenPath)) {
+        const cross = await resolveCrossWorkspaceDoc(workspacesRootReal, fence, occ.writtenPath);
+        if (cross) return { ...occ, kind: "cross", key: cross.key, file: cross.file, shortForm: cross.shortForm };
+      }
+      return { ...occ, kind: null, key: null, file: null, shortForm: "" };
+    }),
   );
 
-  // Pass 2 — build snapshots. De-dupe by canonical path so the same file
-  // mentioned twice is read once; the on-wire key is the canonical path the
-  // web cache lookup produces from a clicked href.
+  // Pass 2 — build snapshots. De-dupe by snapshot key so the same file
+  // mentioned twice is read once; the on-wire key is what the web cache lookup
+  // produces from a clicked href.
   const docs: SnapshotDoc[] = [];
   let totalBytes = 0;
   let skipped = 0;
@@ -72,20 +111,22 @@ export async function buildMessageDocumentSnapshots(
   const snapshotted = new Set<string>();
 
   for (const occ of resolved) {
-    const canonical = occ.canonical;
-    if (!canonical || !canonical.toLowerCase().endsWith(".md")) {
+    const key = occ.key;
+    if (!key || !key.toLowerCase().endsWith(".md")) {
       skipped += 1;
       continue;
     }
-    if (seen.has(canonical)) continue;
-    seen.add(canonical);
+    if (seen.has(key)) continue;
+    seen.add(key);
 
     if (docs.length >= MAX_DOC_SNAPSHOTS_PER_MESSAGE) {
       skipped += 1;
       continue;
     }
 
-    const file = await resolveWorkspaceFile(rootReal, canonical);
+    // Self keys resolve back against `root`; cross keys already carry the
+    // realpath'd file from the fenced lookup.
+    const file = occ.kind === "cross" ? occ.file : await resolveWorkspaceFile(rootReal, key);
     if (!file) {
       skipped += 1;
       continue;
@@ -120,25 +161,44 @@ export async function buildMessageDocumentSnapshots(
         continue;
       }
       const sha256 = createHash("sha256").update(content, "utf8").digest("hex");
-      docs.push({ path: canonical, sha256, size, content });
+      docs.push({ path: key, sha256, size, content });
       totalBytes += size;
-      snapshotted.add(canonical);
+      snapshotted.add(key);
     } catch {
       skipped += 1;
     }
   }
 
-  // Pass 3 — rewrite the text spans of resolved ABSOLUTE-in-root tokens to
-  // their canonical relative path (web can't map an absolute path to a
-  // snapshot key without knowing `root`). The rewrite surface is kept minimal:
-  // relative mentions — canonical or not (`./docs/foo.md`) — are left verbatim
-  // because web already canonicalises them during its re-scan match. Only
-  // tokens that actually produced a snapshot are rewritten, so "rewritten ⇔
-  // previewable" holds and an unsnapshot-able mention is never mutated.
+  // Self snapshot keys are bare base-relative paths; a cross short form
+  // `<ownerSlug>/<rel>` can therefore collide with one (e.g. the sender also
+  // snapshotted a real file at `assistant/design.md`). Web gives a direct
+  // self-key match priority, so a colliding short form would link to the WRONG
+  // (self) snapshot. Detect the collision here and fall back to the FULL global
+  // key for that cross mention so web direct-matches the right snapshot
+  // (review P2-b).
+  const selfKeys = new Set<string>();
+  for (const occ of resolved) {
+    if (occ.kind === "self" && occ.key && snapshotted.has(occ.key)) selfKeys.add(occ.key);
+  }
+
+  // Pass 3 — rewrite text spans to the form web re-scans into the snapshot key.
+  // Web can't map an absolute path (it doesn't know `root`), nor a cross global
+  // key from a bare absolute path, so:
+  //   self + absolute-in-root → canonical bare relative path (unchanged #480)
+  //   cross                   → short `<ownerSlug>/<rel>` (web re-expands with
+  //                             chatId), OR the full global key when the short
+  //                             form would collide with a self snapshot key.
+  // Self RELATIVE mentions (`./docs/foo.md`) are left verbatim because web
+  // already canonicalises them on re-scan. Only tokens that actually produced a
+  // snapshot are rewritten, so "rewritten ⇔ previewable" holds.
   const rewrites: Array<{ start: number; end: number; replacement: string }> = [];
   for (const occ of resolved) {
-    if (occ.canonical && isAbsolute(occ.writtenPath) && snapshotted.has(occ.canonical)) {
-      rewrites.push({ start: occ.start, end: occ.end, replacement: `${occ.canonical}${occ.lineSuffix}` });
+    if (!occ.key || !snapshotted.has(occ.key)) continue;
+    if (occ.kind === "self" && isAbsolute(occ.writtenPath)) {
+      rewrites.push({ start: occ.start, end: occ.end, replacement: `${occ.key}${occ.lineSuffix}` });
+    } else if (occ.kind === "cross") {
+      const replacement = selfKeys.has(occ.shortForm) ? occ.key : occ.shortForm;
+      rewrites.push({ start: occ.start, end: occ.end, replacement: `${replacement}${occ.lineSuffix}` });
     }
   }
 
@@ -246,6 +306,61 @@ async function canonicalizeWorkspacePath(rootReal: string, writtenPath: string):
   const prefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
   if (real !== rootReal && !real.startsWith(prefix)) return null;
   return normalizeDocLinkPath(relative(rootReal, real));
+}
+
+/**
+ * Resolve an ABSOLUTE `.md` path that points into a DIFFERENT agent's
+ * workspace under the shared common root. Returns the global snapshot key
+ * `<ownerSlug>/<chatId>/<rel>`, the realpath'd file to read, and the short
+ * `<ownerSlug>/<rel>` form to rewrite into the outbound text — or null when
+ * the path is outside the common root, belongs to another chat, hides, is the
+ * sender's own workspace (handled as a self path), is not a regular `.md`
+ * file, or cannot be realpath'd.
+ *
+ * realpath runs BEFORE the containment check so an ancestor symlink cannot
+ * fake "inside the common root" — same discipline as the self-path resolver.
+ */
+async function resolveCrossWorkspaceDoc(
+  workspacesRootReal: string,
+  fence: WorkspaceFence,
+  absPath: string,
+): Promise<{ key: string; file: string; shortForm: string } | null> {
+  const real = await safeRealpath(absPath);
+  if (!real) return null;
+
+  const prefix = workspacesRootReal.endsWith(sep) ? workspacesRootReal : workspacesRootReal + sep;
+  if (!real.startsWith(prefix)) return null;
+
+  const segments = relative(workspacesRootReal, real)
+    .split(sep)
+    .filter((s) => s.length > 0 && s !== ".");
+  // Need at least <ownerSlug>/<chatId>/<file>.
+  if (segments.length < 3) return null;
+  // Reject any hidden segment (`.agent/`, `.git/`, dotfiles) anywhere in the
+  // realpath — closes the symlink-into-hidden-dir escape after realpath.
+  if (segments.some((s) => s.startsWith("."))) return null;
+
+  const [ownerSlug, segChatId, ...rest] = segments;
+  if (!ownerSlug || !segChatId) return null;
+  // Chat-scope fence: only the current chat's workspaces are in range, so one
+  // chat can never preview another chat's private workspace docs.
+  if (segChatId !== fence.chatId) return null;
+  // The sender's own workspace is handled by the self-path resolver (bare key,
+  // #480 rewrite). Keep cross strictly cross-agent.
+  if (ownerSlug === fence.selfSlug) return null;
+
+  const rel = rest.join("/");
+  const key = buildWorkspaceDocKey(ownerSlug, segChatId, rel);
+  if (!key || !key.toLowerCase().endsWith(".md")) return null;
+
+  try {
+    const st = await stat(real);
+    if (!st.isFile()) return null;
+  } catch {
+    return null;
+  }
+
+  return { key, file: real, shortForm: `${ownerSlug}/${rel}` };
 }
 
 /**

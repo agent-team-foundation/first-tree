@@ -4,6 +4,7 @@ import {
   documentContextSchema,
   extractMentions,
   type MentionParticipant,
+  parseWorkspaceDocKey,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
   scanMentionTokens,
@@ -68,7 +69,7 @@ import {
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
-import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
 import { computeRequiresMention } from "../../../utils/requires-mention.js";
@@ -278,6 +279,7 @@ function TextRow({
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const slugToId = useAgentSlugToIdMap();
   const senderName = agentNameFn(msg.senderId);
   const isSelf = myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
@@ -295,8 +297,8 @@ function TextRow({
     if (typeof msg.content !== "string") return JSON.stringify(msg.content);
     if (msg.source === "web") return msg.content;
     const snapshotPaths = new Set(docSnapshots?.keys() ?? []);
-    return linkifyMarkdownDocPaths(msg.content, snapshotPaths);
-  }, [msg.format, msg.content, msg.source, docSnapshots]);
+    return linkifyMarkdownDocPaths(msg.content, snapshotPaths, msg.chatId);
+  }, [msg.format, msg.content, msg.source, msg.chatId, docSnapshots]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -319,7 +321,21 @@ function TextRow({
           event.preventDefault();
           const next = new URLSearchParams(searchParams);
           next.set("docChat", msg.chatId);
-          next.set("docAgent", msg.senderId);
+          // Owner attribution for `docAgent`: a global cross-agent key
+          // `<ownerSlug>/<chatId>/…` (chatId segment === this chat) belongs to
+          // the OWNER, not the sender; self / legacy bare keys stay the sender.
+          // `docAgent` is only a hint here — the drawer authoritatively
+          // re-resolves the owner from the key's own slug for the path-based
+          // fallback (review P2-a), so an unresolved owner does NOT mis-query
+          // the sender's workspace; it just leaves this placeholder in the URL
+          // for `hasDocRef`. The inline snapshot path renders from cache
+          // regardless of `docAgent`.
+          const parsedKey = parseWorkspaceDocKey(docPath);
+          const ownerId =
+            parsedKey && parsedKey.chatId === msg.chatId
+              ? (slugToId(parsedKey.agentSlug) ?? msg.senderId)
+              : msg.senderId;
+          next.set("docAgent", ownerId);
           next.set("docPath", docPath);
 
           // Prefer the inline snapshot variant: hand the drawer the bytes via
@@ -356,7 +372,7 @@ function TextRow({
         );
       },
     }),
-    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams],
+    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams, slugToId],
   );
 
   return (

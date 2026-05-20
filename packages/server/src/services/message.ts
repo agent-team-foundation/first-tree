@@ -202,8 +202,14 @@ async function sendMessageInner(
     // Server-side bottom-line on `metadata.documentContext`: shape via shared
     // schema + byte budgets and sha256 calibration. Snapshot content arrives
     // from a trusted runtime, but server still has to verify so a client bug
-    // can't lodge mismatched hash/size into immutable message history.
-    validateDocumentContext(incomingMeta);
+    // can't lodge mismatched hash/size into immutable message history. The
+    // chat scope additionally rejects a cross-agent snapshot key whose owner
+    // is not a speaker participant of this chat (cross-workspace doc preview
+    // provenance check).
+    validateDocumentContext(incomingMeta, {
+      chatId,
+      participantSlugs: new Set(participants.map((p) => p.name?.toLowerCase()).filter((n): n is string => Boolean(n))),
+    });
     const explicitMentionsRaw = incomingMeta.mentions;
     const explicitMentions = Array.isArray(explicitMentionsRaw)
       ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
