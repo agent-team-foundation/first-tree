@@ -6,10 +6,10 @@ const A = "agent-a";
 const B = "agent-b";
 
 describe("computeRequiresMention", () => {
-  // ── 1-on-1 (the regression first-tree-hub #465 introduced) ────────────────
+  // ── 1-on-1 (the regression first-tree-hub PR 465 introduced) ──────────────
   it("does NOT require a mention in a 1-on-1 where the user is a speaker", () => {
-    // human + their assistant: 2 speakers, user is in. Post-#465 every chat is
-    // type='group', but a 1-on-1 must still send without an explicit @mention.
+    // human + their assistant: 2 speakers, user is in. After PR 465 every chat
+    // is type='group', but a 1-on-1 must still send without an explicit @mention.
     expect(computeRequiresMention([ME, A], ME)).toBe(false);
   });
 

@@ -1277,8 +1277,8 @@ export function ChatView({
    * 400. See proposals/group-chat-ux-improvements §2.
    *
    * Keyed on **membership shape**, not `chats.type`. Since the group-chat
-   * convergence (first-tree-hub #465 / first-tree-context #281) every chat is
-   * created with `type='group'`, so the old `chatDetail.type === "group"`
+   * convergence (first-tree-hub PR 465 / first-tree-context PR 281) every chat
+   * is created with `type='group'`, so the old `chatDetail.type === "group"`
    * check fired for 1-on-1 DMs too and forced an @mention there — breaking the
    * "DM doesn't need an explicit @mention" UX. The server already keys on
    * shape (`services/message.ts` `isOneOnOne = participants.length === 2`,

@@ -7,8 +7,8 @@
  * needs an explicit mention; a real group (3+ speakers) does.
  *
  * Keyed on **speaker count**, NOT `chats.type`. Since the group-chat
- * convergence (first-tree-hub #465 / first-tree-context #281) every chat is
- * created with `type='group'`, so a `type === "group"` check forced an
+ * convergence (first-tree-hub PR 465 / first-tree-context PR 281) every chat
+ * is created with `type='group'`, so a `type === "group"` check forced an
  * `@mention` in 1-on-1 DMs too — breaking the "DM doesn't need an explicit
  * @mention" UX. This predicate keys on shape instead, matching the server.
  *
