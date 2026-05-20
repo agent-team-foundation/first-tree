@@ -655,11 +655,13 @@ export class SessionManager {
         this._activeCount--;
         candidate.session.handler.shutdown().catch(() => {});
       }
-      // LRU eviction is a local memory-management concern, not operator intent
-      // — do NOT emit a wire state. The server row stays as last reported;
-      // the local `evictedMappings` entry keeps resume-on-next-message working.
-      // (`suspended` here would accumulate rows in agent_chat_sessions forever
-      // since the cleanup cron is out of scope for this redesign.)
+      // LRU eviction is local memory-management, not operator intent — do
+      // NOT emit a wire state here. The chat now lives in `evictedMappings`
+      // and the next `agent:bound` (initial bind or reconnect) will pick it
+      // up via `getEvictedChatIds()` in `agent-slot.fullStateSync` and
+      // advertise it as `suspended`, so the server's `agent_chat_sessions.state`
+      // converges to "handler is gone" on the next sync without churn on
+      // every eviction.
       this.sessions.delete(candidate.key);
       this.sessionRuntimeStates.delete(candidate.key);
       // Drop the trigger alongside the session — the next message routed to
