@@ -84,6 +84,64 @@ describe("ClientConnection — auth:expired reconnect", () => {
     await connection.disconnect();
   }, 10_000);
 
+  it("emits auth:fatal and stops reconnecting on mid-session auth:rejected", async () => {
+    // After registration, server suddenly rejects the token. Without auth:fatal
+    // emit, the process would stay up with no operator-visible signal — the
+    // close handler bypasses scheduleReconnect (closing=true) and emits nothing
+    // else, so the agent silently stops responding to inbox pushes.
+    let socketCount = 0;
+    wss.on("connection", (ws: WebSocket) => {
+      const n = ++socketCount;
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(String(raw)) as { type: string };
+        if (msg.type === "auth") {
+          ws.send(JSON.stringify({ type: "auth:ok" }));
+          return;
+        }
+        if (msg.type === "client:register") {
+          ws.send(JSON.stringify({ type: "client:registered" }));
+          if (n === 1) {
+            setTimeout(() => {
+              ws.send(JSON.stringify({ type: "auth:rejected", reason: "revoked" }));
+              ws.close(4401, "rejected");
+            }, 20);
+          }
+        }
+      });
+    });
+
+    const connection = new ClientConnection({
+      serverUrl,
+      clientId: "client_runtime_rejected",
+      getAccessToken: async () => "tok",
+    });
+
+    const events: string[] = [];
+    const fatals: Error[] = [];
+    connection.on("reconnecting", () => events.push("reconnecting"));
+    connection.on("connected", () => events.push("connected"));
+    connection.on("auth:fatal", (err) => {
+      events.push("auth:fatal");
+      fatals.push(err);
+    });
+    connection.on("error", () => {});
+
+    await connection.connect();
+    expect(connection.isConnected).toBe(true);
+
+    // Wait long enough for the server's 20ms-delayed auth:rejected push +
+    // close + any (incorrectly scheduled) reconnect attempts to settle.
+    await new Promise<void>((r) => setTimeout(r, 1500));
+
+    expect(events).toContain("auth:fatal");
+    expect(events).not.toContain("reconnecting");
+    expect(socketCount).toBe(1);
+    expect(connection.isConnected).toBe(false);
+    expect(fatals[0]?.message).toMatch(/auth:rejected/i);
+
+    await connection.disconnect();
+  }, 10_000);
+
   it("does not loop-reconnect when auth:rejected fires during initial handshake", async () => {
     let socketCount = 0;
     wss.on("connection", (ws: WebSocket) => {
