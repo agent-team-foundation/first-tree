@@ -53,3 +53,5 @@ drizzle/meta/
 # to the repo's dist instead of the globally installed release).
 .local-bin/
 .dev/
+.agents/skills/
+.claude/skills/
