@@ -77,6 +77,15 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
     // `{ installed: true }` is the right shape here — it puts the
     // UpdateManager into `pendingRestart=true`, blocking further attempts
     // until the operator restarts the process.
+    //
+    // Note: we deliberately do NOT call `recordUpdateAttempt` on this
+    // branch. The on-disk `blocked` record written by the previous
+    // process is exactly the state we want to surface to admins; writing
+    // a fresh record here would just push the timestamp forward without
+    // adding information. "Freeze, don't refresh" is the intended
+    // semantics — if you change it, also reconsider how the admin
+    // dashboard interprets `at` (currently: "when did this client first
+    // get stuck on $target").
     if (isLoopGuarded(targetVersion)) {
       print.line(
         `  [update] Refusing to retry ${targetVersion} — a previous attempt completed without\n` +
@@ -109,17 +118,25 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       return { installed: false };
     }
 
-    // Loop detection: npm reported success, but did the version actually
-    // advance? We treat "installed >= target" as success, but if npm
-    // resolved the spec to something `<= currentVersion`, we're about to
-    // restart into the same binary that triggered the update. Skip the
-    // restart, mark the loop guard, and report it. semver.valid checks
-    // protect against `result.installedVersion === null` (npm stdout
-    // didn't parse cleanly) — in that case we proceed normally, since we
-    // can't prove no-advance.
+    // Loop detection: npm reported success, but did it actually install
+    // the target? Comparing `installed` against `targetVersion` (rather
+    // than `currentVersion`) is deliberate — the failure we're guarding
+    // against is "npm resolved our spec to something other than what we
+    // asked for" (stale dist-tag, channel misconfig, registry mirror
+    // lag). If `installed < targetVersion`, exit(75) restarts into a
+    // binary still older than what the server is advertising and the
+    // drift check on the next welcome triggers another install: that's
+    // the loop. Using `lt(installed, target)` (not
+    // `lte(installed, current)`) also means an intentional server-driven
+    // downgrade — should we ever support one — wouldn't be misflagged
+    // as a no-advance loop, because there'd be no drift left to trigger
+    // a second attempt. semver.valid guards protect against
+    // `result.installedVersion === null` (npm stdout didn't parse
+    // cleanly); in that case we proceed normally because we can't
+    // disprove a successful install.
     const installed = result.installedVersion;
-    if (installed && semver.valid(installed) && semver.valid(currentVersion) && semver.lte(installed, currentVersion)) {
-      const reason = `npm reported install of ${installed}, but running version ${currentVersion} would not advance (requested ${targetVersion})`;
+    if (installed && semver.valid(installed) && semver.valid(targetVersion) && semver.lt(installed, targetVersion)) {
+      const reason = `npm reported install of ${installed}, but the server-advertised target was ${targetVersion} (running ${currentVersion})`;
       print.line(`  [update] WARNING: ${reason}\n`);
       print.line("  [update] Skipping restart to avoid an exit-75 → reboot loop. Loop guard armed.\n");
       recordUpdateAttempt({
