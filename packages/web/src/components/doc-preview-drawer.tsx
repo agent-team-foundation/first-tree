@@ -1,3 +1,4 @@
+import { parseWorkspaceDocKey } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
 import {
@@ -13,6 +14,7 @@ import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { getMeDoc } from "../api/me-docs.js";
 import { docPreviewPathFromHref } from "../lib/doc-preview-links.js";
+import { useAgentSlugToIdMap } from "../lib/use-agent-name-map.js";
 import { cn } from "../lib/utils.js";
 import { type DocSnapshotEntry, docSnapshotQueryKey } from "../pages/workspace/center/chat-view.js";
 import { Button } from "./ui/button.js";
@@ -190,17 +192,37 @@ export function DocPreviewDrawer() {
     };
   }, [hasDocRef, isMobile]);
 
+  // A cross-agent docPath is a global key `<ownerSlug>/<chatId>/<rel>`; the
+  // path-based fallback endpoint is keyed by (owner agentId, rel) under
+  // `workspaces/<ownerName>/<chatId>/`, so strip the owner+chatId prefix and
+  // send just `rel`. Self / legacy bare keys (or a deep self path whose chatId
+  // segment doesn't match this chat) pass through unchanged.
+  const slugToId = useAgentSlugToIdMap();
+  const parsedKey = docPath ? parseWorkspaceDocKey(docPath) : null;
+  const isCrossKey = parsedKey !== null && parsedKey.chatId === docChatId;
+  // For a cross key the OWNER is named in the key itself — resolve the owner
+  // agent id from that slug rather than trusting `docAgent` (the click handler
+  // may have stored the sender as a hasDocRef placeholder when the owner slug
+  // couldn't be resolved). This keeps the fallback pointed at the owner's
+  // workspace even after a reload / cache miss; if the owner can't be resolved
+  // we DISABLE the fallback rather than query the sender, which could surface a
+  // same-named file from the WRONG workspace (review P2-a).
+  const crossOwnerId = isCrossKey && parsedKey ? slugToId(parsedKey.agentSlug) : null;
+  const fallbackAgentId = isCrossKey ? crossOwnerId : docAgentId;
+  const apiPath = isCrossKey && parsedKey ? parsedKey.rel : (docPath ?? "");
+  const apiBasePath = isCrossKey ? undefined : docBasePath;
   const previewQuery = useQuery({
-    queryKey: ["me", "docs", "preview", docChatId, docAgentId, docBasePath, docPath],
+    queryKey: ["me", "docs", "preview", docChatId, fallbackAgentId, apiBasePath, apiPath],
     queryFn: () =>
       getMeDoc(docChatId ?? "", {
-        agentId: docAgentId ?? "",
-        basePath: docBasePath,
-        path: docPath ?? "",
+        agentId: fallbackAgentId ?? "",
+        basePath: apiBasePath,
+        path: apiPath,
       }),
     // Skip the network round-trip when we already have an inline snapshot
-    // pre-staged in the React Query cache — see chat-view click handler.
-    enabled: hasDocRef && !inlineSnapshot,
+    // pre-staged in the React Query cache — see chat-view click handler. Also
+    // skip for a cross key whose owner couldn't be resolved (fail closed).
+    enabled: hasDocRef && !inlineSnapshot && Boolean(fallbackAgentId),
   });
   const resolvedDocPath = inlineSnapshot?.path ?? previewQuery.data?.ref.path ?? docPath;
   const displayDocPath = inlineSnapshot?.path ?? previewQuery.data?.path ?? docPath;

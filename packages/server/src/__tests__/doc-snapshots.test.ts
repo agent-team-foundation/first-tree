@@ -137,4 +137,94 @@ describe("validateDocumentContext", () => {
       ).toThrow(BadRequestError);
     }
   });
+
+  describe("cross-agent provenance (chatScope)", () => {
+    const scope = (slugs: string[]) => ({ chatId: "chat-1", participantSlugs: new Set(slugs) });
+
+    it("accepts a cross-agent global key when the owner is a chat participant", () => {
+      expect(() =>
+        validateDocumentContext(
+          {
+            documentContext: {
+              kind: "snapshot",
+              docs: [snapshotDoc("assistant/chat-1/design.md", "# theirs\n")],
+            },
+          },
+          scope(["coder", "assistant"]),
+        ),
+      ).not.toThrow();
+    });
+
+    it("rejects a cross-agent global key when the owner is NOT a chat participant", () => {
+      expect(() =>
+        validateDocumentContext(
+          {
+            documentContext: {
+              kind: "snapshot",
+              docs: [snapshotDoc("intruder/chat-1/secret.md", "# leak\n")],
+            },
+          },
+          scope(["coder", "assistant"]),
+        ),
+      ).toThrow(BadRequestError);
+    });
+
+    it("leaves bare self keys unaffected by the participant check", () => {
+      expect(() =>
+        validateDocumentContext(
+          {
+            documentContext: {
+              kind: "snapshot",
+              docs: [snapshotDoc("docs/design.md", "# mine\n")],
+            },
+          },
+          scope(["coder"]),
+        ),
+      ).not.toThrow();
+    });
+
+    it("rejects a participant-owned global key that names a DIFFERENT chat (chatId fence — P1)", () => {
+      // `assistant` is a participant, so `assistant/other-chat/design.md` is a
+      // cross key shape pointing at another chat's workspace — it must not slip
+      // past the `workspaces/*/<currentChatId>/` fence.
+      expect(() =>
+        validateDocumentContext(
+          {
+            documentContext: {
+              kind: "snapshot",
+              docs: [snapshotDoc("assistant/other-chat/design.md", "# x\n")],
+            },
+          },
+          scope(["coder", "assistant"]),
+        ),
+      ).toThrow(BadRequestError);
+    });
+
+    it("allows a deep SELF path whose first segment is not a participant slug", () => {
+      // `docs/api/design.md` is a legitimate nested self path; `docs` is not a
+      // participant, so the chatId-fence rule must not over-reject it.
+      expect(() =>
+        validateDocumentContext(
+          {
+            documentContext: {
+              kind: "snapshot",
+              docs: [snapshotDoc("docs/api/design.md", "# nested\n")],
+            },
+          },
+          scope(["coder", "assistant"]),
+        ),
+      ).not.toThrow();
+    });
+
+    it("skips the provenance check entirely when no chatScope is supplied (back-compat)", () => {
+      expect(() =>
+        validateDocumentContext({
+          documentContext: {
+            kind: "snapshot",
+            docs: [snapshotDoc("intruder/chat-1/secret.md", "# leak\n")],
+          },
+        }),
+      ).not.toThrow();
+    });
+  });
 });

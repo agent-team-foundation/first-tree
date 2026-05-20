@@ -1,4 +1,5 @@
 import {
+  buildWorkspaceDocKey,
   normalizeDocLinkPath,
   scanBareDocPathTokens,
   stripDocPathLineSuffix,
@@ -62,8 +63,16 @@ export function docPreviewPathFromHref(href: string, currentDocPath?: string | n
  * the user still sees the line number, but the href has no `:` before a `/`,
  * so react-markdown's `defaultUrlTransform` keeps it instead of stripping it
  * to `""` (an empty href made the anchor reload the whole page on click).
+ *
+ * Cross-agent (`chatId` provided): a snapshot of a file in ANOTHER agent's
+ * workspace is keyed globally as `<ownerSlug>/<chatId>/<rel>`, and the runtime
+ * rewrites the visible mention to the short `<ownerSlug>/<rel>` form. So when
+ * a bare canonical token isn't itself a snapshot key, we also try expanding it
+ * with the current chat id (`<firstSeg>/<chatId>/<rest>`) and link to that
+ * global key if it matches. Self/legacy bare keys still match directly and
+ * win (tried first), so self previews are unchanged.
  */
-export function linkifyMarkdownDocPaths(markdown: string, snapshotPaths: ReadonlySet<string>): string {
+export function linkifyMarkdownDocPaths(markdown: string, snapshotPaths: ReadonlySet<string>, chatId?: string): string {
   if (snapshotPaths.size === 0) return markdown;
   const matches = scanBareDocPathTokens(markdown);
   if (matches.length === 0) return markdown;
@@ -79,11 +88,31 @@ export function linkifyMarkdownDocPaths(markdown: string, snapshotPaths: Readonl
     // like `.agent/secret.md` / `../outside.md` canonicalise to null; tokens
     // with no embedded snapshot are conversational mentions, not previews.
     const canonical = normalizeDocLinkPath(stripDocPathLineSuffix(match.raw));
-    if (!canonical || !snapshotPaths.has(canonical)) continue;
+    if (!canonical) continue;
+    const target = resolveSnapshotKey(canonical, snapshotPaths, chatId);
+    if (!target) continue;
     out += markdown.slice(cursor, match.start);
-    out += `[${match.raw}](${canonical})`;
+    out += `[${match.raw}](${target})`;
     cursor = match.end;
   }
   out += markdown.slice(cursor);
   return out;
+}
+
+/**
+ * Map a canonical bare token to the snapshot key it should link to, or null if
+ * none. Self/legacy bare keys are tried first (so self previews are unchanged);
+ * otherwise, with a chat id, the token is treated as the short cross form
+ * `<ownerSlug>/<rest>` and expanded to the global `<ownerSlug>/<chatId>/<rest>`
+ * key.
+ */
+function resolveSnapshotKey(canonical: string, snapshotPaths: ReadonlySet<string>, chatId?: string): string | null {
+  if (snapshotPaths.has(canonical)) return canonical;
+  if (!chatId) return null;
+  const slash = canonical.indexOf("/");
+  if (slash <= 0) return null;
+  const ownerSlug = canonical.slice(0, slash);
+  const rest = canonical.slice(slash + 1);
+  const global = buildWorkspaceDocKey(ownerSlug, chatId, rest);
+  return global && snapshotPaths.has(global) ? global : null;
 }
