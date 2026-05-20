@@ -243,11 +243,19 @@ describe("sessionEventService", () => {
 
     await sessionEventService.appendEvent(app.db, agent.uuid, c, {
       kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: "https://github.com/example/tree" },
+      payload: {
+        purpose: "design_decision",
+        treeRepoUrl: "https://github.com/example/tree",
+        nodePath: "members/Gandy2025/NODE.md",
+      },
     });
     await sessionEventService.appendEvent(app.db, agent.uuid, c, {
       kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: "https://github.com/example/tree" },
+      payload: {
+        purpose: "design_decision",
+        treeRepoUrl: "https://github.com/example/tree",
+        nodePath: "designs/context-tree-usage-signal.md",
+      },
     });
     await sessionEventService.appendEvent(app.db, agent.uuid, c, {
       kind: "tool_call",
@@ -255,7 +263,7 @@ describe("sessionEventService", () => {
     });
     await sessionEventService.appendEvent(app.db, "missing-agent", c, {
       kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: null },
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: null },
     });
 
     const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
@@ -273,6 +281,9 @@ describe("sessionEventService", () => {
     expect(new Date(summary.recentEvents[0]?.createdAt ?? 0).getTime()).toBeGreaterThanOrEqual(
       new Date(summary.recentEvents[1]?.createdAt ?? 0).getTime(),
     );
+    // nodePath is surfaced from the stored payload, newest-first.
+    expect(summary.recentEvents[0]?.nodePath).toBe("designs/context-tree-usage-signal.md");
+    expect(summary.recentEvents[1]?.nodePath).toBe("members/Gandy2025/NODE.md");
   });
 
   it("exposes the agent's avatar color token in the feed so the web client renders the same disc as elsewhere", async () => {
@@ -286,7 +297,7 @@ describe("sessionEventService", () => {
     await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design-spike" });
     await sessionEventService.appendEvent(app.db, agent.uuid, c, {
       kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: null },
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
     });
 
     const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
@@ -302,7 +313,7 @@ describe("sessionEventService", () => {
     await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design-spike" });
     await sessionEventService.appendEvent(app.db, agent.uuid, c, {
       kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: null },
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
     });
 
     const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
@@ -332,7 +343,7 @@ describe("sessionEventService", () => {
 
     await sessionEventService.appendEvent(app.db, agent.uuid, crossOrgChatId, {
       kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: null },
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
     });
 
     const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
@@ -353,12 +364,36 @@ describe("sessionEventService", () => {
 
     await sessionEventService.appendEvent(app.db, agent.uuid, c, {
       kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: null },
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
     });
 
     const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
     const event = summary.recentEvents[0];
     expect(event?.chatId).toBe(c);
     expect(event?.chatTitle).toBeNull();
+  });
+
+  it("surfaces nodePath null for a pre-P0 event whose payload predates the field", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "legacy" });
+
+    // Simulate a row written before the nodePath field existed — insert the
+    // legacy payload shape directly (appendEvent now requires nodePath, so it
+    // can't reproduce this). The feed must degrade to nodePath: null rather
+    // than throw at the snapshot-schema parse boundary.
+    await app.db.insert(sessionEvents).values({
+      id: uuidv7(),
+      agentId: agent.uuid,
+      chatId: c,
+      seq: 1,
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
+    expect(summary.recentEvents).toHaveLength(1);
+    expect(summary.recentEvents[0]?.nodePath).toBeNull();
   });
 });

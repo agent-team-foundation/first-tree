@@ -209,7 +209,19 @@ function ChangeMap({
 function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const windowText = snapshot.usage.windowDays === 1 ? "1 day" : `${snapshot.usage.windowDays} days`;
   const agentText = snapshot.usage.agentCount === 1 ? "1 agent" : `${snapshot.usage.agentCount} agents`;
-  const usageText = snapshot.usage.usageCount === 1 ? "1 time" : `${snapshot.usage.usageCount} times`;
+  const usageText = snapshot.usage.usageCount === 1 ? "once" : `${snapshot.usage.usageCount} times`;
+
+  // Honest copy: each usage event is now a real Read of a Context Tree file
+  // (the agent runtime emits one per tree-file read, with the node path). The
+  // signal knows the tree was read — not why — so it makes no "design
+  // decision" claim. See packages/client/src/handlers/claude-code.ts.
+  if (snapshot.usage.usageCount === 0) {
+    return (
+      <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
+        <span>No agent has read the context tree in the last {windowText}.</span>
+      </div>
+    );
+  }
 
   return (
     <div className="text-lead context-signal" style={{ color: "var(--fg-3)" }}>
@@ -217,7 +229,7 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
         In the last {windowText}, <mark>{agentText}</mark>
       </span>
       <span>
-        used the tree <mark>{usageText}</mark> to make design decisions.
+        read the context tree <mark>{usageText}</mark>.
       </span>
     </div>
   );
@@ -308,15 +320,25 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
               </span>
               <span className="context-usage-feed-text">
                 <span className="context-usage-feed-agent">{event.agentName}</span>
-                <span className="context-usage-feed-action"> consulted tree for context </span>
+                <span className="context-usage-feed-action"> read </span>
+                {event.nodePath ? (
+                  <span className="context-usage-feed-node" title={event.nodePath}>
+                    {event.nodePath}
+                  </span>
+                ) : (
+                  <span className="context-usage-feed-action">the context tree</span>
+                )}
                 {chatId ? (
-                  <button
-                    type="button"
-                    className="context-usage-feed-chat"
-                    onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
-                  >
-                    {chatLabel(event)}
-                  </button>
+                  <>
+                    <span className="context-usage-feed-action"> in </span>
+                    <button
+                      type="button"
+                      className="context-usage-feed-chat"
+                      onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
+                    >
+                      {chatLabel(event)}
+                    </button>
+                  </>
                 ) : null}
               </span>
               <span className="context-usage-feed-time">{relativeTimeLabel(event.createdAt, now)}</span>

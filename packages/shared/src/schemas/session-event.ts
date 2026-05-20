@@ -59,6 +59,12 @@ export type TurnEndEventPayload = z.infer<typeof turnEndEventPayload>;
 export const contextTreeUsageEventPayload = z.object({
   purpose: z.literal("design_decision"),
   treeRepoUrl: z.string().nullable(),
+  // Tree-root-relative path of the file the agent actually Read (e.g.
+  // `members/Gandy2025/NODE.md`). Null when the read target could not be
+  // resolved to a node path. Emitted only when a view tool reads a file under
+  // the configured Context Tree root — see the client handler's tool-call
+  // processor. (Pre-P0 events lack this field; the server surfaces null then.)
+  nodePath: z.string().nullable(),
 });
 export type ContextTreeUsageEventPayload = z.infer<typeof contextTreeUsageEventPayload>;
 

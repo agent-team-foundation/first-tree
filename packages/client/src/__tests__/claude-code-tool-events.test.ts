@@ -1,6 +1,6 @@
 import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
 import { describe, expect, it, vi } from "vitest";
-import { createToolCallProcessor } from "../handlers/claude-code.js";
+import { createToolCallProcessor, treeNodePathOf } from "../handlers/claude-code.js";
 
 /**
  * S11 (NC2 client handler) — tool-call processor fixtures.
@@ -284,5 +284,180 @@ describe("createToolCallProcessor", () => {
     if (!ev || ev.kind !== "thinking") throw new Error("expected thinking event");
     // Payload is intentionally empty — thinking content is never persisted.
     expect(ev.payload).toEqual({});
+  });
+});
+
+/**
+ * P0 Context Tree usage signal. The processor emits `context_tree_usage` only
+ * when a view tool SUCCESSFULLY reads a file under the configured tree root,
+ * carrying the tree-root-relative node path — replacing the old
+ * per-inbound-message vanity emit. The emit fires on the successful
+ * tool_result (not the tool_use request), so failed/aborted reads never count.
+ * When no tree binding is configured, it emits nothing.
+ */
+describe("createToolCallProcessor — Context Tree usage signal", () => {
+  const TREE = "/home/op/.first-tree/tree";
+  const binding = { path: TREE, repoUrl: "https://github.com/example/tree" } as const;
+
+  function usageEvents(emit: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>) {
+    return emit.mock.calls.map((c) => c[0]).filter((ev) => ev.kind === "context_tree_usage");
+  }
+
+  it("emits context_tree_usage with the node path when a tree Read succeeds", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    processor.onMessage(assistantToolUse("r1", "Read", { file_path: `${TREE}/members/Gandy2025/NODE.md` }));
+    // No usage on the tool_use request — only after the read succeeds.
+    expect(usageEvents(emit)).toHaveLength(0);
+    processor.onMessage(userToolResult("r1", "file contents"));
+
+    const usage = usageEvents(emit);
+    expect(usage).toHaveLength(1);
+    const ev = usage[0];
+    if (!ev || ev.kind !== "context_tree_usage") throw new Error("expected context_tree_usage");
+    expect(ev.payload.nodePath).toBe("members/Gandy2025/NODE.md");
+    expect(ev.payload.treeRepoUrl).toBe("https://github.com/example/tree");
+    expect(ev.payload.purpose).toBe("design_decision");
+  });
+
+  it("emits for NotebookRead under the tree as well", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    processor.onMessage(assistantToolUse("r2", "NotebookRead", { file_path: `${TREE}/designs/spike.md` }));
+    processor.onMessage(userToolResult("r2", "cells"));
+
+    const usage = usageEvents(emit);
+    expect(usage).toHaveLength(1);
+    expect(usage[0]?.kind === "context_tree_usage" && usage[0].payload.nodePath).toBe("designs/spike.md");
+  });
+
+  it("does NOT emit when a tree Read FAILS (is_error)", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    processor.onMessage(assistantToolUse("r3", "Read", { file_path: `${TREE}/missing/NODE.md` }));
+    processor.onMessage(userToolResult("r3", "ENOENT: no such file", true));
+
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+
+  it("does NOT emit for an aborted tree Read that never returns a result", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    processor.onMessage(assistantToolUse("r4", "Read", { file_path: `${TREE}/NODE.md` }));
+    // Turn aborted before the tool_result arrives.
+    processor.flush();
+
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+
+  it("does NOT emit when Read targets a file outside the tree", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    processor.onMessage(assistantToolUse("r5", "Read", { file_path: "/home/op/project/src/index.ts" }));
+    processor.onMessage(userToolResult("r5", "code"));
+
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+
+  it("does NOT match a sibling dir that shares the tree-root prefix", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    // `/home/op/.first-tree/tree-other/...` must not count as inside the tree.
+    processor.onMessage(assistantToolUse("r6", "Read", { file_path: "/home/op/.first-tree/tree-other/NODE.md" }));
+    processor.onMessage(userToolResult("r6", "x"));
+
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+
+  it("does NOT emit for a non-view tool even if an arg path is under the tree", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    processor.onMessage(
+      assistantToolUse("r7", "Bash", { command: `cat ${TREE}/NODE.md`, file_path: `${TREE}/NODE.md` }),
+    );
+    processor.onMessage(userToolResult("r7", "contents"));
+
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+
+  it("emits nothing when no Context Tree binding is configured", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit); // no binding
+
+    processor.onMessage(assistantToolUse("r8", "Read", { file_path: `${TREE}/NODE.md` }));
+    processor.onMessage(userToolResult("r8", "x"));
+
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+
+  it("emits nothing when the binding path is null", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, { path: null, repoUrl: null });
+
+    processor.onMessage(assistantToolUse("r9", "Read", { file_path: `${TREE}/NODE.md` }));
+    processor.onMessage(userToolResult("r9", "x"));
+
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+
+  it("carries a null treeRepoUrl through when the binding has no repo url", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, { path: TREE, repoUrl: null });
+
+    processor.onMessage(assistantToolUse("r10", "Read", { file_path: `${TREE}/NODE.md` }));
+    processor.onMessage(userToolResult("r10", "x"));
+
+    const usage = usageEvents(emit);
+    expect(usage).toHaveLength(1);
+    const ev = usage[0];
+    if (!ev || ev.kind !== "context_tree_usage") throw new Error("expected context_tree_usage");
+    expect(ev.payload.treeRepoUrl).toBeNull();
+    expect(ev.payload.nodePath).toBe("NODE.md");
+  });
+
+  it("does NOT emit when Read input has no string file_path", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit, binding);
+
+    processor.onMessage(assistantToolUse("r11", "Read", { offset: 0 }));
+    processor.onMessage(userToolResult("r11", "x"));
+
+    expect(usageEvents(emit)).toHaveLength(0);
+  });
+});
+
+describe("treeNodePathOf", () => {
+  const TREE = "/home/op/.first-tree/tree";
+
+  it("relativizes a file under the tree root", () => {
+    expect(treeNodePathOf(`${TREE}/members/x/NODE.md`, TREE)).toBe("members/x/NODE.md");
+  });
+
+  it("tolerates a trailing slash on the tree root", () => {
+    expect(treeNodePathOf(`${TREE}/NODE.md`, `${TREE}/`)).toBe("NODE.md");
+  });
+
+  it("returns null for a path outside the tree", () => {
+    expect(treeNodePathOf("/home/op/project/x.ts", TREE)).toBeNull();
+  });
+
+  it("returns null for a sibling dir sharing the prefix", () => {
+    expect(treeNodePathOf("/home/op/.first-tree/tree-other/NODE.md", TREE)).toBeNull();
+  });
+
+  it("returns null for the tree root itself (no node path)", () => {
+    expect(treeNodePathOf(TREE, TREE)).toBeNull();
+  });
+
+  it("returns null on empty inputs", () => {
+    expect(treeNodePathOf("", TREE)).toBeNull();
+    expect(treeNodePathOf(`${TREE}/NODE.md`, "")).toBeNull();
   });
 });

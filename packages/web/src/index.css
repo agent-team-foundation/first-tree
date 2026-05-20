@@ -1062,6 +1062,12 @@
   color: var(--fg-3);
 }
 
+.context-usage-feed-node {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .context-usage-feed-chat {
   background: none;
   border: 0;

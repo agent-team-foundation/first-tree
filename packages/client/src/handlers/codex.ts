@@ -177,13 +177,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return sessionCtx.formatInboundContent(message).then((text) => text);
   }
 
-  function emitContextTreeUsage(sessionCtx: SessionContext): void {
-    if (!contextTreePath) return;
-    sessionCtx.emitEvent({
-      kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: contextTreeRepoUrl },
-    });
-  }
+  // NOTE: codex's stream exposes only `command_execution` (shell) items — it
+  // cannot cleanly tell which Context Tree node a turn read without parsing
+  // shell commands. Rather than emit a fake per-turn signal (the old
+  // `emitContextTreeUsage` did), codex produces NO `context_tree_usage` events.
+  // Precise codex tree-read tracking is a known gap (P1). See the claude-code
+  // handler's tool-call processor for the real per-read signal.
 
   async function prepareGitWorktrees(
     payload: AgentRuntimeConfigPayload,
@@ -349,7 +348,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
     const abort = new AbortController();
     currentAbort = abort;
-    emitContextTreeUsage(sessionCtx);
     sessionCtx.setRuntimeState("working");
 
     // Emit exactly one `turn_end` per turn, after `forwardResult` resolves —

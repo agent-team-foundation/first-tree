@@ -189,15 +189,68 @@ function extractToolResultText(content: unknown): string {
 }
 
 /**
+ * View tools whose `file_path` argument names a single file the model is
+ * reading. A read of a file under the Context Tree root is the honest
+ * "agent consulted the tree" signal (see `treeNodePathOf`). Search tools
+ * (Grep/Glob) are excluded — they scan, they don't read a specific node.
+ */
+const TREE_READ_TOOL_NAMES: ReadonlySet<string> = new Set(["Read", "NotebookRead"]);
+
+/** Extract a string `file_path` argument from a tool_use input, if present. */
+function readFilePathArg(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const fp = (input as { file_path?: unknown }).file_path;
+  return typeof fp === "string" ? fp : null;
+}
+
+/**
+ * If `filePath` lives under `contextTreePath`, return its tree-root-relative
+ * path (e.g. `members/Gandy2025/NODE.md`); otherwise null. The agent reads
+ * tree files by absolute path (CLAUDE.md points it at the full tree at
+ * `contextTreePath`), so a prefix match on the normalised root is the filter.
+ * The trailing-slash trim keeps `/a/tree` from matching `/a/tree-other/x`.
+ */
+export function treeNodePathOf(filePath: string, contextTreePath: string): string | null {
+  if (!filePath || !contextTreePath) return null;
+  const root = contextTreePath.endsWith("/") ? contextTreePath.slice(0, -1) : contextTreePath;
+  if (!filePath.startsWith(`${root}/`)) return null;
+  const rel = filePath.slice(root.length + 1);
+  return rel.length > 0 ? rel : null;
+}
+
+/**
+ * If a tool with this name + input is a tree-file read, return the node path
+ * it read; else null.
+ */
+function treeReadNodePath(toolName: string, input: unknown, contextTreePath: string): string | null {
+  if (!TREE_READ_TOOL_NAMES.has(toolName)) return null;
+  const filePath = readFilePathArg(input);
+  if (filePath === null) return null;
+  return treeNodePathOf(filePath, contextTreePath);
+}
+
+/** Context Tree binding the tool-call processor needs to emit usage signals. */
+export type ContextTreeBinding = { path: string | null; repoUrl: string | null };
+
+/**
  * Pair `tool_use` (assistant) with `tool_result` (user) blocks and emit a
  * `tool_call` event per pair. Unpaired entries are flushed as `status: "pending"`.
+ *
+ * When a `contextTree` binding is supplied, a view tool whose read of a file
+ * under the tree root SUCCEEDS ALSO emits a `context_tree_usage` event carrying
+ * the node path — the honest replacement for the old per-inbound-message emit.
+ * Emitting on the successful tool_result (not the tool_use request) means
+ * failed/aborted reads never inflate the signal.
  */
 export type ToolCallProcessor = {
   onMessage(message: unknown): void;
   flush(): void;
 };
 
-export function createToolCallProcessor(emit: (event: SessionEvent) => void): ToolCallProcessor {
+export function createToolCallProcessor(
+  emit: (event: SessionEvent) => void,
+  contextTree?: ContextTreeBinding,
+): ToolCallProcessor {
   type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
   const pending = new Map<string, Pending>();
 
@@ -219,6 +272,23 @@ export function createToolCallProcessor(emit: (event: SessionEvent) => void): To
         ...(resultPreview !== undefined ? { resultPreview } : {}),
       },
     });
+
+    // Honest Context Tree usage: a view tool that successfully read a file
+    // under the tree root means the agent actually consulted that node. Emit
+    // here (on the successful tool_result), not on the tool_use request, so
+    // failed reads (is_error) and aborted/unanswered reads never count.
+    // Carries the node path so the web feed can show which node was read.
+    // Replaces the old unconditional per-inbound-message emit (the vanity metric).
+    if (status === "ok" && contextTree?.path) {
+      const nodePath = treeReadNodePath(entry.name, entry.args, contextTree.path);
+      if (nodePath !== null) {
+        emit({
+          kind: "context_tree_usage",
+          payload: { purpose: "design_decision", treeRepoUrl: contextTree.repoUrl, nodePath },
+        });
+      }
+    }
+
     pending.delete(block.tool_use_id);
   }
 
@@ -351,8 +421,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     sessionCtx: SessionContext,
     sessionId: string,
   ): Promise<SDKUserMessage> {
-    emitContextTreeUsage(sessionCtx);
-
     // Image messages — two supported shapes:
     //   1. imageRef: `{imageId, mimeType, filename, size}` — new path. Bytes
     //      live on local disk, delivered via the `image_payload` WS push.
@@ -427,14 +495,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       parent_tool_use_id: null,
       session_id: sessionId,
     };
-  }
-
-  function emitContextTreeUsage(sessionCtx: SessionContext): void {
-    if (!contextTreePath) return;
-    sessionCtx.emitEvent({
-      kind: "context_tree_usage",
-      payload: { purpose: "design_decision", treeRepoUrl: contextTreeRepoUrl },
-    });
   }
 
   /**
@@ -712,7 +772,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   async function consumeOutput(sessionCtx: SessionContext): Promise<void> {
-    const toolCallProcessor = createToolCallProcessor((event) => sessionCtx.emitEvent(event));
+    const toolCallProcessor = createToolCallProcessor((event) => sessionCtx.emitEvent(event), {
+      path: contextTreePath,
+      repoUrl: contextTreeRepoUrl,
+    });
     try {
       while (true) {
         if (!currentQuery) return;

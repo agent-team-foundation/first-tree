@@ -76,6 +76,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         agentAvatarColorToken: "hue-1",
         chatId: "chat-design-spike",
         chatTitle: "design-spike",
+        nodePath: "members/Gandy2025/designs/context-tree-usage-signal.md",
         createdAt: new Date(Date.now() - 2 * 60_000).toISOString(),
       },
       {
@@ -85,6 +86,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         agentAvatarColorToken: "hue-4",
         chatId: "chat-onboarding-q3",
         chatTitle: "onboarding-q3",
+        nodePath: "domains/onboarding/NODE.md",
         createdAt: new Date(Date.now() - 12 * 60_000).toISOString(),
       },
       {
@@ -94,6 +96,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         agentAvatarColorToken: "hue-2",
         chatId: "chat-qa-run-42",
         chatTitle: "qa-run-42",
+        nodePath: "domains/quality/NODE.md",
         createdAt: new Date(Date.now() - 60 * 60_000).toISOString(),
       },
       {
@@ -103,6 +106,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         agentAvatarColorToken: "hue-1",
         chatId: "chat-weekly-retro",
         chatTitle: "weekly-retro",
+        nodePath: "NODE.md",
         createdAt: new Date(Date.now() - 4 * 60 * 60_000).toISOString(),
       },
       {
@@ -114,6 +118,9 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         agentAvatarColorToken: null,
         chatId: "chat-internal-review",
         chatTitle: "internal-review",
+        // Pre-P0 event — no node path recorded; the feed falls back to
+        // "read the context tree".
+        nodePath: null,
         createdAt: new Date(Date.now() - 6 * 60 * 60_000).toISOString(),
       },
     ],
