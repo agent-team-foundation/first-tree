@@ -182,6 +182,8 @@ export {
   clientSchema,
   clientStatusSchema,
   clientWireCapabilitiesSchema,
+  type UpdateAttempt,
+  updateAttemptSchema,
 } from "./schemas/client.js";
 export {
   CAPABILITY_STATES,

@@ -2,6 +2,8 @@ import {
   type ClientCapabilities,
   clientCapabilitiesSchema,
   type RuntimeProvider,
+  type UpdateAttempt,
+  updateAttemptSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -56,6 +58,14 @@ export async function registerClient(
     hostname?: string;
     os?: string;
     sdkVersion?: string;
+    /**
+     * Most recent self-update outcome reported by the client on its
+     * `client:register` frame. Merged shallow into `clients.metadata`
+     * under the `lastUpdateAttempt` key so the admin dashboard can
+     * surface "X clients failed to self-update — last reason …".
+     * Optional — clients without the update-state wiring don't send it.
+     */
+    lastUpdateAttempt?: UpdateAttempt;
   },
 ) {
   const now = new Date();
@@ -73,6 +83,18 @@ export async function registerClient(
     );
   }
 
+  // Shallow-merge `lastUpdateAttempt` into the existing metadata jsonb so
+  // we don't clobber sibling keys like `capabilities` (written by
+  // `updateClientCapabilities`). Postgres `||` is a shallow merge — the
+  // top-level `lastUpdateAttempt` key is replaced wholesale, peers
+  // untouched. COALESCE handles the brand-new-row case where metadata is
+  // still NULL. We only emit the merge clause when the client actually
+  // reported an attempt — old clients without the wire field continue to
+  // not touch metadata at all.
+  const metadataMerge = data.lastUpdateAttempt
+    ? sql`COALESCE(${clients.metadata}, '{}'::jsonb) || ${JSON.stringify({ lastUpdateAttempt: data.lastUpdateAttempt })}::jsonb`
+    : undefined;
+
   await db
     .insert(clients)
     .values({
@@ -86,6 +108,7 @@ export async function registerClient(
       sdkVersion: data.sdkVersion ?? null,
       connectedAt: now,
       lastSeenAt: now,
+      ...(data.lastUpdateAttempt ? { metadata: { lastUpdateAttempt: data.lastUpdateAttempt } } : {}),
     })
     .onConflictDoUpdate({
       target: clients.id,
@@ -98,6 +121,7 @@ export async function registerClient(
         sdkVersion: data.sdkVersion ?? null,
         connectedAt: now,
         lastSeenAt: now,
+        ...(metadataMerge ? { metadata: metadataMerge } : {}),
       },
     });
 }
@@ -184,6 +208,26 @@ export async function heartbeatClient(db: Database, clientId: string) {
 export async function getClient(db: Database, clientId: string) {
   const [row] = await db.select().from(clients).where(eq(clients.id, clientId)).limit(1);
   return row ?? null;
+}
+
+/**
+ * Pull the most-recent self-update attempt out of a client row's
+ * `metadata` jsonb, if one is recorded. Returns `null` when:
+ *   - the row has no metadata yet (client without update-state wiring,
+ *     or first connect ever for this row)
+ *   - the `lastUpdateAttempt` sub-object is missing
+ *   - the sub-object fails schema validation (corrupted on disk, or a
+ *     newer wire shape we don't recognise)
+ *
+ * Exposed so the admin / `/me/clients` routes can flatten metadata's
+ * structured field into the response without each route re-doing the
+ * narrowing.
+ */
+export function extractLastUpdateAttempt(metadata: unknown): UpdateAttempt | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const sub = (metadata as Record<string, unknown>).lastUpdateAttempt;
+  const parsed = updateAttemptSchema.safeParse(sub);
+  return parsed.success ? parsed.data : null;
 }
 
 /**

@@ -1,7 +1,9 @@
 import type { ExecuteUpdateFn, UpdatePromptFn } from "@first-tree-hub/client";
 import { confirm } from "@inquirer/prompts";
+import * as semver from "semver";
 import { print } from "./output.js";
 import { detectInstallMode, installGlobalSpec } from "./update.js";
+import { isLoopGuarded, recordUpdateAttempt } from "./update-state.js";
 
 /** Reserved exit code that means "clean self-restart, service manager please bring me back". */
 export const SELF_RESTART_EXIT_CODE = 75;
@@ -51,7 +53,7 @@ export const declineUpdate: UpdatePromptFn = async () => false;
  * operator restarts manually.
  */
 export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteUpdateFn {
-  return async ({ targetVersion }) => {
+  return async ({ currentVersion, targetVersion }) => {
     const mode = detectInstallMode();
     if (mode === "source") {
       print.line("  [update] Running from source checkout — self-update skipped. Use `git pull` instead.\n");
@@ -64,6 +66,28 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       return { installed: false };
     }
 
+    // Cross-restart loop guard: if a previous attempt installed this exact
+    // target version but the on-disk binary never advanced (npm latest
+    // resolved to the same version we already had, dist-tag silently
+    // re-pointed, etc.), running it again would re-trigger the same
+    // exit(75) → restart → drift → install loop until systemd's
+    // StartLimit kills the service. Refuse instead, and surface the
+    // reason so the operator knows what to do (run `connect <token>`
+    // again, or `npm i -g …@latest` manually). Returning
+    // `{ installed: true }` is the right shape here — it puts the
+    // UpdateManager into `pendingRestart=true`, blocking further attempts
+    // until the operator restarts the process.
+    if (isLoopGuarded(targetVersion)) {
+      print.line(
+        `  [update] Refusing to retry ${targetVersion} — a previous attempt completed without\n` +
+          "           advancing the on-disk version. The most likely cause is npm's `latest`\n" +
+          "           dist-tag resolving to the same version this client is already running.\n" +
+          "           Operator action: manually run `npm install -g @agent-team-foundation/first-tree-hub@latest`,\n" +
+          "           then restart the service.\n",
+      );
+      return { installed: true };
+    }
+
     // Auto-update installs the *exact* version the server advertised in
     // `server:welcome.serverCommandVersion`. Using `@latest` here would
     // mis-resolve once the server starts advertising alpha builds (alpha
@@ -74,16 +98,60 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
     const result = await installGlobalSpec(targetVersion);
     if (!result.ok) {
       print.line(`  [update] Install failed: ${result.reason}\n`);
+      recordUpdateAttempt({
+        result: "failed",
+        target: targetVersion,
+        currentBefore: currentVersion,
+        installedVersion: null,
+        reason: result.reason,
+        at: new Date().toISOString(),
+      });
       return { installed: false };
     }
 
-    const installed = result.installedVersion ?? targetVersion;
+    // Loop detection: npm reported success, but did the version actually
+    // advance? We treat "installed >= target" as success, but if npm
+    // resolved the spec to something `<= currentVersion`, we're about to
+    // restart into the same binary that triggered the update. Skip the
+    // restart, mark the loop guard, and report it. semver.valid checks
+    // protect against `result.installedVersion === null` (npm stdout
+    // didn't parse cleanly) — in that case we proceed normally, since we
+    // can't prove no-advance.
+    const installed = result.installedVersion;
+    if (installed && semver.valid(installed) && semver.valid(currentVersion) && semver.lte(installed, currentVersion)) {
+      const reason = `npm reported install of ${installed}, but running version ${currentVersion} would not advance (requested ${targetVersion})`;
+      print.line(`  [update] WARNING: ${reason}\n`);
+      print.line("  [update] Skipping restart to avoid an exit-75 → reboot loop. Loop guard armed.\n");
+      recordUpdateAttempt({
+        result: "blocked",
+        target: targetVersion,
+        currentBefore: currentVersion,
+        installedVersion: installed,
+        reason,
+        at: new Date().toISOString(),
+      });
+      // Treat as `installed: true` so the UpdateManager sets
+      // pendingRestart and stops retrying this welcome session. No
+      // exit(75) — the supervisor MUST NOT relaunch us into the same
+      // broken state.
+      return { installed: true };
+    }
+
+    const installedLabel = installed ?? targetVersion;
+    recordUpdateAttempt({
+      result: "ok",
+      target: targetVersion,
+      currentBefore: currentVersion,
+      installedVersion: installed,
+      reason: null,
+      at: new Date().toISOString(),
+    });
     if (managed) {
-      print.line(`  [update] Installed ${installed}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
+      print.line(`  [update] Installed ${installedLabel}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
       process.exit(SELF_RESTART_EXIT_CODE);
     }
     print.line(
-      `  [update] Installed ${installed}. Restart the client manually (Ctrl+C then \`first-tree-hub client start\`) to pick up the new version.\n`,
+      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`first-tree-hub client start\`) to pick up the new version.\n`,
     );
     return { installed: true };
   };
