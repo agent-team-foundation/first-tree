@@ -165,6 +165,23 @@ export type PrecedingMessage = z.infer<typeof precedingMessageSchema>;
  */
 export const clientMessageSchema = messageSchema.extend({
   configVersion: z.number().int().positive(),
+  // Forward-roll defence: the server may push new source values before the
+  // client ships the matching enum update (e.g. a new adapter is added).
+  // Without `.catch`, the strict enum rejects the whole inbox frame, which
+  // forces a 300s reaper round-trip before re-delivery — and that retry
+  // hits the same schema mismatch, so the entry exhausts retryCount and
+  // is effectively lost. Degrading unknown values to `null` keeps the
+  // frame parseable so the handler still receives the message body; only
+  // the audit-trail `source` label is lost. Mirrors the
+  // inboxDeliverFrameSchema `.passthrough()` policy for top-level fields.
+  //
+  // Scope: `.catch` is field-scoped — it fires for ANY shape mismatch on
+  // `source` (unknown enum value, wrong type like `12345`, missing /
+  // undefined), not just enum drift. Acceptable because `source` is a
+  // pure audit label that handlers never branch on. Other fields' parse
+  // errors still bubble up to the parent `safeParse`, so required-shape
+  // drift on id / chatId / format is NOT silently swallowed.
+  source: messageSourceSchema.nullable().catch(null),
   recipientMode: participantModeSchema.default("full"),
   precedingMessages: z.array(precedingMessageSchema).default([]),
 });
