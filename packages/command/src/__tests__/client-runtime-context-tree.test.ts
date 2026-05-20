@@ -104,7 +104,7 @@ describe("ClientRuntime context-tree wiring", () => {
     rt.addAgent("alpha", {
       agentId: "agent-alpha",
       runtime: "claude-code",
-      session: { idle_timeout: 300, max_sessions: 4 },
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
       concurrency: 1,
     } as unknown as Parameters<typeof rt.addAgent>[1]);
 

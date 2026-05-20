@@ -50,7 +50,12 @@ function createSessionManager(opts: {
   handler?: AgentHandler;
   handlerFactory?: HandlerFactory;
   ackEntry?: (entryId: number) => Promise<void>;
-  session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
+  session?: {
+    idle_timeout: number;
+    max_sessions: number;
+    working_grace_seconds: number;
+    reconcile_interval_seconds: number;
+  };
   concurrency?: number;
   log?: pino.Logger;
   onRuntimeStateChange?: (state: "idle" | "working" | "blocked" | "error") => void;
@@ -60,7 +65,12 @@ function createSessionManager(opts: {
   const sdk = opts.sdk ?? mockSdk();
 
   return new SessionManager({
-    session: opts.session ?? { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+    session: opts.session ?? {
+      idle_timeout: 300,
+      max_sessions: 10,
+      working_grace_seconds: 3600,
+      reconcile_interval_seconds: 300,
+    },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -234,7 +244,7 @@ describe("SessionManager: runtime state cleanup on eviction", () => {
       });
 
     const sm = createSessionManager({
-      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       handlerFactory: factory,
       onRuntimeStateChange: (state) => runtimeChanges.push(state),
     });
@@ -346,5 +356,127 @@ describe("SessionManager: ackEntry handles entryId correctly", () => {
     expect(ackEntry).toHaveBeenCalledWith(2);
 
     await sm.shutdown();
+  });
+});
+
+describe("SessionManager.evictIdle — working-state grace window", () => {
+  // A long thinking turn or one giant SDK message produces no inbound events
+  // for minutes at a time, so `lastActivity` (refreshed only by handler
+  // `touch()`) drifts past `idle_timeout` even though the handler is still
+  // working. Without this grace window the runtime suspends the SDK
+  // mid-thought; with it, the slot survives until either work resumes or the
+  // upper bound `idle_timeout + working_grace_seconds` is exceeded.
+  it("does NOT suspend a session whose runtimeState is 'working' inside the grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      let capturedCtx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_msg, ctx) {
+          capturedCtx = ctx;
+          return "s-working";
+        },
+      });
+      const sm = createSessionManager({
+        handler,
+        // 1s idle window + 60s grace — picked so a single 20s tick lands
+        // inside the grace window.
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 60, reconcile_interval_seconds: 300 },
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-thinking" }));
+      defined(capturedCtx, "ctx").setRuntimeState("working");
+
+      // 20s ≫ idle_timeout (1s) but ≪ idle_timeout + grace (61s).
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(handler.suspend).not.toHaveBeenCalled();
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("DOES suspend once inactiveMs exceeds idle_timeout + working_grace_seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      let capturedCtx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_msg, ctx) {
+          capturedCtx = ctx;
+          return "s-stuck";
+        },
+      });
+      const sm = createSessionManager({
+        handler,
+        // 1s idle + 5s grace — the timer below blows past the 6s cap so
+        // the runtime should give up and reclaim the slot.
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 5, reconcile_interval_seconds: 300 },
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-stuck" }));
+      defined(capturedCtx, "ctx").setRuntimeState("working");
+
+      // 30s ≫ idle_timeout + grace (6s). evictIdle ticks every 10s.
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(handler.suspend).toHaveBeenCalledTimes(1);
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("also exempts 'blocked' (the state evictIdle itself flips 'working' into after 2 minutes)", async () => {
+    vi.useFakeTimers();
+    try {
+      let capturedCtx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_msg, ctx) {
+          capturedCtx = ctx;
+          return "s-blocked";
+        },
+      });
+      const sm = createSessionManager({
+        handler,
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 60, reconcile_interval_seconds: 300 },
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-blocked" }));
+      defined(capturedCtx, "ctx").setRuntimeState("blocked");
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(handler.suspend).not.toHaveBeenCalled();
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("'idle' runtimeState still suspends at idle_timeout (regression)", async () => {
+    vi.useFakeTimers();
+    try {
+      let capturedCtx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_msg, ctx) {
+          capturedCtx = ctx;
+          return "s-idle";
+        },
+      });
+      const sm = createSessionManager({
+        handler,
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 60, reconcile_interval_seconds: 300 },
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-idle" }));
+      defined(capturedCtx, "ctx").setRuntimeState("idle");
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(handler.suspend).toHaveBeenCalledTimes(1);
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
