@@ -43,7 +43,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: `@${outsider.agent.name} 你好` },
+        { source: "api", format: "text", content: `@${outsider.agent.name} 你好` },
         { enforceGroupMention: true },
       ),
     ).rejects.toThrow(new RegExp(`Cannot @-mention "${outsider.agent.name}"`));
@@ -66,7 +66,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: `@${outsider.agent.name} ping` },
+        { source: "api", format: "text", content: `@${outsider.agent.name} ping` },
         { enforceGroupMention: true },
       );
       throw new Error("expected sendMessage to reject");
@@ -98,6 +98,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
         chat.id,
         sender.agent.uuid,
         {
+          source: "api",
           format: "text",
           content: `@${inGroupPeer.agent.name} please ping @${outsider.agent.name}`,
         },
@@ -121,7 +122,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
       app.db,
       chat.id,
       sender.agent.uuid,
-      { format: "text", content: `@${inGroupPeer.agent.name} status?` },
+      { source: "api", format: "text", content: `@${inGroupPeer.agent.name} status?` },
       { enforceGroupMention: true },
     );
     expect(result.message).toBeDefined();
@@ -144,7 +145,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
       app.db,
       chat.id,
       sender.agent.uuid,
-      { format: "text", content: "Example:\n```\nrun `@nonexistent` to ...\n```" },
+      { source: "api", format: "text", content: "Example:\n```\nrun `@nonexistent` to ...\n```" },
       { enforceGroupMention: true },
     );
     expect(result.message).toBeDefined();
@@ -171,6 +172,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
       chat.id,
       sender.agent.uuid,
       {
+        source: "api",
         format: "text",
         content: `Replying about @${outsider.agent.name}'s question — they aren't in this chat.`,
         purpose: "agent-final-text",
@@ -198,6 +200,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     // intentionally agent-only; non-agent paths preserve "@-token-as-text"
     // semantics.
     const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: `Mentioning @${outsider.agent.name} in a notification`,
     });

@@ -216,13 +216,11 @@ export async function findOrCreateChatForChannel(
 
     // Add bot agent and sender as participants. External IM users
     // (Feishu/Slack) always map to a `human` agent on the sender side, so
-    // these chats are inherently human↔agent. `addChatParticipants` derives
-    // the right mode from `(chats.type, agents.type)` — for the IM adapter
-    // path: human sender stays `full`; bot agent in a `direct` chat with a
-    // human peer also resolves to `full` per `defaultParticipantMode`. Pre-
-    // fix this site hardcoded `mode: 'full'` for every row, which would
-    // silently break if an adapter ever paired two non-human agents (the
-    // anti-echo invariant from migration 0029 would not apply).
+    // these chats are inherently human↔agent. v2 made `chat_membership.mode`
+    // decision-inert — `addChatParticipants` writes the constant
+    // `'mention_only'` for every speaker row; the fan-out 1:1 implicit
+    // wake (services/message.ts) takes care of waking the bot on every
+    // inbound message without needing a mode-derived bypass.
     const specs =
       data.botAgentId === data.senderAgentId
         ? [{ agentId: data.botAgentId, role: "member" as const }]

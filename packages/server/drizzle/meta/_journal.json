@@ -330,6 +330,13 @@
       "when": 1779753600000,
       "tag": "0046_session_events_context_tree_usage_index",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1779840000000,
+      "tag": "0047_v2_messages_source_required",
+      "breakpoints": true
     }
   ]
 }

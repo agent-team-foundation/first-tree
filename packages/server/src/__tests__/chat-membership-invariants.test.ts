@@ -118,6 +118,7 @@ describe("chat membership invariants", () => {
 
     // peer sends a message so admin has an unread counter to remember.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
       format: "text",
       content: "ping",
       metadata: { mentions: [admin.humanAgentUuid] },

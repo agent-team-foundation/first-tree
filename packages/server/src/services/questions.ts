@@ -250,7 +250,7 @@ export async function submitAnswer(
         format: "question_answer",
         content: answerContent,
         inReplyTo: questionRow.messageId,
-        source: "hub_ui",
+        source: "web",
       },
       // This `question_answer` is addressed to the asker by construction —
       // the answer's structured content carries no `@<name>` tokens, so

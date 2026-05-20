@@ -215,6 +215,7 @@ console.log("\n[e2e-askuser] case 1: happy-path roundtrip");
   const result = await sendMessage(app.db, chat.id, peer.uuid, {
     format: "question",
     content: questionContent,
+    source: "api",
   });
   expect(result.message.format === "question", "agent send produced format=question");
 
@@ -307,6 +308,7 @@ console.log("\n[e2e-askuser] case 2: codex runtime defense");
         previewFormat: null,
         allowFreeText: false,
       },
+      source: "api",
     });
   } catch (err) {
     threw = true;
@@ -363,6 +365,7 @@ console.log("\n[e2e-askuser] case 3: archiveSession marks pending question super
       previewFormat: null,
       allowFreeText: false,
     },
+    source: "api",
   });
 
   await app.db
@@ -429,6 +432,7 @@ console.log("\n[e2e-askuser] case 4: claimClient marks pending superseded for un
       previewFormat: null,
       allowFreeText: false,
     },
+    source: "api",
   });
 
   // New owner takes over the client.
@@ -532,6 +536,7 @@ console.log("\n[e2e-askuser] case 6: agent inbox.pull surfaces question_answer e
       previewFormat: null,
       allowFreeText: false,
     },
+    source: "api",
   });
 
   await inject("POST", `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`, ctx.accessToken, {

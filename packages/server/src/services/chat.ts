@@ -11,7 +11,8 @@ import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { backfillSilentContextForNewParticipants } from "./inbox.js";
 import { resolveChatTitle } from "./me-chat.js";
-import { addChatParticipants, changeChatType, wouldUpgradeToGroup } from "./participant-mode.js";
+import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
+import { addChatParticipants } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
 import { leaveAsParticipant, recomputeChatWatchers } from "./watcher.js";
 
@@ -134,11 +135,15 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
   // chat is membership-derived; we do NOT apply `agentVisibilityCondition`
   // here — see `docs/agent-space-and-mention-visibility-design.zh-CN.md`
   // §4.3.3.
+  // v2: chat_membership.mode is decision-inert; the wire `mode` field is
+  // populated below from the WIRE_RECIPIENT_MODE constant (mirrors the
+  // strategy in services/message-dispatcher.ts), so we no longer SELECT
+  // the column. Drop together with the wire field in v3 — see
+  // proposals/hub-chat-message-v2-simplify-mode.20260520.md §七.
   const participantRows = await db
     .select({
       agentId: chatMembership.agentId,
       role: chatMembership.role,
-      mode: chatMembership.mode,
       joinedAt: chatMembership.joinedAt,
       name: agents.name,
       displayName: agents.displayName,
@@ -171,7 +176,10 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
     chatId,
     agentId: p.agentId,
     role: p.role,
-    mode: p.mode,
+    // v2: wire `mode` is reserved for v3 cleanup; write the constant
+    // `WIRE_RECIPIENT_MODE` so existing clients that still parse the field
+    // see a stable value. No consumer reads this today.
+    mode: WIRE_RECIPIENT_MODE,
     joinedAt: p.joinedAt,
     name: p.name,
     displayName: p.displayName,
@@ -247,11 +255,14 @@ export async function listChats(db: Database, agentId: string, limit: number, cu
  * set (see proposals/hub-agent-messaging-reply-and-mentions §4).
  */
 export async function listChatParticipantsWithNames(db: Database, chatId: string) {
+  // v2: chat_membership.mode is decision-inert; we no longer SELECT it. The
+  // route layer projects the wire `mode` field from the WIRE_RECIPIENT_MODE
+  // constant — see api/agent/chats.ts. Drop together with the wire field
+  // in v3 (proposals/hub-chat-message-v2-simplify-mode.20260520.md §七).
   const rows = await db
     .select({
       agentId: chatMembership.agentId,
       role: chatMembership.role,
-      mode: chatMembership.mode,
       joinedAt: chatMembership.joinedAt,
       name: agents.name,
       displayName: agents.displayName,
@@ -327,16 +338,10 @@ export async function ensureParticipant(db: Database, chatId: string, agentId: s
   // is structurally separate so the user's read state survives the
   // promotion untouched — no state-carry needed (proposal §8.4).
   await db.transaction(async (tx) => {
-    const current = await tx
-      .select({ agentId: chatMembership.agentId })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-    if (wouldUpgradeToGroup(current.length, 1)) {
-      await changeChatType(tx, chatId, "group");
-    }
-    // Mode derived server-side via `addChatParticipants`. `upgradeWatcherToSpeaker`
-    // promotes a pre-existing watcher row in place so chat_user_state is preserved
-    // automatically (the chat_user_state row, if any, lives in a separate table
+    // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
+    // `chat_membership.mode` is decision-inert. `upgradeWatcherToSpeaker`
+    // promotes a pre-existing watcher row in place so chat_user_state is
+    // preserved automatically (the row, if any, lives in a separate table
     // and survives the access_mode flip untouched — proposal §8.4).
     await addChatParticipants(tx, chatId, [{ agentId }], { upgradeWatcherToSpeaker: true });
     // Reconcile watcher rows for managers of any non-human in chat.
@@ -417,28 +422,12 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
     throw new ConflictError(`Agent "${data.agentName ?? targetAgent.id}" is already a participant`);
   }
 
-  // Direct chats become groups on the third speaker. Flip existing
-  // non-human speakers to mention_only so the group doesn't devolve into
-  // noise. Atomic: upgrade + UPSERT must not interleave with sendMessage's
-  // participant read, or a concurrent send would see chats.type='group'
-  // with mode='full'.
-  //
-  // Watcher → speaker UPSERT preserves chat_user_state (read state) by
-  // construction — they live in a different table (proposal §8.4).
+  // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
+  // `chat_membership.mode` is decision-inert. `upgradeWatcherToSpeaker`
+  // promotes any pre-existing watcher row in place — chat_user_state is
+  // structurally separate so read state is preserved without a state-carry
+  // transaction.
   await db.transaction(async (tx) => {
-    const currentSpeakers = await tx
-      .select({ agentId: chatMembership.agentId })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-    if (wouldUpgradeToGroup(currentSpeakers.length, 1)) {
-      await changeChatType(tx, chatId, "group");
-    }
-    // Mode derived server-side from `(chats.type, agents.type)`. Callers no
-    // longer pass `mode` (HTTP schema dropped that field; see Phase 1 design
-    // §3.2 — `data.mode` is therefore ignored even if a stale TS caller is
-    // still constructing it). `upgradeWatcherToSpeaker` promotes any
-    // pre-existing watcher row in place — chat_user_state is structurally
-    // separate so read state is preserved without a state-carry transaction.
     await addChatParticipants(tx, chatId, [{ agentId: targetAgent.id }], { upgradeWatcherToSpeaker: true });
     await recomputeChatWatchers(tx, chatId);
     // v1 §四 改造 2: backfill the most recent N messages as silent
@@ -537,7 +526,6 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
       chatId: chatMembership.chatId,
       agentId: chatMembership.agentId,
       role: chatMembership.role,
-      mode: chatMembership.mode,
     })
     .from(chatMembership)
     .where(and(inArray(chatMembership.agentId, agentIds), eq(chatMembership.accessMode, "speaker")));
@@ -678,16 +666,15 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
   // the manager's read state survives the promotion automatically —
   // no state-carry transaction needed.
   await db.transaction(async (tx) => {
-    if (wouldUpgradeToGroup(participantAgentIds.length, 1)) {
-      await changeChatType(tx, chatId, "group");
-    }
+    // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
+    // `chat_membership.mode` is decision-inert.
+    //
     // The join contract admits only the manager's human agent —
     // `assertHuman: true` makes a non-human caller surface as a 400 rather
-    // than silently inserting with an inappropriate `mode`.
-    // `upgradeWatcherToSpeaker` promotes the manager's pre-existing watcher
-    // row in place (common case — migration 0030 or prior recompute pass).
-    // chat_user_state is structurally separate so read state survives the
-    // promotion automatically.
+    // than silently inserting. `upgradeWatcherToSpeaker` promotes the
+    // manager's pre-existing watcher row in place (common case — migration
+    // 0030 or prior recompute pass). chat_user_state is structurally
+    // separate so read state survives the promotion automatically.
     await addChatParticipants(tx, chatId, [{ agentId: humanAgentId, role: "member" }], {
       assertHuman: true,
       upgradeWatcherToSpeaker: true,

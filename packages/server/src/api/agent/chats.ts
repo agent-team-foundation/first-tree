@@ -8,6 +8,7 @@ import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
 import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
+import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 
 const log = createLogger("AgentChatsRoute");
 
@@ -68,7 +69,10 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     return rows.map((r) => ({
       agentId: r.agentId,
       role: r.role,
-      mode: r.mode,
+      // v2: wire `mode` field is reserved for v3 cleanup; write the constant
+      // `WIRE_RECIPIENT_MODE` so already-deployed client runtimes that still
+      // parse the field see a stable value. No consumer reads this today.
+      mode: WIRE_RECIPIENT_MODE,
       name: r.name,
       displayName: r.displayName,
       type: r.type,

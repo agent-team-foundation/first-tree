@@ -540,6 +540,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
           format: "question",
           content: questionContent,
+          source: "api",
           // Same bypass channel result-sink uses: an AskUserQuestion is a
           // handler-initiated post, not a user-typed group broadcast — it
           // must not be rejected by the group-chat `@mention required`

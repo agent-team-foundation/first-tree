@@ -73,7 +73,7 @@ describe("silent inbox + preceding context", () => {
     const uid = crypto.randomUUID().slice(0, 6);
     const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
 
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "anyone awake?" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "anyone awake?" });
 
     const rows = await app.db
       .select({ notify: inboxEntries.notify, status: inboxEntries.status })
@@ -89,8 +89,8 @@ describe("silent inbox + preceding context", () => {
     const uid = crypto.randomUUID().slice(0, 6);
     const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
 
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "still no @observer" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "second silent one" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "still no @observer" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "second silent one" });
 
     const pulled = await pollInbox(app.db, observer.inboxId, 10);
     expect(pulled).toHaveLength(0);
@@ -102,10 +102,11 @@ describe("silent inbox + preceding context", () => {
     const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
 
     // Three silent messages, then one that explicitly mentions observer.
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "first silent" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "second silent" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "third silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "first silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "second silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "third silent" });
     await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@si-obs-${uid} please weigh in`,
     });
@@ -146,9 +147,10 @@ describe("silent inbox + preceding context", () => {
     const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
 
     // First wave: M1 (silent), M2 (silent), M3 (mentions observer).
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "m1" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "m2" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "m1" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "m2" });
     await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@si-obs-${uid} m3`,
     });
@@ -162,9 +164,10 @@ describe("silent inbox + preceding context", () => {
 
     // Second wave: M4 (silent), M5 (silent), M6 (mentions observer).
     // m1/m2 have been acked, so they should NOT appear again.
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "m4" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "m5" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "m4" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "m5" });
     await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@si-obs-${uid} m6`,
     });
@@ -184,13 +187,15 @@ describe("silent inbox + preceding context", () => {
     // Timeline: silent-1, mention-1, silent-2, mention-2 — all before the
     // observer ever polls. The first trigger should carry [silent-1] and the
     // second should carry [silent-2], not [silent-1, silent-2].
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "silent-1" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "silent-1" });
     await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@si-obs-${uid} mention-1`,
     });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "silent-2" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "silent-2" });
     await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@si-obs-${uid} mention-2`,
     });
@@ -218,9 +223,10 @@ describe("silent inbox + preceding context", () => {
     const silentCount = cap + overflow;
     const pad = (i: number) => `silent-${String(i).padStart(3, "0")}`;
     for (let i = 0; i < silentCount; i++) {
-      await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: pad(i) });
+      await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: pad(i) });
     }
     await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@si-obs-${uid} please weigh in`,
     });
@@ -248,15 +254,22 @@ describe("silent inbox + preceding context", () => {
     expect(silentRemaining.every((r) => r.status === "acked")).toBe(true);
   });
 
-  it("full-mode participants still wake on every group message and carry no preceding context", async () => {
-    // Sanity check — silent inbox is a mention_only-only optimisation. A
-    // full-mode participant in the same group should keep the existing
-    // notify=true semantics with empty precedingMessages.
+  it("explicit @mention wakes a peer with empty precedingMessages when no silent context exists yet", async () => {
+    // v2: `mode` is decision-inert; there is no `full`-mode bypass. A peer
+    // wakes only on explicit mention / addressedTo / 1:1 implicit (the
+    // 1:1-implicit branch does not apply to this 3-speaker group). With no
+    // prior silent rows in the chat, the trigger carries
+    // `precedingMessages: []`.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { human, peer, chat } = await setupGroupWithMentionOnlyAgent(uid);
 
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "hello team" });
+    await sendMessage(app.db, chat.id, human.uuid, {
+      source: "web",
+      format: "text",
+      content: `hi @si-peer-${uid}`,
+      metadata: { mentions: [peer.uuid] },
+    });
     const pulled = await pollInbox(app.db, peer.inboxId, 10);
     expect(pulled).toHaveLength(1);
     expect(pulled[0]?.message.precedingMessages).toEqual([]);
@@ -271,8 +284,8 @@ describe("silent inbox + preceding context", () => {
     const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
 
     // Two silent rows: one fresh, one >24h old.
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "stale-old" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "fresh-recent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "stale-old" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "fresh-recent" });
     // Backdate the first silent inbox entry to 25 hours ago.
     await app.db.execute(sql`
       UPDATE inbox_entries
@@ -288,6 +301,7 @@ describe("silent inbox + preceding context", () => {
     `);
 
     await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@si-obs-${uid} please weigh in`,
     });
@@ -351,13 +365,15 @@ describe("silent inbox + preceding context", () => {
     }
 
     // Chat A: silent-A then mention-A. Chat B: silent-B then mention-B.
-    await sendMessage(app.db, chatA.id, human.uuid, { format: "text", content: "silent-A" });
+    await sendMessage(app.db, chatA.id, human.uuid, { source: "api", format: "text", content: "silent-A" });
     await sendMessage(app.db, chatA.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@mc-obs-${uid} mention-A`,
     });
-    await sendMessage(app.db, chatB.id, human.uuid, { format: "text", content: "silent-B" });
+    await sendMessage(app.db, chatB.id, human.uuid, { source: "api", format: "text", content: "silent-B" });
     await sendMessage(app.db, chatB.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@mc-obs-${uid} mention-B`,
     });
@@ -382,7 +398,7 @@ describe("silent inbox + preceding context", () => {
     const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
 
     // Silent row #1 — will be acked first (still fresh).
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "silent-acked" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "silent-acked" });
     // Mark it acked manually (bulk-ack would happen on next mention, but we
     // isolate the GC behaviour from mention timing here).
     await app.db
@@ -397,10 +413,10 @@ describe("silent inbox + preceding context", () => {
       );
 
     // Silent row #2 — fresh pending (within the age window).
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "silent-fresh-pending" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "silent-fresh-pending" });
 
     // Silent row #3 — backdated past the age window.
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "silent-stale-pending" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "silent-stale-pending" });
     // Use a 1-second age limit + backdate the latest row 2 seconds.
     await app.db.execute(sql`
       UPDATE inbox_entries

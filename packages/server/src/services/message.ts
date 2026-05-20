@@ -98,12 +98,35 @@ export async function sendMessage(
   data: SendMessage,
   options: SendMessageOptions = {},
 ): Promise<SendMessageResult> {
-  return withSpan(
-    "inbox.enqueue",
-    messageAttrs({ chatId, senderAgentId: senderId, source: data.source ?? undefined }),
-    () => sendMessageInner(db, chatId, senderId, data, options),
+  return withSpan("inbox.enqueue", messageAttrs({ chatId, senderAgentId: senderId, source: data.source }), () =>
+    sendMessageInner(db, chatId, senderId, data, options),
   );
 }
+
+/**
+ * 1:1 implicit wake rule
+ * ======================
+ *
+ * A chat with exactly 2 speakers (`participants.length === 2`) treats the
+ * non-sender peer as implicitly addressed. Practical UX motivation: in a
+ * 1-on-1 human↔agent chat, the human typing "hello" without an explicit
+ * `@mention` should still wake the agent — there is no ambiguity about
+ * who the message is for.
+ *
+ * This rule is expressed in the fan-out decision (notify=true branch) as:
+ *
+ *   isOneOnOne && p.agentId !== senderId
+ *
+ * It is NOT a `chat_membership.mode`-derived property — `mode` is decision-
+ * inert in v2. The rule operates on chat membership shape and applies
+ * uniformly regardless of participant types. A 1:1 agent↔agent chat is
+ * also covered (the other agent gets notify=true on every message, which
+ * is the desired behaviour for a tight pair like a delegated subtask).
+ *
+ * Silent-send (content empty after stripping leading `@<name>` tokens)
+ * and `purpose === "agent-final-text"` both still force notify=false; the
+ * implicit wake is shadowed by these profile bypasses.
+ */
 
 async function sendMessageInner(
   db: Database,
@@ -113,31 +136,32 @@ async function sendMessageInner(
   options: SendMessageOptions,
 ): Promise<SendMessageResult> {
   const txResult = await db.transaction(async (tx) => {
-    // 1. Load participants, chat type, and sender (inbox + org) in parallel —
-    //    all three are needed for fan-out + mention enforcement + post-tx
-    //    session activation. Running concurrently keeps the hot send path on
-    //    a single round-trip rather than three sequential lookups.
-    //    Sender's organizationId is reused for predictive session activation
+    // 1. Load participants and sender (inbox + org) in parallel — both are
+    //    needed for fan-out + mention enforcement + post-tx session
+    //    activation. Running concurrently keeps the hot send path on a
+    //    single round-trip rather than two sequential lookups. Sender's
+    //    organizationId is reused for predictive session activation
     //    (chat-internal participants share the same org under multi-tenant).
-    const [participants, [chatRow], [senderRow]] = await Promise.all([
+    //
+    //    v2: `chat_membership.mode` is **not** SELECTed — fan-out no longer
+    //    reads it. Likewise `chats.type` is locked to 'group' since
+    //    first-tree-context PR #465 and no longer drives any decision here.
+    const [participants, [senderRow]] = await Promise.all([
       tx
         .select({
           agentId: chatMembership.agentId,
           inboxId: agents.inboxId,
-          mode: chatMembership.mode,
           name: agents.name,
         })
         .from(chatMembership)
         .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
         .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"))),
-      tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1),
       tx
         .select({ inboxId: agents.inboxId, organizationId: agents.organizationId, type: agents.type })
         .from(agents)
         .where(eq(agents.uuid, senderId))
         .limit(1),
     ]);
-    const chatType = chatRow?.type ?? null;
     if (!senderRow) {
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
     }
@@ -255,25 +279,44 @@ async function sendMessageInner(
       ? [...new Set([...mergedMentions, ...participants.filter((p) => p.agentId !== senderId).map((p) => p.agentId)])]
       : mergedMentions;
 
+    // v2: centralise the bypass contract for `purpose` values. Each flag
+    // describes what this purpose means for a downstream decision; adding a
+    // new `purpose` value means defining its profile here once, not hunting
+    // through the three call sites below.
+    //
+    // `agent-final-text` profile rationale:
+    //   - skip group-mention enforcement (handler-initiated forward, not a
+    //     user-typed broadcast).
+    //   - skip the unresolved-@-token guard (handler text may legitimately
+    //     contain narrative @ tokens that don't resolve to chat members).
+    //   - force every fan-out row to notify=false (final text lands in
+    //     chat history for human observers but never wakes another
+    //     session). v1 §四 改造 4 (b) bypass channel.
+    const isAgentFinalText = data.purpose === "agent-final-text";
+    const purposeProfile = isAgentFinalText
+      ? {
+          skipMentionEnforcement: true,
+          skipUnresolvedTokenGuard: true,
+          forceSilentFanOut: true,
+        }
+      : {
+          skipMentionEnforcement: false,
+          skipUnresolvedTokenGuard: false,
+          forceSilentFanOut: false,
+        };
+
     // 2b. Group-chat receiver enforcement (agent-only). Stop a misuse where an
     //     agent calls `send --chat <id>` against a group without naming who
-    //     should pick it up — every mention_only participant would silently
-    //     drop the message and the sender would assume delivery.
+    //     should pick it up — every recipient would silently drop the message
+    //     and the sender would assume delivery.
     //
-    //     Keys on membership shape rather than `chats.type` so post-Phase-1
-    //     `group` rows with size=2 (the new 1-on-1 shape) keep the legacy
-    //     "DM doesn't need an explicit @mention" UX. Three-plus-speaker
-    //     chats stay strict.
-    //
-    //     `purpose === "agent-final-text"` bypasses this guard: the message
-    //     is a handler-initiated forward (result-sink final text, or an
-    //     AskUserQuestion payload posted via canUseTool), not a user-typed
-    //     broadcast. It still has to land in chat history so human
-    //     observers in the web UI can see what the agent is doing — but
-    //     every fan-out row is forced to `notify=false` further down so it
-    //     never wakes another session. v1 §四 改造 4 (b) bypass channel.
-    const isAgentFinalText = data.purpose === "agent-final-text";
-    if (options.enforceGroupMention && chatType === "group" && !isOneOnOne && !isAgentFinalText) {
+    //     Keys on membership shape (`isOneOnOne`, derived from
+    //     `participants.length === 2`) so a size-2 chat keeps the legacy
+    //     "1-on-1 doesn't need an explicit @mention" UX. Three-plus-speaker
+    //     chats stay strict. v2 dropped the `chats.type === "group"` branch
+    //     — chats are structurally always group, so the predicate folds
+    //     down to "must be a real group (≥3 speakers) and not bypassed".
+    if (options.enforceGroupMention && !isOneOnOne && !purposeProfile.skipMentionEnforcement) {
       const recipientMentions = mergedMentions.filter((id) => id !== senderId);
       if (recipientMentions.length === 0) {
         throw new BadRequestError(
@@ -296,14 +339,14 @@ async function sendMessageInner(
     //
     //   Code-fenced `@` tokens are already stripped by `scanMentionTokens`
     //   upstream, so legitimate quoted `@<name>` in code blocks is
-    //   unaffected. `purpose === "agent-final-text"` bypasses for the same
-    //   reason it bypasses enforceGroupMention: handler-initiated forwards
-    //   are not user-typed routing requests.
+    //   unaffected. `purpose === "agent-final-text"` bypasses through
+    //   `purposeProfile.skipUnresolvedTokenGuard` for the same reason it
+    //   bypasses enforceGroupMention.
     if (
       options.enforceGroupMention &&
       !explicitlyDeclared &&
       contentExtractEnabled &&
-      !isAgentFinalText &&
+      !purposeProfile.skipUnresolvedTokenGuard &&
       typeof effectiveContent === "string"
     ) {
       const rawTokens = scanMentionTokens(effectiveContent);
@@ -381,7 +424,7 @@ async function sendMessageInner(
       typeof outboundContent === "string" && outboundContent.replace(/^(@\S+\s*)+/, "").trim().length === 0;
     if (isSilentSend) {
       log.info(
-        { chatId, senderId, source: data.source ?? null },
+        { chatId, senderId, source: data.source },
         "silent send: empty content after mention strip — no fan-out wake-up",
       );
     }
@@ -404,7 +447,7 @@ async function sendMessageInner(
         content: outboundContent,
         metadata: metadataToStore,
         inReplyTo: data.inReplyTo ?? null,
-        source: data.source ?? null,
+        source: data.source,
       })
       .returning();
 
@@ -427,15 +470,18 @@ async function sendMessageInner(
     //    - `notify=false` — silent context row, written so a future active
     //      delivery to the same chat can replay it as preceding history.
     //
-    //    Rules:
+    //    v2 rules (membership-shape driven; `chat_membership.mode` is no
+    //    longer read — see file-level "1:1 implicit wake rule" comment and
+    //    proposals/hub-chat-message-v2-simplify-mode.20260520.md):
     //    - sender is always filtered out (no self-delivery).
-    //    - `full` mode participants always get notify=true.
-    //    - `mention_only` participants get notify=true only when in `mentions`,
-    //      otherwise notify=false (silent context).
-    //
-    //    Replaces the previous "filter mention_only out at fan-out time" rule
-    //    so a `mention_only` agent that gets @mentioned later can still see
-    //    the chat history it missed — see proposals/group-chat-ux-improvements §1.
+    //    - explicit wake triggers `notify=true`:
+    //        * agentId in `addressedToAgentIds` (system-routed override), OR
+    //        * agentId in `metadata.mentions` (mergedMentions, post-resolve), OR
+    //        * 1:1 implicit — `isOneOnOne` and the recipient is not sender.
+    //    - silent-send and `purposeProfile.forceSilentFanOut` (today
+    //      = `purpose === "agent-final-text"`) both force notify=false for
+    //      every row regardless. Inbox entries are still written so history
+    //      replay still works; nobody is woken.
     const mentionSet = new Set(mergedMentions);
     const addressedSet = new Set(options.addressedToAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
@@ -447,16 +493,10 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        // Silent-send (step 2e) AND agent-final-text (step 2b bypass) both
-        // force every fan-out row to notify=false regardless of mode /
-        // mentions. Inbox entries are still written so history replay still
-        // works; nobody is woken.
-        // `addressedToAgentIds` widens the notify set within the non-silenced
-        // branch — see option doc on `SendMessageOptions`.
         notify:
           !isSilentSend &&
-          !isAgentFinalText &&
-          (addressedSet.has(p.agentId) || p.mode !== "mention_only" || mentionSet.has(p.agentId)),
+          !purposeProfile.forceSilentFanOut &&
+          (addressedSet.has(p.agentId) || mentionSet.has(p.agentId) || isOneOnOne),
       }));
 
     if (fanout.length > 0) {

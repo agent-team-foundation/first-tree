@@ -21,6 +21,7 @@ import {
   hasActiveConnection,
   sendToClient,
 } from "../services/connection-manager.js";
+import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import * as presenceService from "../services/presence.js";
 
 type AgentRow = {
@@ -291,7 +292,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       participants: result.participants.map((p) => ({
         agentId: p.agentId,
         role: p.role,
-        mode: p.mode,
+        // v2: wire `mode` field is decision-inert. Project the constant.
+        mode: WIRE_RECIPIENT_MODE,
         joinedAt: p.joinedAt.toISOString(),
       })),
     });

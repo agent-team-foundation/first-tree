@@ -107,12 +107,14 @@ describe("buildClientMessagePayload (Step 3)", () => {
 });
 
 /**
- * Coverage for the proposal §3.3 fields added at dispatcher time: every
- * client-bound payload must carry `recipientMode` so the runtime can apply
- * mention filtering without a round-trip back to the Hub.
+ * v2: `chat_membership.mode` is decision-inert. The wire payload still
+ * carries `recipientMode` for backwards compatibility with already-deployed
+ * client runtimes, but the value is the constant `"mention_only"` for every
+ * recipient and the dispatcher no longer reads `chat_membership.mode` to
+ * decide it. See proposals/hub-chat-message-v2-simplify-mode.20260520.md §七.
  */
-describe("buildClientMessagePayload — recipientMode", () => {
-  it("defaults recipientMode to 'full' when the agent is not a participant of the entry's chat", async () => {
+describe("buildClientMessagePayload — recipientMode (v2 constant)", () => {
+  it("emits the constant 'mention_only' regardless of the agent / chat shape", async () => {
     const agent = await createAgent(app.db, {
       name: `rmode-stranger-${Date.now()}`,
       type: "autonomous_agent",
@@ -125,43 +127,10 @@ describe("buildClientMessagePayload — recipientMode", () => {
       RAW,
       "unrelated-chat-id",
     );
-    expect(built.recipientMode).toBe("full");
-  });
-
-  it("returns 'mention_only' when the participant row records mention_only mode", async () => {
-    const a1 = await createAgent(app.db, {
-      name: `rmode-a1-${Date.now()}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const a2 = await createAgent(app.db, {
-      name: `rmode-a2-${Date.now()}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const a3 = await createAgent(app.db, {
-      name: `rmode-a3-${Date.now()}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const chat = await createChat(app.db, a1.uuid, { type: "group", participantIds: [a2.uuid] });
-    // Phase 1: server derives `mention_only` for any non-human agent in a
-    // group chat — no client-side override needed (or accepted).
-    await addParticipant(app.db, chat.id, a1.uuid, { agentId: a3.uuid });
-
-    const built = await buildClientMessagePayload(
-      app.db,
-      { kind: "agentId", agentId: a3.uuid },
-      { ...RAW, chatId: chat.id },
-      chat.id,
-    );
     expect(built.recipientMode).toBe("mention_only");
   });
 
-  it("returns 'mention_only' for an agent↔agent direct chat (migration 0029)", async () => {
+  it("agent↔agent two-speaker chat → 'mention_only' wire value", async () => {
     const a1 = await createAgent(app.db, {
       name: `rmode-dir1-${Date.now()}`,
       type: "autonomous_agent",
@@ -184,7 +153,7 @@ describe("buildClientMessagePayload — recipientMode", () => {
     expect(built.recipientMode).toBe("mention_only");
   });
 
-  it("returns 'full' for a human↔agent direct chat", async () => {
+  it("human↔agent two-speaker chat → 'mention_only' wire value (no v1 'full' derivation)", async () => {
     const human = await createAgent(app.db, {
       name: `rmode-hum-${Date.now()}`,
       type: "human",
@@ -203,10 +172,41 @@ describe("buildClientMessagePayload — recipientMode", () => {
       { ...RAW, chatId: chat.id },
       chat.id,
     );
-    expect(built.recipientMode).toBe("full");
+    expect(built.recipientMode).toBe("mention_only");
   });
 
-  it("batch variant preserves per-entry recipientMode", async () => {
+  it("3+ speaker group → every speaker gets the same constant", async () => {
+    const a1 = await createAgent(app.db, {
+      name: `rmode-a1-${Date.now()}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const a2 = await createAgent(app.db, {
+      name: `rmode-a2-${Date.now()}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const a3 = await createAgent(app.db, {
+      name: `rmode-a3-${Date.now()}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const chat = await createChat(app.db, a1.uuid, { type: "group", participantIds: [a2.uuid] });
+    await addParticipant(app.db, chat.id, a1.uuid, { agentId: a3.uuid });
+
+    const built = await buildClientMessagePayload(
+      app.db,
+      { kind: "agentId", agentId: a3.uuid },
+      { ...RAW, chatId: chat.id },
+      chat.id,
+    );
+    expect(built.recipientMode).toBe("mention_only");
+  });
+
+  it("batch variant emits the same constant wire value for every item", async () => {
     const a1 = await createAgent(app.db, {
       name: `batch-a1-${Date.now()}`,
       type: "autonomous_agent",
@@ -223,9 +223,6 @@ describe("buildClientMessagePayload — recipientMode", () => {
       type: "group",
       participantIds: [a2.uuid],
     });
-    // Phase 1: a non-human agent (a1) joining a group chat is auto-set to
-    // `mention_only` by the server. No `mode` override needed (or accepted).
-    await addParticipant(app.db, group.id, a2.uuid, { agentId: a1.uuid }).catch(() => void 0);
 
     const built = await buildClientMessagePayloadsForInbox(app.db, a1.inboxId, [
       {
@@ -254,7 +251,7 @@ describe("buildClientMessagePayload — recipientMode", () => {
     const first = built[0];
     const second = built[1];
     if (!first || !second) throw new Error("expected two payloads");
-    expect(["full", "mention_only"]).toContain(first.recipientMode);
-    expect(first.recipientMode).toBe(second.recipientMode);
+    expect(first.recipientMode).toBe("mention_only");
+    expect(second.recipientMode).toBe("mention_only");
   });
 });

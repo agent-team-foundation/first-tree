@@ -331,7 +331,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     // target to keep the race semantics intact.
     await Promise.all([
       sessionService.archiveSession(app.db, target.uuid, chat.id, admin.organizationId, app.notifier),
-      sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: `race @${targetName}` }),
+      sendMessage(app.db, chat.id, sender.uuid, { source: "api", format: "text", content: `race @${targetName}` }),
     ]);
 
     expect(await readState(app, target.uuid, chat.id)).toBe("active");

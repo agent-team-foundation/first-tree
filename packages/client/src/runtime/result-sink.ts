@@ -125,6 +125,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     await deps.sdk.sendMessage(deps.chatId, {
       format: "text",
       content,
+      source: "api",
       // `purpose: "agent-final-text"` tells the server to skip the
       // group-chat `@mention required` guard and force every fan-out row
       // to `notify=false`. final text lands in chat history so human

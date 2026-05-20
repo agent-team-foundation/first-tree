@@ -58,6 +58,12 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const identity = requireAgent(request);
       await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      // NOTE: `sendMessageSchema.source` defaults to "api" when omitted
+      // (see shared/schemas/message.ts). This is an intentional HTTP-
+      // boundary tolerance for SDK callers; production callers all set
+      // source explicitly (web/cli/api/feishu/github). Do not "fix" this
+      // to require explicit source — it would break unaudited third-
+      // party integrations.
       const body = sendMessageSchema.parse(request.body);
       const prepared = await prepareImageOutbound(app.db, app.notifier, request.params.chatId, body);
       const { message: msg, recipients } = await messageService.sendMessage(

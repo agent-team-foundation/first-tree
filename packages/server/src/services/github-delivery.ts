@@ -66,6 +66,7 @@ export async function deliverNormalizedEvent(
       const { message, recipients } = await sendMessage(app.db, resolved.chatId, target.humanAgentId, {
         format: "card",
         content: card,
+        source: "github",
         metadata: {
           source: "github",
           event: event.rawEventType,
