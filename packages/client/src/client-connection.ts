@@ -854,6 +854,22 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "inbox:deliver") {
       const parsed = inboxDeliverFrameSchema.safeParse(msg);
       if (!parsed.success) {
+        // Best-effort ack: without it the server's reaper rolls the entry
+        // back to `pending` 300s later and re-pushes the same frame, which
+        // this build is guaranteed to drop again. The retry loop runs up
+        // to maxRetries before the entry is abandoned — pure spam in both
+        // directions. `entryId` is a top-level field and usually survives
+        // when inner `message` validation is what failed (see frameKeys).
+        // Logged separately as `entryIdAcked` so operators can correlate.
+        const rawEntryId = msg.entryId;
+        // Match `inboxAckFrameSchema`: non-negative integer. A `typeof "number"`
+        // check alone would let NaN / Infinity / floats slip through and ack
+        // would silently no-op on the server side (rejected by its own schema).
+        const entryIdAcked =
+          typeof rawEntryId === "number" && Number.isInteger(rawEntryId) && rawEntryId >= 0 ? rawEntryId : null;
+        if (entryIdAcked !== null) {
+          this.sendInboxAck(entryIdAcked);
+        }
         // Per-issue path/message + the receiving frame keys so we can pinpoint
         // shape drift between server build and client schema during gradual
         // rollouts. Frame body intentionally not logged in full — message
@@ -868,6 +884,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
             })),
             frameKeys: Object.keys(msg),
             messageKeys: msg.message && typeof msg.message === "object" ? Object.keys(msg.message) : null,
+            entryIdAcked,
           },
           "malformed inbox:deliver frame — dropping",
         );
