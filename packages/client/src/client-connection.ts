@@ -862,7 +862,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         // when inner `message` validation is what failed (see frameKeys).
         // Logged separately as `entryIdAcked` so operators can correlate.
         const rawEntryId = msg.entryId;
-        const entryIdAcked = typeof rawEntryId === "number" ? rawEntryId : null;
+        // Match `inboxAckFrameSchema`: non-negative integer. A `typeof "number"`
+        // check alone would let NaN / Infinity / floats slip through and ack
+        // would silently no-op on the server side (rejected by its own schema).
+        const entryIdAcked =
+          typeof rawEntryId === "number" && Number.isInteger(rawEntryId) && rawEntryId >= 0 ? rawEntryId : null;
         if (entryIdAcked !== null) {
           this.sendInboxAck(entryIdAcked);
         }

@@ -174,6 +174,13 @@ export const clientMessageSchema = messageSchema.extend({
   // frame parseable so the handler still receives the message body; only
   // the audit-trail `source` label is lost. Mirrors the
   // inboxDeliverFrameSchema `.passthrough()` policy for top-level fields.
+  //
+  // Scope: `.catch` is field-scoped — it fires for ANY shape mismatch on
+  // `source` (unknown enum value, wrong type like `12345`, missing /
+  // undefined), not just enum drift. Acceptable because `source` is a
+  // pure audit label that handlers never branch on. Other fields' parse
+  // errors still bubble up to the parent `safeParse`, so required-shape
+  // drift on id / chatId / format is NOT silently swallowed.
   source: messageSourceSchema.nullable().catch(null),
   recipientMode: participantModeSchema.default("full"),
   precedingMessages: z.array(precedingMessageSchema).default([]),

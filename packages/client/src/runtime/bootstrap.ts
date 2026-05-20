@@ -6,6 +6,7 @@ import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/c
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import type { ChatContext } from "./chat-context.js";
+import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
 
 const CONTEXT_TREE_REPOS_DIR = join(DEFAULT_DATA_DIR, "context-tree-repos");
@@ -29,17 +30,19 @@ export function contextTreeCloneDir(repo: string, branch: string): string {
 }
 
 /**
- * Convert a plain HTTPS git URL to its SSH counterpart so we can fall back
- * to key-based auth when the HTTPS clone fails. Headless service envs
- * (systemd / launchd unit) have no TTY for git's credential prompt, so any
- * unconfigured HTTPS access exits with "could not read Username". URLs not
- * matching `https://<host>/<path>` (already SSH, ssh://, git://, file paths)
- * return null — no rewrite possible / needed.
+ * Convert a plain HTTPS git URL to its scp-like SSH counterpart for fallback
+ * cloning. Delegates the host parsing + safety rules (reject embedded
+ * credentials, reject non-default ports) to `httpsToSshBaseRewrite` in
+ * git-mirror-manager — keeps a single source of truth for URL rewriting.
+ * Returns null when no portable mapping exists.
  */
 function toSshGitUrl(httpsRepo: string): string | null {
-  const m = httpsRepo.match(/^https:\/\/([^/]+)\/(.+)$/);
-  if (!m) return null;
-  return `git@${m[1]}:${m[2]}`;
+  const rewrite = httpsToSshBaseRewrite(httpsRepo);
+  if (!rewrite) return null;
+  // `rewrite.httpsBase` is the `https://<host>/` prefix; replace it with the
+  // matching `git@<host>:` to produce a full SSH URL for the same path.
+  if (!httpsRepo.startsWith(rewrite.httpsBase)) return null;
+  return rewrite.sshBase + httpsRepo.slice(rewrite.httpsBase.length);
 }
 
 function withContextTreeSyncLock(
@@ -156,7 +159,11 @@ async function syncContextTreeRepo(
           timeout: 60_000,
         });
         log("Context Tree cloned via SSH fallback");
-        return { path: cloneDir, repoUrl: repo, branch };
+        // Report the SSH URL as ground truth — `git remote get-url origin`
+        // on this checkout will be the SSH form, and downstream consumers
+        // (`first-tree tree integrate --tree-url`, telemetry) should match
+        // the actual remote rather than the configured-but-unusable HTTPS.
+        return { path: cloneDir, repoUrl: sshRepo, branch };
       } catch (sshErr) {
         const sshMsg = sshErr instanceof Error ? sshErr.message : String(sshErr);
         log(`Context Tree SSH fallback also failed: ${sshMsg}`);
