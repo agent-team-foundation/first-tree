@@ -72,12 +72,42 @@ export const clientWireCapabilitiesSchema = z
   .partial();
 export type ClientWireCapabilities = z.infer<typeof clientWireCapabilitiesSchema>;
 
+/**
+ * Outcome of the client's last self-update attempt. Carried on
+ * `client:register` so the server can persist it into
+ * `clients.metadata.lastUpdateAttempt`, surfacing in the admin
+ * dashboard whichever clients are failing to auto-update — without
+ * needing per-machine SSH to grep `client.log`.
+ *
+ * Length caps protect the WS frame budget: even a verbose npm stderr
+ * gets truncated client-side before persisting, but `.max()` here is the
+ * server-side guard against a hostile or buggy client sending a
+ * megabyte-long reason.
+ */
+export const updateAttemptSchema = z.object({
+  result: z.enum(["ok", "failed", "blocked"]),
+  target: z.string().min(1).max(64),
+  currentBefore: z.string().min(1).max(64),
+  installedVersion: z.string().min(1).max(64).nullable(),
+  reason: z.string().max(500).nullable(),
+  /** ISO timestamp the attempt finished. */
+  at: z.string().min(1).max(40),
+});
+export type UpdateAttempt = z.infer<typeof updateAttemptSchema>;
+
 export const clientRegisterSchema = z.object({
   clientId: z.string().min(1).max(100),
   hostname: z.string().max(100).optional(),
   os: z.string().max(50).optional(),
   sdkVersion: z.string().max(50).optional(),
   wireCapabilities: clientWireCapabilitiesSchema.optional(),
+  /**
+   * Most recent self-update outcome, if any. Optional — a freshly
+   * installed client (no prior attempts) and older clients (no report
+   * path wired) both omit it. Server persists into
+   * `clients.metadata.lastUpdateAttempt` on receipt.
+   */
+  lastUpdateAttempt: updateAttemptSchema.optional(),
 });
 export type ClientRegister = z.infer<typeof clientRegisterSchema>;
 

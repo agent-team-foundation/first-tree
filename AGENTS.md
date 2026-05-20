@@ -128,14 +128,6 @@ SDK methods live in `sdk.ts`, handlers register in `handlers/`, runtime changes 
 - **Releases**: tag + GitHub Release
 - Do not auto-commit; wait for user to test and confirm before committing
 
-### Versioning
-
-- **Bump `packages/command`** on every PR that touches `command` or `client`, **or** parts of `shared` that `command` / `client` actually import. This is the consumer-facing tarball — only changes that flow through `npm install` need a new version.
-- **Do not bump** for changes confined to `server` / `web`, or to `shared` modules consumed only by `server` / `web` (e.g. admin-API contract schemas, server-only Zod schemas, web-only types). Those ship via the SaaS Docker image, not npm.
-- **Never bump** `private: true` packages (`shared` / `client` / `server` / `web`) — `tsdown` inlines them into the `command` tarball; their `version` is inert.
-
-Full policy (how to pick the next version, anti-patterns, bash recipes): [docs/versioning-and-publishing.md](docs/versioning-and-publishing.md).
-
 <!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->
 ## First Tree integration
 

@@ -32,6 +32,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
       connectedAt: serializeDate(client.connectedAt),
       lastSeenAt: client.lastSeenAt.toISOString(),
       capabilities,
+      lastUpdateAttempt: clientService.extractLastUpdateAttempt(client.metadata),
     };
   });
 

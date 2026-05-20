@@ -1,3 +1,4 @@
+import type { UpdateAttempt } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { ClientConnection } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
@@ -34,6 +35,13 @@ export type AgentRuntimeOptions = {
    * manager.
    */
   update?: UpdateHooks;
+  /**
+   * Optional accessor for the most recent self-update outcome — see
+   * `ClientConnectionConfig.getLastUpdateAttempt`. Wired by the command
+   * package so the server can surface failed-to-self-update clients in
+   * the admin dashboard.
+   */
+  getLastUpdateAttempt?: () => UpdateAttempt | null;
 };
 
 const DEFAULT_SHUTDOWN_TIMEOUT = 30_000;
@@ -65,6 +73,7 @@ export class AgentRuntime {
       sdkVersion: options.currentVersion,
       userAgent: options.userAgent,
       getAccessToken: this.getAccessToken,
+      getLastUpdateAttempt: options.getLastUpdateAttempt,
     });
 
     // Surface transport-level errors (TLS resets, DNS hiccups, WS handshake
