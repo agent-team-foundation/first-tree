@@ -9,7 +9,6 @@ import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
-import { messages } from "../db/schema/messages.js";
 import type { Notifier } from "./notifier.js";
 
 /**
@@ -18,9 +17,10 @@ import type { Notifier } from "./notifier.js";
  *
  *   1. Generate / adopt an `imageId`
  *   2. Push the bytes as an `image_payload` WS frame to every participant
- *      agent's inbox — plus the reply-to inbox when this is a cross-chat
- *      reply (matches sendMessage's extra fan-out). Best-effort, local
- *      instance only, no PG NOTIFY.
+ *      agent's inbox. Cross-chat reply routing has been removed (see
+ *      first-tree-context PR #281), so there is no extra reply-to fan-out
+ *      to match — the chat's own participant list is the full audience.
+ *      Best-effort, local instance only, no PG NOTIFY.
  *   3. Return a copy of `data` whose `content` is just the reference
  *      {imageId, mimeType, filename, size}
  *
@@ -60,7 +60,7 @@ export async function prepareImageOutbound(
   };
   const serialised = JSON.stringify(frame);
 
-  const inboxIds = await collectTargetInboxes(db, chatId, data.inReplyTo);
+  const inboxIds = await collectTargetInboxes(db, chatId);
   for (const inboxId of inboxIds) {
     notifier.pushFrameToInbox(inboxId, serialised).catch(() => {
       // Best-effort side channel; downstream already surfaces a placeholder
@@ -82,27 +82,18 @@ export async function prepareImageOutbound(
 }
 
 /**
- * Mirror `sendMessage`'s fan-out set: every participant of the current
- * chat, plus the original requester's inbox when this message is a cross-
- * chat reply (see `services/message.ts` replyTo routing).
+ * Mirror `sendMessage`'s fan-out set: every speaker in the chat receives
+ * the image-bytes broadcast. Cross-chat reply routing and the
+ * `replyToInbox` envelope were removed alongside the sub-chat cleanup
+ * (first-tree-context PR #281), so the chat's own speaker list is the
+ * full audience.
  */
-async function collectTargetInboxes(db: Database, chatId: string, inReplyTo: string | undefined): Promise<string[]> {
+async function collectTargetInboxes(db: Database, chatId: string): Promise<string[]> {
   const participants = await db
     .select({ inboxId: agents.inboxId })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
-  const set = new Set(participants.map((p) => p.inboxId));
-
-  if (inReplyTo) {
-    const [original] = await db
-      .select({ replyToInbox: messages.replyToInbox })
-      .from(messages)
-      .where(eq(messages.id, inReplyTo))
-      .limit(1);
-    if (original?.replyToInbox) set.add(original.replyToInbox);
-  }
-
-  return [...set];
+  return [...new Set(participants.map((p) => p.inboxId))];
 }

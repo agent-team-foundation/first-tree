@@ -1,6 +1,5 @@
 import {
   type ClientMessage,
-  type InReplyToSnapshot,
   type Message,
   messageSourceSchema,
   type ParticipantMode,
@@ -11,7 +10,6 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
-import { messages as messagesTable } from "../db/schema/messages.js";
 
 /**
  * Use a structurally-typed DB so both `Database` and `PgTransaction` from
@@ -20,7 +18,7 @@ import { messages as messagesTable } from "../db/schema/messages.js";
 type DbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select">;
 
 /** Loose shape for inbound message rows — `source` is plain text in DB. */
-type RawMessageRow = Omit<Message, "source" | "configVersion" | "recipientMode" | "inReplyToSnapshot"> & {
+type RawMessageRow = Omit<Message, "source" | "configVersion" | "recipientMode"> & {
   source: string | null;
 };
 
@@ -46,15 +44,14 @@ function normaliseMode(mode: string | null | undefined): ParticipantMode {
  * same agent-config lookup.
  *
  * `entryChatId` is the chat this payload is routed to on the receiver side
- * — often equal to `message.chatId`, but in `replyTo` routing the original
- * sender may be notified in a *different* chat (see services/message.ts).
- * It drives `recipientMode` lookup from `chat_membership` (speaker rows).
+ * — typically equal to `message.chatId`. It drives `recipientMode` lookup
+ * from `chat_membership` (speaker rows).
  *
  * Production code should prefer `buildClientMessagePayloadsForInbox` — the
  * single-message variant is kept only because it simplifies the dispatcher
- * unit tests. Each call here issues up to three independent queries
- * (agent-config, participant mode, inReplyTo snapshot), so batching matters
- * for any fan-out sized path.
+ * unit tests. Each call here issues up to two independent queries
+ * (agent-config, participant mode), so batching matters for any fan-out
+ * sized path.
  */
 export type ClientMessagePayloadSource = { kind: "inboxId"; inboxId: string } | { kind: "agentId"; agentId: string };
 
@@ -78,7 +75,6 @@ export async function buildClientMessagePayload(
 
   const chatForMode = entryChatId ?? message.chatId;
   const recipientMode = await resolveRecipientMode(db, agentId, chatForMode);
-  const inReplyToSnapshot = await resolveInReplyToSnapshot(db, message.inReplyTo);
 
   return {
     id: message.id,
@@ -87,14 +83,11 @@ export async function buildClientMessagePayload(
     format: message.format,
     content: message.content,
     metadata: message.metadata,
-    replyToInbox: message.replyToInbox,
-    replyToChat: message.replyToChat,
     inReplyTo: message.inReplyTo,
     source: normaliseSource(message.source),
     createdAt: message.createdAt,
     configVersion: version,
     recipientMode,
-    inReplyToSnapshot,
     precedingMessages,
   };
 }
@@ -108,7 +101,7 @@ export type MessageForInbox = {
 
 /**
  * Batch variant — builds all payloads with a single DB lookup per agent plus
- * batched lookups for participant modes and inReplyTo snapshots.
+ * a batched lookup for participant modes.
  */
 export async function buildClientMessagePayloadsForInbox(
   db: DbLike,
@@ -143,24 +136,6 @@ export async function buildClientMessagePayloadsForInbox(
     for (const r of rows) modeByChat.set(r.chatId, normaliseMode(r.mode));
   }
 
-  // Batch: inReplyTo snapshots for all messages that carry one.
-  const inReplyToIds = [...new Set(items.map((it) => it.message.inReplyTo).filter((id): id is string => id !== null))];
-  const snapshotById = new Map<string, NonNullable<InReplyToSnapshot>>();
-  if (inReplyToIds.length > 0) {
-    const origs = await db
-      .select({
-        id: messagesTable.id,
-        senderId: messagesTable.senderId,
-        chatId: messagesTable.chatId,
-        replyToChat: messagesTable.replyToChat,
-      })
-      .from(messagesTable)
-      .where(inArray(messagesTable.id, inReplyToIds));
-    for (const o of origs) {
-      snapshotById.set(o.id, { senderId: o.senderId, chatId: o.chatId, replyToChat: o.replyToChat });
-    }
-  }
-
   return items.map(({ entryChatId, message: m, precedingMessages = [] }) => ({
     id: m.id,
     chatId: m.chatId,
@@ -168,14 +143,11 @@ export async function buildClientMessagePayloadsForInbox(
     format: m.format,
     content: m.content,
     metadata: m.metadata,
-    replyToInbox: m.replyToInbox,
-    replyToChat: m.replyToChat,
     inReplyTo: m.inReplyTo,
     source: normaliseSource(m.source),
     createdAt: m.createdAt,
     configVersion: version,
     recipientMode: modeByChat.get(entryChatId ?? m.chatId) ?? "full",
-    inReplyToSnapshot: m.inReplyTo ? (snapshotById.get(m.inReplyTo) ?? null) : null,
     precedingMessages,
   }));
 }
@@ -193,21 +165,6 @@ async function resolveRecipientMode(db: DbLike, agentId: string, chatId: string)
     )
     .limit(1);
   return normaliseMode(row?.mode);
-}
-
-async function resolveInReplyToSnapshot(db: DbLike, inReplyTo: string | null): Promise<InReplyToSnapshot> {
-  if (!inReplyTo) return null;
-  const [row] = await db
-    .select({
-      senderId: messagesTable.senderId,
-      chatId: messagesTable.chatId,
-      replyToChat: messagesTable.replyToChat,
-    })
-    .from(messagesTable)
-    .where(eq(messagesTable.id, inReplyTo))
-    .limit(1);
-  if (!row) return null;
-  return { senderId: row.senderId, chatId: row.chatId, replyToChat: row.replyToChat };
 }
 
 async function resolveAgentId(db: DbLike, source: ClientMessagePayloadSource): Promise<string> {

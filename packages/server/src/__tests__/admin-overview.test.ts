@@ -11,7 +11,7 @@ describe("Admin Overview API", () => {
     const { agent: a2 } = await createTestAgent(app, { name: "overview-a2" });
 
     // Create a chat via the agent-scoped API (uses X-Agent-Id + JWT).
-    await a1.request("POST", "/api/v1/agent/chats", { type: "direct", participantIds: [a2.uuid] });
+    await a1.request("POST", "/api/v1/agent/chats", { type: "group", participantIds: [a2.uuid] });
 
     const res = await app.inject({
       method: "GET",

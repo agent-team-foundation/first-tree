@@ -1,8 +1,4 @@
-import {
-  paginationQuerySchema,
-  sendMessageSchema,
-  sendToAgentSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { paginationQuerySchema, sendMessageSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { requireAgent } from "../../middleware/require-identity.js";
@@ -69,7 +65,18 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
         request.params.chatId,
         identity.uuid,
         prepared,
-        { enforceGroupMention: true, normalizeMentionsInContent: true },
+        {
+          enforceGroupMention: true,
+          normalizeMentionsInContent: true,
+          // Agent endpoint preserves content `@<name>` extraction as a
+          // **fallback** — when the caller does not declare routing intent
+          // via `metadata.mentions` or `receiverNames`, the IM-natural
+          // "typed `@b` wakes b" path still works. Declaring either field
+          // makes the call explicit-wins and skips content extraction (see
+          // `sendMessage`). The full retire of content extraction on agent
+          // path is deferred to a follow-up PR.
+          extractMentionsFromContent: true,
+        },
       );
 
       notifyRecipients(app.notifier, recipients, msg.id);
@@ -120,30 +127,4 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
       nextCursor: result.nextCursor,
     };
   });
-}
-
-export async function agentSendToAgentRoutes(app: FastifyInstance): Promise<void> {
-  const writeRateLimit = agentMessageWriteRateLimit(app.config.rateLimit?.agentMessageMax ?? 30);
-
-  app.post<{ Params: { name: string } }>(
-    "/:name/messages",
-    { config: { ...writeRateLimit, otelRecordBody: true } },
-    async (request, reply) => {
-      const identity = requireAgent(request);
-      const body = sendToAgentSchema.parse(request.body);
-      const { message: msg, recipients } = await messageService.sendToAgent(
-        app.db,
-        identity.uuid,
-        request.params.name,
-        body,
-      );
-
-      notifyRecipients(app.notifier, recipients, msg.id);
-
-      return reply.status(201).send({
-        ...msg,
-        createdAt: msg.createdAt.toISOString(),
-      });
-    },
-  );
 }

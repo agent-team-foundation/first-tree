@@ -37,7 +37,7 @@ describe("chat upgrade — direct to group", () => {
     const { agent: a3 } = await createTestAgent(app, { name: `up-a3-${uid}` });
 
     const chat = await createChat(app.db, a1.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
     });
 
@@ -85,7 +85,7 @@ describe("chat upgrade — direct to group", () => {
     await app.db.update(agentsTable).set({ managerId: a1.memberId }).where(eq(agentsTable.uuid, a2.uuid));
 
     const chat = await createChat(app.db, a1.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
     });
 
@@ -144,7 +144,7 @@ describe("chat upgrade — direct to group", () => {
     const { agent: human } = await createTestAgent(app, { name: `ensure-h-${uid}`, type: "human" });
 
     const chat = await createChat(app.db, a1.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
     });
 

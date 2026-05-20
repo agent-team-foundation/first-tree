@@ -19,7 +19,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       clientId: admin.clientId,
     });
     const chat = await createChat(app.db, admin.humanAgentUuid, {
-      type: "direct",
+      type: "group",
       participantIds: [agent.uuid],
     });
     return { app, admin, agent, chat };

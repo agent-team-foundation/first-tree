@@ -1,29 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
-describe("Agent Messaging Flow (send → chats → history)", () => {
+/**
+ * End-to-end agent messaging flow against the canonical
+ * `POST /api/v1/agent/chats/:chatId/messages` path. Hub keeps a single
+ * group-chat model (see first-tree-context PR #281) and the by-name
+ * `sendToAgent` primitive has been retired — these tests exercise the
+ * `create chat → send → list → history` flow without relying on it.
+ */
+describe("Agent Messaging Flow (create → send → chats → history)", () => {
   const getApp = useTestApp();
 
-  it("full flow: send to agent, list chats, view history", async () => {
+  it("full flow: create chat with peer, send, list chats, view history", async () => {
     const app = getApp();
     const sender = await createTestAgent(app, { name: "flow-sender" });
     const receiver = await createTestAgent(app, { name: "flow-receiver" });
 
-    // v1 §四 改造 1: opening a side-chat with a non-member needs `direct: true`.
-    const sendRes = await sender.request("POST", `/api/v1/agent/agents/${receiver.agent.name}/messages`, {
+    const chatRes = await sender.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [receiver.agent.uuid],
+    });
+    expect(chatRes.statusCode).toBe(201);
+    const chatId = chatRes.json().id as string;
+
+    const sendRes = await sender.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "Hello from sender",
-      direct: true,
+      content: `@${receiver.agent.name} Hello from sender`,
     });
     expect(sendRes.statusCode).toBe(201);
     const sentMessage = sendRes.json();
     expect(sentMessage.senderId).toBe(sender.agent.uuid);
-    // Server prepends @<targetName> on agent-to-agent sends — see
-    // agent-send-mention-injection.test.ts.
     expect(sentMessage.content).toBe(`@${receiver.agent.name} Hello from sender`);
-    expect(sentMessage.chatId).toBeDefined();
-
-    const chatId = sentMessage.chatId as string;
+    expect(sentMessage.chatId).toBe(chatId);
 
     const senderChatsRes = await sender.request("GET", "/api/v1/agent/chats");
     expect(senderChatsRes.statusCode).toBe(200);
@@ -44,7 +52,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
 
     const replyRes = await receiver.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "Hello back!",
+      content: `@${sender.agent.name} Hello back!`,
     });
     expect(replyRes.statusCode).toBe(201);
     expect(replyRes.json().senderId).toBe(receiver.agent.uuid);
@@ -62,10 +70,14 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const { agent: a4 } = await createTestAgent(app, { name: "page-a4" });
 
     for (const target of [a2, a3, a4]) {
-      await a1.request("POST", `/api/v1/agent/agents/${target.name}/messages`, {
+      const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+        type: "group",
+        participantIds: [target.uuid],
+      });
+      const chatId = chatRes.json().id as string;
+      await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
-        content: `hi ${target.name}`,
-        direct: true,
+        content: `@${target.name} hi`,
       });
     }
 
@@ -86,17 +98,16 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const a1 = await createTestAgent(app, { name: "msghist-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "msghist-a2" });
 
-    const firstMsg = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
-      format: "text",
-      content: "msg-1",
-      direct: true,
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.uuid],
     });
-    const chatId = firstMsg.json().chatId as string;
+    const chatId = chatRes.json().id as string;
 
-    for (const text of ["msg-2", "msg-3"]) {
+    for (const text of ["msg-1", "msg-2", "msg-3"]) {
       await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
-        content: text,
+        content: `@${a2.name} ${text}`,
       });
     }
 
@@ -117,12 +128,15 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const { agent: a2 } = await createTestAgent(app, { name: "noaccess-a2" });
     const a3 = await createTestAgent(app, { name: "noaccess-a3" });
 
-    const sendRes = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
-      format: "text",
-      content: "private",
-      direct: true,
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.uuid],
     });
-    const chatId = sendRes.json().chatId as string;
+    const chatId = chatRes.json().id as string;
+    await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "text",
+      content: `@${a2.name} private`,
+    });
 
     const historyRes = await a3.request("GET", `/api/v1/agent/chats/${chatId}/messages`);
     expect(historyRes.statusCode).toBe(403);
@@ -133,15 +147,18 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const a1 = await createTestAgent(app, { name: "md-sender" });
     const { agent: a2 } = await createTestAgent(app, { name: "md-receiver" });
 
-    const res = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.uuid],
+    });
+    const chatId = chatRes.json().id as string;
+
+    const res = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "markdown",
-      content: "## Hello\n\nThis is **bold**",
-      direct: true,
+      content: `@${a2.name} ## Hello\n\nThis is **bold**`,
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().format).toBe("markdown");
-    // Server prepends @<targetName> on agent-to-agent sends — see
-    // agent-send-mention-injection.test.ts.
     expect(res.json().content).toBe(`@${a2.name} ## Hello\n\nThis is **bold**`);
   });
 
@@ -150,11 +167,16 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const a1 = await createTestAgent(app, { name: "meta-sender" });
     const { agent: a2 } = await createTestAgent(app, { name: "meta-receiver" });
 
-    const res = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.uuid],
+    });
+    const chatId = chatRes.json().id as string;
+
+    const res = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "approval needed",
+      content: `@${a2.name} approval needed`,
       metadata: { intent: "approval", urgency: "high" },
-      direct: true,
     });
     expect(res.statusCode).toBe(201);
     const msg = res.json();

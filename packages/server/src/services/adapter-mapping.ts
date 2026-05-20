@@ -177,9 +177,12 @@ export async function findOrCreateChatForChannel(
     return existing.chatId;
   }
 
-  // Create new chat + mapping in transaction
+  // Create new chat + mapping in transaction. Hub keeps a single
+  // group-chat model (see first-tree-context PR #281); the p2p
+  // adapter shape is captured via membership size + the bot/sender pair,
+  // not via `chats.type`, so we always write `group` here.
   const chatId = randomUUID();
-  const internalType = data.chatType === "p2p" ? "direct" : "group";
+  const internalType = "group";
 
   return db.transaction(async (tx) => {
     // Get bot agent's org

@@ -15,9 +15,12 @@ export const chats = pgTable(
     topic: text("topic"),
     lifecyclePolicy: text("lifecycle_policy").default("persistent"),
     /**
-     * Anchor for nested chats. Currently unused at the product level — listMeChats
-     * filters `parent_chat_id IS NULL`, so any non-null row is hidden from the
-     * conversation list. Reserved as scaffolding for a future nested-chat model.
+     * Decision-inert column. Hub keeps a single group-chat model — there is no
+     * sub-chat / nested-chat product layer (see first-tree-context PR #281).
+     * The column is retained as schema scaffolding only; the business layer
+     * never writes a non-null value and `listMeChats` defensively filters
+     * `parent_chat_id IS NULL` so any historical row stays hidden from the
+     * conversation list. Do NOT reintroduce nested-chat semantics here.
      */
     parentChatId: text("parent_chat_id"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),

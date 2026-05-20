@@ -22,7 +22,7 @@ describe("Agent Messages — per-agent rate limit", () => {
 
     const chat = (
       await sender.request("POST", "/api/v1/agent/chats", {
-        type: "direct",
+        type: "group",
         participantIds: [target.agent.uuid],
       })
     ).json();
@@ -46,13 +46,13 @@ describe("Agent Messages — per-agent rate limit", () => {
 
     const chat1 = (
       await a1.request("POST", "/api/v1/agent/chats", {
-        type: "direct",
+        type: "group",
         participantIds: [target.agent.uuid],
       })
     ).json();
     const chat3 = (
       await a3.request("POST", "/api/v1/agent/chats", {
-        type: "direct",
+        type: "group",
         participantIds: [target.agent.uuid],
       })
     ).json();

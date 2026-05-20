@@ -160,12 +160,16 @@ export type ConnectionInfo = {
   } | null;
 };
 
+/**
+ * Test connection response.
+ *
+ * Server returns only `success` / `offline` / `stale`. The extra `error`
+ * status is a client-side fallback shown when the request itself fails
+ * (network drop, 403, etc.) — in that case `connection` is absent.
+ */
 export type TestResult = {
-  status: "success" | "timeout" | "offline" | "stale" | "error";
+  status: "success" | "offline" | "stale" | "error";
   message?: string;
-  chatId?: string;
-  responseContent?: string;
-  responseTime?: number;
   connection?: ConnectionInfo;
 };
 
