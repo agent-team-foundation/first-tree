@@ -30,11 +30,14 @@
 /**
  * v1 limitation — the path-segment character class is intentionally ASCII
  * only. Unicode filenames and Windows backslash-separated paths are NOT
- * linkified. Workspaces in practice use POSIX-style ASCII paths, and the
- * runtime's `normalizeDocLinkPath` also rejects absolute paths, so this
- * matches the rest of the pipeline. Loosening the character class later
- * is straightforward but requires re-validating that we don't accidentally
- * absorb adjacent punctuation as part of a "filename".
+ * linkified. Workspaces in practice use POSIX-style ASCII paths. The regex
+ * does accept a leading "/", so absolute tokens are scanned; the runtime
+ * (`buildMessageDocumentSnapshots`) resolves an absolute path that lands
+ * inside the workspace root and rewrites it to its canonical relative form,
+ * while `normalizeDocLinkPath` strips a leading "/" and treats the rest as
+ * root-relative. Loosening the character class later is straightforward but
+ * requires re-validating that we don't accidentally absorb adjacent
+ * punctuation as part of a "filename".
  */
 const BARE_PATH_RE =
   /(^|[\s([{"'])(?<path>(?:\.{1,2}\/|\/)?(?:[A-Za-z0-9_.~+@%-]+\/)*[A-Za-z0-9_.~+@%-]+\.md(?::\d+(?::\d+)?)?)(?=$|[\s)\]}"',.;!?])/g;
