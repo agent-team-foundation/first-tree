@@ -40,9 +40,23 @@ describe("docPreviewPathFromHref", () => {
 });
 
 describe("linkifyMarkdownDocPaths", () => {
-  it("wraps plain markdown document paths into inline markdown links", () => {
-    expect(linkifyMarkdownDocPaths("Created docs/intro.md and README.md:12.")).toBe(
-      "Created [docs/intro.md](docs/intro.md) and [README.md:12](README.md:12).",
+  it("wraps only snapshotted paths, linking to the canonical (de-suffixed) target", () => {
+    // `README.md:12` keeps its `:12` in the visible text but links to the
+    // canonical `README.md` — an href with a `:` before any `/` would be
+    // stripped to "" by react-markdown's defaultUrlTransform and reload the page.
+    expect(
+      linkifyMarkdownDocPaths("Created docs/intro.md and README.md:12.", new Set(["docs/intro.md", "README.md"])),
+    ).toBe("Created [docs/intro.md](docs/intro.md) and [README.md:12](README.md).");
+  });
+
+  it("leaves a mentioned-but-not-snapshotted path as plain text (no dead links)", () => {
+    // The agent only *talks about* README.md:12 (e.g. describing a bug); there
+    // is no snapshot for it, so it must NOT become a clickable (dead) link.
+    expect(linkifyMarkdownDocPaths("the README.md:12 bug is annoying", new Set())).toBe(
+      "the README.md:12 bug is annoying",
+    );
+    expect(linkifyMarkdownDocPaths("see docs/intro.md for details", new Set(["docs/other.md"]))).toBe(
+      "see docs/intro.md for details",
     );
   });
 
@@ -57,25 +71,27 @@ describe("linkifyMarkdownDocPaths", () => {
       "External https://example.com/readme.md",
       "Text docs/readme.txt",
     ].join("\n");
-    expect(linkifyMarkdownDocPaths(input)).toBe(input);
+    // Even when the snapshot set contains these paths, the scanner skips
+    // links / code / HTML, so the source is returned unchanged.
+    expect(
+      linkifyMarkdownDocPaths(input, new Set(["docs/intro.md", "docs/code.md", "docs/fenced.md", "docs/html.md"])),
+    ).toBe(input);
   });
 
   it("returns the source unchanged when no plain markdown paths are present", () => {
     const text = "hello world";
-    expect(linkifyMarkdownDocPaths(text)).toBe(text);
+    expect(linkifyMarkdownDocPaths(text, new Set(["docs/intro.md"]))).toBe(text);
   });
 
   it("leaves tokens that would canonicalise to null as plain text (hidden segments, escapes)", () => {
-    // These all match the surface-level bare-path regex but
-    // `normalizeDocLinkPath` rejects them — wrapping them anyway would
-    // produce an anchor whose onClick declines to intercept, letting
-    // the browser navigate away from the chat as a same-origin nav.
+    // These match the surface-level regex but `normalizeDocLinkPath` rejects
+    // them, so they can never be in the snapshot set and stay plain text.
     const input = "see .agent/secret.md and ../outside.md and docs/.git/HEAD.md";
-    expect(linkifyMarkdownDocPaths(input)).toBe(input);
+    expect(linkifyMarkdownDocPaths(input, new Set([".agent/secret.md", "outside.md"]))).toBe(input);
   });
 
-  it("linkifies the resolvable token in a line that also contains an unresolvable one", () => {
-    expect(linkifyMarkdownDocPaths("ok docs/intro.md but not .agent/secret.md")).toBe(
+  it("linkifies the snapshotted token in a line that also contains an unresolvable one", () => {
+    expect(linkifyMarkdownDocPaths("ok docs/intro.md but not .agent/secret.md", new Set(["docs/intro.md"]))).toBe(
       "ok [docs/intro.md](docs/intro.md) but not .agent/secret.md",
     );
   });
