@@ -361,6 +361,18 @@ export class SessionManager {
     }));
   }
 
+  /**
+   * ChatIds the client still holds in `evictedMappings` — i.e. either
+   * hydrated from disk on startup or dropped from `sessions` by LRU. Used
+   * by the agent-slot full-state-sync to advertise these as "suspended" on
+   * the wire, so the server's `agent_chat_sessions.state` doesn't get
+   * stuck on a pre-restart "active" snapshot when the in-memory handler is
+   * actually gone.
+   */
+  getEvictedChatIds(): string[] {
+    return [...this.evictedMappings.keys()];
+  }
+
   // ---- Internal -----------------------------------------------------------
 
   private async routeMessage(chatId: string, message: SessionMessage, entryId?: number): Promise<void> {
@@ -663,6 +675,7 @@ export class SessionManager {
 
   private evictIdle(): void {
     const timeoutMs = this.config.session.idle_timeout * 1000;
+    const workingGraceMs = this.config.session.working_grace_seconds * 1000;
     // Blocked detection — 2 minutes without activity while session is active
     const blockedThresholdMs = 120_000;
     const now = Date.now();
@@ -688,8 +701,35 @@ export class SessionManager {
           );
           continue;
         }
+
+        // `lastActivity` is bumped per inbound SDK message/event (handler
+        // `touch()`), so a long thinking turn or a single very large message
+        // looks identical to "session has been idle" here. Without this
+        // exemption the runtime suspends the SDK transport mid-thinking and
+        // the work is lost. `working_grace_seconds` bounds the worst case:
+        // if a handler bug strands the state at `working`/`blocked`, the
+        // slot is reclaimed after the grace window expires.
+        const currentState = this.sessionRuntimeStates.get(session.chatId);
+        const stillProgressing = currentState === "working" || currentState === "blocked";
+        if (stillProgressing && inactiveMs < timeoutMs + workingGraceMs) {
+          this.config.log.info(
+            {
+              chatId: session.chatId,
+              runtimeState: currentState,
+              inactiveSec: Math.round(inactiveMs / 1000),
+              graceSec: this.config.session.working_grace_seconds,
+            },
+            "session idle threshold reached but still working — skipping suspend",
+          );
+          continue;
+        }
+
         this.config.log.info(
-          { chatId: session.chatId, idleTimeoutSec: this.config.session.idle_timeout },
+          {
+            chatId: session.chatId,
+            idleTimeoutSec: this.config.session.idle_timeout,
+            runtimeState: currentState ?? "idle",
+          },
           "session idle, suspending",
         );
         this.suspendSession(session);

@@ -20,6 +20,11 @@ export const agentConfigSchema = defineConfig({
   session: {
     idle_timeout: field(z.number().int().positive().default(300)),
     max_sessions: field(z.number().int().positive().default(10)),
+    // Upper bound on how long a session may stay `working`/`blocked` past
+    // `idle_timeout` before the runtime force-suspends it. Protects long
+    // thinking / large message generation from idle eviction while still
+    // bounding stuck-state slot leaks. See evictIdle in session-manager.ts.
+    working_grace_seconds: field(z.number().int().positive().default(3600)),
   },
 });
 

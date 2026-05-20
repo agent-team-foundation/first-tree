@@ -53,7 +53,7 @@ function makeSessionManager(opts: {
     return next;
   };
   return new SessionManager({
-    session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+    session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     concurrency: 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -183,7 +183,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
   }) {
     const queue = [...opts.handlerQueue];
     return new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 1,
       handlerFactory: () => queue.shift() ?? workingHandler(),
       handlerConfig: { workspaceRoot: "/tmp/test" },

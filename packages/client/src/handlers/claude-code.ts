@@ -809,6 +809,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             respawnQuery(claudeSessionId, sessionCtx);
           } catch (resumeErr) {
             sessionCtx.log(`Auto-resume failed: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
+            // Mirror the MAX_RETRIES branch above: leaving runtimeState at
+            // `working` would block the SessionManager's idle-suspend grace
+            // window from ever firing on this session, so the slot would
+            // never be reclaimed.
+            sessionCtx.setRuntimeState("error");
             return;
           }
         }
