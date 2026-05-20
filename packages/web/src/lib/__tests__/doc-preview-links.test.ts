@@ -95,4 +95,45 @@ describe("linkifyMarkdownDocPaths", () => {
       "ok [docs/intro.md](docs/intro.md) but not .agent/secret.md",
     );
   });
+
+  it("expands a short cross-agent token to the global key when a chatId is given", () => {
+    // Runtime rewrote a sibling-workspace mention to `assistant/design.md` and
+    // embedded the snapshot under the global key `assistant/<chatId>/design.md`.
+    // Web re-expands the token with the current chat id and links to that key.
+    expect(linkifyMarkdownDocPaths("see assistant/design.md", new Set(["assistant/chat-1/design.md"]), "chat-1")).toBe(
+      "see [assistant/design.md](assistant/chat-1/design.md)",
+    );
+  });
+
+  it("prefers a direct (self/legacy) bare key over the cross expansion", () => {
+    // A literal self subdir named like another agent still matches its bare key
+    // first, so self previews never get hijacked by cross expansion.
+    expect(linkifyMarkdownDocPaths("see assistant/design.md", new Set(["assistant/design.md"]), "chat-1")).toBe(
+      "see [assistant/design.md](assistant/design.md)",
+    );
+  });
+
+  it("does not cross-expand without a chatId (self-only matching)", () => {
+    expect(linkifyMarkdownDocPaths("see assistant/design.md", new Set(["assistant/chat-1/design.md"]))).toBe(
+      "see assistant/design.md",
+    );
+  });
+
+  it("leaves a cross token plain when its expanded global key isn't snapshotted", () => {
+    expect(linkifyMarkdownDocPaths("see assistant/design.md", new Set(["assistant/chat-1/other.md"]), "chat-1")).toBe(
+      "see assistant/design.md",
+    );
+  });
+
+  it("disambiguates a self/cross collision: self short token vs full cross key (P2-b)", () => {
+    // Runtime emits the FULL global key for the colliding cross mention, so the
+    // bare `assistant/design.md` token is unambiguously the SELF snapshot and
+    // the full-key token resolves to the cross snapshot — distinct targets.
+    const set = new Set(["assistant/design.md", "assistant/chat-1/design.md"]);
+    expect(
+      linkifyMarkdownDocPaths("self assistant/design.md and cross assistant/chat-1/design.md", set, "chat-1"),
+    ).toBe(
+      "self [assistant/design.md](assistant/design.md) and cross [assistant/chat-1/design.md](assistant/chat-1/design.md)",
+    );
+  });
 });

@@ -2,7 +2,12 @@
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
-export { isCanonicalDocLinkPath, normalizeDocLinkPath } from "./lib/doc-path.js";
+export {
+  buildWorkspaceDocKey,
+  isCanonicalDocLinkPath,
+  normalizeDocLinkPath,
+  parseWorkspaceDocKey,
+} from "./lib/doc-path.js";
 export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";

@@ -60,6 +60,50 @@ export function useAgentNameMap(): (uuid: string | null | undefined) => string {
 }
 
 /**
+ * Reverse of {@link useAgentNameMap}: resolves an agent's `name` (the @handle
+ * slug, which is also its workspace directory name) to its UUID.
+ *
+ * Used by cross-agent doc preview: a snapshot key carries the OWNER agent's
+ * slug (`<ownerSlug>/<chatId>/<rel>`), but the path-based fallback endpoint
+ * (`GET /chats/:id/docs/preview`) is keyed by agent UUID. The inline-snapshot
+ * path renders straight from cache and needs no UUID, so an unresolved slug
+ * (owner not in the loaded roster) is non-fatal — callers fall back to the
+ * message sender.
+ */
+export function useAgentSlugToIdMap(): (slug: string | null | undefined) => string | null {
+  const { data } = useQuery({
+    queryKey: ["agents", "name-map"],
+    queryFn: () => listAgents({ limit: 100 }),
+    staleTime: 30_000,
+  });
+  const { data: managed } = useQuery({
+    queryKey: ["managed-agents", "name-map"],
+    queryFn: listManagedAgents,
+    staleTime: 30_000,
+  });
+
+  return useMemo(() => {
+    const map = new Map<string, string>();
+    // Cross-org managed agents first; org-scoped roster overwrites on collision
+    // (more authoritative for the selected tenant), matching useAgentNameMap.
+    if (managed) {
+      for (const a of managed) {
+        if (a.name) map.set(a.name.toLowerCase(), a.uuid);
+      }
+    }
+    if (data?.items) {
+      for (const a of data.items) {
+        if (a.name) map.set(a.name.toLowerCase(), a.uuid);
+      }
+    }
+    return (slug: string | null | undefined) => {
+      if (!slug) return null;
+      return map.get(slug.toLowerCase()) ?? null;
+    };
+  }, [data, managed]);
+}
+
+/**
  * Minimal identity pair surfaced to components that want to render the
  * full `<AgentChip>` (display name + `@name`) instead of a single string.
  * `displayName` is non-null post-Phase 2 of the agent-naming refactor;

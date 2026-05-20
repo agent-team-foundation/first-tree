@@ -117,3 +117,115 @@ describe("buildMessageDocumentSnapshots — absolute-in-root rewrite (Option R /
     expect(rewrittenText).toBe("first design.md then again design.md");
   });
 });
+
+/**
+ * Cross-agent doc preview: with a workspace fence, an absolute `.md` path that
+ * realpaths into ANOTHER agent's workspace (same chat) under the shared
+ * `workspaces/` common root is snapshotted with a global
+ * `<ownerSlug>/<chatId>/<rel>` key and rewritten to the short `<ownerSlug>/<rel>`
+ * form. Self paths keep their bare key + #480 behaviour; out-of-scope paths
+ * (other chat, other root, hidden) stay verbatim.
+ */
+describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => {
+  let workspacesRoot: string;
+  let selfRoot: string;
+  const chatId = "chat-xyz";
+  const selfSlug = "coder";
+  const otherSlug = "assistant";
+
+  beforeAll(async () => {
+    workspacesRoot = await mkdtemp(join(tmpdir(), "doc-snap-ws-"));
+    // self workspace: workspaces/coder/chat-xyz
+    selfRoot = join(workspacesRoot, selfSlug, chatId);
+    await mkdir(selfRoot, { recursive: true });
+    await writeFile(join(selfRoot, "mine.md"), "# mine\n", "utf8");
+    // Self file whose relative path collides with a cross short form
+    // (`assistant/design.md`) — used to prove the collision → full-key rewrite.
+    await mkdir(join(selfRoot, otherSlug), { recursive: true });
+    await writeFile(join(selfRoot, otherSlug, "design.md"), "# my own assistant notes\n", "utf8");
+    // sibling agent workspace (same chat): workspaces/assistant/chat-xyz
+    const otherRoot = join(workspacesRoot, otherSlug, chatId);
+    await mkdir(join(otherRoot, "docs"), { recursive: true });
+    await writeFile(join(otherRoot, "design.md"), "# their design\n", "utf8");
+    await writeFile(join(otherRoot, "docs", "intro.md"), "# their intro\n", "utf8");
+    await mkdir(join(otherRoot, ".agent"), { recursive: true });
+    await writeFile(join(otherRoot, ".agent", "secret.md"), "# their secret\n", "utf8");
+    await symlink(join(otherRoot, ".agent", "secret.md"), join(otherRoot, "leak.md"));
+    // sibling agent in a DIFFERENT chat: workspaces/assistant/other-chat
+    const otherChatRoot = join(workspacesRoot, otherSlug, "other-chat");
+    await mkdir(otherChatRoot, { recursive: true });
+    await writeFile(join(otherChatRoot, "private.md"), "# other chat\n", "utf8");
+  });
+
+  afterAll(async () => {
+    await rm(workspacesRoot, { recursive: true, force: true });
+  });
+
+  const fence = () => ({ workspacesRoot, chatId, selfSlug });
+
+  it("snapshots a sibling agent's doc with a global key + short rewrite", async () => {
+    const abs = join(workspacesRoot, otherSlug, chatId, "design.md");
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`see ${abs} please`, selfRoot, fence());
+
+    expect(docs.map((d) => d.path)).toEqual([`${otherSlug}/${chatId}/design.md`]);
+    expect(docs[0]?.content).toBe("# their design\n");
+    expect(rewrittenText).toBe(`see ${otherSlug}/design.md please`);
+  });
+
+  it("preserves subdir + :line suffix in the cross rewrite", async () => {
+    const abs = join(workspacesRoot, otherSlug, chatId, "docs", "intro.md");
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`open ${abs}:10 now`, selfRoot, fence());
+
+    expect(docs.map((d) => d.path)).toEqual([`${otherSlug}/${chatId}/docs/intro.md`]);
+    expect(rewrittenText).toBe(`open ${otherSlug}/docs/intro.md:10 now`);
+  });
+
+  it("keeps the self path bare (Case A unchanged) even with a fence", async () => {
+    const abs = join(selfRoot, "mine.md");
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`my ${abs} file`, selfRoot, fence());
+
+    expect(docs.map((d) => d.path)).toEqual(["mine.md"]);
+    expect(rewrittenText).toBe("my mine.md file");
+  });
+
+  it("rejects a sibling doc from a DIFFERENT chat (chat-scope fence)", async () => {
+    const abs = join(workspacesRoot, otherSlug, "other-chat", "private.md");
+    const text = `cross-chat ${abs} nope`;
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot, fence());
+
+    expect(docs).toEqual([]);
+    expect(rewrittenText).toBe(text);
+  });
+
+  it("rejects a sibling symlink whose realpath crosses into a hidden dir", async () => {
+    const abs = join(workspacesRoot, otherSlug, chatId, "leak.md");
+    const text = `leak ${abs}`;
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot, fence());
+
+    expect(docs).toEqual([]);
+    expect(rewrittenText).toBe(text);
+  });
+
+  it("does NOT cross-resolve when no fence is supplied (opt-in)", async () => {
+    const abs = join(workspacesRoot, otherSlug, chatId, "design.md");
+    const text = `see ${abs} please`;
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot);
+
+    expect(docs).toEqual([]);
+    expect(rewrittenText).toBe(text);
+  });
+
+  it("rewrites a cross mention to the FULL global key when its short form collides with a self key (P2-b)", async () => {
+    // Self file `assistant/design.md` (relative) AND the sibling agent's
+    // `assistant/<chat>/design.md` are both referenced. The cross short form
+    // would be `assistant/design.md` — identical to the self key — so the cross
+    // mention must be rewritten to the full global key instead.
+    const crossAbs = join(workspacesRoot, otherSlug, chatId, "design.md");
+    const text = `self ${otherSlug}/design.md and cross ${crossAbs}`;
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot, fence());
+
+    expect(docs.map((d) => d.path).sort()).toEqual([`${otherSlug}/${chatId}/design.md`, `${otherSlug}/design.md`]);
+    // Self relative mention stays verbatim; cross mention becomes the full key.
+    expect(rewrittenText).toBe(`self ${otherSlug}/design.md and cross ${otherSlug}/${chatId}/design.md`);
+  });
+});
