@@ -28,6 +28,20 @@ export function contextTreeCloneDir(repo: string, branch: string): string {
   return join(CONTEXT_TREE_REPOS_DIR, digest);
 }
 
+/**
+ * Convert a plain HTTPS git URL to its SSH counterpart so we can fall back
+ * to key-based auth when the HTTPS clone fails. Headless service envs
+ * (systemd / launchd unit) have no TTY for git's credential prompt, so any
+ * unconfigured HTTPS access exits with "could not read Username". URLs not
+ * matching `https://<host>/<path>` (already SSH, ssh://, git://, file paths)
+ * return null — no rewrite possible / needed.
+ */
+function toSshGitUrl(httpsRepo: string): string | null {
+  const m = httpsRepo.match(/^https:\/\/([^/]+)\/(.+)$/);
+  if (!m) return null;
+  return `git@${m[1]}:${m[2]}`;
+}
+
 function withContextTreeSyncLock(
   key: string,
   fn: () => Promise<ContextTreeBinding | null>,
@@ -122,6 +136,32 @@ async function syncContextTreeRepo(
     const msg = err instanceof Error ? err.message : String(err);
     log(`Context Tree sync failed: ${msg}`);
     log("Check that git credentials (SSH key or credential helper) are configured for this repo");
+
+    // First-time HTTPS clone is the common failure case in headless service
+    // envs (systemd / launchd) — no TTY for git's credential prompt, so HTTPS
+    // auth exits with "could not read Username". If the configured URL is
+    // HTTPS, retry once with the SSH counterpart before giving up. Many
+    // operators have SSH keys configured even when credential helpers aren't.
+    // Pull failures (existing .git present) skip this — the existing remote
+    // is whatever clone last succeeded; switching it mid-flight is messier
+    // than letting the "use existing clone" fallback below take over.
+    const sshRepo = !existsSync(join(cloneDir, ".git")) ? toSshGitUrl(repo) : null;
+    if (sshRepo) {
+      log(`Retrying Context Tree clone via SSH: ${sshRepo}`);
+      try {
+        rmSync(cloneDir, { recursive: true, force: true });
+        mkdirSync(cloneDir, { recursive: true });
+        execFileSync("git", ["clone", "--branch", branch, "--single-branch", sshRepo, cloneDir], {
+          stdio: "pipe",
+          timeout: 60_000,
+        });
+        log("Context Tree cloned via SSH fallback");
+        return { path: cloneDir, repoUrl: repo, branch };
+      } catch (sshErr) {
+        const sshMsg = sshErr instanceof Error ? sshErr.message : String(sshErr);
+        log(`Context Tree SSH fallback also failed: ${sshMsg}`);
+      }
+    }
 
     // If pull failed due to diverged history, try re-clone.
     // Only re-clone when the error indicates a non-recoverable git state.
