@@ -284,15 +284,18 @@ function TextRow({
   // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
   // user typed in the web composer (`source === "hub_ui"`) is left untouched
   // so paths that humans write — code-fence walkthroughs, quoted snippets,
-  // intentional bare references — render exactly as authored. The scan rules
-  // mirror the runtime snapshot scanner, so every link this rewrites has a
-  // matching `documentContext.docs[]` entry to power the preview drawer
-  // without a server round-trip.
+  // intentional bare references — render exactly as authored. Only paths that
+  // this message actually carries a snapshot for get linkified, so a filename
+  // the agent only *mentions* in prose stays plain text instead of becoming a
+  // dead link — and every link that does render opens from cache without a
+  // server round-trip.
   const textContent = useMemo<string | null>(() => {
     if (msg.format !== "text" && msg.format !== "markdown") return null;
     if (typeof msg.content !== "string") return JSON.stringify(msg.content);
-    return msg.source === "hub_ui" ? msg.content : linkifyMarkdownDocPaths(msg.content);
-  }, [msg.format, msg.content, msg.source]);
+    if (msg.source === "hub_ui") return msg.content;
+    const snapshotPaths = new Set(docSnapshots?.keys() ?? []);
+    return linkifyMarkdownDocPaths(msg.content, snapshotPaths);
+  }, [msg.format, msg.content, msg.source, docSnapshots]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
