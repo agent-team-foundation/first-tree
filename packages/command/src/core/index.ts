@@ -78,5 +78,13 @@ export {
   PACKAGE_NAME,
 } from "./update.js";
 export { createExecuteUpdate, declineUpdate, promptUpdate, SELF_RESTART_EXIT_CODE } from "./update-glue.js";
+export {
+  defaultUpdateStatePath,
+  isLoopGuarded,
+  readUpdateState,
+  recordUpdateAttempt,
+  type UpdateAttempt,
+  type UpdateState,
+} from "./update-state.js";
 // Command package version (bundle self-identification)
 export { CLI_USER_AGENT, COMMAND_VERSION } from "./version.js";
