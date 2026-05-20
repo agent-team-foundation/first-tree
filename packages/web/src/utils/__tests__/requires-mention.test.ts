@@ -13,8 +13,11 @@ describe("computeRequiresMention", () => {
     expect(computeRequiresMention([ME, A], ME)).toBe(false);
   });
 
-  it("does NOT require a mention in a 1-on-1 between two agents the user is in", () => {
-    expect(computeRequiresMention([ME, A], ME)).toBe(false);
+  it("does NOT require a mention in a 1-on-1 where the user is one of two agents", () => {
+    // The current user's own agent id is one of the two speakers (here `A`,
+    // not the `ME` constant) — confirms the predicate keys on actual
+    // membership, not a hardcoded notion of self.
+    expect(computeRequiresMention([A, B], A)).toBe(false);
   });
 
   // ── real groups (3+ speakers) ─────────────────────────────────────────────
