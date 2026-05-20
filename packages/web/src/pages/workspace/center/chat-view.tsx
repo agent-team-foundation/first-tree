@@ -71,6 +71,7 @@ import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/do
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
+import { computeRequiresMention } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 
@@ -1269,17 +1270,27 @@ export function ChatView({
   }, [chatDetail?.participants, activity?.agents, agentId, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
 
   /**
-   * "Needs explicit @mention" guard: a real group, OR a direct chat where the
-   * current user isn't yet a participant (their first send promotes it to a
-   * 3-person group). In both cases an unaddressed message would be silently
-   * dropped by `mention_only` peers and the server now rejects it with 400.
-   * See proposals/group-chat-ux-improvements §2.
+   * "Needs explicit @mention" guard: a real group (3+ speakers), OR a 1-on-1
+   * where the current user isn't yet a participant (their first send promotes
+   * it to a 3-person group). In both cases an unaddressed message would be
+   * silently dropped by `mention_only` peers and the server rejects it with
+   * 400. See proposals/group-chat-ux-improvements §2.
+   *
+   * Keyed on **membership shape**, not `chats.type`. Since the group-chat
+   * convergence (first-tree-hub #465 / first-tree-context #281) every chat is
+   * created with `type='group'`, so the old `chatDetail.type === "group"`
+   * check fired for 1-on-1 DMs too and forced an @mention there — breaking the
+   * "DM doesn't need an explicit @mention" UX. The server already keys on
+   * shape (`services/message.ts` `isOneOnOne = participants.length === 2`,
+   * speakers only); this mirrors it. `chatDetail.participants` is also
+   * speakers-only (`getChatDetail` filters `accessMode = 'speaker'`).
    */
   const requiresMention = useMemo(() => {
     if (!chatDetail) return false;
-    if (chatDetail.type === "group") return true;
-    const meIn = chatDetail.participants.some((p) => p.agentId === myAgentId);
-    return chatDetail.type === "direct" && !meIn && chatDetail.participants.length >= 2;
+    return computeRequiresMention(
+      chatDetail.participants.map((p) => p.agentId),
+      myAgentId,
+    );
   }, [chatDetail, myAgentId]);
 
   // First-message pre-fill: when the user lands on a brand-new empty chat
