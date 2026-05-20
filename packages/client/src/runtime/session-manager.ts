@@ -830,7 +830,7 @@ export class SessionManager {
     };
   }
 
-  private async resolveDocumentBasePath(log: (msg: string) => void, chatId: string): Promise<string | null> {
+  private async resolveDocumentBasePath(log: (msg: string) => void, chatId: string): Promise<string> {
     // Per-chat workspace root: the same dir the handler hands the agent as cwd
     // (`acquireWorkspace(workspaceRoot, chatId)` returns `<workspaceRoot>/<chatId>`).
     // Computed with a pure `join` — NOT `acquireWorkspace`, whose mkdir/rmSync
