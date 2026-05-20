@@ -93,15 +93,13 @@ describe("createResultSink — forwardResult enrichment", () => {
     expect(body.purpose).toBe("agent-final-text");
   });
 
-  it("case 1.5 (documentContext regression): writes path-variant metadata.documentContext + omits metadata.mentions", async () => {
-    // v1.5 regression guard — PR #356's documentContext injection must
-    // survive改造 4 surgery. Verifying the branch is still wired AND that
-    // it is NOT accompanied by an automatic mentions array.
-    //
+  it("case 1.5: a base path that resolves no docs attaches NO documentContext (no kind:path leak)", async () => {
     // The basePath here is a relative string that won't resolve to a real
-    // worktree on disk, so the snapshot scan returns no docs and the sink
-    // falls back to the legacy path variant — exactly what we want for
-    // single-host / shared-fs deployments.
+    // worktree on disk, so the snapshot scan returns no docs. We no longer
+    // fall back to the legacy `kind:"path"` variant — it would embed the
+    // agent host's local absolute path in immutable history and is dead in
+    // the cloud topology. A message with no resolvable doc carries no
+    // documentContext at all (and still no auto-mentions array).
     const { sink, sendMessage } = buildSink({
       trigger: { messageId: "m1", senderId: "agent-peer" },
       getDocumentBasePath: vi.fn().mockResolvedValue("first-tree-hub"),
@@ -110,9 +108,9 @@ describe("createResultSink — forwardResult enrichment", () => {
     await sink("see [design](docs/design.md)");
 
     const body = sendMessage.mock.calls[0]?.[1] as {
-      metadata?: { documentContext?: { kind?: string; basePath?: string }; mentions?: unknown };
+      metadata?: { documentContext?: unknown; mentions?: unknown };
     };
-    expect(body.metadata?.documentContext).toEqual({ kind: "path", basePath: "first-tree-hub" });
+    expect(body.metadata?.documentContext).toBeUndefined();
     expect(body.metadata?.mentions).toBeUndefined();
   });
 
@@ -193,7 +191,7 @@ describe("createResultSink — forwardResult enrichment", () => {
       expect(body.metadata?.documentContext?.docs?.map((d) => d.path)).toEqual(["docs/intro.md"]);
     });
 
-    it("rejects dotfiles / hidden dirs and falls back to path variant when no docs survive", async () => {
+    it("rejects dotfiles / hidden dirs and attaches NO documentContext when no docs survive", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
@@ -202,10 +200,12 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink("hidden: [secret](.agent/secret.md)");
 
       const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: { kind?: string; basePath?: string } };
+        metadata?: { documentContext?: unknown };
       };
-      expect(body.metadata?.documentContext?.kind).toBe("path");
-      expect(body.metadata?.documentContext?.basePath).toBe(worktree);
+      // The hidden path is rejected, leaving zero snapshots — and we no longer
+      // emit the legacy `kind:"path"` fallback (which would leak the worktree
+      // absolute path into history), so there is no documentContext at all.
+      expect(body.metadata?.documentContext).toBeUndefined();
     });
 
     it("stores canonical workspace-relative paths so web cache lookup matches", async () => {
@@ -240,10 +240,11 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink("see [public](public.md)");
 
       const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: { kind?: string; basePath?: string } };
+        metadata?: { documentContext?: unknown };
       };
-      expect(body.metadata?.documentContext?.kind).toBe("path");
-      expect(body.metadata?.documentContext?.basePath).toBe(worktree);
+      // Symlink target is rejected → zero snapshots → no documentContext (the
+      // legacy kind:"path" fallback that leaked the worktree path is gone).
+      expect(body.metadata?.documentContext).toBeUndefined();
     });
 
     it("stores size that matches Buffer.byteLength(content, utf8) so server validation never rejects a malformed-UTF-8 file", async () => {
@@ -299,12 +300,11 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink("see [evil](https://x.com/api.md) and [also](//x.com/a.md) and [mail](mailto:a@b.md)");
 
       const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: { kind?: string; basePath?: string } };
+        metadata?: { documentContext?: unknown };
       };
-      // None of the three hrefs is a workspace path, so the sink falls back
-      // to the path variant rather than emitting any snapshot.
-      expect(body.metadata?.documentContext?.kind).toBe("path");
-      expect(body.metadata?.documentContext?.basePath).toBe(worktree);
+      // None of the three hrefs is a workspace path → zero snapshots → no
+      // documentContext (no legacy kind:"path" fallback).
+      expect(body.metadata?.documentContext).toBeUndefined();
     });
 
     it("ignores escaped link `\\[...](path.md)` and image link `![alt](path.md)`", async () => {
@@ -316,12 +316,11 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink("escaped: \\[design](design.md) and image: ![diagram](api.md)");
 
       const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: { kind?: string; basePath?: string } };
+        metadata?: { documentContext?: unknown };
       };
-      // Neither escaped nor image triggers snapshot emission, so the sink
-      // falls back to the path variant.
-      expect(body.metadata?.documentContext?.kind).toBe("path");
-      expect(body.metadata?.documentContext?.basePath).toBe(worktree);
+      // Neither escaped nor image triggers snapshot emission → zero snapshots
+      // → no documentContext (no legacy kind:"path" fallback).
+      expect(body.metadata?.documentContext).toBeUndefined();
     });
   });
 
