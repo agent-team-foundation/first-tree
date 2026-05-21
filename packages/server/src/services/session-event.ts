@@ -169,6 +169,19 @@ export async function clearEvents(db: Database, agentId: string, chatId: string)
 const CONTEXT_TREE_USAGE_FEED_LIMIT = 50;
 
 /**
+ * Read the tree-root-relative `nodePath` out of a stored context_tree_usage
+ * payload (jsonb). Pre-P0 events predate the field and resolve to null; the
+ * payload is `unknown` from the DB driver so we narrow defensively.
+ */
+function nodePathFromPayload(payload: unknown): string | null {
+  if (payload && typeof payload === "object" && "nodePath" in payload) {
+    const value = (payload as { nodePath?: unknown }).nodePath;
+    if (typeof value === "string") return value;
+  }
+  return null;
+}
+
+/**
  * Org-wide aggregate counts + the most recent context-tree usage events
  * for the org. The Context Tab is an org-wide transparency surface — any
  * member can see who has been using the tree, including the chat topic
@@ -217,6 +230,7 @@ export async function summarizeContextTreeUsage(
       // lives in the same org as the caller's snapshot.
       joinedChatId: chats.id,
       chatTopic: chats.topic,
+      payload: sessionEvents.payload,
       createdAt: sessionEvents.createdAt,
     })
     .from(sessionEvents)
@@ -245,6 +259,9 @@ export async function summarizeContextTreeUsage(
       // with a non-null `chatId`.
       chatId: sameOrgChat ? row.rawChatId : null,
       chatTitle: sameOrgChat ? row.chatTopic : null,
+      // Surface which node the agent read straight from the stored payload.
+      // No node-frequency aggregation here — that's P1.
+      nodePath: nodePathFromPayload(row.payload),
       createdAt: row.createdAt.toISOString(),
     };
   });

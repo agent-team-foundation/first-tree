@@ -143,6 +143,12 @@ export const contextTreeUsageEventSchema = z.object({
   // identifying info, so it is masked alongside chatTitle).
   chatId: z.string().nullable(),
   chatTitle: z.string().nullable(),
+  // Tree-root-relative path of the node the agent read (e.g.
+  // `members/Gandy2025/NODE.md`), surfaced from the session event payload so
+  // the web feed can show *which* node was consulted. Null for pre-P0 events
+  // (recorded before per-read node tracking) or reads that could not be
+  // resolved to a node path.
+  nodePath: z.string().nullable(),
   createdAt: z.string(),
 });
 export type ContextTreeUsageEvent = z.infer<typeof contextTreeUsageEventSchema>;
