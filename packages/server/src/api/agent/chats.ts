@@ -7,8 +7,10 @@ import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
 import { agentAvatarImageUrl } from "../../services/agent.js";
+import { getAttachmentForDownload } from "../../services/attachment.js";
 import * as chatService from "../../services/chat.js";
 import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
+import { sendAttachmentResponse } from "../attachment-response.js";
 
 const log = createLogger("AgentChatsRoute");
 
@@ -81,6 +83,25 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       avatarImageUrl: agentAvatarImageUrl(r.agentId, r.avatarImageUpdatedAt ?? null),
     }));
   });
+
+  /**
+   * GET /agent/chats/:chatId/attachments/:attachmentId — download an
+   * attachment's bytes for the agent runtime to materialise locally and Read
+   * (route 2). Same member-gated, hardened-header path as the web route; the
+   * viewer is the agent itself.
+   */
+  app.get<{ Params: { chatId: string; attachmentId: string } }>(
+    "/:chatId/attachments/:attachmentId",
+    async (request, reply) => {
+      const identity = requireAgent(request);
+      const att = await getAttachmentForDownload(app.db, {
+        chatId: request.params.chatId,
+        attachmentId: request.params.attachmentId,
+        viewerId: identity.uuid,
+      });
+      sendAttachmentResponse(reply, att);
+    },
+  );
 
   // Participant management
   app.post<{ Params: { chatId: string } }>("/:chatId/participants", async (request, reply) => {

@@ -1,5 +1,19 @@
 // Schemas
 
+export {
+  ATTACHMENT_LIMITS,
+  ATTACHMENT_UPLOAD_BODY_LIMIT,
+  type AttachmentClassification,
+  AttachmentRejectedError,
+  classifyAttachment,
+  DENIED_ATTACHMENT_EXTENSIONS,
+  fileExtension,
+  INLINE_SAFE_IMAGE_MIMES,
+  isInlineSafeImage,
+  looksExecutable,
+  MAGICLESS_SAFE_EXTENSIONS,
+  sniffMime,
+} from "./attachments.js";
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
@@ -389,14 +403,18 @@ export {
   updateMemberSchema,
 } from "./schemas/member.js";
 export {
+  type AttachmentRef,
+  attachmentRefSchema,
   type ClientMessage,
   clientMessageSchema,
+  deriveAttachmentKind,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   type Message,
   type MessageFormat,
   type MessagePurpose,
   type MessageSource,
+  messageAttachmentsMetadataSchema,
   messageFormatSchema,
   messagePurposeSchema,
   messageSchema,

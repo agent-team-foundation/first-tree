@@ -1,9 +1,12 @@
 import {
+  type AttachmentRef,
   CHAT_ENGAGEMENT_STATUSES,
   type ChatParticipantDetail,
   documentContextSchema,
   extractMentions,
+  isInlineSafeImage,
   type MentionParticipant,
+  messageAttachmentsMetadataSchema,
   parseWorkspaceDocKey,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
@@ -16,17 +19,18 @@ import { useSearchParams } from "react-router";
 import { getActivityOverview } from "../../../api/activity.js";
 import {
   type FileMessageContent,
+  fetchChatAttachmentBlob,
   getChat,
   type ImageRefContent,
   listChatMessages,
   type MessageWithDelivery,
   patchChatEngagement,
-  readFileAsBase64,
   renameChat,
   sendChatMessage,
-  sendFileMessage,
+  sendChatMessageWithAttachments,
+  uploadChatAttachment,
 } from "../../../api/chats.js";
-import { getImage, putImage } from "../../../api/image-store.js";
+import { getImage } from "../../../api/image-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -56,7 +60,7 @@ import { Markdown } from "../../../components/ui/markdown.js";
 import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
-import { usePendingImages } from "../../../lib/use-pending-images.js";
+import { usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
 import { computeRequiresMention } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
@@ -425,6 +429,7 @@ function TextRow({
             </pre>
           )}
         </div>
+        <MessageAttachments chatId={msg.chatId} metadata={msg.metadata} />
       </div>
     </div>
   );
@@ -523,6 +528,133 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
     <span className="text-label" style={{ color: "var(--fg-4)" }}>
       …
     </span>
+  );
+}
+
+/** Read A′ attachment refs off a message's metadata, or [] when none. */
+function getMessageAttachments(metadata: Record<string, unknown>): AttachmentRef[] {
+  const parsed = messageAttachmentsMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data.attachments : [];
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * Render a message's attachments (route 2) below its caption. Inline-safe
+ * images (png/jpeg/gif/webp) show a thumbnail fetched via authenticated
+ * blob; everything else — including SVG — renders as a download card.
+ */
+function MessageAttachments({ chatId, metadata }: { chatId: string; metadata: Record<string, unknown> }) {
+  const attachments = useMemo(() => getMessageAttachments(metadata), [metadata]);
+  if (attachments.length === 0) return null;
+  return (
+    <div className="flex flex-col" style={{ gap: 4, marginTop: 2 }}>
+      {attachments.map((att) =>
+        att.kind === "image" && isInlineSafeImage(att.mimeType) ? (
+          <AttachmentImage key={att.attachmentId} chatId={chatId} att={att} />
+        ) : (
+          <FileCard key={att.attachmentId} chatId={chatId} att={att} />
+        ),
+      )}
+    </div>
+  );
+}
+
+/** Inline image — bytes fetched (authenticated) and shown via an object URL. */
+function AttachmentImage({ chatId, att }: { chatId: string; att: AttachmentRef }) {
+  const [state, setState] = useState<{ kind: "loading" } | { kind: "hit"; src: string } | { kind: "miss" }>({
+    kind: "loading",
+  });
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    fetchChatAttachmentBlob(chatId, att.attachmentId)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setState({ kind: "hit", src: objectUrl });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ kind: "miss" });
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [chatId, att.attachmentId]);
+
+  if (state.kind === "hit") {
+    return (
+      <img
+        src={state.src}
+        alt={att.filename}
+        style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
+      />
+    );
+  }
+  if (state.kind === "miss") {
+    return (
+      <span className="text-label" style={{ color: "var(--fg-3)", fontStyle: "italic" }}>
+        [Image "{att.filename}" failed to load]
+      </span>
+    );
+  }
+  return (
+    <span className="text-label" style={{ color: "var(--fg-4)" }}>
+      …
+    </span>
+  );
+}
+
+/** Non-image (or non-inline) attachment — an icon + name + size download card. */
+function FileCard({ chatId, att }: { chatId: string; att: AttachmentRef }) {
+  const [downloading, setDownloading] = useState(false);
+  const onDownload = async () => {
+    setDownloading(true);
+    try {
+      const blob = await fetchChatAttachmentBlob(chatId, att.attachmentId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = att.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={onDownload}
+      disabled={downloading}
+      className="flex items-center text-label"
+      title={`Download ${att.filename}`}
+      style={{
+        gap: 8,
+        marginTop: 4,
+        padding: "var(--sp-1_5) var(--sp-2)",
+        border: "var(--hairline) solid var(--border)",
+        borderRadius: "var(--radius-input)",
+        background: "var(--bg-sunken)",
+        color: "var(--fg)",
+        cursor: "pointer",
+        maxWidth: 320,
+        textAlign: "left",
+      }}
+    >
+      <Paperclip className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--fg-3)" }} />
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{att.filename}</span>
+      <span className="mono" style={{ color: "var(--fg-4)", marginLeft: "auto" }}>
+        {formatBytes(att.size)}
+      </span>
+    </button>
   );
 }
 
@@ -716,10 +848,9 @@ export function ChatView({
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
+  const { pendingAttachments, addFiles, removeAttachment, clearAttachments } = usePendingAttachments({
     onError: setUploadError,
-    // Dismiss a stale upload error (e.g. "image too large") the moment the
-    // user adds or removes an image — they're already fixing it.
+    // Adding/removing is a "user is fixing it" signal — drop a now-stale error.
     onChange: () => setUploadError(null),
   });
   // Right-rail visibility — defaults to hidden so the chat area gets the
@@ -867,8 +998,8 @@ export function ChatView({
 
   const handleSend = async () => {
     const text = draft.trim();
-    const images = pendingImages;
-    if (!text && images.length === 0) return;
+    const attachments = pendingAttachments;
+    if (!text && attachments.length === 0) return;
     if (uploading) return;
 
     // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
@@ -882,63 +1013,41 @@ export function ChatView({
     // nothing and the button stays disabled, prompting the user to use
     // the `[+]` button or the autocomplete picker.
 
-    // Group-chat send guard: don't fire requests we know the server (with
-    // proposal §3 enforcement) or downstream `mention_only` agents will drop.
-    // Applies to image-only sends too — the server-side mention check runs
-    // per message regardless of format, so an image without an addressee
-    // would 400 just like a text without an addressee (issue 387). Surface
-    // a hint when the user has only attached images so the silent-return
-    // doesn't look like a stuck send.
+    // Group-chat send guard: don't fire requests the server's mention check
+    // (services/message.ts) would 400. Applies to attachment sends too — a
+    // pure-attachment message (empty caption) with no @mention is rejected
+    // server-side just like an empty text, so surface a hint instead of a
+    // silent stuck send.
     if (requiresMention && draftMentions.length === 0) {
-      if (images.length > 0) {
-        // English matches the other uploadError strings in this file
-        // (Failed to send image / Failed to add participants / Image too large).
-        setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
+      if (attachments.length > 0) {
+        setUploadError("@mention a group member in the text — the attachments go to the same recipient(s).");
       }
       return;
     }
 
-    if (images.length > 0) {
+    if (attachments.length > 0) {
       setUploading(true);
       setUploadError(null);
       try {
-        // Carry the text-draft mentions onto each image message so the
-        // server's group-chat mention guard (services/message.ts) accepts
-        // file-format sends. Without this, every image POST is missing
-        // recipient mentions and 400s before the text message is sent
-        // (issue 387). In direct chats `draftMentions` is empty and the
-        // metadata field is omitted entirely — server check is skipped
-        // anyway, so this is a no-op for 1:1.
-        const imageMetadata = draftMentions.length > 0 ? { mentions: draftMentions } : undefined;
-        for (const img of images) {
-          const data = await readFileAsBase64(img.file);
-          const imageId = crypto.randomUUID();
-          // Write to IndexedDB before the POST so the sending tab can render
-          // its own message via the imageRef shape immediately on refetch,
-          // even if the server write races ahead of the response.
-          await putImage({ imageId, base64: data, mimeType: img.file.type });
-          await sendFileMessage(
-            chatId,
-            {
-              data,
-              mimeType: img.file.type,
-              filename: img.file.name,
-              size: img.file.size,
-              imageId,
-            },
-            imageMetadata,
-          );
+        // Upload each file (route 2 / PG-bytea), then send ONE message that
+        // carries the caption + all attachment refs (A′). The server validates
+        // the refs are ours + unbound (C3) and folds them into
+        // metadata.attachments. One send → one message → one bubble.
+        const attachmentIds: string[] = [];
+        for (const att of attachments) {
+          const ref = await uploadChatAttachment(chatId, att.file);
+          attachmentIds.push(ref.attachmentId);
         }
-        clearImages();
-        if (text) await sendChatMessage(chatId, text);
+        await sendChatMessageWithAttachments(chatId, { text, attachmentIds });
+        clearAttachments();
         setDraft("");
         queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
-        // Mirror sendMut.onSuccess: predictive session-activation only shows
-        // up in the sidebar after we invalidate, otherwise the file-send path
-        // for the first message in a new chat waits for 10s polling.
+        // Mirror sendMut.onSuccess: predictive session-activation only shows in
+        // the sidebar after we invalidate, otherwise the first message in a new
+        // chat waits for the 10s polling refetch.
         queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       } catch (err) {
-        setUploadError(err instanceof Error ? err.message : "Failed to send image");
+        setUploadError(err instanceof Error ? err.message : "Failed to send attachment");
       } finally {
         setUploading(false);
       }
@@ -1743,18 +1852,19 @@ export function ChatView({
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {
                       e.preventDefault();
-                      addImages(Array.from(e.dataTransfer.files));
+                      addFiles(Array.from(e.dataTransfer.files));
                     }}
                   >
-                    {/* Image preview area — above textarea */}
-                    {pendingImages.length > 0 && (
+                    {/* Attachment preview area — above textarea. Images show a
+                        thumbnail; other files show an icon + name chip. */}
+                    {pendingAttachments.length > 0 && (
                       <div
                         className="flex items-center"
                         style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
                       >
-                        {pendingImages.map((img) => (
+                        {pendingAttachments.map((att) => (
                           <div
-                            key={img.id}
+                            key={att.id}
                             style={{
                               position: "relative",
                               flexShrink: 0,
@@ -1763,14 +1873,33 @@ export function ChatView({
                               overflow: "hidden",
                             }}
                           >
-                            <img
-                              src={img.previewUrl}
-                              alt={img.file.name}
-                              style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
-                            />
+                            {att.kind === "image" && att.previewUrl ? (
+                              <img
+                                src={att.previewUrl}
+                                alt={att.file.name}
+                                style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                              />
+                            ) : (
+                              <div
+                                className="flex items-center text-label"
+                                style={{
+                                  gap: 4,
+                                  height: 32,
+                                  padding: "0 var(--sp-2)",
+                                  maxWidth: 180,
+                                  color: "var(--fg-2)",
+                                }}
+                                title={att.file.name}
+                              >
+                                <Paperclip className="h-3 w-3 shrink-0" />
+                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {att.file.name}
+                                </span>
+                              </div>
+                            )}
                             <button
                               type="button"
-                              onClick={() => removeImage(img.id)}
+                              onClick={() => removeAttachment(att.id)}
                               style={{
                                 position: "absolute",
                                 top: 1,
@@ -1843,7 +1972,7 @@ export function ChatView({
                           const files = Array.from(e.clipboardData.files);
                           if (files.length > 0) {
                             e.preventDefault();
-                            addImages(files);
+                            addFiles(files);
                           }
                         }}
                         placeholder={
@@ -1937,7 +2066,7 @@ export function ChatView({
                         <button
                           type="button"
                           onClick={() => fileInputRef.current?.click()}
-                          title="Attach image"
+                          title="Attach file"
                           style={{
                             background: "none",
                             border: "none",
@@ -1953,12 +2082,11 @@ export function ChatView({
                         <input
                           ref={fileInputRef}
                           type="file"
-                          accept="image/*"
                           multiple
                           style={{ display: "none" }}
                           onChange={(e) => {
                             if (e.target.files) {
-                              addImages(Array.from(e.target.files));
+                              addFiles(Array.from(e.target.files));
                               e.target.value = "";
                             }
                           }}
@@ -1976,7 +2104,7 @@ export function ChatView({
                           disabled={
                             sendMut.isPending ||
                             uploading ||
-                            (!draft.trim() && pendingImages.length === 0) ||
+                            (!draft.trim() && pendingAttachments.length === 0) ||
                             (requiresMention && draftMentions.length === 0)
                           }
                           title={
@@ -1989,7 +2117,7 @@ export function ChatView({
                             "inline-flex items-center justify-center transition-opacity",
                             (sendMut.isPending ||
                               uploading ||
-                              (!draft.trim() && pendingImages.length === 0) ||
+                              (!draft.trim() && pendingAttachments.length === 0) ||
                               (requiresMention && draftMentions.length === 0)) &&
                               "opacity-40 cursor-not-allowed",
                           )}

@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { extname, join, resolve } from "node:path";
+import { ATTACHMENT_LIMITS } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { FIRST_TREE_HUB_ATTR, redactUrl } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import fastifyOpenTelemetry from "@autotelic/fastify-opentelemetry";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
@@ -321,6 +323,15 @@ export async function buildApp(config: Config) {
   // this codebase are JSON envelopes; image content travels via HTTP.
   await app.register(websocket, {
     options: { maxPayload: config.ws?.maxPayload ?? 65_536 },
+  });
+
+  // Multipart — message attachment uploads (route 2 / PG-bytea). `fileSize`
+  // caps a single file server-side so the messages routes don't inherit
+  // Fastify's 1 MB default body limit; one file per request (the composer
+  // uploads each attachment separately, then sends one message referencing
+  // them). See services/attachment.ts + proposals/hub-message-text-attachments.
+  await app.register(multipart, {
+    limits: { fileSize: ATTACHMENT_LIMITS.maxFileBytes, files: 1 },
   });
 
   // CORS — explicit origins if configured; allow all in dev; same-origin in production

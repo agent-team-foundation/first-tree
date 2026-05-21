@@ -1,11 +1,12 @@
 import type {
+  AttachmentRef,
   Chat,
   ChatDetail,
   ChatEngagementStatus,
   ChatGithubEntityListResponse,
   Message,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { api, withOrg } from "./client.js";
+import { api, apiFetchBlob, apiUpload, withOrg } from "./client.js";
 
 type PaginatedChats = {
   items: (Chat & { participantCount: number })[];
@@ -63,6 +64,44 @@ export function sendChatMessage(chatId: string, content: string): Promise<Messag
     format: "text",
     content,
   });
+}
+
+/**
+ * Upload one file to a chat (route 2 / PG-bytea). Returns the persisted
+ * {@link AttachmentRef}; the composer collects these and sends a single message
+ * referencing them via `attachmentIds`. The server runs the type double-gate +
+ * quota and leaves the row unbound until the send binds it.
+ */
+export function uploadChatAttachment(chatId: string, file: File): Promise<AttachmentRef> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return apiUpload<AttachmentRef>(`/chats/${encodeURIComponent(chatId)}/attachments`, form);
+}
+
+/**
+ * Send one message carrying a text caption (may be empty) + previously-uploaded
+ * attachments (A′: refs ride `metadata.attachments`, no new format). The server
+ * validates each attachmentId belongs to the sender and is unbound (C3).
+ */
+export function sendChatMessageWithAttachments(
+  chatId: string,
+  args: { text: string; attachmentIds: string[] },
+): Promise<Message> {
+  return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
+    format: "text",
+    content: args.text,
+    attachmentIds: args.attachmentIds,
+  });
+}
+
+/** Authenticated path of a chat attachment's download route (for fetch→blob). */
+export function chatAttachmentPath(chatId: string, attachmentId: string): string {
+  return `/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+/** Fetch an attachment's bytes as a Blob (authenticated) for inline rendering / download. */
+export function fetchChatAttachmentBlob(chatId: string, attachmentId: string): Promise<Blob> {
+  return apiFetchBlob(chatAttachmentPath(chatId, attachmentId));
 }
 
 /**

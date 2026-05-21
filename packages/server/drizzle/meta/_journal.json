@@ -337,6 +337,13 @@
       "when": 1779840000000,
       "tag": "0047_v2_messages_source_required",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1779926400000,
+      "tag": "0048_message_attachments",
+      "breakpoints": true
     }
   ]
 }

@@ -287,6 +287,18 @@ export class FirstTreeHubSDK {
     return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
   }
 
+  /**
+   * Download a message attachment's raw bytes (route 2 / PG-bytea). Member-gated
+   * server-side; the runtime materialises the bytes to local disk so the model
+   * can Read them. Returns the bytes as a Buffer — the caller already knows the
+   * filename/mime from the message's `metadata.attachments` ref.
+   */
+  async downloadChatAttachment(chatId: string, attachmentId: string): Promise<Buffer> {
+    const response = await this.doFetch(`/api/v1/agent/chats/${chatId}/attachments/${attachmentId}`);
+    if (!response.ok) throw await this.toSdkError(response);
+    return Buffer.from(await response.arrayBuffer());
+  }
+
   private queryString(options?: { limit?: number; cursor?: string }): string {
     const params = new URLSearchParams();
     if (options?.limit !== undefined) params.set("limit", String(options.limit));

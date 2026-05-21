@@ -16,6 +16,7 @@ export { githubEntityChatMappings } from "./github-entity-chat-mappings.js";
 export { inboxEntries } from "./inbox-entries.js";
 export { invitationRedemptions, invitations } from "./invitations.js";
 export { members } from "./members.js";
+export { messageAttachments } from "./message-attachments.js";
 export { messages } from "./messages.js";
 export { notifications } from "./notifications.js";
 export { organizationSettings } from "./organization-settings.js";

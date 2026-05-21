@@ -1,4 +1,5 @@
 import {
+  ATTACHMENT_LIMITS,
   addMeChatParticipantsSchema,
   paginationQuerySchema,
   patchChatEngagementSchema,
@@ -14,8 +15,10 @@ import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
+import { BadRequestError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { agentAvatarImageUrl } from "../services/agent.js";
+import { createAttachment, getAttachmentForDownload } from "../services/attachment.js";
 import { ensureParticipant, joinChat, leaveChat } from "../services/chat.js";
 import { findInstallationByOrg } from "../services/github-app-installations.js";
 import { mintContextTreeInstallationToken } from "../services/github-app-token.js";
@@ -36,6 +39,7 @@ import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { submitAnswer } from "../services/questions.js";
 import { extractSummary } from "../services/session.js";
+import { sendAttachmentResponse } from "./attachment-response.js";
 
 /**
  * Class C — resource-scoped chat routes. Mounted at
@@ -323,6 +327,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       // Human web endpoint: typed `@<name>` is the user's intent expression
       // — the only path where the message *itself* is the routing decision.
       extractMentionsFromContent: true,
+      // Attachments uploaded via POST /chats/:id/attachments, validated +
+      // bound inside the send transaction (A′: refs ride metadata.attachments).
+      attachmentIds: body.attachmentIds,
     });
 
     notifyRecipients(app.notifier, result.recipients, result.message.id);
@@ -337,6 +344,55 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       createdAt: result.message.createdAt.toISOString(),
     });
   });
+
+  /**
+   * POST /chats/:chatId/attachments — upload one file (multipart) to be
+   * referenced by a subsequent message send. Persists to PG (route 2); returns
+   * an AttachmentRef the composer puts in `attachmentIds` when it sends. The
+   * row is unbound until the send binds it (C3). Caller speaks as their human
+   * agent and must be a chat participant.
+   */
+  app.post<{ Params: { chatId: string } }>("/:chatId/attachments", async (request, reply) => {
+    const { scope } = await requireChatAccess(request, app.db);
+    await ensureParticipant(app.db, request.params.chatId, scope.humanAgentId);
+
+    const file = await request.file();
+    if (!file) throw new BadRequestError("No file uploaded.");
+    let bytes: Buffer;
+    try {
+      bytes = await file.toBuffer();
+    } catch {
+      throw new BadRequestError(`Attachment exceeds the ${ATTACHMENT_LIMITS.maxFileBytes / (1024 * 1024)}MB limit.`);
+    }
+
+    const ref = await createAttachment(app.db, {
+      chatId: request.params.chatId,
+      uploaderId: scope.humanAgentId,
+      filename: file.filename,
+      declaredMime: file.mimetype,
+      bytes,
+    });
+    return reply.status(201).send(ref);
+  });
+
+  /**
+   * GET /chats/:chatId/attachments/:attachmentId — stream an attachment's bytes
+   * to a chat member. Membership re-checked per request; download headers are
+   * hardened (C2) — only the inline-safe image allow-list is served inline,
+   * everything else (incl. SVG) is forced to download with nosniff.
+   */
+  app.get<{ Params: { chatId: string; attachmentId: string } }>(
+    "/:chatId/attachments/:attachmentId",
+    async (request, reply) => {
+      const { scope } = await requireChatAccess(request, app.db);
+      const att = await getAttachmentForDownload(app.db, {
+        chatId: request.params.chatId,
+        attachmentId: request.params.attachmentId,
+        viewerId: scope.humanAgentId,
+      });
+      sendAttachmentResponse(reply, att);
+    },
+  );
 
   /**
    * POST /chats/:chatId/questions/:correlationId/answer — submit an answer

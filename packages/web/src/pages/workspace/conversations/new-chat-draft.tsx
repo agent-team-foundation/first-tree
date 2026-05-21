@@ -3,8 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
-import { readFileAsBase64, sendChatMessage, sendFileMessage } from "../../../api/chats.js";
-import { putImage } from "../../../api/image-store.js";
+import { sendChatMessage, sendChatMessageWithAttachments, uploadChatAttachment } from "../../../api/chats.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
@@ -17,7 +16,7 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
-import { type PendingImage, usePendingImages } from "../../../lib/use-pending-images.js";
+import { type PendingAttachment, usePendingAttachments } from "../../../lib/use-pending-attachments.js";
 import { cn } from "../../../lib/utils.js";
 
 /**
@@ -41,17 +40,19 @@ import { cn } from "../../../lib/utils.js";
  *     in the room". This unifies entry points without making them
  *     mutually exclusive.
  *
- *   - Images attach via the Paperclip button, drag-drop, or paste —
- *     staged through `usePendingImages` (shared with the in-chat
- *     composer). Bytes are read and uploaded only on send, after the
- *     chat exists. An image-only send (empty body) is allowed; a group
+ *   - Files (any type) attach via the Paperclip button, drag-drop, or
+ *     paste — staged through `usePendingAttachments` (shared with the
+ *     in-chat composer). Bytes upload only on send, after the chat
+ *     exists. An attachment-only send (empty body) is allowed; a group
  *     (2+ chips) still needs an `@` in the body so the server's per-
- *     message mention guard accepts the file send.
+ *     message mention guard accepts the send.
  *
- * On send: createMeChat({participantIds: chips ∪ body @s}) → for each
- * staged image putImage(IndexedDB) + sendFileMessage → sendChatMessage
- * with the verbatim body. Empty body is allowed when there's ≥1 chip and
- * (a non-empty body or ≥1 image).
+ * On send: createMeChat({participantIds: chips ∪ body @s}) → upload each
+ * staged file (route 2 / PG-bytea) → send ONE message carrying the body
+ * caption + attachment refs in metadata.attachments (A′) — the same
+ * single-message flow as the in-chat composer, so both produce one
+ * message / one bubble. Empty body is allowed when there's ≥1 chip and
+ * (a non-empty body or ≥1 attachment).
  */
 
 export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => void }) {
@@ -73,7 +74,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   // Image staging shared with the in-chat composer (same image/* + 5 MB
   // rules and object-URL lifecycle). Bytes are read and uploaded only on
   // send, after the chat is created — see `createMut` below.
-  const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
+  const { pendingAttachments, addFiles, removeAttachment, clearAttachments } = usePendingAttachments({
     onError: setError,
     onChange: () => setError(null),
   });
@@ -171,44 +172,28 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     mutationFn: async ({
       participantIds,
       text,
-      images,
-      mentions,
+      attachments,
     }: {
       participantIds: string[];
       text: string;
-      images: PendingImage[];
-      mentions: string[];
+      attachments: PendingAttachment[];
     }) => {
       const created = await createMeChat({ participantIds });
       const chatId = created.chatId;
-      // Send images first (mirrors the in-chat composer ordering), then the
-      // text body, so the new chat opens with attachments above the message.
-      if (images.length > 0) {
-        // Carry the @-mentions onto each image message so the server's
-        // group-chat mention guard accepts file-format sends (issue 387).
-        // Single-chip (direct) chats have no mentions and skip the check.
-        const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
-        for (const img of images) {
-          const data = await readFileAsBase64(img.file);
-          const imageId = crypto.randomUUID();
-          // Write to IndexedDB before the POST so the sending tab can render
-          // the image from its imageRef immediately on refetch.
-          await putImage({ imageId, base64: data, mimeType: img.file.type });
-          await sendFileMessage(
-            chatId,
-            {
-              data,
-              mimeType: img.file.type,
-              filename: img.file.name,
-              size: img.file.size,
-              imageId,
-            },
-            imageMetadata,
-          );
-        }
-      }
       const trimmed = text.trim();
-      if (trimmed.length > 0) {
+      if (attachments.length > 0) {
+        // Upload each file (route 2 / PG-bytea), then send ONE message that
+        // carries the caption + all attachment refs (A′) — same flow as the
+        // in-chat composer. @-mentions in `trimmed` route the message; the
+        // server folds the refs into metadata.attachments. One send → one
+        // message → one bubble.
+        const attachmentIds: string[] = [];
+        for (const att of attachments) {
+          const ref = await uploadChatAttachment(chatId, att.file);
+          attachmentIds.push(ref.attachmentId);
+        }
+        await sendChatMessageWithAttachments(chatId, { text: trimmed, attachmentIds });
+      } else if (trimmed.length > 0) {
         await sendChatMessage(chatId, trimmed);
       }
       return chatId;
@@ -216,7 +201,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     onSuccess: (chatId) => {
       setDraft("");
       setChips([]);
-      clearImages();
+      clearAttachments();
       seededDefaultRef.current = false;
       queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       onCreated(chatId);
@@ -231,21 +216,21 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     if (chips.length === 0) return false;
     // Body OR at least one image — image-only sends are allowed (mirrors the
     // in-chat composer's "text non-empty or has image" rule).
-    if (draft.trim().length === 0 && pendingImages.length === 0) return false;
+    if (draft.trim().length === 0 && pendingAttachments.length === 0) return false;
     // Groups still need an @ even for image-only sends: the server's
     // group-chat mention guard runs per message regardless of format.
     if (chips.length >= 2 && bodyMentions.length === 0) return false;
     return true;
-  }, [sending, createMut.isPending, chips.length, draft, bodyMentions.length, pendingImages.length]);
+  }, [sending, createMut.isPending, chips.length, draft, bodyMentions.length, pendingAttachments.length]);
 
   const sendBlockedReason = useMemo(() => {
     if (chips.length === 0) return "Add at least one participant";
-    if (draft.trim().length === 0 && pendingImages.length === 0) return null;
+    if (draft.trim().length === 0 && pendingAttachments.length === 0) return null;
     if (chips.length >= 2 && bodyMentions.length === 0) {
       return "Group chats need an @ to wake at least one participant";
     }
     return null;
-  }, [chips.length, draft, bodyMentions.length, pendingImages.length]);
+  }, [chips.length, draft, bodyMentions.length, pendingAttachments.length]);
 
   const handleSend = async (): Promise<void> => {
     if (!canSend) return;
@@ -261,7 +246,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     setError(null);
     setSending(true);
     try {
-      await createMut.mutateAsync({ participantIds, text: draft, images: pendingImages, mentions: bodyMentions });
+      await createMut.mutateAsync({ participantIds, text: draft, attachments: pendingAttachments });
     } finally {
       setSending(false);
     }
@@ -295,7 +280,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
-              addImages(Array.from(e.dataTransfer.files));
+              addFiles(Array.from(e.dataTransfer.files));
             }}
           >
             <ParticipantChips
@@ -308,15 +293,16 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
               onAdd={addChip}
               onRemove={removeChip}
             />
-            {/* Image preview row — between the chip row and the textarea. */}
-            {pendingImages.length > 0 && (
+            {/* Attachment preview row — images show a thumbnail, other files an
+                icon + name chip. Between the chip row and the textarea. */}
+            {pendingAttachments.length > 0 && (
               <div
                 className="flex items-center"
                 style={{ gap: 6, padding: "0 var(--sp-2_5) var(--sp-1)", overflowX: "auto" }}
               >
-                {pendingImages.map((img) => (
+                {pendingAttachments.map((att) => (
                   <div
-                    key={img.id}
+                    key={att.id}
                     style={{
                       position: "relative",
                       flexShrink: 0,
@@ -325,15 +311,28 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                       overflow: "hidden",
                     }}
                   >
-                    <img
-                      src={img.previewUrl}
-                      alt={img.file.name}
-                      style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
-                    />
+                    {att.kind === "image" && att.previewUrl ? (
+                      <img
+                        src={att.previewUrl}
+                        alt={att.file.name}
+                        style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                      />
+                    ) : (
+                      <div
+                        className="flex items-center text-label"
+                        style={{ gap: 4, height: 32, padding: "0 var(--sp-2)", maxWidth: 180, color: "var(--fg-2)" }}
+                        title={att.file.name}
+                      >
+                        <Paperclip className="h-3 w-3 shrink-0" />
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {att.file.name}
+                        </span>
+                      </div>
+                    )}
                     <button
                       type="button"
-                      onClick={() => removeImage(img.id)}
-                      title="Remove image"
+                      onClick={() => removeAttachment(att.id)}
+                      title="Remove attachment"
                       style={{
                         position: "absolute",
                         top: 1,
@@ -379,7 +378,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                   const files = Array.from(e.clipboardData.files);
                   if (files.length > 0) {
                     e.preventDefault();
-                    addImages(files);
+                    addFiles(files);
                   }
                 }}
                 placeholder={
@@ -443,8 +442,8 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={sending || createMut.isPending}
-                  title="Attach image"
-                  aria-label="Attach image"
+                  title="Attach file"
+                  aria-label="Attach file"
                   className="inline-flex items-center"
                   style={{
                     background: "none",
@@ -459,19 +458,18 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
                   multiple
                   style={{ display: "none" }}
                   onChange={(e) => {
                     if (e.target.files) {
-                      addImages(Array.from(e.target.files));
+                      addFiles(Array.from(e.target.files));
                       e.target.value = "";
                     }
                   }}
                 />
               </span>
               <span className="flex items-center" style={{ gap: 8 }}>
-                {sending && pendingImages.length > 0 && (
+                {sending && pendingAttachments.length > 0 && (
                   <span className="mono text-caption" style={{ color: "var(--accent)" }}>
                     uploading…
                   </span>

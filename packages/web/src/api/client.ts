@@ -209,3 +209,52 @@ export const api = {
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
+
+/** Add the bearer token + handle a single 401 refresh, returning the raw Response. */
+async function authedFetch(path: string, init: RequestInit): Promise<Response> {
+  const headersFor = (token?: string): HeadersInit => ({
+    ...(init.headers as Record<string, string> | undefined),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  });
+  const tokens = getStoredTokens();
+  let res = await fetch(`${BASE_URL}${path}`, { ...init, headers: headersFor(tokens?.accessToken) });
+  if (res.status === 401 && tokens?.refreshToken) {
+    const refreshed = await tryRefresh(tokens.refreshToken);
+    if (refreshed) res = await fetch(`${BASE_URL}${path}`, { ...init, headers: headersFor(refreshed.accessToken) });
+  }
+  return res;
+}
+
+async function throwApiError(res: Response): Promise<never> {
+  if (res.status === 401) {
+    clearStoredTokens();
+    window.dispatchEvent(new CustomEvent("auth:logout"));
+  }
+  const text = await res.text();
+  let message = text;
+  try {
+    const json = JSON.parse(text) as { error?: string };
+    message = json.error ?? text;
+  } catch {
+    // non-JSON body — use the raw text
+  }
+  throw new ApiError(res.status, message);
+}
+
+/**
+ * Upload `FormData` (multipart). Distinct from `api.post` because the browser
+ * must set the multipart boundary itself — we deliberately do NOT set
+ * Content-Type. Used for attachment uploads.
+ */
+export async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
+  const res = await authedFetch(path, { method: "POST", body: formData });
+  if (!res.ok) await throwApiError(res);
+  return (await res.json()) as T;
+}
+
+/** Fetch binary bytes (authenticated) as a Blob — for attachment rendering. */
+export async function apiFetchBlob(path: string): Promise<Blob> {
+  const res = await authedFetch(path, { method: "GET" });
+  if (!res.ok) await throwApiError(res);
+  return res.blob();
+}

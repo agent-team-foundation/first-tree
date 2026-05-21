@@ -1,3 +1,4 @@
+import { type AttachmentRef, messageAttachmentsMetadataSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import { trace } from "@opentelemetry/api";
@@ -736,8 +737,8 @@ async function processFeishuOutboundClaimed(
         continue;
       }
 
-      // Format and send via official SDK
-      const { msgType, content } = formatForFeishu(msg.format, msg.content);
+      // Format and send via official SDK (attachments → filename list, no links)
+      const { msgType, content } = formatForFeishu(msg.format, msg.content, attachmentsFromMetadata(msg.metadata));
 
       const result = await botApiCall(bot, () =>
         bot.client.im.v1.message.create({
@@ -789,18 +790,48 @@ async function ackEntry(db: Database, entryId: number): Promise<void> {
   await db.update(inboxEntries).set({ status: "acked", ackedAt: new Date() }).where(eq(inboxEntries.id, entryId));
 }
 
-/** Convert internal message format to Feishu msg_type + content string. */
-function formatForFeishu(format: string, content: unknown): { msgType: string; content: string } {
+/** Extract A′ attachment refs from a message's metadata, or [] when none. */
+function attachmentsFromMetadata(metadata: unknown): AttachmentRef[] {
+  const parsed = messageAttachmentsMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data.attachments : [];
+}
+
+function formatAttachmentSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * Convert internal message format to Feishu msg_type + content string.
+ *
+ * Attachments (route 2 / A′) are downgraded to a plain filename + size list
+ * appended to the text — external Feishu users have no Hub session, so we
+ * deliberately do NOT embed download links (real file forwarding via the Feishu
+ * upload API is a follow-up).
+ */
+function formatForFeishu(
+  format: string,
+  content: unknown,
+  attachments: AttachmentRef[] = [],
+): { msgType: string; content: string } {
+  const suffix =
+    attachments.length > 0
+      ? `\n\n📎 ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}:\n${attachments
+          .map((a) => `• ${a.filename} (${formatAttachmentSize(a.size)})`)
+          .join("\n")}`
+      : "";
+
   if (format === "text") {
     const text = typeof content === "string" ? content : JSON.stringify(content);
-    return { msgType: "text", content: JSON.stringify({ text }) };
+    return { msgType: "text", content: JSON.stringify({ text: text + suffix }) };
   }
 
   if (format === "markdown") {
     const text = typeof content === "string" ? content : JSON.stringify(content);
     const card = {
       config: { wide_screen_mode: true },
-      elements: [{ tag: "markdown", content: text }],
+      elements: [{ tag: "markdown", content: text + suffix }],
     };
     return { msgType: "interactive", content: JSON.stringify(card) };
   }
@@ -810,5 +841,5 @@ function formatForFeishu(format: string, content: unknown): { msgType: string; c
   }
 
   const text = typeof content === "string" ? content : JSON.stringify(content);
-  return { msgType: "text", content: JSON.stringify({ text }) };
+  return { msgType: "text", content: JSON.stringify({ text: text + suffix }) };
 }

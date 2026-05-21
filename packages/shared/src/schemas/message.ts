@@ -77,6 +77,46 @@ export type MessageFormat = z.infer<typeof messageFormatSchema>;
 export const messagePurposeSchema = z.enum(["agent-final-text"]);
 export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
 
+// -- Message attachments (A′: no new `format`; attachments ride `metadata.attachments`) --
+
+/**
+ * Reference to a file attached to a message. The bytes live server-side in
+ * `message_attachments` (PG bytea, see proposals/hub-message-text-attachments);
+ * the message itself only carries this reference under `metadata.attachments[]`.
+ * There is no base64 and no client-local id here — clients fetch the bytes on
+ * demand from `GET /chats/:chatId/attachments/:attachmentId` with their normal
+ * auth (web JWT / agent token).
+ *
+ * A message with `metadata.attachments` is a *regular* text/markdown message
+ * whose `content` string is the caption (may be empty for an attachment-only
+ * send). This keeps old readers gracefully degrading — they render the caption
+ * and ignore the attachments — and keeps the @mention guard on the existing
+ * text path.
+ */
+export const attachmentRefSchema = z.object({
+  attachmentId: z.string().uuid(),
+  mimeType: z.string().min(1),
+  filename: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  /** Render/delivery split (image → thumbnail/vision, file → card/Read). */
+  kind: z.enum(["image", "file"]),
+});
+export type AttachmentRef = z.infer<typeof attachmentRefSchema>;
+
+/** Shape of the `metadata.attachments` field carried on a message. */
+export const messageAttachmentsMetadataSchema = z.object({
+  attachments: z.array(attachmentRefSchema),
+});
+
+/**
+ * Single source of truth for the image/file split. Server stamps it on upload,
+ * web/runtime read it back — call this everywhere instead of re-deriving from
+ * `mimeType` ad hoc so the two sides can never drift.
+ */
+export function deriveAttachmentKind(mimeType: string): "image" | "file" {
+  return mimeType.startsWith("image/") ? "image" : "file";
+}
+
 export const sendMessageSchema = z.object({
   format: messageFormatSchema.default("text"),
   content: z.unknown(),
@@ -105,6 +145,14 @@ export const sendMessageSchema = z.object({
    * prefer this over relying on `@<name>` extraction from `content`.
    */
   receiverNames: z.array(z.string().min(1)).optional(),
+  /**
+   * Ids of files previously uploaded via `POST /chats/:id/attachments` to
+   * attach to this message. The server validates ownership/binding (C3) and
+   * folds the authoritative refs into the stored `metadata.attachments` — the
+   * message stays a regular text/markdown message (A′). Caption goes in
+   * `content` and may be empty for an attachment-only send.
+   */
+  attachmentIds: z.array(z.string().uuid()).optional(),
 });
 export type SendMessage = z.infer<typeof sendMessageSchema>;
 

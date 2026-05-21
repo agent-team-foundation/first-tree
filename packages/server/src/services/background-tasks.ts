@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
 import type { AdapterManager } from "./adapter-manager.js";
+import { gcOrphanedAttachments } from "./attachment.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
 import type { KaelRuntime } from "./kael-runtime.js";
@@ -44,6 +45,13 @@ export function createBackgroundTasks(
               { ackedDeleted: pruned.ackedDeleted, stalePendingDeleted: pruned.stalePendingDeleted },
               "pruned silent inbox rows",
             );
+          }
+          // Orphan-attachment GC piggy-backs on the same timer: delete uploads
+          // that were never bound to a message within the TTL (abandoned
+          // compose) so they don't pin PG storage / org quota forever.
+          const gcDeleted = await gcOrphanedAttachments(app.db);
+          if (gcDeleted > 0) {
+            log.debug({ deleted: gcDeleted }, "gc'd orphaned attachments");
           }
         } catch (err) {
           log.error({ err }, "failed to reset timed-out inbox entries");

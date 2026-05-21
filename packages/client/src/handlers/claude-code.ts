@@ -9,7 +9,9 @@ import type {
   SupportedImageMime,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import {
+  type AttachmentRef,
   deriveRepoLocalPath,
+  messageAttachmentsMetadataSchema,
   type QuestionItem,
   type QuestionMessageContent,
   questionItemSchema,
@@ -26,6 +28,7 @@ import type {
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
+import { findAttachmentPath, writeAttachmentFile } from "../runtime/attachment-store.js";
 import { bootstrapWorkspace, installFirstTreeIntegration } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
 import { renderChatContextSection } from "../runtime/chat-context-section.js";
@@ -125,6 +128,34 @@ async function writeLegacyImageToTempFile(content: LegacyImageFileContent, chatI
   const path = join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`);
   await writeFile(path, Buffer.from(content.data, "base64"));
   return path;
+}
+
+/** Read the A′ attachment refs off a message's metadata, or [] when none. */
+function parseAttachments(metadata: Record<string, unknown> | null): AttachmentRef[] {
+  if (!metadata) return [];
+  const parsed = messageAttachmentsMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data.attachments : [];
+}
+
+/**
+ * Ensure an attachment's bytes are on local disk (download + cache), returning
+ * its path — or null when the download fails (server unreachable, revoked
+ * access). Route 2 is durable, so a failure is retryable, not permanent loss.
+ */
+async function materialiseAttachment(
+  sessionCtx: SessionContext,
+  chatId: string,
+  att: AttachmentRef,
+): Promise<string | null> {
+  const cached = findAttachmentPath(chatId, att.attachmentId, att.filename);
+  if (cached) return cached;
+  try {
+    const bytes = await sessionCtx.sdk.downloadChatAttachment(chatId, att.attachmentId);
+    return await writeAttachmentFile(chatId, att.attachmentId, att.filename, bytes);
+  } catch (err) {
+    sessionCtx.log(`attachment download failed (${att.filename}): ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
 }
 
 function extractContentBlocks(message: unknown): unknown[] {
@@ -489,6 +520,39 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           };
         }
       }
+    }
+
+    // Attachments (route 2 / A′): a regular text/markdown message whose
+    // `metadata.attachments[]` references files persisted server-side. Render
+    // the caption + preceding context exactly like a text message, then
+    // download each attachment to local disk and point the model at the path
+    // for its Read tool (image → vision, doc → text). A failed download yields
+    // an explicit "do not answer from it" placeholder so the model never
+    // answers on missing content — and it's retryable (route 2 is durable),
+    // not the permanent loss the old WS-push path implied.
+    const attachments = parseAttachments(message.metadata);
+    if (attachments.length > 0) {
+      const caption = await sessionCtx.formatInboundContent(message);
+      const blocks: string[] = [];
+      for (const att of attachments) {
+        const path = await materialiseAttachment(sessionCtx, message.chatId, att);
+        if (path) {
+          const what = att.kind === "image" ? "An image" : "A file";
+          blocks.push(
+            `${what} was shared in this chat. Use the Read tool to read it, then respond based on its content.\n\nFilename: ${att.filename}\nPath: ${path}`,
+          );
+        } else {
+          blocks.push(
+            `[attachment "${att.filename}" unavailable on this device — DO NOT answer based on its content; ask the user to resend if it is required.]`,
+          );
+        }
+      }
+      return {
+        type: "user",
+        message: { role: "user", content: [caption, ...blocks].join("\n\n") },
+        parent_tool_use_id: null,
+        session_id: sessionId,
+      };
     }
 
     // Default text content — sender attribution lives in the runtime so every

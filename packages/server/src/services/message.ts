@@ -10,6 +10,7 @@ import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
 import { upsertSessionState } from "./activity.js";
+import { bindAttachmentsToMessage, prepareAttachmentsForSend } from "./attachment.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext } from "./doc-snapshots.js";
 import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from "./questions.js";
@@ -89,6 +90,14 @@ export type SendMessageOptions = {
    * when no explicit declaration was made.
    */
   extractMentionsFromContent?: boolean;
+  /**
+   * Attachment ids (from `POST /chats/:id/attachments`) to bind to this
+   * message. Validated inside the send transaction (must be uploaded by the
+   * sender, still unbound, same chat — C3) and folded into
+   * `metadata.attachments` as authoritative refs. The message stays a regular
+   * text/markdown message (A′) — attachments ride metadata, no new `format`.
+   */
+  attachmentIds?: readonly string[];
 };
 
 export async function sendMessage(
@@ -198,7 +207,14 @@ async function sendMessageInner(
     //     where the typed message is the sole source of routing intent.
     //     Agent / programmatic callers leave this off so a narrative
     //     `@<peer>` in content never silently wakes anyone.
-    const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+    // Copy the incoming metadata, then drop any client-supplied `attachments`
+    // key (C3 hardening). Attachment refs may ONLY be produced server-side by
+    // `prepareAttachmentsForSend` and folded in at insert time — without this a
+    // caller could omit `attachmentIds` and write a forged `metadata.attachments`
+    // straight into the message, bypassing the uploader / unbound / same-chat /
+    // count / size validation entirely.
+    const incomingMeta: Record<string, unknown> = { ...((data.metadata ?? {}) as Record<string, unknown>) };
+    delete incomingMeta.attachments;
     // Server-side bottom-line on `metadata.documentContext`: shape via shared
     // schema + byte budgets and sha256 calibration. Snapshot content arrives
     // from a trusted runtime, but server still has to verify so a client bug
@@ -442,7 +458,18 @@ async function sendMessageInner(
     const projectionMentions: string[] = isSilentSend ? [] : dmAutoProjection;
 
     // 3. Store the message (with merged metadata + normalised content).
+    //    Attachments (route 2 / PG-bytea): validate the referenced uploads are
+    //    the sender's own, still unbound, and in this chat (C3), fold their
+    //    authoritative refs into metadata.attachments before the insert, then
+    //    bind them to the new message id — all in this tx so a rollback drops
+    //    both. The message itself stays plain text/markdown (A′).
     const messageId = randomUUID();
+    const attachmentRefs =
+      options.attachmentIds && options.attachmentIds.length > 0
+        ? await prepareAttachmentsForSend(tx, { chatId, senderId, attachmentIds: options.attachmentIds })
+        : [];
+    const metadataWithAttachments =
+      attachmentRefs.length > 0 ? { ...metadataToStore, attachments: attachmentRefs } : metadataToStore;
     const [msg] = await tx
       .insert(messages)
       .values({
@@ -451,11 +478,14 @@ async function sendMessageInner(
         senderId,
         format: data.format,
         content: outboundContent,
-        metadata: metadataToStore,
+        metadata: metadataWithAttachments,
         inReplyTo: data.inReplyTo ?? null,
         source: data.source,
       })
       .returning();
+    if (attachmentRefs.length > 0) {
+      await bindAttachmentsToMessage(tx, { messageId, attachmentIds: options.attachmentIds ?? [] });
+    }
 
     // 3b. For ask-user questions, record the pending lifecycle row in the
     //     same transaction so a rollback drops both. The content was just
