@@ -1,3 +1,4 @@
+import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
 import { X } from "lucide-react";
 import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
 import { GitHubSection } from "./github-section.js";
@@ -24,6 +25,9 @@ import { ParticipantsSection } from "./participants-section.js";
  */
 export function ChatRightSidebar({
   chatId,
+  participants,
+  participantsLoading,
+  managedByMe,
   addParticipantsCandidates,
   agentIdentity,
   onAdded,
@@ -31,6 +35,9 @@ export function ChatRightSidebar({
   readOnly,
 }: {
   chatId: string;
+  participants: ChatParticipantDetail[];
+  participantsLoading: boolean;
+  managedByMe: Map<string, boolean>;
   addParticipantsCandidates: MentionCandidate[];
   agentIdentity: (uuid: string | null | undefined) => {
     name: string | null;
@@ -81,6 +88,9 @@ export function ChatRightSidebar({
       <div className="flex-1 overflow-y-auto">
         <ParticipantsSection
           chatId={chatId}
+          participants={participants}
+          participantsLoading={participantsLoading}
+          managedByMe={managedByMe}
           addParticipantsCandidates={addParticipantsCandidates}
           agentIdentity={agentIdentity}
           onAdded={onAdded}

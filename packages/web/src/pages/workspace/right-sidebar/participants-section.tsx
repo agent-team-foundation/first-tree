@@ -1,17 +1,9 @@
 import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Loader2, Plus } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { getActivityOverview } from "../../../api/activity.js";
-import { getChat } from "../../../api/chats.js";
-import { addMeChatParticipants } from "../../../api/me-chats.js";
+import { useMemo } from "react";
 import { useAuth } from "../../../auth/auth-context.js";
+import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
-import {
-  ambiguousDisplayNames,
-  type MentionCandidate,
-  MentionLabel,
-} from "../../../components/mention-autocomplete.js";
+import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
 import { AgentRow } from "./agent-row.js";
 
 /**
@@ -21,21 +13,28 @@ import { AgentRow } from "./agent-row.js";
  * Remove / Change role are deferred to a future iteration alongside the
  * missing backend routes for member-side participant removal).
  *
- * The bottom "Add" affordance mirrors the header quick-add icon —
- * both go through the same `addMeChatParticipants` mutation.
- * Membership is currently non-revocable, but neither surface shows an
- * inline notice — the banner read as noise once users were already
- * in the picker, and the irreversibility lives in product docs / FAQs
- * instead.
+ * The bottom "Add" affordance shares <AddParticipantDropdown> with the
+ * header quick-add icon — both go through the same `addMeChatParticipants`
+ * mutation and the same grouped, avatar'd picker.
+ *
+ * Membership data (`participants` / `managedByMe`) is passed down from
+ * ChatView, which already holds the `chat-detail` + `activity` queries —
+ * this section no longer re-declares them.
  */
 export function ParticipantsSection({
   chatId,
+  participants,
+  participantsLoading,
+  managedByMe,
   addParticipantsCandidates,
   agentIdentity,
   onAdded,
   readOnly,
 }: {
   chatId: string;
+  participants: ChatParticipantDetail[];
+  participantsLoading: boolean;
+  managedByMe: Map<string, boolean>;
   addParticipantsCandidates: MentionCandidate[];
   agentIdentity: (
     uuid: string | null | undefined,
@@ -44,24 +43,7 @@ export function ParticipantsSection({
   readOnly: boolean;
 }) {
   const { role } = useAuth();
-  const chatQuery = useQuery({
-    queryKey: ["chat-detail", chatId],
-    queryFn: () => getChat(chatId),
-    enabled: !!chatId,
-  });
-  const activityQuery = useQuery({
-    queryKey: ["activity"],
-    queryFn: getActivityOverview,
-    refetchInterval: 15_000,
-  });
 
-  const managedByMe = useMemo(() => {
-    const m = new Map<string, boolean>();
-    for (const a of activityQuery.data?.agents ?? []) m.set(a.agentId, a.managedByMe);
-    return m;
-  }, [activityQuery.data?.agents]);
-
-  const participants = chatQuery.data?.participants ?? [];
   // Humans first (the people in the room), then agents (the tools and
   // teammates). Within each group, server order is preserved.
   const sorted = useMemo(() => {
@@ -82,7 +64,7 @@ export function ParticipantsSection({
       </div>
 
       <div className="flex flex-col" style={{ padding: "0 var(--sp-2) var(--sp-1)", gap: 2 }}>
-        {chatQuery.isLoading ? (
+        {participantsLoading ? (
           <div className="text-body" style={{ padding: "var(--sp-2)", color: "var(--fg-3)" }}>
             Loading…
           </div>
@@ -108,7 +90,8 @@ export function ParticipantsSection({
 
       {readOnly ? null : (
         <div style={{ padding: "var(--sp-1) var(--sp-2) var(--sp-2)" }}>
-          <AddParticipantInlineButton
+          <AddParticipantDropdown
+            variant="inline"
             chatId={chatId}
             candidates={addParticipantsCandidates}
             participantIds={participants.map((p) => p.agentId)}
@@ -141,167 +124,6 @@ function HumanRow({ participant }: { participant: ChatParticipantDetail }) {
       <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 2 }}>
         <div className="truncate text-subtitle">{participant.displayName}</div>
       </div>
-    </div>
-  );
-}
-
-/**
- * Inline "Add" row at the bottom of the Participants section. Visually
- * folds into the participant list — same row padding and an avatar-sized
- * dashed-circle stand-in (so the left edge lines up with HumanRow /
- * AgentRow) so the eye reads it as the list's next row, not a separate
- * button.
- *
- * States:
- *   - default:  "Add"        (clickable, opens the picker dropdown)
- *   - pending:  "Adding…"    (spinner in the slot, disabled)
- *   - all in:   "All added"  (disabled, dimmed, no dropdown)
- *
- * Shares `addMeChatParticipants` with the header quick-add icon.
- */
-function AddParticipantInlineButton({
-  chatId,
-  candidates,
-  participantIds,
-  agentIdentity,
-  onAdded,
-}: {
-  chatId: string;
-  candidates: MentionCandidate[];
-  participantIds: string[];
-  agentIdentity: (
-    uuid: string | null | undefined,
-  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
-  onAdded: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const handler = (ev: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (containerRef.current.contains(ev.target as Node)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-  // Esc must close the dropdown without leaking to chat-view's
-  // sidebar-level Esc handler. The trigger button keeps focus while the
-  // menu is open, so a React-level handler scoped to the menu div never
-  // sees the keystroke. Attaching to `document` in capture phase fires
-  // before chat-view's bubble-phase listener, so stopPropagation here
-  // peels off only the dropdown and leaves a closed dropdown's Esc free
-  // to bubble and collapse the sidebar as before.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (ev: KeyboardEvent) => {
-      if (ev.key !== "Escape") return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      setOpen(false);
-    };
-    document.addEventListener("keydown", handler, true);
-    return () => document.removeEventListener("keydown", handler, true);
-  }, [open]);
-
-  const addMut = useMutation({
-    mutationFn: (agentId: string) => addMeChatParticipants(chatId, { participantIds: [agentId] }),
-    onSuccess: () => {
-      setOpen(false);
-      onAdded();
-    },
-  });
-
-  const outsideCandidates = useMemo(
-    () => candidates.filter((c) => !participantIds.includes(c.agentId)),
-    [candidates, participantIds],
-  );
-  const allAdded = outsideCandidates.length === 0;
-  const disabled = allAdded || addMut.isPending;
-  const label = addMut.isPending ? "Adding…" : allAdded ? "All added" : "Add";
-
-  return (
-    <div ref={containerRef} style={{ position: "relative" }}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        disabled={disabled}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="flex w-full items-center transition-colors hover:bg-[var(--bg-hover)]"
-        style={{
-          gap: "var(--sp-2_5)",
-          padding: "var(--sp-1_75) var(--sp-2)",
-          borderRadius: "var(--radius-input)",
-          border: 0,
-          background: "transparent",
-          color: disabled ? "var(--fg-4)" : "var(--fg-3)",
-          cursor: disabled ? "not-allowed" : "pointer",
-          opacity: allAdded ? 0.55 : 1,
-        }}
-      >
-        {/* Dashed-circle avatar stand-in — keeps the row left edge
-            aligned with the avatars on participant rows above. */}
-        <span
-          aria-hidden="true"
-          className="flex shrink-0 items-center justify-center"
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 999,
-            border: "var(--hairline) dashed var(--border)",
-            color: "inherit",
-          }}
-        >
-          {addMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-        </span>
-        <span className="text-body">{label}</span>
-      </button>
-      {open && !allAdded && (
-        <div
-          role="menu"
-          aria-label="Add participant"
-          className="absolute z-20 max-h-72 overflow-auto border shadow-lg"
-          style={{
-            top: "calc(100% + var(--sp-1))",
-            left: 0,
-            right: 0,
-            background: "var(--bg-raised)",
-            borderColor: "var(--border)",
-            borderRadius: "var(--radius-input)",
-          }}
-        >
-          {(() => {
-            const ambiguous = ambiguousDisplayNames(outsideCandidates);
-            return outsideCandidates.map((cand) => {
-              const ident = agentIdentity(cand.agentId);
-              const avatarUrl = ident?.avatarImageUrl ?? null;
-              const fallback = cand.displayName ?? cand.name ?? cand.agentId.slice(0, 8);
-              return (
-                <button
-                  key={cand.agentId}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => addMut.mutate(cand.agentId)}
-                  disabled={addMut.isPending}
-                  className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
-                  style={{
-                    gap: "var(--sp-2_5)",
-                    padding: "var(--sp-1_75) var(--sp-2)",
-                    border: 0,
-                    background: "transparent",
-                    cursor: addMut.isPending ? "default" : "pointer",
-                  }}
-                >
-                  <RealAvatar src={avatarUrl} name={fallback} seed={cand.agentId} size={28} />
-                  <MentionLabel candidate={cand} ambiguous={ambiguous} />
-                </button>
-              );
-            });
-          })()}
-        </div>
-      )}
     </div>
   );
 }

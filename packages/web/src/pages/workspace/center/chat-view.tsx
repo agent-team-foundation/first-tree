@@ -10,18 +10,7 @@ import {
   scanMentionTokens,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  ArrowUp,
-  AtSign,
-  Check,
-  ExternalLink,
-  Eye,
-  MessageSquare,
-  MoreHorizontal,
-  Paperclip,
-  UserPlus,
-  X,
-} from "lucide-react";
+import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, MoreHorizontal, Paperclip, X } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
@@ -39,7 +28,6 @@ import {
   sendFileMessage,
 } from "../../../api/chats.js";
 import { getImage, putImage } from "../../../api/image-store.js";
-import { addMeChatParticipants } from "../../../api/me-chats.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -50,6 +38,7 @@ import {
   type SessionListItem,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import {
   isQuestionAnswerContent,
@@ -59,11 +48,8 @@ import {
 } from "../../../components/chat/question-message.js";
 import { WorkingBubble } from "../../../components/chat/working-bubble.js";
 import {
-  ambiguousDisplayNames,
-  groupAndSortCandidates,
   MentionAutocompletePopover,
   type MentionCandidate,
-  MentionLabel,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
@@ -840,7 +826,7 @@ export function ChatView({
     refetchInterval: 5_000,
   });
 
-  const { data: chatDetail } = useQuery({
+  const { data: chatDetail, isLoading: chatDetailLoading } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
@@ -1549,7 +1535,8 @@ export function ChatView({
                 }}
               />
               {readOnly ? null : (
-                <AddParticipantQuickButton
+                <AddParticipantDropdown
+                  variant="icon"
                   chatId={chatId}
                   participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
                   candidates={addableCandidates}
@@ -2057,6 +2044,9 @@ export function ChatView({
         {showSidebar ? (
           <ChatRightSidebar
             chatId={chatId}
+            participants={chatDetail?.participants ?? []}
+            participantsLoading={chatDetailLoading}
+            managedByMe={managedByMeMap}
             addParticipantsCandidates={addableCandidates}
             agentIdentity={chatScopedAgentIdentity}
             onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
@@ -2257,154 +2247,4 @@ function participantDotView(state: string): { bg: string; border: string } | nul
     default:
       return null;
   }
-}
-
-/**
- * Header-anchored quick-add icon — same backend mutation and same
- * grouped picker as the sidebar's inline "+ Add participant" button.
- * Both surfaces share the V1 one-way-door notice so users see the
- * irreversibility before they commit (membership is non-revocable
- * until the deferred remove flow lands).
- */
-function AddParticipantQuickButton({
-  chatId,
-  participantIds,
-  candidates,
-  agentIdentity: _agentIdentity,
-  onAdded,
-}: {
-  chatId: string;
-  participantIds: string[];
-  candidates: MentionCandidate[];
-  /** Identity resolver covering ALL agents (incl. the viewer's own,
-   *  which `mentionCandidates` excludes). Lets the chip row label
-   *  self correctly instead of falling back to a UUID prefix. The
-   *  `avatarImageUrl` and `avatarColorToken` fields are threaded into
-   *  the chip's leading avatar so a manager-configured image / hue
-   *  shows up here as well as on the left-rail row. */
-  agentIdentity: (uuid: string | null | undefined) => {
-    name: string | null;
-    displayName: string;
-    avatarImageUrl: string | null;
-    avatarColorToken: string | null;
-  } | null;
-  onAdded: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (ev: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (containerRef.current.contains(ev.target as Node)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const addMut = useMutation({
-    mutationFn: (agentId: string) => addMeChatParticipants(chatId, { participantIds: [agentId] }),
-    onSuccess: () => {
-      setOpen(false);
-      onAdded();
-    },
-  });
-
-  const outsideCandidates = useMemo(
-    () => candidates.filter((c) => !participantIds.includes(c.agentId)),
-    [candidates, participantIds],
-  );
-  const disabled = outsideCandidates.length === 0 || addMut.isPending;
-
-  return (
-    <div ref={containerRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        disabled={disabled}
-        title={outsideCandidates.length === 0 ? "All available agents are already in this chat" : "Add participant"}
-        aria-label="Add participant"
-        className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-        style={{
-          width: 28,
-          height: 28,
-          border: 0,
-          background: "transparent",
-          borderRadius: "var(--radius-input)",
-          color: disabled ? "var(--fg-4)" : "var(--fg-3)",
-          cursor: disabled ? "not-allowed" : "pointer",
-        }}
-      >
-        <UserPlus size={16} />
-      </button>
-      {open && outsideCandidates.length > 0 && (
-        <div
-          role="menu"
-          aria-label="Add participant"
-          onKeyDown={(e) => {
-            // Escape closes this menu first; without stopPropagation
-            // it bubbles to chat-view's document-level Esc handler and
-            // collapses the whole rail at the same time.
-            if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
-              setOpen(false);
-            }
-          }}
-          className="absolute z-20 max-h-72 overflow-auto rounded-md border shadow-lg"
-          // Right-anchored so the dropdown grows leftward from the icon,
-          // matching the legacy chip-row position and keeping the long
-          // grouped picker (mine vs teammates) off the panel edge.
-          style={{
-            top: "calc(100% + var(--sp-1))",
-            right: 0,
-            minWidth: 280,
-            background: "var(--bg-raised)",
-            borderColor: "var(--border)",
-          }}
-        >
-          {(() => {
-            const ambiguous = ambiguousDisplayNames(outsideCandidates);
-            return groupAndSortCandidates(outsideCandidates).map((item) => {
-              if ("divider" in item) {
-                return (
-                  <div
-                    key="__divider"
-                    role="presentation"
-                    style={{
-                      height: "var(--hairline)",
-                      background: "var(--border-faint)",
-                      margin: "var(--sp-0_5) var(--sp-3)",
-                    }}
-                  />
-                );
-              }
-              return (
-                <button
-                  key={item.agentId}
-                  type="button"
-                  role="menuitem"
-                  title={item.name ? `@${item.name}` : undefined}
-                  onClick={() => addMut.mutate(item.agentId)}
-                  disabled={addMut.isPending}
-                  className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                  style={{
-                    background: "transparent",
-                    color: "var(--fg)",
-                    border: "none",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  <MentionLabel candidate={item} ambiguous={ambiguous} />
-                </button>
-              );
-            });
-          })()}
-        </div>
-      )}
-    </div>
-  );
 }
