@@ -71,6 +71,7 @@ import { Markdown } from "../../../components/ui/markdown.js";
 import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
+import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
 import { computeRequiresMention } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
@@ -645,12 +646,6 @@ function QuestionAnswerRow({
   );
 }
 
-type PendingImage = {
-  id: string;
-  file: File;
-  previewUrl: string;
-};
-
 type TimelineItem =
   | { kind: "message"; at: string; key: string; data: MessageWithDelivery }
   | { kind: "event"; at: string; key: string; data: SessionEventRow }
@@ -734,9 +729,14 @@ export function ChatView({
   const { agentId: myAgentId } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
-  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
+    onError: setUploadError,
+    // Dismiss a stale upload error (e.g. "image too large") the moment the
+    // user adds or removes an image — they're already fixing it.
+    onChange: () => setUploadError(null),
+  });
   // Right-rail visibility — defaults to hidden so the chat area gets the
   // full reading column; user opens via the header icon and the choice
   // persists across chats (a global preference, not per-chat).
@@ -880,40 +880,6 @@ export function ChatView({
     },
   });
 
-  const addImages = useCallback((files: File[]) => {
-    const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // Claude API per-image limit
-    const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-    if (imageFiles.length === 0) return;
-
-    const oversized = imageFiles.find((f) => f.size > MAX_IMAGE_SIZE);
-    if (oversized) {
-      setUploadError(
-        `Image too large (${(oversized.size / 1024 / 1024).toFixed(1)}MB). Maximum ${MAX_IMAGE_SIZE / 1024 / 1024}MB per image.`,
-      );
-      return;
-    }
-
-    const newImages: PendingImage[] = imageFiles.map((file) => ({
-      id: crypto.randomUUID(),
-      file,
-      previewUrl: URL.createObjectURL(file),
-    }));
-    setPendingImages((prev) => [...prev, ...newImages]);
-    setUploadError(null);
-  }, []);
-
-  const removeImage = useCallback((id: string) => {
-    setPendingImages((prev) => {
-      const img = prev.find((i) => i.id === id);
-      if (img) URL.revokeObjectURL(img.previewUrl);
-      return prev.filter((i) => i.id !== id);
-    });
-    // Mirror addImages: removing an image is also a "user is fixing it"
-    // signal — a prior "image too large" or "no @mention" error is now
-    // potentially stale and shouldn't stay pinned under the composer.
-    setUploadError(null);
-  }, []);
-
   const handleSend = async () => {
     const text = draft.trim();
     const images = pendingImages;
@@ -996,9 +962,8 @@ export function ChatView({
             },
             imageMetadata,
           );
-          URL.revokeObjectURL(img.previewUrl);
         }
-        setPendingImages([]);
+        clearImages();
         if (text) await sendChatMessage(chatId, text);
         setDraft("");
         queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
