@@ -130,4 +130,40 @@ describe("CLI `chat send` happy path against spawned dist CLI", () => {
     expect(row.rows[0]?.sender_id).toBe(creds.humanAgentId);
     expect(row.rows[0]?.format).toBe("text");
   });
+
+  // Regression: CLI used to unconditionally prepend `@<recipientName>` to the
+  // content, so an agent whose LLM output already contained `@<recipientName>`
+  // ended up sending `@a @a body`. The prepend is now the server's job
+  // (`normalizeMentionsInContent` — idempotent + case-insensitive); CLI only
+  // declares routing intent via `receiverNames`. This test pins that
+  // single-source-of-truth split: a leading-`@` body must land verbatim, not
+  // double-stamped.
+  it("does not double-prepend @<recipient> when the body already starts with it", async () => {
+    const creds = readCredentialsOrThrow(handle);
+    const tag = randomBytes(3).toString("hex");
+    const messageBody = `@${recipientName} cli-send-leading-at ${tag}`;
+
+    const result = await execCli({
+      home: handle.clientHome,
+      serverBaseUrl: handle.serverBaseUrl,
+      args: ["chat", "send", recipientName, messageBody, "--agent", creds.humanAgentName],
+      extraEnv: { FIRST_TREE_HUB_CHAT_ID: chatId },
+      timeoutMs: 15_000,
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `chat send exited with code ${result.exitCode}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      );
+    }
+
+    // `messages.content` is jsonb storing a string — `#>>'{}'` extracts the
+    // raw text so we can assert exact equality (not substring), which is the
+    // whole point of the regression check.
+    const row = await pg.query<{ content: string }>(
+      "SELECT content #>> '{}' AS content FROM messages WHERE chat_id = $1 AND content::text LIKE '%' || $2 || '%' LIMIT 1",
+      [chatId, tag],
+    );
+    expect(row.rows[0], `message with tag "${tag}" not found in PG`).toBeDefined();
+    expect(row.rows[0]?.content).toBe(messageBody);
+  });
 });
