@@ -1,6 +1,6 @@
 import type { AgentMainStatus } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { type AgentStatusView, viewOf } from "../agent-status-view.js";
+import { type AgentStatusView, sessionStateToMain, viewOf } from "../agent-status-view.js";
 
 const ALL: AgentMainStatus[] = ["offline", "failed", "needs_you", "working", "paused", "ready"];
 
@@ -60,6 +60,30 @@ describe("viewOf — §9.1 visual vocabulary", () => {
       expect(v.colorVar.startsWith("var(--")).toBe(true);
       // A pulse kind always pairs with an animation class, and vice-versa.
       expect(v.pulse === null).toBe(v.animationClass === null);
+    }
+  });
+});
+
+describe("sessionStateToMain — F3 bridge (session C vocabulary → composite main)", () => {
+  it("maps each session state to a composite main (never collapses to offline-by-mistake)", () => {
+    expect(sessionStateToMain("active")).toBe("working");
+    expect(sessionStateToMain("suspended")).toBe("paused");
+    expect(sessionStateToMain("errored")).toBe("failed");
+    expect(sessionStateToMain("evicted")).toBe("offline");
+  });
+
+  it("treats no-session / null / loading as ready (not Offline — the F3 regression)", () => {
+    expect(sessionStateToMain(null)).toBe("ready");
+    expect(sessionStateToMain(undefined)).toBe("ready");
+    expect(sessionStateToMain("none")).toBe("ready");
+    expect(sessionStateToMain("loading")).toBe("ready");
+  });
+
+  it("every mapped value is a real composite main (round-trips through viewOf)", () => {
+    for (const state of ["active", "suspended", "errored", "evicted", "none", null]) {
+      const main = sessionStateToMain(state);
+      expect(ALL).toContain(main);
+      expect(viewOf(main).label.length).toBeGreaterThan(0);
     }
   });
 });

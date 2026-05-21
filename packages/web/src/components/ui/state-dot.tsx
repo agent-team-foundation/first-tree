@@ -1,110 +1,41 @@
-import { cn } from "../../lib/utils.js";
+import type { AgentStatusPulse, AgentStatusShape } from "../../lib/agent-status-view.js";
+import { StatusGlyph } from "./status-glyph.js";
 
+/** Agent-global runtime vocabulary (axis A). Distinct from the per-(agent,chat)
+ * composite `AgentMainStatus` — they share visual atoms, not enum values. */
 export type AgentState = "idle" | "working" | "blocked" | "error" | "offline";
 
-type StateDotProps = {
-  state: AgentState;
-  size?: number;
-  className?: string;
-};
-
-export function StateDot({ state, size = 8, className }: StateDotProps) {
-  const base: React.CSSProperties = {
-    width: size,
-    height: size,
-    display: "inline-block",
-    position: "relative",
-    flexShrink: 0,
-  };
-
-  if (state === "working") {
-    return (
-      <span className={cn("shrink-0", className)} style={base} role="img" aria-label="working">
-        <span
-          style={{
-            position: "absolute",
-            inset: 0,
-            borderRadius: "50%",
-            background: "var(--state-working)",
-          }}
-        />
-        <span
-          style={{
-            position: "absolute",
-            inset: -3,
-            borderRadius: "50%",
-            border: "var(--hairline) solid var(--state-working)",
-            animation: "ring-pulse 1.8s infinite",
-            opacity: 0.6,
-          }}
-        />
-      </span>
-    );
+/**
+ * Map a runtime-A state to its shared visual atom (§9.1). Colors are the
+ * same `--state-*` tokens the composite vocabulary uses, so "working" is the
+ * same blue everywhere. `blocked` is a solid amber dot — the rotating dashed
+ * ring (`dash-spin`) was retired in §9.2 in favour of one amber atom.
+ */
+function runtimeStateView(state: AgentState): { colorVar: string; shape: AgentStatusShape; pulse: AgentStatusPulse } {
+  switch (state) {
+    case "working":
+      return { colorVar: "var(--state-working)", shape: "dot", pulse: "working" };
+    case "blocked":
+      return { colorVar: "var(--state-blocked)", shape: "dot", pulse: null };
+    case "error":
+      return { colorVar: "var(--state-error)", shape: "triangle", pulse: null };
+    case "idle":
+      return { colorVar: "var(--state-idle)", shape: "dot", pulse: null };
+    case "offline":
+      return { colorVar: "var(--state-offline)", shape: "hollow", pulse: null };
   }
+}
 
-  if (state === "blocked") {
-    return (
-      <span
-        className={cn("shrink-0", className)}
-        style={{
-          ...base,
-          border: "var(--hairline-bold) dashed var(--state-blocked)",
-          borderRadius: "50%",
-          animation: "dash-spin 4s linear infinite",
-        }}
-        role="img"
-        aria-label="blocked"
-      >
-        <span
-          style={{
-            position: "absolute",
-            inset: 2,
-            borderRadius: "50%",
-            background: "var(--state-blocked)",
-          }}
-        />
-      </span>
-    );
-  }
-
-  if (state === "error") {
-    return (
-      <span
-        className={cn("shrink-0", className)}
-        style={{
-          ...base,
-          background: "var(--state-error)",
-          clipPath: "polygon(50% 0%, 100% 100%, 0% 100%)",
-          borderRadius: 1,
-        }}
-        role="img"
-        aria-label="error"
-      />
-    );
-  }
-
-  if (state === "idle") {
-    return (
-      <span
-        className={cn("shrink-0", className)}
-        style={{ ...base, borderRadius: "50%", background: "var(--state-idle)" }}
-        role="img"
-        aria-label="idle"
-      />
-    );
-  }
-
+export function StateDot({ state, size = 8, className }: { state: AgentState; size?: number; className?: string }) {
+  const v = runtimeStateView(state);
   return (
-    <span
-      className={cn("shrink-0", className)}
-      style={{
-        ...base,
-        borderRadius: "50%",
-        border: "var(--hairline) solid var(--state-offline)",
-        background: "transparent",
-      }}
-      role="img"
-      aria-label="offline"
+    <StatusGlyph
+      colorVar={v.colorVar}
+      shape={v.shape}
+      pulse={v.pulse}
+      size={size}
+      className={className}
+      ariaLabel={state}
     />
   );
 }

@@ -1,6 +1,31 @@
 import type { AgentMainStatus } from "@first-tree/shared";
 
 /**
+ * Map a per-(agent,chat) `session.state` (the C vocabulary:
+ * active/suspended/errored/evicted, or none/null) to a composite
+ * `AgentMainStatus` for display. Only `session.state` is known at the call
+ * site (no live activity / reachability), so `active` shows as `working` per
+ * design §7.3B. This is what fixes F3: the session context panel previously
+ * fed C values to `StateChip` (which only understands the runtime-A
+ * vocabulary), collapsing every live session to "Offline".
+ */
+export function sessionStateToMain(state: string | null | undefined): AgentMainStatus {
+  switch (state) {
+    case "active":
+      return "working";
+    case "suspended":
+      return "paused";
+    case "errored":
+      return "failed";
+    case "evicted":
+      return "offline";
+    default:
+      // "none" / null / loading → reachable, nothing pending.
+      return "ready";
+  }
+}
+
+/**
  * Indicator shape. Mirrors the existing StateDot shape+color double-encoding
  * (shape carries meaning too, so color-blind users can still distinguish
  * states): `dot` solid circle, `triangle` warning glyph, `pause` double-bar
