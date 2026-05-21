@@ -44,13 +44,21 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
     .where(and(eq(agentChatSessions.chatId, chatId), inArray(agentChatSessions.agentId, agentIds)));
   const sessionState = new Map(sessions.map((s) => [s.agentId, s.state]));
 
-  // Reachability (A): a non-null bound client. Mirrors the web
-  // `resolveAgentState` rule (no client ⇒ offline).
+  // Reachability (A): a non-null bound client (mirrors the web
+  // `resolveAgentState` rule — no client ⇒ offline). Also carries the
+  // agent-global runtime_state so a runtime `error` folds into `errored`
+  // (failed = session errored OR runtime error, §1.2). ONLY `error` is
+  // taken from runtime — `working`/`blocked`/`idle` stay out of the per-chat
+  // composite (working is driven by live activity D, not global runtime).
   const presence = await db
-    .select({ agentId: agentPresence.agentId, clientId: agentPresence.clientId })
+    .select({
+      agentId: agentPresence.agentId,
+      clientId: agentPresence.clientId,
+      runtimeState: agentPresence.runtimeState,
+    })
     .from(agentPresence)
     .where(inArray(agentPresence.agentId, agentIds));
-  const reachable = new Map(presence.map((p) => [p.agentId, p.clientId != null]));
+  const presenceById = new Map(presence.map((p) => [p.agentId, p]));
 
   // Attention: agents with a pending AskUserQuestion in this chat.
   const pendingByChat = await derivePendingQuestions(db, [chatId]);
@@ -61,11 +69,12 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
 
   return agentIds.map((agentId) => {
     const state = sessionState.get(agentId);
+    const p = presenceById.get(agentId);
     const engagement: AgentEngagement = state === "active" ? "active" : state === "suspended" ? "suspended" : "none";
     return buildAgentChatStatus({
       agentId,
-      reachable: reachable.get(agentId) ?? false,
-      errored: state === "errored",
+      reachable: p?.clientId != null,
+      errored: state === "errored" || p?.runtimeState === "error",
       needsYou: pendingAgents.has(agentId),
       working: workingAgents.has(agentId),
       engagement,

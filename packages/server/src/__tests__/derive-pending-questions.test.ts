@@ -40,4 +40,19 @@ describe("derivePendingQuestions", () => {
     // otherChat: pending but not in the queried set → absent.
     expect(map.has(otherChat)).toBe(false);
   });
+
+  it("dedupes an agent with multiple pending questions in the same chat", async () => {
+    const chat = randomUUID();
+    const a1 = randomUUID();
+    await getApp()
+      .db.insert(pendingQuestions)
+      .values([
+        { id: randomUUID(), agentId: a1, chatId: chat, messageId: randomUUID(), status: "pending" },
+        { id: randomUUID(), agentId: a1, chatId: chat, messageId: randomUUID(), status: "pending" },
+      ]);
+
+    const map = await derivePendingQuestions(getApp().db, [chat]);
+
+    expect(map.get(chat)).toEqual([a1]); // not [a1, a1]
+  });
 });

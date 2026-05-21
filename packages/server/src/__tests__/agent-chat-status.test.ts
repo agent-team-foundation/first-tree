@@ -19,11 +19,12 @@ describe("getChatAgentStatuses", () => {
     return { app, admin, peer, chatId };
   }
 
-  async function bindPresence(agentId: string, clientId: string): Promise<void> {
+  async function bindPresence(agentId: string, clientId: string, runtimeState = "idle"): Promise<void> {
     await getApp().db.execute(sql`
       INSERT INTO agent_presence (agent_id, status, client_id, runtime_state, last_seen_at)
-      VALUES (${agentId}, 'online', ${clientId}, 'idle', NOW())
-      ON CONFLICT (agent_id) DO UPDATE SET status = 'online', client_id = EXCLUDED.client_id
+      VALUES (${agentId}, 'online', ${clientId}, ${runtimeState}, NOW())
+      ON CONFLICT (agent_id) DO UPDATE
+        SET status = 'online', client_id = EXCLUDED.client_id, runtime_state = EXCLUDED.runtime_state
     `);
   }
 
@@ -79,5 +80,64 @@ describe("getChatAgentStatuses", () => {
     const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
     expect(s?.reachable).toBe(false);
     expect(s?.main).toBe("offline"); // reachability gates everything
+  });
+
+  it("a reachable agent in global runtime error reads as failed (no session error needed)", async () => {
+    const { app, peer, chatId } = await newChatWithAgent();
+    // Reachable, runtime_state='error', and NO agent_chat_sessions row (so the
+    // session axis is not 'errored'): failed must still come from runtime error
+    // (§1.2: failed = session errored OR runtime error).
+    await bindPresence(peer.agent.uuid, peer.clientId, "error");
+
+    const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+    expect(s?.reachable).toBe(true);
+    expect(s?.errored).toBe(true);
+    expect(s?.main).toBe("failed");
+  });
+});
+
+describe("GET /chats/:chatId/agent-status — route auth + shape", () => {
+  const getApp = useTestApp();
+
+  it("a chat participant gets 200 and an AgentChatStatus[] of non-human speakers", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `acs-http-${randomUUID().slice(0, 6)}` });
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${chatId}/agent-status`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ agentId: string; main: string }>;
+    expect(Array.isArray(body)).toBe(true);
+    const entry = body.find((x) => x.agentId === peer.agent.uuid);
+    expect(entry).toBeDefined();
+    expect(typeof entry?.main).toBe("string");
+    // The human creator is a speaker but not a runtime agent — excluded.
+    expect(body.some((x) => x.agentId === admin.humanAgentUuid)).toBe(false);
+  });
+
+  it("a non-member (different org) gets 404, not the status set", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `acs-http2-${randomUUID().slice(0, 6)}` });
+    const { chatId } = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    const outsider = await createTestAdmin(app); // own org, not a member of this chat's org
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${chatId}/agent-status`,
+      headers: { authorization: `Bearer ${outsider.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(404);
   });
 });

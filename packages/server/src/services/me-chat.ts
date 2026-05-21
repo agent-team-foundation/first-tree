@@ -537,12 +537,17 @@ export async function derivePendingQuestions(db: Database, chatIds: string[]): P
     .select({ chatId: pendingQuestions.chatId, agentId: pendingQuestions.agentId })
     .from(pendingQuestions)
     .where(and(inArray(pendingQuestions.chatId, chatIds), eq(pendingQuestions.status, "pending")));
-  const out = new Map<string, string[]>();
+  // Dedupe per chat: one agent may have several pending questions in the
+  // same chat, but the field is "agents with a pending question" (a set), so
+  // a future count / "+N" must not over-count.
+  const sets = new Map<string, Set<string>>();
   for (const row of rows) {
-    const list = out.get(row.chatId);
-    if (list) list.push(row.agentId);
-    else out.set(row.chatId, [row.agentId]);
+    const set = sets.get(row.chatId);
+    if (set) set.add(row.agentId);
+    else sets.set(row.chatId, new Set([row.agentId]));
   }
+  const out = new Map<string, string[]>();
+  for (const [chatId, set] of sets) out.set(chatId, [...set]);
   return out;
 }
 
