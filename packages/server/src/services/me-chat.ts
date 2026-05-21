@@ -47,6 +47,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
+import { pendingQuestions } from "../db/schema/pending-questions.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
@@ -461,6 +462,12 @@ export async function listMeChats(
   // currently working".
   const liveActivityByChat = await deriveLiveActivity(db, chatIds);
 
+  // needs-you — per-chat set of agents with a pending AskUserQuestion. One
+  // indexed lookup on `pending_questions (chat_id, status)`. The authority
+  // is the server-side `pending_questions` table (not a client-side
+  // message scan), so superseded/answered questions are correctly excluded.
+  const pendingByChat = await derivePendingQuestions(db, chatIds);
+
   // First-message lookup for auto-title fallback. Mirrors
   // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
   // logic is the same as before the schema refactor — first-message
@@ -511,10 +518,32 @@ export async function listMeChats(
       engagementStatus: r.engagement_status,
       engagedAgentIds: engagedByChat.get(r.chat_id) ?? [],
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
+      pendingQuestionAgentIds: pendingByChat.get(r.chat_id) ?? [],
     };
   });
 
   return { rows, nextCursor };
+}
+
+/**
+ * Per-chat set of agent ids with a PENDING question (`pending_questions`
+ * status = 'pending'), grouped chatId → agentId[]. Chats with no pending
+ * question are absent from the map (caller treats absence as []). One
+ * indexed read via `idx_pending_questions_chat_status`.
+ */
+export async function derivePendingQuestions(db: Database, chatIds: string[]): Promise<Map<string, string[]>> {
+  if (chatIds.length === 0) return new Map();
+  const rows = await db
+    .select({ chatId: pendingQuestions.chatId, agentId: pendingQuestions.agentId })
+    .from(pendingQuestions)
+    .where(and(inArray(pendingQuestions.chatId, chatIds), eq(pendingQuestions.status, "pending")));
+  const out = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = out.get(row.chatId);
+    if (list) list.push(row.agentId);
+    else out.set(row.chatId, [row.agentId]);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

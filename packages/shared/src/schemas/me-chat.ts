@@ -213,6 +213,16 @@ export const meChatRowSchema = z.object({
    * + auto-incrementing seconds counter.
    */
   liveActivity: liveActivitySchema.nullable(),
+  /**
+   * Speakers in this chat with a PENDING AskUserQuestion waiting on a human
+   * (`pending_questions.status === 'pending'`). Drives the chat-list
+   * "needs-you" attention signal without opening the chat. Per-(agent,chat),
+   * derived at query time from the existing `pending_questions` table (no
+   * schema migration). `.default([])` for version skew: an older server
+   * build that predates this field would otherwise blank the row on a
+   * web-ahead deploy.
+   */
+  pendingQuestionAgentIds: z.array(z.string()).default([]),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
