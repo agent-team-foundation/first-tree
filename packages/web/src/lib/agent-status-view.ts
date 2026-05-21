@@ -1,18 +1,24 @@
-import type { AgentMainStatus } from "@first-tree/shared";
+import type { AgentMainStatus, SessionState } from "@first-tree/shared";
 
 /**
  * Map a per-(agent,chat) `session.state` (the C vocabulary:
  * active/suspended/errored/evicted, or none/null) to a composite
- * `AgentMainStatus` for display. Only `session.state` is known at the call
- * site (no live activity / reachability), so `active` shows as `working` per
- * design §7.3B. This is what fixes F3: the session context panel previously
- * fed C values to `StateChip` (which only understands the runtime-A
- * vocabulary), collapsing every live session to "Offline".
+ * `AgentMainStatus` for display. This is what fixes F3: the session context
+ * panel previously fed C values to `StateChip` (which only understands the
+ * runtime-A vocabulary), collapsing every live session to "Offline".
+ *
+ * `active → ready` (NOT working): an active session means "engaged in this
+ * chat", not "working right now". `working` is driven by live activity (D),
+ * which this mapping doesn't see — mirrors `deriveMainStatus(engagement=
+ * active)` → ready, per design §7.3B.
+ *
+ * The param is narrowed to the real session vocabulary (plus none/null) so an
+ * unknown string can't be silently accepted at a call site.
  */
-export function sessionStateToMain(state: string | null | undefined): AgentMainStatus {
+export function sessionStateToMain(state: SessionState | "none" | null | undefined): AgentMainStatus {
   switch (state) {
     case "active":
-      return "working";
+      return "ready";
     case "suspended":
       return "paused";
     case "errored":
@@ -20,7 +26,7 @@ export function sessionStateToMain(state: string | null | undefined): AgentMainS
     case "evicted":
       return "offline";
     default:
-      // "none" / null / loading → reachable, nothing pending.
+      // "none" / null / undefined → reachable, nothing pending.
       return "ready";
   }
 }

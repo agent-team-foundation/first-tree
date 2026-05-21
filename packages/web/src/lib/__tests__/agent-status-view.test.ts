@@ -65,22 +65,26 @@ describe("viewOf — §9.1 visual vocabulary", () => {
 });
 
 describe("sessionStateToMain — F3 bridge (session C vocabulary → composite main)", () => {
-  it("maps each session state to a composite main (never collapses to offline-by-mistake)", () => {
-    expect(sessionStateToMain("active")).toBe("working");
+  it("active is NOT 'working' — an active session is engaged, not live-working", () => {
+    // `working` must come from live activity (D), which this mapping can't see;
+    // mirrors deriveMainStatus(engagement=active) → ready.
+    expect(sessionStateToMain("active")).toBe("ready");
+  });
+
+  it("maps the remaining session states to their composite main", () => {
     expect(sessionStateToMain("suspended")).toBe("paused");
     expect(sessionStateToMain("errored")).toBe("failed");
     expect(sessionStateToMain("evicted")).toBe("offline");
   });
 
-  it("treats no-session / null / loading as ready (not Offline — the F3 regression)", () => {
+  it("treats no-session / null / undefined as ready (not Offline — the F3 regression)", () => {
     expect(sessionStateToMain(null)).toBe("ready");
     expect(sessionStateToMain(undefined)).toBe("ready");
     expect(sessionStateToMain("none")).toBe("ready");
-    expect(sessionStateToMain("loading")).toBe("ready");
   });
 
   it("every mapped value is a real composite main (round-trips through viewOf)", () => {
-    for (const state of ["active", "suspended", "errored", "evicted", "none", null]) {
+    for (const state of ["active", "suspended", "errored", "evicted", "none", null] as const) {
       const main = sessionStateToMain(state);
       expect(ALL).toContain(main);
       expect(viewOf(main).label.length).toBeGreaterThan(0);
