@@ -77,6 +77,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         chatId: "chat-design-spike",
         chatTitle: "design-spike",
         nodePath: "members/Gandy2025/designs/context-tree-usage-signal.md",
+        viewerCanAccess: true,
         createdAt: new Date(Date.now() - 2 * 60_000).toISOString(),
       },
       {
@@ -87,6 +88,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         chatId: "chat-onboarding-q3",
         chatTitle: "onboarding-q3",
         nodePath: "domains/onboarding/NODE.md",
+        viewerCanAccess: true,
         createdAt: new Date(Date.now() - 12 * 60_000).toISOString(),
       },
       {
@@ -97,6 +99,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         chatId: "chat-qa-run-42",
         chatTitle: "qa-run-42",
         nodePath: "domains/quality/NODE.md",
+        viewerCanAccess: true,
         createdAt: new Date(Date.now() - 60 * 60_000).toISOString(),
       },
       {
@@ -107,6 +110,7 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         chatId: "chat-weekly-retro",
         chatTitle: "weekly-retro",
         nodePath: "NODE.md",
+        viewerCanAccess: true,
         createdAt: new Date(Date.now() - 4 * 60 * 60_000).toISOString(),
       },
       {
@@ -121,6 +125,9 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
         // Pre-P0 event — no node path recorded; the feed falls back to
         // "read the context tree".
         nodePath: null,
+        // Caller is not a member of this chat — the label shows but renders as
+        // inert text (no deep link), exercising the non-clickable preview path.
+        viewerCanAccess: false,
         createdAt: new Date(Date.now() - 6 * 60 * 60_000).toISOString(),
       },
     ],

@@ -331,13 +331,23 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
                 {chatId ? (
                   <>
                     <span className="context-usage-feed-action"> in </span>
-                    <button
-                      type="button"
-                      className="context-usage-feed-chat"
-                      onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
-                    >
-                      {chatLabel(event)}
-                    </button>
+                    {event.viewerCanAccess ? (
+                      <button
+                        type="button"
+                        className="context-usage-feed-chat"
+                        onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
+                      >
+                        {chatLabel(event)}
+                      </button>
+                    ) : (
+                      // Org-wide the label is visible, but a non-member must not
+                      // be able to navigate into a chat the server would 404 —
+                      // render inert text instead of a link. See
+                      // summarizeContextTreeUsage / viewerCanAccess.
+                      <span className="context-usage-feed-chat is-static" title="No access to this chat">
+                        {chatLabel(event)}
+                      </span>
+                    )}
                   </>
                 ) : null}
               </span>
@@ -392,15 +402,18 @@ function relativeTimeLabel(value: string, nowMs: number): string {
 }
 
 function LoadingState() {
+  // Cold-load only (no cached snapshot). Center an intentional loading state
+  // in the content area with a spinning icon, rather than a single static line
+  // pinned to the top-left. `animate-spin` is the same spinner utility used
+  // across the app (see save-bar / agent-row).
   return (
-    <Panel>
-      <PanelBody>
-        <div className="flex items-center text-body" style={{ color: "var(--fg-2)", gap: "var(--sp-2)" }}>
-          <RefreshCw size={17} />
-          Loading team context...
-        </div>
-      </PanelBody>
-    </Panel>
+    <div
+      className="flex flex-col items-center justify-center text-body"
+      style={{ color: "var(--fg-2)", gap: "var(--sp-3)", minHeight: "50vh", textAlign: "center" }}
+    >
+      <RefreshCw size={22} className="animate-spin" aria-hidden="true" />
+      <span>Loading team context...</span>
+    </div>
   );
 }
 

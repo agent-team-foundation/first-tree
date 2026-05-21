@@ -5,9 +5,10 @@ import type {
   SessionEventKind,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { sessionEventSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, asc, desc, eq, gt, gte, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { createLogger } from "../observability/index.js";
@@ -182,6 +183,58 @@ function nodePathFromPayload(payload: unknown): string | null {
 }
 
 /**
+ * The caller's identity within the org whose usage feed is being read.
+ * Used to decide, per event, whether the caller may actually open the chat
+ * (`viewerCanAccess`). Both fields are scoped to the same org as the feed,
+ * so they mirror the values `requireChatAccess` would resolve for the chat.
+ */
+export type ContextTreeUsageViewer = {
+  /** The caller's HUMAN agent in this org (the chat_membership anchor). */
+  humanAgentId: string;
+  /** The caller's `members.id` in this org (the manage-a-speaker anchor). */
+  memberId: string;
+};
+
+/**
+ * Of `chatIds` (all in the viewer's org), the subset the viewer may open.
+ * Mirrors `requireChatAccess` exactly: a chat is accessible if the caller's
+ * human agent has any `chat_membership` row (speaker OR watcher), or the
+ * caller manages an agent that is a `speaker` in the chat. Two batched
+ * queries bounded by `chatIds` — no per-event N+1.
+ */
+async function accessibleChatIdSet(
+  db: Database,
+  viewer: ContextTreeUsageViewer,
+  chatIds: string[],
+): Promise<Set<string>> {
+  const accessible = new Set<string>();
+  if (chatIds.length === 0) return accessible;
+
+  // Direct membership — caller's human agent is a speaker or watcher.
+  const directRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.agentId, viewer.humanAgentId)));
+  for (const row of directRows) accessible.add(row.chatId);
+
+  // Supervised speaker — caller manages an agent that speaks in the chat.
+  const supervisedRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
+    .where(
+      and(
+        inArray(chatMembership.chatId, chatIds),
+        eq(chatMembership.accessMode, "speaker"),
+        eq(agents.managerId, viewer.memberId),
+      ),
+    );
+  for (const row of supervisedRows) accessible.add(row.chatId);
+
+  return accessible;
+}
+
+/**
  * Org-wide aggregate counts + the most recent context-tree usage events
  * for the org. The Context Tab is an org-wide transparency surface — any
  * member can see who has been using the tree, including the chat topic
@@ -195,11 +248,18 @@ function nodePathFromPayload(payload: unknown): string | null {
  * `organization_id = $org` predicate so the planner cannot accidentally
  * surface a foreign org's topic; the resulting `joinedChatId` is the
  * authoritative signal for "this chat lives in this org".
+ *
+ * `viewerCanAccess` is layered on top: the topic/id stay org-wide visible,
+ * but only a `viewer` who passes `requireChatAccess`'s membership rule for a
+ * given chat gets `viewerCanAccess: true` (the web feed turns that into a
+ * clickable deep link; everyone else sees inert text). Fail-closed: when no
+ * `viewer` is supplied every event is `viewerCanAccess: false`.
  */
 export async function summarizeContextTreeUsage(
   db: Database,
   organizationId: string,
   windowDays: number,
+  viewer?: ContextTreeUsageViewer,
 ): Promise<ContextTreeUsageSummary> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const [aggregate] = await db
@@ -246,6 +306,12 @@ export async function summarizeContextTreeUsage(
     .orderBy(desc(sessionEvents.createdAt))
     .limit(CONTEXT_TREE_USAGE_FEED_LIMIT);
 
+  // Resolve which in-org chats the caller may actually open, in one batch up
+  // front so the per-event map stays O(1). Cross-org events are excluded here
+  // because their chatId is masked away anyway.
+  const inOrgChatIds = [...new Set(recentRows.filter((row) => row.joinedChatId !== null).map((row) => row.rawChatId))];
+  const accessibleChatIds = viewer ? await accessibleChatIdSet(db, viewer, inOrgChatIds) : new Set<string>();
+
   const recentEvents: ContextTreeUsageEvent[] = recentRows.map((row) => {
     const sameOrgChat = row.joinedChatId !== null;
     return {
@@ -262,6 +328,10 @@ export async function summarizeContextTreeUsage(
       // Surface which node the agent read straight from the stored payload.
       // No node-frequency aggregation here — that's P1.
       nodePath: nodePathFromPayload(row.payload),
+      // Org-wide we expose the chat label, but only a viewer who passes the
+      // chat's membership rule gets a clickable link. Cross-org rows have no
+      // chatId, so they can never be accessible.
+      viewerCanAccess: sameOrgChat && accessibleChatIds.has(row.rawChatId),
       createdAt: row.createdAt.toISOString(),
     };
   });

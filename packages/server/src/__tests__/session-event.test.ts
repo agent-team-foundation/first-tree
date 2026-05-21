@@ -1,7 +1,10 @@
 import { and, eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import * as sessionEventService from "../services/session-event.js";
@@ -277,6 +280,9 @@ describe("sessionEventService", () => {
       expect(event.chatId).toBe(c);
       expect(event.chatTitle).toBe("design-spike");
       expect(typeof event.createdAt).toBe("string");
+      // Fail-closed: no viewer supplied → no clickable deep link, even though
+      // the chat label stays visible org-wide.
+      expect(event.viewerCanAccess).toBe(false);
     }
     expect(new Date(summary.recentEvents[0]?.createdAt ?? 0).getTime()).toBeGreaterThanOrEqual(
       new Date(summary.recentEvents[1]?.createdAt ?? 0).getTime(),
@@ -396,4 +402,112 @@ describe("sessionEventService", () => {
     expect(summary.recentEvents).toHaveLength(1);
     expect(summary.recentEvents[0]?.nodePath).toBeNull();
   });
+
+  it("marks viewerCanAccess true when the caller's human agent is a direct member (watcher) of the chat", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const humanAgentId = await humanAgentIdFor(app, memberId);
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design" });
+    // A watcher row is enough — requireChatAccess's direct branch grants
+    // access to speakers AND watchers, and the feed mirrors that.
+    await app.db.insert(chatMembership).values({ chatId: c, agentId: humanAgentId, accessMode: "watcher" });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
+    });
+    expect(summary.recentEvents[0]?.viewerCanAccess).toBe(true);
+  });
+
+  it("marks viewerCanAccess true when the caller manages an agent that speaks in the chat", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const humanAgentId = await humanAgentIdFor(app, memberId);
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design" });
+    // No direct membership for the caller's human agent — access must come
+    // from the supervised-speaker branch: the emitter agent is a speaker and
+    // is managed by the caller (createTestAgent pins managerId = memberId).
+    await app.db.insert(chatMembership).values({ chatId: c, agentId: agent.uuid, accessMode: "speaker" });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
+    });
+    expect(summary.recentEvents[0]?.viewerCanAccess).toBe(true);
+  });
+
+  it("marks viewerCanAccess false when the caller is neither a member nor manages a speaker (label still shown)", async () => {
+    const app = getApp();
+    const viewerCtx = await createTestAgent(app);
+    // A second member in the same org whose agent is the chat's only speaker.
+    const otherCtx = await createTestAgent(app);
+    const humanAgentId = await humanAgentIdFor(app, viewerCtx.memberId);
+    const organizationId = viewerCtx.organizationId;
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "private" });
+    // The speaker is managed by a *different* member — the supervised branch
+    // must not grant the caller access.
+    await app.db.insert(chatMembership).values({ chatId: c, agentId: otherCtx.agent.uuid, accessMode: "speaker" });
+    await sessionEventService.appendEvent(app.db, viewerCtx.agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId: viewerCtx.memberId,
+    });
+    const event = summary.recentEvents.find((e) => e.chatId === c);
+    expect(event?.viewerCanAccess).toBe(false);
+    // Org-wide transparency is unchanged: the label/id stay visible.
+    expect(event?.chatId).toBe(c);
+    expect(event?.chatTitle).toBe("private");
+  });
+
+  it("marks viewerCanAccess false for a cross-org chat even when a viewer is supplied", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const humanAgentId = await humanAgentIdFor(app, memberId);
+
+    const orgB = uuidv7();
+    await app.db.insert(organizations).values({
+      id: orgB,
+      name: `org-b-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Org B",
+    });
+    const crossOrgChatId = chatId();
+    await app.db.insert(chats).values({ id: crossOrgChatId, organizationId: orgB, type: "direct", topic: "leaked" });
+    await sessionEventService.appendEvent(app.db, agent.uuid, crossOrgChatId, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
+    });
+    expect(summary.recentEvents[0]?.chatId).toBeNull();
+    expect(summary.recentEvents[0]?.viewerCanAccess).toBe(false);
+  });
 });
+
+/** Resolve the human agent uuid for a member row (the chat_membership anchor). */
+async function humanAgentIdFor(app: FastifyInstance, memberId: string): Promise<string> {
+  const [row] = await app.db
+    .select({ agentId: members.agentId })
+    .from(members)
+    .where(eq(members.id, memberId))
+    .limit(1);
+  if (!row) throw new Error("member row missing");
+  return row.agentId;
+}
