@@ -105,16 +105,52 @@ export function compareMainStatus(a: AgentMainStatus, b: AgentMainStatus): numbe
  * Server-derived composite status for one agent in one chat. Produced
  * server-side — the authority, because only the server can aggregate
  * reachability, session, live activity, and pending-question across the
- * data plane — and consumed read-only by every UI surface. `main` is
- * `deriveMainStatus` of the other fields.
+ * data plane — and consumed read-only by every UI surface.
+ *
+ * INVARIANT: `main === deriveMainStatus(the other fields)`. The schema's
+ * `superRefine` enforces it on parse, so a self-contradictory payload (e.g.
+ * `{ main: "ready", working: true }`) is rejected rather than silently
+ * trusted. Always construct via `buildAgentChatStatus` to keep `main`
+ * derived rather than hand-set.
  */
-export const agentChatStatusSchema = z.object({
-  agentId: z.string(),
-  main: agentMainStatusSchema,
-  reachable: z.boolean(),
-  engagement: agentEngagementSchema,
-  working: z.boolean(),
-  needsYou: z.boolean(),
-  errored: z.boolean(),
-});
+export const agentChatStatusSchema = z
+  .object({
+    agentId: z.string(),
+    main: agentMainStatusSchema,
+    reachable: z.boolean(),
+    engagement: agentEngagementSchema,
+    working: z.boolean(),
+    needsYou: z.boolean(),
+    errored: z.boolean(),
+  })
+  .superRefine((val, ctx) => {
+    const expected = deriveMainStatus(val);
+    if (val.main !== expected) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `main "${val.main}" must equal deriveMainStatus(...) = "${expected}"`,
+        path: ["main"],
+      });
+    }
+  });
 export type AgentChatStatus = z.infer<typeof agentChatStatusSchema>;
+
+/** Inputs to `buildAgentChatStatus` — the axis fields plus the agent id. */
+export type AgentChatStatusInput = DeriveMainStatusInput & { agentId: string };
+
+/**
+ * Construct an `AgentChatStatus` with `main` always derived from the axes
+ * (never hand-set), keeping the schema invariant true by construction. This
+ * is the only sanctioned way to build the composite status server-side.
+ */
+export function buildAgentChatStatus(input: AgentChatStatusInput): AgentChatStatus {
+  return {
+    agentId: input.agentId,
+    reachable: input.reachable,
+    engagement: input.engagement,
+    working: input.working,
+    needsYou: input.needsYou,
+    errored: input.errored,
+    main: deriveMainStatus(input),
+  };
+}

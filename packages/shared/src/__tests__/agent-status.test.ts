@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentChatStatusSchema,
   agentMainStatusSchema,
+  buildAgentChatStatus,
   compareMainStatus,
   type DeriveMainStatusInput,
   deriveMainStatus,
@@ -105,5 +106,46 @@ describe("agentChatStatusSchema", () => {
     // Guards against the two-vocabulary confusion this module exists to prevent.
     expect(agentMainStatusSchema.safeParse("idle").success).toBe(false);
     expect(agentMainStatusSchema.safeParse("blocked").success).toBe(false);
+  });
+
+  it("rejects a payload whose main contradicts the other fields", () => {
+    const contradictory = {
+      agentId: "agent-1",
+      main: "ready", // but working:true ⇒ deriveMainStatus = "working"
+      reachable: true,
+      engagement: "active",
+      working: true,
+      needsYou: false,
+      errored: false,
+    };
+    expect(agentChatStatusSchema.safeParse(contradictory).success).toBe(false);
+  });
+});
+
+describe("buildAgentChatStatus", () => {
+  it("derives main from the axes and satisfies the schema invariant", () => {
+    const status = buildAgentChatStatus({
+      agentId: "agent-1",
+      reachable: true,
+      errored: false,
+      needsYou: true,
+      working: true,
+      engagement: "active",
+    });
+    expect(status.main).toBe("needs_you"); // needs_you outranks working
+    expect(agentChatStatusSchema.safeParse(status).success).toBe(true);
+  });
+
+  it("an unreachable agent builds to offline regardless of other axes", () => {
+    const status = buildAgentChatStatus({
+      agentId: "agent-1",
+      reachable: false,
+      errored: true,
+      needsYou: true,
+      working: true,
+      engagement: "active",
+    });
+    expect(status.main).toBe("offline");
+    expect(agentChatStatusSchema.safeParse(status).success).toBe(true);
   });
 });
