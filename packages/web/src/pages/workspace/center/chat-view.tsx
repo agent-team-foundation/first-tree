@@ -939,8 +939,12 @@ export function ChatView({
       setUploadError(err instanceof Error ? err.message : "Failed to send message");
       if (ctx?.tempId) removeOptimisticMessages(new Set([ctx.tempId]));
       // Put the rejected text back so the user can edit and retry without
-      // re-typing.
-      if (ctx?.previousDraft) setDraft(ctx.previousDraft);
+      // re-typing — but only if the user hasn't already started typing
+      // something new during the in-flight window. Setting `previousDraft`
+      // unconditionally would overwrite the new keystrokes (PR review
+      // observation #1). Functional setState reads the latest draft inside
+      // React's commit so we don't race the textarea's controlled value.
+      if (ctx?.previousDraft) setDraft((current) => (current === "" ? ctx.previousDraft : current));
     },
     // Resync against the server in the background so any fan-out side-effects
     // (e.g. server-rewritten content, mention resolution) eventually overwrite
@@ -1074,7 +1078,10 @@ export function ChatView({
         // user can retry. Already-acked rows have been swapped to real ids by
         // replaceOptimisticMessage and are no longer in pendingTempIds.
         removeOptimisticMessages(pendingTempIds);
-        if (previousDraft) setDraft(previousDraft);
+        // Only restore the pre-send draft if the user hasn't already started
+        // typing something new during the upload window (PR review
+        // observation #1).
+        if (previousDraft) setDraft((current) => (current === "" ? previousDraft : current));
       } finally {
         setUploading(false);
       }
