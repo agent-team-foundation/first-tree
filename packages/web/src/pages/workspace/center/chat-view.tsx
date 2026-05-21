@@ -1204,23 +1204,36 @@ export function ChatView({
   // pass the union and let it compute `outsideCandidates`. Self is
   // excluded; missing slug is skipped. Suspended rows are excluded so
   // the picker never offers a row the server would refuse on add.
+  //
+  // Identity resolution: prefer the shared `useAgentIdentityMap`, fall
+  // back to the raw `listAgents` row when the map hasn't resolved yet.
+  // Both surfaces are fed by `listAgents` ultimately, so the window is
+  // short, but on a brand-new teammate's first paint the identity map
+  // may not have indexed them yet — without the fallback they'd briefly
+  // drop out of the picker. Mirrors the fallback pattern in
+  // `new-chat-draft.tsx`.
   const addableCandidates = useMemo<MentionCandidate[]>(() => {
-    const ids = new Set<string>();
-    for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
+    const orgRowById = new Map<string, { name: string | null; displayName: string }>();
     for (const a of orgAgentsPage?.items ?? []) {
       if (a.status === "suspended") continue;
-      ids.add(a.uuid);
+      orgRowById.set(a.uuid, { name: a.name, displayName: a.displayName });
     }
+    const ids = new Set<string>();
+    for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
+    for (const id of orgRowById.keys()) ids.add(id);
     if (ids.size === 0) ids.add(agentId);
     const out: MentionCandidate[] = [];
     for (const id of ids) {
       if (id === myAgentId) continue;
       const ident = chatScopedAgentIdentity(id);
-      if (!ident || !ident.name) continue;
+      const orgRow = orgRowById.get(id);
+      const name = ident?.name ?? orgRow?.name ?? null;
+      if (!name) continue;
+      const displayName = ident?.displayName ?? orgRow?.displayName ?? null;
       out.push({
         agentId: id,
-        name: ident.name,
-        displayName: ident.displayName,
+        name,
+        displayName,
         managedByMe: managedByMeMap.get(id) ?? false,
       });
     }
