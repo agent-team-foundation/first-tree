@@ -28,7 +28,13 @@ export type MentionParticipant = {
 // First char must be alphanumeric, matching `AGENT_NAME_REGEX` in
 // `schemas/agent.js`. An `@-foo` or `@_foo` token is not a valid mention
 // (`-foo` can never be a legal new agent name under the tightened rule).
-export const MENTION_REGEX = /(?<![A-Za-z0-9_.@-])@([A-Za-z0-9][A-Za-z0-9_-]{0,63})\b/g;
+//
+// Trailing `(?![A-Za-z0-9_\/-])` replaces a plain `\b`: it forbids the token
+// being followed by `/`, so npm scoped package names (`@scope/pkg`) don't
+// surface as a `scope` mention — the bare `\b` accepts `/` as a boundary and
+// would otherwise (with backtracking) match a truncated prefix like
+// `agent-team-` from `@agent-team-foundation/first-tree-hub-shared`.
+export const MENTION_REGEX = /(?<![A-Za-z0-9_.@-])@([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?![A-Za-z0-9_/-])/g;
 
 /**
  * Strip Markdown code regions (fenced + inline) so identifier-shaped
