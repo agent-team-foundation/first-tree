@@ -126,6 +126,7 @@ SDK methods live in `sdk.ts`, handlers register in `handlers/`, runtime changes 
 - **Branch naming**: `feat/xxx`, `fix/xxx`, `refactor/xxx`, `test/xxx`, `docs/xxx`, `chore/xxx`
 - **Commit messages**: Conventional Commits — `feat: xxx`, `fix: xxx`, `refactor: xxx`, `test: xxx`, `docs: xxx`
 - **Releases**: tag + GitHub Release
+- **Do not edit `version` fields in any `package.json`.** Version bumps are handled by CI on tag push, or manually by a maintainer cutting a tag. Coding agents must not touch `version` as part of a feature/fix PR.
 - Do not auto-commit; wait for user to test and confirm before committing
 
 <!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->

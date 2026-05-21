@@ -409,7 +409,7 @@ Codex `ThreadEvent` → hub `SessionEvent`：
 | Step | 改动 | 风险 |
 |---|---|---|
 | 0026 migration | 单步、单列：`agents.runtime_provider` NOT NULL DEFAULT `'claude-code'` + backfill。`clients.capabilities` 走 `metadata.capabilities` 子键（C 方案，无 SQL 改动） | 低（stop-migrate-restart 模型，无 rolling deploy 间隙问题） |
-| `command` 包发布 | tarball bump（按 docs/versioning-and-publishing.md 规则） | 低 |
+| `command` 包发布 | tarball 发布（CI / 手动 tag 触发） | 低 |
 | 老 client 兼容 | 老 client 没 capabilities 上报 → server 容忍 `'{}'`，UI 显示 "Capabilities not yet reported" | 低 |
 | Schema discriminated union | 读端兼容：missing `kind` → `"claude-code"`；写端补 `kind` | 低 |
 
