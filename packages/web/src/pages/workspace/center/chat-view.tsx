@@ -7,7 +7,6 @@ import {
   parseWorkspaceDocKey,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
-  scanMentionTokens,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, MoreHorizontal, Paperclip, X } from "lucide-react";
@@ -857,10 +856,10 @@ export function ChatView({
       // docs/session-creation-on-first-message.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
     },
-    // Backstop: surface server-side `enforceGroupMention` 400s (and any
-    // other send failure) under the composer instead of silently failing.
-    // The pre-flight check in `handleSend` should catch unresolved
-    // `@<token>` locally; this catches anything that slips through.
+    // Server-side `enforceGroupMention` + unresolved-token guard 400s
+    // (e.g. user typed `@<outsider>` who's not in the chat) surface here.
+    // Client no longer pre-flights — unresolved `@<token>` is treated as
+    // plain text locally; the round-trip is the user's notification.
     onError: (err) => {
       setUploadError(err instanceof Error ? err.message : "Failed to send message");
     },
@@ -872,35 +871,16 @@ export function ChatView({
     if (!text && images.length === 0) return;
     if (uploading) return;
 
-    // Unresolved-@-token guard (client mirror of `enforceGroupMention` in
-    // `services/message.ts`). The autocomplete only offers in-chat
-    // members, but the user can still hand-type `@<name>` — typos,
-    // renamed agents, or agents not in this chat. Catching it here
-    // produces a precise hint immediately instead of round-tripping to a
-    // 400 the user has to decode. New participants are added via
-    // ParticipantsHeader's `[+]`, not via `@`.
-    //
-    // Derive the speaker set from `chatDetail.participants` rather than
-    // `mentionCandidates` so it includes self — `mentionCandidates`
-    // intentionally excludes self (you don't autocomplete "@yourself"),
-    // but `@<own-name>` is a legal token the server accepts. Without
-    // self here the guard would reject it with the "[+] button" hint,
-    // which is misleading since the user is already a member.
-    if (text) {
-      const memberNames = new Set(
-        (chatDetail?.participants ?? [])
-          .map((p) => chatScopedAgentIdentity(p.agentId)?.name?.toLowerCase())
-          .filter((n): n is string => !!n),
-      );
-      const unresolved = scanMentionTokens(text).filter((t) => !memberNames.has(t));
-      if (unresolved.length > 0) {
-        const sample = unresolved[0];
-        setUploadError(
-          `Cannot @-mention "${sample}" — they're not in this chat. Use the [+] button above to add them first.`,
-        );
-        return;
-      }
-    }
+    // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
+    // doesn't resolve to a chat member is treated as plain text, matching
+    // Slack/Discord/Feishu. This avoids false positives like npm scoped
+    // package names (`@scope/pkg`) or quoted handles in the body. The
+    // `enforceGroupMention` constraint (group chat must address at least
+    // one member) is reflected via `requiresMention` + `draftMentions`
+    // gating the send button below — `extractMentions` resolves only
+    // against in-chat membership, so an `@<outsider>` simply contributes
+    // nothing and the button stays disabled, prompting the user to use
+    // the `[+]` button or the autocomplete picker.
 
     // Group-chat send guard: don't fire requests we know the server (with
     // proposal §3 enforcement) or downstream `mention_only` agents will drop.
@@ -1309,13 +1289,15 @@ export function ChatView({
   ]);
 
   /** AgentIds the draft text addresses via `@<name>` tokens, resolved
-   * against the in-chat membership (`mentionCandidates`). The client no
-   * longer auto-invites `@<outsider>` — and the server now rejects any
-   * unresolved `@<token>` with a 400 (see `enforceGroupMention` guard in
-   * `services/message.ts`). To avoid the round-trip and a confusing
-   * error, `handleSend` runs the same check locally via
-   * `scanMentionTokens` before firing the mutation; new participants go
-   * through the ParticipantsHeader `[+]` button instead. */
+   * against the in-chat membership (`mentionCandidates`). Used purely
+   * as a UX signal: drives the send-button disable + tooltip when a
+   * group chat has no valid mention yet. Unresolved `@<token>` tokens
+   * (typos, npm package names, outsiders) contribute nothing here —
+   * the button stays disabled, prompting the user to pick from
+   * autocomplete or use ParticipantsHeader's `[+]`. The server still
+   * runs its own unresolved-token guard on the agent path (the PR-393
+   * anti-hallucination fix); on the human web path it's tolerated by the
+   * `mentions.ts` regex excluding npm scoped names from token scans. */
   const draftMentions = useMemo(() => {
     const ps: MentionParticipant[] = mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name }));
     return extractMentions(draft, ps);
