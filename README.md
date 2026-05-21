@@ -53,16 +53,16 @@ tasks, and your team can review those updates like normal code changes.
 ## The Current Surface
 
 ```text
-┌──────────────────────────────────────────────────────────────────────┐
-│                         first-tree (umbrella CLI)                    │
-├───────────────────────────┬───────────────────────────┬──────────────┤
-│           tree            │        github scan        │     hub      │
-│      context layer        │   GitHub chief of staff   │   reserved   │
-├───────────────────────────┼───────────────────────────┼──────────────┤
-│ inspect / init / bind /   │ install / start / watch / │ start / stop │
-│ workspace / verify /      │ poll / run / cleanup /    │ / doctor /   │
-│ publish / tree skill ...  │ statusline / doctor       │ status       │
-└───────────────────────────┴───────────────────────────┴──────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                  first-tree (umbrella CLI)               │
+├───────────────────────────┬──────────────────────────────┤
+│           tree            │         github scan          │
+│      context layer        │    GitHub chief of staff     │
+├───────────────────────────┼──────────────────────────────┤
+│ inspect / init / bind /   │ install / start / watch /    │
+│ workspace / verify /      │ poll / run / cleanup /       │
+│ publish / tree skill ...  │ statusline / doctor          │
+└───────────────────────────┴──────────────────────────────┘
 
 Canonical shipped skills in the current proposal:
 
@@ -77,7 +77,6 @@ Canonical shipped skills in the current proposal:
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`first-tree tree`**        | The Context Tree layer. This is where onboarding, inspection, validation, publishing, and skill maintenance live. | The tree lifecycle surface is implemented in this workspace: `inspect`, `status`, `init`, `bootstrap`, `bind`, `integrate`, `workspace sync`, `verify`, `publish`, `upgrade`, and the maintenance helpers are live. |
 | **`first-tree github scan`** | The GitHub inbox runtime. This is the new public home for the old `breeze` behavior.                              | Fully wired to [`packages/github-scan/`](./packages/github-scan/README.md), with fail-closed tree binding checks at the CLI entry and the tree repo handed through to the runtime.                                  |
-| **`first-tree hub`**         | Reserved namespace for future Hub integration.                                                                    | Stub commands only in this workspace snapshot.                                                                                                                                                                      |
 | **`skills/`**                | Canonical skill payload source for the proposal's five shipped skills.                                            | Present in this repo and copied into the built package. `first-tree tree skill ...` now installs, upgrades, lists, diagnoses, and repairs these canonical payloads.                                                 |
 
 ## Why first-tree
@@ -104,8 +103,8 @@ That means:
   `first-tree github scan`
 - the canonical five-skill payloads now live under `skills/`
 - the tree lifecycle surface now has real `init`, `bootstrap`, `bind`,
-  `integrate`, `workspace sync`, `verify`, `publish`, `generate-codeowners`,
-  `install-claude-code-hook`, `inject-context`, `upgrade`, `review`, and
+  `integrate`, `workspace sync`, `verify`, `publish`, `codeowners`,
+  `claude-hook`, `inject`, `upgrade`, `review`, and
   `tree skill ...` commands
 - new trees scaffold default agent-template files and an org-config placeholder
 - `github scan` now routes agents through the shipped First Tree skill set,
@@ -162,24 +161,24 @@ use today and which ones require an existing tree binding.
 
 ### `first-tree tree`
 
-| Command                                    | What it does                                                  | Status                                                   |
-| ------------------------------------------ | ------------------------------------------------------------- | -------------------------------------------------------- |
-| `first-tree tree inspect`                  | Classify the current folder and report first-tree metadata    | implemented                                              |
-| `first-tree tree status`                   | Human-friendly alias for `inspect`                            | implemented                                              |
-| `first-tree tree help onboarding`          | Print the current onboarding narrative                        | implemented                                              |
-| `first-tree tree init`                     | Proposal-aligned onboarding entrypoint                        | implemented                                              |
-| `first-tree tree bootstrap`                | Low-level tree bootstrap for an explicit tree checkout        | implemented                                              |
-| `first-tree tree bind`                     | Bind a source repo or workspace to an existing tree repo      | implemented                                              |
-| `first-tree tree integrate`                | Install local tree integration without mutating the tree repo | implemented                                              |
-| `first-tree tree workspace sync`           | Bind newly added child repos to the shared tree               | implemented                                              |
-| `first-tree tree verify`                   | Validate a tree repo                                          | implemented                                              |
-| `first-tree tree upgrade`                  | Refresh integration and tree metadata                         | implemented                                              |
-| `first-tree tree publish`                  | Publish a tree repo and refresh bound repos                   | implemented                                              |
-| `first-tree tree generate-codeowners`      | Generate `.github/CODEOWNERS` from ownership data             | implemented                                              |
-| `first-tree tree install-claude-code-hook` | Install the Claude Code hook wiring                           | implemented                                              |
-| `first-tree tree inject-context`           | Emit the SessionStart payload from `NODE.md`                  | implemented                                              |
-| `first-tree tree review`                   | Run the tree PR review helper                                 | implemented                                              |
-| `first-tree tree skill <subcommand>`       | Proposal replacement for the old top-level `skill` namespace  | implemented for install, upgrade, list, doctor, and link |
+| Command                              | What it does                                                  | Status                                                   |
+| ------------------------------------ | ------------------------------------------------------------- | -------------------------------------------------------- |
+| `first-tree tree inspect`            | Classify the current folder and report first-tree metadata    | implemented                                              |
+| `first-tree tree status`             | Human-friendly alias for `inspect`                            | implemented                                              |
+| `first-tree tree help onboarding`    | Print the current onboarding narrative                        | implemented                                              |
+| `first-tree tree init`               | Proposal-aligned onboarding entrypoint                        | implemented                                              |
+| `first-tree tree bootstrap`          | Low-level tree bootstrap for an explicit tree checkout        | implemented                                              |
+| `first-tree tree bind`               | Bind a source repo or workspace to an existing tree repo      | implemented                                              |
+| `first-tree tree integrate`          | Install local tree integration without mutating the tree repo | implemented                                              |
+| `first-tree tree workspace sync`     | Bind newly added child repos to the shared tree               | implemented                                              |
+| `first-tree tree verify`             | Validate a tree repo                                          | implemented                                              |
+| `first-tree tree upgrade`            | Refresh integration and tree metadata                         | implemented                                              |
+| `first-tree tree publish`            | Publish a tree repo and refresh bound repos                   | implemented                                              |
+| `first-tree tree codeowners`         | Generate `.github/CODEOWNERS` from ownership data             | implemented                                              |
+| `first-tree tree claude-hook`        | Install the Claude Code hook wiring                           | implemented                                              |
+| `first-tree tree inject`             | Emit the SessionStart payload from `NODE.md`                  | implemented                                              |
+| `first-tree tree review`             | Run the tree PR review helper                                 | implemented                                              |
+| `first-tree tree skill <subcommand>` | Proposal replacement for the old top-level `skill` namespace  | implemented for install, upgrade, list, doctor, and link |
 
 ### `first-tree github scan`
 
@@ -194,12 +193,6 @@ Fail-closed binding behavior:
   `--tree-repo <owner/repo>` override.
 - `status`, `doctor`, `stop`, `cleanup`, `watch`, and hook/internal entrypoints
   can still run without a tree binding so diagnosis is not blocked.
-
-### `first-tree hub`
-
-| Command                             | What it does                                  | Status |
-| ----------------------------------- | --------------------------------------------- | ------ |
-| `start`, `stop`, `doctor`, `status` | Reserved namespace for future Hub integration | stub   |
 
 ## Migration Notes
 

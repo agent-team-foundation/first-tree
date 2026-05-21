@@ -6,7 +6,7 @@ This repository is in the middle of an intentional migration:
 
 - the old single-package main branch is now reference material
 - the active repo is a pnpm workspace
-- the public CLI is being reshaped around `tree`, `github scan`, and `hub`
+- the public CLI is being reshaped around `tree` and `github scan`
 - `gardener` is moving out of the CLI and into a shipped skill
 
 That means good contributions here do two things at once:
@@ -154,7 +154,7 @@ A typical minimal doc page update flow is:
 Helpful PRs for this repo usually include:
 
 - the user-facing or maintainer-facing problem being solved
-- the affected surface area (`tree`, `github scan`, `hub`, docs, packaging, or tests)
+- the affected surface area (`tree`, `github scan`, docs, packaging, or tests)
 - the validation commands you ran
 - any follow-up work that is still intentionally left out
 - the documentation impact (`apps/doc-website`, affected routes, and any

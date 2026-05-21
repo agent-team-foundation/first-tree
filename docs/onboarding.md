@@ -27,8 +27,8 @@ The restructured CLI is centered on three ideas:
 At the moment:
 
 - `tree inspect`, `tree status`, `tree bind`, `tree integrate`,
-  `tree workspace sync`, `tree verify`, `tree generate-codeowners`,
-  `tree install-claude-code-hook`, `tree inject-context`, `tree upgrade`, and
+  `tree workspace sync`, `tree verify`, `tree codeowners`,
+  `tree claude-hook`, `tree inject`, `tree upgrade`, and
   `tree review` are implemented
 - `tree help onboarding` prints the short in-CLI version of this guide
 - `tree init`, `tree bootstrap`, and `tree publish` are implemented

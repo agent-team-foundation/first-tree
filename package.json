@@ -22,11 +22,12 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "ci:check": "pnpm lint && pnpm typecheck && pnpm -r --workspace-concurrency=1 test",
+    "ci:check": "pnpm lint && pnpm check:no-old-names && pnpm typecheck && pnpm -r --workspace-concurrency=1 test",
     "typecheck": "tsc -b",
     "test": "pnpm -r test",
     "test:coverage": "pnpm -r test:coverage",
     "lint": "oxlint .",
+    "check:no-old-names": "bash scripts/check-no-old-names.sh",
     "fmt": "oxfmt . --write",
     "fmt:check": "oxfmt . --check",
     "precommit": "pnpm ci:check && pnpm lint-staged",

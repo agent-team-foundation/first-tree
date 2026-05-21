@@ -14,7 +14,6 @@ Describe the bug in one or two sentences.
 
 - `first-tree tree`
 - `first-tree github scan`
-- `first-tree hub`
 - docs
 - packaging or CI
 

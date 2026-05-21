@@ -12,12 +12,11 @@ const repoRoot = resolve(cliRoot, "../..");
 const entryPath = resolve(cliRoot, "dist/index.js");
 const rootPackagePath = resolve(repoRoot, "package.json");
 const cliPackagePath = resolve(cliRoot, "package.json");
-const commandNames = ["tree", "github", "hub"];
+const commandNames = ["tree", "github"];
 const rootHelpCommandPaths = [
   "first-tree tree inspect",
   "first-tree tree skill install",
   "first-tree github scan",
-  "first-tree hub start",
 ];
 const commandGroups = [
   {
@@ -27,10 +26,6 @@ const commandGroups = [
   {
     name: "github",
     subcommands: ["scan"],
-  },
-  {
-    name: "hub",
-    subcommands: ["start", "stop", "doctor", "status"],
   },
 ];
 
@@ -79,7 +74,7 @@ describe("first-tree CLI", () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: first-tree");
-    expect(result.stdout).toContain("CLI for Context Tree, GitHub Scan, and Hub workflows.");
+    expect(result.stdout).toContain("CLI for Context Tree and GitHub Scan workflows.");
     expect(result.stdout).toContain("--json");
     expect(result.stdout).toContain("-d, --debug");
     expect(result.stdout).toContain("-q, --quiet");
@@ -333,8 +328,8 @@ describe("first-tree CLI", () => {
       `---\ntitle: Alice\nowners: [alice]\ntype: human\nrole: owner\ndomains: [core]\n---\n\n# Alice\n`,
     );
 
-    const writeResult = await runCli(["tree", "generate-codeowners"], { cwd: treeRoot });
-    const checkResult = await runCli(["tree", "generate-codeowners", "--check"], { cwd: treeRoot });
+    const writeResult = await runCli(["tree", "codeowners"], { cwd: treeRoot });
+    const checkResult = await runCli(["tree", "codeowners", "--check"], { cwd: treeRoot });
 
     expect(writeResult.code).toBe(0);
     expect(writeResult.stderr).toBe("");
@@ -346,14 +341,14 @@ describe("first-tree CLI", () => {
 
   it("installs managed SessionStart hooks", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "first-tree-hooks-"));
-    const result = await runCli(["tree", "install-claude-code-hook", "--root", root]);
+    const result = await runCli(["tree", "claude-hook", "--root", root]);
 
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(".claude/settings.json");
     const claudeSettings = await readFile(resolve(root, ".claude", "settings.json"), "utf8");
     const codexHooks = await readFile(resolve(root, ".codex", "hooks.json"), "utf8");
-    expect(claudeSettings).toContain("first-tree tree inject-context");
+    expect(claudeSettings).toContain("first-tree tree inject");
     expect(claudeSettings).not.toContain("--skip-version-check");
     expect(await readFile(resolve(root, ".codex", "config.toml"), "utf8")).toContain(
       "codex_hooks = true",
@@ -362,11 +357,11 @@ describe("first-tree CLI", () => {
     expect(codexHooks).not.toContain("--skip-version-check");
   });
 
-  it("emits inject-context payload from a local tree repo", async () => {
+  it("emits tree inject payload from a local tree repo", async () => {
     const treeRoot = await makeGitRepoDir("first-tree-inject-tree-");
     await writeFile(resolve(treeRoot, "NODE.md"), "# Root\nbody\n");
 
-    const result = await runCli(["tree", "inject-context"], { cwd: treeRoot });
+    const result = await runCli(["tree", "inject"], { cwd: treeRoot });
 
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
@@ -528,22 +523,13 @@ describe("first-tree CLI", () => {
     expect(workspaceHelp.stdout).toContain("sync");
   });
 
-  it("fails hub placeholder commands with a not-implemented error", async () => {
-    const result = await runCli(["hub", "start"]);
-
-    expect(result.code).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("first-tree hub start is not implemented yet.");
-    expect(result.stderr).toContain("Usage: first-tree hub start");
-  });
-
   it("prints subcommand help after an invalid option", async () => {
-    const result = await runCli(["tree", "generate-codeowners", "--bad-option"]);
+    const result = await runCli(["tree", "codeowners", "--bad-option"]);
 
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("error: unknown option '--bad-option'");
-    expect(result.stderr).toContain("Usage: first-tree tree generate-codeowners");
+    expect(result.stderr).toContain("Usage: first-tree tree codeowners");
     expect(result.stderr).toContain("Options:");
   });
 

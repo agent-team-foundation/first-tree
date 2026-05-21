@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { generateCodeowners } from "../src/commands/tree/codeowners.js";
+import { generateCodeowners } from "../src/commands/tree/codeowners-lib.js";
 
 const tempDirs: string[] = [];
 

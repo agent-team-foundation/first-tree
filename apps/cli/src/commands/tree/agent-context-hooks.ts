@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 export const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
 export const CODEX_CONFIG_PATH = ".codex/config.toml";
 export const CODEX_HOOKS_PATH = ".codex/hooks.json";
-export const INJECT_CONTEXT_COMMAND = "npx -p first-tree first-tree tree inject-context";
+export const INJECT_CONTEXT_COMMAND = "npx -p first-tree first-tree tree inject";
 
 const CODEX_SESSION_START_MATCHER = "startup|resume";
 const CODEX_SESSION_START_STATUS = "Loading First Tree context";
@@ -16,6 +16,15 @@ const STALE_INJECT_CONTEXT_PATTERNS = [
   /\.context-tree\/helpers\/inject-tree-context\.sh/gu,
   /\.context-tree\/scripts\/inject-tree-context\.sh/gu,
   /\.scripts\/inject-tree-context\.sh/gu,
+] as const;
+
+// v0.4.x literals — `tree inject-context` was renamed to `tree inject` in
+// Phase 1B. When `tree claude-hook` runs on a host that still has the old
+// literal in its managed hook configs, rewrite it in place so existing users
+// get an idempotent upgrade path.
+const LEGACY_INJECT_CONTEXT_COMMAND_PATTERNS = [
+  /npx -p first-tree first-tree tree inject-context\b/gu,
+  /first-tree tree inject-context\b/gu,
 ] as const;
 
 export type AgentConfigAction = "created" | "updated" | "unchanged";
@@ -84,9 +93,10 @@ function buildClaudeSettingsDocument(current: string | null): string {
   const root = readJsonObject(current);
   const hooks = cloneObject(root.hooks);
   const sessionStart = Array.isArray(hooks.SessionStart) ? hooks.SessionStart : [];
+  const migrated = rewriteLegacyInjectContextCommand(sessionStart);
 
   hooks.SessionStart = [
-    ...stripManagedHooks(sessionStart, isClaudeManagedHook),
+    ...stripManagedHooks(migrated, isClaudeManagedHook),
     {
       hooks: [
         {
@@ -144,9 +154,10 @@ function buildCodexHooksDocument(current: string | null): string {
   const root = readJsonObject(current);
   const hooks = cloneObject(root.hooks);
   const sessionStart = Array.isArray(hooks.SessionStart) ? hooks.SessionStart : [];
+  const migrated = rewriteLegacyInjectContextCommand(sessionStart);
 
   hooks.SessionStart = [
-    ...stripManagedHooks(sessionStart, isCodexManagedHook),
+    ...stripManagedHooks(migrated, isCodexManagedHook),
     {
       matcher: CODEX_SESSION_START_MATCHER,
       hooks: [
@@ -161,6 +172,33 @@ function buildCodexHooksDocument(current: string | null): string {
 
   root.hooks = hooks;
   return `${JSON.stringify(root, null, 2)}\n`;
+}
+
+function rewriteLegacyInjectContextCommand(groups: unknown[]): unknown[] {
+  return groups.map((group) => {
+    if (!isObject(group) || !Array.isArray(group.hooks)) {
+      return group;
+    }
+
+    const rewrittenHooks = group.hooks.map((hook) => {
+      if (!isObject(hook) || hook.type !== "command" || typeof hook.command !== "string") {
+        return hook;
+      }
+
+      const next = rewriteLegacyCommandString(hook.command);
+      return next === hook.command ? hook : { ...hook, command: next };
+    });
+
+    return { ...group, hooks: rewrittenHooks };
+  });
+}
+
+function rewriteLegacyCommandString(command: string): string {
+  let result = command;
+  for (const pattern of LEGACY_INJECT_CONTEXT_COMMAND_PATTERNS) {
+    result = result.replace(pattern, INJECT_CONTEXT_COMMAND);
+  }
+  return result;
 }
 
 function stripManagedHooks(

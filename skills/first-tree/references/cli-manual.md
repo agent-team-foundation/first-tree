@@ -1,6 +1,6 @@
 # CLI Manual
 
-This repo currently exposes three top-level CLI groups.
+This repo currently exposes two top-level CLI groups.
 
 ## `first-tree tree`
 
@@ -13,8 +13,8 @@ Use for tree lifecycle work:
 
 Current implementation status: the tree lifecycle surface is live in this repo,
 including `inspect`, `status`, `init`, `bootstrap`, `bind`, `integrate`,
-`workspace sync`, `verify`, `upgrade`, `publish`, `generate-codeowners`,
-`install-claude-code-hook`, `inject-context`, `review`, and `tree skill ...`.
+`workspace sync`, `verify`, `upgrade`, `publish`, `codeowners`,
+`claude-hook`, `inject`, `review`, and `tree skill ...`.
 
 ## `first-tree github scan`
 
@@ -30,8 +30,3 @@ This runtime is implemented in the current repo and now points agents at the
 shipped `first-tree`, `first-tree-github-scan`, `first-tree-sync`, and
 `first-tree-write` skills. For human/operator daemon work, load the shipped
 `github-scan` operational skill.
-
-## `first-tree hub`
-
-Reserved namespace for future hosted or local Hub integration. The command
-names exist, but they currently exit non-zero with a not-implemented error.

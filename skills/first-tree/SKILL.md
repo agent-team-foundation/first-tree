@@ -3,7 +3,7 @@ name: first-tree
 version: 0.4.0-alpha.1
 cliCompat:
   first-tree: ">=0.4.0 <0.5.0"
-description: Canonical whitepaper and routing skill for First Tree. Explains what belongs in a Context Tree, how source or workspace roots, tree repos, and bindings relate, and how the current `first-tree tree`, `first-tree hub`, and `first-tree github scan` surfaces fit together. Use when you need shared First Tree concepts, need to choose between onboarding, sync, write, or GitHub notification workflows, or need the high-level CLI map before acting.
+description: Canonical whitepaper and routing skill for First Tree. Explains what belongs in a Context Tree, how source or workspace roots, tree repos, and bindings relate, and how the current `first-tree tree` and `first-tree github scan` surfaces fit together. Use when you need shared First Tree concepts, need to choose between onboarding, sync, write, or GitHub notification workflows, or need the high-level CLI map before acting.
 ---
 
 # First Tree
@@ -40,7 +40,6 @@ The current public CLI surface is:
 
 - `first-tree tree` — tree lifecycle, bindings, validation, publish, and skill maintenance
 - `first-tree github scan` — GitHub inbox runtime and daemon operations
-- `first-tree hub` — reserved namespace for future Hub integration
 
 Do not invent new top-level CLI groups when acting on the current repo. If a
 workflow needs more automation than the CLI already offers, keep the orchestration

@@ -5,12 +5,12 @@ import { registerCommandGroup, registerSubcommands } from "../groups.js";
 import { automationSubcommands } from "./automation.js";
 import { bindCommand } from "./bind.js";
 import { bootstrapCommand } from "./bootstrap.js";
-import { generateCodeownersCommand } from "./generate-codeowners.js";
+import { claudeHookCommand } from "./claude-hook.js";
+import { codeownersCommand } from "./codeowners.js";
+import { injectCommand } from "./inject.js";
 import { inspectCommand } from "./inspect.js";
-import { injectContextCommand } from "./inject-context.js";
 import { initCommand } from "./init.js";
 import { integrateCommand } from "./integrate.js";
-import { installClaudeCodeHookCommand } from "./install-claude-code-hook.js";
 import { publishCommand } from "./publish.js";
 import { reviewCommand } from "./review.js";
 import { skillSubcommands } from "./skill.js";
@@ -44,9 +44,9 @@ const treeSubcommands: SubcommandModule[] = [
   verifyCommand,
   upgradeCommand,
   publishCommand,
-  generateCodeownersCommand,
-  installClaudeCodeHookCommand,
-  injectContextCommand,
+  codeownersCommand,
+  claudeHookCommand,
+  injectCommand,
   reviewCommand,
 ];
 

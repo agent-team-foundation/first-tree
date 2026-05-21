@@ -69,7 +69,7 @@ export function createProgram(version = readPackageVersion()): Command {
 
   program
     .name("first-tree")
-    .description("CLI for Context Tree, GitHub Scan, and Hub workflows.")
+    .description("CLI for Context Tree and GitHub Scan workflows.")
     .version(version)
     .option("--json", "output in json format")
     .option("-d, --debug", "Show debugging output.")

@@ -1,7 +1,7 @@
 {
   "name": "first-tree",
   "version": "0.4.0-alpha.1",
-  "description": "CLI for Context Tree onboarding, GitHub Scan automation, and hub workflows.",
+  "description": "CLI for Context Tree onboarding and GitHub Scan automation.",
   "keywords": [
     "agents",
     "cli",

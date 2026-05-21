@@ -3,10 +3,9 @@
 This workspace follows the proposal in
 `first-tree-context/proposals/first-tree-cli-restructure.20260501.md`.
 
-The proposal reshapes the public CLI around three namespaces:
+The proposal reshapes the public CLI around two namespaces:
 
 - `first-tree tree`
-- `first-tree hub`
 - `first-tree github`
 
 Inside `github`, the first command group is `scan`, which takes over the old
@@ -22,18 +21,17 @@ GitHub inbox / automation runtime previously described as `breeze`.
 
 ## Current Workspace Status
 
-| Surface                                                                    | Current state                                                                                                                     |
-| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `tree inspect` / `tree status`                                             | implemented in `apps/cli`                                                                                                         |
-| `tree help onboarding`                                                     | implemented as the current onboarding narrative                                                                                   |
-| `tree bind` / `integrate` / `workspace sync` / `verify`                    | implemented in `apps/cli`                                                                                                         |
-| `tree generate-codeowners` / `install-claude-code-hook` / `inject-context` | implemented in `apps/cli`                                                                                                         |
-| `tree init` / `bootstrap` / `publish`                                      | implemented in `apps/cli`                                                                                                         |
-| `tree upgrade` / `review`                                                  | implemented in `apps/cli`                                                                                                         |
-| `tree skill ...`                                                           | implemented for install, upgrade, list, doctor, and link against the canonical shipped `skills/` payloads                         |
-| `github scan ...`                                                          | implemented by wiring the public CLI to `packages/github-scan`, with runner prompts now pointing at the shipped First Tree skills |
-| `hub ...`                                                                  | stub namespace only                                                                                                               |
-| `first-tree-sync` / `first-tree-write`                                     | canonical gardener-logic replacement skills are now the target shape                                                              |
+| Surface                                                 | Current state                                                                                                                     |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `tree inspect` / `tree status`                          | implemented in `apps/cli`                                                                                                         |
+| `tree help onboarding`                                  | implemented as the current onboarding narrative                                                                                   |
+| `tree bind` / `integrate` / `workspace sync` / `verify` | implemented in `apps/cli`                                                                                                         |
+| `tree codeowners` / `claude-hook` / `inject`            | implemented in `apps/cli`                                                                                                         |
+| `tree init` / `bootstrap` / `publish`                   | implemented in `apps/cli`                                                                                                         |
+| `tree upgrade` / `review`                               | implemented in `apps/cli`                                                                                                         |
+| `tree skill ...`                                        | implemented for install, upgrade, list, doctor, and link against the canonical shipped `skills/` payloads                         |
+| `github scan ...`                                       | implemented by wiring the public CLI to `packages/github-scan`, with runner prompts now pointing at the shipped First Tree skills |
+| `first-tree-sync` / `first-tree-write`                  | canonical gardener-logic replacement skills are now the target shape                                                              |
 
 ## GitHub Scan Binding Contract
 
@@ -74,7 +72,6 @@ The biggest gaps between this workspace and the historical main branch are:
 
 1. land the remaining tree adoption sweep and release-note updates around the 20260501 proposal
 2. deepen the sync/write runtime beyond prompt-level routing into richer tree-task orchestration as the new skills mature
-3. implement the reserved `hub` namespace once Hub behavior is defined
 
 ## Contributor Rule Of Thumb
 

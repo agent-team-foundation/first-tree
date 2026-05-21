@@ -3,11 +3,11 @@ import type { Command } from "commander";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { ensureAgentContextHooks, formatAgentContextHookMessages } from "./agent-context-hooks.js";
 
-function configureInstallClaudeCodeHookCommand(command: Command): void {
+function configureClaudeHookCommand(command: Command): void {
   command.option("--root <path>", "operate on a different root (default: cwd)");
 }
 
-export function runInstallClaudeCodeHookCommand(context: CommandContext): void {
+export function runClaudeHookCommand(context: CommandContext): void {
   const options = context.command.opts() as { root?: string };
   const targetRoot = options.root ?? process.cwd();
   const result = ensureAgentContextHooks(targetRoot);
@@ -28,11 +28,11 @@ export function runInstallClaudeCodeHookCommand(context: CommandContext): void {
   }
 }
 
-export const installClaudeCodeHookCommand: SubcommandModule = {
-  name: "install-claude-code-hook",
+export const claudeHookCommand: SubcommandModule = {
+  name: "claude-hook",
   alias: "",
   summary: "",
   description: "Install the Claude Code hook for first-tree workflows.",
-  configure: configureInstallClaudeCodeHookCommand,
-  action: runInstallClaudeCodeHookCommand,
+  configure: configureClaudeHookCommand,
+  action: runClaudeHookCommand,
 };

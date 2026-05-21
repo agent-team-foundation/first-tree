@@ -18,7 +18,6 @@ Describe the change you want to see.
 
 - `first-tree tree`
 - `first-tree github scan`
-- `first-tree hub`
 - skill topology
 - docs or onboarding
 - packaging or CI

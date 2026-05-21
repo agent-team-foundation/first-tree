@@ -12,6 +12,16 @@ permissions:
   contents: read
 
 jobs:
+  grep-old-names:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Forbid legacy CLI names
+        run: bash scripts/check-no-old-names.sh
+
   ci-check:
     runs-on: ubuntu-latest
 

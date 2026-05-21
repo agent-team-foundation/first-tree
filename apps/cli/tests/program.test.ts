@@ -44,28 +44,6 @@ afterEach(() => {
   runGitHubScanMock.mockResolvedValue(0);
 });
 
-const hubCommandMessages: Array<{
-  args: string[];
-  message: string;
-}> = [
-  {
-    args: ["hub", "start"],
-    message: "first-tree hub start is not implemented yet.",
-  },
-  {
-    args: ["hub", "stop"],
-    message: "first-tree hub stop is not implemented yet.",
-  },
-  {
-    args: ["hub", "doctor"],
-    message: "first-tree hub doctor is not implemented yet.",
-  },
-  {
-    args: ["hub", "status"],
-    message: "first-tree hub status is not implemented yet.",
-  },
-];
-
 async function runConfiguredProgram(program: Command, args: string[]): Promise<ProgramRunResult> {
   let stdout = "";
   let stderr = "";
@@ -175,7 +153,7 @@ describe("first-tree program", () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: first-tree");
-    expect(result.stdout).toContain("CLI for Context Tree, GitHub Scan, and Hub workflows.");
+    expect(result.stdout).toContain("CLI for Context Tree and GitHub Scan workflows.");
     expect(result.stdout).toContain("--json");
     expect(result.stdout).toContain("-d, --debug");
     expect(result.stdout).toContain("-q, --quiet");
@@ -183,7 +161,6 @@ describe("first-tree program", () => {
     expect(result.stdout).toContain("first-tree tree inspect");
     expect(result.stdout).toContain("first-tree tree skill install");
     expect(result.stdout).toContain("first-tree github scan");
-    expect(result.stdout).toContain("first-tree hub start");
   });
 
   it("omits the all-commands appendix when no commands are registered", async () => {
@@ -337,17 +314,6 @@ describe("first-tree program", () => {
     });
   });
 
-  for (const { args, message } of hubCommandMessages) {
-    it(`fails ${args.join(" ")} in process`, async () => {
-      const result = await runProgram(args, "0.0.0-test");
-
-      expect(result.code).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(message);
-      expect(result.stderr).toContain("Usage: first-tree hub");
-    });
-  }
-
   it("reports a missing shared tree for workspace sync in process", async () => {
     const root = makeTempDir();
     mkdirSync(join(root, "repo-a"));
@@ -382,7 +348,7 @@ describe("first-tree program", () => {
     process.chdir(root);
 
     try {
-      const result = await runProgram(["tree", "install-claude-code-hook"], "0.0.0-test");
+      const result = await runProgram(["tree", "claude-hook"], "0.0.0-test");
 
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
@@ -413,7 +379,7 @@ describe("first-tree program", () => {
     process.chdir(root);
 
     try {
-      const result = await runProgram(["tree", "generate-codeowners"], "0.0.0-test");
+      const result = await runProgram(["tree", "codeowners"], "0.0.0-test");
 
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
@@ -424,7 +390,7 @@ describe("first-tree program", () => {
     }
   });
 
-  it("emits inject-context payload in process", async () => {
+  it("emits tree inject payload in process", async () => {
     const root = makeTempDir();
     writeFileSync(join(root, "NODE.md"), "# Root\nbody\n");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -432,7 +398,7 @@ describe("first-tree program", () => {
     process.chdir(root);
 
     try {
-      const result = await runProgram(["tree", "inject-context"], "0.0.0-test");
+      const result = await runProgram(["tree", "inject"], "0.0.0-test");
 
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
@@ -453,10 +419,7 @@ describe("first-tree program", () => {
     process.chdir(root);
 
     try {
-      const result = await runProgram(
-        ["tree", "inject-context", "--skip-version-check"],
-        "0.0.0-test",
-      );
+      const result = await runProgram(["tree", "inject", "--skip-version-check"], "0.0.0-test");
 
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
