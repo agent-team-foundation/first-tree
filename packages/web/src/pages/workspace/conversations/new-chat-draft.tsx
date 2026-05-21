@@ -1,9 +1,10 @@
 import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Plus, X } from "lucide-react";
+import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
-import { sendChatMessage } from "../../../api/chats.js";
+import { readFileAsBase64, sendChatMessage, sendFileMessage } from "../../../api/chats.js";
+import { putImage } from "../../../api/image-store.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
+import { type PendingImage, usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
 
 /**
@@ -39,8 +41,17 @@ import { cn } from "../../../lib/utils.js";
  *     in the room". This unifies entry points without making them
  *     mutually exclusive.
  *
- * On send: createMeChat({participantIds: chips}) → sendChatMessage with
- * the verbatim body. Empty body with at least one chip is allowed.
+ *   - Images attach via the Paperclip button, drag-drop, or paste —
+ *     staged through `usePendingImages` (shared with the in-chat
+ *     composer). Bytes are read and uploaded only on send, after the
+ *     chat exists. An image-only send (empty body) is allowed; a group
+ *     (2+ chips) still needs an `@` in the body so the server's per-
+ *     message mention guard accepts the file send.
+ *
+ * On send: createMeChat({participantIds: chips ∪ body @s}) → for each
+ * staged image putImage(IndexedDB) + sendFileMessage → sendChatMessage
+ * with the verbatim body. Empty body is allowed when there's ≥1 chip and
+ * (a non-empty body or ≥1 image).
  */
 
 export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => void }) {
@@ -57,6 +68,15 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seededDefaultRef = useRef(false);
   const pickerContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Image staging shared with the in-chat composer (same image/* + 5 MB
+  // rules and object-URL lifecycle). Bytes are read and uploaded only on
+  // send, after the chat is created — see `createMut` below.
+  const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
+    onError: setError,
+    onChange: () => setError(null),
+  });
 
   // Auto-grow the textarea up to the CSS `max-height` cap (10.5rem ≈ 8
   // visible lines). Re-measure on every keystroke so paste and delete
@@ -148,17 +168,55 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   }, [pickerOpen]);
 
   const createMut = useMutation({
-    mutationFn: async ({ participantIds, text }: { participantIds: string[]; text: string }) => {
+    mutationFn: async ({
+      participantIds,
+      text,
+      images,
+      mentions,
+    }: {
+      participantIds: string[];
+      text: string;
+      images: PendingImage[];
+      mentions: string[];
+    }) => {
       const created = await createMeChat({ participantIds });
+      const chatId = created.chatId;
+      // Send images first (mirrors the in-chat composer ordering), then the
+      // text body, so the new chat opens with attachments above the message.
+      if (images.length > 0) {
+        // Carry the @-mentions onto each image message so the server's
+        // group-chat mention guard accepts file-format sends (issue 387).
+        // Single-chip (direct) chats have no mentions and skip the check.
+        const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
+        for (const img of images) {
+          const data = await readFileAsBase64(img.file);
+          const imageId = crypto.randomUUID();
+          // Write to IndexedDB before the POST so the sending tab can render
+          // the image from its imageRef immediately on refetch.
+          await putImage({ imageId, base64: data, mimeType: img.file.type });
+          await sendFileMessage(
+            chatId,
+            {
+              data,
+              mimeType: img.file.type,
+              filename: img.file.name,
+              size: img.file.size,
+              imageId,
+            },
+            imageMetadata,
+          );
+        }
+      }
       const trimmed = text.trim();
       if (trimmed.length > 0) {
-        await sendChatMessage(created.chatId, trimmed);
+        await sendChatMessage(chatId, trimmed);
       }
-      return created.chatId;
+      return chatId;
     },
     onSuccess: (chatId) => {
       setDraft("");
       setChips([]);
+      clearImages();
       seededDefaultRef.current = false;
       queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       onCreated(chatId);
@@ -171,19 +229,23 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   const canSend = useMemo(() => {
     if (sending || createMut.isPending) return false;
     if (chips.length === 0) return false;
-    if (draft.trim().length === 0) return false;
+    // Body OR at least one image — image-only sends are allowed (mirrors the
+    // in-chat composer's "text non-empty or has image" rule).
+    if (draft.trim().length === 0 && pendingImages.length === 0) return false;
+    // Groups still need an @ even for image-only sends: the server's
+    // group-chat mention guard runs per message regardless of format.
     if (chips.length >= 2 && bodyMentions.length === 0) return false;
     return true;
-  }, [sending, createMut.isPending, chips.length, draft, bodyMentions.length]);
+  }, [sending, createMut.isPending, chips.length, draft, bodyMentions.length, pendingImages.length]);
 
   const sendBlockedReason = useMemo(() => {
     if (chips.length === 0) return "Add at least one participant";
-    if (draft.trim().length === 0) return null;
+    if (draft.trim().length === 0 && pendingImages.length === 0) return null;
     if (chips.length >= 2 && bodyMentions.length === 0) {
       return "Group chats need an @ to wake at least one participant";
     }
     return null;
-  }, [chips.length, draft, bodyMentions.length]);
+  }, [chips.length, draft, bodyMentions.length, pendingImages.length]);
 
   const handleSend = async (): Promise<void> => {
     if (!canSend) return;
@@ -199,7 +261,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     setError(null);
     setSending(true);
     try {
-      await createMut.mutateAsync({ participantIds, text: draft });
+      await createMut.mutateAsync({ participantIds, text: draft, images: pendingImages, mentions: bodyMentions });
     } finally {
       setSending(false);
     }
@@ -222,12 +284,18 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
             What's the task?
           </p>
 
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
           <div
             style={{
               borderRadius: 10,
               background: "var(--bg-raised)",
               boxShadow: "var(--shadow-md)",
               overflow: "visible",
+            }}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              addImages(Array.from(e.dataTransfer.files));
             }}
           >
             <ParticipantChips
@@ -240,6 +308,55 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
               onAdd={addChip}
               onRemove={removeChip}
             />
+            {/* Image preview row — between the chip row and the textarea. */}
+            {pendingImages.length > 0 && (
+              <div
+                className="flex items-center"
+                style={{ gap: 6, padding: "0 var(--sp-2_5) var(--sp-1)", overflowX: "auto" }}
+              >
+                {pendingImages.map((img) => (
+                  <div
+                    key={img.id}
+                    style={{
+                      position: "relative",
+                      flexShrink: 0,
+                      borderRadius: 4,
+                      border: "var(--hairline) solid var(--border)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <img
+                      src={img.previewUrl}
+                      alt={img.file.name}
+                      style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(img.id)}
+                      title="Remove image"
+                      style={{
+                        position: "absolute",
+                        top: 1,
+                        right: 1,
+                        width: 14,
+                        height: 14,
+                        borderRadius: "50%",
+                        background: "var(--color-overlay-scrim)",
+                        border: "none",
+                        color: "var(--bg-raised)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        padding: 0,
+                      }}
+                    >
+                      <X className="h-2 w-2" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div style={{ position: "relative" }}>
               <MentionAutocompletePopover
                 trigger={mention.trigger}
@@ -257,6 +374,13 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                 }}
                 onSelect={(e) => {
                   setCursor(e.currentTarget.selectionStart ?? draft.length);
+                }}
+                onPaste={(e) => {
+                  const files = Array.from(e.clipboardData.files);
+                  if (files.length > 0) {
+                    e.preventDefault();
+                    addImages(files);
+                  }
                 }}
                 placeholder={
                   chips.length >= 2 ? "Describe the task. Use @ to address one or more." : "Describe the task…"
@@ -313,28 +437,67 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                 </div>
               )}
             </div>
-            <div className="flex items-center justify-end" style={{ padding: "var(--sp-1_5) var(--sp-2_5)" }}>
-              <button
-                type="button"
-                onClick={() => void handleSend()}
-                disabled={!canSend}
-                title={sendBlockedReason ?? "Send (Enter)"}
-                aria-label="Send"
-                className={cn(
-                  "inline-flex items-center justify-center transition-opacity",
-                  !canSend && "opacity-40 cursor-not-allowed",
+            <div className="flex items-center justify-between" style={{ padding: "var(--sp-1_5) var(--sp-2_5)" }}>
+              <span className="flex items-center" style={{ gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={sending || createMut.isPending}
+                  title="Attach image"
+                  aria-label="Attach image"
+                  className="inline-flex items-center"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    cursor: sending || createMut.isPending ? "not-allowed" : "pointer",
+                    color: "var(--fg-3)",
+                    padding: 0,
+                  }}
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      addImages(Array.from(e.target.files));
+                      e.target.value = "";
+                    }
+                  }}
+                />
+              </span>
+              <span className="flex items-center" style={{ gap: 8 }}>
+                {sending && pendingImages.length > 0 && (
+                  <span className="mono text-caption" style={{ color: "var(--accent)" }}>
+                    uploading…
+                  </span>
                 )}
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: "var(--radius-input)",
-                  background: "var(--fg)",
-                  color: "var(--bg-raised)",
-                  border: "none",
-                }}
-              >
-                <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSend()}
+                  disabled={!canSend}
+                  title={sendBlockedReason ?? "Send (Enter)"}
+                  aria-label="Send"
+                  className={cn(
+                    "inline-flex items-center justify-center transition-opacity",
+                    !canSend && "opacity-40 cursor-not-allowed",
+                  )}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: "var(--radius-input)",
+                    background: "var(--fg)",
+                    color: "var(--bg-raised)",
+                    border: "none",
+                  }}
+                >
+                  <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                </button>
+              </span>
             </div>
           </div>
 
