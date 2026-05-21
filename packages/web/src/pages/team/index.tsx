@@ -1,5 +1,5 @@
-import type { Agent, RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
-import { MEMBER_ROLES } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent, RuntimeProvider } from "@first-tree/shared";
+import { MEMBER_ROLES } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, UserPlus } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";

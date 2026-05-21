@@ -6,7 +6,7 @@ import {
   type ClientCapabilities,
   isReservedAgentName,
   type RuntimeProvider,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
@@ -66,7 +66,7 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  */
 
 // Runtime selection sources its values from `RuntimeProvider`; new providers
-// extend the union in `@agent-team-foundation/first-tree-hub-shared` and the
+// extend the union in `@first-tree/shared` and the
 // dialog picks them up automatically.
 
 /**

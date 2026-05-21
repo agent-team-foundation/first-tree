@@ -1,7 +1,4 @@
-import type {
-  QuestionAnswerMessageContent,
-  QuestionMessageContent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { QuestionAnswerMessageContent, QuestionMessageContent } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";

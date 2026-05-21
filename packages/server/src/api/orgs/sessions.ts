@@ -1,4 +1,4 @@
-import { paginationQuerySchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { paginationQuerySchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireOrgMembership } from "../../scope/require-org.js";

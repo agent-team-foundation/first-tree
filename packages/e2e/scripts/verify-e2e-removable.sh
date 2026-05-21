@@ -121,7 +121,7 @@ echo "→  pnpm build …"
 pnpm build >/dev/null
 
 echo "→  capturing baseline CLI tarball hash (packages/e2e ABSENT)…"
-BASELINE_HASH=$(find packages/command/dist -type f -name '*.mjs' -print0 |
+BASELINE_HASH=$(find apps/cli/dist -type f -name '*.mjs' -print0 |
   LC_ALL=C sort -z |
   xargs -0 shasum -a 256 |
   shasum -a 256 |
@@ -140,7 +140,7 @@ echo "→  pnpm build …"
 pnpm build >/dev/null
 
 echo "→  capturing with-e2e CLI tarball hash…"
-WITH_E2E_HASH=$(find packages/command/dist -type f -name '*.mjs' -print0 |
+WITH_E2E_HASH=$(find apps/cli/dist -type f -name '*.mjs' -print0 |
   LC_ALL=C sort -z |
   xargs -0 shasum -a 256 |
   shasum -a 256 |

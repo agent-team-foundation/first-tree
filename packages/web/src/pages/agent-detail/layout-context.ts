@@ -1,9 +1,4 @@
-import type {
-  Agent,
-  AgentRuntimeConfig,
-  RuntimeProvider,
-  UpdateAgent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent, AgentRuntimeConfig, RuntimeProvider, UpdateAgent } from "@first-tree/shared";
 import { useOutletContext } from "react-router";
 import type { ClientStatusInfo } from "../../api/agent-config.js";
 import type { UseConfigDraftResult } from "./use-config-draft.js";

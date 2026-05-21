@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { ToolCallEventPayload } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ToolCallEventPayload } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";

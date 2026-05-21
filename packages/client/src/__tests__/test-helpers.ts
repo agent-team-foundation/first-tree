@@ -1,4 +1,4 @@
-import type { InboxEntryWithMessage, PrecedingMessage } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage, PrecedingMessage } from "@first-tree/shared";
 import type { SessionMessage } from "../runtime/handler.js";
 
 /**

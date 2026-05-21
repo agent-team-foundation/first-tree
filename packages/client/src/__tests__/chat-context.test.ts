@@ -1,4 +1,4 @@
-import type { ChatDetail, ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatDetail, ChatParticipantDetail } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import { fetchChatContext } from "../runtime/chat-context.js";
 import { renderChatContextSection } from "../runtime/chat-context-section.js";

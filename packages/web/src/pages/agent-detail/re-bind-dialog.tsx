@@ -4,7 +4,7 @@ import {
   type ClientCapabilities,
   RUNTIME_PROVIDERS,
   type RuntimeProvider,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { type ClientWithCapabilities, getClientCapabilities, type HubClient, listClients } from "../../api/activity.js";

@@ -8,7 +8,7 @@ import {
   parseLogLevel,
   redactUrl,
   SKIP_KEYS,
-} from "@agent-team-foundation/first-tree-hub-shared/observability";
+} from "@first-tree/shared/observability";
 import pino from "pino";
 
 // ─── Config (late-initialized) ────────────────────────────────────────

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { ContextTreeChange, ContextTreeNode } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ContextTreeChange, ContextTreeNode } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { contextTreeSnapshotTestInternals, getContextTreeSnapshot } from "../services/context-tree-snapshot.js";
 

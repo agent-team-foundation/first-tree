@@ -10,7 +10,7 @@ import {
   type SnapshotDoc,
   scanBareDocPathTokens,
   stripDocPathLineSuffix,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 
 /**
  * Scan an outbound agent message for `.md` path mentions (inline markdown

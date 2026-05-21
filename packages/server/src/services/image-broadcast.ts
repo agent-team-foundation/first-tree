@@ -4,7 +4,7 @@ import {
   type ImageRefContent,
   imageInlineContentSchema,
   type SendMessage,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";

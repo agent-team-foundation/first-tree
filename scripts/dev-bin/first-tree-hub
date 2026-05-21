@@ -8,4 +8,4 @@
 # parent env so the hub-dev isolation set up by dev-cli.sh stays intact.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-exec node "$REPO_ROOT/packages/command/dist/cli/index.mjs" "$@"
+exec node "$REPO_ROOT/apps/cli/dist/cli/index.mjs" "$@"

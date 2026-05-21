@@ -4,7 +4,7 @@ import {
   MAX_DOC_SNAPSHOT_BYTES,
   MAX_TOTAL_DOC_SNAPSHOT_BYTES,
   parseWorkspaceDocKey,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { BadRequestError } from "../errors.js";
 
 /**

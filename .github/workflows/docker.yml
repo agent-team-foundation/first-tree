@@ -48,13 +48,13 @@ jobs:
       # Pass the in-tree Command-package version as a Docker build-arg.
       # Server uses it as the bootstrap value for `serverCommandVersion`
       # before the npm-registry poller starts — see Dockerfile's
-      # `ARG COMMAND_VERSION` block. Reading from `packages/command/package.json`
+      # `ARG COMMAND_VERSION` block. Reading from `apps/cli/package.json`
       # keeps the image's bootstrap version in lockstep with whichever
       # stable CLI commit the image was built from.
       - name: Resolve Command-package version
         id: command-version
         run: |
-          VERSION=$(node -p "require('./packages/command/package.json').version")
+          VERSION=$(node -p "require('./apps/cli/package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved Command version: $VERSION"
 

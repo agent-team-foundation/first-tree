@@ -1,4 +1,4 @@
-# `@first-tree-hub/e2e` — cross-process E2E framework
+# `@first-tree/e2e` — cross-process E2E framework
 
 Real-process E2E for Hub: each run boots a fresh PostgreSQL (Docker), spawns
 the built server and the unified CLI as **separate Node processes**, and
@@ -46,10 +46,10 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
    / build` still pass, and asserts the CLI tarball hash is identical with or
    without the package. Run before every e2e-touching PR merges.
 3. **No reverse imports.** Source files under `packages/{server,client,command,
-   web,shared}` must never `import "@first-tree-hub/e2e"`. The e2e package
+   web,shared}` must never `import "@first-tree/e2e"`. The e2e package
    may only reach the rest of the monorepo via spawned dist binaries or via
    HTTP / WS — never by importing source symbols. (Type-only imports from
-   `@agent-team-foundation/first-tree-hub-shared` are fine.)
+   `@first-tree/shared` are fine.)
 
 ## Local prerequisites
 
@@ -60,7 +60,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
 - Built dist for server + CLI:
 
   ```bash
-  pnpm --filter @first-tree-hub/server build
+  pnpm --filter @first-tree/server build
   pnpm --filter @agent-team-foundation/first-tree-hub build
   ```
 

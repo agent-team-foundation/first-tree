@@ -10,7 +10,7 @@
  * Honeycomb (e.g. `inbox.entry.id = "..."`) reconstructs the journey.
  */
 
-import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { FIRST_TREE_HUB_ATTR } from "@first-tree/shared/observability";
 
 type Attrs = Record<string, unknown>;
 

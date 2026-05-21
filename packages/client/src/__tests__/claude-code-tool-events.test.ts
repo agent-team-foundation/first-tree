@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionEvent } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createToolCallProcessor, treeNodePathOf } from "../handlers/claude-code.js";
 

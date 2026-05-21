@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { REPO_ROOT } from "../env.js";
 
-const CLI_ENTRY = resolve(REPO_ROOT, "packages/command/dist/cli/index.mjs");
+const CLI_ENTRY = resolve(REPO_ROOT, "apps/cli/dist/cli/index.mjs");
 
 export type CliEnvOptions = {
   /** Per-CLI FIRST_TREE_HUB_HOME, where credentials.json / client.yaml live. */

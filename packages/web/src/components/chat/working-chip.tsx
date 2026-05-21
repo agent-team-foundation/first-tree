@@ -19,7 +19,7 @@
  * slot) still reads as the primary actionable target.
  */
 
-import type { LiveActivity } from "@agent-team-foundation/first-tree-hub-shared";
+import type { LiveActivity } from "@first-tree/shared";
 import { useEffect, useState } from "react";
 
 const TICK_INTERVAL_MS = 1000;

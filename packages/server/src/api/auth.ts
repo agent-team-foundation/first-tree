@@ -1,8 +1,4 @@
-import {
-  connectTokenExchangeSchema,
-  loginSchema,
-  refreshTokenSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { connectTokenExchangeSchema, loginSchema, refreshTokenSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import * as authService from "../services/auth.js";
 

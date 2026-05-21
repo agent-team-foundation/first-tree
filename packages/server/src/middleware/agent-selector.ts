@@ -1,4 +1,4 @@
-import { AGENT_SELECTOR_HEADER } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";

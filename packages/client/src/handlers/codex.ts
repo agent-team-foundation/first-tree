@@ -1,10 +1,6 @@
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import {
-  type AgentRuntimeConfigPayload,
-  deriveRepoLocalPath,
-  type SessionEvent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { type AgentRuntimeConfigPayload, deriveRepoLocalPath, type SessionEvent } from "@first-tree/shared";
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER, installFirstTreeIntegration } from "../runtime/bootstrap.js";

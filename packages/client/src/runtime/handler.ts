@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionEvent } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 

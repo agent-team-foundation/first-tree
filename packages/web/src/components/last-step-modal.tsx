@@ -1,4 +1,4 @@
-import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";

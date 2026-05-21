@@ -4,7 +4,7 @@ import {
   type RuntimeProvider,
   type UpdateAttempt,
   updateAttemptSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";

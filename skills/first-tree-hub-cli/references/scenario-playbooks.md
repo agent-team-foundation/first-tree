@@ -268,10 +268,10 @@ Use this when the task is a code change, not an operation.
 
 ### Flow
 
-1. Find the matching command handler under `packages/command/src/commands/`.
-2. Move reusable logic into `packages/command/src/core/`.
+1. Find the matching command handler under `apps/cli/src/commands/`.
+2. Move reusable logic into `apps/cli/src/core/`.
 3. If flags / env vars / schema change, update `packages/shared/src/config/*.ts`.
-4. Register new top-level commands from `packages/command/src/cli/index.ts`.
+4. Register new top-level commands from `apps/cli/src/cli/index.ts`.
 5. Update `docs/cli-reference.md` (and `docs/onboarding-guide.md` if onboarding flow changes).
 6. Run the smallest relevant validation first: `pnpm check`, `pnpm typecheck`, `pnpm --filter @agent-team-foundation/first-tree-hub test`.
 

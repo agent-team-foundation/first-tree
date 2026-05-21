@@ -14,7 +14,7 @@ import {
   type SessionState,
   serverWelcomeFrameSchema,
   type UpdateAttempt,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
 import { writeImage } from "./runtime/image-store.js";

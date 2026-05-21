@@ -25,7 +25,7 @@ const HOST = process.env.HOST ?? "127.0.0.1";
 
 const webDistPath = resolve(import.meta.dirname, "..", "..", "web", "dist");
 if (!existsSync(webDistPath)) {
-  console.error(`web/dist not found at ${webDistPath}; run 'pnpm --filter @first-tree-hub/web build' first.`);
+  console.error(`web/dist not found at ${webDistPath}; run 'pnpm --filter @first-tree/web build' first.`);
   process.exit(1);
 }
 

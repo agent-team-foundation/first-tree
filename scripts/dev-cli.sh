@@ -2,7 +2,7 @@
 # scripts/dev-cli.sh — run the in-tree CLI against an isolated home so it
 # cannot collide with a production `first-tree-hub` install on the same
 # machine. Pairs with the home-derived service-suffix logic in
-# packages/command/src/core/service-install.ts: a non-default
+# apps/cli/src/core/service-install.ts: a non-default
 # FIRST_TREE_HUB_HOME yields a non-default systemd unit / launchd label,
 # so prod and dev background services coexist as separate units.
 #
@@ -27,7 +27,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # actually calls `program.parse()`. dist/index.mjs is the library `exports`
 # entry and only re-exports types/functions, so node-running it exits 0 with
 # zero output.
-DIST="$REPO_ROOT/packages/command/dist/cli/index.mjs"
+DIST="$REPO_ROOT/apps/cli/dist/cli/index.mjs"
 
 if [[ "${1:-}" == "--rebuild" ]]; then
   shift

@@ -5,7 +5,7 @@ import {
   type GithubEntityLiveState,
   type GithubEntityType,
   githubEntityBoundViaSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { GITHUB_API_BASE } from "./github-api-base.js";
 
 /**

@@ -1,4 +1,4 @@
-import type { OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
+import type { OrgBrief } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../../api/client.js";

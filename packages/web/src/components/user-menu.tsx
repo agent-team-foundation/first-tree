@@ -1,4 +1,4 @@
-import type { OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
+import type { OrgBrief } from "@first-tree/shared";
 import { Check, LogOut, Plus, UserPlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";

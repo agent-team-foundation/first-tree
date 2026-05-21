@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { FIRST_TREE_HUB_ATTR } from "@first-tree/shared/observability";
 import { trace } from "@opentelemetry/api";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";

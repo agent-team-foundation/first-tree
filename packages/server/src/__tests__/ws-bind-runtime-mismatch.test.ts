@@ -1,4 +1,4 @@
-import { AGENT_BIND_REJECT_REASONS } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_BIND_REJECT_REASONS } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";

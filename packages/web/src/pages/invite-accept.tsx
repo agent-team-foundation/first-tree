@@ -1,4 +1,4 @@
-import type { InvitationPreview, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InvitationPreview, OrgBrief } from "@first-tree/shared";
 import { ArrowLeft, Github, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";

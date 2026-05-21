@@ -1,4 +1,4 @@
-import type { AgentType } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentType } from "@first-tree/shared";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";

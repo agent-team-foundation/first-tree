@@ -69,8 +69,8 @@ first-tree-hub client status   # CLI 版本、服务状态、Hub URL、已配置
 ```bash
 pnpm install                               # 安装依赖
 docker compose up -d                       # 启动开发用 PostgreSQL
-pnpm --filter @first-tree-hub/server dev   # 启动服务器（开发模式）
-pnpm --filter @first-tree-hub/web dev      # 启动管理后台（开发模式）
+pnpm --filter @first-tree/server dev   # 启动服务器（开发模式）
+pnpm --filter @first-tree/web dev      # 启动管理后台（开发模式）
 pnpm check && pnpm typecheck               # Lint + 类型检查
 pnpm test                                  # 运行测试
 ```

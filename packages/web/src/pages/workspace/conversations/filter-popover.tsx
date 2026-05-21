@@ -1,4 +1,4 @@
-import type { ChatSource } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatSource } from "@first-tree/shared";
 import { Check, Settings } from "lucide-react";
 import { Popover } from "../../../components/ui/popover.js";
 

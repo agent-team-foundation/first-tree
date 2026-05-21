@@ -57,7 +57,7 @@ jobs:
 
       - name: Validate stable release tag
         id: release
-        working-directory: packages/command
+        working-directory: apps/cli
         env:
           PACKAGE_NAME: "@agent-team-foundation/first-tree-hub"
         run: |
@@ -123,7 +123,7 @@ jobs:
       - run: pnpm test
 
       - name: Publish to npm
-        working-directory: packages/command
+        working-directory: apps/cli
         run: npm publish --tag latest --access public
 
       - name: Send feishu message
@@ -176,7 +176,7 @@ jobs:
 
       - name: Resolve alpha version
         id: version
-        working-directory: packages/command
+        working-directory: apps/cli
         env:
           PACKAGE_NAME: "@agent-team-foundation/first-tree-hub"
         run: |
@@ -224,7 +224,7 @@ jobs:
 
       - name: Set alpha package version
         if: steps.version.outputs.publish == 'true'
-        working-directory: packages/command
+        working-directory: apps/cli
         env:
           ALPHA_VERSION: ${{ steps.version.outputs.alpha_version }}
           PACKAGE_NAME: "@agent-team-foundation/first-tree-hub"
@@ -249,7 +249,7 @@ jobs:
 
       - name: Publish to npm
         if: steps.version.outputs.publish == 'true'
-        working-directory: packages/command
+        working-directory: apps/cli
         run: npm publish --tag alpha --access public
 
       - name: Send feishu message
@@ -304,7 +304,7 @@ jobs:
         id: version
         working-directory: packages/shared
         env:
-          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub-shared"
+          PACKAGE_NAME: "@first-tree/shared"
         run: |
           BASE_VERSION=$(node -p "require('./package.json').version")
           if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -361,7 +361,7 @@ jobs:
         working-directory: packages/shared
         env:
           ALPHA_VERSION: ${{ steps.version.outputs.alpha_version }}
-          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub-shared"
+          PACKAGE_NAME: "@first-tree/shared"
         run: |
           node <<'NODE'
           const fs = require("node:fs");
@@ -395,9 +395,9 @@ jobs:
           INPUT_TITLE: ${{ job.status == 'success' && 'npm alpha publish ✅ 成功' || 'npm alpha publish ❌ 失败' }}
           INPUT_CONTENT: |
             发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
-            Package: @agent-team-foundation/first-tree-hub-shared
+            Package: @first-tree/shared
             Version: ${{ steps.version.outputs.alpha_version || 'unresolved' }}
-            Install: npm install @agent-team-foundation/first-tree-hub-shared@alpha
+            Install: npm install @first-tree/shared@alpha
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [[ -z "${INPUT_WEBHOOK:-}" ]]; then

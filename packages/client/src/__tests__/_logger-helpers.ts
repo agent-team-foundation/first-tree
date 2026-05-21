@@ -1,4 +1,4 @@
-import { recordingDestination, silentDestination } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { recordingDestination, silentDestination } from "@first-tree/shared/observability";
 import pino from "pino";
 
 /** Silent logger for tests that don't care about log output. */

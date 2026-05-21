@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfigPayload } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { documentBasePathFromRuntimeConfig } from "../runtime/session-manager.js";
 

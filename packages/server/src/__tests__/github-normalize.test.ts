@@ -1,4 +1,4 @@
-import type { WebhookSource } from "@agent-team-foundation/first-tree-hub-shared";
+import type { WebhookSource } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { extractMentions, normalizeGithubEvent } from "../services/github-normalize.js";
 

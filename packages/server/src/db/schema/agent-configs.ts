@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfigPayload } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 /**

@@ -15,7 +15,7 @@
  * When tracing is disabled every function degrades to a transparent no-op.
  */
 
-import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { FIRST_TREE_HUB_ATTR } from "@first-tree/shared/observability";
 import type { Context, Span } from "@opentelemetry/api";
 import { context as otelContext, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { WebSocket } from "ws";

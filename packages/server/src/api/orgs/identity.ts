@@ -1,4 +1,4 @@
-import { updateOrganizationSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { updateOrganizationSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import * as orgService from "../../services/organization.js";

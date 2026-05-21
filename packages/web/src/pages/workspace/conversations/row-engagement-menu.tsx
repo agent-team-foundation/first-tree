@@ -1,4 +1,4 @@
-import { CHAT_ENGAGEMENT_STATUSES, type ChatEngagementStatus } from "@agent-team-foundation/first-tree-hub-shared";
+import { CHAT_ENGAGEMENT_STATUSES, type ChatEngagementStatus } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { patchChatEngagement } from "../../../api/chats.js";
 import { markMeChatUnread } from "../../../api/me-chats.js";

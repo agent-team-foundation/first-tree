@@ -1,10 +1,4 @@
-import type {
-  Chat,
-  ChatDetail,
-  ChatEngagementStatus,
-  ChatGithubEntityListResponse,
-  Message,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { Chat, ChatDetail, ChatEngagementStatus, ChatGithubEntityListResponse, Message } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 type PaginatedChats = {

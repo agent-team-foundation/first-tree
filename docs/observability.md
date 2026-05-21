@@ -306,7 +306,7 @@ Sampling is `ParentBased(TraceIdRatioBased(sampleRate))` — inbound
   request. Use attribute-based search (see "Find the full story" above).
   Fixing this requires persisting W3C `traceparent` on inbox rows and is
   tracked as tech debt until multi-replica deployment makes it necessary.
-- **No client-side tracing.** Client (`@first-tree-hub/client`) emits logs
+- **No client-side tracing.** Client (`@first-tree/client`) emits logs
   only. Agent-side work is observed indirectly via Hub-side spans
   (`ws.connection`, `ws.message`, inbox attrs).
 - **No PG span.** PostgreSQL queries are not wrapped in spans — for query

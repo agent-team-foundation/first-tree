@@ -4,7 +4,7 @@ import {
   messageSourceSchema,
   type ParticipantMode,
   type PrecedingMessage,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { agentConfigs } from "../db/schema/agent-configs.js";

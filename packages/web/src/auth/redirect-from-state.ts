@@ -1,4 +1,4 @@
-import { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "@agent-team-foundation/first-tree-hub-shared";
+import { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "@first-tree/shared";
 
 /**
  * Read the `{from: Location}` state set by `RequireAuth` when it

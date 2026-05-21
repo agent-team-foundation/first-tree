@@ -1,4 +1,4 @@
-import type { Organization, UpdateOrganization } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Organization, UpdateOrganization } from "@first-tree/shared";
 import { api } from "./client.js";
 
 /**

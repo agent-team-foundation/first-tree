@@ -4,7 +4,7 @@ import {
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";

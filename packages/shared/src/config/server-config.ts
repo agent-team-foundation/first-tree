@@ -295,7 +295,7 @@ export const serverConfigSchema = defineConfig({
    *   on `latest`.
    * - `commandVersion`: bootstrap fallback used until the first successful
    *   poll, and the cache value when the registry is unreachable.
-   *   Docker images inject `packages/command/package.json.version` at build
+   *   Docker images inject `apps/cli/package.json.version` at build
    *   time via the `COMMAND_VERSION` build-arg.
    * - `pollIntervalMinutes`: refresh cadence. 60 minutes is the safe default
    *   for both prod (slow stable cadence) and staging (frequent alpha

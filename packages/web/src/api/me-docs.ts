@@ -1,4 +1,4 @@
-import type { GetMeDoc, GetMeDocResponse } from "@agent-team-foundation/first-tree-hub-shared";
+import type { GetMeDoc, GetMeDocResponse } from "@first-tree/shared";
 import { api } from "./client.js";
 
 export function getMeDoc(chatId: string, query: GetMeDoc): Promise<GetMeDocResponse> {

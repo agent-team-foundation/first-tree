@@ -1,4 +1,4 @@
-import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionState } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 export type SessionListItem = {

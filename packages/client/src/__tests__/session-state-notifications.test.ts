@@ -1,4 +1,4 @@
-import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionState } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";

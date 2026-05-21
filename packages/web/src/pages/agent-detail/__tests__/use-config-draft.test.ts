@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfig } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfig } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { createConfigDraft } from "../use-config-draft.js";
 

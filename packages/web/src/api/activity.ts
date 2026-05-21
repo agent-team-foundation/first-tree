@@ -1,4 +1,4 @@
-import type { ClientCapabilities } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ClientCapabilities } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 export type AgentType = "human" | "personal_assistant" | "autonomous_agent";

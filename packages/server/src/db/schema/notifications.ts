@@ -1,4 +1,4 @@
-import type { NotificationSeverity, NotificationType } from "@agent-team-foundation/first-tree-hub-shared";
+import type { NotificationSeverity, NotificationType } from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { boolean, index, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 

@@ -11,7 +11,7 @@
  * `user.id` etc. landed on a hook wrapper span instead of the route row).
  */
 
-import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { FIRST_TREE_HUB_ATTR } from "@first-tree/shared/observability";
 import type { Span } from "@opentelemetry/api";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { normalizeAttrs } from "./otel-helpers.js";

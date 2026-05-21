@@ -1,4 +1,4 @@
-import type { ContextTreeSnapshot } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ContextTreeSnapshot } from "@first-tree/shared";
 import { type ContextTreeBinding, isGithubRemoteBinding } from "./context-tree-snapshot.js";
 import { createAppJwt, GithubAppApiError, type GithubAppCredentials, mintInstallationToken } from "./github-app.js";
 import type { InstallationRow } from "./github-app-installations.js";

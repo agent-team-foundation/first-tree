@@ -69,8 +69,8 @@ first-tree-hub client status   # CLI version, service state, hub, agents
 ```bash
 pnpm install                               # Install dependencies
 docker compose up -d                       # Start dev PostgreSQL
-pnpm --filter @first-tree-hub/server dev   # Start server (dev mode)
-pnpm --filter @first-tree-hub/web dev      # Start web dashboard (dev mode)
+pnpm --filter @first-tree/server dev   # Start server (dev mode)
+pnpm --filter @first-tree/web dev      # Start web dashboard (dev mode)
 pnpm check && pnpm typecheck               # Lint + type check
 pnpm test                                  # Run tests
 ```

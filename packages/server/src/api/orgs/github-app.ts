@@ -2,7 +2,7 @@ import {
   type GithubAccountType,
   type GithubAppInstallationOutput,
   githubAppInstallationClaimBodySchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { authIdentities } from "../../db/schema/auth-identities.js";

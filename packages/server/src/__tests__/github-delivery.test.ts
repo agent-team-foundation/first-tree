@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { NormalizedEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { NormalizedEvent } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";

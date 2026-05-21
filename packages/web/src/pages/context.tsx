@@ -3,7 +3,7 @@ import type {
   ContextTreeNode,
   ContextTreeSnapshot,
   ContextTreeUsageEvent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
 import { AlertTriangle, Network, RefreshCw } from "lucide-react";

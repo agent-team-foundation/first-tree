@@ -378,8 +378,8 @@ PR-D:
 - [packages/client/src/client-connection.ts](packages/client/src/client-connection.ts) — 解析 `CLIENT_USER_MISMATCH` 关闭码,投递结构化错误给 CLI
 
 **CLI(PR-B + PR-D):**
-- [packages/command/src/commands/client.ts](packages/command/src/commands/client.ts)(PR-B)— 新增 `claim` 子命令;`connect` / `client start` 在收到 mismatch 错误时输出引导
-- `packages/command/src/commands/agent.ts`(PR-D)— `--org` flag 与默认行为调整
+- [apps/cli/src/commands/client.ts](apps/cli/src/commands/client.ts)(PR-B)— 新增 `claim` 子命令;`connect` / `client start` 在收到 mismatch 错误时输出引导
+- `apps/cli/src/commands/agent.ts`(PR-D)— `--org` flag 与默认行为调整
 
 **测试:**
 - 见 §7。

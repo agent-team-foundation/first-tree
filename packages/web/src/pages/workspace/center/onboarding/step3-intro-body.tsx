@@ -1,4 +1,4 @@
-import type { OrgContextTreeOutput, OrgSourceReposOutput } from "@agent-team-foundation/first-tree-hub-shared";
+import type { OrgContextTreeOutput, OrgSourceReposOutput } from "@first-tree/shared";
 import { Check, ChevronDown, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";

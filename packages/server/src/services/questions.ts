@@ -3,7 +3,7 @@ import {
   type QuestionMessageContent,
   questionAnswerMessageContentSchema,
   questionMessageContentSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";

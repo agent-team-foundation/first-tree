@@ -1,4 +1,4 @@
-import { ENV_REDACTED_PLACEHOLDER, type EnvEntry } from "@agent-team-foundation/first-tree-hub-shared";
+import { ENV_REDACTED_PLACEHOLDER, type EnvEntry } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { canKeepExistingSensitiveValue, envDialogInitialValue, resolveEnvDialogValue } from "../env-section.js";
 import { formatMcpArgsInput, formatMcpHeadersInput, parseMcpArgsText, parseMcpHeadersText } from "../mcp-section.js";

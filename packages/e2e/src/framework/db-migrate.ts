@@ -20,7 +20,7 @@
  * (baseline-dump regression per §十一.1):
  *
  *   - `applyMigrationsTo(databaseUrl)` — call `runMigrations` from
- *     `@first-tree-hub/server` directly. Today blocked by the server build
+ *     `@first-tree/server` directly. Today blocked by the server build
  *     not exporting it through the package's public surface; would require
  *     a `db:migrate` script entry instead of a source import (so the e2e
  *     package keeps its "no source imports" rule from §三.3).

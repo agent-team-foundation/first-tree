@@ -37,7 +37,7 @@ Windows at non-integer DPI scale is the highest-risk environment — all P0 regr
 | `text-body` default body | 12px, 400, line-height 1.5 — most common; sanity-check across dense tables |
 | `text-subtitle` section/card titles | 13px, 600, `-0.1px` tracking — clearly distinct from body but not title |
 | `text-title` page titles | 16px, 600, `-0.2px` tracking — only appears in `<PageHeader>` and dialog titles |
-| No Tailwind `text-xs/sm/base/lg/2xl` classes visible in computed styles | Run guardrail script: `pnpm --filter @first-tree-hub/web lint:tokens` |
+| No Tailwind `text-xs/sm/base/lg/2xl` classes visible in computed styles | Run guardrail script: `pnpm --filter @first-tree/web lint:tokens` |
 
 ## Category 3 — Font-weight whitelist (400 / 500 / 600 / 700)
 
@@ -103,13 +103,13 @@ These only surface on Windows at 125% / 150% DPI. Do not ship without this pass.
 
 ```bash
 # Token/palette/weight guardrails (fast, < 1s):
-pnpm --filter @first-tree-hub/web lint:tokens
+pnpm --filter @first-tree/web lint:tokens
 
 # Full build — also runs guardrails:
-pnpm --filter @first-tree-hub/web build
+pnpm --filter @first-tree/web build
 
 # Playwright visual diff (if installed):
-pnpm --filter @first-tree-hub/web test:visual
+pnpm --filter @first-tree/web test:visual
 ```
 
 See `tests/visual-regression.spec.ts` for the Mac/Win viewport matrix the visual diff uses.

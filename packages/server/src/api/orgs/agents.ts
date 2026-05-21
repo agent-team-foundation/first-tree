@@ -3,7 +3,7 @@ import {
   agentTypeSchema,
   createAgentSchema,
   paginationQuerySchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ForbiddenError } from "../../errors.js";

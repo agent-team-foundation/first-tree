@@ -1,4 +1,4 @@
-import { type PulseBucket, pulseTickSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { type PulseBucket, pulseTickSchema } from "@first-tree/shared";
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { aggregate, EMPTY_BUCKETS } from "./pulse-aggregate.js";
 import { useAdminWs } from "./use-admin-ws.js";

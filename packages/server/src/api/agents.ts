@@ -1,8 +1,4 @@
-import {
-  agentPinnedMessageSchema,
-  rebindAgentSchema,
-  updateAgentSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { agentPinnedMessageSchema, rebindAgentSchema, updateAgentSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, ForbiddenError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireAgentAccess } from "../scope/require-resource.js";

@@ -19,7 +19,7 @@
     { "path": "packages/shared" },
     { "path": "packages/server" },
     { "path": "packages/client" },
-    { "path": "packages/command" },
+    { "path": "apps/cli" },
     { "path": "packages/web" }
   ],
   "files": []

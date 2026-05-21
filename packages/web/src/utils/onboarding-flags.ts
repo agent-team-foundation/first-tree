@@ -9,7 +9,7 @@
  *   the user navigates between app tabs before creating their first agent.
  */
 
-import type { AgentVisibility } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentVisibility } from "@first-tree/shared";
 
 const JOIN_PATH_KEY = "onboarding:joinPath";
 const DRAFT_KEY_PREFIX = "onboarding:draft";

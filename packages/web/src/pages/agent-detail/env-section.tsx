@@ -1,4 +1,4 @@
-import { ENV_REDACTED_PLACEHOLDER, type EnvEntry } from "@agent-team-foundation/first-tree-hub-shared";
+import { ENV_REDACTED_PLACEHOLDER, type EnvEntry } from "@first-tree/shared";
 import { Eye, EyeOff, Lock, Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { Button } from "../../components/ui/button.js";

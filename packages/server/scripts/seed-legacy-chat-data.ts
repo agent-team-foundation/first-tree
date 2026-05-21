@@ -12,7 +12,7 @@
  *   - speaker with subscription collision (proposal §3 invariant 1 violation —
  *     this should never happen but we test the "speaker wins" merge anyway)
  *
- * Run: DATABASE_URL=... pnpm --filter @first-tree-hub/server tsx scripts/seed-legacy-chat-data.ts
+ * Run: DATABASE_URL=... pnpm --filter @first-tree/server tsx scripts/seed-legacy-chat-data.ts
  */
 
 import { randomUUID } from "node:crypto";

@@ -1,4 +1,4 @@
-import { MENTION_REGEX, type SessionState, stripCode } from "@agent-team-foundation/first-tree-hub-shared";
+import { MENTION_REGEX, type SessionState, stripCode } from "@first-tree/shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
