@@ -7,7 +7,7 @@ import type { ComponentLogger } from "./logging.js";
 import { authedJson } from "./server-driver/http.js";
 
 export type DevUserSession = {
-  /** PID of the long-running `client start --foreground` process. */
+  /** PID of the long-running `daemon start --foreground` process. */
   pid: number;
   /** Per-session home so devuser doesn't collide with the fixture home. */
   home: string;
@@ -35,7 +35,7 @@ export type SetupDevUserOptions = {
 };
 
 /**
- * Walk the real "log in as Dev User → generate connect-token → CLI client
+ * Walk the real "log in as Dev User → generate connect-token → CLI daemon
  * start" path end-to-end:
  *
  *   1. dev-callback bypass → user JWT pair (mimics the web Continue-as-Dev-User
@@ -45,17 +45,17 @@ export type SetupDevUserOptions = {
  *   3. POST /auth/connect-token → user JWT pair from the connect-token (the
  *      `first-tree-hub login` command's `exchangeToken` step)
  *   4. Plant credentials.json + client.yaml on disk under `${runHome}-devuser`
- *      so the spawned CLI doesn't need to run an interactive connect
- *   5. spawn `client start --foreground --no-interactive`, which is what a
+ *      so the spawned CLI doesn't need to run an interactive login
+ *   5. spawn `daemon start --foreground --no-interactive`, which is what a
  *      real installed background service would run — critically, this path
  *      probes local runtime SDKs (claude-code / codex) and PATCHes
  *      `clients.metadata.capabilities`, which the web onboarding flow then
  *      reads to decide "no runtime ready on this computer" vs. "ready"
  *
- * `first-tree-hub login <token> --no-start` is deliberately NOT used:
- * connect's inline-running path skips the capabilities probe, leaving
+ * `first-tree-hub login <token> --no-start` is deliberately NOT used here:
+ * its inline-running path skips the capabilities probe, leaving
  * `clients.metadata` NULL and the web onboarding step 2 stuck on
- * "No runtime ready on this computer". `client start --foreground` is the
+ * "No runtime ready on this computer". `daemon start --foreground` is the
  * canonical long-running entry point and is what the service unit invokes.
  *
  * Requires the server to have been booted with
@@ -109,7 +109,7 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
     refreshToken: string;
   };
 
-  // Step 4: plant credentials.json + client.yaml so `client start` finds them.
+  // Step 4: plant credentials.json + client.yaml so `daemon start` finds them.
   const devHome = `${opts.runHome}-devuser`;
   const configDir = resolve(devHome, "config");
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
@@ -125,13 +125,13 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
     { mode: 0o600 },
   );
 
-  // Step 5: spawn `client start --foreground --no-interactive`. `spawnCli`
+  // Step 5: spawn `daemon start --foreground --no-interactive`. `spawnCli`
   // sanitizes ambient `FIRST_TREE_*` env so the per-run client.yaml
   // wins over any parent-process server URL.
   const client: SpawnedCli = await spawnCli({
     home: devHome,
     serverBaseUrl: opts.serverBaseUrl,
-    args: ["client", "start", "--foreground", "--no-interactive"],
+    args: ["daemon", "start", "--foreground", "--no-interactive"],
     logger: opts.logger,
   });
 

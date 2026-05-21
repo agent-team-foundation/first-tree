@@ -23,7 +23,7 @@ gh auth status
 ### What to remember
 
 - First Tree Hub requires Node.js `>= 22.16`.
-- Do not jump to `client start`, `connect <token>`, or `onboard` on a machine where installation state is unknown.
+- Do not jump to `daemon start`, `login <token>`, or `agent create` on a machine where installation state is unknown.
 - If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree-hub ...` so they do not have to fight PATH.
 
 ## 1. "Connect this computer to an existing Hub server"
@@ -48,14 +48,14 @@ To verify:
 first-tree-hub daemon status          # local: service state + hub + auth health
 first-tree-hub daemon doctor          # readiness checks (includes background-service state)
 # Server-side: open the Hub web admin → Computers tab to verify this
-# machine appears. (`client list` was retired in Phase 1A.)
+# machine appears. (The legacy `client list` CLI verb was retired in Phase 1A.)
 ```
 
-If something breaks, `client doctor` usually points at the culprit (no credentials, wrong server URL, WebSocket blocked, etc.).
+If something breaks, `daemon doctor` usually points at the culprit (no credentials, wrong server URL, WebSocket blocked, etc.).
 
 ### What to remember
 
-- `connect <token>` is the **only** supported way to sign in. There is no separate `login`, username/password, or manual credential setup.
+- `login <token>` is the **only** supported way to sign in. There is no separate web login flow, username/password, or manual credential setup from the CLI side.
 - It writes `~/.first-tree/hub/credentials.json` and a generated `client.id` in `client.yaml`.
 - The hub URL is derived from the token's `iss` claim, so the operator never types a URL.
 - Agents are not registered by this command. Admins pin agents to this machine's `client.id` from the Hub UI (or via `agent create --client-id ...`). A running client auto-picks them up.
@@ -66,7 +66,7 @@ Use this for a production desktop or a server that should run agents permanently
 
 ### Flow
 
-`connect <token>` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
+`login <token>` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
 
 ```bash
 first-tree-hub login <token>                 # auto-installs the service
@@ -74,7 +74,7 @@ first-tree-hub daemon doctor                   # verify: shows running/inactive/
 tail -f ~/.first-tree/hub/logs/client.log      # tail logs (NDJSON)
 ```
 
-To repair a broken unit (binary moved, Node upgraded), re-run `connect <token>` — it rewrites the unit file. Re-authentication is required (paste a fresh connect token).
+To repair a broken unit (binary moved, Node upgraded), re-run `login <token>` — it rewrites the unit file. Re-authentication is required (paste a fresh connect token).
 
 To decommission a machine, remove the unit at the OS level and clear local state:
 
@@ -95,9 +95,9 @@ To force-disconnect from the server side: use the Hub web admin (Computers → D
 
 ### What to remember
 
-- Windows is unsupported. `connect <token>` falls back to inline mode there — tell the user to use `first-tree-hub daemon start` inside a user-managed supervisor.
-- The service runs `client start --no-interactive`, so the machine must already have valid `credentials.json` — `connect <token>` writes that for you in the same step.
-- Re-running `connect <token>` is safe and idempotent for the unit file, but always re-authenticates.
+- Windows is unsupported. `login <token>` falls back to inline mode there — tell the user to use `first-tree-hub daemon start` inside a user-managed supervisor.
+- The service runs `daemon start --no-interactive`, so the machine must already have valid `credentials.json` — `login <token>` writes that for you in the same step.
+- Re-running `login <token>` is safe and idempotent for the unit file, but always re-authenticates.
 
 ## 3. "Onboard a new human member"
 
@@ -195,8 +195,8 @@ first-tree-hub config show     # effective client YAML
 
 ### What to remember
 
-- If `client doctor` flags "no credentials", the fix is `first-tree-hub login <token>`, not a YAML edit.
-- If `client list` shows the client but `client status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
+- If `daemon doctor` flags "no credentials", the fix is `first-tree-hub login <token>`, not a YAML edit.
+- If `daemon status` / web admin Computers tab shows the client but `daemon status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
 - The Hub server is operated by the First Tree team as a SaaS — when a client cannot reach it, the issue is local connectivity / credentials, not server config.
 
 ## 7. "Debug messaging between agents"
@@ -221,7 +221,7 @@ first-tree-hub chat open <agent-name>                          # interactive REP
 
 ### What to remember
 
-- These are debugging / operator commands. For production, agents run under `client start` (or the service) and receive messages via WebSocket.
+- These are debugging / operator commands. For production, agents run under `daemon start` (or the service) and receive messages via WebSocket.
 - Use `--agent <name>` when multiple agent aliases are configured; with a single alias the flag is optional.
 
 ## 8. "Inspect or recover session state"
@@ -265,7 +265,7 @@ is no self-host path. Use this section when scaling out the *client* side.
 
 - Connect tokens carry the hub URL in their `iss` claim — operators never
   type a URL.
-- Windows is unsupported. `connect <token>` falls back to inline mode there;
+- Windows is unsupported. `login <token>` falls back to inline mode there;
   use a user-managed supervisor for permanent deployment.
 
 ## 10. "Change how the CLI behaves" (code change)

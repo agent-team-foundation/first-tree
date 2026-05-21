@@ -56,8 +56,8 @@ export type ExecCliOptions = CliEnvOptions & {
 
 /**
  * Run the dist CLI to completion and capture its stdout / stderr / exit code.
- * Use this for one-shot commands like `connect`, `agent list`, `chat send`
- * etc. Long-running entries (`client start --foreground`) belong on
+ * Use this for one-shot commands like `login`, `agent list`, `chat send`
+ * etc. Long-running entries (`daemon start --foreground`) belong on
  * `spawnCli` below — they never exit on their own.
  */
 export async function execCli(opts: ExecCliOptions): Promise<CliExecResult> {
@@ -125,7 +125,7 @@ export type SpawnCliOptions = CliEnvOptions & {
  * Spawn a long-running CLI process. The promise resolves once the child has
  * survived `immediateExitGraceMs` without exiting; the returned handle exposes
  * the underlying `ChildProcess` plus a `stop()` that does SIGTERM → SIGKILL
- * fallback. Use for `client start --foreground`, `connect --no-service`, etc.
+ * fallback. Use for `daemon start --foreground`, `login --no-start`, etc.
  */
 export async function spawnCli(opts: SpawnCliOptions): Promise<SpawnedCli> {
   const env = buildCliEnv(opts);

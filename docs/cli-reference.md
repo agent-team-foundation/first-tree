@@ -130,14 +130,14 @@ and runs `daemon start`, the WebSocket handshake refuses with code
    (`agents.client_id` ← NULL, presence reset to offline) — atomic.
 3. Logs `event=client.owner_transfer` with the previous/new owner ids.
 
-After claim, `client start` reconnects without further prompts. There is no
-`--force` flag — interactive confirmation (or explicit `--confirm`) is
-mandatory so a typo doesn't strip the previous owner's machine. See
+After override, `daemon start` reconnects without further prompts. The
+`--override` flag is the explicit consent — a typo cannot strip the
+previous owner's machine because the verb must be requested by name. See
 [docs/decouple-client-from-identity-design-zh.md §4.4](decouple-client-from-identity-design-zh.md).
 
 ### Manual service operations
 
-`client start / stop / restart` cover day-to-day service control. Install happens during `first-tree-hub login <token>`; uninstall is a manual OS-level step (see *Decommission* below). `client status` and `client doctor` report state.
+`daemon start / stop / restart` cover day-to-day service control. Install happens during `first-tree-hub login <token>`; uninstall is a manual OS-level step (see *Decommission* below). `daemon status` and `daemon doctor` report state.
 
 **Tail logs:**
 

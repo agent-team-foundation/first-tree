@@ -26,12 +26,12 @@ don't have to remember either.
 
 ```bash
 # from repo root, first-time use
-./scripts/dev-cli.sh --rebuild connect <connect-token>
+./scripts/dev-cli.sh --rebuild login <connect-token>
 
 # day-to-day
-./scripts/dev-cli.sh client status
-./scripts/dev-cli.sh client restart
-./scripts/dev-cli.sh update --check
+./scripts/dev-cli.sh daemon status
+./scripts/dev-cli.sh daemon restart
+./scripts/dev-cli.sh upgrade --check
 journalctl --user -u first-tree-hub-client-dev -f
 ```
 
@@ -68,16 +68,16 @@ a CLI upgrade to silently rename people's prod service.
 ## When to use which knob
 
 - **`scripts/dev-cli.sh` with default home** — most testing, including
-  end-to-end `connect` / `client start` / `stop` / `restart` / `update`.
+  end-to-end `login` / `daemon start|stop|restart` / `upgrade`.
   Coexists with prod.
 - **Custom dev home via `FIRST_TREE_DEV_HOME=$HOME/.first-tree/hub-foo`**
   — when you want a second parallel dev install (e.g. one per branch).
   Each home gets its own unit name automatically.
 - **Direct `pnpm --filter ... dev`** — when iterating on code that does
   not touch service install, config, or credentials. `tsx` runs against
-  source so `detectInstallMode()` returns `"source"` and any `update`
+  source so `detectInstallMode()` returns `"source"` and any `upgrade`
   path short-circuits — fine for everything except testing the
-  install/restart side of `update` itself.
+  install/restart side of `upgrade` itself.
 - **`./scripts/dev-cli.sh --rebuild`** — rebuilds dist before running.
   Use after editing any source under `packages/`.
 
@@ -86,9 +86,9 @@ a CLI upgrade to silently rename people's prod service.
 - The PostgreSQL database. Hub server uses one shared DB by default.
   If you also run an in-tree server (`pnpm --filter @first-tree/server dev`),
   use a separate DB URL via `FIRST_TREE_DATABASE_URL`.
-- Global npm packages. `update --no-restart` will still run
+- Global npm packages. `upgrade --no-restart` will still run
   `npm install -g @agent-team-foundation/first-tree-hub@latest` and
-  upgrade your machine-wide binary. Use `update --check` for safe
+  upgrade your machine-wide binary. Use `upgrade --check` for safe
   read-only verification.
 - Credentials shared with the Hub server (Hub-side rows in
   `clients` / `agents` tables). The dev install registers as a
@@ -98,7 +98,7 @@ a CLI upgrade to silently rename people's prod service.
 ## Tearing down a dev install
 
 ```bash
-./scripts/dev-cli.sh client stop
+./scripts/dev-cli.sh daemon stop
 # Optional — fully remove unit file + auto-start:
 systemctl --user disable first-tree-hub-client-dev.service
 rm ~/.config/systemd/user/first-tree-hub-client-dev.service

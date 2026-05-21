@@ -31,7 +31,7 @@ The command package depends on the client package; it does not invoke server boo
 
 ### Agent identity is managed by Hub
 
-- Agent identities are created, updated, and owned via Admin API (used both by the web UI and by the CLI's `agent create` / `agent claim` / `onboard`).
+- Agent identities are created, updated, and owned via Admin API (used both by the web UI and by the CLI's `agent create` / `agent claim` / `agent create`).
 - Agent profile (markdown self-description) is stored in the `agents.profile` column.
 - Each agent has exactly one `clientId` — the machine that runs it. Bind with `agent bind client <name> --client-id <id>`; the field is immutable once set.
 - Context Tree integration is optional — when configured, the client injects organizational context (`AGENT.md`, root `NODE.md`) into agent workspaces at startup.
@@ -71,7 +71,7 @@ on startup:
 
 ### Client startup
 
-`client start` runs every locally configured agent against one Hub server.
+`daemon start` runs every locally configured agent against one Hub server.
 
 The client runtime:
 
@@ -83,7 +83,7 @@ The client runtime:
 - manages session state and isolated chat workspaces
 - optionally syncs a shared Context Tree clone for organizational context
 
-The **background service** is installed automatically by `first-tree-hub login <token>` (skip with `--no-start`). It runs `client start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. There is no `client service ...` CLI subcommand — `client doctor` shows current state, manual lifecycle ops go through `launchctl` / `systemctl` directly (see `docs/cli-reference.md`).
+The **background daemon** is installed automatically by `first-tree-hub login <token>` (skip with `--no-start`). It runs `daemon start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. The `daemon` namespace owns the daemon lifecycle (`start` / `stop` / `restart` / `status` / `doctor`); install / repair is folded into `login <token>`.
 
 ### Workspace bootstrap
 
@@ -96,18 +96,18 @@ When a handler starts, the client runtime bootstraps a per-chat workspace and wr
 
 ## Onboarding Mental Model
 
-`onboard` is intentionally higher-level than the rest of the CLI.
+`agent create` is intentionally higher-level than the rest of the CLI.
 
 - It creates the agent via Admin API, optionally creates a personal assistant, optionally binds a Feishu bot, and saves the local alias — all in one step.
-- It uses the signed-in member's JWT (from `credentials.json`). If no credentials exist, it exits with a clear pointer to `connect <token>`.
+- It uses the signed-in member's JWT (from `credentials.json`). If no credentials exist, it exits with a clear pointer to `login <token>`.
 - `--check` performs a dry-run that surfaces exactly which fields are missing, using the same check logic as the real path.
 
-Do not replace `onboard` with ad hoc Admin API calls unless the user explicitly wants to bypass the supported flow for development or debugging.
+Do not replace `agent create` with ad hoc Admin API calls unless the user explicitly wants to bypass the supported flow for development or debugging.
 
 ## Common Misunderstandings to Avoid
 
 - Do not say `agent add` creates an agent on the Hub. It only writes a local alias (`agents/<name>/agent.yaml`) mapping a friendly name to an existing `agentId`. Use `agent create` to create a server-side row.
-- Do not say `client start` starts the server. It only runs configured agent clients against a server that must already be running.
+- Do not say `daemon start` starts the server. It only runs configured agent clients against a server that must already be running.
 - Do not say the Context Tree owns agent identity. Hub does. Context Tree is an optional organizational knowledge source.
 - Do not frame the inbox as exactly-once delivery. The contract is at-least-once with client-side deduplication.
 - Do not reach for `FIRST_TREE_AGENT_TOKEN` or `FIRST_TREE_AGENT`. Neither env var is read by the CLI anymore; all auth flows through `credentials.json`.

@@ -45,7 +45,7 @@
 | 维度 | 决策 |
 |---|---|
 | 同 connection 同时持多 user | **禁止** |
-| 同 connection 在生命周期内换 user | **允许,必须经 `client claim --confirm` 显式接管** |
+| 同 connection 在生命周期内换 user | **允许,必须经 `login <token> --override` 显式接管** |
 | 同 connection 同时持多 org | **N/A** — connection 不携带任何 org 信息;agent 的 org 归属由 `agent.managerId → members.(userId, organizationId)` 链路承载,bind 时通过 join 实时校验 |
 | 同 connection 在生命周期内"切 org" | **不存在该动作** — connection 与 org 完全无关;Web 端 `/auth/switch-org` 退化为前端默认视图调整器,不驱动 backend session |
 | `clients.user_id` | **NOT NULL,运行时鉴权依据** |
@@ -171,7 +171,7 @@ handshake 流程([ws-client.ts:380-458](packages/server/src/api/agent/ws-client.
 
 旧 agent.managerId 仍指向旧 owner;agent 暂时不在任何 client 上跑,等旧 owner 在另一台机器上重新 pin。
 
-`client claim` 不提供 `--force` — 必须经过交互式 prompt;CI 场景需要预先以正确身份 connect。
+`login <token> --override` 不提供 `--force` — 必须经过交互式 prompt;CI 场景需要预先以正确身份 connect。
 
 ### 4.5 角色检查改实时查(归到 PR-D)
 
@@ -237,7 +237,7 @@ v2 把两个独立概念混作一谈。v3 拆开:
 | `client.yaml` | clientId、client_secret、server URL | 机器(工作目录)| `client connect` 一次性写入,生命周期不动 |
 | `credentials.json` | 当前 user 的 access + refresh JWT(单一)| 用户 | 每次 login / logout |
 
-切 org 不动文件(JWT 不变,session 一开始就覆盖所有 org)。切 user 等价于 logout + login + 必要时 `client claim --confirm`。
+切 org 不动文件(JWT 不变,session 一开始就覆盖所有 org)。切 user 等价于 logout + login + 必要时 `login <token> --override`。
 
 ### 4.8 Membership 撤销的及时性
 
@@ -257,7 +257,7 @@ User 被踢出 org B(`members.status` 改 `inactive`)后:
 | PR | 范围 | schema | 风险 |
 |---|---|---|---|
 | **PR-A** | 切断 `clients.organization_id` 所有读路径(§4.10.1 6 处);新行 INSERT 仍写 placeholder 但删除 `ClientOrgMismatchError` 校验路径;`assertClientOwner` 删 admin 跨 user 兜底 | 无 | 低 — 纯代码,语义收紧而非扩张 |
-| **PR-B** | (1) WS handshake `AuthenticatedSession` 简化为只 `userId`;(2) `agent:bind` 加 `members.status='active'` 校验 + 删除 `agent.organizationId === session.organizationId` 同 org 限制;(3) `registerClient` user 不一致改抛 `ClientUserMismatchError`;(4) `claimClient` service + `POST /clients/:id/claim`;(5) CLI `client claim --confirm` + mismatch 引导 | 无 | 中 — claim 事务必须原子;agent:bind 改造范围已在 §4.10.2 列出 |
+| **PR-B** | (1) WS handshake `AuthenticatedSession` 简化为只 `userId`;(2) `agent:bind` 加 `members.status='active'` 校验 + 删除 `agent.organizationId === session.organizationId` 同 org 限制;(3) `registerClient` user 不一致改抛 `ClientUserMismatchError`;(4) `claimClient` service + `POST /clients/:id/claim`;(5) CLI `login <token> --override` + mismatch 引导 | 无 | 中 — claim 事务必须原子;agent:bind 改造范围已在 §4.10.2 列出 |
 | **PR-C** | `/auth/switch-org` 退化(server 改 204、web AuthContext 改 localStorage 派生);**server + web 必须同 PR 升级** | 无 | 中 — web auth state 重写,有视觉/路由回归风险 |
 | **PR-D** | (1) 定义 admin org context 来源约定((γ) query/body `organizationId`);(2) `requireMemberInOrg` helper;(3) §4.10.3 4 处 admin gate 重写;(4) §4.5.1 listing 二分(`agentVisibilityCondition` 接受显式 orgId 入参,新 `listAgentsManagedByUser` helper);(5) CLI `agent --org <id>` flag | 无 | 高 — 漏一处即跨 org admin 越权;PR 实施前重新扫一遍 main HEAD 的调用面 |
 
@@ -378,16 +378,16 @@ PR-D:
 - [packages/client/src/client-connection.ts](packages/client/src/client-connection.ts) — 解析 `CLIENT_USER_MISMATCH` 关闭码,投递结构化错误给 CLI
 
 **CLI(PR-B + PR-D):**
-- [apps/cli/src/commands/client.ts](apps/cli/src/commands/client.ts)(PR-B)— 新增 `claim` 子命令;`connect` / `client start` 在收到 mismatch 错误时输出引导
-- `apps/cli/src/commands/agent.ts`(PR-D)— `--org` flag 与默认行为调整
+- `apps/cli/src/commands/login.ts`(PR-B,Phase 1A 后 `--override` 模式取代独立 `claim` 子命令)— `login <token> --override` 接管 ownership;`login` / `daemon start` 在收到 mismatch 错误时输出引导
+- `apps/cli/src/commands/agent/`(PR-D)— `--org` flag 与默认行为调整
 
 **测试:**
 - 见 §7。
 
 **文档:**
 - [docs/decouple-client-from-org-design-zh.md](docs/decouple-client-from-org-design-zh.md) — 头部加 *"Q7(`session:org_changed` 推帧)在后续 [Connection 与 Identity 关系收束](decouple-client-from-identity-design-zh.md) 设计中撤回"*
-- [AGENTS.md](AGENTS.md) — "Unified user-JWT auth" 段落改为 *"socket 上覆盖该 user 全部 active org;切 user 经 `client claim` 显式确认"*
-- [docs/cli-reference.md](docs/cli-reference.md) — `client claim`、`agent --org` 文档化
+- [AGENTS.md](AGENTS.md) — "Unified user-JWT auth" 段落改为 *"socket 上覆盖该 user 全部 active org;切 user 经 `login <token> --override` 显式确认"*
+- [docs/cli-reference.md](docs/cli-reference.md) — `login <token> --override`、`agent --org` 文档化
 - Context Tree `agent-hub/client-runtime.md`、`agent-hub/claim-agent.md` 同步语义
 
 ### 5.2 风险等级
@@ -403,7 +403,7 @@ PR-D:
 | `/auth/switch-org` 退化 + web `AuthContext` 重写 | **中** — web auth state 来源切换有视觉/路由回归风险 | PR-C |
 | Agent listing 二分(同 org roster vs 跨 org managed) | 中 — 语义切分需要 PM 对齐;CLI `agent list` 默认行为变化 | PR-D |
 | Admin role 实时查迁移 | **中→高** — 漏一处即跨 org admin 越权 | PR-D |
-| CLI `client claim` UX | 低 | PR-B |
+| CLI `login <token> --override` UX | 低 | PR-B |
 
 ---
 
@@ -433,9 +433,9 @@ PR-D:
 3. 新增集成测试:
    - **多 org 同 socket 并行 bind:** Alice 在 org A 与 org B 都是 member,WS 已连;同 socket 上 `agent:bind` org A 的 agent 成功 → 紧接 `agent:bind` org B 的 agent 也成功;两个 agent 的 inbox NOTIFY、session:state、runtime:state 各自独立工作互不干扰;调 `/auth/switch-org` 后两 agent 都仍 bound。
    - **切 user 默认拒绝:** Alice 的 `client.yaml` + Bob 的 JWT → handshake 收 `CLIENT_USER_MISMATCH`;CLI stderr 含 claim 引导文本。
-   - **显式 claim 接管:** `client claim --confirm` → 200 → handshake 通过 → DB:`clients.user_id = Bob`,Alice 名下所有 agent 在 `agents.client_id` 与 `agent_presence.client_id` 都为 NULL,presence offline;server 日志含一行 `event: client.owner_transfer { clientId, fromUserId: Alice, toUserId: Bob, ts }`。
+   - **显式 claim 接管:** `login <token> --override` → 200 → handshake 通过 → DB:`clients.user_id = Bob`,Alice 名下所有 agent 在 `agents.client_id` 与 `agent_presence.client_id` 都为 NULL,presence offline;server 日志含一行 `event: client.owner_transfer { clientId, fromUserId: Alice, toUserId: Bob, ts }`。
    - **claim 后 Alice 重连被拒:** Alice 的 JWT → `CLIENT_USER_MISMATCH`(owner 已是 Bob)。
-   - **claim 反向:** Alice 重新 `client claim --confirm` → owner 改回 Alice;Bob 名下 agent 全 unpin;Alice 之前的 agent 仍 NULL,需要手动重 pin。
+   - **claim 反向:** Alice 重新 `login <token> --override` → owner 改回 Alice;Bob 名下 agent 全 unpin;Alice 之前的 agent 仍 NULL,需要手动重 pin。
    - **Membership 撤销立即生效:** Alice 持 (org A, org B) 双 membership,bind org A agent 成功;Alice 被踢出 org B(`members.status='inactive'`)后,新的 `agent:bind` org B agent 拒(`agents → members` JOIN 见 manager.status='inactive')。
    - **跨 org admin 越权拦截:** Alice 是 org A admin、org B member;向 admin API 路径携带 org B 上下文(如 `/admin/orgs/<orgB>/...`)→ admin gate 实时查 `members WHERE (Alice, orgB)` 见 role='member' → 拒。
    - **`/auth/switch-org` 不影响 socket:** 调用前后 socket 上 bound 的 agent 列表完全相同;不收到任何 server 推帧;`/auth/switch-org` 仅刷新前端默认视图,不影响 backend 任何运行时判断。
@@ -459,7 +459,7 @@ PR-D:
    - `agent:bind` SELECT 加 `members.status`,删 line 565 `agent.organizationId === session.organizationId` 校验,加 `members.status='active'` 检查
    - `errors.ts` 新 `ClientUserMismatchError`;`registerClient` user 不一致改抛它;WS close 4403
    - `claimClient` service(单事务,SQL 见 §4.4)+ `POST /clients/:clientId/claim` 路由
-   - CLI `client claim --confirm` + WS close 4403 解析与引导文本
+   - CLI `login <token> --override` + WS close 4403 解析与引导文本
    - 新增集成测试:多 org 同 socket 并行 bind、切 user 拒绝、claim 接管、claim 反向、membership 撤销 bind 拒绝、4403 不触发 SDK 重连
 4. **PR-C — `/auth/switch-org` 退化(server + web 同 PR)**
    - server `POST /auth/switch-org` 返 204 + 改 schema
@@ -527,12 +527,12 @@ Alice 跑了一阵子;Bob 想用同一台机器:
 | 2 | Bob `hub login` → 得 Bob 的 JWT |
 | 3 | Client WS handshake → `CLIENT_USER_MISMATCH` |
 | 4 | CLI 输出 *"This client is owned by alice@example.com. Run `first-tree-hub login <token> --override` to transfer. This will unpin Alice's 3 agents from this machine."* |
-| 5 | Bob 跑 `client claim --confirm` → 二次确认 → owner 切换 + Alice 名下 3 agent 全 unpin;server 日志记录 `event: client.owner_transfer` 一行 |
+| 5 | Bob 跑 `login <token> --override` → 二次确认 → owner 切换 + Alice 名下 3 agent 全 unpin;server 日志记录 `event: client.owner_transfer` 一行 |
 | 6 | Bob 重连成功;Bob 在多 org 中也自动覆盖 |
 
 ### B.3 Alice 反向 claim 回来
 
-Bob 用完后 Alice 回到机器 M:`client claim --confirm` → owner 改回 Alice。Bob 期间 pin 的 agent 一并 unpin;Alice 之前的 agent 仍是 NULL(在 Bob 那次 claim 时已 unpin),需要 Alice 重新 `agent add` 或 Web 上重新 pin。
+Bob 用完后 Alice 回到机器 M:`login <token> --override` → owner 改回 Alice。Bob 期间 pin 的 agent 一并 unpin;Alice 之前的 agent 仍是 NULL(在 Bob 那次 claim 时已 unpin),需要 Alice 重新 `agent add` 或 Web 上重新 pin。
 
 ### B.4 CI / 演示机
 
@@ -545,7 +545,7 @@ Bob 用完后 Alice 回到机器 M:`client claim --confirm` → owner 改回 Ali
 | 3 | 跑 agent → 任务完成 |
 | 4 | 可选 `hub logout`;`client.yaml` 留存 |
 
-下次同 service-account 进来 handshake 通过;若换 service-account 触发 `CLIENT_USER_MISMATCH`,CI 脚本里显式 `client claim --confirm`(脚本场景虽接受 prompt 风险但仍要求显式参数,无静默接管路径)。
+下次同 service-account 进来 handshake 通过;若换 service-account 触发 `CLIENT_USER_MISMATCH`,CI 脚本里显式 `login <token> --override`(脚本场景虽接受 prompt 风险但仍要求显式参数,无静默接管路径)。
 
 ### B.5 Alice 被踢出 org B
 
@@ -581,12 +581,12 @@ Alice 是 org A admin、org B member,持 JWT(JWT 内 organizationId 与 role cla
 | R-RUN 不变量 | `agent.organizationId === session.organizationId AND client.userId === jwt.userId` | `agent.managerUserId === jwt.userId AND member.status='active' AND clients.user_id === jwt.userId`;org 不再参与 R-RUN |
 | 切 org 行为 | 推 `session:org_changed` 帧驱动 CLI 解绑/重绑 | **撤回 — session 一开始覆盖全部 active org,无切换动作** |
 | `/auth/switch-org` 端点 | 重新签发 JWT + 推 WS 帧 | 仅作"前端默认视图调整器",不推 WS 帧、不变 backend session |
-| 切 user 行为 | 未明确 | **`CLIENT_USER_MISMATCH` 拒绝 + `client claim --confirm` 显式接管 + 旧 agent unpin** |
+| 切 user 行为 | 未明确 | **`CLIENT_USER_MISMATCH` 拒绝 + `login <token> --override` 显式接管 + 旧 agent unpin** |
 | `agent_presence` schema | 不变 | 仍不变(代码事实修正)|
 | Connection 单/多活 | 单活(隐含)| **per-user 单活;connection 与 org 完全无关(无 single/multi 概念)** |
 | `client_uses` 流水 | 无 | 无新表 — owner 切换事件由 server 结构化日志覆盖 |
 | Role 检查来源 | `jwt.role` | **(user, requestedOrgId) 实时查 `members.role`**,扫调用点改造 |
-| CLI 命令体系 | 不动 | `client claim`;`agent --org` flag;`agent create` 多 org 用户强制 `--org` |
+| CLI 命令体系 | 不动 | `login <token> --override`;`agent --org` flag;`agent create` 多 org 用户强制 `--org` |
 
 ---
 

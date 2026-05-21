@@ -10,26 +10,44 @@
 
 ## CLI Source Map
 
-- `apps/cli/src/cli/index.ts` — top-level Commander program and command registration.
-- `apps/cli/src/commands/client.ts` — `client start/stop/restart/status/doctor`, the Hub-side `client list / disconnect` commands, `client claim`, and the `client config show/set/get` subgroup for editing `client.yaml`. The background service has no dedicated subgroup — its lifecycle is folded into top-level `connect <token>` (auto-install) and `client doctor` (state, via `checkBackgroundService`).
-- `apps/cli/src/commands/saas-connect.ts` — top-level `connect <token>`: decodes the token's `iss` claim to derive the hub URL, persists `credentials.json`, writes `server.url` into `client.yaml`, and installs the background service by default.
-- `apps/cli/src/commands/agent.ts` — local aliases (`add/remove/prune/list`), `create`, `claim`, `workspace clean`, `bind client/bot/user`, runtime status (`status/reset`), `agent session list/suspend/terminate`, and the hidden `agent debug register/pull` debug subgroup. Delegates `agent config` registration to `commands/agent-config.ts`.
-- `apps/cli/src/commands/agent-config.ts` — `agent config show/set-model/append-prompt/add-mcp/set-env/add-repo/dry-run`, all thin wrappers over `/api/v1/admin/agents/:id/config`.
-- `apps/cli/src/commands/chat.ts` — `chat send/list/history/open`. The day-to-day messaging surface (sender is the agent matching `--agent <name>` or the only one configured locally).
-- `apps/cli/src/commands/onboard.ts` — guided onboarding, argument-shape only.
+Phase 1A of the repo-merge refactor split the old monolithic command
+files into namespace subdirectories. Each verb / subcommand lives in its
+own file; helpers shared across namespaces live in `commands/_shared/`.
+
+- `apps/cli/src/cli/index.ts` — top-level Commander program and dispatcher. Registers 5 top-level shortcuts + 5 active namespaces + 2 placeholder namespaces.
+- **Top-level shortcuts** (single-verb files):
+  - `apps/cli/src/commands/login.ts` — `login <token> [--no-start] [--override]`. Decodes the token's `iss` claim to derive the hub URL, persists `credentials.json`, writes `server.url` into `client.yaml`, installs the background daemon (unless `--no-start`). `--override` folds in the old `client claim` behavior (POST `/clients/:id/claim` + stale alias cleanup).
+  - `apps/cli/src/commands/logout.ts` — `logout [--purge]`. Symmetric to `login`: stops the daemon + deletes `credentials.json`; `--purge` also wipes `client.yaml`.
+  - `apps/cli/src/commands/status.ts` — top-level cross-subsystem overview (CLI version + service + hub + auth + agents).
+  - `apps/cli/src/commands/doctor.ts` — top-level cross-subsystem readiness check. Phase 1A ships the daemon-side checks; Phase 3 wires in tree / git / claude-code binary checks via the same shared helper.
+  - `apps/cli/src/commands/upgrade.ts` — `upgrade [--check] [--no-restart]`. Self-upgrade via the npm registry + refresh unit + restart daemon. Refuses to run from a source checkout.
+- **Namespaces** (subdirectories with their own `index.ts` registrar):
+  - `apps/cli/src/commands/daemon/` — daemon lifecycle (`start` / `stop` / `restart` / `status` / `doctor`). `daemon/start.ts` is the only command that loads `ClientRuntime`; it fails closed when no credentials exist, pointing the operator at `login`.
+  - `apps/cli/src/commands/config/` — top-level local YAML editing (`show` / `set` / `get`). Promoted out of the old `client config` subgroup in Phase 1A.
+  - `apps/cli/src/commands/agent/` — agent management. Subdirectories: `agent/bind/` (client/bot/user), `agent/workspace/` (clean), `agent/session/` (list + suspend/terminate), `agent/debug/` (hidden register), `agent/config/` (server-side runtime config: show / set-model / append-prompt / add-mcp / set-env / add-repo / dry-run). Top-level verbs: `add` / `remove` / `prune` / `list` / `create` / `claim` / `status` / `reset`.
+  - `apps/cli/src/commands/chat/` — `send` / `invite` / `list` / `history` / `open`. Day-to-day messaging.
+  - `apps/cli/src/commands/org/` — `bind-tree` (only command today).
+  - `apps/cli/src/commands/tree/` — placeholder for the unified `tree` namespace; Phase 3 T3.1 wires this through to the shared `first-tree tree` surface.
+  - `apps/cli/src/commands/github/` — placeholder for the unified `github` namespace; same Phase 3 trigger.
+- **Shared helpers** (`apps/cli/src/commands/_shared/`):
+  - `connect-token.ts` — `decodeJwtPayload`, `deriveHubUrlFromToken`, `HubUrlDerivationError`. Reused by `login` and any future caller that needs to introspect a connect token.
+  - `local-agent.ts` — `resolveLocalAgent`, `createSdk`, `handleSdkError`, `readClientId`. Used by agent and chat namespaces to resolve the sender agent from the local config.
+  - `resolve-agent.ts` — `resolveAgent` (cross-org `/me/managed-agents` lookup), used by every command that addresses a Hub agent by name.
+  - `account-transfer.ts` — `postClaim` + `cleanupStaleAliasesAfterClaim`. Used by `login --override` to transfer machine ownership and prune the previous owner's local aliases.
+  - `status-blocks.ts` — pure render blocks for `status` and `daemon status` (CLI version, service, hub, auth, agents).
 
 ## Reusable Core Logic
 
-- `apps/cli/src/core/onboard.ts` — agent creation via Admin API, optional assistant creation, optional Feishu binding; provides `onboardCheck` / `onboardCreate` / `formatCheckReport` / `loadOnboardState` / `saveOnboardState`.
 - `apps/cli/src/core/bootstrap.ts` — credential persistence (`saveCredentials`, `loadCredentials`) and token freshness (`resolveAccessToken`, `ensureFreshAccessToken`), plus `resolveServerUrl` and `saveAgentConfig`. `ensureFreshAdminToken` is a back-compat alias of `ensureFreshAccessToken`.
-- `apps/cli/src/core/service-install.ts` — `installClientService`, `uninstallClientService`, `getClientServiceStatus`, `isServiceSupported`, `resolveCliInvocation`. Handles launchd (macOS) and `systemd --user` (Linux); marks other platforms as `unsupported`. Logs go to `~/.first-tree/hub/logs/`.
-- `apps/cli/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `client start` and `connect <token> --no-start`. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
-- `apps/cli/src/core/doctor.ts` — readiness checks used by `client doctor`: `checkNodeVersion`, `checkClientConfig`, `checkServerReachable`, `checkAgentConfigs`, `checkWebSocket`, `checkBackgroundService`.
+- `apps/cli/src/core/service-install.ts` — `installClientService`, `uninstallClientService`, `getClientServiceStatus`, `isServiceSupported`, `resolveCliInvocation`, plus the `startClientService` / `stopClientService` / `restartClientService` thin wrappers. Handles launchd (macOS) and `systemd --user` (Linux); marks other platforms as `unsupported`. Logs go to `~/.first-tree/hub/logs/`. The launchd plist / systemd unit templates spawn `daemon start --no-interactive`.
+- `apps/cli/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `daemon start` and `login`'s inline-run fallback. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
+- `apps/cli/src/core/doctor.ts` — readiness checks used by `daemon doctor` and the top-level `doctor`: `checkNodeVersion`, `checkClientConfig`, `checkServerReachable`, `checkAgentConfigs`, `checkWebSocket`, `checkBackgroundService`, plus `reconcileAgentConfigs` (server-aware variant).
 - `apps/cli/src/core/feishu.ts` — `bindFeishuBot`, `bindFeishuUser`.
+- `apps/cli/src/core/agent-prune.ts` — `findStaleAliases`, `removeLocalAgent`, `formatStaleReason`. Used by `agent prune` and by `_shared/account-transfer.ts`.
 - `apps/cli/src/core/prompt.ts` — `isInteractive`, `promptAddAgent`, `promptMissingFields` (schema-driven prompting).
-- `apps/cli/src/core/output.ts` — `fail`, `success`, `blank`, `status` helpers for consistent stderr/stdout output.
+- `apps/cli/src/core/output.ts` — `print.{result, fail, status, check, blank, line}` for consistent stderr / stdout output.
 
-If you change command behavior, there is a good chance the real logic belongs in one of these core modules rather than in the command handler itself.
+If you change command behavior, there is a good chance the real logic belongs in one of these core modules (or `commands/_shared/`) rather than in the command handler itself.
 
 ## Shared Config and Schema Files
 
@@ -48,7 +66,7 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 - `packages/client/src/runtime/bootstrap.ts` — optional Context Tree clone sync and `.agent/` workspace bootstrap.
 - `packages/client/src/runtime/session-manager.ts` — session lifecycle and dedup-sensitive message dispatch.
 - `packages/server/src/app.ts` — server wiring, route registration, background jobs.
-- `packages/server/src/api/auth/` — connect-token, refresh endpoints consumed by `connect <token>` and `ensureFreshAccessToken`.
+- `packages/server/src/api/auth/` — connect-token, refresh endpoints consumed by `login` and `ensureFreshAccessToken`.
 - `packages/server/src/api/admin/` — agent admin, agent config, session, and client endpoints that the CLI calls.
 - `packages/server/src/services/inbox.ts` — inbox push-claim / WS ack / silent-context bundling / timeout reset (adapter+kael consumers).
 
@@ -56,41 +74,44 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 
 ### Add or change a CLI command
 
-1. Update or add the handler in `apps/cli/src/commands/`.
-2. Move reusable logic into `apps/cli/src/core/`.
-3. Register the command from `apps/cli/src/cli/index.ts` if it is new.
+1. Add the handler under the right namespace dir in `apps/cli/src/commands/` (`<verb>.ts` for a single command, `<ns>/<verb>.ts` for a namespace member). Keep handlers thin.
+2. Move reusable logic into `apps/cli/src/core/` (cross-command) or `apps/cli/src/commands/_shared/` (cross-namespace within commands).
+3. Register the command from the relevant namespace `index.ts`, then ensure that `index.ts` is registered from `apps/cli/src/cli/index.ts`.
 4. Update barrel exports (`apps/cli/src/core/index.ts`, `apps/cli/src/index.ts`) if the functionality should be importable by other tools.
-5. Update `docs/cli-reference.md`.
+5. Update `docs/cli-reference.md` and `references/command-surface.md` in this skill.
 
 ### Change the credential / auth surface
 
 1. Changes to login or refresh behavior touch `core/bootstrap.ts` and the `/api/v1/auth/*` routes.
-2. Changes to `connect <token>` flow touch `commands/saas-connect.ts` and (usually) `core/service-install.ts`.
+2. Changes to the `login` flow touch `commands/login.ts` (and possibly `commands/_shared/connect-token.ts`, `commands/_shared/account-transfer.ts`) and (usually) `core/service-install.ts`.
 3. Any change that adds or removes an auth env var must update `docs/cli-reference.md` and `references/command-surface.md` in this skill.
 
 ### Change onboarding behavior
 
-1. `commands/onboard.ts` for argument shape or interaction flow only.
-2. `core/onboard.ts` for the actual behavior.
-3. `docs/onboarding-guide.md` for user-facing changes.
-4. `docs/claim-agent-guide.md` if claim / binding behavior changes.
+The single-shot `onboard` command was retired in Phase 1A; onboarding is now a sequence of explicit verbs (`login` + `agent create` + optional `agent bind bot` + `daemon start`). To change onboarding behavior:
 
-### Change the background service
+1. `commands/login.ts` for token exchange / `--override` flow.
+2. `commands/agent/create.ts` for the Hub-side create + local bind step.
+3. `commands/agent/bind/{bot,user}.ts` for IM bindings.
+4. `docs/onboarding-guide.md` and `docs/claim-agent-guide.md` for user-facing changes.
+
+### Change the background daemon
 
 1. `core/service-install.ts` for platform-specific logic (launchd plist, systemd unit, log paths, CLI invocation resolution).
-2. `commands/saas-connect.ts` for the install-on-connect behavior — there is no dedicated `client service ...` CLI subcommand; lifecycle is bundled into top-level `connect <token>`.
-3. `core/doctor.ts` (`checkBackgroundService`) for what `client doctor` reports about service state.
+2. `commands/daemon/start.ts` for the foreground / supervisor-child branching and the fail-closed credential check.
+3. `commands/login.ts` for the install-on-login behavior (`installClientService` invocation).
+4. `core/doctor.ts` (`checkBackgroundService`) for what `daemon doctor` reports about service state.
 
 ### Change config behavior
 
 1. Update the relevant schema under `packages/shared/src/config/`.
 2. Check whether prompt text, defaults, env names, or secret masking rules also need changes.
 3. Update `docs/cli-reference.md`.
-4. Re-test the matching `client config` or `agent` flows.
+4. Re-test the matching top-level `config` or `agent config` flows.
 
 ### Change messaging or agent runtime behavior
 
-1. Start with `apps/cli/src/commands/agent.ts` if the CLI surface changes.
+1. Start with `apps/cli/src/commands/agent/` (or `chat/`) if the CLI surface changes.
 2. Inspect `packages/client/src/sdk.ts` and `packages/client/src/runtime/` if client runtime semantics change.
 3. Inspect `packages/server/src/api/agent/` and `packages/server/src/services/` if server contracts change.
 4. Update shared schemas in `packages/shared/src/schemas/` when payload shapes change.
@@ -120,5 +141,5 @@ first-tree-hub
 Reusable code is also importable. When adding reusable CLI-adjacent behavior, preserve the separation:
 
 - thin command handler for argument parsing
-- reusable `core/*` function for behavior
+- reusable `core/*` function for behavior (or `commands/_shared/*` for command-only helpers shared across namespaces)
 - re-export through `apps/cli/src/index.ts` when external callers need the API
