@@ -1131,7 +1131,7 @@ export function ChatView({
   const itemCount = items.length;
   useEffect(() => {
     if (itemCount > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
     }
   }, [itemCount]);
 
