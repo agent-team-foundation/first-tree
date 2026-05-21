@@ -206,7 +206,7 @@ export function QuestionMessage({
       {isPending ? (
         <div className="flex items-center justify-end" style={{ gap: "var(--sp-2)" }}>
           {submitError ? (
-            <span className="text-caption" style={{ color: "var(--state-danger)" }}>
+            <span className="text-caption" style={{ color: "var(--state-error)" }}>
               {submitError}
             </span>
           ) : null}
