@@ -1,19 +1,17 @@
 /**
- * Continuously tracks which message is at (or nearest to) the bottom
- * edge of the chat viewport, then persists that id per-chat into
- * IndexedDB. On chat open, the UI uses this stored value to scroll
- * the same message back to the viewport bottom — so the user
- * resumes visually where they left off, not "at the bottom of all
- * current content" and not "at the highest message they've ever
- * seen".
+ * Continuously tracks the message at the bottom edge of the chat
+ * viewport, then persists two ids per-chat into IndexedDB:
  *
- * The tracking signal is the actual scroll position, not visibility
- * dwell time. Two reasons:
- *  - It matches what the user means by "where I was reading"
- *    (their viewport, not what they read).
- *  - It is monotonically tied to their scroll actions — no
- *    surprises from "I touched the bottom for half a second so the
- *    marker jumped to the bottom forever".
+ *  - `bottomVisibleMessageId` — the live scroll-position anchor.
+ *    Read on chat-open to scroll the user back to where they
+ *    visually left off.
+ *  - `latestKnownMessageId` — the chronologically latest message
+ *    present at write time (the chat tip). Read on chat-open to
+ *    decide which messages count as "new since last visit"
+ *    (everything strictly newer than this id).
+ *
+ * Both ids are written together on every persistence event so the
+ * pair is always coherent.
  *
  * Writes fire on three triggers:
  *  - debounced scroll-settle (default 600ms after the last scroll
@@ -55,12 +53,6 @@ type UseReadTrackerOptions = {
    * `["chat-read-state", chatId]` in sync with what was just
    * persisted (otherwise a same-session A → B → A would read the
    * stale value).
-   *
-   * Both ids are passed: `bottomVisibleMessageId` drives the
-   * scroll anchor on next visit; `latestKnownMessageId` is the
-   * persisted session watermark that seeds the pill baseline on
-   * re-open (so the pill does not flash "↓ N new" for content the
-   * user already passed in the prior visit).
    */
   onWrite?: (chatId: string, bottomVisibleMessageId: string, latestKnownMessageId: string) => void;
   /**
@@ -73,17 +65,6 @@ type UseReadTrackerOptions = {
    * just on persisted snapshots.
    */
   onBottomVisibleChange?: (bottomVisibleMessageId: string | null) => void;
-  /**
-   * Resolves the id to persist as `latestKnownMessageId` at IDB
-   * write time. Designed for callers that maintain a session high
-   * watermark (advance with viewport-bottom over the visit,
-   * monotonic) and want THAT id persisted instead of "the latest
-   * DOM message at write time". When the callback returns `null`,
-   * the tracker falls back to `findLatestMessageId(container)` —
-   * i.e., the chronologically latest rendered message — which is
-   * the right default for callers that don't track a watermark.
-   */
-  getLatestKnownMessageId?: () => string | null;
   /** Settle time before a scroll triggers an IDB write. Default 600ms. */
   writeDebounceMs?: number;
 };
@@ -145,15 +126,10 @@ function findBottomVisibleMessageId(container: HTMLElement): string | null {
 /**
  * Returns the id of the LAST `[data-message-id]` node in the
  * container — i.e., the latest message by `createdAt` (since the
- * timeline is sorted ascending). Distinct from
- * `findBottomVisibleMessageId` — that one is gated by the
- * viewport; this one always returns the chronologically-latest
- * message regardless of whether the user has scrolled to see it.
- *
- * Used as a fallback for `latestKnownMessageId` when the caller
- * does not supply a session-watermark resolver — the persisted
- * baseline still needs *some* id, and "latest in DOM at write time"
- * is the right default for that case.
+ * timeline is sorted ascending). This is what gets persisted as
+ * `latestKnownMessageId`: the chat tip at write time, used on the
+ * next visit to decide which messages are truly "new since you
+ * were last here".
  */
 function findLatestMessageId(container: HTMLElement): string | null {
   const nodes = container.querySelectorAll<HTMLElement>("[data-message-id]");
@@ -168,7 +144,6 @@ export function useReadTracker({
   chatId,
   onWrite,
   onBottomVisibleChange,
-  getLatestKnownMessageId,
   writeDebounceMs = 600,
 }: UseReadTrackerOptions): void {
   // Latest computed bottom-visible id. Kept in a ref so write/flush
@@ -203,16 +178,12 @@ export function useReadTracker({
   // without making the effects re-run on every render.
   const onWriteRef = useRef(onWrite);
   const onBottomVisibleChangeRef = useRef(onBottomVisibleChange);
-  const getLatestKnownMessageIdRef = useRef(getLatestKnownMessageId);
   useEffect(() => {
     onWriteRef.current = onWrite;
   }, [onWrite]);
   useEffect(() => {
     onBottomVisibleChangeRef.current = onBottomVisibleChange;
   }, [onBottomVisibleChange]);
-  useEffect(() => {
-    getLatestKnownMessageIdRef.current = getLatestKnownMessageId;
-  }, [getLatestKnownMessageId]);
 
   // Reset on chat switch — the previous chat's bottomVisibleId is
   // not meaningful for the new chat.
@@ -261,12 +232,7 @@ export function useReadTracker({
         if (currentChatIdRef.current !== chatId) return;
         const bv = bottomVisibleIdRef.current;
         if (!bv) return;
-        // `latestKnownMessageId` is sourced via the caller's
-        // callback (chat-view's session high watermark). If absent
-        // or null, fall back to the chronologically-latest DOM
-        // message — preserves the previous default behavior for
-        // callers that don't supply the callback.
-        const lk = getLatestKnownMessageIdRef.current?.() ?? findLatestMessageId(container);
+        const lk = findLatestMessageId(container);
         if (!lk) return;
         void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
       }, writeDebounceMs);
@@ -302,15 +268,10 @@ export function useReadTracker({
       // flushNow runs, the bottomVisible ref still holds the OLD
       // chat's pre-switch value.
       //
-      // The high-watermark callback is read live (not via ref) so
-      // it returns the OLD chat's session high water — at this
-      // point in cleanup, the chat-view's ref-sync useEffect for
-      // the NEW chat has not yet run, so the callback closure is
-      // still bound to the OLD chat's state.
       const bv = bottomVisibleIdRef.current;
       if (!bv) return;
       const container = containerRef.current;
-      const lk = getLatestKnownMessageIdRef.current?.() ?? (container ? findLatestMessageId(container) : null);
+      const lk = container ? findLatestMessageId(container) : null;
       if (!lk) return;
       void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
     };

@@ -51,6 +51,7 @@ import {
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
+import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -715,32 +716,6 @@ export function ChatView({
     refetchInterval: 15_000,
   });
 
-  // High-watermark message-id ref read by `useReadTracker` when it
-  // flushes IDB. Declared up here (rather than down in the tracker
-  // block) so `sendMut.onSuccess` and the file-send path can write
-  // it SYNCHRONOUSLY at the moment the server returns a new
-  // message id. The synchronous write closes a timing race in the
-  // chat-switch-mid-send scenario:
-  //
-  //   - onSuccess sets `pendingHighWaterAdvance` (state update).
-  //   - User clicks switch-to-B in a separate event-loop task,
-  //     BEFORE React's scheduler runs the post-paint useEffects.
-  //   - React commits chatId=B + reset state in one cycle. The
-  //     drain useEffect and the ref-sync useEffect from the
-  //     interleaving render are cancelled by React.
-  //   - After the chatId=B render paints, the tracker's
-  //     chatId-cleanup fires and reads this ref. If we waited for
-  //     a useEffect to sync it, the ref would still be at the
-  //     pre-send baseline — and IDB would be written with the
-  //     stale id, undoing the explicit `setReadState` call we made
-  //     in onSuccess.
-  //
-  // Writing the ref synchronously in onSuccess sidesteps that
-  // entire chain: by the time the tracker cleanup reads, the ref
-  // already holds the new message id. Per PR 286 manual sign-off
-  // rev 12 (reviewer's option A, sharpened).
-  const highWatermarkMessageIdRef = useRef<string | null>(null);
-
   // Pre-advance target for the session high water: the id of a
   // message the USER just sent (text-only or file path). The actual
   // `setSessionHighestId` call happens in an effect further down,
@@ -779,19 +754,13 @@ export function ChatView({
       // docs/session-creation-on-first-message.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       // Persist the own-send advance to chat-A's read-state row
-      // BOTH in the React Query cache and in IndexedDB, keyed by
-      // the `chatId` captured in this closure at send time.
-      //
-      // Why directly (rather than relying on the tracker's
-      // debounced/flush-on-unmount writes): if the user switches to
-      // a different chat within the first ~600ms of pressing Enter,
-      // the tracker hasn't debounced-written yet and its flush on
-      // chatId change reads `highWatermarkMessageIdRef`, which may
-      // still be at the pre-send baseline because
-      // `sessionHighestId` hasn't been advanced yet either (the
-      // drain effect runs after paint). Writing here makes the
-      // own-send advance durable independent of timing. Per PR 286
-      // manual sign-off rev 11 (chat-switch-mid-send fix).
+      // both in the React Query cache and in IndexedDB, keyed by
+      // the `chatId` captured in this closure at send time. The
+      // direct write makes the snapshot durable even if the user
+      // switches chats before the tracker's debounce window
+      // settles. The just-sent message is, under UUID v7, also the
+      // chat tip — so `latestKnownMessageId = sentMessage.id` is
+      // both the visual anchor and the freshness marker.
       const ownSendReadState: ReadState = {
         chatId,
         bottomVisibleMessageId: sentMessage.id,
@@ -800,12 +769,6 @@ export function ChatView({
       };
       queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
       void setReadState(chatId, sentMessage.id, sentMessage.id);
-      // Synchronously advance the tracker's high-water ref so that
-      // a chat-switch fired before React's post-paint useEffects
-      // run cannot leave the ref at a stale baseline. See the
-      // declaration of `highWatermarkMessageIdRef` for the full
-      // race trace.
-      highWatermarkMessageIdRef.current = sentMessage.id;
       // Pre-advance the in-memory high water to the new message id
       // BEFORE initiating the smooth scroll. By the time the new
       // message commits to `mergedMessages`, `sessionHighestIdx`
@@ -929,9 +892,6 @@ export function ChatView({
           };
           queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
           void setReadState(chatId, lastSentMessageId, lastSentMessageId);
-          // Synchronous ref write — see sendMut.onSuccess for
-          // the chat-switch-mid-send race rationale.
-          highWatermarkMessageIdRef.current = lastSentMessageId;
           setPendingHighWaterAdvance({ chatId, messageId: lastSentMessageId });
         }
         // Same scroll-on-send as sendMut.onSuccess — the file-send
@@ -1224,58 +1184,86 @@ export function ChatView({
     return Math.max(0, mergedMessages.length - 1 - sessionHighestIdx);
   }, [mergedMessages, sessionHighestIdx]);
 
-  // Keep `highWatermarkMessageIdRef` (declared up near `sendMut`)
-  // in sync with the resolved high water as session state evolves.
-  // The ref is the source of truth for the tracker's IDB writes;
-  // this effect captures organic advances (user scrolling forward,
-  // baseline-only re-visits) that aren't already covered by the
-  // synchronous own-send write in `sendMut.onSuccess` /
-  // file-send path.
-  //
-  // Branch order matters:
-  //
-  //   1. Pending pre-advance for the current chat → use it. This
-  //      covers the small but real window after `setPendingHighWaterAdvance`
-  //      and before the drain effect has applied it to
-  //      `sessionHighestId`. Without this branch, the effect would
-  //      fall through to `mergedMessages[baselineIdx]` and clobber
-  //      the synchronous ref write done in `onSuccess` — exactly
-  //      the regression caught in PR 286 manual sign-off rev 11
-  //      (T5 fail report).
-  //   2. Explicit `sessionHighestId` → use it. Covers the post-drain
-  //      window where pending has been cleared but the new id is
-  //      still pre-refetch.
-  //   3. Resolve through `mergedMessages[sessionHighestIdx]`. Normal
-  //      organic-advance case.
+  // Snapshot the IDB latest-known id at chat-open: this fixes the
+  // "New Messages" divider to the boundary between
+  // already-in-chat-at-leave-time and arrived-since-then. Held
+  // through the visit so live tracker writes to IDB do not migrate
+  // the divider as the user scrolls. Reset on chatId change so the
+  // next visit recomputes from the freshly-persisted value.
+  const [dividerAnchorMessageId, setDividerAnchorMessageId] = useState<string | null>(null);
+  // Dismiss when the divider has scrolled out the top of the
+  // viewport (IntersectionObserver below). Kept as state so the
+  // render path can drop the divider once dismissed. Reset on chat
+  // switch.
+  const [dividerDismissed, setDividerDismissed] = useState<boolean>(false);
+  // Tracks which chatId we have already snapshotted the divider
+  // anchor for. Without this guard, the snapshot would re-fire on
+  // every tracker IDB write (each one updates the React Query
+  // cache for the chat-read-state key), and the divider would slide
+  // forward as the user scrolled — defeating the "frozen at open"
+  // intent.
+  const dividerSnapshotChatIdRef = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
+  useLayoutEffect(() => {
+    setDividerAnchorMessageId(null);
+    setDividerDismissed(false);
+    dividerSnapshotChatIdRef.current = null;
+  }, [chatId]);
+  // Snapshot once the read-state query for this chatId has resolved
+  // (data is `undefined` while loading, `null` for no row, and a
+  // `ReadState` otherwise). Skips when there is no prior IDB row —
+  // first-time visits intentionally show no divider.
   useEffect(() => {
-    if (pendingHighWaterAdvance && pendingHighWaterAdvance.chatId === chatId) {
-      highWatermarkMessageIdRef.current = pendingHighWaterAdvance.messageId;
-      return;
+    if (dividerSnapshotChatIdRef.current === chatId) return;
+    if (readState === undefined) return;
+    dividerSnapshotChatIdRef.current = chatId;
+    setDividerAnchorMessageId(readState?.latestKnownMessageId ?? null);
+  }, [chatId, readState]);
+
+  // Index of the first message strictly newer than the divider
+  // anchor — i.e., where the "New Messages" line slots in. UUID v7
+  // ids are time-sortable lexicographically, so `>` is a valid
+  // freshness comparison. Returns -1 when no divider should render
+  // (no anchor, no anchor message present, or no newer messages).
+  const firstNewItemIdx = useMemo<number>(() => {
+    if (!dividerAnchorMessageId) return -1;
+    if (!mergedMessages.some((m) => m.id === dividerAnchorMessageId)) return -1;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item || item.kind !== "message") continue;
+      if (item.data.id > dividerAnchorMessageId) return i;
     }
-    if (sessionHighestId !== null) {
-      highWatermarkMessageIdRef.current = sessionHighestId;
-      return;
-    }
-    if (sessionHighestIdx >= 0 && sessionHighestIdx < mergedMessages.length) {
-      highWatermarkMessageIdRef.current = mergedMessages[sessionHighestIdx]?.id ?? null;
-      return;
-    }
-    // Fallback: when IDB has a `latestKnownMessageId` but it can't
-    // yet be resolved to an index in `mergedMessages` (chat re-open
-    // while chat-messages refetch is in flight, common for the
-    // B → A return after an own-send), keep the ref pinned to the
-    // IDB value rather than dropping to null. Without this, the
-    // tracker's first debounced write after re-mount would call
-    // `findLatestMessageId(container)` and persist the pre-send
-    // baseline back into IDB — clobbering the own-send advance we
-    // wrote in `onSuccess` two visits ago. Caught in PR 286 manual
-    // sign-off rev 12 T5 fail report.
-    if (storedLatestKnownId !== null) {
-      highWatermarkMessageIdRef.current = storedLatestKnownId;
-      return;
-    }
-    highWatermarkMessageIdRef.current = null;
-  }, [pendingHighWaterAdvance, chatId, sessionHighestId, sessionHighestIdx, mergedMessages, storedLatestKnownId]);
+    return -1;
+  }, [items, mergedMessages, dividerAnchorMessageId]);
+
+  // Hide the divider the moment it scrolls past the top of the
+  // viewport — but keep it visible while the user is still looking
+  // at it, even after they have read every new message below.
+  // Dismissal is one-way during a visit; the next chat open
+  // re-evaluates from the fresh snapshot.
+  const dividerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (dividerDismissed) return;
+    if (firstNewItemIdx < 0) return;
+    const node = dividerRef.current;
+    const container = scrollContainerRef.current;
+    if (!node || !container) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const rootBounds = entry.rootBounds;
+          if (!rootBounds) continue;
+          if (entry.boundingClientRect.bottom < rootBounds.top) {
+            setDividerDismissed(true);
+            return;
+          }
+        }
+      },
+      { root: container, threshold: 0 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [firstNewItemIdx, dividerDismissed]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
@@ -1344,13 +1332,6 @@ export function ChatView({
       });
     },
     onBottomVisibleChange: setLiveBottomVisibleId,
-    // Persist the user's session high watermark as
-    // `latestKnownMessageId`, not "the latest msg in the DOM".
-    // Without this, leaving a chat mid-scroll (never reaching the
-    // bottom) would persist the chat's actual latest message, and
-    // the next return would show no divider for content the user
-    // never saw.
-    getLatestKnownMessageId: () => highWatermarkMessageIdRef.current,
   });
 
   // Pill click: jump to the bottom. As the scroll lands, the
@@ -1766,7 +1747,7 @@ export function ChatView({
               </div>
             )}
             <div className="flex flex-col" style={{ gap: 4 }}>
-              {items.flatMap((item) => {
+              {items.flatMap((item, idx) => {
                 let node: ReactNode = null;
                 if (item.kind === "event") {
                   const ev = item.data;
@@ -1813,8 +1794,22 @@ export function ChatView({
                 // message when there's a known break between cache and the
                 // server window.
                 const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
-                if (isGapAnchor) {
-                  return [node, <HistoryGapBanner key={`gap-after-${item.data.id}`} />];
+                // Insert the "New Messages" divider before the first item
+                // whose message id is strictly newer than the snapshot
+                // taken at chat-open. Dismissed once it has scrolled past
+                // the top of the viewport (IntersectionObserver above).
+                const showDivider = !dividerDismissed && idx === firstNewItemIdx;
+                const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
+                const epilogue =
+                  isGapAnchor && item.kind === "message" ? (
+                    <HistoryGapBanner key={`gap-after-${item.data.id}`} />
+                  ) : null;
+                if (prelude || epilogue) {
+                  const out: ReactNode[] = [];
+                  if (prelude) out.push(prelude);
+                  out.push(node);
+                  if (epilogue) out.push(epilogue);
+                  return out;
                 }
                 return node;
               })}

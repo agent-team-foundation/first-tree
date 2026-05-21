@@ -1,33 +1,32 @@
 /**
- * Per-browser, per-chat **scroll-position** memory: the id of the
- * message that sat at the bottom edge of the user's viewport the last
- * time they left this chat (unmount, tab visibility-loss, or as the
- * scroll settled mid-session).
+ * Per-browser, per-chat snapshot taken when the user leaves a chat,
+ * used to restore scroll position and to mark the old/new boundary
+ * on return.
  *
- * On chat open, the UI scrolls that message to the viewport bottom,
- * so any later-arrived messages — agent replies that came in while
- * the chat was unselected, or that the user scrolled past without
- * seeing — sit just below the fold. A floating pill surfaces their
- * count.
+ * The two persisted ids serve distinct roles:
  *
- * Earlier revisions modeled this as a *monotonic last-read marker*
- * (advanced forward only as a message was in the viewport for
- * ≥500ms). That was rejected during PR 286 manual sign-off: the user
- * expects "come back to where I left visually" — i.e. when leaving
- * the bottom and then scrolling up to re-read, returning to the chat
- * later should NOT skip back to the bottom even if no new messages
- * arrived. A snapshot-on-leave model captures that intent directly.
+ *  - `bottomVisibleMessageId` — the message that sat at the bottom
+ *    edge of the viewport at leave time. On return, the UI scrolls
+ *    this message back to the viewport bottom so the user resumes
+ *    at the same visual position.
  *
- * The IDB schema field name is `bottomVisibleMessageId` to match the
- * new semantics. The store name (`read-state`) and surrounding code
- * still use the historical "read state" vocabulary because the
- * concept is, externally, "where to drop the user back into the
- * chat".
+ *  - `latestKnownMessageId` — the chat tip (chronologically latest
+ *    message in the chat) at leave time. On return, any message
+ *    strictly newer than this is "new since you were last here":
+ *    counted by the pill and divided from prior content by the
+ *    "New Messages" divider.
+ *
+ * The two are equal when the user left the chat at the bottom. They
+ * diverge when the user scrolled up before leaving — `bottomVisible`
+ * trails behind `latestKnown`. The bug that drove this distinction:
+ * if `latestKnown` were instead the user's session high watermark,
+ * a mid-scroll leave + return would falsely surface the messages
+ * between the high water and the chat tip as "new" — but they were
+ * already there before the user left.
  *
  * Origin: proposal `hub-chat-scroll-and-cache.20260509.md` (M2),
- * revised through PR 286 manual sign-off — the dedicated unread
- * divider was dropped in the final round in favor of a pill-only
- * UX (Lark-style). See issue first-tree-all 120.
+ * revised through PR 286 manual sign-off. See issue first-tree-all
+ * 120.
  */
 
 const DB_NAME = "first-tree-hub-chat-cache";
@@ -40,29 +39,24 @@ export type ReadState = {
   chatId: string;
   /**
    * The message that was at (or nearest to) the bottom edge of the
-   * viewport when the user last left this chat. Not necessarily the
-   * latest message in the chat — that's the whole point. Drives the
-   * `scrollToMessageImmediate` anchor on return: the user lands back
-   * at the visual position they left.
+   * viewport at the moment the user left this chat. Drives the
+   * `scrollToMessageImmediate` anchor on return.
    */
   bottomVisibleMessageId: string;
   /**
-   * The highest message id the user had reached (had at viewport
-   * bottom) by the time they left this chat. Distinct from
-   * `bottomVisibleMessageId` — the user may have scrolled back up
-   * before leaving, in which case the bottom-visible id sits behind
-   * the watermark. Both ids are recorded.
+   * The chat tip — the chronologically latest message present in
+   * the chat at the moment the user left. Distinct from
+   * `bottomVisibleMessageId` whenever the user scrolled up before
+   * leaving (bottom-visible trails behind the tip).
    *
-   * Drives the pill's baseline on return: pill count = messages
-   * strictly newer than this id (so the user does not see "↓ N new"
-   * for content they already passed in a prior visit). Without this
-   * field, the pill would flash on every re-open of a chat with
-   * any messages below the scroll-restore anchor.
+   * On return, anything strictly newer than this id is "new since
+   * your last visit": counted by the pill and divided from prior
+   * content by the "New Messages" divider. Anything ≤ this id was
+   * already in the chat when the user left, even if they hadn't
+   * scrolled to it — so it does not count as new.
    *
-   * Optional for backward compatibility: rows written before this
-   * field existed (briefly, during the M2 model swap) lack it.
-   * Treat undefined as "session-only watermark on first return after
-   * upgrade".
+   * Optional only for backward compatibility with rows written
+   * before this field existed.
    */
   latestKnownMessageId?: string;
   /** Wall-clock when the snapshot was taken. Used for diagnostics. */
@@ -118,11 +112,10 @@ export async function getReadState(chatId: string): Promise<ReadState | null> {
 }
 
 /**
- * Upsert the scroll-position snapshot for `chatId`. Captures both
- * the visual position (`bottomVisibleMessageId`) and the freshness
- * marker (`latestKnownMessageId` — the id of the latest message in
- * the chat at the moment of this snapshot, used later to compute
- * "new since last visit").
+ * Upsert the snapshot for `chatId`. Captures both the visual
+ * position (`bottomVisibleMessageId`) and the freshness marker
+ * (`latestKnownMessageId`, the chat tip at the moment of this
+ * snapshot).
  *
  * Fire-and-forget at call sites: the write is best-effort, must
  * never delay rendering, and silently no-ops if IndexedDB is
