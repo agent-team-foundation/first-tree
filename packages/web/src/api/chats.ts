@@ -10,7 +10,7 @@ export type MessageWithDelivery = Message & {
   deliveryStatus?: "sent" | "pending" | "delivered" | "acked";
 };
 
-type PaginatedMessages = {
+export type PaginatedMessages = {
   items: MessageWithDelivery[];
   nextCursor: string | null;
 };
