@@ -37,20 +37,38 @@ export async function upsertSessionState(
   options?: { touchPresenceLastSeen?: boolean },
 ) {
   const now = new Date();
-  let wrote = false;
+  let stateChanged = false;
   await db.transaction(async (tx) => {
     // Short-circuit when the row is already at the target state: skip the
     // updatedAt refresh so steady-state messaging doesn't churn the row.
     // Insertions and any state transition (evicted → active, active →
     // suspended, etc.) still take the UPDATE branch.
-    await tx
+    //
+    // We use `.returning()` to detect whether INSERT/UPDATE actually fired —
+    // PostgreSQL omits returning rows when the ON CONFLICT DO UPDATE's
+    // `setWhere` predicate is false (same-state no-op). Zero rows back ⇒
+    // skip the downstream presence refresh + NOTIFY. This keeps
+    // `session:state` frames off the wire when an already-active session
+    // receives a burst of steady-state messages (e.g. an agent emitting
+    // many intermediate chat results into the same chat) — without this
+    // short-circuit, the predictive Step 1b in services/message.ts would
+    // NOTIFY once per message and the admin WS would invalidate
+    // `["activity"]` / `["sessions"]` dozens of times per second. The
+    // client's `heartbeat` frame is the canonical lastSeenAt refresh
+    // path (see presence.ts:touchAgent), so dropping the lastSeenAt
+    // side-effect here is safe.
+    const rows = await tx
       .insert(agentChatSessions)
       .values({ agentId, chatId, state, updatedAt: now })
       .onConflictDoUpdate({
         target: [agentChatSessions.agentId, agentChatSessions.chatId],
         set: { state, updatedAt: now },
         setWhere: ne(agentChatSessions.state, state),
-      });
+      })
+      .returning({ agentId: agentChatSessions.agentId });
+
+    if (rows.length === 0) return;
+    stateChanged = true;
 
     // runtimeState is owned by the client's `runtime:state` frame — do not
     // write it here to avoid dual-write conflicts.
@@ -83,11 +101,9 @@ export async function upsertSessionState(
         target: [agentPresence.agentId],
         set: presenceSet,
       });
-
-    wrote = true;
   });
 
-  if (wrote && notifier) {
+  if (stateChanged && notifier) {
     notifier.notifySessionStateChange(agentId, chatId, state, organizationId).catch(() => {});
   }
 }

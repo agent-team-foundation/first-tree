@@ -30,8 +30,8 @@ let latestQc: QC | null = null;
 let refCount = 0;
 
 // `session:state` and `session:event` frames burst when an agent ticks
-// through tool calls — every frame would otherwise force a `me/chats`
-// refetch and the React-Query default (`staleTime: 0`) wouldn't dedupe.
+// through tool calls — every frame would otherwise force an invalidation
+// per frame and the React-Query default (`staleTime: 0`) wouldn't dedupe.
 // Leading-edge fire keeps the working ring / WorkingChip snappy; the
 // trailing window collapses the burst into at most one extra round-trip
 // after it ends.
@@ -42,26 +42,58 @@ let refCount = 0;
 // server-side `liveActivity` window. Also applied to `chat:message`
 // to fold storm-of-messages flurries (formerly invalidated every frame
 // without a throttle).
-const ME_CHATS_INVALIDATE_THROTTLE_MS = 1000;
-let meChatsLastInvalidatedAt = 0;
-let meChatsTrailingTimer: ReturnType<typeof setTimeout> | null = null;
+//
+// Each cache key gets its OWN leading + trailing pair via the factory
+// below so bursts in one channel don't starve another. The server's
+// `session:state` short-circuit (services/activity.ts) is the primary
+// defence — this throttle is the client-side safety net for any frame
+// that does reach us (and for `chat:message` which has no server-side
+// dedupe).
+const INVALIDATE_THROTTLE_MS = 1000;
 
-function invalidateMeChatsThrottled(qc: QC) {
-  const now = Date.now();
-  const elapsed = now - meChatsLastInvalidatedAt;
-  if (elapsed >= ME_CHATS_INVALIDATE_THROTTLE_MS) {
-    meChatsLastInvalidatedAt = now;
-    qc.invalidateQueries({ queryKey: ["me", "chats"] });
-    return;
-  }
-  if (meChatsTrailingTimer === null) {
-    meChatsTrailingTimer = setTimeout(() => {
-      meChatsTrailingTimer = null;
-      meChatsLastInvalidatedAt = Date.now();
-      if (latestQc) latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
-    }, ME_CHATS_INVALIDATE_THROTTLE_MS - elapsed);
-  }
+type ThrottledInvalidator = {
+  invalidate: (qc: QC) => void;
+  dispose: () => void;
+};
+
+function createThrottledInvalidator(queryKey: readonly unknown[], throttleMs: number): ThrottledInvalidator {
+  let lastAt = 0;
+  let trailingTimer: ReturnType<typeof setTimeout> | null = null;
+  return {
+    invalidate(qc: QC) {
+      const now = Date.now();
+      const elapsed = now - lastAt;
+      if (elapsed >= throttleMs) {
+        lastAt = now;
+        qc.invalidateQueries({ queryKey });
+        return;
+      }
+      if (trailingTimer === null) {
+        trailingTimer = setTimeout(() => {
+          trailingTimer = null;
+          lastAt = Date.now();
+          if (latestQc) latestQc.invalidateQueries({ queryKey });
+        }, throttleMs - elapsed);
+      }
+    },
+    dispose() {
+      if (trailingTimer) {
+        clearTimeout(trailingTimer);
+        trailingTimer = null;
+      }
+    },
+  };
 }
+
+const meChatsInvalidator = createThrottledInvalidator(["me", "chats"], INVALIDATE_THROTTLE_MS);
+// `["activity"]` and `["sessions"]` are read by 5+ workspace components
+// each (chat-view, roster, agent-context, new-chat-draft, team, clients,
+// command-palette). A non-throttled invalidation on every `session:state`
+// frame fans out into one GET per mounted component per frame — measured
+// at "dozens per second" while an agent ticks through tool calls. Same
+// 1s window as `me/chats` so all three keys stay roughly in lock-step.
+const activityInvalidator = createThrottledInvalidator(["activity"], INVALIDATE_THROTTLE_MS);
+const sessionsInvalidator = createThrottledInvalidator(["sessions"], INVALIDATE_THROTTLE_MS);
 
 function broadcast(msg: WsMessage) {
   for (const sub of subscribers) {
@@ -73,15 +105,15 @@ function broadcast(msg: WsMessage) {
   }
   if (latestQc) {
     if (msg.type === "session:state") {
-      latestQc.invalidateQueries({ queryKey: ["activity"] });
-      latestQc.invalidateQueries({ queryKey: ["sessions"] });
+      activityInvalidator.invalidate(latestQc);
+      sessionsInvalidator.invalidate(latestQc);
       // `MeChatRow.engagedAgentIds` is derived from
       // `agent_chat_sessions(agent_id, chat_id).state === 'active'`, which
       // is mutated by the same `session:state` event upstream. Invalidate
       // the conversation-list query so the avatar engaged ring switches
       // on / off in real time without waiting for the 15s `refetchInterval`.
       // Throttled because the upstream frames can burst tool-call-fast.
-      invalidateMeChatsThrottled(latestQc);
+      meChatsInvalidator.invalidate(latestQc);
     } else if (msg.type === "session:event") {
       // `MeChatRow.liveActivity` is derived from the most recent
       // `session_events` row for each chat. The same wire frame produced
@@ -89,8 +121,8 @@ function broadcast(msg: WsMessage) {
       // through this socket; invalidate the conversation-list so the
       // WorkingChip in the time slot updates within the throttle window.
       // Re-uses the same leading + trailing throttle helper as
-      // `session:state` (window defined by `ME_CHATS_INVALIDATE_THROTTLE_MS`).
-      invalidateMeChatsThrottled(latestQc);
+      // `session:state` (window defined by `INVALIDATE_THROTTLE_MS`).
+      meChatsInvalidator.invalidate(latestQc);
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
       // carries `{ type, chatId }` (see shared/me-chat.ts:chatMessageFrameSchema);
@@ -101,7 +133,7 @@ function broadcast(msg: WsMessage) {
       // try/catch and the user-facing fallback is the 5s polling refetch
       // already wired into ChatView.
       const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
-      invalidateMeChatsThrottled(latestQc);
+      meChatsInvalidator.invalidate(latestQc);
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: ["chat-messages", chatId] });
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
@@ -225,10 +257,9 @@ function teardown() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  if (meChatsTrailingTimer) {
-    clearTimeout(meChatsTrailingTimer);
-    meChatsTrailingTimer = null;
-  }
+  meChatsInvalidator.dispose();
+  activityInvalidator.dispose();
+  sessionsInvalidator.dispose();
   if (ws) {
     ws.close(1000, "unmount");
     ws = null;
