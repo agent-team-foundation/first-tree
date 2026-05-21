@@ -16,6 +16,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { agentAvatarImageUrl } from "../services/agent.js";
+import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, joinChat, leaveChat } from "../services/chat.js";
 import { findInstallationByOrg } from "../services/github-app-installations.js";
 import { mintContextTreeInstallationToken } from "../services/github-app-token.js";
@@ -129,6 +130,18 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
       })),
     };
+  });
+
+  /**
+   * Composite per-agent status for this chat's non-human speakers — the
+   * server-authoritative aggregation (reachability + session + live activity
+   * + needs-you) that the right-sidebar AgentRow and the compose status bar
+   * consume. Access is the standard chat-visibility gate; the response set
+   * depends only on the chat, not the caller's role.
+   */
+  app.get<{ Params: { chatId: string } }>("/:chatId/agent-status", async (request) => {
+    const { chat } = await requireChatAccess(request, app.db);
+    return getChatAgentStatuses(app.db, chat.id);
   });
 
   /**
