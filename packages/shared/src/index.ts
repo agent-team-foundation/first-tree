@@ -108,6 +108,20 @@ export {
   updateAgentRuntimeConfigSchema,
 } from "./schemas/agent-runtime-config.js";
 export {
+  AGENT_ENGAGEMENTS,
+  AGENT_MAIN_STATUSES,
+  type AgentChatStatus,
+  type AgentEngagement,
+  type AgentMainStatus,
+  agentChatStatusSchema,
+  agentEngagementSchema,
+  agentMainStatusSchema,
+  compareMainStatus,
+  type DeriveMainStatusInput,
+  deriveMainStatus,
+  MAIN_STATUS_PRIORITY,
+} from "./schemas/agent-status.js";
+export {
   type ConnectTokenExchange,
   type ConnectTokenResponse,
   connectTokenExchangeSchema,
