@@ -1,4 +1,4 @@
-import type { ChatEngagementView, ChatSource, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatEngagementView, ChatSource, MeChatRow } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";

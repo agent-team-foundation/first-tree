@@ -1,4 +1,4 @@
-import { parseWorkspaceDocKey } from "@agent-team-foundation/first-tree-hub-shared";
+import { parseWorkspaceDocKey } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
 import {

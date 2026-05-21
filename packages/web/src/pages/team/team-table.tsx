@@ -1,4 +1,4 @@
-import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent } from "@first-tree/shared";
 import { Bot, Lock, type LucideIcon, User, Users } from "lucide-react";
 import { type CSSProperties, useState } from "react";
 import type { RuntimeAgent } from "../../api/activity.js";

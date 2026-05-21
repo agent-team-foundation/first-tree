@@ -1,4 +1,4 @@
-import { createAdapterConfigSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { createAdapterConfigSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../../observability/index.js";
 import { requireOrgMembership } from "../../scope/require-org.js";

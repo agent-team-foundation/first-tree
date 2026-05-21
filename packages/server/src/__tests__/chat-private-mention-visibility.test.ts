@@ -20,7 +20,7 @@
  *      bypasses the discovery filter.
  */
 
-import { AGENT_VISIBILITY, type ChatDetail } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_VISIBILITY, type ChatDetail } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { addParticipant as agentAddParticipant, createChat as agentCreateChat } from "../services/chat.js";

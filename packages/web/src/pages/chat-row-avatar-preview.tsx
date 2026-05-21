@@ -1,4 +1,4 @@
-import type { MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { MeChatRow } from "@first-tree/shared";
 import { useEffect } from "react";
 import { ChatRowAvatar } from "../components/chat/chat-row-avatar.js";
 

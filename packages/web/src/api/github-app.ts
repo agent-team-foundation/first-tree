@@ -1,4 +1,4 @@
-import type { GithubAppInstallationOutput } from "@agent-team-foundation/first-tree-hub-shared";
+import type { GithubAppInstallationOutput } from "@first-tree/shared";
 import { ApiError, api } from "./client.js";
 
 /**

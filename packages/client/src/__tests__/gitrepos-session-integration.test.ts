@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentRuntimeConfig } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfig } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Stub the Claude SDK — the handler's internals call `query()` to spawn a

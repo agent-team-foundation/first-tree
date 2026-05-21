@@ -1,4 +1,4 @@
-import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
+import type { RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MessageSquare, Play } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type AddParticipant, AGENT_VISIBILITY, type CreateChat } from "@agent-team-foundation/first-tree-hub-shared";
+import { type AddParticipant, AGENT_VISIBILITY, type CreateChat } from "@first-tree/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";

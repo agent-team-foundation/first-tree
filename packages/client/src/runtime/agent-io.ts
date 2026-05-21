@@ -1,4 +1,4 @@
-import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatParticipantDetail } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentIdentity, SessionMessage } from "./handler.js";
 

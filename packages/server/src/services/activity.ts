@@ -1,4 +1,4 @@
-import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionState } from "@first-tree/shared";
 import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";

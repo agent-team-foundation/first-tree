@@ -5,7 +5,7 @@ import {
   type EnvEntry,
   type GitRepo,
   type McpServer,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 /**

@@ -1,9 +1,5 @@
 // TEMPORARY: mock snapshot for /preview/context. Delete with the route.
-import type {
-  ContextTreeNode,
-  ContextTreeSnapshot,
-  ContextTreeUpdate,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { ContextTreeNode, ContextTreeSnapshot, ContextTreeUpdate } from "@first-tree/shared";
 
 const node = (
   id: string,

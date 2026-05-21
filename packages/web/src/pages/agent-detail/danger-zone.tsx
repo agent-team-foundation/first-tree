@@ -1,4 +1,4 @@
-import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent } from "@first-tree/shared";
 import { Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Button } from "../../components/ui/button.js";

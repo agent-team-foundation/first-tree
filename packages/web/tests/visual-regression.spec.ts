@@ -2,7 +2,7 @@
  * Visual regression skeleton — scaffolding for cross-platform typography + token QA.
  *
  * Prerequisites (not installed in this repo yet):
- *   pnpm --filter @first-tree-hub/web add -D @playwright/test
+ *   pnpm --filter @first-tree/web add -D @playwright/test
  *   pnpm exec playwright install chromium webkit firefox
  *
  * Then wire into package.json:

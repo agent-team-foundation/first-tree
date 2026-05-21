@@ -62,11 +62,11 @@ export function runDoctor(repoRoot: string): DoctorResult {
     issues.push({
       kind: "io",
       what: "server dist",
-      detail: `Missing ${serverDist}. Run \`pnpm --filter @first-tree-hub/server build\` first.`,
+      detail: `Missing ${serverDist}. Run \`pnpm --filter @first-tree/server build\` first.`,
     });
   }
 
-  const commandDist = resolve(repoRoot, "packages/command/dist/cli/index.mjs");
+  const commandDist = resolve(repoRoot, "apps/cli/dist/cli/index.mjs");
   if (!existsSync(commandDist)) {
     issues.push({
       kind: "io",

@@ -342,6 +342,6 @@ name := lowercase(input)
 - `src/components/mention-autocomplete.tsx` —— **新建** `[P1]`
 - `src/lib/use-agent-name-map.ts` —— 简化 / 移除 fallback `[P2]`
 
-**CLI** — `packages/command`
+**CLI** — `apps/cli`
 - `src/commands/agent.ts` —— `agent add` / `agent list` / `--agent` 调整 `[P3]`
 - `src/core/` —— 启动时的本地状态迁移 `[P3]`

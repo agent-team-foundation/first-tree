@@ -1,8 +1,4 @@
-import {
-  isOrgSettingNamespace,
-  ORG_SETTINGS_NAMESPACES,
-  type OrgSettingNamespace,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { isOrgSettingNamespace, ORG_SETTINGS_NAMESPACES, type OrgSettingNamespace } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";

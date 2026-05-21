@@ -1,4 +1,4 @@
-import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatParticipantDetail } from "@first-tree/shared";
 import { X } from "lucide-react";
 import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
 import { GitHubSection } from "./github-section.js";

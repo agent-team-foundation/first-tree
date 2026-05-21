@@ -1,4 +1,4 @@
-import type { AdapterBotStatus, Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AdapterBotStatus, Agent } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";

@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfig } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfig } from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 

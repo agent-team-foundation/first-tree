@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { initConfig, serverConfigSchema } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { initConfig, serverConfigSchema } from "@first-tree/shared/config";
 import { buildApp } from "./app.js";
 import { markReady } from "./bootstrap-state.js";
 import { runStage } from "./bootstrap-utils.js";

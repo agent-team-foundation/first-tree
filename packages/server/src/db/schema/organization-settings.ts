@@ -6,7 +6,7 @@ import { users } from "./users.js";
  * Per-organization settings, keyed by `(organization_id, namespace)`.
  *
  * One row holds an entire group of related config as a JSONB blob — schema
- * for each namespace lives in `@agent-team-foundation/first-tree-hub-shared`
+ * for each namespace lives in `@first-tree/shared`
  * (`ORG_SETTINGS_NAMESPACES`) and is enforced by the service layer on every
  * read/write. Adding a new config group means registering a new namespace +
  * Zod schema in shared; the DB does not change.

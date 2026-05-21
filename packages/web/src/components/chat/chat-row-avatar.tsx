@@ -29,7 +29,7 @@
  * accessible name is unchanged.
  */
 
-import type { MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { MeChatRow } from "@first-tree/shared";
 
 type Participant = MeChatRow["participants"][number];
 

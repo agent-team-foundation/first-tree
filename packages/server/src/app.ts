@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { extname, join, resolve } from "node:path";
-import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { FIRST_TREE_HUB_ATTR, redactUrl } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import fastifyOpenTelemetry from "@autotelic/fastify-opentelemetry";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { FIRST_TREE_HUB_ATTR, redactUrl } from "@first-tree/shared/observability";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
@@ -103,7 +103,7 @@ export type AppContext = {
  *
  *  1. `config.update.commandVersion` — explicit injection. Set by the
  *     Dockerfile at build time (via `COMMAND_VERSION` build-arg, which CI
- *     reads from `packages/command/package.json.version`), so a fresh image
+ *     reads from `apps/cli/package.json.version`), so a fresh image
  *     boots with a sane version even when the npm registry is unreachable
  *     at startup.
  *  2. Server workspace's own `package.json` — kept only for `pnpm --filter

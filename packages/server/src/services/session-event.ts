@@ -3,8 +3,8 @@ import type {
   ContextTreeUsageSummary,
   SessionEvent,
   SessionEventKind,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import { sessionEventSchema } from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
+import { sessionEventSchema } from "@first-tree/shared";
 import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";

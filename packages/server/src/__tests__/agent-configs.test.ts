@@ -1,7 +1,4 @@
-import {
-  agentRuntimeConfigPayloadSchema,
-  DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { agentRuntimeConfigPayloadSchema, DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

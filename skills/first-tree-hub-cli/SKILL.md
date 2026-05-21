@@ -1,6 +1,6 @@
 ---
 name: first-tree-hub-cli
-description: Install, operate, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `connect`/`client`/`agent`/`chat`/`onboard` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to the SaaS Hub, installing or running the client as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
+description: Install, operate, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `connect`/`client`/`agent`/`chat`/`onboard` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to the SaaS Hub, installing or running the client as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `apps/cli`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
 ---
 
 # First Tree Hub CLI
@@ -151,11 +151,11 @@ To decommission a machine: stop and remove the unit at the OS level (`launchctl 
 ### Modify Code Safely
 
 - For new or changed CLI behavior, inspect:
-  - `packages/command/src/commands/*.ts` — command registration and argument shape.
-  - `packages/command/src/core/*.ts` — reusable logic (auth, service install, doctor, onboard, Feishu, etc.).
+  - `apps/cli/src/commands/*.ts` — command registration and argument shape.
+  - `apps/cli/src/core/*.ts` — reusable logic (auth, service install, doctor, onboard, Feishu, etc.).
   - `packages/shared/src/config/*.ts` — if flags, env vars, or schema change.
   - `docs/cli-reference.md` and `docs/onboarding-guide.md` — whenever user-facing behavior changes.
-- Keep command modules thin. Reusable business logic belongs in `packages/command/src/core/`. Re-export new reusable functions from `packages/command/src/core/index.ts` and `packages/command/src/index.ts` when external callers should be able to import them.
+- Keep command modules thin. Reusable business logic belongs in `apps/cli/src/core/`. Re-export new reusable functions from `apps/cli/src/core/index.ts` and `apps/cli/src/index.ts` when external callers should be able to import them.
 - See `references/developer-map.md` for the full source layout.
 
 ## Validation

@@ -1,4 +1,4 @@
-import type { AgentVisibility, ClientCapabilities, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentVisibility, ClientCapabilities, OrgBrief } from "@first-tree/shared";
 import { ArrowRight, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";

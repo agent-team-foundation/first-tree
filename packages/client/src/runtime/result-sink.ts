@@ -1,4 +1,4 @@
-import { documentContextSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { documentContextSchema } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { buildMessageDocumentSnapshots } from "./doc-snapshots.js";
 import type { AgentIdentity } from "./handler.js";

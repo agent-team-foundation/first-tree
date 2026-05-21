@@ -10,7 +10,7 @@ This report covers the **code-level** spike — does the integration surface loo
 
 ## F1 — `client start --foreground` already exists
 
-`packages/command/src/commands/client.ts:85`:
+`apps/cli/src/commands/client.ts:85`:
 
 ```ts
 .option("--foreground", "Run inline instead of delegating to the background service (for debugging)")
@@ -18,7 +18,7 @@ This report covers the **code-level** spike — does the integration surface loo
 
 The handler treats `options.foreground === true || isSupervisorChild` as the inline branch (`wantInline`) and bypasses the systemd/launchd installation paths entirely. `--foreground` plus `--no-interactive` is what the e2e framework needs.
 
-**Status**: ✅ no client source change required. Framework spawns CLI via `node packages/command/dist/cli/index.mjs client start --foreground --no-interactive`.
+**Status**: ✅ no client source change required. Framework spawns CLI via `node apps/cli/dist/cli/index.mjs client start --foreground --no-interactive`.
 
 ## F2 — `/healthz` is the right liveness probe (not `/health`)
 

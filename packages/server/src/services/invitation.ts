@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { INVITATION_DEFAULT_TTL_DAYS } from "@agent-team-foundation/first-tree-hub-shared";
+import { INVITATION_DEFAULT_TTL_DAYS } from "@first-tree/shared";
 import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { invitationRedemptions, invitations } from "../db/schema/invitations.js";

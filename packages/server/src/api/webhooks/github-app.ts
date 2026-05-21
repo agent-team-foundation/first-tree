@@ -1,8 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import {
-  githubAppInstallationPermissionsSchema,
-  type WebhookSource,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { githubAppInstallationPermissionsSchema, type WebhookSource } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";

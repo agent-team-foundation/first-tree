@@ -3,7 +3,7 @@ import type {
   AgentRuntimeConfigDryRunResult,
   AgentRuntimeConfigPayload,
   UpdateAgentRuntimeConfig,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { api } from "./client.js";
 
 /**

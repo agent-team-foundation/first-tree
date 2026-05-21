@@ -1,4 +1,4 @@
-import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
+import type { RuntimeProvider } from "@first-tree/shared";
 import { Check, ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";

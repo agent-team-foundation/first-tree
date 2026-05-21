@@ -5,8 +5,8 @@ import type {
   RuntimeState,
   SessionEvent,
   SessionState,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
+} from "@first-tree/shared";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { RegisterResult } from "../sdk.js";

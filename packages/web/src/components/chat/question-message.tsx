@@ -5,7 +5,7 @@ import {
   type QuestionPreviewFormat,
   questionAnswerMessageContentSchema,
   questionMessageContentSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { submitQuestionAnswer } from "../../api/questions.js";

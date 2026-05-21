@@ -2,7 +2,7 @@ import type { FastifyBaseLogger } from "fastify";
 
 /**
  * npm name of the consumer-facing CLI tarball. Kept here (rather than
- * imported from `packages/command`) because the server Docker image
+ * imported from `apps/cli`) because the server Docker image
  * deliberately does NOT copy the Command package — see the May 2026
  * "decouple Docker entry from CLI" refactor — so a runtime import would
  * fail. The string is part of npm's public API; renaming it would break

@@ -15,40 +15,40 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 // Array form (not object) so each alias matches exactly with an anchored
-// RegExp. An unanchored prefix like `@first-tree-hub/client` would
-// otherwise swallow `@first-tree-hub/client/observability` and rewrite it
+// RegExp. An unanchored prefix like `@first-tree/client` would
+// otherwise swallow `@first-tree/client/observability` and rewrite it
 // to a bogus path with `/observability` appended to the file.
 export const monorepoSourceAliases: { find: RegExp; replacement: string }[] = [
   {
-    find: /^@agent-team-foundation\/first-tree-hub-shared\/config$/,
+    find: /^@first-tree\/shared\/config$/,
     replacement: resolve(root, "packages/shared/src/config/index.ts"),
   },
   {
-    find: /^@agent-team-foundation\/first-tree-hub-shared\/observability$/,
+    find: /^@first-tree\/shared\/observability$/,
     replacement: resolve(root, "packages/shared/src/observability/index.ts"),
   },
   {
-    find: /^@agent-team-foundation\/first-tree-hub-shared$/,
+    find: /^@first-tree\/shared$/,
     replacement: resolve(root, "packages/shared/src/index.ts"),
   },
   {
-    find: /^@first-tree-hub\/client\/observability$/,
+    find: /^@first-tree\/client\/observability$/,
     replacement: resolve(root, "packages/client/src/observability/index.ts"),
   },
   {
-    find: /^@first-tree-hub\/client$/,
+    find: /^@first-tree\/client$/,
     replacement: resolve(root, "packages/client/src/index.ts"),
   },
   {
-    find: /^@first-tree-hub\/server\/observability$/,
+    find: /^@first-tree\/server\/observability$/,
     replacement: resolve(root, "packages/server/src/observability/index.ts"),
   },
   {
-    find: /^@first-tree-hub\/server\/config$/,
+    find: /^@first-tree\/server\/config$/,
     replacement: resolve(root, "packages/server/src/config.ts"),
   },
   {
-    find: /^@first-tree-hub\/server$/,
+    find: /^@first-tree\/server$/,
     replacement: resolve(root, "packages/server/src/app.ts"),
   },
 ];

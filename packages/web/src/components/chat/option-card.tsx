@@ -1,4 +1,4 @@
-import type { QuestionOption, QuestionPreviewFormat } from "@agent-team-foundation/first-tree-hub-shared";
+import type { QuestionOption, QuestionPreviewFormat } from "@first-tree/shared";
 import DOMPurify from "dompurify";
 import { useMemo } from "react";
 import { cn } from "../../lib/utils.js";

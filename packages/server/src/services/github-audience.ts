@@ -1,4 +1,4 @@
-import type { InvolveReason, NormalizedEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InvolveReason, NormalizedEvent } from "@first-tree/shared";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";

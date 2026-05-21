@@ -1,4 +1,4 @@
-import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { FIRST_TREE_HUB_ATTR } from "@first-tree/shared/observability";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import { trace } from "@opentelemetry/api";
 import { and, eq, ne, sql } from "drizzle-orm";

@@ -1,4 +1,4 @@
-import type { ToolCallEventPayload } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ToolCallEventPayload } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { extractGithubEntity } from "../services/github-entity-extractor.js";
 

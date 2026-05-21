@@ -1,4 +1,4 @@
-import type { PulseBucket } from "@agent-team-foundation/first-tree-hub-shared";
+import type { PulseBucket } from "@first-tree/shared";
 import type { AdminBroadcastPayload } from "./admin-broadcast.js";
 import type { Notifier, RuntimeStateChangeHandler } from "./notifier.js";
 

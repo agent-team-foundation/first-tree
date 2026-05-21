@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chatMetadataSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { chatMetadataSchema } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";

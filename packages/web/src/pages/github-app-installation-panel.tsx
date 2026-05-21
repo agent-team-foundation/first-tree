@@ -1,4 +1,4 @@
-import type { GithubAppInstallationOutput } from "@agent-team-foundation/first-tree-hub-shared";
+import type { GithubAppInstallationOutput } from "@first-tree/shared";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Building2, ExternalLink, PauseCircle, User } from "lucide-react";
 import { ApiError } from "../api/client.js";

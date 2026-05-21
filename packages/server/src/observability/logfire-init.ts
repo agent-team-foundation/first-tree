@@ -21,7 +21,7 @@
  * deployments do not need to change `FIRST_TREE_HUB_OTEL_*` env vars.
  */
 
-import { TRACING_SENSITIVE_KEY_PATTERNS } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { TRACING_SENSITIVE_KEY_PATTERNS } from "@first-tree/shared/observability";
 import * as logfire from "@pydantic/logfire-node";
 import { createLogger } from "./logger.js";
 import { installPinoErrorBridge, uninstallPinoErrorBridge } from "./otel-helpers.js";

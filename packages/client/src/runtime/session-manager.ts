@@ -6,8 +6,8 @@ import type {
   RuntimeState,
   SessionEvent,
   SessionState,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import { deriveRepoLocalPath } from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
+import { deriveRepoLocalPath } from "@first-tree/shared";
 import { hasPendingForChat, tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";

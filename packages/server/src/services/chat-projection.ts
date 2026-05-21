@@ -32,7 +32,7 @@
  *     watchers are not direct `@`-mention targets.
  */
 
-import { CHAT_ENGAGEMENT_STATUSES } from "@agent-team-foundation/first-tree-hub-shared";
+import { CHAT_ENGAGEMENT_STATUSES } from "@first-tree/shared";
 import { eq, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { chats } from "../db/schema/chats.js";

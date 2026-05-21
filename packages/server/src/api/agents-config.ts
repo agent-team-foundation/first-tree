@@ -1,7 +1,4 @@
-import {
-  dryRunAgentRuntimeConfigSchema,
-  updateAgentRuntimeConfigSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { dryRunAgentRuntimeConfigSchema, updateAgentRuntimeConfigSchema } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agentPresence } from "../db/schema/agent-presence.js";

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { extractMentions, type SendMessage, scanMentionTokens } from "@agent-team-foundation/first-tree-hub-shared";
+import { extractMentions, type SendMessage, scanMentionTokens } from "@first-tree/shared";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";

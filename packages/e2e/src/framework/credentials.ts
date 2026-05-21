@@ -170,7 +170,7 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
   const configDir = resolve(opts.home, "config");
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
 
-  // Mirrors `packages/command/src/core/bootstrap.ts::saveCredentials` shape.
+  // Mirrors `apps/cli/src/core/bootstrap.ts::saveCredentials` shape.
   writeFileSync(
     resolve(configDir, "credentials.json"),
     JSON.stringify({ accessToken, refreshToken, serverUrl: opts.serverUrl }, null, 2),

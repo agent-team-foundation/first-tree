@@ -1,4 +1,4 @@
-import { selfServiceFeishuBotSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { selfServiceFeishuBotSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../../errors.js";
 import { requireAgent } from "../../middleware/require-identity.js";

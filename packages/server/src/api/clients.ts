@@ -1,4 +1,4 @@
-import { updateClientCapabilitiesSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { updateClientCapabilitiesSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth.js";

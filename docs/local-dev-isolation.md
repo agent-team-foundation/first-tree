@@ -51,7 +51,7 @@ independent journald identifiers, and independent state under
 
 The systemd unit name and launchd label come from the basename of
 `FIRST_TREE_HUB_HOME` via `deriveServiceSuffix` in
-[`packages/command/src/core/service-install.ts`](../packages/command/src/core/service-install.ts).
+[`apps/cli/src/core/service-install.ts`](../apps/cli/src/core/service-install.ts).
 Rules:
 
 | Home basename | systemd unit | launchd label |
@@ -84,7 +84,7 @@ a CLI upgrade to silently rename people's prod service.
 ## What `dev-cli.sh` does NOT isolate
 
 - The PostgreSQL database. Hub server uses one shared DB by default.
-  If you also run an in-tree server (`pnpm --filter @first-tree-hub/server dev`),
+  If you also run an in-tree server (`pnpm --filter @first-tree/server dev`),
   use a separate DB URL via `FIRST_TREE_HUB_DATABASE_URL`.
 - Global npm packages. `update --no-restart` will still run
   `npm install -g @agent-team-foundation/first-tree-hub@latest` and

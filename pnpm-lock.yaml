@@ -18,50 +18,7 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
-  packages/client:
-    dependencies:
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.2.84
-        version: 0.2.84(zod@4.3.6)
-      '@openai/codex-sdk':
-        specifier: ^0.125.0
-        version: 0.125.0
-      pino:
-        specifier: ^9.5.0
-        version: 9.14.0
-      semver:
-        specifier: ^7.6.3
-        version: 7.7.4
-      ws:
-        specifier: ^8.20.0
-        version: 8.20.0
-      yaml:
-        specifier: ^2.8.3
-        version: 2.8.3
-      zod:
-        specifier: ^4.0.0
-        version: 4.3.6
-    devDependencies:
-      '@agent-team-foundation/first-tree-hub-shared':
-        specifier: workspace:*
-        version: link:../shared
-      '@types/node':
-        specifier: ^22.16.0
-        version: 22.19.15
-      '@types/semver':
-        specifier: ^7.5.8
-        version: 7.7.1
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      tsdown:
-        specifier: ^0.21.4
-        version: 0.21.4(typescript@5.9.3)
-      vitest:
-        specifier: ^3.2.0
-        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
-
-  packages/command:
+  apps/cli:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.84
@@ -97,18 +54,18 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
-      '@agent-team-foundation/first-tree-hub-shared':
+      '@first-tree/client':
         specifier: workspace:*
-        version: link:../shared
-      '@first-tree-hub/client':
+        version: link:../../packages/client
+      '@first-tree/server':
         specifier: workspace:*
-        version: link:../client
-      '@first-tree-hub/server':
+        version: link:../../packages/server
+      '@first-tree/shared':
         specifier: workspace:*
-        version: link:../server
-      '@first-tree-hub/web':
+        version: link:../../packages/shared
+      '@first-tree/web':
         specifier: workspace:*
-        version: link:../web
+        version: link:../../packages/web
       '@types/node':
         specifier: ^22.16.0
         version: 22.19.15
@@ -128,20 +85,63 @@ importers:
         specifier: ^3.2.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
 
+  packages/client:
+    dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: ^0.2.84
+        version: 0.2.84(zod@4.3.6)
+      '@openai/codex-sdk':
+        specifier: ^0.125.0
+        version: 0.125.0
+      pino:
+        specifier: ^9.5.0
+        version: 9.14.0
+      semver:
+        specifier: ^7.6.3
+        version: 7.7.4
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+      zod:
+        specifier: ^4.0.0
+        version: 4.3.6
+    devDependencies:
+      '@first-tree/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@types/node':
+        specifier: ^22.16.0
+        version: 22.19.15
+      '@types/semver':
+        specifier: ^7.5.8
+        version: 7.7.1
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      tsdown:
+        specifier: ^0.21.4
+        version: 0.21.4(typescript@5.9.3)
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
   packages/e2e:
     devDependencies:
       '@agent-team-foundation/first-tree-hub':
         specifier: workspace:*
-        version: link:../command
-      '@agent-team-foundation/first-tree-hub-shared':
-        specifier: workspace:*
-        version: link:../shared
+        version: link:../../apps/cli
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.84
         version: 0.2.84(zod@4.3.6)
-      '@first-tree-hub/server':
+      '@first-tree/server':
         specifier: workspace:*
         version: link:../server
+      '@first-tree/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: ^22.16.0
         version: 22.19.15
@@ -178,9 +178,6 @@ importers:
 
   packages/server:
     dependencies:
-      '@agent-team-foundation/first-tree-hub-shared':
-        specifier: workspace:*
-        version: link:../shared
       '@autotelic/fastify-opentelemetry':
         specifier: ^0.23.0
         version: 0.23.0(@opentelemetry/api@1.9.1)
@@ -196,6 +193,9 @@ importers:
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.2.0
+      '@first-tree/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@larksuiteoapi/node-sdk':
         specifier: ^1.59.0
         version: 1.59.0
@@ -233,7 +233,7 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
-      '@first-tree-hub/client':
+      '@first-tree/client':
         specifier: workspace:*
         version: link:../client
       '@opentelemetry/context-async-hooks':
@@ -294,7 +294,7 @@ importers:
 
   packages/web:
     dependencies:
-      '@agent-team-foundation/first-tree-hub-shared':
+      '@first-tree/shared':
         specifier: workspace:*
         version: link:../shared
       '@radix-ui/react-dialog':

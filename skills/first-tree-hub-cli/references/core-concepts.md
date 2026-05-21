@@ -15,7 +15,7 @@ Use this distinction consistently when explaining the system or choosing where a
 
 - `packages/server` — Fastify API server, admin APIs, agent APIs, database access, adapters, notifications. Operated centrally as the SaaS Hub.
 - `packages/client` — Agent SDK, client runtime, WebSocket connection management, workspace/session handling.
-- `packages/command` — Unified CLI entry point plus reusable core orchestration helpers (auth, service install, onboard, doctor, Feishu binding). User-facing commands are limited to client / agent operations; the SaaS server runs from its own bundle (`packages/server/dist/index.mjs`).
+- `apps/cli` — Unified CLI entry point plus reusable core orchestration helpers (auth, service install, onboard, doctor, Feishu binding). User-facing commands are limited to client / agent operations; the SaaS server runs from its own bundle (`packages/server/dist/index.mjs`).
 - `packages/shared` — Zod schemas, TypeScript types, and the schema-driven config system shared across packages.
 - `packages/web` — React admin dashboard served by the server.
 

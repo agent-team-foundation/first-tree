@@ -3,7 +3,7 @@ import {
   githubDevCallbackQuerySchema,
   githubStartQuerySchema,
   safeRedirectPath,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { signTokensForUser } from "../../services/auth.js";
 import {

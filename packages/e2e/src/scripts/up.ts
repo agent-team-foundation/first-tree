@@ -61,7 +61,7 @@ async function main(): Promise<void> {
     console.log(`  devUser:      ** provisioning failed — see error above **`);
   }
   console.log("\nWeb dev login:");
-  console.log(`  start web:  VITE_PROXY_TARGET=${world.server.baseUrl} pnpm --filter @first-tree-hub/web dev`);
+  console.log(`  start web:  VITE_PROXY_TARGET=${world.server.baseUrl} pnpm --filter @first-tree/web dev`);
   console.log(`  then open:  http://localhost:5173/login  →  "Continue as Dev User"`);
   if (devSession) console.log(`              settings should now list client ${devSession.clientId}`);
   console.log("\nPress Ctrl-C to tear down.");

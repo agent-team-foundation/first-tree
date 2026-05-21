@@ -1,4 +1,4 @@
-import type { ChatSource, GithubEntityType } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatSource, GithubEntityType } from "@first-tree/shared";
 import {
   CircleDot,
   GitCommit,

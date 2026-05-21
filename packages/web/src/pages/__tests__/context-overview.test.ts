@@ -1,4 +1,4 @@
-import type { ContextTreeNode } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ContextTreeNode } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { buildOverviewNodes } from "../context.js";
 

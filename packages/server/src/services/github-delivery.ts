@@ -1,4 +1,4 @@
-import type { GithubEventCard, NormalizedEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { GithubEventCard, NormalizedEvent } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { createLogger } from "../observability/index.js";

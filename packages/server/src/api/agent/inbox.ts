@@ -1,4 +1,4 @@
-import { inboxPollQuerySchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { inboxPollQuerySchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
 import * as inboxService from "../../services/inbox.js";

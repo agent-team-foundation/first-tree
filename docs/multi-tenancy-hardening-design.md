@@ -40,8 +40,8 @@ File: `AGENTS.md` (CLAUDE.md follows via symlink).
 **Monorepo Structure section** — mark shared as internal:
 
 ```diff
--`packages/shared/` — `@agent-team-foundation/first-tree-hub-shared` — Zod schemas + types + config system (published)
-+`packages/shared/` — `@agent-team-foundation/first-tree-hub-shared` — Zod schemas + types + config system (internal, not published)
+-`packages/shared/` — `@first-tree/shared` — Zod schemas + types + config system (published)
++`packages/shared/` — `@first-tree/shared` — Zod schemas + types + config system (internal, not published)
 ```
 
 **Versioning section** — drop the shared bump rule, add shared to the inert list:
@@ -58,7 +58,7 @@ File: `packages/shared/package.json`.
 
 ```diff
  {
-   "name": "@agent-team-foundation/first-tree-hub-shared",
+   "name": "@first-tree/shared",
 +  "private": true,
    "version": "0.2.1",
    ...
@@ -145,7 +145,7 @@ WHERE "organization_id" IS NULL
 ALTER TABLE "clients" ALTER COLUMN "organization_id" SET NOT NULL;
 ```
 
-> **Note on the drizzle-kit workflow:** we define the schema with `.notNull()` first, run `pnpm --filter @first-tree-hub/server db:generate`, then manually append the `UPDATE` between the `ADD COLUMN` and `SET NOT NULL` (drizzle-kit will generate both DDL steps; we just insert the backfill between them). AGENTS.md's "never hand-edit migrations" rule targets already-committed history; appending DML to a freshly generated file is standard practice.
+> **Note on the drizzle-kit workflow:** we define the schema with `.notNull()` first, run `pnpm --filter @first-tree/server db:generate`, then manually append the `UPDATE` between the `ADD COLUMN` and `SET NOT NULL` (drizzle-kit will generate both DDL steps; we just insert the backfill between them). AGENTS.md's "never hand-edit migrations" rule targets already-committed history; appending DML to a freshly generated file is standard practice.
 
 ### B2. R-RUN: add org check + `ClientOrgMismatchError`
 
@@ -184,7 +184,7 @@ In the server-side `client:register` handler (exact file TBD — likely under `p
 
 ### B4. CLI: detect mismatch → interactive reprompt → re-register
 
-Locations TBD — likely in `packages/client/src/runtime/bootstrap.ts` (the connect flow) or `packages/command/src/core/` (the onboard flow).
+Locations TBD — likely in `packages/client/src/runtime/bootstrap.ts` (the connect flow) or `apps/cli/src/core/` (the onboard flow).
 
 **Behavior:**
 
@@ -226,7 +226,7 @@ Locations TBD — likely in `packages/client/src/runtime/bootstrap.ts` (the conn
 | `packages/server/src/errors.ts` (TBD) | B2 new `ClientOrgMismatchError` |
 | `packages/server/src/ws/*` or `services/clients.ts` (TBD) | B3 write `organizationId` on register |
 | `packages/server/src/ws/*` (TBD) | B2 map `ClientOrgMismatchError` → 403 + code |
-| `packages/client/src/runtime/bootstrap.ts` or `packages/command/src/core/*` (TBD) | B4 mismatch handling + interactive prompt + backup |
+| `packages/client/src/runtime/bootstrap.ts` or `apps/cli/src/core/*` (TBD) | B4 mismatch handling + interactive prompt + backup |
 | Tests | Integration coverage for R-RUN cross-org rejection and CLI re-register flow |
 
 "TBD" = path confirmed during implementation after reading the relevant code.

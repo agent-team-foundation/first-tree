@@ -1,9 +1,4 @@
-import {
-  CHAT_SOURCES,
-  type ChatEngagementView,
-  type ChatSource,
-  chatEngagementViewSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { CHAT_SOURCES, type ChatEngagementView, type ChatSource, chatEngagementViewSchema } from "@first-tree/shared";
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";

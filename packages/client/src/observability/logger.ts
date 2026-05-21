@@ -8,7 +8,7 @@ import {
   type LogFormat,
   type LogLevel,
   parseLogLevel,
-} from "@agent-team-foundation/first-tree-hub-shared/observability";
+} from "@first-tree/shared/observability";
 import pino from "pino";
 import { RotatingFileStream } from "./rotating-file-stream.js";
 

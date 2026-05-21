@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { CreateMember, UpdateMember } from "@agent-team-foundation/first-tree-hub-shared";
+import type { CreateMember, UpdateMember } from "@first-tree/shared";
 import bcrypt from "bcrypt";
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";

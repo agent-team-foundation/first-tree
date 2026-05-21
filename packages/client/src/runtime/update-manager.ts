@@ -1,4 +1,4 @@
-import type { ClientConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
+import type { ClientConfig } from "@first-tree/shared/config";
 import * as semver from "semver";
 import type { ServerWelcome } from "../client-connection.js";
 

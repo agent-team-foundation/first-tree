@@ -1,8 +1,4 @@
-import {
-  NOTIFICATION_TYPES,
-  type NotificationSeverity,
-  type NotificationType,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { NOTIFICATION_TYPES, type NotificationSeverity, type NotificationType } from "@first-tree/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";

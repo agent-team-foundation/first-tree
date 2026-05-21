@@ -5,7 +5,7 @@ import type {
   RebindAgent,
   RuntimeProvider,
   UpdateAgent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import {
   AGENT_NAME_REGEX,
   AGENT_STATUSES,
@@ -14,7 +14,7 @@ import {
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
   isReservedAgentName,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, count, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";

@@ -1,4 +1,4 @@
-import type { ContextTreeSnapshot } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ContextTreeSnapshot } from "@first-tree/shared";
 import { api, withOrgAt } from "./client.js";
 
 export type ContextTreeWindow = "1d" | "7d" | "30d";

@@ -1,4 +1,4 @@
-import { deriveRepoLocalPath, type GitRepo } from "@agent-team-foundation/first-tree-hub-shared";
+import { deriveRepoLocalPath, type GitRepo } from "@first-tree/shared";
 import { Plus } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "../../components/ui/button.js";

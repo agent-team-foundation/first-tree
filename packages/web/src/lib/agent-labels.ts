@@ -1,4 +1,4 @@
-import type { AgentType, AgentVisibility } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentType, AgentVisibility } from "@first-tree/shared";
 
 export function humanizeAgentType(type: AgentType): string {
   switch (type) {

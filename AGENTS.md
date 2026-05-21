@@ -25,15 +25,15 @@ pnpm install                                       # Install all dependencies
 docker compose up -d                               # Start PostgreSQL (dev)
 
 # Run the SaaS server locally (auto-runs Drizzle migrations on boot)
-pnpm --filter @first-tree-hub/server dev
+pnpm --filter @first-tree/server dev
 # Web dashboard (separate terminal)
-pnpm --filter @first-tree-hub/web dev
+pnpm --filter @first-tree/web dev
 
 pnpm check && pnpm typecheck                       # Run after every change
 pnpm test                                          # Vitest
 
-pnpm --filter @first-tree-hub/server db:generate   # Generate migrations
-pnpm --filter @first-tree-hub/server db:migrate    # Apply migrations
+pnpm --filter @first-tree/server db:generate   # Generate migrations
+pnpm --filter @first-tree/server db:migrate    # Apply migrations
 ```
 
 > Full CLI commands, env vars, and per-package dev scripts: [docs/cli-reference.md](docs/cli-reference.md). All other scripts (`format`, `build`, `db:studio`, per-package `dev` / `test`) are in each package's `package.json`.
@@ -55,21 +55,21 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 ## Repo-Local Skill
 
-- Use `skills/first-tree-hub-cli/SKILL.md` as the source-of-truth skill when the task is about the unified CLI, onboarding, config flows, runtime boundaries, or other behavior spanning `packages/command`, `packages/client`, `packages/server`, and `packages/shared`.
+- Use `skills/first-tree-hub-cli/SKILL.md` as the source-of-truth skill when the task is about the unified CLI, onboarding, config flows, runtime boundaries, or other behavior spanning `apps/cli`, `packages/client`, `packages/server`, and `packages/shared`.
 - `.agents/skills/first-tree-hub-cli/` and `.claude/skills/first-tree-hub-cli/` are symlinks to `skills/first-tree-hub-cli/`. No sync step is needed.
 
 ## Monorepo Structure
 
-- `packages/shared/` — `@agent-team-foundation/first-tree-hub-shared` — Zod schemas + types + config system (internal, not published)
-- `packages/server/` — `@first-tree-hub/server` — Fastify API server (private, bundled)
-- `packages/client/` — `@first-tree-hub/client` — Agent SDK + Runtime (private, bundled)
-- `packages/command/` — `@agent-team-foundation/first-tree-hub` — Unified CLI (**published**, the consumer-facing tarball)
-- `packages/web/` — `@first-tree-hub/web` — React admin dashboard (private, bundled)
+- `packages/shared/` — `@first-tree/shared` — Zod schemas + types + config system (internal, not published)
+- `packages/server/` — `@first-tree/server` — Fastify API server (private, bundled)
+- `packages/client/` — `@first-tree/client` — Agent SDK + Runtime (private, bundled)
+- `apps/cli/` — `@agent-team-foundation/first-tree-hub` — Unified CLI (**published**, the consumer-facing tarball)
+- `packages/web/` — `@first-tree/web` — React admin dashboard (private, bundled)
 - `docs/` — [cli-reference.md](docs/cli-reference.md), [claim-agent-guide.md](docs/claim-agent-guide.md)
 
 ## Architecture Rules
 
-**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@agent-team-foundation/first-tree-hub-shared`. Command is the user-facing CLI for client / agent operations and depends only on Client + Shared; Server is shipped separately as the SaaS Docker image.
+**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@first-tree/shared`. Command is the user-facing CLI for client / agent operations and depends only on Client + Shared; Server is shipped separately as the SaaS Docker image.
 
 **Stateless Server:** All persistent data lives in PostgreSQL. Server holds no business state.
 
