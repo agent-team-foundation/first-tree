@@ -13,7 +13,7 @@ import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, MoreHorizonta
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
-import { getActivityOverview } from "../../../api/activity.js";
+import { listAgents } from "../../../api/agents.js";
 import {
   type FileMessageContent,
   getChat,
@@ -711,7 +711,7 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId } = useAuth();
+  const { agentId: myAgentId, memberId: myMemberId } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -836,11 +836,18 @@ export function ChatView({
    *  membership-scoped (`mentionCandidates` below) and does NOT read
    *  from this list — inviting a new agent goes through the `[+]`
    *  button explicitly, not through `@<outsider>`. Also feeds
-   *  `managedByMeMap` for picker grouping. */
-  const { data: activity } = useQuery({
-    queryKey: ["activity"],
-    queryFn: getActivityOverview,
-    refetchInterval: 15_000,
+   *  `managedByMeMap` for picker grouping.
+   *
+   *  Backed by `GET /orgs/:orgId/agents` (`listAgents`) rather than
+   *  `/activity`: the activity feed filters on `runtimeState IS NOT NULL`
+   *  to mean "AI agents with a live runtime", which drops human members
+   *  entirely (humans never bind a runtime). See issue 343. `limit: 100`
+   *  is the server's enforced cap in `paginationQuerySchema`; orgs above
+   *  that threshold need pagination here. */
+  const { data: orgAgentsPage } = useQuery({
+    queryKey: ["org-agents"],
+    queryFn: () => listAgents({ limit: 100 }),
+    refetchInterval: 30_000,
   });
 
   const sendMut = useMutation({
@@ -1151,19 +1158,19 @@ export function ChatView({
 
   const displayName = chatScopedAgentName(agentId);
 
-  // `/activity` carries `managedByMe` per agent — both candidate lists
-  // need it for picker grouping. Known limitation: agents that appear
-  // only via `chatDetail.participants` (no runtime presence row, e.g.
-  // an autonomous agent that has never been bound to a client) default
-  // to false, so a caller's own offline agent can land in the
-  // "teammates" group. Grouping is a visual hint, not a security
-  // boundary, so we accept the fidelity loss rather than widen
-  // `/activity`'s shape (also consumed by roster / team / clients).
+  // `managedByMe` is `managerId === myMemberId`, derived client-side
+  // from the `listAgents` response (the row carries `managerId`). Drives
+  // the picker's "mine / others" grouping. Agents that appear only via
+  // `chatDetail.participants` and not in the org-agents page default to
+  // false, so a caller's own private agent in another org could land in
+  // the "teammates" group — grouping is a visual hint, not a security
+  // boundary, so we accept that fidelity loss.
   const managedByMeMap = useMemo(() => {
     const m = new Map<string, boolean>();
-    for (const a of activity?.agents ?? []) m.set(a.agentId, a.managedByMe);
+    if (!myMemberId) return m;
+    for (const a of orgAgentsPage?.items ?? []) m.set(a.uuid, a.managerId === myMemberId);
     return m;
-  }, [activity?.agents]);
+  }, [orgAgentsPage?.items, myMemberId]);
 
   // Mention autocomplete candidates: strictly the agents currently in
   // THIS chat (minus self). Driving the `@` popover and `extractMentions`
@@ -1192,14 +1199,18 @@ export function ChatView({
 
   // Candidates for the ParticipantsHeader `[+]` add-member dropdown:
   // every agent the user might invite, union of current members and
-  // org-wide discoverable agents from `/activity`. The header filters
-  // out already-joined participants internally, so we pass the union
-  // and let it compute `outsideCandidates`. Self is excluded; missing
-  // slug is skipped.
+  // org-wide discoverable agents from `/orgs/:orgId/agents`. The
+  // dropdown filters out already-joined participants internally, so we
+  // pass the union and let it compute `outsideCandidates`. Self is
+  // excluded; missing slug is skipped. Suspended rows are excluded so
+  // the picker never offers a row the server would refuse on add.
   const addableCandidates = useMemo<MentionCandidate[]>(() => {
     const ids = new Set<string>();
     for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
-    for (const a of activity?.agents ?? []) ids.add(a.agentId);
+    for (const a of orgAgentsPage?.items ?? []) {
+      if (a.status === "suspended") continue;
+      ids.add(a.uuid);
+    }
     if (ids.size === 0) ids.add(agentId);
     const out: MentionCandidate[] = [];
     for (const id of ids) {
@@ -1214,7 +1225,7 @@ export function ChatView({
       });
     }
     return out;
-  }, [chatDetail?.participants, activity?.agents, agentId, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
+  }, [chatDetail?.participants, orgAgentsPage?.items, agentId, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
 
   /**
    * "Needs explicit @mention" guard: a real group (3+ speakers), OR a 1-on-1
