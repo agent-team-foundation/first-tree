@@ -4,9 +4,9 @@ import { Bell, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { ActivityDots } from "../../../components/chat/activity-dots.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { SourceIcon } from "../../../components/chat/source-icon.js";
-import { WorkingChip } from "../../../components/chat/working-chip.js";
 import { Popover } from "../../../components/ui/popover.js";
 import { SegmentedControl } from "../../../components/ui/segmented-control.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -213,7 +213,19 @@ export function ConversationList({
   // (e.g. an inactive tab the browser throttles) won't see the bucket
   // shift until the next refetch lands; that's an acceptable degree
   // of staleness for a presentational concern.
-  const buckets = useMemo(() => groupRows(allRows, group), [allRows, group]);
+  // Hoist needs-you chats into a pinned section at the top WITHOUT touching
+  // cursor pagination or reordering the main list: partition them out, group
+  // the rest as usual, then prepend a synthetic "Needs you" bucket. A chat
+  // appears in exactly one place (pinned OR its normal group), never both.
+  const buckets = useMemo(() => {
+    const needsYouRows = allRows.filter((r) => r.pendingQuestionAgentIds.length > 0);
+    if (needsYouRows.length === 0) return groupRows(allRows, group);
+    const rest = allRows.filter((r) => r.pendingQuestionAgentIds.length === 0);
+    return [
+      { key: "needs-you", label: "Needs you", rows: needsYouRows, defaultCollapsed: false },
+      ...groupRows(rest, group),
+    ];
+  }, [allRows, group]);
 
   // Track the cursor for follow-up page loads. Mirrored from the latest
   // base-query response: any background refetch resets `nextCursor` so the
@@ -568,6 +580,7 @@ export function ConversationList({
                   // the duplicate; the em-dash placeholder picks up below.
                   const subtitle = rawSubtitle && rawSubtitle !== row.title ? rawSubtitle : "";
                   const hasUnread = row.unreadMentionCount > 0;
+                  const needsYou = row.pendingQuestionAgentIds.length > 0;
                   return (
                     <div
                       key={row.chatId}
@@ -585,7 +598,9 @@ export function ConversationList({
                           padding: "var(--sp-2) var(--sp-3)",
                           gap: "var(--sp-2_5)",
                           background: isSelected ? "var(--bg-active)" : "transparent",
-                          borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--accent)" : "transparent"}`,
+                          borderLeft: `var(--hairline-bold) solid ${
+                            isSelected ? "var(--accent)" : needsYou ? "var(--state-blocked)" : "transparent"
+                          }`,
                         }}
                       >
                         <ChatRowAvatar
@@ -593,8 +608,8 @@ export function ConversationList({
                           type={row.type}
                           participants={row.participants}
                           selfAgentId={selfAgentId ?? ""}
-                          engagedAgentIds={row.engagedAgentIds}
                           unreadCount={row.unreadMentionCount}
+                          needsYou={needsYou}
                         />
                         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
                           <div className="flex items-center" style={{ gap: 6 }}>
@@ -618,7 +633,7 @@ export function ConversationList({
                             </span>
                             {(() => {
                               const slot = row.liveActivity ? (
-                                <WorkingChip activity={row.liveActivity} />
+                                <ActivityDots />
                               ) : row.lastMessageAt ? (
                                 <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
                                   {formatRowTime(row.lastMessageAt)}

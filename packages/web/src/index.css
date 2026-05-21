@@ -590,19 +590,6 @@
   }
 }
 
-/* Chat-row avatar working ring — steady breathe to signal "agent is
-   responding now" without the urgency of a flash. opacity-only so the
-   animation stays GPU-cheap on long conversation lists. */
-@keyframes chat-row-avatar-working-breathe {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 @keyframes context-live-halo-breathe {
   0%,
   100% {
@@ -625,13 +612,26 @@
   }
 }
 
-.chat-row-avatar__working-ring {
-  animation: chat-row-avatar-working-breathe 1.6s ease-in-out infinite;
+/* Chat-row activity dots ("•••") — the list time-slot indicator for "an
+   agent is producing output now". Three dots fade in sequence (per-dot
+   animation-delay set inline) for a calm scrolling read; ~1.6s shares the
+   canonical working cadence family. */
+@keyframes chat-row-activity-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.chat-row-activity-dot {
+  animation: chat-row-activity-dot 1.6s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-row-avatar__working-ring {
+  .chat-row-activity-dot {
     animation: none;
-    opacity: 1;
+    opacity: 0.7;
   }
 }
 
