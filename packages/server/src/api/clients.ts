@@ -69,6 +69,13 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     const { clientId } = request.params;
     const result = await clientService.claimClient(app.db, clientId, userId);
     const droppedAgentIds = forceDisconnectClient(clientId);
+    // Post-commit (the claim tx has already committed): nudge the chat list to
+    // clear any now-stale needs-you indicator on chats whose pending questions
+    // were superseded by the claim. messageId is unused by the chat:message
+    // frame (it carries only chatId), so a sentinel is fine.
+    for (const chatId of result.supersededChatIds) {
+      app.notifier.notifyChatMessage(chatId, "").catch(() => {});
+    }
     request.log.info(
       {
         event: "client.owner_transfer",

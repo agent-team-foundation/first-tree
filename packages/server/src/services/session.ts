@@ -387,6 +387,12 @@ async function transitionSessionState(
     // also revert the question state — preserves atomicity with the chat
     // session state flip itself.
     if (target === "evicted") {
+      // No explicit needs-you push needed here: this transition emits a
+      // post-commit `notifySessionStateChange` below, which the web admin WS
+      // already maps to a `me/chats` refetch — so the cleared (superseded)
+      // pending question drops out of `pendingQuestionAgentIds` on the next
+      // list load. The client-claim path (client.ts) has no such session:state
+      // change, which is why only that path fires `notifyChatMessage`.
       await markSupersededByChat(tx, chatId, "chat_archived");
     }
 

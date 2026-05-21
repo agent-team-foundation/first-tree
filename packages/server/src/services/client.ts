@@ -146,7 +146,7 @@ export async function claimClient(
   db: Database,
   clientId: string,
   newUserId: string,
-): Promise<{ previousUserId: string | null; unpinnedAgentIds: string[] }> {
+): Promise<{ previousUserId: string | null; unpinnedAgentIds: string[]; supersededChatIds: string[] }> {
   return db.transaction(async (tx) => {
     const [locked] = await tx.execute<{ id: string; user_id: string | null }>(
       sql`SELECT id, user_id FROM clients WHERE id = ${clientId} FOR UPDATE`,
@@ -157,10 +157,11 @@ export async function claimClient(
     const previousUserId = locked.user_id;
 
     if (previousUserId === newUserId) {
-      return { previousUserId, unpinnedAgentIds: [] as string[] };
+      return { previousUserId, unpinnedAgentIds: [] as string[], supersededChatIds: [] as string[] };
     }
 
     let unpinnedAgentIds: string[] = [];
+    let supersededChatIds: string[] = [];
     if (previousUserId !== null) {
       const rows = await tx
         .select({ uuid: agents.uuid })
@@ -178,14 +179,16 @@ export async function claimClient(
           .where(inArray(agentPresence.agentId, unpinnedAgentIds));
         // Pending ask-user questions on the unpinned agents can no longer be
         // delivered back — their owning client is detaching. Mark superseded
-        // in the same transaction so a rollback unwinds it together.
-        await markSupersededByAgents(tx, unpinnedAgentIds, "client_claimed");
+        // in the same transaction so a rollback unwinds it together. The
+        // affected chat ids flow back to the caller for a post-commit
+        // needs-you refresh (this path emits no session:state change).
+        supersededChatIds = await markSupersededByAgents(tx, unpinnedAgentIds, "client_claimed");
       }
     }
 
     await tx.update(clients).set({ userId: newUserId }).where(eq(clients.id, clientId));
 
-    return { previousUserId, unpinnedAgentIds };
+    return { previousUserId, unpinnedAgentIds, supersededChatIds };
   });
 }
 
