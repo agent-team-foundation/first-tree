@@ -20,3 +20,11 @@ export const CONCURRENCY = 16;
 
 /** How often the session manager scans for idle sessions to reclaim. */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
+
+/**
+ * Grace window above `idle_timeout` during which a `working` or `blocked`
+ * session is exempted from idle suspend. Bounds the worst case where a
+ * handler bug leaves `runtimeState` stuck at `working` so a slot can't be
+ * leaked forever.
+ */
+export const WORKING_GRACE_SECONDS = 60 * 60;

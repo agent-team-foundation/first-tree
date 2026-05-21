@@ -46,7 +46,7 @@ function createSessionManager(
 ) {
   const factory: HandlerFactory = () => handler;
   return new SessionManager({
-    session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+    session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     concurrency: 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -117,7 +117,7 @@ describe("SessionManager.evictIdle — askuser-in-flight guard (#418)", () => {
       const factory: HandlerFactory = () => handler;
       const sm = new SessionManager({
         // 1-second idle timeout so a single 10s evictIdle tick is plenty.
-        session: { idle_timeout: 1, max_sessions: 10, reconcile_interval_seconds: 300 },
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
         concurrency: 5,
         handlerFactory: factory,
         handlerConfig: { workspaceRoot: "/tmp/test" },

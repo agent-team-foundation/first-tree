@@ -9,20 +9,18 @@ import { createMeChat } from "../services/me-chat.js";
 import { createAdminContext, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * Phase 1 invariant matrix — pins
+ * v2 chat_membership.mode invariant — pins
  *
- *   `chat_membership.mode` (for `access_mode = 'speaker'` rows) is derived
- *   from `(chats.type, agents.type)` at every write path; no caller can
- *   land in an inconsistent state.
+ *   `chat_membership.mode` for `access_mode = 'speaker'` rows is written as
+ *   the constant `'mention_only'` at every speaker-write path. The column
+ *   is decision-inert; no caller can drift back to the v1
+ *   `(chats.type, agents.type)` derivation that this file used to gate.
  *
- * Each `it` exercises one entrypoint, then directly inspects the
- * `chat_membership` row to assert the post-write mode. If a future
- * refactor reintroduces a hand-rolled mode somewhere, exactly one row in
- * this matrix flips.
+ * Each `it` exercises one entrypoint, then inspects the freshly-written
+ * `chat_membership` row. If a future refactor reintroduces a hand-rolled
+ * mode somewhere, the corresponding row in this matrix flips.
  *
- * See docs/chat-participant-mode-fix-design.md §3.5 and
- * proposals/chat-data-model-restructure.20260512.md §8 (post-restructure
- * the underlying table is `chat_membership` rather than `chat_participants`).
+ * See proposals/hub-chat-message-v2-simplify-mode.20260520.md.
  */
 
 async function loadMode(
@@ -44,10 +42,10 @@ async function loadMode(
   return row?.mode;
 }
 
-describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
+describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", () => {
   const getApp = useTestApp();
 
-  it("createChat / direct + human + agent → both 'full'", async () => {
+  it("createChat / human + agent (size=2) → both 'mention_only'", async () => {
     const app = getApp();
     const humanCtx = await createTestAgent(app, { type: "human" });
     const { agent: peer } = await createTestAgent(app, { type: "autonomous_agent" });
@@ -57,11 +55,11 @@ describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
       participantIds: [peer.uuid],
     });
 
-    expect(await loadMode(app, chat.id, humanCtx.agent.uuid)).toBe("full");
-    expect(await loadMode(app, chat.id, peer.uuid)).toBe("full");
+    expect(await loadMode(app, chat.id, humanCtx.agent.uuid)).toBe("mention_only");
+    expect(await loadMode(app, chat.id, peer.uuid)).toBe("mention_only");
   });
 
-  it("createChat / direct + agent + agent → both 'mention_only' (anti-echo)", async () => {
+  it("createChat / agent + agent (size=2) → both 'mention_only'", async () => {
     const app = getApp();
     const a = await createTestAgent(app, { type: "autonomous_agent" });
     const { agent: b } = await createTestAgent(app, { type: "autonomous_agent" });
@@ -75,7 +73,7 @@ describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
     expect(await loadMode(app, chat.id, b.uuid)).toBe("mention_only");
   });
 
-  it("createChat / group + human + agent + agent → human 'full', agents 'mention_only'", async () => {
+  it("createChat / group (size=3, human + 2 agents) → all 'mention_only'", async () => {
     const app = getApp();
     const humanCtx = await createTestAgent(app, { type: "human" });
     const { agent: ag1 } = await createTestAgent(app, { type: "autonomous_agent" });
@@ -86,12 +84,12 @@ describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
       participantIds: [ag1.uuid, ag2.uuid],
     });
 
-    expect(await loadMode(app, chat.id, humanCtx.agent.uuid)).toBe("full");
+    expect(await loadMode(app, chat.id, humanCtx.agent.uuid)).toBe("mention_only");
     expect(await loadMode(app, chat.id, ag1.uuid)).toBe("mention_only");
     expect(await loadMode(app, chat.id, ag2.uuid)).toBe("mention_only");
   });
 
-  it("createChat / group + 3 agents → all 'mention_only'", async () => {
+  it("createChat / group (size=3, 3 agents) → all 'mention_only'", async () => {
     const app = getApp();
     const a = await createTestAgent(app, { type: "autonomous_agent" });
     const { agent: b } = await createTestAgent(app, { type: "autonomous_agent" });
@@ -107,33 +105,26 @@ describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
     expect(await loadMode(app, chat.id, c.uuid)).toBe("mention_only");
   });
 
-  it("addParticipant upgrade / direct → group re-grades existing non-humans to 'mention_only'", async () => {
+  it("addParticipant on a 2-speaker chat → new + existing rows all 'mention_only' (no re-grade needed)", async () => {
     const app = getApp();
     const humanCtx = await createTestAgent(app, { type: "human" });
     const { agent: ag1 } = await createTestAgent(app, { type: "autonomous_agent" });
     const { agent: ag2 } = await createTestAgent(app, { type: "autonomous_agent" });
 
-    // Direct chat: human + agent → both 'full'.
     const chat = await createChat(app.db, humanCtx.agent.uuid, {
       type: "group",
       participantIds: [ag1.uuid],
     });
-    expect(await loadMode(app, chat.id, ag1.uuid)).toBe("full");
+    expect(await loadMode(app, chat.id, ag1.uuid)).toBe("mention_only");
 
-    // Adding ag2 upgrades to group and re-grades ag1 (non-human) to
-    // mention_only. The human stays 'full'.
     await addParticipant(app.db, chat.id, humanCtx.agent.uuid, { agentId: ag2.uuid });
 
-    expect(await loadMode(app, chat.id, humanCtx.agent.uuid)).toBe("full");
+    expect(await loadMode(app, chat.id, humanCtx.agent.uuid)).toBe("mention_only");
     expect(await loadMode(app, chat.id, ag1.uuid)).toBe("mention_only");
     expect(await loadMode(app, chat.id, ag2.uuid)).toBe("mention_only");
   });
 
-  it("createMeChat / group seeds non-humans as 'mention_only' on first write (root-cause bug fix)", async () => {
-    // This is the failing path from design §1.1: the original bug created
-    // group chats whose agent participants ended up in 'full' because
-    // `createMeChat`'s ad-hoc `isDirectAgentOnly` branch only handled the
-    // direct-agent-only special case.
+  it("createMeChat / group seeds every speaker as 'mention_only'", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const ag1 = await createAgent(app.db, {
@@ -155,40 +146,12 @@ describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
       participantIds: [ag1.uuid, ag2.uuid],
     });
 
-    expect(await loadMode(app, chatId, admin.humanAgentUuid)).toBe("full");
+    expect(await loadMode(app, chatId, admin.humanAgentUuid)).toBe("mention_only");
     expect(await loadMode(app, chatId, ag1.uuid)).toBe("mention_only");
     expect(await loadMode(app, chatId, ag2.uuid)).toBe("mention_only");
   });
 
-  it("two-speaker chat / human + agent → both 'full' (1-on-1 derived rule)", async () => {
-    const app = getApp();
-    const humanCtx = await createTestAgent(app, { type: "human" });
-    const { agent: peer } = await createTestAgent(app, { type: "autonomous_agent" });
-
-    const chat = await createChat(app.db, humanCtx.agent.uuid, {
-      type: "group",
-      participantIds: [peer.uuid],
-    });
-
-    expect(await loadMode(app, chat.id, humanCtx.agent.uuid)).toBe("full");
-    expect(await loadMode(app, chat.id, peer.uuid)).toBe("full");
-  });
-
-  it("two-speaker chat / agent + agent → both 'mention_only' (anti-echo derived rule)", async () => {
-    const app = getApp();
-    const a = await createTestAgent(app, { type: "autonomous_agent" });
-    const { agent: b } = await createTestAgent(app, { type: "autonomous_agent" });
-
-    const chat = await createChat(app.db, a.agent.uuid, {
-      type: "group",
-      participantIds: [b.uuid],
-    });
-
-    expect(await loadMode(app, chat.id, a.agent.uuid)).toBe("mention_only");
-    expect(await loadMode(app, chat.id, b.uuid)).toBe("mention_only");
-  });
-
-  it("ensureParticipant on a group chat seeds the new non-human at 'mention_only'", async () => {
+  it("ensureParticipant on a group chat seeds the new speaker as 'mention_only'", async () => {
     const app = getApp();
     const humanCtx = await createTestAgent(app, { type: "human" });
     const { agent: ag1 } = await createTestAgent(app, { type: "autonomous_agent" });
@@ -205,11 +168,9 @@ describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
     expect(await loadMode(app, chat.id, late.uuid)).toBe("mention_only");
   });
 
-  it("findOrCreateChatForChannel / IM adapter pair (bot + human sender) → both 'full'", async () => {
+  it("findOrCreateChatForChannel / IM adapter pair (bot + human sender) → both 'mention_only'", async () => {
     const app = getApp();
     const botCtx = await createTestAgent(app, { type: "autonomous_agent" });
-    // The IM adapter binds an external user to a `human` agent — match that
-    // shape with a fresh human agent in the same org as the bot.
     const senderUuid = crypto.randomUUID();
     await app.db.insert(agents).values({
       uuid: senderUuid,
@@ -228,7 +189,7 @@ describe("Phase 1 invariant: chat_membership.mode is server-derived", () => {
       senderAgentId: senderUuid,
     });
 
-    expect(await loadMode(app, chatId, botCtx.agent.uuid)).toBe("full");
-    expect(await loadMode(app, chatId, senderUuid)).toBe("full");
+    expect(await loadMode(app, chatId, botCtx.agent.uuid)).toBe("mention_only");
+    expect(await loadMode(app, chatId, senderUuid)).toBe("mention_only");
   });
 });

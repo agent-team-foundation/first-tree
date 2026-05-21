@@ -237,10 +237,22 @@ export class AgentSlot {
     for (const { chatId, state } of this.sessionManager.getSessionStates()) {
       this.clientConnection.reportSessionState(this.config.agentId, chatId, state);
     }
-    const runtimeState = this.sessionManager.getAggregateRuntimeState();
-    if (runtimeState) {
-      this.clientConnection.reportRuntimeState(this.config.agentId, runtimeState);
+    // After a process restart `sessions` is empty but SessionRegistry just
+    // hydrated every persisted (chatId → claudeSessionId) row into
+    // `evictedMappings`. Without this loop, the server's
+    // `agent_chat_sessions.state` would stay on the pre-restart snapshot
+    // (commonly `active`) forever — the next inbound message would only
+    // refresh that one row, leaving the rest stale. "suspended" is the
+    // closest in-schema state for "handler is gone but resumable".
+    for (const chatId of this.sessionManager.getEvictedChatIds()) {
+      this.clientConnection.reportSessionState(this.config.agentId, chatId, "suspended");
     }
+    // Explicit "idle" clears any stale `working`/`blocked` on the server:
+    // any in-flight work owned by the previous process died with its SDK
+    // transport. The first inbound message will flip it back to `working`
+    // through the normal session-runtime-state path.
+    const runtimeState = this.sessionManager.getAggregateRuntimeState();
+    this.clientConnection.reportRuntimeState(this.config.agentId, runtimeState ?? "idle");
   }
 
   /**

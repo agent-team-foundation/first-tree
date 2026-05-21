@@ -13,6 +13,7 @@ import {
   type SessionEvent,
   type SessionState,
   serverWelcomeFrameSchema,
+  type UpdateAttempt,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
@@ -38,6 +39,20 @@ export type ClientConnectionConfig = {
    * HTTP traffic so trace backends can identify the install. See SdkConfig.userAgent.
    */
   userAgent?: string;
+  /**
+   * Optional accessor for the most recent self-update outcome — the
+   * command layer reads `~/.first-tree/hub/state/update-state.json` and
+   * returns the parsed record. The connection forwards it on every
+   * `client:register` so the server can persist into
+   * `clients.metadata.lastUpdateAttempt`, giving the admin dashboard
+   * visibility into clients that are failing to auto-update without
+   * needing SSH access. Sync (the underlying read is a single small JSON
+   * file) so the register frame can be built inline. The runtime
+   * gracefully tolerates omission — clients without the update-state
+   * wiring don't supply this, and the server's `clientRegisterSchema`
+   * keeps the field optional.
+   */
+  getLastUpdateAttempt?: () => UpdateAttempt | null;
   /**
    * Override the heartbeat tick interval (default 30s). Lower values are
    * primarily useful in tests that need to exercise the silence watchdog or
@@ -231,6 +246,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private readonly sdkVersion: string | undefined;
   private readonly userAgent: string | undefined;
   private readonly getAccessToken: AccessTokenProvider;
+  private readonly getLastUpdateAttempt: (() => UpdateAttempt | null) | undefined;
   private readonly heartbeatIntervalMs: number;
   private readonly heartbeatTimeoutMs: number;
 
@@ -313,6 +329,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.sdkVersion = config.sdkVersion;
     this.userAgent = config.userAgent;
     this.getAccessToken = config.getAccessToken;
+    this.getLastUpdateAttempt = config.getLastUpdateAttempt;
     this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
     this.heartbeatTimeoutMs = config.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
     this.wsLogger = createLogger("ws").child({ clientId: this.clientId });
@@ -626,6 +643,18 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
     if (type === "auth:ok") {
       this.authLogger.info("auth accepted, registering client");
+      // Pull the last update attempt synchronously off disk so the
+      // register frame carries up-to-date status. Throwing here would
+      // kill registration, so we swallow any unexpected error (the
+      // accessor reads a small JSON file — disk errors are the only
+      // realistic failure mode, and the worst-case outcome is just
+      // omitting the field, which the server schema already tolerates).
+      let lastUpdateAttempt: UpdateAttempt | null = null;
+      try {
+        lastUpdateAttempt = this.getLastUpdateAttempt?.() ?? null;
+      } catch (err) {
+        this.authLogger.warn({ err }, "getLastUpdateAttempt threw; omitting from register frame");
+      }
       this.ws?.send(
         JSON.stringify({
           type: "client:register",
@@ -633,6 +662,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           hostname: getHostname(),
           os: platform(),
           sdkVersion: this.sdkVersion,
+          ...(lastUpdateAttempt ? { lastUpdateAttempt } : {}),
         }),
       );
       return;
@@ -824,6 +854,22 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "inbox:deliver") {
       const parsed = inboxDeliverFrameSchema.safeParse(msg);
       if (!parsed.success) {
+        // Best-effort ack: without it the server's reaper rolls the entry
+        // back to `pending` 300s later and re-pushes the same frame, which
+        // this build is guaranteed to drop again. The retry loop runs up
+        // to maxRetries before the entry is abandoned — pure spam in both
+        // directions. `entryId` is a top-level field and usually survives
+        // when inner `message` validation is what failed (see frameKeys).
+        // Logged separately as `entryIdAcked` so operators can correlate.
+        const rawEntryId = msg.entryId;
+        // Match `inboxAckFrameSchema`: non-negative integer. A `typeof "number"`
+        // check alone would let NaN / Infinity / floats slip through and ack
+        // would silently no-op on the server side (rejected by its own schema).
+        const entryIdAcked =
+          typeof rawEntryId === "number" && Number.isInteger(rawEntryId) && rawEntryId >= 0 ? rawEntryId : null;
+        if (entryIdAcked !== null) {
+          this.sendInboxAck(entryIdAcked);
+        }
         // Per-issue path/message + the receiving frame keys so we can pinpoint
         // shape drift between server build and client schema during gradual
         // rollouts. Frame body intentionally not logged in full — message
@@ -838,6 +884,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
             })),
             frameKeys: Object.keys(msg),
             messageKeys: msg.message && typeof msg.message === "object" ? Object.keys(msg.message) : null,
+            entryIdAcked,
           },
           "malformed inbox:deliver frame — dropping",
         );

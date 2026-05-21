@@ -60,3 +60,58 @@ export function isCanonicalDocLinkPath(path: string): boolean {
   const normalized = normalizeDocLinkPath(path);
   return normalized !== null && normalized === path;
 }
+
+/**
+ * Cross-agent workspace doc key.
+ *
+ * doc-preview snapshots from the SENDER's own workspace keep a bare,
+ * base-relative key (`docs/foo.md`) — unchanged, zero-regression. A snapshot
+ * of a file in ANOTHER agent's workspace needs a globally-unique key so web's
+ * cache lookup is unambiguous: `<agentSlug>/<chatId>/<rel>`, i.e. the path
+ * relative to the shared `workspaces/` common root (minus that root). Runtime
+ * builds it when it snapshots a sibling-workspace file; web reconstructs the
+ * same key from a scanned token to match the snapshot; server parses it to
+ * re-check the owner is a chat participant. All three must agree, so the
+ * build/parse logic lives here next to `normalizeDocLinkPath`.
+ *
+ * `chatId` scopes the key to a single chat: a `workspaces/<X>/<chatId>` dir
+ * only exists when X has run a session in that chat, so the chatId segment is
+ * the structural fence that keeps one chat from previewing another chat's
+ * private workspace docs.
+ */
+export function buildWorkspaceDocKey(agentSlug: string, chatId: string, rel: string): string | null {
+  const slug = agentSlug.trim();
+  const chat = chatId.trim();
+  // slug / chatId must each be a single, non-hidden path segment.
+  if (!slug || !chat || slug.includes("/") || chat.includes("/")) return null;
+  if (slug.startsWith(".") || chat.startsWith(".")) return null;
+  const relNorm = normalizeDocLinkPath(rel);
+  if (!relNorm) return null;
+  const key = `${slug}/${chat}/${relNorm}`;
+  // Re-validate the assembled key so a slug/chatId containing a stray dot
+  // segment or other non-canonical token can never produce a key that web
+  // would later canonicalise into a different string (silent cache miss).
+  return isCanonicalDocLinkPath(key) ? key : null;
+}
+
+/**
+ * Inverse of {@link buildWorkspaceDocKey}. Splits a canonical key into
+ * `{ agentSlug, chatId, rel }`, or `null` when it has fewer than three
+ * segments / is non-canonical.
+ *
+ * NOTE — ambiguity: a bare self key with three or more segments
+ * (`docs/sub/a.md`) parses too. Callers that need to tell "global cross key"
+ * from "deep self path" apart MUST additionally require `chatId` to equal the
+ * current chat's id (chat ids are uuids, so a self subdir literally named the
+ * chat id is effectively impossible). See web `chat-view` / server authz.
+ */
+export function parseWorkspaceDocKey(key: string): { agentSlug: string; chatId: string; rel: string } | null {
+  const norm = normalizeDocLinkPath(key);
+  if (!norm) return null;
+  const segs = norm.split("/");
+  if (segs.length < 3) return null;
+  const [agentSlug, chatId, ...rest] = segs;
+  const rel = rest.join("/");
+  if (!agentSlug || !chatId || rel.length === 0) return null;
+  return { agentSlug, chatId, rel };
+}

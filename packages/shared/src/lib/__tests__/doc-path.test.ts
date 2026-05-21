@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isCanonicalDocLinkPath, normalizeDocLinkPath } from "../doc-path.js";
+import {
+  buildWorkspaceDocKey,
+  isCanonicalDocLinkPath,
+  normalizeDocLinkPath,
+  parseWorkspaceDocKey,
+} from "../doc-path.js";
 
 describe("normalizeDocLinkPath", () => {
   it("returns the canonical workspace-relative form", () => {
@@ -70,5 +75,65 @@ describe("isCanonicalDocLinkPath", () => {
     expect(isCanonicalDocLinkPath("https://x/a.md")).toBe(false);
     expect(isCanonicalDocLinkPath(".agent/x.md")).toBe(false);
     expect(isCanonicalDocLinkPath("../x.md")).toBe(false);
+  });
+});
+
+describe("buildWorkspaceDocKey", () => {
+  it("builds a canonical global cross-agent key", () => {
+    expect(buildWorkspaceDocKey("assistant", "chat-1", "design.md")).toBe("assistant/chat-1/design.md");
+    expect(buildWorkspaceDocKey("assistant", "chat-1", "docs/design.md")).toBe("assistant/chat-1/docs/design.md");
+    // rel is normalised before assembly
+    expect(buildWorkspaceDocKey("assistant", "chat-1", "./docs/design.md")).toBe("assistant/chat-1/docs/design.md");
+  });
+
+  it("rejects when slug / chatId are missing, hidden, or contain a slash", () => {
+    expect(buildWorkspaceDocKey("", "chat-1", "a.md")).toBeNull();
+    expect(buildWorkspaceDocKey("assistant", "", "a.md")).toBeNull();
+    expect(buildWorkspaceDocKey(".hidden", "chat-1", "a.md")).toBeNull();
+    expect(buildWorkspaceDocKey("assistant", ".x", "a.md")).toBeNull();
+    expect(buildWorkspaceDocKey("a/b", "chat-1", "a.md")).toBeNull();
+    expect(buildWorkspaceDocKey("assistant", "c/d", "a.md")).toBeNull();
+  });
+
+  it("rejects when rel escapes / hides / is empty", () => {
+    expect(buildWorkspaceDocKey("assistant", "chat-1", "../secret.md")).toBeNull();
+    expect(buildWorkspaceDocKey("assistant", "chat-1", ".agent/x.md")).toBeNull();
+    expect(buildWorkspaceDocKey("assistant", "chat-1", "")).toBeNull();
+  });
+
+  it("produces a key that is itself canonical", () => {
+    const key = buildWorkspaceDocKey("assistant", "chat-1", "docs/design.md");
+    expect(key).not.toBeNull();
+    expect(isCanonicalDocLinkPath(key as string)).toBe(true);
+  });
+});
+
+describe("parseWorkspaceDocKey", () => {
+  it("splits a global key into slug / chatId / rel", () => {
+    expect(parseWorkspaceDocKey("assistant/chat-1/design.md")).toEqual({
+      agentSlug: "assistant",
+      chatId: "chat-1",
+      rel: "design.md",
+    });
+    expect(parseWorkspaceDocKey("assistant/chat-1/docs/design.md")).toEqual({
+      agentSlug: "assistant",
+      chatId: "chat-1",
+      rel: "docs/design.md",
+    });
+  });
+
+  it("returns null for fewer than three segments", () => {
+    expect(parseWorkspaceDocKey("design.md")).toBeNull();
+    expect(parseWorkspaceDocKey("chat-1/design.md")).toBeNull();
+  });
+
+  it("returns null for non-canonical / rejected input", () => {
+    expect(parseWorkspaceDocKey("../a/b.md")).toBeNull();
+    expect(parseWorkspaceDocKey(".agent/chat/x.md")).toBeNull();
+  });
+
+  it("round-trips with buildWorkspaceDocKey", () => {
+    const key = buildWorkspaceDocKey("assistant", "chat-1", "docs/design.md") as string;
+    expect(parseWorkspaceDocKey(key)).toEqual({ agentSlug: "assistant", chatId: "chat-1", rel: "docs/design.md" });
   });
 });

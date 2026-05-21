@@ -1,4 +1,5 @@
 import {
+  buildWorkspaceDocKey,
   normalizeDocLinkPath,
   scanBareDocPathTokens,
   stripDocPathLineSuffix,
@@ -42,23 +43,37 @@ export function docPreviewPathFromHref(href: string, currentDocPath?: string | n
 
 /**
  * Rewrite plain `.md` path mentions in chat text into inline markdown links
- * `[path](path)` so react-markdown renders them as clickable previews. The
- * scan rules are shared with the runtime snapshot scanner (`scanBareDocPathTokens`)
- * — both sides must agree token-for-token, otherwise the web side would
- * render a link whose canonical key has no snapshot in metadata and the
- * click would silently fall back to the legacy server `/me/docs/preview`
- * endpoint that cannot read the agent's local workspace.
+ * so react-markdown renders them as clickable previews.
  *
- * Each match is also canonicalised through `normalizeDocLinkPath` before it
- * becomes a link — tokens like `.agent/secret.md` or `../outside.md` pass
- * the surface-level regex but `normalizeDocLinkPath` rejects them as
- * hidden / out-of-root, so wrapping them anyway would produce a dead link
- * that `docPreviewPathFromHref` re-rejects on click and the browser then
- * follows as a same-origin nav (404 / navigation away from chat). Filtering
- * here keeps the invariant "every wrapped token has a matching snapshot or
- * is at least resolvable inside the workspace".
+ * A token is linkified ONLY when its canonical path is present in
+ * `snapshotPaths` — the set of `.md` docs the runtime actually embedded as
+ * snapshots in this message's `metadata.documentContext`. This is the single
+ * invariant that keeps the feature honest:
+ *
+ *   - No dead / false-positive links. A path the agent merely *mentions*
+ *     conversationally (an example like `README.md:12`, a file that doesn't
+ *     exist, or a doc that was too large to snapshot) has no snapshot, so it
+ *     stays plain text instead of rendering a link that opens an empty preview
+ *     or — worse — an unrelated workspace file that happens to share the name.
+ *   - Every rendered link is guaranteed to open from the React Query cache
+ *     with no server round-trip (load-bearing on the cloud topology).
+ *
+ * The link target is the CANONICAL (de-suffixed) path, while the visible text
+ * keeps the raw token. So `README.md:12` renders `[README.md:12](README.md)`:
+ * the user still sees the line number, but the href has no `:` before a `/`,
+ * so react-markdown's `defaultUrlTransform` keeps it instead of stripping it
+ * to `""` (an empty href made the anchor reload the whole page on click).
+ *
+ * Cross-agent (`chatId` provided): a snapshot of a file in ANOTHER agent's
+ * workspace is keyed globally as `<ownerSlug>/<chatId>/<rel>`, and the runtime
+ * rewrites the visible mention to the short `<ownerSlug>/<rel>` form. So when
+ * a bare canonical token isn't itself a snapshot key, we also try expanding it
+ * with the current chat id (`<firstSeg>/<chatId>/<rest>`) and link to that
+ * global key if it matches. Self/legacy bare keys still match directly and
+ * win (tried first), so self previews are unchanged.
  */
-export function linkifyMarkdownDocPaths(markdown: string): string {
+export function linkifyMarkdownDocPaths(markdown: string, snapshotPaths: ReadonlySet<string>, chatId?: string): string {
+  if (snapshotPaths.size === 0) return markdown;
   const matches = scanBareDocPathTokens(markdown);
   if (matches.length === 0) return markdown;
 
@@ -69,16 +84,35 @@ export function linkifyMarkdownDocPaths(markdown: string): string {
   let cursor = 0;
   for (const match of matches) {
     if (match.start < cursor) continue;
-    // Canonicalise BEFORE wrapping. If the token would not resolve to a
-    // workspace-safe canonical path we leave the original text alone —
-    // rendering an anchor whose onClick declines to intercept produces a
-    // same-origin navigation, which is far worse UX than plain text.
+    // Canonicalise BEFORE wrapping, then require a matching snapshot. Tokens
+    // like `.agent/secret.md` / `../outside.md` canonicalise to null; tokens
+    // with no embedded snapshot are conversational mentions, not previews.
     const canonical = normalizeDocLinkPath(stripDocPathLineSuffix(match.raw));
     if (!canonical) continue;
+    const target = resolveSnapshotKey(canonical, snapshotPaths, chatId);
+    if (!target) continue;
     out += markdown.slice(cursor, match.start);
-    out += `[${match.raw}](${match.raw})`;
+    out += `[${match.raw}](${target})`;
     cursor = match.end;
   }
   out += markdown.slice(cursor);
   return out;
+}
+
+/**
+ * Map a canonical bare token to the snapshot key it should link to, or null if
+ * none. Self/legacy bare keys are tried first (so self previews are unchanged);
+ * otherwise, with a chat id, the token is treated as the short cross form
+ * `<ownerSlug>/<rest>` and expanded to the global `<ownerSlug>/<chatId>/<rest>`
+ * key.
+ */
+function resolveSnapshotKey(canonical: string, snapshotPaths: ReadonlySet<string>, chatId?: string): string | null {
+  if (snapshotPaths.has(canonical)) return canonical;
+  if (!chatId) return null;
+  const slash = canonical.indexOf("/");
+  if (slash <= 0) return null;
+  const ownerSlug = canonical.slice(0, slash);
+  const rest = canonical.slice(slash + 1);
+  const global = buildWorkspaceDocKey(ownerSlug, chatId, rest);
+  return global && snapshotPaths.has(global) ? global : null;
 }

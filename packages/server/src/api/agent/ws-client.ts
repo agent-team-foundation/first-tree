@@ -469,6 +469,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   hostname: data.hostname,
                   os: data.os,
                   sdkVersion: data.sdkVersion,
+                  lastUpdateAttempt: data.lastUpdateAttempt,
                 });
               } catch (err) {
                 const message = err instanceof Error ? err.message : "client register failed";

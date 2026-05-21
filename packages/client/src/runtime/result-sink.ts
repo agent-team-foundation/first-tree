@@ -51,42 +51,64 @@ export type ResultSinkDeps = {
    * worktree instead of the per-chat workspace root.
    */
   getDocumentBasePath?: () => Promise<string | null>;
+  /**
+   * Shared `workspaces/` common root (parent of every `<agentSlug>/<chatId>`).
+   * Set alongside `selfSlug` to enable cross-agent doc snapshots: an absolute
+   * `.md` path that realpaths into ANOTHER agent's workspace under this root
+   * (same chat) is snapshotted with a global `<ownerSlug>/<chatId>/<rel>` key.
+   * Absent → self-only behaviour (pre-existing).
+   */
+  workspacesRoot?: string;
+  /** This agent's own dir name under `workspacesRoot` (excluded from cross). */
+  selfSlug?: string;
 };
 
 export type ResultSink = (text: string) => Promise<void>;
 
 export function createResultSink(deps: ResultSinkDeps): ResultSink {
-  async function buildMetadata(text: string): Promise<Record<string, unknown> | undefined> {
+  // Build the outbound payload: the (possibly rewritten) content + metadata.
+  // The content may differ from `text` when a referenced doc was written as an
+  // absolute-in-root path: `buildMessageDocumentSnapshots` rewrites that span
+  // to the canonical workspace-relative path so web's unchanged re-scan can
+  // match the snapshot. Relative mentions are returned verbatim.
+  async function prepareOutbound(text: string): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const metadata: Record<string, unknown> = {};
+    let content = text;
     const documentBasePath = await deps.getDocumentBasePath?.();
     if (documentBasePath) {
-      // Prefer the inline-snapshot variant when the text actually references
-      // markdown docs we can resolve. This is the cloud-friendly form: web
-      // gets the bytes straight from the message, no second server round-trip
-      // and no dependency on the server having access to the agent's local
-      // workspace filesystem (see proposal §核心设计).
+      // Embed the inline-snapshot variant only. This is the cloud-friendly
+      // form: web gets the bytes straight from the message, no second server
+      // round-trip and no dependency on the server having access to the
+      // agent's local workspace filesystem (see proposal §核心设计).
       //
-      // When no resolvable links exist (or all of them are rejected), fall
-      // back to the path-based variant so single-host deployments where
-      // server + runtime share the workspace can still preview via the
-      // legacy `/docs/preview` endpoint.
-      let snapshotsWritten = false;
+      // We deliberately do NOT fall back to the legacy `kind:"path"` variant.
+      // It carries the agent host's local absolute workspace path into
+      // immutable chat history (a cloud-topology leak), and is dead in the
+      // cloud anyway since the server can't read the agent's disk. Any real,
+      // referenced `.md` is already captured as a snapshot above; a message
+      // with no resolvable doc simply carries no documentContext. (Historical
+      // messages may still hold `kind:"path"`; the web reader keeps handling
+      // them for back-compat — this only stops emitting new ones.)
       try {
-        const { docs, skipped } = await buildMessageDocumentSnapshots(text, documentBasePath);
+        // Enable cross-agent resolution only when the runtime supplied the
+        // shared common root + this agent's slug; otherwise fall back to the
+        // self-only path (e.g. legacy callers / tests).
+        const fence =
+          deps.workspacesRoot && deps.selfSlug
+            ? { workspacesRoot: deps.workspacesRoot, chatId: deps.chatId, selfSlug: deps.selfSlug }
+            : undefined;
+        const { docs, skipped, rewrittenText } = await buildMessageDocumentSnapshots(text, documentBasePath, fence);
+        content = rewrittenText;
         if (docs.length > 0) {
           metadata.documentContext = documentContextSchema.parse({ kind: "snapshot", docs });
-          snapshotsWritten = true;
         }
         if (skipped > 0) {
           deps.log(`doc snapshot: skipped ${skipped} unresolvable link(s)`);
         }
       } catch (err) {
-        // Snapshot build failure must never block message delivery — degrade
-        // to the path-based fallback below and log so it's debuggable.
-        deps.log(`doc snapshot: build failed, falling back to path variant: ${(err as Error).message}`);
-      }
-      if (!snapshotsWritten) {
-        metadata.documentContext = documentContextSchema.parse({ kind: "path", basePath: documentBasePath });
+        // Snapshot build failure must never block message delivery — log and
+        // attach no documentContext so the message still goes out (verbatim).
+        deps.log(`doc snapshot: build failed, no documentContext attached: ${(err as Error).message}`);
       }
     }
 
@@ -95,7 +117,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // text reaches the chat for human observers only; agent-to-agent
     // wake-ups now require an explicit `first-tree-hub chat send <name>`.
 
-    return Object.keys(metadata).length > 0 ? metadata : undefined;
+    return { content, metadata: Object.keys(metadata).length > 0 ? metadata : undefined };
   }
 
   return async function forwardResult(text: string): Promise<void> {
@@ -115,11 +137,12 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // isn't accidentally attached to this outbound reply.
     deps.clearTrigger();
 
-    const metadata = await buildMetadata(text);
+    const { content, metadata } = await prepareOutbound(text);
 
     await deps.sdk.sendMessage(deps.chatId, {
       format: "text",
-      content: text,
+      content,
+      source: "api",
       // `purpose: "agent-final-text"` tells the server to skip the
       // group-chat `@mention required` guard and force every fan-out row
       // to `notify=false`. final text lands in chat history so human

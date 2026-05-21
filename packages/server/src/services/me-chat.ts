@@ -50,7 +50,7 @@ import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
-import { addChatParticipants, changeChatType } from "./participant-mode.js";
+import { addChatParticipants } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
 import {
   ensureCanJoin,
@@ -732,12 +732,11 @@ export async function createMeChat(
       topic,
     });
 
-    // Mode derived per-row from `(chats.type, agents.type)` via the
-    // canonical entrypoint — pre-fix `createMeChat` wrote
-    // `mode: 'mention_only'` only on the direct-agent-only branch and
-    // defaulted everything else to `'full'`, which silently left
-    // `(type='group', non-human)` participants in `'full'` mode (the
-    // root-cause group-chat bug from §1.1 of the Phase 1 design doc).
+    // v2: mode is decision-inert; `addChatParticipants` writes the
+    // constant `'mention_only'` for every speaker row. The single-writer
+    // entrypoint is retained so a future per-receiver wake policy lands
+    // in one place. See
+    // proposals/hub-chat-message-v2-simplify-mode.20260520.md.
     await addChatParticipants(
       tx,
       chatId,
@@ -868,23 +867,11 @@ export async function addMeChatParticipants(
       return;
     }
 
-    // Historical direct chats upgrade to group on the 3rd speaker. New
-    // chats are already written as `group` (see Task 1.E and
-    // first-tree-context PR #281), so this branch is only reached by
-    // legacy `type='direct'` rows; `changeChatType` is a no-op when the
-    // chat is already a group, so we drop the explicit type guard and rely
-    // on the helper to stay idempotent.
-    if (existingSpeakers.length + toUpsert.length >= 3) {
-      await changeChatType(tx, chatId, "group");
-    }
-
-    // Mode derived per-row from `(chats.type, agents.type)` by the canonical
-    // entrypoint. `addChatParticipants` re-reads `chats.type` so it picks
-    // up the post-`changeChatType` value above; we don't have to pass an
-    // `isGroupAfter` flag around. `upgradeWatcherToSpeaker: true` promotes
-    // any pre-existing watcher row in place — chat_user_state lives in a
-    // separate table so the user's read state survives the promotion
-    // untouched (no state-carry transaction needed).
+    // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
+    // `chat_membership.mode` is decision-inert. `upgradeWatcherToSpeaker:
+    // true` promotes any pre-existing watcher row in place — chat_user_state
+    // lives in a separate table so the user's read state survives the
+    // promotion untouched (no state-carry transaction needed).
     await addChatParticipants(
       tx,
       chatId,

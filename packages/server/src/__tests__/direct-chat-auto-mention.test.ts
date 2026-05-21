@@ -82,6 +82,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       participantIds: [peer.agent.uuid],
     });
     await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      source: "api",
       format: "text",
       content: "hi, no explicit @ here",
     });
@@ -98,6 +99,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       participantIds: [peer.agent.uuid],
     });
     await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
       format: "text",
       content: "ack",
     });
@@ -105,7 +107,11 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
     expect(await loadUnread(chatId, admin.humanAgentUuid, admin.organizationId)).toBeGreaterThanOrEqual(1);
   });
 
-  it("agent ↔ agent DM: counter bumps but inbox stays silent (migration 0029 preserved)", async () => {
+  it("agent ↔ agent DM: counter bumps AND inbox wakes the peer (v2 1:1 implicit wake)", async () => {
+    // v2 behavioural change vs. v1 / migration 0029: a 2-speaker chat is a
+    // tight pair, so an unmentioned send wakes the peer. The unread counter
+    // also bumps via the DM auto-mention projection — it always did, this
+    // half of the contract is unchanged.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const a1 = await createTestAgent(app, { name: `aa1-${uid}` });
@@ -116,16 +122,16 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       participantIds: [a2.uuid],
     });
     await sendMessage(app.db, chat.id, a1.agent.uuid, {
+      source: "api",
       format: "text",
       content: "ok thanks",
     });
 
-    // Counter side: a2's unread for this chat bumps to 1 (the chat-list signal).
+    // Counter side unchanged.
     expect(await loadUnread(chat.id, a2.uuid, a1.organizationId)).toBeGreaterThanOrEqual(1);
 
-    // Inbox side: no notify=true row — a2's runtime should NOT wake on a
-    // plain-text courtesy reply, matching migration 0029's anti-loop intent.
-    expect(await notifyInboxRows(chat.id, a2.uuid)).toHaveLength(0);
+    // Inbox side: 1:1 implicit wake fires → exactly one notify=true row.
+    expect(await notifyInboxRows(chat.id, a2.uuid)).toHaveLength(1);
   });
 
   it("DM content is never rewritten with `@<peer-name>` prefix", async () => {
@@ -140,7 +146,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       app.db,
       chatId,
       admin.humanAgentUuid,
-      { format: "text", content: "plain hi" },
+      { source: "api", format: "text", content: "plain hi" },
       // Match the production agent send path which sets this flag.
       { normalizeMentionsInContent: true },
     );
@@ -163,6 +169,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       participantIds: [peer.agent.uuid],
     });
     await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      source: "api",
       format: "text",
       content: `@${peer.agent.name}`,
     });
@@ -182,6 +189,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       participantIds: [a2.uuid, a3.uuid],
     });
     await sendMessage(app.db, chat.id, a1.agent.uuid, {
+      source: "api",
       format: "text",
       content: "anyone around",
     });

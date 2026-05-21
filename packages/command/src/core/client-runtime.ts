@@ -18,6 +18,7 @@ import {
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 import { print } from "./output.js";
+import { readUpdateState } from "./update-state.js";
 import { CLI_USER_AGENT } from "./version.js";
 
 type AgentEntry = {
@@ -85,6 +86,12 @@ export class ClientRuntime {
       sdkVersion: options.currentVersion,
       userAgent: CLI_USER_AGENT,
       getAccessToken: (opts) => ensureFreshAccessToken(opts),
+      // Forward the last self-update outcome on every `client:register`
+      // so the server can persist it into `clients.metadata.lastUpdateAttempt`
+      // and the admin dashboard can flag clients that are failing to
+      // self-update. Read is synchronous (small JSON file) and tolerant —
+      // missing / corrupt state file simply omits the field.
+      getLastUpdateAttempt: () => readUpdateState()?.last ?? null,
     });
     this.gitMirrorManager = createGitMirrorManager({
       dataDir: DEFAULT_DATA_DIR,
@@ -142,6 +149,7 @@ export class ClientRuntime {
       session: {
         idle_timeout: config.session.idle_timeout,
         max_sessions: config.session.max_sessions,
+        working_grace_seconds: config.session.working_grace_seconds,
         // Admin-managed runtime config doesn't carry this field yet; local
         // `agent.yaml` users can override via the client YAML schema.
         reconcile_interval_seconds: 300,

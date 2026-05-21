@@ -35,7 +35,12 @@ function createSessionManager(opts: {
   sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
   handlerFactory?: HandlerFactory;
-  session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
+  session?: {
+    idle_timeout: number;
+    max_sessions: number;
+    working_grace_seconds: number;
+    reconcile_interval_seconds: number;
+  };
   concurrency?: number;
   log?: pino.Logger;
   onStateChange?: (chatId: string, state: SessionState) => void;
@@ -45,7 +50,12 @@ function createSessionManager(opts: {
   const sdk = opts.sdk ?? mockSdk();
 
   return new SessionManager({
-    session: opts.session ?? { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+    session: opts.session ?? {
+      idle_timeout: 300,
+      max_sessions: 10,
+      working_grace_seconds: 3600,
+      reconcile_interval_seconds: 300,
+    },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -110,7 +120,7 @@ describe("SessionManager: state notifications", () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const handlers: AgentHandler[] = [];
     const sm = createSessionManager({
-      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       handlerFactory: () => {
         const h = createMockHandler();
         handlers.push(h);
@@ -221,6 +231,36 @@ describe("SessionManager: getSessionStates()", () => {
   });
 });
 
+describe("SessionManager: getEvictedChatIds()", () => {
+  // After a process restart, SessionRegistry hydrates every persisted
+  // (chatId → claudeSessionId) row into `evictedMappings` — `sessions` is
+  // empty. The agent-slot full-state-sync uses these chatIds to advertise
+  // them as "suspended" on the wire so the server's
+  // `agent_chat_sessions.state` isn't stuck on a pre-restart snapshot.
+  it("returns evictedMappings keys (LRU-evicted chats included)", async () => {
+    const sm = createSessionManager({
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
+    // chat-c forces LRU eviction of the older chat (chat-a is suspended-then-evicted
+    // out of `sessions` into `evictedMappings`).
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-c" }));
+
+    const evicted = new Set(sm.getEvictedChatIds());
+    expect(evicted.has("chat-a")).toBe(true);
+
+    await sm.shutdown();
+  });
+
+  it("returns empty array when nothing has been evicted", async () => {
+    const sm = createSessionManager({});
+    expect(sm.getEvictedChatIds()).toEqual([]);
+    await sm.shutdown();
+  });
+});
+
 describe("SessionManager: shutdown state reporting", () => {
   it("reports active sessions as 'suspended' on shutdown", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
@@ -287,7 +327,7 @@ describe("SessionManager: terminate + reconcile", () => {
 
   it("getHeldChatIds() unions active sessions and evicted mappings", async () => {
     const sm = createSessionManager({
-      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
@@ -305,7 +345,7 @@ describe("SessionManager: terminate + reconcile", () => {
   it("applyStaleChatIds() cleans up both live sessions and evicted mappings", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const sm = createSessionManager({
-      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
     });
 

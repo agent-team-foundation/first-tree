@@ -1,3 +1,4 @@
+import { basename, dirname, join } from "node:path";
 import type {
   AgentRuntimeConfigPayload,
   GitRepo,
@@ -41,14 +42,32 @@ type PendingMessage = {
   entryId: number;
 };
 
-function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload): string | null {
-  // A single repo has an unambiguous markdown-link root. Multi-repo workspaces
-  // need path-prefix matching before we can safely choose a base path.
-  if (payload.gitRepos.length !== 1) return null;
-  const repo = payload.gitRepos[0];
-  if (!repo) return null;
-  const localPath = repoLocalPath(repo).trim();
-  return localPath.length > 0 ? localPath : null;
+/**
+ * Resolve the base path the runtime reads markdown doc snapshots against.
+ *
+ * NEVER returns null — every chat has a workspace, and the snapshot scanner
+ * existence-checks each candidate inside the returned root, so a bare mention
+ * that doesn't physically exist simply stays plain text rather than
+ * mis-resolving. Previously this returned null for zero/multi-repo
+ * workspaces, which left those messages with no `documentContext` at all, so
+ * a doc the agent wrote in the workspace could never be previewed.
+ *
+ * Resolution:
+ *  - exactly one repo → that repo's worktree, the unambiguous markdown-link
+ *    root. The worktree is materialised at `<perChatRoot>/<localPath>`, so the
+ *    base MUST be that ABSOLUTE path. Returning a bare relative `localPath`
+ *    (the old behaviour) made the runtime resolve it against its own
+ *    `process.cwd()` — the launch dir, not the per-chat workspace — so it
+ *    silently failed to find any doc and cloud preview was dead.
+ *  - zero or multiple repos → the per-chat workspace root.
+ */
+export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, perChatRoot: string): string {
+  if (payload.gitRepos.length === 1) {
+    const repo = payload.gitRepos[0];
+    const localPath = repo ? repoLocalPath(repo).trim() : "";
+    if (localPath.length > 0) return join(perChatRoot, localPath);
+  }
+  return perChatRoot;
 }
 
 function repoLocalPath(repo: GitRepo): string {
@@ -342,6 +361,18 @@ export class SessionManager {
     }));
   }
 
+  /**
+   * ChatIds the client still holds in `evictedMappings` — i.e. either
+   * hydrated from disk on startup or dropped from `sessions` by LRU. Used
+   * by the agent-slot full-state-sync to advertise these as "suspended" on
+   * the wire, so the server's `agent_chat_sessions.state` doesn't get
+   * stuck on a pre-restart "active" snapshot when the in-memory handler is
+   * actually gone.
+   */
+  getEvictedChatIds(): string[] {
+    return [...this.evictedMappings.keys()];
+  }
+
   // ---- Internal -----------------------------------------------------------
 
   private async routeMessage(chatId: string, message: SessionMessage, entryId?: number): Promise<void> {
@@ -624,11 +655,13 @@ export class SessionManager {
         this._activeCount--;
         candidate.session.handler.shutdown().catch(() => {});
       }
-      // LRU eviction is a local memory-management concern, not operator intent
-      // — do NOT emit a wire state. The server row stays as last reported;
-      // the local `evictedMappings` entry keeps resume-on-next-message working.
-      // (`suspended` here would accumulate rows in agent_chat_sessions forever
-      // since the cleanup cron is out of scope for this redesign.)
+      // LRU eviction is local memory-management, not operator intent — do
+      // NOT emit a wire state here. The chat now lives in `evictedMappings`
+      // and the next `agent:bound` (initial bind or reconnect) will pick it
+      // up via `getEvictedChatIds()` in `agent-slot.fullStateSync` and
+      // advertise it as `suspended`, so the server's `agent_chat_sessions.state`
+      // converges to "handler is gone" on the next sync without churn on
+      // every eviction.
       this.sessions.delete(candidate.key);
       this.sessionRuntimeStates.delete(candidate.key);
       // Drop the trigger alongside the session — the next message routed to
@@ -644,6 +677,7 @@ export class SessionManager {
 
   private evictIdle(): void {
     const timeoutMs = this.config.session.idle_timeout * 1000;
+    const workingGraceMs = this.config.session.working_grace_seconds * 1000;
     // Blocked detection — 2 minutes without activity while session is active
     const blockedThresholdMs = 120_000;
     const now = Date.now();
@@ -669,8 +703,35 @@ export class SessionManager {
           );
           continue;
         }
+
+        // `lastActivity` is bumped per inbound SDK message/event (handler
+        // `touch()`), so a long thinking turn or a single very large message
+        // looks identical to "session has been idle" here. Without this
+        // exemption the runtime suspends the SDK transport mid-thinking and
+        // the work is lost. `working_grace_seconds` bounds the worst case:
+        // if a handler bug strands the state at `working`/`blocked`, the
+        // slot is reclaimed after the grace window expires.
+        const currentState = this.sessionRuntimeStates.get(session.chatId);
+        const stillProgressing = currentState === "working" || currentState === "blocked";
+        if (stillProgressing && inactiveMs < timeoutMs + workingGraceMs) {
+          this.config.log.info(
+            {
+              chatId: session.chatId,
+              runtimeState: currentState,
+              inactiveSec: Math.round(inactiveMs / 1000),
+              graceSec: this.config.session.working_grace_seconds,
+            },
+            "session idle threshold reached but still working — skipping suspend",
+          );
+          continue;
+        }
+
         this.config.log.info(
-          { chatId: session.chatId, idleTimeoutSec: this.config.session.idle_timeout },
+          {
+            chatId: session.chatId,
+            idleTimeoutSec: this.config.session.idle_timeout,
+            runtimeState: currentState ?? "idle",
+          },
           "session idle, suspending",
         );
         this.suspendSession(session);
@@ -742,7 +803,13 @@ export class SessionManager {
         this.currentTrigger.delete(chatId);
       },
       log,
-      getDocumentBasePath: () => this.resolveDocumentBasePath(log),
+      getDocumentBasePath: () => this.resolveDocumentBasePath(log, chatId),
+      // Cross-agent doc preview: `workspaceRoot` is `<workspaces>/<agentSlug>`
+      // (see agent-slot.ts), so the shared common root is its parent and this
+      // agent's slug is its basename — derived from existing config, no new
+      // config surface (decision: config-ascent).
+      workspacesRoot: dirname(this.config.handlerConfig.workspaceRoot),
+      selfSlug: basename(this.config.handlerConfig.workspaceRoot),
     });
 
     const envCtx = { sdk: this.config.sdk, agent: this.config.agentIdentity, chatId };
@@ -771,14 +838,21 @@ export class SessionManager {
     };
   }
 
-  private async resolveDocumentBasePath(log: (msg: string) => void): Promise<string | null> {
-    if (!this.config.agentConfigCache) return null;
+  private async resolveDocumentBasePath(log: (msg: string) => void, chatId: string): Promise<string> {
+    // Per-chat workspace root: the same dir the handler hands the agent as cwd
+    // (`acquireWorkspace(workspaceRoot, chatId)` returns `<workspaceRoot>/<chatId>`).
+    // Computed with a pure `join` — NOT `acquireWorkspace`, whose mkdir/rmSync
+    // side effects must not run on every outbound message.
+    const perChatRoot = join(this.config.handlerConfig.workspaceRoot, chatId);
+    if (!this.config.agentConfigCache) return perChatRoot;
     try {
       const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
-      return documentBasePathFromRuntimeConfig(payload);
+      return documentBasePathFromRuntimeConfig(payload, perChatRoot);
     } catch (err) {
-      log(`document preview base path unavailable: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+      log(
+        `document preview base path: config unavailable, using workspace root: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return perChatRoot;
     }
   }
 

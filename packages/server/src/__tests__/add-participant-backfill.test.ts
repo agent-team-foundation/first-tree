@@ -63,7 +63,7 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
 
     const total = PRECEDING_CONTEXT_MAX_ENTRIES + 5;
     for (let i = 0; i < total; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, { format: "text", content: `msg-${i}` });
+      await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: `msg-${i}` });
     }
 
     const ownerSilentBefore = await countSilentEntries(app.db, owner.agent.inboxId, chat.id);
@@ -96,7 +96,7 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
 
     const total = 7;
     for (let i = 0; i < total; i++) {
-      await sendMessage(app.db, chat.id, owner.agent.uuid, { format: "text", content: `m${i}` });
+      await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: `m${i}` });
     }
 
     await addParticipant(app.db, chat.id, owner.agent.uuid, { agentId: newcomer.agent.uuid });
@@ -132,7 +132,7 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
       type: "group",
       participantIds: [peer.agent.uuid],
     });
-    await sendMessage(app.db, chat.id, owner.agent.uuid, { format: "text", content: "hi" });
+    await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: "hi" });
 
     const peerSilentBefore = await countSilentEntries(app.db, peer.agent.inboxId, chat.id);
     const peerNotifyBefore = await countNotifyEntries(app.db, peer.agent.inboxId, chat.id);
@@ -161,14 +161,14 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
       type: "group",
       participantIds: [peer.agent.uuid],
     });
-    await sendMessage(app.db, chat.id, owner.agent.uuid, { format: "text", content: "before-1" });
-    await sendMessage(app.db, chat.id, owner.agent.uuid, { format: "text", content: "before-2" });
+    await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: "before-1" });
+    await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: "before-2" });
 
     await addParticipant(app.db, chat.id, owner.agent.uuid, { agentId: newcomer.agent.uuid });
     const afterJoin = await countSilentEntries(app.db, newcomer.agent.inboxId, chat.id);
 
-    await sendMessage(app.db, chat.id, owner.agent.uuid, { format: "text", content: "after-1" });
-    await sendMessage(app.db, chat.id, owner.agent.uuid, { format: "text", content: "after-2" });
+    await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: "after-1" });
+    await sendMessage(app.db, chat.id, owner.agent.uuid, { source: "api", format: "text", content: "after-2" });
 
     expect(await countSilentEntries(app.db, newcomer.agent.inboxId, chat.id)).toBe(afterJoin + 2);
     // No notify rows on the joiner yet — they have not been @-mentioned.
@@ -198,6 +198,7 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
     const seeded: string[] = [];
     for (let i = 0; i < 5; i++) {
       const r = await sendMessage(app.db, chat.id, owner.agent.uuid, {
+        source: "api",
         format: "text",
         content: `seed-${i}`,
       });
@@ -209,6 +210,7 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
     // Wake the joiner via an explicit @-mention; the preceding-context
     // bundler runs as part of pollInbox.
     await sendMessage(app.db, chat.id, owner.agent.uuid, {
+      source: "api",
       format: "text",
       content: `@${newcomer.agent.name} you're up`,
       metadata: { mentions: [newcomer.agent.uuid] },

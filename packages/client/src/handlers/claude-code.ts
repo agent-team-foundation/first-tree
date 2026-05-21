@@ -540,6 +540,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
           format: "question",
           content: questionContent,
+          source: "api",
           // Same bypass channel result-sink uses: an AskUserQuestion is a
           // handler-initiated post, not a user-typed group broadcast — it
           // must not be rejected by the group-chat `@mention required`
@@ -809,6 +810,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             respawnQuery(claudeSessionId, sessionCtx);
           } catch (resumeErr) {
             sessionCtx.log(`Auto-resume failed: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
+            // Mirror the MAX_RETRIES branch above: leaving runtimeState at
+            // `working` would block the SessionManager's idle-suspend grace
+            // window from ever firing on this session, so the slot would
+            // never be reclaimed.
+            sessionCtx.setRuntimeState("error");
             return;
           }
         }

@@ -2,15 +2,37 @@ import { z } from "zod";
 
 // -- Message Source (which entry point created this message) --
 
+/**
+ * Entry point that produced this message. Required (NOT NULL) after v2 —
+ * every write path must declare its caller-stack origin so observability /
+ * loop / egress diagnostics can join on it.
+ *
+ *   - "web"     — Hub web UI (POST /chats/:id/messages from a browser
+ *                 session; includes AskUserQuestion answers submitted via
+ *                 the web UI).
+ *   - "cli"     — Agent's `first-tree-hub` CLI (`chat send` / `chat invite`
+ *                 / etc.).
+ *   - "api"     — Agent SDK direct API call (incl. result-sink auto-forward,
+ *                 in-process tool integrations, AskUserQuestion publish);
+ *                 the catch-all for client runtime-initiated writes that
+ *                 aren't typed via the CLI.
+ *   - "feishu"  — Inbound message bridged from a Feishu adapter.
+ *   - "github"  — Inbound message bridged from a GitHub webhook.
+ *
+ * NOT a behaviour discriminator — use `purpose` for that (e.g. distinguishing
+ * a CLI-typed agent send from a result-sink auto-forward, both of which may
+ * carry source='api'/'cli'). `source` is the caller-stack origin, intended
+ * for observability and loop / egress diagnostics.
+ */
 export const MESSAGE_SOURCES = {
-  HUB_UI: "hub_ui",
+  WEB: "web",
   CLI: "cli",
   FEISHU: "feishu",
   GITHUB: "github",
   API: "api",
 } as const;
 
-export const messageSourceSchema = z.enum(["hub_ui", "cli", "feishu", "github", "api"]);
+export const messageSourceSchema = z.enum(["web", "cli", "feishu", "github", "api"]);
 export type MessageSource = z.infer<typeof messageSourceSchema>;
 
 export const MESSAGE_FORMATS = {
@@ -60,7 +82,17 @@ export const sendMessageSchema = z.object({
   content: z.unknown(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   inReplyTo: z.string().optional(),
-  source: messageSourceSchema.optional(),
+  /**
+   * Required output (NOT NULL in `messages.source`). The Zod `.default("api")`
+   * lets HTTP request bodies omit the field — Hub's pre-v2 HTTP clients still
+   * send messages without `source`, and a deploy that suddenly 422'd those
+   * requests would be a needless coupling break. The default fills in for
+   * those callers; in-process TS callers go through `z.infer<>` (= the
+   * `SendMessage` type), where `source` is structurally required and must be
+   * passed explicitly so a forgotten value surfaces as a compile error
+   * rather than silently labelling everything `'api'`.
+   */
+  source: messageSourceSchema.default("api"),
   purpose: messagePurposeSchema.optional(),
   /**
    * Recipient agent names that the server should resolve to uuids against
@@ -133,6 +165,23 @@ export type PrecedingMessage = z.infer<typeof precedingMessageSchema>;
  */
 export const clientMessageSchema = messageSchema.extend({
   configVersion: z.number().int().positive(),
+  // Forward-roll defence: the server may push new source values before the
+  // client ships the matching enum update (e.g. a new adapter is added).
+  // Without `.catch`, the strict enum rejects the whole inbox frame, which
+  // forces a 300s reaper round-trip before re-delivery — and that retry
+  // hits the same schema mismatch, so the entry exhausts retryCount and
+  // is effectively lost. Degrading unknown values to `null` keeps the
+  // frame parseable so the handler still receives the message body; only
+  // the audit-trail `source` label is lost. Mirrors the
+  // inboxDeliverFrameSchema `.passthrough()` policy for top-level fields.
+  //
+  // Scope: `.catch` is field-scoped — it fires for ANY shape mismatch on
+  // `source` (unknown enum value, wrong type like `12345`, missing /
+  // undefined), not just enum drift. Acceptable because `source` is a
+  // pure audit label that handlers never branch on. Other fields' parse
+  // errors still bubble up to the parent `safeParse`, so required-shape
+  // drift on id / chatId / format is NOT silently swallowed.
+  source: messageSourceSchema.nullable().catch(null),
   recipientMode: participantModeSchema.default("full"),
   precedingMessages: z.array(precedingMessageSchema).default([]),
 });

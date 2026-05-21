@@ -4,13 +4,13 @@ export type GroupMode = "recency" | "source" | "type" | "none";
 
 /**
  * Parse a `?group=` URL value into a `GroupMode`. Unknown / missing
- * values fall back to `recency` (the default). Exported so both the
+ * values fall back to `source` (the default). Exported so both the
  * URL-state side (`WorkspacePage`) and the headless dropdown
  * (`ConversationList`) share one canonical parser.
  */
 export function parseGroupMode(raw: string | null): GroupMode {
-  if (raw === "source" || raw === "type" || raw === "none") return raw;
-  return "recency";
+  if (raw === "recency" || raw === "type" || raw === "none") return raw;
+  return "source";
 }
 
 export type GroupBucket = {

@@ -84,6 +84,7 @@ describe("server-side silent-send form guard (L4 mirror of result-sink)", () => 
     const { app, sender, obsA, obsB, chat } = await setupGroup("ss-empty");
 
     const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: "",
     });
@@ -118,6 +119,7 @@ describe("server-side silent-send form guard (L4 mirror of result-sink)", () => 
     // would be woken with an empty conversation turn.
     const { app, sender, obsA, obsB, chat } = await setupGroup("ss-pure-at");
     const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: `@${obsA.name}`,
       metadata: { mentions: [obsA.uuid] },
@@ -134,6 +136,7 @@ describe("server-side silent-send form guard (L4 mirror of result-sink)", () => 
   it("Case 3: whitespace-only content — silenced", async () => {
     const { app, sender, obsA, chat } = await setupGroup("ss-ws");
     const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: "   \n\t  ",
     });
@@ -151,6 +154,7 @@ describe("server-side silent-send form guard (L4 mirror of result-sink)", () => 
     // of that decision and routes normally.
     const { app, sender, obsA, obsB, chat } = await setupGroup("ss-dot");
     const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: ".",
       // Explicitly @ obsA so mention_only fan-out wakes them; obsB stays
@@ -174,6 +178,7 @@ describe("server-side silent-send form guard (L4 mirror of result-sink)", () => 
     // after stripping leading @<name>?". Yes → route normally.
     const { app, sender, obsA, obsB, chat } = await setupGroup("ss-real");
     const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: `@${obsA.name} 完成 PR #42`,
       metadata: { mentions: [obsA.uuid] },

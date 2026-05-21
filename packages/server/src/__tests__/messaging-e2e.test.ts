@@ -72,6 +72,7 @@ describe("messaging E2E — group-chat mention scenarios", () => {
 
     // Human messages with explicit mention of b1.
     await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: "@b1 please look",
       metadata: { mentions: [b1.uuid] },
@@ -131,6 +132,7 @@ describe("messaging E2E — group-chat mention scenarios", () => {
 
     // a1 pings b1.
     const ping = await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: "@b1 thoughts?",
       metadata: { mentions: [b1.uuid] },
@@ -139,6 +141,7 @@ describe("messaging E2E — group-chat mention scenarios", () => {
     // b1's runtime processes, then auto-forwards with mentions=[a1, b3].
     await pollInbox(app.db, b1.inboxId, 10);
     await sendMessage(app.db, chat.id, b1.uuid, {
+      source: "api",
       format: "text",
       content: "rough plan. @b3 can you sanity-check?",
       inReplyTo: ping.message.id,
@@ -185,6 +188,7 @@ describe("messaging E2E — group-chat mention scenarios", () => {
     const c1 = await createChat(app.db, b1.uuid, { type: "group", participantIds: [b2.uuid] });
 
     const m1 = await sendMessage(app.db, c1.id, b1.uuid, {
+      source: "api",
       format: "text",
       content: "first cut",
       metadata: { mentions: [b2.uuid] },

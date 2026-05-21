@@ -36,7 +36,12 @@ function createSessionManager(opts: {
   sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
   ackEntry?: (entryId: number) => Promise<void>;
-  session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
+  session?: {
+    idle_timeout: number;
+    max_sessions: number;
+    working_grace_seconds: number;
+    reconcile_interval_seconds: number;
+  };
   concurrency?: number;
   log?: pino.Logger;
 }) {
@@ -45,7 +50,12 @@ function createSessionManager(opts: {
   const sdk = opts.sdk ?? mockSdk();
 
   return new SessionManager({
-    session: opts.session ?? { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+    session: opts.session ?? {
+      idle_timeout: 300,
+      max_sessions: 10,
+      working_grace_seconds: 3600,
+      reconcile_interval_seconds: 300,
+    },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -116,7 +126,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -183,7 +193,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -270,7 +280,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -315,7 +325,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 2, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -369,7 +379,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 2,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -444,7 +454,7 @@ describe("SessionManager ackEntry callback", () => {
     const h = handler ?? createMockHandler();
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: () => h,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -496,7 +506,7 @@ describe("SessionManager ackEntry callback", () => {
     const handler = createMockHandler();
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 1, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 1, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 1,
       handlerFactory: () => handler,
       handlerConfig: { workspaceRoot: "/tmp/test" },

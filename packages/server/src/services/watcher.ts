@@ -38,7 +38,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
-import { addChatParticipants, changeChatType, wouldUpgradeToGroup } from "./participant-mode.js";
+import { addChatParticipants } from "./participant-mode.js";
 
 /**
  * Structural DB type that accepts both the top-level `Database` and a
@@ -190,20 +190,15 @@ export async function joinAsParticipant(db: Database, chatId: string, humanAgent
       return { chatId, inserted: false, carried: null };
     }
 
-    const currentSpeakers = await tx
-      .select({ agentId: chatMembership.agentId })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-    if (wouldUpgradeToGroup(currentSpeakers.length, 1)) {
-      await changeChatType(tx, chatId, "group");
-    }
-
+    // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
+    // `chat_membership.mode` is decision-inert. Just upsert the speaker row.
+    //
     // `/me/chats/:id/join` admits only the manager's human agent.
     // `assertHuman: true` makes a non-human caller surface as a 400 rather
-    // than silently inserting with an inappropriate mode.
-    // `upgradeWatcherToSpeaker` promotes a pre-existing watcher row in place;
-    // chat_user_state is structurally separate so the user's read state
-    // survives untouched — no state-carry needed.
+    // than silently inserting.
+    // `upgradeWatcherToSpeaker` promotes a pre-existing watcher row in
+    // place; chat_user_state is structurally separate so the user's read
+    // state survives untouched — no state-carry needed.
     await addChatParticipants(tx, chatId, [{ agentId: humanAgentId, role: "member" }], {
       assertHuman: true,
       upgradeWatcherToSpeaker: true,

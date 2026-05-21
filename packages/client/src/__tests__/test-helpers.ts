@@ -28,7 +28,7 @@ export function mockCtxPlumbing(
 } {
   return {
     forwardResult: async (text: string) => {
-      await sdk.sendMessage(chatId, { format: "text", content: text });
+      await sdk.sendMessage(chatId, { source: "api", format: "text", content: text });
     },
     buildAgentEnv: (env) => env,
     formatInboundContent: async (msg) => {

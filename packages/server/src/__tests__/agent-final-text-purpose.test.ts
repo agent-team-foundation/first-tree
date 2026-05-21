@@ -43,6 +43,7 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
       chat.id,
       peerA.agent.uuid,
       {
+        source: "api",
         format: "text",
         content: "i am done — turn ended",
         purpose: "agent-final-text",
@@ -72,6 +73,7 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
       chat.id,
       peerA.agent.uuid,
       {
+        source: "api",
         format: "text",
         content: "final text broadcast",
         purpose: "agent-final-text",
@@ -106,7 +108,7 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
         app.db,
         chat.id,
         peerA.agent.uuid,
-        { format: "text", content: "i am done — turn ended" },
+        { source: "api", format: "text", content: "i am done — turn ended" },
         { enforceGroupMention: true },
       ),
     ).rejects.toThrow(/explicit @mention/i);
@@ -127,6 +129,7 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     });
 
     const r = await sendMessage(app.db, chat.id, a.agent.uuid, {
+      source: "api",
       format: "text",
       content: `@${b.agent.name} thanks`,
       metadata: { mentions: [b.agent.uuid] },

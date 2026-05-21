@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { CONCURRENCY, IDLE_TIMEOUT_MS, MAX_SESSIONS } from "./constants.js";
+import { CONCURRENCY, IDLE_TIMEOUT_MS, MAX_SESSIONS, WORKING_GRACE_SECONDS } from "./constants.js";
 
 /**
  * Minimal `agent.yaml` schema.
@@ -26,6 +26,13 @@ const sessionConfigSchema = z
       .positive()
       .default(IDLE_TIMEOUT_MS / 1000),
     max_sessions: z.number().int().positive().default(MAX_SESSIONS),
+    /**
+     * Upper bound on how long `working`/`blocked` may keep a session alive
+     * past `idle_timeout` before force-suspend. Matches the field of the
+     * same name in the admin-managed runtime config; this default applies
+     * only when the legacy local `agent.yaml` path is in use.
+     */
+    working_grace_seconds: z.number().int().positive().default(WORKING_GRACE_SECONDS),
     /** How often the client reconciles its local chatIds with the server. */
     reconcile_interval_seconds: z.number().int().min(30).max(3600).default(300),
   })

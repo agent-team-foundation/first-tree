@@ -182,6 +182,7 @@ describe("Adapter mapping service", () => {
         participantIds: [agent.uuid],
       });
       const { message: msg } = await sendMessage(app.db, chat.id, agent.uuid, {
+        source: "api",
         format: "text",
         content: "test message for ref",
       });

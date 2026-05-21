@@ -4,6 +4,7 @@ import {
   documentContextSchema,
   extractMentions,
   type MentionParticipant,
+  parseWorkspaceDocKey,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
   scanMentionTokens,
@@ -68,9 +69,10 @@ import {
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
-import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { cn } from "../../../lib/utils.js";
+import { computeRequiresMention } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 
@@ -277,22 +279,26 @@ function TextRow({
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const slugToId = useAgentSlugToIdMap();
   const senderName = agentNameFn(msg.senderId);
   const isSelf = myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
   const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
   // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
-  // user typed in the web composer (`source === "hub_ui"`) is left untouched
+  // user typed in the web composer (`source === "web"`) is left untouched
   // so paths that humans write — code-fence walkthroughs, quoted snippets,
-  // intentional bare references — render exactly as authored. The scan rules
-  // mirror the runtime snapshot scanner, so every link this rewrites has a
-  // matching `documentContext.docs[]` entry to power the preview drawer
-  // without a server round-trip.
+  // intentional bare references — render exactly as authored. Only paths that
+  // this message actually carries a snapshot for get linkified, so a filename
+  // the agent only *mentions* in prose stays plain text instead of becoming a
+  // dead link — and every link that does render opens from cache without a
+  // server round-trip.
   const textContent = useMemo<string | null>(() => {
     if (msg.format !== "text" && msg.format !== "markdown") return null;
     if (typeof msg.content !== "string") return JSON.stringify(msg.content);
-    return msg.source === "hub_ui" ? msg.content : linkifyMarkdownDocPaths(msg.content);
-  }, [msg.format, msg.content, msg.source]);
+    if (msg.source === "web") return msg.content;
+    const snapshotPaths = new Set(docSnapshots?.keys() ?? []);
+    return linkifyMarkdownDocPaths(msg.content, snapshotPaths, msg.chatId);
+  }, [msg.format, msg.content, msg.source, msg.chatId, docSnapshots]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -315,7 +321,21 @@ function TextRow({
           event.preventDefault();
           const next = new URLSearchParams(searchParams);
           next.set("docChat", msg.chatId);
-          next.set("docAgent", msg.senderId);
+          // Owner attribution for `docAgent`: a global cross-agent key
+          // `<ownerSlug>/<chatId>/…` (chatId segment === this chat) belongs to
+          // the OWNER, not the sender; self / legacy bare keys stay the sender.
+          // `docAgent` is only a hint here — the drawer authoritatively
+          // re-resolves the owner from the key's own slug for the path-based
+          // fallback (review P2-a), so an unresolved owner does NOT mis-query
+          // the sender's workspace; it just leaves this placeholder in the URL
+          // for `hasDocRef`. The inline snapshot path renders from cache
+          // regardless of `docAgent`.
+          const parsedKey = parseWorkspaceDocKey(docPath);
+          const ownerId =
+            parsedKey && parsedKey.chatId === msg.chatId
+              ? (slugToId(parsedKey.agentSlug) ?? msg.senderId)
+              : msg.senderId;
+          next.set("docAgent", ownerId);
           next.set("docPath", docPath);
 
           // Prefer the inline snapshot variant: hand the drawer the bytes via
@@ -352,7 +372,7 @@ function TextRow({
         );
       },
     }),
-    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams],
+    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams, slugToId],
   );
 
   return (
@@ -1266,17 +1286,27 @@ export function ChatView({
   }, [chatDetail?.participants, activity?.agents, agentId, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
 
   /**
-   * "Needs explicit @mention" guard: a real group, OR a direct chat where the
-   * current user isn't yet a participant (their first send promotes it to a
-   * 3-person group). In both cases an unaddressed message would be silently
-   * dropped by `mention_only` peers and the server now rejects it with 400.
-   * See proposals/group-chat-ux-improvements §2.
+   * "Needs explicit @mention" guard: a real group (3+ speakers), OR a 1-on-1
+   * where the current user isn't yet a participant (their first send promotes
+   * it to a 3-person group). In both cases an unaddressed message would be
+   * silently dropped by `mention_only` peers and the server rejects it with
+   * 400. See proposals/group-chat-ux-improvements §2.
+   *
+   * Keyed on **membership shape**, not `chats.type`. Since the group-chat
+   * convergence (first-tree-hub PR 465 / first-tree-context PR 281) every chat
+   * is created with `type='group'`, so the old `chatDetail.type === "group"`
+   * check fired for 1-on-1 DMs too and forced an @mention there — breaking the
+   * "DM doesn't need an explicit @mention" UX. The server already keys on
+   * shape (`services/message.ts` `isOneOnOne = participants.length === 2`,
+   * speakers only); this mirrors it. `chatDetail.participants` is also
+   * speakers-only (`getChatDetail` filters `accessMode = 'speaker'`).
    */
   const requiresMention = useMemo(() => {
     if (!chatDetail) return false;
-    if (chatDetail.type === "group") return true;
-    const meIn = chatDetail.participants.some((p) => p.agentId === myAgentId);
-    return chatDetail.type === "direct" && !meIn && chatDetail.participants.length >= 2;
+    return computeRequiresMention(
+      chatDetail.participants.map((p) => p.agentId),
+      myAgentId,
+    );
   }, [chatDetail, myAgentId]);
 
   // First-message pre-fill: when the user lands on a brand-new empty chat

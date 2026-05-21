@@ -23,7 +23,7 @@ import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
  *   - `?watching=1` (default off) — chats where the caller is a watcher
  *   - `?origin=manual,pr,issue,…` (default empty = unfiltered) — multi-select
  *   - `?with=agent-x,agent-y` (default empty = unfiltered) — participants
- *   - `?group=recency|source|none` (default `recency`) — list grouping
+ *   - `?group=recency|source|type|none` (default `source`) — list grouping
  *
  * Phase B replaces the Phase A single-value `?source=` with the multi-select
  * `?origin=`; the legacy key is still accepted on first load and upgraded
@@ -346,7 +346,7 @@ export function nextParamsForParticipants(current: URLSearchParams, agents: Read
  */
 export function nextParamsForGroup(current: URLSearchParams, mode: GroupMode): URLSearchParams {
   const next = new URLSearchParams(current);
-  if (mode === "recency") next.delete("group");
+  if (mode === "source") next.delete("group");
   else next.set("group", mode);
   return next;
 }
