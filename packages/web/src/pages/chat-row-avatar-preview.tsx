@@ -37,6 +37,7 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     engagementStatus: overrides.engagementStatus ?? "active",
     engagedAgentIds: overrides.engagedAgentIds ?? [],
     liveActivity: overrides.liveActivity ?? null,
+    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
   };
 }
 
