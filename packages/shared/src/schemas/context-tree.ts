@@ -149,6 +149,14 @@ export const contextTreeUsageEventSchema = z.object({
   // (recorded before per-read node tracking) or reads that could not be
   // resolved to a node path.
   nodePath: z.string().nullable(),
+  // Whether the caller may actually open this chat — true iff they satisfy
+  // the same membership rule as `requireChatAccess` (their human agent has a
+  // chat_membership row, i.e. speaker OR watcher, OR they manage a speaker in
+  // the chat). The feed shares chatId/chatTitle org-wide for transparency, but
+  // only a viewer who can access the chat should get a clickable deep link;
+  // others render it as inert text. Always false for cross-org events (where
+  // chatId is masked to null) and computed fresh per request (never stored).
+  viewerCanAccess: z.boolean(),
   createdAt: z.string(),
 });
 export type ContextTreeUsageEvent = z.infer<typeof contextTreeUsageEventSchema>;

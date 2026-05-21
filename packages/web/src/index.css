@@ -1084,6 +1084,20 @@
   text-decoration: underline;
 }
 
+/*
+ * Inert variant for chats the viewer cannot open (non-member). Keeps the
+ * label's color/sizing/truncation but drops the link affordance — no pointer
+ * cursor, no hover underline. The `title` attribute carries the explanation.
+ */
+.context-usage-feed-chat.is-static {
+  cursor: default;
+}
+
+.context-usage-feed-chat.is-static:hover {
+  color: var(--fg-2);
+  text-decoration: none;
+}
+
 .context-usage-feed-time {
   color: var(--fg-3);
   font-variant-numeric: tabular-nums;

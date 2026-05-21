@@ -60,6 +60,27 @@ async function resolveCallerInOrg(
 }
 
 /**
+ * Resolve the caller's active membership in `orgId` without throwing —
+ * returns `null` when the caller is not an active member. Use for surfaces
+ * that should degrade gracefully (e.g. computing per-event chat access for
+ * the org-wide Context usage feed) rather than 404, where the throwing
+ * `resolveCallerInOrg` would be wrong.
+ */
+export async function resolveOrgViewer(
+  db: Database,
+  userId: string,
+  orgId: string,
+): Promise<{ memberId: string; humanAgentId: string } | null> {
+  const [row] = await db
+    .select({ id: members.id, role: members.role, agentId: members.agentId })
+    .from(members)
+    .where(and(eq(members.userId, userId), eq(members.organizationId, orgId), eq(members.status, "active")))
+    .limit(1);
+  if (!row || (row.role !== "admin" && row.role !== "member")) return null;
+  return { memberId: row.id, humanAgentId: row.agentId };
+}
+
+/**
  * Gate access to a single agent. `kind = "visible"` checks read-style
  * visibility (org-visible OR managed by caller). `kind = "manage"` adds
  * "or caller is admin in agent's org".

@@ -1,6 +1,7 @@
 import { contextTreeSnapshotSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { resolveOrgViewer } from "../scope/require-resource.js";
 import { requireUser } from "../scope/require-user.js";
 import {
   type ContextTreeBinding,
@@ -49,8 +50,9 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       const window = query.window ?? "7d";
       const rawSnapshot = await getContextTreeSnapshot({ ...binding, githubToken }, window);
       const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
+      const viewer = orgId ? await resolveOrgViewer(app.db, userId, orgId) : null;
       const usage = orgId
-        ? await summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window))
+        ? await summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined)
         : snapshot.usage;
       return contextTreeSnapshotSchema.parse({ ...snapshot, usage });
     },
