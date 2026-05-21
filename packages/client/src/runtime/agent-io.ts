@@ -28,10 +28,10 @@ export function buildAgentEnv(
 ): NodeJS.ProcessEnv {
   return {
     ...parentEnv,
-    FIRST_TREE_HUB_SERVER_URL: ctx.sdk.serverUrl,
-    FIRST_TREE_HUB_AGENT_ID: ctx.agent.agentId,
-    FIRST_TREE_HUB_INBOX_ID: ctx.agent.inboxId,
-    FIRST_TREE_HUB_CHAT_ID: ctx.chatId,
+    FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
+    FIRST_TREE_AGENT_ID: ctx.agent.agentId,
+    FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
+    FIRST_TREE_CHAT_ID: ctx.chatId,
   };
 }
 

@@ -13,7 +13,7 @@
  * makes lifecycle tests slow + flaky in CI).
  */
 
-import { FIRST_TREE_HUB_ATTR } from "@first-tree/shared/observability";
+import { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 import { context as otelContext, type Span, trace } from "@opentelemetry/api";
 import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks";
 import {
@@ -146,7 +146,7 @@ describe("bodyCaptureOnSendHook", () => {
     span.end();
 
     const attrs = findFinished(traceId).attributes;
-    const raw = attrs[FIRST_TREE_HUB_ATTR.HTTP_REQUEST_BODY];
+    const raw = attrs[FIRST_TREE_ATTR.HTTP_REQUEST_BODY];
     expect(typeof raw).toBe("string");
     const decoded = JSON.parse(raw as string) as Record<string, unknown>;
     expect(decoded.username).toBe("alice");
@@ -164,7 +164,7 @@ describe("bodyCaptureOnSendHook", () => {
     await bodyCaptureOnSendHook(req, makeReply(200), null);
     span.end();
 
-    expect(findFinished(traceId).attributes[FIRST_TREE_HUB_ATTR.HTTP_REQUEST_BODY]).toBeUndefined();
+    expect(findFinished(traceId).attributes[FIRST_TREE_ATTR.HTTP_REQUEST_BODY]).toBeUndefined();
   });
 
   it("does not stamp the body when the route did not opt in", async () => {
@@ -176,7 +176,7 @@ describe("bodyCaptureOnSendHook", () => {
     await bodyCaptureOnSendHook(req, makeReply(401), null);
     span.end();
 
-    expect(findFinished(traceId).attributes[FIRST_TREE_HUB_ATTR.HTTP_REQUEST_BODY]).toBeUndefined();
+    expect(findFinished(traceId).attributes[FIRST_TREE_ATTR.HTTP_REQUEST_BODY]).toBeUndefined();
   });
 
   it("truncates the body attribute to ~4 KiB with a clear marker", async () => {
@@ -190,7 +190,7 @@ describe("bodyCaptureOnSendHook", () => {
     await bodyCaptureOnSendHook(req, makeReply(500), null);
     span.end();
 
-    const raw = findFinished(traceId).attributes[FIRST_TREE_HUB_ATTR.HTTP_REQUEST_BODY] as string;
+    const raw = findFinished(traceId).attributes[FIRST_TREE_ATTR.HTTP_REQUEST_BODY] as string;
     expect(typeof raw).toBe("string");
     expect(raw.length).toBeGreaterThan(4096);
     expect(raw.length).toBeLessThan(4096 + 64); // 4 KiB + a small "[truncated …]" marker

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FIRST_TREE_HUB_ATTR } from "@first-tree/shared/observability";
+import { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 import { trace } from "@opentelemetry/api";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
@@ -195,9 +195,9 @@ export function createKaelRuntime(
       return withSpan(
         "kael.forward",
         {
-          [FIRST_TREE_HUB_ATTR.KAEL_ENDPOINT]: kaelEndpoint,
-          [FIRST_TREE_HUB_ATTR.BG_TASK_NAME]: "kael.forward",
-          [FIRST_TREE_HUB_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
+          [FIRST_TREE_ATTR.KAEL_ENDPOINT]: kaelEndpoint,
+          [FIRST_TREE_ATTR.BG_TASK_NAME]: "kael.forward",
+          [FIRST_TREE_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
           "kael.agent_count": agentConfigs.size,
         },
         async () => {
@@ -275,8 +275,8 @@ export function createKaelRuntime(
           // many of the claimed entries actually shipped vs. errored.
           const span = trace.getActiveSpan();
           if (span) {
-            span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_SENT_COUNT, sent);
-            span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_ERROR_COUNT, errorCount);
+            span.setAttribute(FIRST_TREE_ATTR.BG_TASK_SENT_COUNT, sent);
+            span.setAttribute(FIRST_TREE_ATTR.BG_TASK_ERROR_COUNT, errorCount);
           }
 
           return { sent, errors: errorCount };

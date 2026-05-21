@@ -4,7 +4,7 @@
  *
  * Resolution order:
  *   1. Explicit `--agent <name>` override.
- *   2. `FIRST_TREE_HUB_AGENT_ID` env — set by the runtime when the CLI is
+ *   2. `FIRST_TREE_AGENT_ID` env — set by the runtime when the CLI is
  *      shelled out from inside an agent sub-process. Reverse-look the uuid
  *      back to a local agent name. Without this, a multi-agent client (e.g.
  *      one machine running both `architect` and `developer`) forces every

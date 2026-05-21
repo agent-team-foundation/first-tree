@@ -26,8 +26,8 @@ export type StartRunOptions = {
   withClient?: boolean;
   /**
    * Extra env injected into the spawned server process. Used by mocks (e.g.
-   * `github-mock` sets `FIRST_TREE_HUB_GITHUB_API_BASE_URL` +
-   * `FIRST_TREE_HUB_GITHUB_APP_*`) so the server's outbound calls land on
+   * `github-mock` sets `FIRST_TREE_GITHUB_API_BASE_URL` +
+   * `FIRST_TREE_GITHUB_APP_*`) so the server's outbound calls land on
    * the mock instead of api.github.com.
    */
   serverExtraEnv?: ServerSpawnOptions["extraEnv"];

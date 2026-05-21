@@ -42,7 +42,7 @@ export async function getGithubAppInstallation(organizationId: string): Promise<
  * dialog.
  *
  * Throws `ApiError` with `status === 503` when the operator hasn't set
- * `FIRST_TREE_HUB_GITHUB_APP_SLUG`; the panel surfaces that as a hint.
+ * `FIRST_TREE_GITHUB_APP_SLUG`; the panel surfaces that as a hint.
  */
 export async function getGithubAppInstallUrl(organizationId: string): Promise<string> {
   const { installUrl } = await api.get<{ installUrl: string }>(

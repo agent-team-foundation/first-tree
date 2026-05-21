@@ -164,8 +164,8 @@ handshake 流程([ws-client.ts:380-458](packages/server/src/api/agent/ws-client.
 | # | 动作 |
 |---|---|
 | 1 | server 抛 `CLIENT_USER_MISMATCH`,WS close 4403 |
-| 2 | CLI 收到关闭码 → 输出 *"This client is currently owned by alice@example.com. Run `first-tree-hub client claim --confirm` to transfer ownership. This will unpin Alice's N agents from this machine."* |
-| 3 | 用户跑 `first-tree-hub client claim --confirm`(交互式二次确认 — 显示当前 owner、新 owner、被解绑 agent 列表与计数)→ 调 `POST /clients/:id/claim` |
+| 2 | CLI 收到关闭码 → 输出 *"This client is currently owned by alice@example.com. Run `first-tree-hub login <token> --override` to transfer ownership. This will unpin Alice's N agents from this machine."* |
+| 3 | 用户跑 `first-tree-hub login <token> --override`(交互式二次确认 — 显示当前 owner、新 owner、被解绑 agent 列表与计数)→ 调 `POST /clients/:id/claim` |
 | 4 | server 在单事务内执行(注意:`agents` 表无 `manager_user_id` 列,通过 `members` join 解出):`UPDATE clients SET user_id = ?` ; `UPDATE agents SET client_id = NULL WHERE client_id = ? AND manager_id IN (SELECT id FROM members WHERE user_id = $oldOwnerId)` ; `UPDATE agent_presence SET status='offline', client_id = NULL, runtime_state=NULL, … WHERE client_id = ?`;事务提交后写一条结构化 log(`event: client.owner_transfer`)|
 | 5 | CLI 重连 WS handshake → 通过 |
 
@@ -526,7 +526,7 @@ Alice 跑了一阵子;Bob 想用同一台机器:
 | 1 | Alice `hub logout`(可选)|
 | 2 | Bob `hub login` → 得 Bob 的 JWT |
 | 3 | Client WS handshake → `CLIENT_USER_MISMATCH` |
-| 4 | CLI 输出 *"This client is owned by alice@example.com. Run `first-tree-hub client claim --confirm` to transfer. This will unpin Alice's 3 agents from this machine."* |
+| 4 | CLI 输出 *"This client is owned by alice@example.com. Run `first-tree-hub login <token> --override` to transfer. This will unpin Alice's 3 agents from this machine."* |
 | 5 | Bob 跑 `client claim --confirm` → 二次确认 → owner 切换 + Alice 名下 3 agent 全 unpin;server 日志记录 `event: client.owner_transfer` 一行 |
 | 6 | Bob 重连成功;Bob 在多 org 中也自动覆盖 |
 

@@ -299,7 +299,7 @@ const personal = await createPersonalTeam(app.db, {
 2. 表单 3 个必填项：
    - **Agent name**（display name，自由文本）
    - **Source repository**（GitHub repo picker — 通过 OAuth 拉用户可访问的 repos 列表）
-   - **Computer**（CLI 命令框；用户在自己机器上跑 `first-tree-hub connect <token>`）
+   - **Computer**（CLI 命令框；用户在自己机器上跑 `first-tree-hub login <token>`）
 3. Runtime 自动选第一个可用的 `ok` capability（优先 Claude Code）；Step 2 没给用户选 runtime 的 UI（高级选项推到 onboarding 后的 settings）
 4. 用户点 Create → 服务端创建 agent，带 `gitRepos: [{url: <选的 repo>}]` + clientId + runtime → 轮询直到 agent 上线 → 推进 `onboardingStep = step3`
 
@@ -328,7 +328,7 @@ const personal = await createPersonalTeam(app.db, {
 │        │ 3. Computer it runs on                      │              │
 │        │    ╭─ Waiting for your computer… ──────╮    │              │
 │        │    │ Open Terminal and run:            │    │              │
-│        │    │   first-tree-hub connect 9f3a… 📋 │    │              │
+│        │    │   first-tree-hub login 9f3a… 📋 │    │              │
 │        │    ╰───────────────────────────────────╯    │              │
 │        │    (client 上线后变成 ✓ <hostname> connected)│              │
 │        │                                             │              │
@@ -357,7 +357,7 @@ const personal = await createPersonalTeam(app.db, {
 
 跟当前 OnboardingView（[packages/web/src/pages/workspace/center/onboarding-view.tsx:144-174](../packages/web/src/pages/workspace/center/onboarding-view.tsx)）一样：
 - Step 2 mount 时 lazy-mint connect token
-- 显示 `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub connect <token>`
+- 显示 `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub login <token>`
 - 每 3 秒 poll `listClients()`；client 上线时把"Waiting"脉冲点切成"✓ <hostname> connected"
 - 接上后拉 capabilities 确认至少一个 runtime 是 `ok`
 

@@ -368,7 +368,7 @@ If we later move to push-based updates, the seam is `broadcastToAdmins({ type: "
 ### 9.1 Type + lint
 - `pnpm check && pnpm typecheck` after every edit.
 
-### 9.2 Manual verification (against an isolated `FIRST_TREE_HUB_HOME` per CLAUDE.md)
+### 9.2 Manual verification (against an isolated `FIRST_TREE_HOME` per CLAUDE.md)
 
 1. Start the hub + web server. Connect one client. Confirm topbar shows no chip.
 2. Pin an agent to that client. Kill the client process (`pkill -f first-tree-hub`).

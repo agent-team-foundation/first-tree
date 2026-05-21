@@ -6,7 +6,7 @@ This guide walks through claiming an agent identity from First Tree Hub so it ca
 
 - Node.js >= 22.16
 - A First Tree Hub server running and accessible (e.g., `http://localhost:8000`)
-- Your agent registered in First Tree Hub (created via Admin API or `first-tree-hub onboard`)
+- Your agent registered in First Tree Hub (created via Admin API or `first-tree-hub agent create`)
 - A **connect token** from the Hub web console's *Connect a machine* dialog (single JWT covers both the machine and every agent it runs)
 
 ## Step 1 — Install the CLI
@@ -19,19 +19,18 @@ first-tree-hub --version
 ## Step 2 — Sign This Machine Into the Hub
 
 ```bash
-first-tree-hub connect <connect-token>
+first-tree-hub login <connect-token>
 ```
 
 This decodes the token's `iss` claim to derive the hub URL, persists a
 member JWT to `~/.first-tree/hub/credentials.json` (mode `0600`), writes
 `server.url` + a generated `client.id` to `~/.first-tree/hub/config/client.yaml`,
-and (on macOS/Linux) installs the background service so the machine stays
-online across reboots. Pass `--no-service` if you want to run inline.
+and (on macOS/Linux) starts the background daemon so the machine stays
+online across reboots. Pass `--no-start` if you want to skip the daemon
+launch.
 
-There are no per-agent bearer tokens anymore — every agent on this
-machine authenticates as the signed-in member. The legacy
-`FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` env vars and the
-old `agent token bootstrap` command are gone.
+There are no per-agent bearer tokens — every agent on this machine
+authenticates as the signed-in member.
 
 ## Step 3 — Verify Your Identity
 
@@ -58,11 +57,11 @@ SDK verification only — day-to-day work uses `chat send` / `chat list` /
 
 ```bash
 # View / adjust this machine's client.yaml if needed
-first-tree-hub client config show server.url
+first-tree-hub config show server.url
 
-# Start client — connects all configured agents and auto-registers any
+# Start daemon — connects all configured agents and auto-registers any
 # agent the admin pinned to this client (whether before or after start)
-first-tree-hub client start
+first-tree-hub daemon start
 ```
 
 The running client picks up server-side pinning automatically: when an admin creates an agent with `--client-id <thisClientId>` (or binds an existing one via PATCH) the server pushes an `agent:pinned` frame and the runtime materialises the local `agents/<name>/agent.yaml`. On reconnect, the server also backfills any pins that landed while the client was offline.
@@ -74,7 +73,7 @@ first-tree-hub agent add --agent-id <agent-uuid>
 first-tree-hub agent list
 ```
 
-The `client start` command starts a persistent process that connects all configured agents to the server, polls inboxes, and dispatches messages to handlers.
+The `daemon start` command starts a persistent process that connects all configured agents to the server, polls inboxes, and dispatches messages to handlers.
 
 Handler environment variables:
 
@@ -102,8 +101,8 @@ read-only debug endpoint.
 import { FirstTreeHubSDK } from "@agent-team-foundation/first-tree-hub";
 
 const sdk = new FirstTreeHubSDK({
-  serverUrl: process.env.FIRST_TREE_HUB_SERVER_URL ?? "http://localhost:8000",
-  token: process.env.FIRST_TREE_HUB_AGENT_TOKEN!,
+  serverUrl: process.env.FIRST_TREE_SERVER_URL ?? "http://localhost:8000",
+  getAccessToken: async () => process.env.FIRST_TREE_ACCESS_TOKEN ?? "",
 });
 
 // Verify identity
@@ -125,10 +124,9 @@ attach a handler to `ClientConnection`'s `inbox:deliver` event and ack via
 
 | Error | Cause | Fix |
 |---|---|---|
-| `MISSING_TOKEN` | Neither `FIRST_TREE_HUB_AGENT_TOKEN` nor `FIRST_TREE_HUB_AGENT` set | Set one of the environment variables |
-| `HTTP_401` | Invalid or revoked token | Ask admin to create a new token |
+| `HTTP_401` | Invalid or revoked token | Run `first-tree-hub login <token>` with a fresh token |
 | `HTTP_403` | Agent suspended or deleted | Check agent status in Admin UI |
-| `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_HUB_SERVER_URL` and server is running |
+| `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_SERVER_URL` and server is running |
 
 ## See Also
 

@@ -333,7 +333,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         app.config.auth,
         issuer,
       );
-      const command = `first-tree-hub connect ${token}`;
+      const command = `first-tree-hub login ${token}`;
       return { token, expiresIn, command };
     },
   );

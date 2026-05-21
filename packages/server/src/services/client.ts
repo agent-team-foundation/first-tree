@@ -45,7 +45,7 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
  *     at first insert sticks for the row's lifetime.
  *   - Existing row with a different user_id → raises
  *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `first-tree-hub client claim --confirm` to take
+ *     operator through `first-tree-hub login <token> --override` to take
  *     ownership, which unpins the previous owner's agents from the machine.
  */
 export async function registerClient(
@@ -79,7 +79,7 @@ export async function registerClient(
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        "Run `first-tree-hub client claim --confirm` to transfer ownership.",
+        "Run `first-tree-hub login <token> --override` to transfer ownership.",
     );
   }
 

@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
-import { registerAgentConfigCommands } from "../commands/agent-config.js";
+import { registerAgentConfigCommands } from "../commands/agent/config/index.js";
 
 describe("agent config CLI registration (Step 8)", () => {
   it("registers all 7 subcommands under `config`", () => {

@@ -23,7 +23,7 @@
 - `apps/cli/src/core/onboard.ts` — agent creation via Admin API, optional assistant creation, optional Feishu binding; provides `onboardCheck` / `onboardCreate` / `formatCheckReport` / `loadOnboardState` / `saveOnboardState`.
 - `apps/cli/src/core/bootstrap.ts` — credential persistence (`saveCredentials`, `loadCredentials`) and token freshness (`resolveAccessToken`, `ensureFreshAccessToken`), plus `resolveServerUrl` and `saveAgentConfig`. `ensureFreshAdminToken` is a back-compat alias of `ensureFreshAccessToken`.
 - `apps/cli/src/core/service-install.ts` — `installClientService`, `uninstallClientService`, `getClientServiceStatus`, `isServiceSupported`, `resolveCliInvocation`. Handles launchd (macOS) and `systemd --user` (Linux); marks other platforms as `unsupported`. Logs go to `~/.first-tree/hub/logs/`.
-- `apps/cli/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `client start` and `connect <token> --no-service`. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
+- `apps/cli/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `client start` and `connect <token> --no-start`. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
 - `apps/cli/src/core/doctor.ts` — readiness checks used by `client doctor`: `checkNodeVersion`, `checkClientConfig`, `checkServerReachable`, `checkAgentConfigs`, `checkWebSocket`, `checkBackgroundService`.
 - `apps/cli/src/core/feishu.ts` — `bindFeishuBot`, `bindFeishuUser`.
 - `apps/cli/src/core/prompt.ts` — `isInteractive`, `promptAddAgent`, `promptMissingFields` (schema-driven prompting).

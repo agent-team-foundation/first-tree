@@ -4,8 +4,8 @@
     {
       "id": 0,
       "name": "new-machine",
-      "prompt": "I just bought a new Mac and want it to run as a Hub client, permanently connected to our team's Hub at https://hub.example.com/. Walk me through it from zero. One more thing — previously I always set FIRST_TREE_HUB_AGENT_TOKEN and ran `first-tree-hub agent token bootstrap` to get my agent running. Do I still do that on the new machine?",
-      "expected_output": "Should recommend npm install → first-tree-hub connect <token> (paste the connect token from the Hub web console; the hub URL is derived from the token's iss claim), explain that the background service is installed automatically on macOS (launchd), and explicitly correct the user's outdated assumption: FIRST_TREE_HUB_AGENT_TOKEN and `agent token bootstrap` are gone; auth is now a single member JWT stored in credentials.json written by `connect <token>`.",
+      "prompt": "I just bought a new Mac and want it to run as a Hub client, permanently connected to our team's Hub at https://hub.example.com/. Walk me through it from zero. One more thing — previously I always set FIRST_TREE_AGENT_TOKEN and ran `first-tree-hub agent token bootstrap` to get my agent running. Do I still do that on the new machine?",
+      "expected_output": "Should recommend npm install → first-tree-hub login <token> (paste the connect token from the Hub web console; the hub URL is derived from the token's iss claim), explain that the background service is installed automatically on macOS (launchd), and explicitly correct the user's outdated assumption: FIRST_TREE_AGENT_TOKEN and `agent token bootstrap` are gone; auth is now a single member JWT stored in credentials.json written by `connect <token>`.",
       "files": []
     },
     {

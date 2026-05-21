@@ -96,7 +96,7 @@ function NotInstalledState({ organizationId }: { organizationId: string | null }
       {slugMissing ? (
         <p className="text-body" style={{ color: "var(--state-error)" }}>
           The GitHub App slug isn't configured on this hub. Ask your operator to set{" "}
-          <code className="mono">FIRST_TREE_HUB_GITHUB_APP_SLUG</code>.
+          <code className="mono">FIRST_TREE_GITHUB_APP_SLUG</code>.
         </p>
       ) : (
         <>

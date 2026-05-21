@@ -217,7 +217,7 @@ export function Step2Body({
   const nameOrFallback = trimmedName || "your agent";
 
   const cliCommand = connectToken
-    ? `npm install -g @agent-team-foundation/first-tree-hub\nfirst-tree-hub connect ${connectToken}`
+    ? `npm install -g @agent-team-foundation/first-tree-hub\nfirst-tree-hub login ${connectToken}`
     : null;
 
   const pollUntilReady = useCallback(
@@ -631,7 +631,7 @@ function CommandBox({ command }: { command: string | null }) {
 
   const lines = command ? command.split("\n") : [];
   const connectLine = lines.find((l) => l.startsWith("first-tree-hub")) ?? "";
-  const connectPrefix = "first-tree-hub connect ";
+  const connectPrefix = "first-tree-hub login ";
   const commandPreview = connectLine.startsWith(connectPrefix)
     ? `${connectPrefix}${connectLine.slice(connectPrefix.length, connectPrefix.length + 22)}…`
     : connectLine.length > 52

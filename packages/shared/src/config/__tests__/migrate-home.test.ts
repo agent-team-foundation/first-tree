@@ -34,7 +34,7 @@ describe("migrateLegacyHome", () => {
     expect(existsSync(newHome)).toBe(false);
   });
 
-  it("skips when FIRST_TREE_HUB_HOME is set (user-controlled home)", () => {
+  it("skips when FIRST_TREE_HOME is set (user-controlled home)", () => {
     seedLegacy();
     const res = migrateLegacyHome({
       newHome,

@@ -263,14 +263,14 @@ describe("buildAgentEnv", () => {
     });
     expect(env.PATH).toBe("/usr/bin");
     expect(env.FOO).toBe("bar");
-    expect(env.FIRST_TREE_HUB_SERVER_URL).toBe("http://hub");
-    expect(env.FIRST_TREE_HUB_AGENT_ID).toBe("agent-a");
-    expect(env.FIRST_TREE_HUB_INBOX_ID).toBe("inbox-a");
-    expect(env.FIRST_TREE_HUB_CHAT_ID).toBe("chat-1");
+    expect(env.FIRST_TREE_SERVER_URL).toBe("http://hub");
+    expect(env.FIRST_TREE_AGENT_ID).toBe("agent-a");
+    expect(env.FIRST_TREE_INBOX_ID).toBe("inbox-a");
+    expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
   });
 
-  it("overrides any pre-existing FIRST_TREE_HUB_* value in the parent env", () => {
-    const parent = { FIRST_TREE_HUB_CHAT_ID: "wrong-chat" } as NodeJS.ProcessEnv;
+  it("overrides any pre-existing FIRST_TREE_* value in the parent env", () => {
+    const parent = { FIRST_TREE_CHAT_ID: "wrong-chat" } as NodeJS.ProcessEnv;
     const env = buildAgentEnv(parent, {
       sdk: { serverUrl: "http://hub" },
       agent: {
@@ -283,6 +283,6 @@ describe("buildAgentEnv", () => {
       },
       chatId: "chat-right",
     });
-    expect(env.FIRST_TREE_HUB_CHAT_ID).toBe("chat-right");
+    expect(env.FIRST_TREE_CHAT_ID).toBe("chat-right");
   });
 });

@@ -57,7 +57,7 @@ export function checkNodeVersion(): CheckResult {
 
 export function checkClientConfig(): CheckResult {
   const hasFile = existsSync(join(DEFAULT_CONFIG_DIR, "client.yaml"));
-  const hasEnv = !!process.env.FIRST_TREE_HUB_SERVER_URL;
+  const hasEnv = !!process.env.FIRST_TREE_SERVER_URL;
 
   if (hasFile && hasEnv) return { label: "Config", ok: true, detail: "config file + env vars" };
   if (hasFile) return { label: "Config", ok: true, detail: join(DEFAULT_CONFIG_DIR, "client.yaml") };
@@ -69,7 +69,7 @@ export async function checkServerReachable(): Promise<CheckResult> {
   const config = getClientConfig();
   const serverUrl = get(config, "server.url");
   if (typeof serverUrl !== "string" || !serverUrl) {
-    return { label: "Server URL", ok: false, detail: "not configured (FIRST_TREE_HUB_SERVER_URL or config file)" };
+    return { label: "Server URL", ok: false, detail: "not configured (FIRST_TREE_SERVER_URL or config file)" };
   }
 
   try {
@@ -134,7 +134,7 @@ export function checkAgentConfigs(): CheckResult {
 export async function reconcileAgentConfigs(opts: {
   clientId: string;
   listPinnedAgents: () => Promise<PinnedAgent[]>;
-  /** Override for tests; defaults to `$FIRST_TREE_HUB_HOME/config/agents`. */
+  /** Override for tests; defaults to `$FIRST_TREE_HOME/config/agents`. */
   agentsDir?: string;
 }): Promise<CheckResult> {
   const agentsDir = opts.agentsDir ?? join(DEFAULT_CONFIG_DIR, "agents");
@@ -223,7 +223,7 @@ export function checkBackgroundService(): CheckResult {
   return {
     label: "Background service",
     ok: false,
-    detail: "not installed — re-run `first-tree-hub connect <token>` to install",
+    detail: "not installed — re-run `first-tree-hub login <token>` to install",
   };
 }
 

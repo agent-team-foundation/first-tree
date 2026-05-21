@@ -35,7 +35,7 @@ export type ServerSpawnOptions = {
 
 export async function spawnServer(opts: ServerSpawnOptions): Promise<ServerProcess> {
   const baseUrl = `http://127.0.0.1:${opts.port}`;
-  // NOTE: do NOT set FIRST_TREE_HUB_PUBLIC_URL here. The same env var is also
+  // NOTE: do NOT set FIRST_TREE_PUBLIC_URL here. The same env var is also
   // a `kael.hubPublicUrl` field; setting it activates the optional `kael`
   // config block and then `kael.endpoint` / `kael.apiKey` become required,
   // crashing boot. publicUrl is only required in production (see
@@ -43,12 +43,12 @@ export async function spawnServer(opts: ServerSpawnOptions): Promise<ServerProce
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "test",
-    FIRST_TREE_HUB_DATABASE_URL: opts.databaseUrl,
-    FIRST_TREE_HUB_PORT: String(opts.port),
-    FIRST_TREE_HUB_HOST: "127.0.0.1",
-    FIRST_TREE_HUB_JWT_SECRET: opts.jwtSecret ?? randomBytes(32).toString("base64url"),
-    FIRST_TREE_HUB_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
-    FIRST_TREE_HUB_WORKSPACES_ROOT: resolve(opts.identity.home, "workspaces"),
+    FIRST_TREE_DATABASE_URL: opts.databaseUrl,
+    FIRST_TREE_PORT: String(opts.port),
+    FIRST_TREE_HOST: "127.0.0.1",
+    FIRST_TREE_JWT_SECRET: opts.jwtSecret ?? randomBytes(32).toString("base64url"),
+    FIRST_TREE_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
+    FIRST_TREE_WORKSPACES_ROOT: resolve(opts.identity.home, "workspaces"),
     ...opts.extraEnv,
   };
 

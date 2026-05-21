@@ -3,7 +3,7 @@
 Known issues that only occur on WSL2 (and their fixes). If you are not on
 WSL2, skip this doc.
 
-## `first-tree-hub client start` fails with "Failed to connect to bus"
+## `first-tree-hub daemon start` fails with "Failed to connect to bus"
 
 Symptom — after rebooting Windows, the very first `first-tree-hub client
 start` reports:
@@ -42,7 +42,7 @@ has the right view.
 sudo umount -l /run/user/$(id -u)   # lazy unmount; existing fds keep working
 ls /run/user/$(id -u)/              # should now show: bus  gnupg  systemd  ...
 systemctl --user status             # should now succeed
-first-tree-hub client start
+first-tree-hub daemon start
 ```
 
 `umount -l` (lazy) is required — a plain `umount` always reports
@@ -136,7 +136,7 @@ chown -h "$uid:$uid" "$d/wayland-0" "$d/wayland-0.lock"
 
 ### Why not just `--foreground`?
 
-`first-tree-hub client start --foreground` skips the service manager
+`first-tree-hub daemon start --foreground` skips the service manager
 entirely and runs the client inline. That works for debugging but loses
 the systemd supervision: no auto-restart, no boot-time start via
 `loginctl enable-linger`, no clean separation from your shell. Use the

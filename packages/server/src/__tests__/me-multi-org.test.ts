@@ -138,7 +138,7 @@ describe("Connect token carries iss claim", () => {
     expect(decoded.type).toBe("connect");
     expect(decoded.iss).toMatch(/^https?:\/\//);
 
-    expect(body.command).toBe(`first-tree-hub connect ${body.token}`);
+    expect(body.command).toBe(`first-tree-hub login ${body.token}`);
   });
 });
 

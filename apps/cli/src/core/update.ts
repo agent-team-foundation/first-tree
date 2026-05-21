@@ -148,7 +148,7 @@ function isSafeInstallSpec(spec: string): boolean {
  * the server `welcome` frame and MUST install that exact version — using
  * `@latest` from auto-update would silently mis-resolve once the server
  * starts advertising alpha builds (alpha lives on a different dist-tag).
- * The manual `first-tree-hub update` CLI keeps the dist-tag form so users
+ * The manual `first-tree-hub upgrade` CLI keeps the dist-tag form so users
  * who type the command without args still get "newest stable on npm".
  */
 export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResult> {

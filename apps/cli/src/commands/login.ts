@@ -31,76 +31,15 @@ import {
   saveCredentials,
 } from "../core/index.js";
 import { print } from "../core/output.js";
-
-type ConnectJwt = {
-  iss?: unknown;
-  memberId?: unknown;
-  organizationId?: unknown;
-};
-
-/**
- * @internal
- * Decode a JWT payload without verifying its signature. Used only by the
- * CLI's account-switch prompt and the URL-derivation helper below. Not
- * re-exported from `apps/cli/src/index.ts` — external consumers
- * should call `deriveHubUrlFromToken` instead.
- */
-export function decodeJwtPayload(token: string): ConnectJwt | null {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3 || !parts[1]) return null;
-    const raw = Buffer.from(parts[1], "base64url").toString();
-    const obj = JSON.parse(raw) as unknown;
-    if (typeof obj !== "object" || obj === null) return null;
-    return obj as ConnectJwt;
-  } catch {
-    return null;
-  }
-}
-
-export class HubUrlDerivationError extends Error {
-  constructor(
-    public readonly code: "INVALID_TOKEN" | "TOKEN_MISSING_ISS" | "TOKEN_BAD_ISS",
-    message: string,
-  ) {
-    super(message);
-    this.name = "HubUrlDerivationError";
-  }
-}
-
-/**
- * Derive the hub URL from a connect token's `iss` claim. Throws
- * `HubUrlDerivationError` when the claim is missing or malformed — we
- * *never* fall back to a default URL because that would let a stale
- * connect token from one environment silently re-target another (prod →
- * staging foot-gun).
- *
- * The action handler maps the thrown error to a `fail()` exit so this
- * function stays unit-testable without spawning a subprocess.
- */
-export function deriveHubUrlFromToken(token: string): string {
-  const payload = decodeJwtPayload(token);
-  if (!payload) {
-    throw new HubUrlDerivationError(
-      "INVALID_TOKEN",
-      "Connect token is not a valid JWT. Generate a new one from your Hub web console.",
-    );
-  }
-  const iss = payload.iss;
-  if (typeof iss !== "string" || iss.length === 0) {
-    throw new HubUrlDerivationError(
-      "TOKEN_MISSING_ISS",
-      "Connect token does not carry an issuer (`iss` claim). Generate a new token from a Hub running v0.10+.",
-    );
-  }
-  if (!/^https?:\/\//i.test(iss)) {
-    throw new HubUrlDerivationError(
-      "TOKEN_BAD_ISS",
-      `Connect token issuer "${iss}" is not an http(s) URL. Generate a new token.`,
-    );
-  }
-  return iss.replace(/\/+$/, "");
-}
+import {
+  cleanupStaleAliasesAfterClaim,
+  postClaim,
+} from "./_shared/account-transfer.js";
+import {
+  decodeJwtPayload,
+  deriveHubUrlFromToken,
+  HubUrlDerivationError,
+} from "./_shared/connect-token.js";
 
 async function promptReplaceOrCancel(newMemberId: string): Promise<"proceed" | "cancel"> {
   const existing = loadCredentials();
@@ -124,7 +63,9 @@ async function promptReplaceOrCancel(newMemberId: string): Promise<"proceed" | "
   print.line(`       Existing account:  ${existingMember}\n`);
   print.line(`       Server:            ${existing.serverUrl}\n`);
   print.line(`       Background service: ${serviceLine}\n\n`);
-  print.line("     Replacing only affects THIS computer. Server-side data is untouched.\n\n");
+  print.line("     Replacing only affects THIS computer. Server-side data is untouched.\n");
+  print.line("     If the other account legitimately still owns this machine and you want to\n");
+  print.line("     take it over (unpinning their agents), re-run with `--override` instead.\n\n");
 
   const choice = await select<"replace" | "cancel">({
     message: "How would you like to continue?",
@@ -152,17 +93,30 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 }
 
 /**
- * Top-level `first-tree-hub connect <token>`. Single positional, no flags,
- * no env-var override — the connect token's `iss` claim carries the hub
- * URL so prod / staging / local environments are tagged at issuance and
- * the operator can never accidentally cross-target.
+ * `first-tree-hub login <token>` — single entry point. The connect token's
+ * `iss` claim carries the hub URL so prod / staging / local environments are
+ * tagged at issuance and the operator can never accidentally cross-target.
+ *
+ * Two modes:
+ *
+ *   - **default**: prompts to replace an existing credentials.json under
+ *     a different member account; on confirmation, exchanges the token,
+ *     persists credentials, runs initConfig (generating `client.id` if
+ *     fresh), and (unless `--no-start`) installs+starts the background
+ *     daemon.
+ *
+ *   - **`--override`**: opts out of the "replace or cancel" prompt and
+ *     POSTs to `/clients/:id/claim`, transferring ownership of this
+ *     machine to the new member (unpinning the previous owner's agents).
+ *     Replaces the old `client claim` top-level command.
  */
-export function registerSaaSConnectCommand(program: Command): void {
+export function registerLoginCommand(program: Command): void {
   program
-    .command("connect <token>")
-    .description("Connect this computer to the Hub using a token from the web console")
-    .option("--no-service", "Skip background service install (runs inline until Ctrl+C)")
-    .action(async (token: string, options: { service?: boolean }) => {
+    .command("login <token>")
+    .description("Sign this computer into the Hub using a token from the web console")
+    .option("--no-start", "Skip background daemon install/start (writes credentials and exits)")
+    .option("--override", "Transfer ownership of this client from a different account (replaces `client claim`)")
+    .action(async (token: string, options: { start?: boolean; override?: boolean }) => {
       try {
         let url: string;
         try {
@@ -176,7 +130,11 @@ export function registerSaaSConnectCommand(program: Command): void {
 
         const payload = decodeJwtPayload(token);
         const newMemberId = typeof payload?.memberId === "string" ? payload.memberId : null;
-        if (newMemberId) {
+
+        // `--override` skips the local replace-or-cancel prompt because the
+        // operator has explicitly asked to take over the machine. The
+        // ownership-transfer POST below is the server-side counterpart.
+        if (!options.override && newMemberId) {
           const decision = await promptReplaceOrCancel(newMemberId);
           if (decision === "cancel") {
             print.line("\n  Cancelled. Existing setup untouched.\n");
@@ -198,7 +156,23 @@ export function registerSaaSConnectCommand(program: Command): void {
         const config = await initConfig({ schema: clientConfigSchema, role: "client" });
         print.line(`  ✓ Computer registered (id: ${config.client.id})\n`);
 
-        const shouldInstallService = options.service !== false && isServiceSupported();
+        // `--override` mode: ownership transfer + stale-alias cleanup. Folds
+        // in what the retired `client claim` command did. `--override` was
+        // the explicit consent — propagate it to the cleanup prompt so the
+        // single flag covers both steps.
+        if (options.override) {
+          print.line("\n  Transferring ownership of this machine to your account.\n");
+          print.line("  This will unpin the previous owner's agents from this client.\n\n");
+          const result = await postClaim(config.server.url, config.client.id);
+          print.line(`  ✓ Ownership transferred. ${result.unpinnedAgentCount} agent(s) unpinned.\n`);
+          await cleanupStaleAliasesAfterClaim({
+            serverUrl: config.server.url,
+            clientId: config.client.id,
+            nonInteractive: true,
+          });
+        }
+
+        const shouldInstallService = options.start !== false && isServiceSupported();
         if (shouldInstallService) {
           const info = installClientService();
           print.line(`  ✓ Background service installed (${info.platform}) — you may close this terminal.\n`);
@@ -206,11 +180,16 @@ export function registerSaaSConnectCommand(program: Command): void {
           return;
         }
 
-        if (options.service === false) {
-          print.line("  (--no-service) running inline — Ctrl+C to stop\n");
-        } else {
-          print.line(`  Background service not supported on ${process.platform}; running inline.\n`);
+        if (options.start === false) {
+          print.line("  (--no-start) credentials written; daemon not launched.\n");
+          print.line("  Run `first-tree-hub daemon start` when ready, or re-run `login` without `--no-start`.\n\n");
+          return;
         }
+
+        // Service not supported on this platform — fall back to inline run so
+        // the user still gets a connected client without manually invoking
+        // `daemon start` afterward.
+        print.line(`  Background service not supported on ${process.platform}; running inline.\n`);
 
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
         try {
@@ -256,7 +235,7 @@ export function registerSaaSConnectCommand(program: Command): void {
           await handleClientOrgMismatch(error, {
             managed: false,
             configDir: DEFAULT_CONFIG_DIR,
-            rerunCommand: "first-tree-hub connect <token>",
+            rerunCommand: "first-tree-hub login <token>",
           });
         }
         const msg = error instanceof Error ? error.message : String(error);

@@ -525,7 +525,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       for (const e of payload.env) env[e.key] = e.value;
     }
 
-    // Child processes receive the member access JWT as FIRST_TREE_HUB_ACCESS_TOKEN
+    // Child processes receive the member access JWT as FIRST_TREE_ACCESS_TOKEN
     // and pair it with X-Agent-Id (sent by the SDK automatically) to act as
     // the current agent. Obtaining the token at buildEnv-time means the child
     // sees the JWT valid at its spawn moment; long-lived runtimes should

@@ -46,7 +46,7 @@ export const declineUpdate: UpdatePromptFn = async () => false;
  * relaunch picks up the new binary.
  *
  * `managed=false` means the process is running standalone (e.g. manual
- * `client start`, `connect <token> --no-service`, CI without a supervisor).
+ * `client start`, `connect <token> --no-start`, CI without a supervisor).
  * Exiting in that mode would leave the client offline until an operator
  * noticed — so the callback instead prints a restart hint, returns
  * `{ installed: true }`, and the UpdateManager stops retrying until the
@@ -168,7 +168,7 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       process.exit(SELF_RESTART_EXIT_CODE);
     }
     print.line(
-      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`first-tree-hub client start\`) to pick up the new version.\n`,
+      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`first-tree-hub daemon start\`) to pick up the new version.\n`,
     );
     return { installed: true };
   };

@@ -25,7 +25,7 @@ async function main() {
   // Boot-time config validation (publicUrl + GitHub App config shape)
   // lives in `buildApp` / `boot-guards.ts`.
 
-  const webDistPath = process.env.FIRST_TREE_HUB_WEB_DIST_PATH;
+  const webDistPath = process.env.FIRST_TREE_WEB_DIST_PATH;
   const config: Config = {
     ...serverConfig,
     instanceId: `srv_${randomUUID().slice(0, 8)}`,

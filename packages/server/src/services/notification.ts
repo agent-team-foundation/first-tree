@@ -218,7 +218,7 @@ export async function markAgentFaultsResolved(db: Database, agentId: string): Pr
 // -- Outbound webhook (fire-and-forget) -----------------------------------
 
 async function pushToWebhook(notification: Record<string, unknown>): Promise<void> {
-  const webhookUrl = process.env.FIRST_TREE_HUB_NOTIFICATION_WEBHOOK_URL;
+  const webhookUrl = process.env.FIRST_TREE_NOTIFICATION_WEBHOOK_URL;
   if (!webhookUrl) return;
 
   try {

@@ -130,7 +130,7 @@ type ClientConnectionEvents = {
    * Unrecoverable auth failure — the credential provider rejected with an
    * `AuthRefreshFailedError` (refresh token expired/revoked). The connection
    * has stopped trying to reconnect; the consumer should surface a recovery
-   * prompt to the operator (re-run `first-tree-hub connect <token>`) and
+   * prompt to the operator (re-run `first-tree-hub login <token>`) and
    * usually exit so a supervisor can back off instead of looping at 1 Hz.
    */
   "auth:fatal": [error: Error];
@@ -155,7 +155,7 @@ export class ClientOrgMismatchError extends Error {
  * Thrown when the server refuses `client:register` because the local
  * client.yaml is owned by a different user. The CLI detects this via
  * `instanceof` and guides the operator to run
- * `first-tree-hub client claim --confirm` to take ownership (which unpins
+ * `first-tree-hub login <token> --override` to take ownership (which unpins
  * the previous owner's agents from this machine). See decouple-client-from-
  * identity §4.4.
  */
@@ -324,7 +324,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   constructor(config: ClientConnectionConfig) {
     super();
-    this.clientId = config.clientId ?? process.env.FIRST_TREE_HUB_CLIENT_ID ?? `client_${randomUUID().slice(0, 8)}`;
+    this.clientId = config.clientId ?? process.env.FIRST_TREE_CLIENT_ID ?? `client_${randomUUID().slice(0, 8)}`;
     this.serverUrl = config.serverUrl.replace(/\/+$/, "");
     this.sdkVersion = config.sdkVersion;
     this.userAgent = config.userAgent;
@@ -554,7 +554,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           this.authLogger.error({ err }, "failed to obtain access token");
           // Refresh token expired / revoked is unrecoverable from inside the
           // process — no amount of retrying will succeed without the
-          // operator running `first-tree-hub connect <new-token>`. Mark the
+          // operator running `first-tree-hub login <new-token>`. Mark the
           // connection closed so `ws.on("close")` doesn't reschedule, and
           // surface an `auth:fatal` event so the consumer (typically the
           // CLI) can print a recovery prompt and exit, letting systemd /

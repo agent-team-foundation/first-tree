@@ -25,7 +25,7 @@ describe("resolveSenderName", () => {
     expect(resolveSenderName({ override: "a2", envAgentId: "uuid-a1", agents })).toEqual({ kind: "ok", name: "a2" });
   });
 
-  it("'ok' by reverse-looking FIRST_TREE_HUB_AGENT_ID against the local agents map", () => {
+  it("'ok' by reverse-looking FIRST_TREE_AGENT_ID against the local agents map", () => {
     // The fix for #192 — multi-agent client + agent-process env should NOT
     // require the caller to repeat --agent.
     const agents = new Map([

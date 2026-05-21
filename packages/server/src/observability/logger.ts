@@ -13,7 +13,7 @@ import pino from "pino";
 
 // ─── Config (late-initialized) ────────────────────────────────────────
 
-const initialLevel = parseLogLevel(process.env.FIRST_TREE_HUB_LOG_LEVEL);
+const initialLevel = parseLogLevel(process.env.FIRST_TREE_LOG_LEVEL);
 let _format: LogFormat = process.env.NODE_ENV === "production" ? "json" : "pretty";
 let _level: LogLevel = initialLevel.level;
 let _bridgeMinLevel = 50; // error
@@ -145,8 +145,8 @@ export const rootLogger = pino(
 
 if (initialLevel.fellBack) {
   rootLogger.warn(
-    { envValue: process.env.FIRST_TREE_HUB_LOG_LEVEL },
-    "invalid FIRST_TREE_HUB_LOG_LEVEL; falling back to info",
+    { envValue: process.env.FIRST_TREE_LOG_LEVEL },
+    "invalid FIRST_TREE_LOG_LEVEL; falling back to info",
   );
 }
 

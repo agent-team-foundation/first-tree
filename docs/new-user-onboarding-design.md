@@ -297,7 +297,7 @@ Why this matters for the v1 design: keeping Step 1 in the wizard structure (even
 2. Form has 3 required inputs:
    - **Agent name** (display name, free text)
    - **Source repository** (GitHub repo picker — populated from user's accessible repos via OAuth)
-   - **Computer** (CLI command box; user runs `first-tree-hub connect <token>` on their machine)
+   - **Computer** (CLI command box; user runs `first-tree-hub login <token>` on their machine)
 3. Runtime auto-picks first available `ok` capability (Claude Code preferred); user has no choice in Step 2 (advanced option deferred to post-onboarding settings)
 4. User clicks Create → server creates the agent with `gitRepos: [{url: <selected repo>}]` + clientId + runtime → polls until agent is online → advances `onboardingStep = step3`
 
@@ -326,7 +326,7 @@ Why this matters for the v1 design: keeping Step 1 in the wizard structure (even
 │        │ 3. Computer it runs on                      │              │
 │        │    ╭─ Waiting for your computer… ──────╮    │              │
 │        │    │ Open Terminal and run:            │    │              │
-│        │    │   first-tree-hub connect 9f3a… 📋 │    │              │
+│        │    │   first-tree-hub login 9f3a… 📋 │    │              │
 │        │    ╰───────────────────────────────────╯    │              │
 │        │    (flips to ✓ <hostname> connected         │              │
 │        │     when client connects)                   │              │
@@ -356,7 +356,7 @@ Why not deferred / per-step incremental upgrade: a second GitHub redirect mid-on
 
 Identical mechanism to current OnboardingView ([packages/web/src/pages/workspace/center/onboarding-view.tsx:144-174](../packages/web/src/pages/workspace/center/onboarding-view.tsx)):
 - Lazy-mint a connect token on Step 2 mount
-- Display `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub connect <token>`
+- Display `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub login <token>`
 - Poll `listClients()` every 3s; flip from "Waiting" pulsing dot to "✓ <hostname> connected" pill when a client comes online
 - Once connected, fetch capabilities to confirm at least one runtime is `ok`
 

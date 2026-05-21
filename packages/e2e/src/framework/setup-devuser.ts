@@ -43,7 +43,7 @@ export type SetupDevUserOptions = {
  *   2. POST /me/connect-tokens → short-lived connect-token (mimics the web
  *      "Add CLI" button)
  *   3. POST /auth/connect-token → user JWT pair from the connect-token (the
- *      `first-tree-hub connect` command's `exchangeToken` step)
+ *      `first-tree-hub login` command's `exchangeToken` step)
  *   4. Plant credentials.json + client.yaml on disk under `${runHome}-devuser`
  *      so the spawned CLI doesn't need to run an interactive connect
  *   5. spawn `client start --foreground --no-interactive`, which is what a
@@ -52,14 +52,14 @@ export type SetupDevUserOptions = {
  *      `clients.metadata.capabilities`, which the web onboarding flow then
  *      reads to decide "no runtime ready on this computer" vs. "ready"
  *
- * `first-tree-hub connect <token> --no-service` is deliberately NOT used:
+ * `first-tree-hub login <token> --no-start` is deliberately NOT used:
  * connect's inline-running path skips the capabilities probe, leaving
  * `clients.metadata` NULL and the web onboarding step 2 stuck on
  * "No runtime ready on this computer". `client start --foreground` is the
  * canonical long-running entry point and is what the service unit invokes.
  *
  * Requires the server to have been booted with
- * `FIRST_TREE_HUB_DEV_CALLBACK_ENABLED=1` — otherwise dev-callback returns 404.
+ * `FIRST_TREE_DEV_CALLBACK_ENABLED=1` — otherwise dev-callback returns 404.
  */
 export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSession> {
   // Step 1: dev-callback → access/refresh in URL fragment. `authedFetch`
@@ -126,7 +126,7 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
   );
 
   // Step 5: spawn `client start --foreground --no-interactive`. `spawnCli`
-  // sanitizes ambient `FIRST_TREE_HUB_*` env so the per-run client.yaml
+  // sanitizes ambient `FIRST_TREE_*` env so the per-run client.yaml
   // wins over any parent-process server URL.
   const client: SpawnedCli = await spawnCli({
     home: devHome,

@@ -16,8 +16,8 @@ The repo gives you two layered isolation knobs that compose:
 
 | Knob | What it isolates | Set by |
 |---|---|---|
-| `FIRST_TREE_HUB_HOME` | config / credentials / workspaces / sessions / logs | already documented in `CLAUDE.md` |
-| Home-derived service suffix | systemd unit name / launchd label / `SyslogIdentifier` | automatic — derived from the `FIRST_TREE_HUB_HOME` basename |
+| `FIRST_TREE_HOME` | config / credentials / workspaces / sessions / logs | already documented in `CLAUDE.md` |
+| Home-derived service suffix | systemd unit name / launchd label / `SyslogIdentifier` | automatic — derived from the `FIRST_TREE_HOME` basename |
 
 `scripts/dev-cli.sh` wires both together with a sensible default so you
 don't have to remember either.
@@ -50,7 +50,7 @@ independent journald identifiers, and independent state under
 ## How the suffix is derived
 
 The systemd unit name and launchd label come from the basename of
-`FIRST_TREE_HUB_HOME` via `deriveServiceSuffix` in
+`FIRST_TREE_HOME` via `deriveServiceSuffix` in
 [`apps/cli/src/core/service-install.ts`](../apps/cli/src/core/service-install.ts).
 Rules:
 
@@ -70,7 +70,7 @@ a CLI upgrade to silently rename people's prod service.
 - **`scripts/dev-cli.sh` with default home** — most testing, including
   end-to-end `connect` / `client start` / `stop` / `restart` / `update`.
   Coexists with prod.
-- **Custom dev home via `FIRST_TREE_HUB_DEV_HOME=$HOME/.first-tree/hub-foo`**
+- **Custom dev home via `FIRST_TREE_DEV_HOME=$HOME/.first-tree/hub-foo`**
   — when you want a second parallel dev install (e.g. one per branch).
   Each home gets its own unit name automatically.
 - **Direct `pnpm --filter ... dev`** — when iterating on code that does
@@ -85,7 +85,7 @@ a CLI upgrade to silently rename people's prod service.
 
 - The PostgreSQL database. Hub server uses one shared DB by default.
   If you also run an in-tree server (`pnpm --filter @first-tree/server dev`),
-  use a separate DB URL via `FIRST_TREE_HUB_DATABASE_URL`.
+  use a separate DB URL via `FIRST_TREE_DATABASE_URL`.
 - Global npm packages. `update --no-restart` will still run
   `npm install -g @agent-team-foundation/first-tree-hub@latest` and
   upgrade your machine-wide binary. Use `update --check` for safe

@@ -60,7 +60,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
   const appCfg = app.config.oauth?.githubApp;
   if (!appCfg) {
     app.log.info(
-      "GitHub App not configured — /auth/github/start will return 503. Set FIRST_TREE_HUB_GITHUB_APP_* to enable.",
+      "GitHub App not configured — /auth/github/start will return 503. Set FIRST_TREE_GITHUB_APP_* to enable.",
     );
   }
 
@@ -215,7 +215,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     //
     //   Gate 1: NODE_ENV must not be 'production'. Same as before —
     //           defense-in-depth, blocks the dumbest mistake.
-    //   Gate 2: FIRST_TREE_HUB_DEV_CALLBACK_ENABLED must be explicitly
+    //   Gate 2: FIRST_TREE_DEV_CALLBACK_ENABLED must be explicitly
     //           "1" or "true". An unset env var defaults to disabled —
     //           operators MUST opt in. Vitest's setup script
     //           (`vitest.setup.ts`) sets this to "1" so the existing
@@ -227,11 +227,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     if (process.env.NODE_ENV === "production") {
       return reply.status(404).send({ error: "Not found" });
     }
-    const devCallbackOptIn = process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED;
+    const devCallbackOptIn = process.env.FIRST_TREE_DEV_CALLBACK_ENABLED;
     if (devCallbackOptIn !== "1" && devCallbackOptIn !== "true") {
       app.log.info(
         { url: request.url },
-        "dev-callback request refused — FIRST_TREE_HUB_DEV_CALLBACK_ENABLED is not set",
+        "dev-callback request refused — FIRST_TREE_DEV_CALLBACK_ENABLED is not set",
       );
       return reply.status(404).send({ error: "Not found" });
     }
