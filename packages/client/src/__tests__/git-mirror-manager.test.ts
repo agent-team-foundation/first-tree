@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { type ChildProcess, execSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,7 @@ import {
   isLikelySshAuthFailure,
   sshToHttpsBaseRewrite,
 } from "../runtime/git-mirror-manager.js";
+import { isUnderManagedRoot } from "../runtime/worktree-cleanup.js";
 
 let workRoot: string;
 let fixtureRepo: string;
@@ -53,6 +54,44 @@ function makeManager(): GitMirrorManager {
 
 function gitIn(cwd: string, args: string): string {
   return execSync(`git ${args}`, { cwd }).toString().trim();
+}
+
+/**
+ * Spawn a detached, long-lived child whose cwd is `dir`. Used by the orphan-
+ * cleanup tests to model a vite/esbuild process still holding the worktree
+ * after its parent session died. The caller MUST clean the pid up in a
+ * `finally` block — vitest will otherwise hang at process exit waiting for it.
+ *
+ * Uses `node` (always on PATH where the suite runs) over `sleep` because
+ * `sleep` is signalled instantly on SIGTERM whereas a node script keeps the
+ * promise-based wait honest (and a future test could swap in a custom signal
+ * handler if it needs to model a misbehaving holder).
+ */
+async function spawnLongLivedChildInDir(dir: string): Promise<{ pid: number; proc: ChildProcess }> {
+  const proc = spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)"], {
+    cwd: dir,
+    detached: true,
+    stdio: "ignore",
+  });
+  proc.unref();
+  if (proc.pid === undefined) {
+    throw new Error("failed to spawn long-lived test child");
+  }
+  // Wait briefly so lsof sees the cwd before the test calls into the manager.
+  await new Promise((r) => setTimeout(r, 50));
+  return { pid: proc.pid, proc };
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ESRCH") return false;
+    // Any other error (e.g. EPERM) implies the pid exists but we can't signal
+    // — count as alive to avoid false-negative assertions.
+    return true;
+  }
 }
 
 function tryGitIn(cwd: string, args: string): { ok: boolean; stdout: string } {
@@ -162,6 +201,143 @@ describe("GitMirrorManager — lifecycle", () => {
       m.createWorktree({ url: fixtureUrl, targetPath: occupied, sessionKey: "chat-C", agentName: "agent-x" }),
     ).rejects.toBeInstanceOf(GitMirrorWorktreeConflictError);
     expect(existsSync(join(occupied, "user-data.txt"))).toBe(true);
+  });
+
+  it("createWorktree auto-recovers when a leftover sits in a hub-managed root", async () => {
+    // Reproduces the production incident: previous session left a directory
+    // tree at the worktree target (typical cause: orphaned vite/.vite dep
+    // cache rewritten by a daemonised dev server after the worktree was
+    // removed). Without self-heal the next session start throws D13. With
+    // `hubManagedRoots` configured, the manager rm -rf's the leftover and
+    // proceeds with `worktree add`.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-heal-"));
+    const managedRoot = join(dataDir, "workspaces");
+    mkdirSync(managedRoot, { recursive: true });
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot] });
+    await m.ensureMirror(fixtureUrl);
+
+    const target = join(managedRoot, "agent-x", "chat-X", "agent-worktree");
+    // Recreate the production shape — packages/web/.vite/deps/_metadata.json,
+    // no `.git` marker.
+    mkdirSync(join(target, "packages", "web", ".vite", "deps"), { recursive: true });
+    writeFileSync(join(target, "packages", "web", ".vite", "deps", "_metadata.json"), "{}");
+
+    const created = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: target,
+      sessionKey: "chat-X",
+      agentName: "agent-x",
+    });
+    expect(created.worktreePath).toBe(target);
+    expect(existsSync(join(target, "README.md"))).toBe(true);
+    // The leftover cache dir is gone — the new checkout doesn't carry
+    // `packages/web/` because the fixture repo doesn't have one.
+    expect(existsSync(join(target, "packages"))).toBe(false);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("createWorktree still throws D13 for occupants outside every managed root", async () => {
+    // Belt-and-braces for the safety guard: even with `hubManagedRoots`
+    // configured, targets OUTSIDE every managed root must still fail loud
+    // rather than silently delete operator data.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-heal-guard-"));
+    const managedRoot = join(dataDir, "workspaces");
+    mkdirSync(managedRoot, { recursive: true });
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot] });
+    await m.ensureMirror(fixtureUrl);
+
+    // Target lives outside `managedRoot` — operator-supplied path.
+    const outside = join(workRoot, "operator-dir");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "user-data.txt"), "important");
+    await expect(
+      m.createWorktree({ url: fixtureUrl, targetPath: outside, sessionKey: "chat-O", agentName: "agent-x" }),
+    ).rejects.toBeInstanceOf(GitMirrorWorktreeConflictError);
+    expect(existsSync(join(outside, "user-data.txt"))).toBe(true);
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("createWorktree kills a process holding the leftover before recovery", async () => {
+    // Simulates the actual orphan: a long-running child (e.g. vite) whose cwd
+    // is the leftover dir. Without the pre-rm kill the rm -rf races against
+    // the child's writes and the worktree add can find the dir non-empty
+    // again. After the fix, the child gets SIGTERM'd, the rm sticks, and
+    // `git worktree add` succeeds.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-heal-kill-"));
+    const managedRoot = join(dataDir, "workspaces");
+    mkdirSync(managedRoot, { recursive: true });
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot] });
+    await m.ensureMirror(fixtureUrl);
+
+    const target = join(managedRoot, "agent-x", "chat-Y", "agent-worktree");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "leftover.txt"), "cache");
+
+    // Spawn an orphan with cwd inside the leftover. Detach so it survives
+    // its parent; the test process kills it via the manager's recovery path.
+    const child = await spawnLongLivedChildInDir(target);
+    expect(processIsAlive(child.pid)).toBe(true);
+
+    try {
+      const created = await m.createWorktree({
+        url: fixtureUrl,
+        targetPath: target,
+        sessionKey: "chat-Y",
+        agentName: "agent-x",
+      });
+      expect(created.worktreePath).toBe(target);
+      expect(existsSync(join(target, "README.md"))).toBe(true);
+      expect(existsSync(join(target, "leftover.txt"))).toBe(false);
+      // Give the kernel a beat to mark the pid as zombie/reaped.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(processIsAlive(child.pid)).toBe(false);
+    } finally {
+      // Belt-and-braces in case the recovery path didn't kill it.
+      try {
+        process.kill(child.pid, "SIGKILL");
+      } catch {
+        // ignore — already reaped
+      }
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeWorktree kills processes whose cwd is inside the worktree before deleting", async () => {
+    // The other half of the orphan story: when a session ends with a child
+    // (vite / esbuild / test watcher) still holding the worktree as cwd,
+    // `git worktree remove --force` may succeed but the child immediately
+    // recreates files under the deleted path. We pre-kill so the next session
+    // start sees an empty parent and the `worktree add` is clean.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-rm-kill-"));
+    const managedRoot = join(dataDir, "workspaces");
+    mkdirSync(managedRoot, { recursive: true });
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot] });
+    await m.ensureMirror(fixtureUrl);
+    const target = join(managedRoot, "agent-x", "chat-Z", "agent-worktree");
+    const { branchName } = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: target,
+      sessionKey: "chat-Z",
+      agentName: "agent-x",
+    });
+    const child = await spawnLongLivedChildInDir(target);
+    expect(processIsAlive(child.pid)).toBe(true);
+
+    try {
+      await m.removeWorktree({ url: fixtureUrl, path: target, branchName });
+      expect(existsSync(target)).toBe(false);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(processIsAlive(child.pid)).toBe(false);
+    } finally {
+      try {
+        process.kill(child.pid, "SIGKILL");
+      } catch {
+        // ignore — already reaped
+      }
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it("removeWorktree deletes both the worktree and the session branch", async () => {
@@ -506,6 +682,92 @@ describe("GitMirrorManager — SSH auth failure heuristic (isLikelySshAuthFailur
     "fatal: could not read Username for 'https://github.com'",
   ])("does NOT match: %s", (msg) => {
     expect(isLikelySshAuthFailure(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — hubManagedRoots safety guards", () => {
+  it("isUnderManagedRoot returns false when target === root (refuses to nuke the managed root itself)", () => {
+    // Without this guard, a caller that accidentally passes the managed root
+    // as a worktree target would let the self-heal branch `rm -rf` the entire
+    // `<dataDir>/workspaces` tree (every agent, every session). Worktree
+    // targets always sit at least two levels deeper; the exact-match case is
+    // never a legitimate request.
+    expect(isUnderManagedRoot("/data/ws", ["/data/ws"])).toBe(false);
+    expect(isUnderManagedRoot("/data/ws/", ["/data/ws"])).toBe(false);
+  });
+
+  it("isUnderManagedRoot returns true for proper descendants", () => {
+    expect(isUnderManagedRoot("/data/ws/agent/chat/repo", ["/data/ws"])).toBe(true);
+    expect(isUnderManagedRoot("/data/ws/a", ["/data/ws"])).toBe(true);
+  });
+
+  it("isUnderManagedRoot returns false for siblings whose name shares a prefix (path traversal guard)", () => {
+    // `/data/ws-evil` looks like a sibling of `/data/ws` and a naive
+    // `startsWith` check would say it's "inside" — the helper uses `relative`
+    // so the result starts with `..` and is correctly rejected.
+    expect(isUnderManagedRoot("/data/ws-evil/agent", ["/data/ws"])).toBe(false);
+    expect(isUnderManagedRoot("/elsewhere/repo", ["/data/ws"])).toBe(false);
+  });
+
+  it("createGitMirrorManager throws when a managed root is outside dataDir (fail-loud against weaponised config)", () => {
+    // The dangerous shapes: `["/"]`, `[os.homedir()]`, `[tmpdir()]`. Each one
+    // would let the createWorktree self-heal branch `rm -rf` arbitrary host
+    // paths. Catch them at construction so the operator sees a startup error
+    // rather than a quiet, much-later data-loss event.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-"));
+    try {
+      expect(() => createGitMirrorManager({ dataDir, hubManagedRoots: ["/"] })).toThrow(GitMirrorError);
+      expect(() => createGitMirrorManager({ dataDir, hubManagedRoots: [join(dataDir, "..", "elsewhere")] })).toThrow(
+        GitMirrorError,
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("createGitMirrorManager aggregates multiple bad roots into one error (operator sees full picture)", () => {
+    // Without aggregation an operator who misconfigured 3 roots would have to
+    // fix-restart-fix-restart-fix-restart. The combined message names every
+    // offending entry up front.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-multi-"));
+    try {
+      const validRoot = join(dataDir, "workspaces");
+      const badA = "/";
+      const badB = join(dataDir, "..", "elsewhere");
+      expect.assertions(3);
+      try {
+        createGitMirrorManager({ dataDir, hubManagedRoots: [badA, validRoot, badB] });
+      } catch (err) {
+        expect(err).toBeInstanceOf(GitMirrorError);
+        const msg = err instanceof Error ? err.message : String(err);
+        // Both bad roots present; the valid one is NOT in the message.
+        expect(msg).toContain(badA);
+        expect(msg).toContain("2 entries");
+      }
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("createGitMirrorManager throws when a managed root equals dataDir itself", () => {
+    // Granting `dataDir` as a managed root would expose `git-mirrors/`,
+    // `chats/`, `images/`, etc. to the self-heal rm -rf — too broad. The
+    // root must be a STRICT subdir.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-"));
+    try {
+      expect(() => createGitMirrorManager({ dataDir, hubManagedRoots: [dataDir] })).toThrow(GitMirrorError);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("createGitMirrorManager accepts a strict subdir of dataDir (the production wiring)", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-"));
+    try {
+      expect(() => createGitMirrorManager({ dataDir, hubManagedRoots: [join(dataDir, "workspaces")] })).not.toThrow();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
 

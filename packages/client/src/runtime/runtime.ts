@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { UpdateAttempt } from "@first-tree/shared";
 import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
 import { ClientConnection } from "../client-connection.js";
@@ -89,6 +90,10 @@ export class AgentRuntime {
     this.gitMirrorManager = createGitMirrorManager({
       dataDir: DEFAULT_DATA_DIR,
       log: createLogger("git-mirror"),
+      // Authorise auto-recovery of orphaned worktree leftovers (kill holders +
+      // rm -rf) for any target under the per-agent workspaces tree. Operator
+      // paths outside this root still fail loud — see GitMirrorManagerOptions.
+      hubManagedRoots: [join(DEFAULT_DATA_DIR, "workspaces")],
     });
 
     for (const [name, agentConfig] of Object.entries(this.config.agents)) {
