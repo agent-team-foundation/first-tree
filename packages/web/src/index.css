@@ -613,25 +613,29 @@
 }
 
 /* Chat-row activity dots ("•••") — the list time-slot indicator for "an
-   agent is producing output now". Three dots fade in sequence (per-dot
-   animation-delay set inline) for a calm scrolling read; ~1.6s shares the
-   canonical working cadence family. */
+   agent is producing output now". Three working-blue dots do a staggered
+   typing-style wave (translateY bounce, per-dot animation-delay set inline)
+   so it reads as clearly "alive" at scan distance. The opacity floor stays
+   high (0.5) so the dots never fade out; ~1.3s cycle. */
 @keyframes chat-row-activity-dot {
   0%,
   100% {
-    opacity: 0.3;
+    transform: translateY(0);
+    opacity: 0.5;
   }
-  50% {
+  30% {
+    transform: translateY(-3px);
     opacity: 1;
   }
 }
 .chat-row-activity-dot {
-  animation: chat-row-activity-dot 1.6s ease-in-out infinite;
+  animation: chat-row-activity-dot 1.3s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .chat-row-activity-dot {
     animation: none;
-    opacity: 0.7;
+    transform: none;
+    opacity: 1;
   }
 }
 
