@@ -1,8 +1,10 @@
 import { CHAT_SOURCES, type ChatEngagementView, type ChatSource, chatEngagementViewSchema } from "@first-tree/shared";
 import { useCallback, useEffect } from "react";
-import { useSearchParams } from "react-router";
+import { Navigate, useSearchParams } from "react-router";
+import { useAuth } from "../../auth/auth-context.js";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
+import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { CenterPanel } from "./center/index.js";
 import { OnboardingStepper } from "./center/onboarding-stepper.js";
 import { type GroupMode, parseGroupMode } from "./conversations/group-rows.js";
@@ -95,6 +97,7 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt } = useAuth();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const legacySource = searchParams.get("source");
@@ -207,6 +210,14 @@ export function WorkspacePage() {
     // win and leave the URL in a half-cleared state.
     setSearchParams(nextParamsForClearFilters(searchParams), { replace: true });
   }, [searchParams, setSearchParams]);
+
+  // Brand-new / incomplete users go through the standalone /onboarding flow
+  // instead of the inline center-panel onboarding. Dismissed or completed
+  // users fall through to the normal workspace (the inline OnboardingView
+  // stays as a reversible fallback for the dismissed-but-not-completed case).
+  if (shouldEnterOnboarding({ meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt })) {
+    return <Navigate to="/onboarding" replace />;
+  }
 
   return (
     <div className="flex flex-1 overflow-hidden">

@@ -43,10 +43,16 @@ export async function getGithubAppInstallation(organizationId: string): Promise<
  *
  * Throws `ApiError` with `status === 503` when the operator hasn't set
  * `FIRST_TREE_GITHUB_APP_SLUG`; the panel surfaces that as a hint.
+ *
+ * `next` controls where GitHub bounces the user after the install dialog
+ * (baked into the signed state server-side). Defaults to Settings → GitHub;
+ * the onboarding flow passes `/onboarding` so the user lands back in setup.
+ * The server allowlists the value, so an arbitrary string is ignored.
  */
-export async function getGithubAppInstallUrl(organizationId: string): Promise<string> {
+export async function getGithubAppInstallUrl(organizationId: string, next?: string): Promise<string> {
+  const qs = next ? `?next=${encodeURIComponent(next)}` : "";
   const { installUrl } = await api.get<{ installUrl: string }>(
-    `/orgs/${organizationId}/github-app-installation/install-url`,
+    `/orgs/${organizationId}/github-app-installation/install-url${qs}`,
   );
   return installUrl;
 }

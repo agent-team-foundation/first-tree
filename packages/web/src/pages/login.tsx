@@ -67,12 +67,15 @@ export function LoginPage() {
             <CardTitle className="text-title">
               First Tree <span className="font-normal text-muted-foreground">Hub</span>
             </CardTitle>
+            <p className="text-label text-muted-foreground" style={{ marginTop: "var(--sp-1)" }}>
+              Sign in to set up your team and your first AI teammate.
+            </p>
           </CardHeader>
           <CardContent className="space-y-4">
             <Button asChild className="w-full">
               <a href={githubHref}>
                 <Github className="h-4 w-4" />
-                Continue with GitHub
+                Sign in with GitHub
               </a>
             </Button>
             <p className="text-center text-label text-muted-foreground">
