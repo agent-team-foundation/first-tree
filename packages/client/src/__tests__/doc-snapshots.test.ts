@@ -5,13 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildMessageDocumentSnapshots } from "../runtime/doc-snapshots.js";
 
 /**
- * Unit tests for the runtime snapshot builder, focused on Option R (Case A):
- * an absolute `.md` path that lands inside the workspace root is snapshotted
- * AND rewritten in the outbound text to its canonical workspace-relative path,
- * so web's unchanged re-scan can match it. Relative mentions and out-of-root /
- * hidden / escaping paths must behave exactly as before.
+ * Unit tests for the runtime snapshot builder. Every resolved+snapshotted `.md`
+ * reference is rewritten into an EXPLICIT markdown link whose href is the
+ * canonical snapshot key (bare → `[display](key)`; inline target → key), so web
+ * resolves a click by direct href→snapshot lookup without re-scanning. Out-of-
+ * root / hidden / escaping paths get no snapshot and are left verbatim.
  */
-describe("buildMessageDocumentSnapshots — absolute-in-root rewrite (Option R / Case A)", () => {
+describe("buildMessageDocumentSnapshots — explicit-link rewrite (self / Case A)", () => {
   let root: string;
   let outside: string;
 
@@ -42,7 +42,7 @@ describe("buildMessageDocumentSnapshots — absolute-in-root rewrite (Option R /
 
     expect(docs.map((d) => d.path)).toEqual(["design.md"]);
     expect(docs[0]?.content).toBe("# design\n");
-    expect(rewrittenText).toBe("wrote design.md just now");
+    expect(rewrittenText).toBe("wrote [design.md](design.md) just now");
   });
 
   it("rewrites an absolute target inside an inline markdown link in place", async () => {
@@ -58,7 +58,8 @@ describe("buildMessageDocumentSnapshots — absolute-in-root rewrite (Option R /
     const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`open ${abs}:42:7 here`, root);
 
     expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    expect(rewrittenText).toBe("open docs/intro.md:42:7 here");
+    // Explicit link: `:line` kept on the display, stripped from the key href.
+    expect(rewrittenText).toBe("open [docs/intro.md:42:7](docs/intro.md) here");
   });
 
   it("leaves an out-of-root absolute path untouched — no snapshot, no rewrite", async () => {
@@ -70,21 +71,24 @@ describe("buildMessageDocumentSnapshots — absolute-in-root rewrite (Option R /
     expect(rewrittenText).toBe(text);
   });
 
-  it("leaves relative tokens completely unchanged (regression)", async () => {
+  it("wraps a bare relative mention into an explicit link; an already-canonical inline href is left as-is", async () => {
     const text = "see docs/intro.md and [d](design.md)";
     const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
 
     expect(docs.map((d) => d.path).sort()).toEqual(["design.md", "docs/intro.md"]);
-    // Text is byte-for-byte identical: relative mentions are never rewritten.
-    expect(rewrittenText).toBe(text);
+    // Bare `docs/intro.md` → explicit link; inline `[d](design.md)` href is
+    // already the canonical key, so it stays byte-identical.
+    expect(rewrittenText).toBe("see [docs/intro.md](docs/intro.md) and [d](design.md)");
   });
 
-  it("does not rewrite a non-canonical RELATIVE token (web canonicalises it on re-scan)", async () => {
+  it("canonicalises a non-canonical inline target (`./docs/intro.md` → `docs/intro.md`)", async () => {
     const text = "see [d](./docs/intro.md)";
     const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
 
     expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
-    expect(rewrittenText).toBe(text);
+    // Web no longer canonicalises on re-scan; the runtime points the target
+    // straight at the snapshot key so the click is a direct lookup.
+    expect(rewrittenText).toBe("see [d](docs/intro.md)");
   });
 
   it("rejects a symlink whose realpath crosses into a hidden dir — relative AND absolute forms", async () => {
@@ -114,7 +118,22 @@ describe("buildMessageDocumentSnapshots — absolute-in-root rewrite (Option R /
     const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
 
     expect(docs.map((d) => d.path)).toEqual(["design.md"]);
-    expect(rewrittenText).toBe("first design.md then again design.md");
+    expect(rewrittenText).toBe("first [design.md](design.md) then again [design.md](design.md)");
+  });
+
+  it("invariant: every rewritten explicit-link href is a real snapshot key", async () => {
+    // The core "two ends agree by construction" guarantee — web resolves a
+    // click by direct href→snapshot lookup, so every href the rewrite emits
+    // MUST be one of the snapshot keys (else a dead link). Mixes bare +
+    // inline + absolute + relative + :line in one message.
+    const absDesign = join(root, "design.md");
+    const text = `a ${absDesign} b docs/intro.md c [x](${join(root, "docs", "intro.md")}) d ${absDesign}:9`;
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
+
+    const keys = new Set(docs.map((d) => d.path));
+    const hrefs = [...rewrittenText.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1]);
+    expect(hrefs.length).toBeGreaterThan(0);
+    for (const href of hrefs) expect(keys.has(href ?? "")).toBe(true);
   });
 });
 
@@ -122,9 +141,10 @@ describe("buildMessageDocumentSnapshots — absolute-in-root rewrite (Option R /
  * Cross-agent doc preview: with a workspace fence, an absolute `.md` path that
  * realpaths into ANOTHER agent's workspace (same chat) under the shared
  * `workspaces/` common root is snapshotted with a global
- * `<ownerSlug>/<chatId>/<rel>` key and rewritten to the short `<ownerSlug>/<rel>`
- * form. Self paths keep their bare key + #480 behaviour; out-of-scope paths
- * (other chat, other root, hidden) stay verbatim.
+ * `<ownerSlug>/<chatId>/<rel>` key and rewritten into an explicit link with a
+ * short `<ownerSlug>/<rel>` display and the FULL global key as href. Self paths
+ * get an explicit relative link; out-of-scope paths (other chat, other root,
+ * hidden) stay verbatim.
  */
 describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => {
   let workspacesRoot: string;
@@ -169,7 +189,9 @@ describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => 
 
     expect(docs.map((d) => d.path)).toEqual([`${otherSlug}/${chatId}/design.md`]);
     expect(docs[0]?.content).toBe("# their design\n");
-    expect(rewrittenText).toBe(`see ${otherSlug}/design.md please`);
+    // Explicit link: short `<slug>/<rel>` display, FULL global key href so web
+    // direct-matches without chatId re-expansion.
+    expect(rewrittenText).toBe(`see [${otherSlug}/design.md](${otherSlug}/${chatId}/design.md) please`);
   });
 
   it("preserves subdir + :line suffix in the cross rewrite", async () => {
@@ -177,15 +199,15 @@ describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => 
     const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`open ${abs}:10 now`, selfRoot, fence());
 
     expect(docs.map((d) => d.path)).toEqual([`${otherSlug}/${chatId}/docs/intro.md`]);
-    expect(rewrittenText).toBe(`open ${otherSlug}/docs/intro.md:10 now`);
+    expect(rewrittenText).toBe(`open [${otherSlug}/docs/intro.md:10](${otherSlug}/${chatId}/docs/intro.md) now`);
   });
 
-  it("keeps the self path bare (Case A unchanged) even with a fence", async () => {
+  it("rewrites a self path into an explicit relative link even with a fence", async () => {
     const abs = join(selfRoot, "mine.md");
     const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`my ${abs} file`, selfRoot, fence());
 
     expect(docs.map((d) => d.path)).toEqual(["mine.md"]);
-    expect(rewrittenText).toBe("my mine.md file");
+    expect(rewrittenText).toBe("my [mine.md](mine.md) file");
   });
 
   it("rejects a sibling doc from a DIFFERENT chat (chat-scope fence)", async () => {
@@ -215,17 +237,20 @@ describe("buildMessageDocumentSnapshots — cross-agent workspace fence", () => 
     expect(rewrittenText).toBe(text);
   });
 
-  it("rewrites a cross mention to the FULL global key when its short form collides with a self key (P2-b)", async () => {
+  it("a self ref and a cross ref that share a short form get DISTINCT hrefs (no collision)", async () => {
     // Self file `assistant/design.md` (relative) AND the sibling agent's
-    // `assistant/<chat>/design.md` are both referenced. The cross short form
-    // would be `assistant/design.md` — identical to the self key — so the cross
-    // mention must be rewritten to the full global key instead.
+    // `assistant/<chat>/design.md` are both referenced — both display as
+    // `assistant/design.md`. With explicit links the hrefs are the canonical
+    // keys (self relative vs cross GLOBAL), so they can never collide and web
+    // direct-matches each to the right snapshot — no collision handling needed.
     const crossAbs = join(workspacesRoot, otherSlug, chatId, "design.md");
     const text = `self ${otherSlug}/design.md and cross ${crossAbs}`;
     const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, selfRoot, fence());
 
     expect(docs.map((d) => d.path).sort()).toEqual([`${otherSlug}/${chatId}/design.md`, `${otherSlug}/design.md`]);
-    // Self relative mention stays verbatim; cross mention becomes the full key.
-    expect(rewrittenText).toBe(`self ${otherSlug}/design.md and cross ${otherSlug}/${chatId}/design.md`);
+    expect(rewrittenText).toBe(
+      `self [${otherSlug}/design.md](${otherSlug}/design.md) and ` +
+        `cross [${otherSlug}/design.md](${otherSlug}/${chatId}/design.md)`,
+    );
   });
 });
