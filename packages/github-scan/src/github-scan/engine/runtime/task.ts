@@ -18,15 +18,10 @@ import {
   classifyNotification,
   priorityFor,
   shouldProcessReason,
-  taskKindFromString,
   type TaskKind,
+  taskKindFromString,
 } from "./task-kind.js";
-import {
-  canonicalApiPath,
-  decodeMultiline,
-  encodeMultiline,
-  stableFileId,
-} from "./task-util.js";
+import { canonicalApiPath, decodeMultiline, encodeMultiline, stableFileId } from "./task-util.js";
 
 export interface TaskCandidate {
   /** Origin: `notifications` | `review-search` | `recovered-running`. */
@@ -62,9 +57,7 @@ export function effectiveWorkspaceRepo(task: TaskCandidate): string {
  * repo, kind, source) so two candidates with identical content share ids.
  */
 export function stableIdFor(task: TaskCandidate): string {
-  return stableFileId(
-    `${task.threadKey}|${task.updatedAt}|${task.repo}|${task.kind}|${task.source}`,
-  );
+  return stableFileId(`${task.threadKey}|${task.updatedAt}|${task.repo}|${task.kind}|${task.source}`);
 }
 
 /** Browser URL preferring `webUrl` then `apiUrl`. */
@@ -106,10 +99,7 @@ function latestCommentWebUrl(task: TaskCandidate): string | undefined {
   if (task.latestCommentApiUrl.length === 0) return undefined;
   const commentId = extractIssueCommentId(task.latestCommentApiUrl);
   if (commentId === undefined) return undefined;
-  const base =
-    task.webUrl.length > 0
-      ? task.webUrl
-      : deriveWebUrl("github.com", task.repo, task.threadKey);
+  const base = task.webUrl.length > 0 ? task.webUrl : deriveWebUrl("github.com", task.repo, task.threadKey);
   if (base === undefined) return undefined;
   return `${base}#issuecomment-${commentId}`;
 }
@@ -125,16 +115,7 @@ export function buildNotificationCandidate(args: {
   latestCommentApiUrl: string;
   updatedAt: string;
 }): TaskCandidate | undefined {
-  const {
-    host,
-    repo,
-    subjectType,
-    reason,
-    title,
-    apiUrl,
-    latestCommentApiUrl,
-    updatedAt,
-  } = args;
+  const { host, repo, subjectType, reason, title, apiUrl, latestCommentApiUrl, updatedAt } = args;
   if (repo.length === 0) return undefined;
   const kind = classifyNotification(subjectType, reason);
   if (kind === "other" || !shouldProcessReason(reason)) return undefined;
@@ -267,9 +248,7 @@ export function threadRecordToLines(record: ThreadRecord): string[] {
   ];
 }
 
-export function threadRecordFromKv(
-  entries: readonly (readonly [string, string])[],
-): ThreadRecord {
+export function threadRecordFromKv(entries: readonly (readonly [string, string])[]): ThreadRecord {
   const record = defaultThreadRecord();
   for (const [key, value] of entries) {
     switch (key) {
@@ -326,17 +305,13 @@ export function candidateFromTaskMetadata(
 
   const apiUrl = threadKey.startsWith("/repos/")
     ? `https://api.github.com${threadKey}`
-    : metadata.get("api_url") ?? "";
+    : (metadata.get("api_url") ?? "");
   const webUrlRaw = metadata.get("web_url") ?? "";
-  const webUrl =
-    webUrlRaw.trim().length > 0
-      ? webUrlRaw
-      : deriveWebUrl(host, repo, threadKey) ?? "";
+  const webUrl = webUrlRaw.trim().length > 0 ? webUrlRaw : (deriveWebUrl(host, repo, threadKey) ?? "");
   const latestCommentApiUrl = metadata.get("latest_comment_api_url") ?? "";
 
   const workspaceRepoRaw = metadata.get("workspace_repo") ?? "";
-  const workspaceRepo =
-    workspaceRepoRaw.trim().length > 0 ? workspaceRepoRaw : repo;
+  const workspaceRepo = workspaceRepoRaw.trim().length > 0 ? workspaceRepoRaw : repo;
 
   return {
     source,
@@ -388,11 +363,7 @@ function readLeadingDigits(value: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-function deriveWebUrl(
-  host: string,
-  repo: string,
-  threadKey: string,
-): string | undefined {
+function deriveWebUrl(host: string, repo: string, threadKey: string): string | undefined {
   const pr = extractPrNumber(threadKey);
   if (pr !== undefined) return `https://${host}/${repo}/pull/${pr}`;
   const issue = extractIssueNumber(threadKey);

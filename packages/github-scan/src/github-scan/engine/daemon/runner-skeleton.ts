@@ -31,34 +31,28 @@
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-import { resolveGitHubScanPaths } from "../runtime/paths.js";
-import { loadGitHubScanDaemonConfig, type DaemonConfig } from "../runtime/config.js";
-
-import {
-  resolveDaemonIdentity,
-  identityHasRequiredScope,
-  type DaemonIdentity,
-} from "./identity.js";
-import { acquireServiceLock, type ServiceLockHandle } from "./claim.js";
-import { startHttpServer, type RunningHttpServer } from "./http.js";
-import { pollOnce, runPoller, type PollerLogger } from "./poller.js";
+import { requireExplicitRepoFilter } from "../runtime/allow-repo.js";
+import { type DaemonConfig, loadGitHubScanDaemonConfig } from "../runtime/config.js";
 import { GhClient as CoreGhClient } from "../runtime/gh.js";
 import type { GitHubScanPaths } from "../runtime/paths.js";
-import { createBus, toSseBus, type Bus } from "./bus.js";
-import { startGhBroker, type RunningBroker } from "./broker.js";
-import { GhExecutor } from "./gh-executor.js";
-import { Dispatcher } from "./dispatcher.js";
-import { WorkspaceManager } from "./workspace.js";
-import type { AgentSpec } from "./runner.js";
-import { GhClient as BrokerGhClient } from "./gh-client.js";
+import { resolveGitHubScanPaths } from "../runtime/paths.js";
+import type { RepoFilter } from "../runtime/repo-filter.js";
+import { loadAgentTemplateSpecs } from "./agent-templates.js";
+import { type RunningBroker, startGhBroker } from "./broker.js";
+import { type Bus, createBus, toSseBus } from "./bus.js";
 import { runCandidateCycle, runCandidateLoop } from "./candidate-loop.js";
-import { RepoFilter } from "../runtime/repo-filter.js";
+import { acquireServiceLock, type ServiceLockHandle } from "./claim.js";
+import { Dispatcher } from "./dispatcher.js";
+import { GhClient as BrokerGhClient } from "./gh-client.js";
+import { GhExecutor } from "./gh-executor.js";
+import { type RunningHttpServer, startHttpServer } from "./http.js";
+import { type DaemonIdentity, identityHasRequiredScope, resolveDaemonIdentity } from "./identity.js";
+import { type PollerLogger, pollOnce, runPoller } from "./poller.js";
+import type { AgentSpec } from "./runner.js";
+import { formatAgentSpecLabel } from "./runner.js";
 import { Scheduler } from "./scheduler.js";
 import { ThreadStore } from "./thread-store.js";
-import { requireExplicitRepoFilter } from "../runtime/allow-repo.js";
-import { loadAgentTemplateSpecs } from "./agent-templates.js";
-import { formatAgentSpecLabel } from "./runner.js";
+import { WorkspaceManager } from "./workspace.js";
 
 export interface DaemonCliOverrides {
   pollIntervalSec?: number;
@@ -285,10 +279,7 @@ function installShutdownHandlers(controller: AbortController, logger: PollerLogg
  * Returns an exit code suitable for `process.exit`.
  */
 // oxlint-disable-next-line complexity
-export async function runDaemon(
-  argv: readonly string[] = [],
-  options: DaemonRunOptions = {},
-): Promise<number> {
+export async function runDaemon(argv: readonly string[] = [], options: DaemonRunOptions = {}): Promise<number> {
   const logger = options.logger ?? DEFAULT_LOGGER;
   const cliOverrides = options.cliOverrides ?? parseDaemonArgs(argv);
   let repoFilter: RepoFilter;
@@ -303,9 +294,7 @@ export async function runDaemon(
   try {
     config = loadGitHubScanDaemonConfig({ cliOverrides });
   } catch (err) {
-    logger.error(
-      `failed to load daemon config: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    logger.error(`failed to load daemon config: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
 
@@ -326,9 +315,7 @@ export async function runDaemon(
       logger.info(`github-scan daemon: identity=${identity.login}@${identity.host}`);
     }
   } catch (err) {
-    logger.warn(
-      `identity resolution failed (continuing): ${err instanceof Error ? err.message : String(err)}`,
-    );
+    logger.warn(`identity resolution failed (continuing): ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // Phase 5 singleton: one daemon per (host, login, profile) on this
@@ -353,9 +340,7 @@ export async function runDaemon(
         note: "daemon starting",
       });
     } catch (err) {
-      logger.error(
-        `github-scan daemon: refusing to start — ${err instanceof Error ? err.message : String(err)}`,
-      );
+      logger.error(`github-scan daemon: refusing to start — ${err instanceof Error ? err.message : String(err)}`);
       return 1;
     }
   }
@@ -385,14 +370,9 @@ export async function runDaemon(
     queued_tasks: "0",
     last_note: "daemon starting",
   };
-  const publishRuntimeStatus = (
-    note?: string,
-    extra: Record<string, string | undefined> = {},
-  ): void => {
+  const publishRuntimeStatus = (note?: string, extra: Record<string, string | undefined> = {}): void => {
     if (note !== undefined) runtimeStatus.last_note = note;
-    runtimeStatus.last_identity = identity
-      ? `${identity.login}@${identity.host}`
-      : `unknown@${config.host}`;
+    runtimeStatus.last_identity = identity ? `${identity.login}@${identity.host}` : `unknown@${config.host}`;
     runtimeStatus.allowed_repos = allowedReposLabel;
     runtimeStatus.active_tasks = String(dispatcher?.activeCount() ?? 0);
     runtimeStatus.queued_tasks = String(dispatcher?.pendingCount() ?? 0);
@@ -401,10 +381,7 @@ export async function runDaemon(
       else runtimeStatus[key] = value;
     }
     runtimeStore.writeRuntimeStatus(runtimeStatus);
-    lockHandle?.refresh(
-      Number.parseInt(runtimeStatus.active_tasks, 10) || 0,
-      runtimeStatus.last_note,
-    );
+    lockHandle?.refresh(Number.parseInt(runtimeStatus.active_tasks, 10) || 0, runtimeStatus.last_note);
   };
   publishRuntimeStatus();
   const runtimeRefreshMs = Math.max(1_000, Math.min(config.pollIntervalSec * 1_000, 30_000));
@@ -423,8 +400,7 @@ export async function runDaemon(
 
   // Phase 3c: shared in-process bus drives SSE + broker task events.
   const bus = createBus({
-    onListenerError: (err) =>
-      logger.warn(`bus listener threw: ${err instanceof Error ? err.message : String(err)}`),
+    onListenerError: (err) => logger.warn(`bus listener threw: ${err instanceof Error ? err.message : String(err)}`),
   });
 
   // Phase 3c: start gh broker + dispatcher if agents are available.
@@ -522,15 +498,11 @@ export async function runDaemon(
           scheduler,
           onCycle: () =>
             publishRuntimeStatus(undefined, {
-              next_search_reconcile_epoch: String(
-                Math.floor(Date.now() / 1_000) + config.pollIntervalSec,
-              ),
+              next_search_reconcile_epoch: String(Math.floor(Date.now() / 1_000) + config.pollIntervalSec),
             }),
           recoverableCandidates: () => scheduler.enqueueRecoverableTasks(identity.host),
         }).catch((err) => {
-          logger.error(
-            `candidate loop crashed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          logger.error(`candidate loop crashed: ${err instanceof Error ? err.message : String(err)}`);
         });
       }
     } else {
@@ -540,9 +512,7 @@ export async function runDaemon(
       logger.warn(`github-scan daemon: skipping broker/dispatcher (${missing.join("; ")})`);
     }
   } catch (err) {
-    logger.error(
-      `failed to start broker/dispatcher: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    logger.error(`failed to start broker/dispatcher: ${err instanceof Error ? err.message : String(err)}`);
     // Continue without dispatcher; still run poller + http.
   }
 
@@ -564,9 +534,7 @@ export async function runDaemon(
         logger,
       });
     } catch (err) {
-      logger.error(
-        `failed to start http server: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      logger.error(`failed to start http server: ${err instanceof Error ? err.message : String(err)}`);
       clearInterval(runtimeTicker);
       if (dispatcher) await dispatcher.stop();
       if (broker) await broker.stop();
@@ -583,14 +551,7 @@ export async function runDaemon(
       // One-shot: run a single poll cycle, then wait for the
       // dispatcher to drain. Also run one candidate-search cycle so
       // assigned/review-requested work is not lost before shutdown.
-      await runPollerOnce(
-        config,
-        paths,
-        repoFilter,
-        controller.signal,
-        logger,
-        config.agentLogin ?? identity?.login,
-      );
+      await runPollerOnce(config, paths, repoFilter, controller.signal, logger, config.agentLogin ?? identity?.login);
       if (candidateRuntime) {
         const outcome = await runCandidateCycle(
           {
@@ -618,9 +579,7 @@ export async function runDaemon(
       });
     }
   } catch (err) {
-    logger.error(
-      `poller exited with error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
-    );
+    logger.error(`poller exited with error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
     exitCode = 1;
   } finally {
     clearInterval(runtimeTicker);
@@ -634,18 +593,14 @@ export async function runDaemon(
       try {
         await candidateLoopDone;
       } catch (err) {
-        logger.warn(
-          `candidate loop shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        logger.warn(`candidate loop shutdown failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     if (dispatcher) {
       try {
         await dispatcher.stop();
       } catch (err) {
-        logger.warn(
-          `dispatcher shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        logger.warn(`dispatcher shutdown failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     if (broker) {
@@ -659,9 +614,7 @@ export async function runDaemon(
       try {
         await httpServer.done;
       } catch (err) {
-        logger.warn(
-          `http server shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        logger.warn(`http server shutdown failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     bus.close();
@@ -670,9 +623,7 @@ export async function runDaemon(
       try {
         await lockHandle.release();
       } catch (err) {
-        logger.warn(
-          `service lock release failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        logger.warn(`service lock release failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -721,9 +672,7 @@ export function findExecutable(name: string): string | null {
  * `$GITHUB_SCAN_HOME` or `$GITHUB_SCAN_DIR/runner`, defaulting to
  * `~/.first-tree/github-scan/runner`. Matches `resolve_inbox_dir` in Rust `fetcher.rs`.
  */
-export function resolveRunnerHome(
-  env: (name: string) => string | undefined = (n) => process.env[n],
-): string {
+export function resolveRunnerHome(env: (name: string) => string | undefined = (n) => process.env[n]): string {
   const mewsHome = env("GITHUB_SCAN_HOME");
   if (mewsHome && mewsHome.length > 0) return mewsHome;
   const githubScanDir = env("GITHUB_SCAN_DIR");

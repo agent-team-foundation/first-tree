@@ -32,9 +32,7 @@ function readManagedBlock(text: string): string | null {
 }
 
 function readMarker(block: string, marker: string): string | undefined {
-  const match = block.match(
-    new RegExp(`^${escapeForRegExp(marker)}\\s+(?:\`(.+?)\`|(.+?))\\s*$`, "mu"),
-  );
+  const match = block.match(new RegExp(`^${escapeForRegExp(marker)}\\s+(?:\`(.+?)\`|(.+?))\\s*$`, "mu"));
   const value = match?.[1] ?? match?.[2];
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
@@ -115,14 +113,7 @@ export function resolveAgentTemplateDirs(startDir: string): string[] {
     pushUniqueExistingDir(
       dirs,
       seen,
-      join(
-        binding.bindingRoot,
-        ".first-tree",
-        "tmp",
-        binding.treeRepoName,
-        ".first-tree",
-        "agent-templates",
-      ),
+      join(binding.bindingRoot, ".first-tree", "tmp", binding.treeRepoName, ".first-tree", "agent-templates"),
     );
     pushUniqueExistingDir(
       dirs,
@@ -158,10 +149,7 @@ function normalizeRuntime(value: unknown): {
     return null;
   }
 
-  const model =
-    typeof value.model === "string" && value.model.trim().length > 0
-      ? value.model.trim()
-      : undefined;
+  const model = typeof value.model === "string" && value.model.trim().length > 0 ? value.model.trim() : undefined;
 
   return model === undefined ? nested : { ...nested, model };
 }
@@ -173,11 +161,7 @@ function normalizeEnv(value: unknown): Record<string, string> | undefined {
 
   const env: Record<string, string> = {};
   for (const [key, rawValue] of Object.entries(value)) {
-    if (
-      typeof rawValue === "string" ||
-      typeof rawValue === "number" ||
-      typeof rawValue === "boolean"
-    ) {
+    if (typeof rawValue === "string" || typeof rawValue === "number" || typeof rawValue === "boolean") {
       env[key] = String(rawValue);
     }
   }
@@ -207,13 +191,9 @@ function readAgentTemplate(path: string): AgentSpec | null {
       ? parsed.name.trim()
       : basename(path).replace(TEMPLATE_FILE_RE, "");
   const prompt =
-    typeof parsed.prompt === "string" && parsed.prompt.trim().length > 0
-      ? parsed.prompt.trim()
-      : undefined;
+    typeof parsed.prompt === "string" && parsed.prompt.trim().length > 0 ? parsed.prompt.trim() : undefined;
   const explicitModel =
-    typeof parsed.model === "string" && parsed.model.trim().length > 0
-      ? parsed.model.trim()
-      : undefined;
+    typeof parsed.model === "string" && parsed.model.trim().length > 0 ? parsed.model.trim() : undefined;
   const env = normalizeEnv(parsed.env);
 
   return {
@@ -246,10 +226,7 @@ function compareAgentSpecs(left: AgentSpec, right: AgentSpec): number {
   return leftName.localeCompare(rightName);
 }
 
-export function loadAgentTemplateSpecs(
-  startDir: string,
-  executableFinder: ExecutableFinder,
-): AgentSpec[] {
+export function loadAgentTemplateSpecs(startDir: string, executableFinder: ExecutableFinder): AgentSpec[] {
   const specs: AgentSpec[] = [];
   const seenTemplateNames = new Set<string>();
 

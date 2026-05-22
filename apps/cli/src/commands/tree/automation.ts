@@ -7,14 +7,14 @@ import type { CommandContext, SubcommandModule } from "../types.js";
 import { readSourceBindingContract } from "./binding-contract.js";
 import {
   AUTO_MERGE_WORKFLOW_TEMPLATE_VERSION,
-  REVIEW_ENFORCER_WORKFLOW_TEMPLATE_VERSION,
   autoMergeWorkflowPath,
   ensureTier2RuleLayer,
+  REVIEW_ENFORCER_WORKFLOW_TEMPLATE_VERSION,
   reviewEnforcerWorkflowPath,
 } from "./rule-layer.js";
+import { parseGitHubRemoteUrl, readGitRemoteUrl, runCommand } from "./shared.js";
 import { parseTemplateVersion } from "./template-write.js";
 import { readTreeIdentityContract } from "./tree-identity.js";
-import { parseGitHubRemoteUrl, readGitRemoteUrl, runCommand } from "./shared.js";
 
 const RULESET_NAME = "first-tree owners gate";
 const FIRST_TREE_GATE_INSTALL_URL = "https://github.com/apps/first-tree-gate";
@@ -47,11 +47,7 @@ type RepositoryRuleset = {
   target?: string;
 };
 
-export type TreeAutomationStage =
-  | "activate_ruleset"
-  | "configured"
-  | "create_ruleset"
-  | "write_rule_layer";
+export type TreeAutomationStage = "activate_ruleset" | "configured" | "create_ruleset" | "write_rule_layer";
 
 export type TreeAutomationSummary = {
   appInstalled: boolean | null;
@@ -128,8 +124,7 @@ function normalizeRulesetEnforcement(value: unknown): RulesetEnforcement | null 
 }
 
 function readRepoMetadata(targetRoot: string, runner: CommandRunner): RepoMetadata | null {
-  const remoteUrl =
-    readTreeIdentityContract(targetRoot)?.publishedTreeUrl ?? readGitRemoteUrl(targetRoot);
+  const remoteUrl = readTreeIdentityContract(targetRoot)?.publishedTreeUrl ?? readGitRemoteUrl(targetRoot);
   const parsed = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
   if (parsed === null) {
     return null;
@@ -186,10 +181,7 @@ function parseTemplateVersionFromContent(content: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-function readLocalWorkflowStatus(
-  definition: WorkflowDefinition,
-  dryRun: boolean,
-): ManagedWorkflowSummary {
+function readLocalWorkflowStatus(definition: WorkflowDefinition, dryRun: boolean): ManagedWorkflowSummary {
   if (!existsSync(definition.path)) {
     return {
       currentVersion: null,
@@ -260,16 +252,8 @@ function ensureLocalTier2RuleLayer(
   ];
 }
 
-function listRulesets(
-  targetRoot: string,
-  repoSlug: string,
-  runner: CommandRunner,
-): RepositoryRuleset[] {
-  const raw = runner(
-    "gh",
-    ["api", `repos/${repoSlug}/rulesets?includes_parents=false`],
-    targetRoot,
-  );
+function listRulesets(targetRoot: string, repoSlug: string, runner: CommandRunner): RepositoryRuleset[] {
+  const raw = runner("gh", ["api", `repos/${repoSlug}/rulesets?includes_parents=false`], targetRoot);
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed)) {
     return [];
@@ -305,11 +289,7 @@ function listRulesets(
   return rulesets;
 }
 
-function detectAppInstallation(
-  targetRoot: string,
-  repoSlug: string,
-  runner: CommandRunner,
-): boolean | null {
+function detectAppInstallation(targetRoot: string, repoSlug: string, runner: CommandRunner): boolean | null {
   try {
     runner("gh", ["api", `repos/${repoSlug}/installation`], targetRoot);
     return true;
@@ -352,22 +332,14 @@ function buildRulesetDefinition(defaultBranch: string): Record<string, unknown> 
 }
 
 function formatJsonCommand(endpoint: string, payload: Record<string, unknown>): string {
-  return [
-    `gh api ${endpoint} --method POST --input - <<'JSON'`,
-    JSON.stringify(payload, null, 2),
-    "JSON",
-  ].join("\n");
+  return [`gh api ${endpoint} --method POST --input - <<'JSON'`, JSON.stringify(payload, null, 2), "JSON"].join("\n");
 }
 
 function formatRulesetCreateCommand(repoSlug: string, defaultBranch: string): string {
   return formatJsonCommand(`repos/${repoSlug}/rulesets`, buildRulesetDefinition(defaultBranch));
 }
 
-function formatRulesetActivateCommand(
-  repoSlug: string,
-  ruleset: RepositoryRuleset,
-  defaultBranch: string,
-): string {
+function formatRulesetActivateCommand(repoSlug: string, ruleset: RepositoryRuleset, defaultBranch: string): string {
   const payload = {
     name: ruleset.name,
     target: ruleset.target ?? "branch",
@@ -403,9 +375,7 @@ function printAutomationSummary(summary: TreeAutomationSummary): void {
     console.log(`  Default branch:  ${summary.defaultBranch}`);
   }
   if (summary.ruleset) {
-    console.log(
-      `  Ruleset:         ${summary.ruleset.name} (#${summary.ruleset.id}, ${summary.ruleset.enforcement})`,
-    );
+    console.log(`  Ruleset:         ${summary.ruleset.name} (#${summary.ruleset.id}, ${summary.ruleset.enforcement})`);
   }
   console.log("");
   console.log("  Workflows:");
@@ -434,10 +404,7 @@ export function installTreeAutomation(
   options: AutomationOptions,
   runner: CommandRunner = runCommand,
 ): TreeAutomationSummary {
-  if (
-    readSourceBindingContract(targetRoot) !== undefined &&
-    readTreeIdentityContract(targetRoot) === undefined
-  ) {
+  if (readSourceBindingContract(targetRoot) !== undefined && readTreeIdentityContract(targetRoot) === undefined) {
     throw new Error(formatSourceRepoError(targetRoot));
   }
 
@@ -491,13 +458,7 @@ export function installTreeAutomation(
   }
 
   const remoteWorkflowStates = workflows.map((definition) =>
-    readRemoteWorkflowState(
-      targetRoot,
-      repoMetadata.repoSlug,
-      repoMetadata.defaultBranch,
-      definition,
-      runner,
-    ),
+    readRemoteWorkflowState(targetRoot, repoMetadata.repoSlug, repoMetadata.defaultBranch, definition, runner),
   );
   const localWorkflowNeedsFollowUp = workflowFiles.some((workflow) =>
     ["custom", "needs-upgrade", "would-write", "written"].includes(workflow.status),
@@ -534,9 +495,7 @@ export function installTreeAutomation(
     warnings.push(
       "GitHub documents `enforcement: evaluate` as Enterprise-only. On non-Enterprise plans, the printed create command may fail and you may need a different rollout strategy for Tier 2.",
     );
-    nextCommands.push(
-      formatRulesetCreateCommand(repoMetadata.repoSlug, repoMetadata.defaultBranch),
-    );
+    nextCommands.push(formatRulesetCreateCommand(repoMetadata.repoSlug, repoMetadata.defaultBranch));
     return {
       appInstalled,
       defaultBranch: repoMetadata.defaultBranch,
@@ -560,9 +519,7 @@ export function installTreeAutomation(
     warnings.push(
       "GitHub documents `enforcement: evaluate` as Enterprise-only. If your repo plan does not support it, confirm the fallback rollout before activating the ruleset.",
     );
-    nextCommands.push(
-      formatRulesetActivateCommand(repoMetadata.repoSlug, ruleset, repoMetadata.defaultBranch),
-    );
+    nextCommands.push(formatRulesetActivateCommand(repoMetadata.repoSlug, ruleset, repoMetadata.defaultBranch));
     return {
       appInstalled,
       defaultBranch: repoMetadata.defaultBranch,
@@ -604,10 +561,7 @@ export function installTreeAutomation(
 function runInstallAutomationCommand(context: CommandContext): void {
   try {
     const targetRoot = resolveAutomationTargetRoot(context.command);
-    const summary = installTreeAutomation(
-      targetRoot,
-      readInstallAutomationOptions(context.command),
-    );
+    const summary = installTreeAutomation(targetRoot, readInstallAutomationOptions(context.command));
 
     if (context.options.json) {
       console.log(JSON.stringify(summary, null, 2));

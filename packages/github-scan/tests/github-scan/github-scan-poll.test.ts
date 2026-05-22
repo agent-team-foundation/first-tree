@@ -11,28 +11,21 @@
  *   - `new → done` transitions are suppressed (spec §2.2)
  */
 
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { runPoll } from "../../src/github-scan/engine/commands/poll.js";
-import { GhClient } from "../../src/github-scan/engine/runtime/gh.js";
-import { resolveGitHubScanPaths } from "../../src/github-scan/engine/runtime/paths.js";
-import { readActivityLog } from "../../src/github-scan/engine/runtime/activity-log.js";
 import {
-  parseNotifications,
-  sortEntries,
   diffEvents,
+  parseNotifications,
+  runPoll,
+  sortEntries,
   splitConcatenatedJsonArrays,
 } from "../../src/github-scan/engine/commands/poll.js";
+import { readActivityLog } from "../../src/github-scan/engine/runtime/activity-log.js";
+import { GhClient } from "../../src/github-scan/engine/runtime/gh.js";
+import { resolveGitHubScanPaths } from "../../src/github-scan/engine/runtime/paths.js";
 
 /**
  * Build a stubbed GhClient. Each call to `spawn` is matched against the
@@ -47,32 +40,30 @@ interface ResponseMatcher {
 
 function makeStubGh(matchers: ResponseMatcher[]): GhClient {
   const calls: string[][] = [];
-  const spawn = vi
-    .fn()
-    .mockImplementation((_cmd: string, argv: string[]) => {
-      calls.push([...argv]);
-      for (const m of matchers) {
-        if (m.match(argv)) {
-          return {
-            pid: 1,
-            status: m.status ?? 0,
-            signal: null,
-            stdout: Buffer.from(m.stdout ?? ""),
-            stderr: Buffer.from(m.stderr ?? ""),
-            output: [],
-          };
-        }
+  const spawn = vi.fn().mockImplementation((_cmd: string, argv: string[]) => {
+    calls.push([...argv]);
+    for (const m of matchers) {
+      if (m.match(argv)) {
+        return {
+          pid: 1,
+          status: m.status ?? 0,
+          signal: null,
+          stdout: Buffer.from(m.stdout ?? ""),
+          stderr: Buffer.from(m.stderr ?? ""),
+          output: [],
+        };
       }
-      // Default: empty ok.
-      return {
-        pid: 1,
-        status: 0,
-        signal: null,
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        output: [],
-      };
-    });
+    }
+    // Default: empty ok.
+    return {
+      pid: 1,
+      status: 0,
+      signal: null,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      output: [],
+    };
+  });
   const gh = new GhClient({ spawn });
   // @ts-expect-error test-only accessor
   gh.__calls = calls;
@@ -108,10 +99,7 @@ function mkGitHubScanDir(): { dir: string; inbox: string; activity: string } {
 describe("splitConcatenatedJsonArrays", () => {
   it("splits paginated array output", () => {
     const raw = `[{"id":"1"}][{"id":"2"},{"id":"3"}]`;
-    expect(splitConcatenatedJsonArrays(raw)).toEqual([
-      `[{"id":"1"}]`,
-      `[{"id":"2"},{"id":"3"}]`,
-    ]);
+    expect(splitConcatenatedJsonArrays(raw)).toEqual([`[{"id":"1"}]`, `[{"id":"2"},{"id":"3"}]`]);
   });
 
   it("handles a single array", () => {
@@ -379,8 +367,7 @@ describe("runPoll end-to-end", () => {
         status: 0,
       },
       {
-        match: (argv) =>
-          argv[0] === "api" && argv[1]?.startsWith("/notifications"),
+        match: (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
         status: 0,
         stdout: notificationsPage,
       },
@@ -512,8 +499,7 @@ describe("runPoll end-to-end", () => {
         status: 0,
       },
       {
-        match: (argv) =>
-          argv[0] === "api" && argv[1]?.startsWith("/notifications"),
+        match: (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
         status: 0,
         stdout: notificationsPage,
       },
@@ -550,8 +536,7 @@ describe("runPoll end-to-end", () => {
         status: 0,
       },
       {
-        match: (argv) =>
-          argv[0] === "api" && argv[1]?.startsWith("/notifications"),
+        match: (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
         status: 3,
         stderr: "API rate limit exceeded",
       },

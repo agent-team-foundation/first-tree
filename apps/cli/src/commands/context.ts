@@ -103,9 +103,7 @@ export function createCommandContext(command: Command): CommandContext {
   };
 }
 
-export function withCommandContext(
-  action: CommandAction,
-): (this: Command, ...args: unknown[]) => void | Promise<void> {
+export function withCommandContext(action: CommandAction): (this: Command, ...args: unknown[]) => void | Promise<void> {
   return function wrappedCommandAction(this: Command): void | Promise<void> {
     return action(createCommandContext(this));
   };

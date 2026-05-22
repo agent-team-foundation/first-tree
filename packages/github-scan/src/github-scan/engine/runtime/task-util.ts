@@ -183,11 +183,7 @@ export function parseGithubTimestampEpoch(value: string): number | undefined {
 }
 
 /** True when `value` parses as a timestamp and lies within `lookbackSecs` of `nowEpoch`. */
-export function isRecentGithubTimestamp(
-  value: string,
-  nowEpoch: number,
-  lookbackSecs: number,
-): boolean {
+export function isRecentGithubTimestamp(value: string, nowEpoch: number, lookbackSecs: number): boolean {
   const ts = parseGithubTimestampEpoch(value);
   if (ts === undefined) return false;
   return ts >= Math.max(0, nowEpoch - lookbackSecs);

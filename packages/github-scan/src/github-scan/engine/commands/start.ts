@@ -6,16 +6,15 @@
  * we fall back to `spawn(... detached: true)` with stdout redirected.
  */
 
+import { spawn } from "node:child_process";
 import { mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { spawn } from "node:child_process";
-
-import { loadGitHubScanDaemonConfig } from "../runtime/config.js";
-import { parseAllowRepoArg, requireExplicitRepoFilter } from "../runtime/allow-repo.js";
 import { findServiceLock, isLockStale } from "../daemon/claim.js";
 import { resolveDaemonIdentity } from "../daemon/identity.js";
 import { bootstrapLaunchdJob, supportsLaunchd } from "../daemon/launchd.js";
 import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
+import { parseAllowRepoArg, requireExplicitRepoFilter } from "../runtime/allow-repo.js";
+import { loadGitHubScanDaemonConfig } from "../runtime/config.js";
 
 export interface RunStartOptions {
   write?: (line: string) => void;
@@ -41,9 +40,7 @@ export interface SelfCliInvocation {
   prefixArgs: string[];
 }
 
-export function resolveSelfCliInvocation(
-  entrypoint: string | undefined = process.argv[1],
-): SelfCliInvocation {
+export function resolveSelfCliInvocation(entrypoint: string | undefined = process.argv[1]): SelfCliInvocation {
   return {
     executable: process.execPath,
     prefixArgs: entrypoint && entrypoint.length > 0 ? [entrypoint] : [],
@@ -51,10 +48,7 @@ export function resolveSelfCliInvocation(
 }
 
 // oxlint-disable-next-line complexity
-export async function runStart(
-  argv: readonly string[] = [],
-  options: RunStartOptions = {},
-): Promise<number> {
+export async function runStart(argv: readonly string[] = [], options: RunStartOptions = {}): Promise<number> {
   const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
   try {
     requireExplicitRepoFilter(parseAllowRepoArg(argv));
@@ -111,8 +105,7 @@ export async function runStart(
 
   const self = resolveSelfCliInvocation(options.entrypoint);
   const executable = options.executable ?? self.executable;
-  const daemonArgs =
-    options.daemonArgs ?? defaultDaemonArgs(argv, options.executable ? [] : self.prefixArgs);
+  const daemonArgs = options.daemonArgs ?? defaultDaemonArgs(argv, options.executable ? [] : self.prefixArgs);
 
   // Capture cwd eagerly (before any other logic might chdir).
   // launchd otherwise spawns the daemon from `/`, which fails the
@@ -238,7 +231,6 @@ export function defaultDaemonArgs(
     forwarded.push(a);
   }
   const treeRepoBinding = env.FIRST_TREE_GITHUB_SCAN_TREE_REPO;
-  const treeRepoArgs =
-    treeRepoBinding && treeRepoBinding.length > 0 ? ["--tree-repo", treeRepoBinding] : [];
+  const treeRepoArgs = treeRepoBinding && treeRepoBinding.length > 0 ? ["--tree-repo", treeRepoBinding] : [];
   return [...prefixArgs, "github", "scan", "daemon", "--backend=ts", ...treeRepoArgs, ...forwarded];
 }

@@ -75,19 +75,9 @@ describe("publishTreeRoot", () => {
 
     expect(summary.publishedTreeUrl).toBe("https://github.com/acme/context-tree.git");
     expect(summary.refreshedSourceRoots).toEqual([sourceRoot]);
-    expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toContain(
-      "https://github.com/acme/context-tree.git",
-    );
-    expect(commandRunner).toHaveBeenCalledWith(
-      "gh",
-      ["repo", "view", "acme/context-tree"],
-      treeRoot,
-    );
-    expect(commandRunner).toHaveBeenCalledWith(
-      "git",
-      ["push", "-u", "origin", "HEAD:main"],
-      treeRoot,
-    );
+    expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toContain("https://github.com/acme/context-tree.git");
+    expect(commandRunner).toHaveBeenCalledWith("gh", ["repo", "view", "acme/context-tree"], treeRoot);
+    expect(commandRunner).toHaveBeenCalledWith("git", ["push", "-u", "origin", "HEAD:main"], treeRoot);
   });
 });
 
@@ -103,24 +93,14 @@ describe("initializeSourceRoot", () => {
 
       expect(summary.bindingMode).toBe("standalone-source");
       expect(summary.recursive).toBe(true);
-      expect(summary.treeRoot).toBe(
-        resolve(dirname(sourceRoot), `${sourceRoot.split("/").pop()}-tree`),
-      );
+      expect(summary.treeRoot).toBe(resolve(dirname(sourceRoot), `${sourceRoot.split("/").pop()}-tree`));
       expect(
-        readFileSync(
-          join(summary.treeRoot, ".first-tree", "agent-templates", "developer.yaml"),
-          "utf8",
-        ),
+        readFileSync(join(summary.treeRoot, ".first-tree", "agent-templates", "developer.yaml"), "utf8"),
       ).toContain("name: developer");
       expect(
-        readFileSync(
-          join(summary.treeRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"),
-          "utf8",
-        ),
+        readFileSync(join(summary.treeRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"), "utf8"),
       ).toContain("name: code-reviewer");
-      expect(readFileSync(join(summary.treeRoot, ".first-tree", "org.yaml"), "utf8")).toContain(
-        "humanInvolveRules:",
-      );
+      expect(readFileSync(join(summary.treeRoot, ".first-tree", "org.yaml"), "utf8")).toContain("humanInvolveRules:");
     } finally {
       process.chdir(previousCwd);
     }

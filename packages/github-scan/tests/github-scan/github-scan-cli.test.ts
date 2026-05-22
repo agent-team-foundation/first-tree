@@ -68,9 +68,7 @@ describe("runGitHubScan dispatcher", () => {
   });
 
   it("prints the package version for --version, -V, and version", async () => {
-    const version = JSON.parse(
-      readFileSync(join(process.cwd(), "package.json"), "utf8"),
-    ).version as string;
+    const version = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version as string;
 
     for (const flag of ["--version", "-V", "version"]) {
       const output = captureOutput();
@@ -100,9 +98,7 @@ describe("runGitHubScan dispatcher", () => {
     vi.doMock("../../src/github-scan/engine/daemon/runner-skeleton.js", () => ({
       runDaemon: runDaemonSpy,
     }));
-    const { runGitHubScan: freshRun } = await import(
-      "../../src/github-scan/cli.js"
-    );
+    const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
 
     const cases: Array<{
       args: string[];
@@ -139,26 +135,20 @@ describe("runGitHubScan dispatcher", () => {
       runStart: runStartSpy,
     }));
 
-    const { runGitHubScan: freshRun } = await import(
-      "../../src/github-scan/cli.js"
-    );
+    const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
 
     const runOutput = captureOutput();
     const runCode = await freshRun(["run", "--help"], runOutput.write);
     expect(runCode).toBe(0);
     expect(runOutput.lines.join("\n")).toContain("usage: first-tree github scan run");
-    expect(runOutput.lines.join("\n")).toContain(
-      "Required: restrict work to owner/repo or owner/* patterns",
-    );
+    expect(runOutput.lines.join("\n")).toContain("Required: restrict work to owner/repo or owner/* patterns");
     expect(runDaemonSpy).not.toHaveBeenCalled();
 
     const startOutput = captureOutput();
     const startCode = await freshRun(["start", "--help"], startOutput.write);
     expect(startCode).toBe(0);
     expect(startOutput.lines.join("\n")).toContain("usage: first-tree github scan start");
-    expect(startOutput.lines.join("\n")).toContain(
-      "Required: restrict work to owner/repo or owner/* patterns",
-    );
+    expect(startOutput.lines.join("\n")).toContain("Required: restrict work to owner/repo or owner/* patterns");
     expect(runStartSpy).not.toHaveBeenCalled();
   });
 
@@ -169,27 +159,18 @@ describe("runGitHubScan dispatcher", () => {
       spawnInherit: spawnSpy,
     }));
 
-    const { runGitHubScan: freshRun } = await import(
-      "../../src/github-scan/cli.js"
-    );
+    const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
 
     const code = await freshRun(["statusline"], () => {});
     expect(code).toBe(0);
-    expect(spawnSpy).toHaveBeenCalledWith(process.execPath, [
-      "/pkg/dist/github-scan-statusline.js",
-    ]);
+    expect(spawnSpy).toHaveBeenCalledWith(process.execPath, ["/pkg/dist/github-scan-statusline.js"]);
   });
 
   it("routes install through the TS install command", async () => {
     const runInstallSpy = vi.fn().mockReturnValue(0);
-    vi.doMock(
-      "../../src/github-scan/engine/commands/install.js",
-      () => ({ runInstall: runInstallSpy }),
-    );
+    vi.doMock("../../src/github-scan/engine/commands/install.js", () => ({ runInstall: runInstallSpy }));
 
-    const { runGitHubScan: freshRun } = await import(
-      "../../src/github-scan/cli.js"
-    );
+    const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
 
     const code = await freshRun(["install"], () => {});
     expect(code).toBe(0);
@@ -213,9 +194,7 @@ describe("runGitHubScan dispatcher", () => {
       runPoll,
     }));
 
-    const { runGitHubScan: freshRun } = await import(
-      "../../src/github-scan/cli.js"
-    );
+    const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
     const code = await freshRun(["poll", "--foo"], () => {});
     expect(code).toBe(0);
     expect(runPoll).toHaveBeenCalledWith(["--foo"]);
@@ -238,9 +217,7 @@ describe("runGitHubScan dispatcher", () => {
       runWatch,
     }));
 
-    const { runGitHubScan: freshRun } = await import(
-      "../../src/github-scan/cli.js"
-    );
+    const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
     const code = await freshRun(["watch"], () => {});
     expect(code).toBe(0);
     expect(runWatch).toHaveBeenCalledWith([]);
@@ -251,9 +228,7 @@ describe("runGitHubScan dispatcher", () => {
     vi.doMock("../../src/github-scan/engine/daemon/runner-skeleton.js", () => ({
       runDaemon: runDaemonSpy,
     }));
-    const { runGitHubScan: freshRun } = await import(
-      "../../src/github-scan/cli.js"
-    );
+    const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
     const code = await freshRun(["run"], () => {});
     expect(code).toBe(13);
   });
@@ -277,9 +252,7 @@ describe("runGitHubScan dispatcher", () => {
       runStatusManager,
     }));
 
-    const { runGitHubScan: freshRun } = await import(
-      "../../src/github-scan/cli.js"
-    );
+    const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
     const code = await freshRun(["status-manager", "list"], () => {});
     expect(code).toBe(0);
     expect(runStatusManager).toHaveBeenCalledWith(["list"]);
@@ -300,9 +273,7 @@ describe("runGitHubScan dispatcher", () => {
     }) as typeof process.stderr.write;
 
     try {
-      const { runGitHubScan: freshRun } = await import(
-        "../../src/github-scan/cli.js"
-      );
+      const { runGitHubScan: freshRun } = await import("../../src/github-scan/cli.js");
       const code = await freshRun(["run"], () => {});
       expect(code).toBe(1);
       expect(writes.join("")).toContain("daemon init failed");

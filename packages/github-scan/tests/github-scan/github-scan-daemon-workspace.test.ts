@@ -1,18 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  WorkspaceManager,
-  sanitizeFilename,
-  type GitRunner,
-} from "../../src/github-scan/engine/daemon/workspace.js";
+import { type GitRunner, sanitizeFilename, WorkspaceManager } from "../../src/github-scan/engine/daemon/workspace.js";
 
 const tempRoots: string[] = [];
 
@@ -81,9 +72,7 @@ describe("WorkspaceManager.prepare", () => {
     });
 
     expect(lease.mirrorDir).toBe(mirrorDir);
-    expect(lease.workspaceDir).toBe(
-      join(workspacesDir, "owner__repo", "issue-42"),
-    );
+    expect(lease.workspaceDir).toBe(join(workspacesDir, "owner__repo", "issue-42"));
     expect(lease.repoUrl).toBe("https://github.com/owner/repo.git");
 
     // Worktree add should have been invoked with the resolved SHA.
@@ -95,17 +84,11 @@ describe("WorkspaceManager.prepare", () => {
     expect(
       calls.some(
         (c) =>
-          c.includes("config") &&
-          c.includes("user.name") &&
-          c.some((a) => a.includes("bob via github-scan-runner")),
+          c.includes("config") && c.includes("user.name") && c.some((a) => a.includes("bob via github-scan-runner")),
       ),
     ).toBe(true);
     expect(
-      calls.some(
-        (c) =>
-          c.includes("user.email") &&
-          c.some((a) => a.includes("bob@users.noreply.github.com")),
-      ),
+      calls.some((c) => c.includes("user.email") && c.some((a) => a.includes("bob@users.noreply.github.com"))),
     ).toBe(true);
   });
 
@@ -133,14 +116,10 @@ describe("WorkspaceManager.prepare", () => {
     expect(lease.workspaceDir).toContain("pr-pr-267");
 
     // Should fetch refs/pull/267/head:...github-scan-runner-pr-267.
-    const fetchCall = calls.find(
-      (c) => c.includes("fetch") && c.some((a) => a.includes("refs/pull/267/head")),
-    );
+    const fetchCall = calls.find((c) => c.includes("fetch") && c.some((a) => a.includes("refs/pull/267/head")));
     expect(fetchCall).toBeDefined();
     const addCall = calls.find((c) => c.includes("worktree") && c.includes("add"));
-    expect(addCall).toContain(
-      "refs/remotes/origin/github-scan-runner-pr-267",
-    );
+    expect(addCall).toContain("refs/remotes/origin/github-scan-runner-pr-267");
   });
 
   it("throws when a checked git command fails", async () => {
@@ -159,9 +138,7 @@ describe("WorkspaceManager.prepare", () => {
       identity: { host: "github.com", login: "alice" },
       runGit: runner,
     });
-    await expect(
-      mgr.prepare({ repo: "o/r", kind: "issue", stableId: "1" }),
-    ).rejects.toThrow(/resolve mirror HEAD/);
+    await expect(mgr.prepare({ repo: "o/r", kind: "issue", stableId: "1" })).rejects.toThrow(/resolve mirror HEAD/);
   });
 
   it("serializes prepare calls that target the same repo mirror", async () => {

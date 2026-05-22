@@ -30,12 +30,8 @@ describe("fnv1a64 / stableFileId", () => {
 
 describe("canonicalApiPath", () => {
   it("strips api.github.com / github.com prefixes + trailing slashes", () => {
-    expect(
-      canonicalApiPath("https://api.github.com/repos/o/r/pulls/12/"),
-    ).toBe("/repos/o/r/pulls/12");
-    expect(canonicalApiPath("https://github.com/o/r/pull/3")).toBe(
-      "/o/r/pull/3",
-    );
+    expect(canonicalApiPath("https://api.github.com/repos/o/r/pulls/12/")).toBe("/repos/o/r/pulls/12");
+    expect(canonicalApiPath("https://github.com/o/r/pull/3")).toBe("/o/r/pull/3");
     expect(canonicalApiPath("/repos/o/r")).toBe("/repos/o/r");
   });
 });
@@ -89,9 +85,7 @@ describe("parseKvLines", () => {
 
 describe("parseGithubTimestampEpoch / isRecentGithubTimestamp", () => {
   it("parses a valid ISO-Z timestamp to unix seconds", () => {
-    expect(parseGithubTimestampEpoch("2026-01-02T03:04:05Z")).toBe(
-      Date.UTC(2026, 0, 2, 3, 4, 5) / 1000,
-    );
+    expect(parseGithubTimestampEpoch("2026-01-02T03:04:05Z")).toBe(Date.UTC(2026, 0, 2, 3, 4, 5) / 1000);
   });
 
   it("rejects wrong length / bad separators / invalid month", () => {
@@ -102,11 +96,7 @@ describe("parseGithubTimestampEpoch / isRecentGithubTimestamp", () => {
 
   it("isRecentGithubTimestamp compares against now - lookback", () => {
     const now = parseGithubTimestampEpoch("2026-04-15T12:00:00Z")!;
-    expect(
-      isRecentGithubTimestamp("2026-04-15T11:59:00Z", now, 120),
-    ).toBe(true);
-    expect(
-      isRecentGithubTimestamp("2026-04-15T11:57:00Z", now, 120),
-    ).toBe(false);
+    expect(isRecentGithubTimestamp("2026-04-15T11:59:00Z", now, 120)).toBe(true);
+    expect(isRecentGithubTimestamp("2026-04-15T11:57:00Z", now, 120)).toBe(false);
   });
 });

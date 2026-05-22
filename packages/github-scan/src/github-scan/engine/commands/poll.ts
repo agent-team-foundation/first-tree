@@ -26,16 +26,11 @@
  *     surface it here.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendActivityEvent } from "../runtime/activity-log.js";
+import { parseAllowRepoArg, requireExplicitRepoFilter } from "../runtime/allow-repo.js";
 import { classifyGitHubScanStatus } from "../runtime/classifier.js";
 import { loadGitHubScanConfig } from "../runtime/config.js";
 import { GhClient, GhExecError } from "../runtime/gh.js";
@@ -43,15 +38,7 @@ import { resolveGitHubScanPaths } from "../runtime/paths.js";
 import { RepoFilter } from "../runtime/repo-filter.js";
 import { updateInbox } from "../runtime/store.js";
 import { shouldTrackReason } from "../runtime/task-kind.js";
-import {
-  parseAllowRepoArg,
-  requireExplicitRepoFilter,
-} from "../runtime/allow-repo.js";
-import {
-  type GhState,
-  type Inbox,
-  type InboxEntry,
-} from "../runtime/types.js";
+import type { GhState, Inbox, InboxEntry } from "../runtime/types.js";
 
 export interface PollIO {
   stdout: (line: string) => void;
@@ -119,12 +106,7 @@ function extractTrailingNumber(url: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function htmlUrlFor(
-  host: string,
-  repo: string,
-  subjectType: string,
-  number: number | null,
-): string {
+function htmlUrlFor(host: string, repo: string, subjectType: string, number: number | null): string {
   const base = `https://${host}/${repo}`;
   if (subjectType === "PullRequest" && number !== null) {
     return `${base}/pull/${number}`;
@@ -175,8 +157,7 @@ export function parseNotifications(
       const lastActor = item.subject?.latest_comment_url ?? url ?? "";
       const updatedAt = item.updated_at ?? "";
       const unread = Boolean(item.unread);
-      const number =
-        typeof url === "string" ? extractTrailingNumber(url) : null;
+      const number = typeof url === "string" ? extractTrailingNumber(url) : null;
       const htmlUrl = htmlUrlFor(host, repo, subjectType, number);
       seenIds.add(id);
       entries.push({
@@ -214,11 +195,7 @@ export function sortEntries(entries: InboxEntry[]): void {
 }
 
 /** Build a batched GraphQL query for the `repo` at `owner/name`. */
-function buildLabelQuery(
-  owner: string,
-  name: string,
-  batch: ReadonlyArray<{ number: number; isPR: boolean }>,
-): string {
+function buildLabelQuery(owner: string, name: string, batch: ReadonlyArray<{ number: number; isPR: boolean }>): string {
   let fragments = "";
   for (const { number, isPR } of batch) {
     const kind = isPR ? "pullRequest" : "issue";
@@ -245,9 +222,7 @@ interface GraphQLLabelResponse {
   };
 }
 
-function parseLabelResponse(
-  response: string,
-): Array<{ number: number; gh_state: GhState | null; labels: string[] }> {
+function parseLabelResponse(response: string): Array<{ number: number; gh_state: GhState | null; labels: string[] }> {
   let parsed: GraphQLLabelResponse;
   try {
     parsed = JSON.parse(response) as GraphQLLabelResponse;
@@ -267,13 +242,9 @@ function parseLabelResponse(
     if (typeof number !== "number") continue;
     const rawState = node.state;
     const gh_state: GhState | null =
-      rawState === "OPEN" || rawState === "CLOSED" || rawState === "MERGED"
-        ? rawState
-        : null;
+      rawState === "OPEN" || rawState === "CLOSED" || rawState === "MERGED" ? rawState : null;
     const labelNodes = node.labels?.nodes ?? [];
-    const labels = labelNodes
-      .map((n) => n?.name)
-      .filter((n): n is string => typeof n === "string");
+    const labels = labelNodes.map((n) => n?.name).filter((n): n is string => typeof n === "string");
     rows.push({ number, gh_state, labels });
   }
   return rows;
@@ -287,11 +258,7 @@ function parseLabelResponse(
  * Mutates `entries` in place. Returns a warning string if any repo's
  * enrichment failed; otherwise `null`.
  */
-export function enrichWithLabels(
-  entries: InboxEntry[],
-  gh: GhClient,
-  host: string,
-): string | null {
+export function enrichWithLabels(entries: InboxEntry[], gh: GhClient, host: string): string | null {
   const byRepo = new Map<string, Array<{ number: number; isPR: boolean }>>();
   for (const entry of entries) {
     if (entry.number === null) continue;
@@ -316,10 +283,7 @@ export function enrichWithLabels(
     const sorted = [...items].sort((a, b) => a.number - b.number);
     const deduped: Array<{ number: number; isPR: boolean }> = [];
     for (const item of sorted) {
-      if (
-        deduped.length === 0 ||
-        deduped[deduped.length - 1].number !== item.number
-      ) {
+      if (deduped.length === 0 || deduped[deduped.length - 1].number !== item.number) {
         deduped.push(item);
       }
     }
@@ -327,14 +291,7 @@ export function enrichWithLabels(
     for (let i = 0; i < deduped.length; i += LABEL_BATCH_SIZE) {
       const batch = deduped.slice(i, i + LABEL_BATCH_SIZE);
       const query = buildLabelQuery(owner, name, batch);
-      const result = gh.run([
-        "api",
-        "graphql",
-        "-H",
-        `GH-Host: ${host}`,
-        "-f",
-        `query=${query}`,
-      ]);
+      const result = gh.run(["api", "graphql", "-H", `GH-Host: ${host}`, "-f", `query=${query}`]);
       if (result.status !== 0) {
         warnings.push(`GraphQL label enrichment for ${repo} failed`);
         continue;
@@ -385,10 +342,7 @@ interface DiffEvent {
  *   - `transition` event when `github_scan_status` changed, EXCEPT
  *     `new → done` (auto-close/merge noise; spec 3 §8)
  */
-export function diffEvents(
-  old: Inbox | null,
-  next: readonly InboxEntry[],
-): DiffEvent[] {
+export function diffEvents(old: Inbox | null, next: readonly InboxEntry[]): DiffEvent[] {
   const prevStatuses = new Map<string, InboxEntry["github_scan_status"]>();
   if (old) {
     for (const entry of old.notifications) {
@@ -415,11 +369,7 @@ export function diffEvents(
 }
 
 /** Remove claim directories whose `claimed_at` is older than `timeoutSecs`. */
-function cleanupExpiredClaims(
-  claimsDir: string,
-  timeoutSecs: number,
-  now: () => Date,
-): void {
+function cleanupExpiredClaims(claimsDir: string, timeoutSecs: number, now: () => Date): void {
   if (!existsSync(claimsDir)) return;
   let dirs: string[];
   try {
@@ -433,19 +383,10 @@ function cleanupExpiredClaims(
     if (!existsSync(marker)) continue;
     try {
       const contents = readFileSync(marker, "utf-8").trim();
-      const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/u.exec(
-        contents,
-      );
+      const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/u.exec(contents);
       let claimedMs: number | null = null;
       if (m) {
-        claimedMs = Date.UTC(
-          Number(m[1]),
-          Number(m[2]) - 1,
-          Number(m[3]),
-          Number(m[4]),
-          Number(m[5]),
-          Number(m[6]),
-        );
+        claimedMs = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
       } else {
         const fallback = Date.parse(contents);
         claimedMs = Number.isFinite(fallback) ? fallback : null;
@@ -521,10 +462,7 @@ export function splitConcatenatedJsonArrays(raw: string): string[] {
  *     schema validation failure on the existing inbox).
  */
 // oxlint-disable-next-line complexity
-export async function runPoll(
-  argv: readonly string[],
-  deps: PollDeps = {},
-): Promise<number> {
+export async function runPoll(argv: readonly string[], deps: PollDeps = {}): Promise<number> {
   if (argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
     const io = deps.io ?? DEFAULT_IO;
     io.stdout("Usage: first-tree github scan poll");
@@ -541,9 +479,7 @@ export async function runPoll(
   const paths = deps.paths ?? resolveGitHubScanPaths();
   const repoFilter = (() => {
     const allowRepo = parseAllowRepoArg(argv);
-    return allowRepo?.trim()
-      ? requireExplicitRepoFilter(allowRepo)
-      : RepoFilter.empty();
+    return allowRepo?.trim() ? requireExplicitRepoFilter(allowRepo) : RepoFilter.empty();
   })();
   const gh = deps.gh ?? new GhClient();
   const now = deps.now ?? (() => new Date());
@@ -556,9 +492,7 @@ export async function runPoll(
   const authCheck = gh.run(["auth", "status"]);
   if (authCheck.status !== 0) {
     const firstLine = authCheck.stderr.split("\n")[0]?.trim() ?? "";
-    io.stderr(
-      `ERROR: gh not authenticated (run \`gh auth login\`). ${firstLine}`.trim(),
-    );
+    io.stderr(`ERROR: gh not authenticated (run \`gh auth login\`). ${firstLine}`.trim());
     return 1;
   }
 

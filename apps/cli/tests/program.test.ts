@@ -1,8 +1,8 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Command, CommanderError } from "commander";
+import { type Command, CommanderError } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withCommandContext } from "../src/commands/context.js";
@@ -125,11 +125,7 @@ async function runWithProbeAction(
   };
 }
 
-function expectActionContext(
-  action: ReturnType<typeof vi.fn>,
-  commandName: string,
-  options: GlobalOptions,
-): void {
+function expectActionContext(action: ReturnType<typeof vi.fn>, commandName: string, options: GlobalOptions): void {
   expect(action).toHaveBeenCalledOnce();
 
   const context = action.mock.calls[0]?.[0] as CommandContext | undefined;
@@ -362,14 +358,8 @@ describe("first-tree program", () => {
   it("generates CODEOWNERS in process", async () => {
     const root = makeTempDir();
     mkdirSync(join(root, "members", "alice"), { recursive: true });
-    writeFileSync(
-      join(root, "NODE.md"),
-      `---\ntitle: Context Tree\nowners: [alice]\n---\n\n# Context Tree\n`,
-    );
-    writeFileSync(
-      join(root, "members", "NODE.md"),
-      `---\ntitle: Members\nowners: [alice]\n---\n\n# Members\n`,
-    );
+    writeFileSync(join(root, "NODE.md"), `---\ntitle: Context Tree\nowners: [alice]\n---\n\n# Context Tree\n`);
+    writeFileSync(join(root, "members", "NODE.md"), `---\ntitle: Members\nowners: [alice]\n---\n\n# Members\n`);
     writeFileSync(
       join(root, "members", "alice", "NODE.md"),
       `---\ntitle: Alice\nowners: [alice]\ntype: human\nrole: owner\ndomains: [core]\n---\n\n# Alice\n`,
@@ -581,9 +571,7 @@ describe("first-tree program", () => {
     const previousTreeRepo = process.env.FIRST_TREE_GITHUB_SCAN_TREE_REPO;
     delete process.env.FIRST_TREE_GITHUB_SCAN_TREE_REPO;
     runGitHubScanMock.mockImplementation(async () => {
-      expect(process.env.FIRST_TREE_GITHUB_SCAN_TREE_REPO).toBe(
-        "agent-team-foundation/first-tree-context",
-      );
+      expect(process.env.FIRST_TREE_GITHUB_SCAN_TREE_REPO).toBe("agent-team-foundation/first-tree-context");
       return 0;
     });
     const previousExitCode = process.exitCode;
@@ -667,14 +655,8 @@ describe("first-tree program", () => {
   it("installs shipped skills and lists them with json output", async () => {
     const root = makeTempDir();
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const installResult = await runProgram(
-      ["tree", "skill", "install", "--root", root],
-      "0.0.0-test",
-    );
-    const listResult = await runProgram(
-      ["--json", "tree", "skill", "list", "--root", root],
-      "0.0.0-test",
-    );
+    const installResult = await runProgram(["tree", "skill", "install", "--root", root], "0.0.0-test");
+    const listResult = await runProgram(["--json", "tree", "skill", "list", "--root", root], "0.0.0-test");
 
     expect(installResult.code).toBe(0);
     expect(listResult.code).toBe(0);
@@ -692,30 +674,19 @@ describe("first-tree program", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
     try {
-      const failingDoctorResult = await runProgram(
-        ["tree", "skill", "doctor", "--root", root],
-        "0.0.0-test",
-      );
+      const failingDoctorResult = await runProgram(["tree", "skill", "doctor", "--root", root], "0.0.0-test");
 
       expect(failingDoctorResult.code).toBe(0);
-      expect(
-        log.mock.calls.some((call) =>
-          String(call[0]).includes("=== first-tree tree skill doctor ==="),
-        ),
-      ).toBe(true);
+      expect(log.mock.calls.some((call) => String(call[0]).includes("=== first-tree tree skill doctor ==="))).toBe(
+        true,
+      );
       expect(log.mock.calls.some((call) => String(call[0]).includes("FAIL first-tree"))).toBe(true);
       expect(process.exitCode).toBe(1);
 
       process.exitCode = 0;
 
-      const installResult = await runProgram(
-        ["tree", "skill", "install", "--root", root],
-        "0.0.0-test",
-      );
-      const passingDoctorResult = await runProgram(
-        ["tree", "skill", "doctor", "--root", root],
-        "0.0.0-test",
-      );
+      const installResult = await runProgram(["tree", "skill", "install", "--root", root], "0.0.0-test");
+      const passingDoctorResult = await runProgram(["tree", "skill", "doctor", "--root", root], "0.0.0-test");
 
       expect(installResult.code).toBe(0);
       expect(passingDoctorResult.code).toBe(0);

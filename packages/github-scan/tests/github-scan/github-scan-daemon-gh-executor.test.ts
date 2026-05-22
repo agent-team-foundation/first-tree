@@ -1,19 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  GhExecutor,
   bucketForArgs,
   commandIsMutating,
-  isRateLimited,
   type ExecOutput,
   type GhCommandSpec,
+  GhExecutor,
+  isRateLimited,
 } from "../../src/github-scan/engine/daemon/gh-executor.js";
 
 describe("bucketForArgs", () => {
   it("classifies search commands", () => {
-    expect(bucketForArgs(["search", "prs", "--review-requested=@me"])).toBe(
-      "search",
-    );
+    expect(bucketForArgs(["search", "prs", "--review-requested=@me"])).toBe("search");
   });
 
   it("classifies api search/* paths as search", () => {
@@ -22,9 +20,7 @@ describe("bucketForArgs", () => {
   });
 
   it("classifies mutating commands as write", () => {
-    expect(
-      bucketForArgs(["issue", "comment", "1", "--body", "hi"]),
-    ).toBe("write");
+    expect(bucketForArgs(["issue", "comment", "1", "--body", "hi"])).toBe("write");
   });
 
   it("classifies read commands as core", () => {
@@ -46,37 +42,17 @@ describe("commandIsMutating", () => {
   });
 
   it("treats api --method GET as read", () => {
-    expect(
-      commandIsMutating(["api", "/repos/x/y/issues", "-X", "GET"]),
-    ).toBe(false);
+    expect(commandIsMutating(["api", "/repos/x/y/issues", "-X", "GET"])).toBe(false);
   });
 
   it("treats api --method POST as write", () => {
-    expect(
-      commandIsMutating(["api", "/repos/x/y/issues", "--method", "POST"]),
-    ).toBe(true);
+    expect(commandIsMutating(["api", "/repos/x/y/issues", "--method", "POST"])).toBe(true);
   });
 
   it("treats api with -f/-F/--field as write", () => {
-    expect(
-      commandIsMutating([
-        "api",
-        "/repos/x/y/issues",
-        "-f",
-        "title=foo",
-      ]),
-    ).toBe(true);
-    expect(
-      commandIsMutating([
-        "api",
-        "/repos/x/y/issues",
-        "--field",
-        "title=foo",
-      ]),
-    ).toBe(true);
-    expect(
-      commandIsMutating(["api", "/repos/x/y/issues", "--input", "-"]),
-    ).toBe(true);
+    expect(commandIsMutating(["api", "/repos/x/y/issues", "-f", "title=foo"])).toBe(true);
+    expect(commandIsMutating(["api", "/repos/x/y/issues", "--field", "title=foo"])).toBe(true);
+    expect(commandIsMutating(["api", "/repos/x/y/issues", "--input", "-"])).toBe(true);
   });
 });
 
@@ -88,13 +64,9 @@ describe("isRateLimited", () => {
   });
 
   it("detects common rate-limit messages", () => {
-    expect(
-      isRateLimited(mk("", "API rate limit exceeded for this resource")),
-    ).toBe(true);
+    expect(isRateLimited(mk("", "API rate limit exceeded for this resource"))).toBe(true);
     expect(isRateLimited(mk("secondary rate limit hit", ""))).toBe(true);
-    expect(isRateLimited(mk("", "abuse detection mechanism triggered"))).toBe(
-      true,
-    );
+    expect(isRateLimited(mk("", "abuse detection mechanism triggered"))).toBe(true);
     expect(isRateLimited(mk("", "retry after 30 seconds"))).toBe(true);
   });
 
@@ -105,10 +77,7 @@ describe("isRateLimited", () => {
 
 describe("GhExecutor", () => {
   /** Build an executor with a deterministic clock + injected spawn. */
-  function buildExecutor(opts: {
-    responses: ExecOutput[];
-    writeCooldownMs?: number;
-  }): {
+  function buildExecutor(opts: { responses: ExecOutput[]; writeCooldownMs?: number }): {
     executor: GhExecutor;
     clock: { now: number };
     sleeps: number[];
@@ -213,9 +182,9 @@ describe("GhExecutor", () => {
     const { executor } = buildExecutor({
       responses: [{ stdout: "", stderr: "nope", statusCode: 1 }],
     });
-    await expect(
-      executor.runChecked({ context: "test", args: ["api", "/x"] }),
-    ).rejects.toThrow(/failed with exit code 1/);
+    await expect(executor.runChecked({ context: "test", args: ["api", "/x"] })).rejects.toThrow(
+      /failed with exit code 1/,
+    );
   });
 
   it("respects abort signal and returns synthetic 124", async () => {

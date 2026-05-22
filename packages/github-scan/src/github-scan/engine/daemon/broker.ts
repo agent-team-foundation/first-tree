@@ -42,24 +42,11 @@
  *     not here.
  */
 
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
 import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
-import {
-  GhExecutor,
-  bucketForArgs,
-  commandIsMutating,
-  type GhCommandSpec,
-} from "./gh-executor.js";
+import { bucketForArgs, commandIsMutating, type GhCommandSpec, type GhExecutor } from "./gh-executor.js";
 
 export const MUTATION_CACHE_TTL_MS = 15 * 60 * 1_000;
 
@@ -152,9 +139,7 @@ export interface RunningBroker {
 }
 
 /** Start the broker and its serve loop. */
-export async function startGhBroker(
-  options: GhBrokerOptions,
-): Promise<RunningBroker> {
+export async function startGhBroker(options: GhBrokerOptions): Promise<RunningBroker> {
   const brokerDir = options.brokerDir;
   const requestsDir = join(brokerDir, "requests");
   const historyDir = join(brokerDir, "history");
@@ -186,9 +171,7 @@ export async function startGhBroker(
       try {
         pending = listPendingRequests(requestsDir);
       } catch (err) {
-        logger.error(
-          `broker: failed to scan request queue: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        logger.error(`broker: failed to scan request queue: ${err instanceof Error ? err.message : String(err)}`);
         await sleep(250);
         continue;
       }
@@ -209,17 +192,11 @@ export async function startGhBroker(
           });
         } catch (err) {
           try {
-            writeFailureResponse(
-              requestDir,
-              err instanceof Error ? err.message : String(err),
-              now,
-            );
+            writeFailureResponse(requestDir, err instanceof Error ? err.message : String(err), now);
           } catch (writeErr) {
             logger.warn(
               `broker: failed to write failure response for ${requestDir}: ${
-                writeErr instanceof Error
-                  ? writeErr.message
-                  : String(writeErr)
+                writeErr instanceof Error ? writeErr.message : String(writeErr)
               }`,
             );
           }
@@ -345,9 +322,7 @@ interface CachedMutationResponse {
  * hashed so retries with the same payload hit the cache even when the
  * tmp file path differs. Matches Rust `mutation_fingerprint`.
  */
-export function mutationFingerprint(
-  spec: GhCommandSpec,
-): string | undefined {
+export function mutationFingerprint(spec: GhCommandSpec): string | undefined {
   if (!spec.mutating) return undefined;
   const normalized: string[] = [];
   const args = spec.args;
@@ -389,15 +364,9 @@ export function mutationFingerprint(
 }
 
 function readBodyFile(path: string, spec: GhCommandSpec): string {
-  const abs = isAbsolute(path)
-    ? path
-    : spec.cwd
-      ? resolve(spec.cwd, path)
-      : path;
+  const abs = isAbsolute(path) ? path : spec.cwd ? resolve(spec.cwd, path) : path;
   if (!existsSync(abs)) {
-    throw new Error(
-      `missing body file for brokered gh command: ${abs}`,
-    );
+    throw new Error(`missing body file for brokered gh command: ${abs}`);
   }
   return readFileSync(abs, "utf8");
 }
@@ -412,9 +381,7 @@ interface ReadCachedOptions {
   now: () => number;
 }
 
-export function readCachedMutationResponse(
-  opts: ReadCachedOptions,
-): CachedMutationResponse | undefined {
+export function readCachedMutationResponse(opts: ReadCachedOptions): CachedMutationResponse | undefined {
   const dir = cacheDirFor(opts.historyDir, opts.fingerprint);
   const responseFile = join(dir, "response.env");
   if (!existsSync(responseFile)) return undefined;
@@ -443,20 +410,14 @@ interface WriteCachedOptions {
   now: () => number;
 }
 
-export function writeCachedMutationResponse(
-  opts: WriteCachedOptions,
-): void {
+export function writeCachedMutationResponse(opts: WriteCachedOptions): void {
   const dir = cacheDirFor(opts.historyDir, opts.fingerprint);
   ensureDir(dir);
   writeFileSync(join(dir, "stdout.txt"), opts.stdout);
   writeFileSync(join(dir, "stderr.txt"), opts.stderr);
   writeFileSync(
     join(dir, "response.env"),
-    [
-      `status_code=${opts.statusCode}`,
-      `completed_at_ms=${opts.now()}`,
-      "",
-    ].join("\n"),
+    [`status_code=${opts.statusCode}`, `completed_at_ms=${opts.now()}`, ""].join("\n"),
   );
 }
 
@@ -489,11 +450,7 @@ function writeSuccessResponse(opts: WriteSuccessOptions): void {
   );
 }
 
-function writeFailureResponse(
-  requestDir: string,
-  error: string,
-  now: () => number,
-): void {
+function writeFailureResponse(requestDir: string, error: string, now: () => number): void {
   // Defensive: same concurrent-cleanup rationale as writeSuccessResponse.
   ensureDir(requestDir);
   const stdoutPath = join(requestDir, "stdout.txt");
@@ -502,13 +459,9 @@ function writeFailureResponse(
   writeFileSync(stderrPath, error);
   writeFileSync(
     join(requestDir, "response.env"),
-    [
-      "status_code=1",
-      `stdout_path=${stdoutPath}`,
-      `stderr_path=${stderrPath}`,
-      `completed_at_ms=${now()}`,
-      "",
-    ].join("\n"),
+    ["status_code=1", `stdout_path=${stdoutPath}`, `stderr_path=${stderrPath}`, `completed_at_ms=${now()}`, ""].join(
+      "\n",
+    ),
   );
 }
 

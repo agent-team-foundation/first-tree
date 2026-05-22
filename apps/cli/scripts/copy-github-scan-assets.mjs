@@ -14,9 +14,7 @@ const SKILLS_ROOT = resolve(APPS_CLI_ROOT, "..", "..", "skills");
 const DIST = join(APPS_CLI_ROOT, "dist");
 
 if (!existsSync(DIST)) {
-  console.error(
-    `copy-github-scan-assets: dist/ does not exist at ${DIST}. Run \`pnpm run build\` first.`,
-  );
+  console.error(`copy-github-scan-assets: dist/ does not exist at ${DIST}. Run \`pnpm run build\` first.`);
   process.exit(1);
 }
 

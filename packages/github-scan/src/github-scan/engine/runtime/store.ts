@@ -33,11 +33,7 @@ import { dirname } from "node:path";
 
 import { lock } from "proper-lockfile";
 
-import {
-  type Inbox,
-  InboxSchema,
-  type InboxEntry,
-} from "./types.js";
+import { type Inbox, type InboxEntry, InboxSchema } from "./types.js";
 
 /**
  * Read and validate `inbox.json`. Returns `null` if the file is absent
@@ -59,9 +55,7 @@ export function readInbox(path: string): Inbox | null {
   }
   const result = InboxSchema.safeParse(parsed);
   if (!result.success) {
-    throw new Error(
-      `inbox.json at ${path} failed schema validation: ${result.error.message}`,
-    );
+    throw new Error(`inbox.json at ${path} failed schema validation: ${result.error.message}`);
   }
   return result.data;
 }

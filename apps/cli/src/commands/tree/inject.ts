@@ -1,4 +1,4 @@
-import { Option, type Command } from "commander";
+import { type Command, Option } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { buildTreeFirstContextBundle } from "./tree-first-context.js";
@@ -14,9 +14,7 @@ Options:
   --help  Show this help message`;
 
 function configureInjectCommand(command: Command): void {
-  command.addOption(
-    new Option("--skip-version-check", "deprecated no-op compatibility flag").hideHelp(),
-  );
+  command.addOption(new Option("--skip-version-check", "deprecated no-op compatibility flag").hideHelp());
 }
 
 export function runInjectCommand(_context: CommandContext): void {

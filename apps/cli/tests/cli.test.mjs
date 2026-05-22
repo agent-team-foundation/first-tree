@@ -13,11 +13,7 @@ const entryPath = resolve(cliRoot, "dist/index.js");
 const rootPackagePath = resolve(repoRoot, "package.json");
 const cliPackagePath = resolve(cliRoot, "package.json");
 const commandNames = ["tree", "github"];
-const rootHelpCommandPaths = [
-  "first-tree tree inspect",
-  "first-tree tree skill install",
-  "first-tree github scan",
-];
+const rootHelpCommandPaths = ["first-tree tree inspect", "first-tree tree skill install", "first-tree github scan"];
 const commandGroups = [
   {
     name: "tree",
@@ -41,18 +37,13 @@ async function makeGitRepoDir(prefix) {
 
 function runCli(args, options = {}) {
   return new Promise((resolveRun) => {
-    execFile(
-      process.execPath,
-      [entryPath, ...args],
-      { cwd: options.cwd ?? repoRoot },
-      (error, stdout, stderr) => {
-        resolveRun({
-          code: error && "code" in error ? error.code : 0,
-          stdout,
-          stderr,
-        });
-      },
-    );
+    execFile(process.execPath, [entryPath, ...args], { cwd: options.cwd ?? repoRoot }, (error, stdout, stderr) => {
+      resolveRun({
+        code: error && "code" in error ? error.code : 0,
+        stdout,
+        stderr,
+      });
+    });
   });
 }
 
@@ -128,9 +119,7 @@ describe("first-tree CLI", () => {
 
     expect(workspaceResult.code).toBe(1);
     expect(workspaceResult.stdout).toBe("");
-    expect(workspaceResult.stderr).toContain(
-      "Could not resolve the shared tree for this workspace.",
-    );
+    expect(workspaceResult.stderr).toContain("Could not resolve the shared tree for this workspace.");
   });
 
   it("bootstraps a tree repo checkout", async () => {
@@ -141,22 +130,15 @@ describe("first-tree CLI", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Context Tree Bootstrap");
     expect(await readFile(resolve(treeRoot, "NODE.md"), "utf8")).toContain("# Context Tree");
-    expect(await readFile(resolve(treeRoot, "AGENTS.md"), "utf8")).toContain(
-      "BEGIN FIRST-TREE-TREE-IDENTITY",
-    );
+    expect(await readFile(resolve(treeRoot, "AGENTS.md"), "utf8")).toContain("BEGIN FIRST-TREE-TREE-IDENTITY");
     await expect(readFile(resolve(treeRoot, ".first-tree", "tree.json"), "utf8")).rejects.toThrow();
-    expect(
-      await readFile(resolve(treeRoot, ".first-tree", "agent-templates", "developer.yaml"), "utf8"),
-    ).toContain("name: developer");
-    expect(
-      await readFile(
-        resolve(treeRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"),
-        "utf8",
-      ),
-    ).toContain("name: code-reviewer");
-    expect(await readFile(resolve(treeRoot, ".first-tree", "org.yaml"), "utf8")).toContain(
-      "humanInvolveRules:",
+    expect(await readFile(resolve(treeRoot, ".first-tree", "agent-templates", "developer.yaml"), "utf8")).toContain(
+      "name: developer",
     );
+    expect(await readFile(resolve(treeRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"), "utf8")).toContain(
+      "name: code-reviewer",
+    );
+    expect(await readFile(resolve(treeRoot, ".first-tree", "org.yaml"), "utf8")).toContain("humanInvolveRules:");
   });
 
   it("binds a source repo to a tree repo", async () => {
@@ -168,13 +150,9 @@ describe("first-tree CLI", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Context Tree Bind");
     expect(result.stdout).toContain("managed identity block");
-    await expect(
-      readFile(resolve(sourceRoot, ".first-tree", "source.json"), "utf8"),
-    ).rejects.toThrow();
+    await expect(readFile(resolve(sourceRoot, ".first-tree", "source.json"), "utf8")).rejects.toThrow();
     expect(await readFile(resolve(sourceRoot, "AGENTS.md"), "utf8")).toContain("managed-block-v1");
-    expect(await readFile(resolve(treeRoot, "AGENTS.md"), "utf8")).toContain(
-      "BEGIN FIRST-TREE-TREE-IDENTITY",
-    );
+    expect(await readFile(resolve(treeRoot, "AGENTS.md"), "utf8")).toContain("BEGIN FIRST-TREE-TREE-IDENTITY");
   });
 
   it("prints workspace sync dry-run json", async () => {
@@ -189,10 +167,9 @@ describe("first-tree CLI", () => {
     await writeFile(resolve(repoA, ".git"), "gitdir: /tmp/repo-a\n");
     await writeFile(resolve(repoB, ".git"), "gitdir: /tmp/repo-b\n");
 
-    const result = await runCli(
-      ["tree", "workspace", "sync", "--tree-path", treeRoot, "--dry-run", "--json"],
-      { cwd: workspaceRoot },
-    );
+    const result = await runCli(["tree", "workspace", "sync", "--tree-path", treeRoot, "--dry-run", "--json"], {
+      cwd: workspaceRoot,
+    });
 
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
@@ -229,9 +206,7 @@ describe("first-tree CLI", () => {
     expect(initResult.code).toBe(0);
     expect(initResult.stderr).toBe("");
 
-    await expect(
-      readFile(resolve(workspaceRoot, ".first-tree", "source.json"), "utf8"),
-    ).rejects.toThrow();
+    await expect(readFile(resolve(workspaceRoot, ".first-tree", "source.json"), "utf8")).rejects.toThrow();
     expect(await readFile(resolve(workspaceRoot, "AGENTS.md"), "utf8")).toContain(
       "FIRST-TREE-ENTRYPOINT: `/workspaces/ws-entrypoint-test`",
     );
@@ -264,10 +239,7 @@ describe("first-tree CLI", () => {
     const treeRoot = await makeGitRepoDir("first-tree-verify-tree-");
     await mkdir(resolve(treeRoot, ".first-tree"), { recursive: true });
     await mkdir(resolve(treeRoot, "members", "alice"), { recursive: true });
-    await writeFile(
-      resolve(treeRoot, "NODE.md"),
-      `---\ntitle: Context Tree\nowners: [alice]\n---\n\n# Context Tree\n`,
-    );
+    await writeFile(resolve(treeRoot, "NODE.md"), `---\ntitle: Context Tree\nowners: [alice]\n---\n\n# Context Tree\n`);
     await writeFile(
       resolve(treeRoot, "AGENTS.md"),
       [
@@ -315,10 +287,7 @@ describe("first-tree CLI", () => {
   it("generates CODEOWNERS for a simple tree repo", async () => {
     const treeRoot = await makeGitRepoDir("first-tree-codeowners-tree-");
     await mkdir(resolve(treeRoot, "members", "alice"), { recursive: true });
-    await writeFile(
-      resolve(treeRoot, "NODE.md"),
-      `---\ntitle: Context Tree\nowners: [alice]\n---\n\n# Context Tree\n`,
-    );
+    await writeFile(resolve(treeRoot, "NODE.md"), `---\ntitle: Context Tree\nowners: [alice]\n---\n\n# Context Tree\n`);
     await writeFile(
       resolve(treeRoot, "members", "NODE.md"),
       `---\ntitle: Members\nowners: [alice]\n---\n\n# Members\n`,
@@ -350,9 +319,7 @@ describe("first-tree CLI", () => {
     const codexHooks = await readFile(resolve(root, ".codex", "hooks.json"), "utf8");
     expect(claudeSettings).toContain("first-tree tree inject");
     expect(claudeSettings).not.toContain("--skip-version-check");
-    expect(await readFile(resolve(root, ".codex", "config.toml"), "utf8")).toContain(
-      "codex_hooks = true",
-    );
+    expect(await readFile(resolve(root, ".codex", "config.toml"), "utf8")).toContain("codex_hooks = true");
     expect(codexHooks).toContain("Loading First Tree context");
     expect(codexHooks).not.toContain("--skip-version-check");
   });
@@ -557,18 +524,13 @@ describe("first-tree CLI", () => {
       await symlink(entryPath, binPath);
 
       const result = await new Promise((resolveRun) => {
-        execFile(
-          process.execPath,
-          [binPath, "--version"],
-          { cwd: repoRoot },
-          (error, stdout, stderr) => {
-            resolveRun({
-              code: error && "code" in error ? error.code : 0,
-              stdout,
-              stderr,
-            });
-          },
-        );
+        execFile(process.execPath, [binPath, "--version"], { cwd: repoRoot }, (error, stdout, stderr) => {
+          resolveRun({
+            code: error && "code" in error ? error.code : 0,
+            stdout,
+            stderr,
+          });
+        });
       });
 
       expect(result.code).toBe(0);

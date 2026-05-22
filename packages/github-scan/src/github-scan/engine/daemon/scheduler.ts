@@ -17,20 +17,18 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-
-import type { CompletionRecord } from "./dispatcher.js";
-import type { GhClient } from "./gh-client.js";
-import type { ThreadStore } from "./thread-store.js";
-import { encodeMultiline } from "../runtime/task-util.js";
-import { shouldIgnoreLatestSelfActivity } from "./gh-client.js";
 import {
   candidateFromTaskMetadata,
   effectiveWorkspaceRepo,
-  toDispatcherCandidate,
   type TaskCandidate,
+  toDispatcherCandidate,
 } from "../runtime/task.js";
-import type { TaskCandidate as DispatchCandidate } from "./dispatcher.js";
+import { encodeMultiline } from "../runtime/task-util.js";
+import type { CompletionRecord, TaskCandidate as DispatchCandidate } from "./dispatcher.js";
+import type { GhClient } from "./gh-client.js";
+import { shouldIgnoreLatestSelfActivity } from "./gh-client.js";
 import type { AgentIdentity } from "./runner.js";
+import type { ThreadStore } from "./thread-store.js";
 
 /**
  * `60 · 2^min(failureCount, 6)` seconds. Matches Rust `retry_delay`.
@@ -42,10 +40,7 @@ export function retryDelaySec(failureCount: number): number {
 }
 
 /** Poll-interval-bounded variant used in the actual retry write. */
-export function failureRetryDelaySec(
-  failureCount: number,
-  pollIntervalSec: number,
-): number {
+export function failureRetryDelaySec(failureCount: number, pollIntervalSec: number): number {
   return Math.min(retryDelaySec(failureCount), pollIntervalSec);
 }
 
@@ -94,10 +89,7 @@ export class Scheduler {
     this.store.saveThreadRecord(record);
 
     if (record.nextRetryEpoch > now) return false;
-    if (
-      record.lastHandledUpdatedAt.length > 0 &&
-      candidate.updatedAt <= record.lastHandledUpdatedAt
-    ) {
+    if (record.lastHandledUpdatedAt.length > 0 && candidate.updatedAt <= record.lastHandledUpdatedAt) {
       return false;
     }
 
@@ -114,11 +106,7 @@ export class Scheduler {
       }
       if (
         record.lastHandledUpdatedAt.length > 0 &&
-        shouldIgnoreLatestSelfActivity(
-          this.identity.login,
-          activity,
-          record.lastHandledUpdatedAt,
-        )
+        shouldIgnoreLatestSelfActivity(this.identity.login, activity, record.lastHandledUpdatedAt)
       ) {
         record.lastHandledUpdatedAt = candidate.updatedAt;
         record.lastResult = "skipped";
@@ -143,9 +131,7 @@ export class Scheduler {
     meta.set("repo", record.candidate.repo);
     meta.set(
       "workspace_repo",
-      record.candidate.workspaceRepo?.trim().length
-        ? record.candidate.workspaceRepo
-        : record.candidate.repo,
+      record.candidate.workspaceRepo?.trim().length ? record.candidate.workspaceRepo : record.candidate.repo,
     );
     meta.set("thread_key", record.threadKey);
     meta.set("title", encodeMultiline(record.candidate.title));
@@ -154,7 +140,7 @@ export class Scheduler {
     if (!meta.has("started_at")) meta.set("started_at", String(now));
     meta.set("finished_at", String(now));
 
-    let threadRecord = this.store.loadThreadRecord(record.threadKey);
+    const threadRecord = this.store.loadThreadRecord(record.threadKey);
     threadRecord.threadKey = record.threadKey;
     threadRecord.repo = record.candidate.repo;
     threadRecord.lastSeenUpdatedAt = record.candidate.updatedAt;
@@ -164,8 +150,7 @@ export class Scheduler {
       const status = record.status ?? "handled";
       meta.set("status", status);
       if (record.summary) meta.set("summary", encodeMultiline(record.summary));
-      if (record.agentOutputPath)
-        meta.set("runner_output_path", record.agentOutputPath);
+      if (record.agentOutputPath) meta.set("runner_output_path", record.agentOutputPath);
       if (record.agentName) meta.set("runner", record.agentName);
 
       if (status === "handled" || status === "skipped") {
@@ -174,9 +159,7 @@ export class Scheduler {
         threadRecord.nextRetryEpoch = 0;
       } else if (status === "failed") {
         threadRecord.failureCount = safeAdd(threadRecord.failureCount, 1);
-        threadRecord.nextRetryEpoch =
-          now +
-          failureRetryDelaySec(threadRecord.failureCount, this.pollIntervalSec);
+        threadRecord.nextRetryEpoch = now + failureRetryDelaySec(threadRecord.failureCount, this.pollIntervalSec);
       }
       threadRecord.lastResult = status;
     } else if (record.phase === "skipped-claim") {
@@ -187,9 +170,7 @@ export class Scheduler {
       meta.set("status", record.phase === "timed_out" ? "timed_out" : "failed");
       if (record.error) meta.set("summary", encodeMultiline(record.error));
       threadRecord.failureCount = safeAdd(threadRecord.failureCount, 1);
-      threadRecord.nextRetryEpoch =
-        now +
-        failureRetryDelaySec(threadRecord.failureCount, this.pollIntervalSec);
+      threadRecord.nextRetryEpoch = now + failureRetryDelaySec(threadRecord.failureCount, this.pollIntervalSec);
       threadRecord.lastResult = meta.get("status") ?? "failed";
     }
 
@@ -201,11 +182,7 @@ export class Scheduler {
    * Port of `Service::record_setup_failure`. Invoked when workspace prep
    * or snapshotting fails before the agent runs.
    */
-  recordSetupFailure(args: {
-    taskId: string;
-    candidate: TaskCandidate;
-    error: string;
-  }): void {
+  recordSetupFailure(args: { taskId: string; candidate: TaskCandidate; error: string }): void {
     const now = this.nowSec();
     this.store.writeTaskMetadata(args.taskId, {
       task_id: args.taskId,
@@ -221,10 +198,7 @@ export class Scheduler {
       updated_at: args.candidate.updatedAt,
       source: args.candidate.source,
       summary: encodeMultiline(args.error),
-      runner_output_path: join(
-        this.store.taskDir(args.taskId),
-        "runner-output.txt",
-      ),
+      runner_output_path: join(this.store.taskDir(args.taskId), "runner-output.txt"),
     });
 
     const record = this.store.loadThreadRecord(args.candidate.threadKey);
@@ -232,8 +206,7 @@ export class Scheduler {
     record.repo = args.candidate.repo;
     record.lastSeenUpdatedAt = args.candidate.updatedAt;
     record.failureCount = safeAdd(record.failureCount, 1);
-    record.nextRetryEpoch =
-      now + failureRetryDelaySec(record.failureCount, this.pollIntervalSec);
+    record.nextRetryEpoch = now + failureRetryDelaySec(record.failureCount, this.pollIntervalSec);
     record.lastResult = "failed";
     record.lastTaskId = args.taskId;
     this.store.saveThreadRecord(record);
@@ -260,9 +233,7 @@ export class Scheduler {
       metadata.set("finished_at", String(now));
       metadata.set(
         "summary",
-        encodeMultiline(
-          "github-scan-runner recovered this unfinished running task and re-queued it",
-        ),
+        encodeMultiline("github-scan-runner recovered this unfinished running task and re-queued it"),
       );
       this.store.writeTaskMetadata(taskId, mapToRecord(metadata));
       recovered.push(candidate);
@@ -354,21 +325,11 @@ export function readRoutingSnapshotText(snapshotDir: string): string {
  * Port of `should_route_to_operator_repo` — heuristic for spotting
  * requests to reconfigure the github-scan-runner itself.
  */
-export function shouldRouteToOperatorRepo(
-  contents: string,
-  login: string,
-): boolean {
+export function shouldRouteToOperatorRepo(contents: string, login: string): boolean {
   const lowerLogin = login.toLowerCase();
-  const asksForChange = [
-    "configure",
-    "update",
-    "change",
-    "fix",
-    "modify",
-    "adjust",
-    "tune",
-    "restart",
-  ].some((word) => contents.includes(word));
+  const asksForChange = ["configure", "update", "change", "fix", "modify", "adjust", "tune", "restart"].some((word) =>
+    contents.includes(word),
+  );
   const mentionsGitHubScanRunner = contents.includes("github-scan-runner");
   const directsToOperator = [
     `@${lowerLogin}`,

@@ -33,9 +33,7 @@ function escapeForRegExp(text: string): string {
 }
 
 function readMarker(block: string, marker: string): string | undefined {
-  const match = block.match(
-    new RegExp(`^${escapeForRegExp(marker)}\\s+(?:\`(.+?)\`|(.+?))\\s*$`, "mu"),
-  );
+  const match = block.match(new RegExp(`^${escapeForRegExp(marker)}\\s+(?:\`(.+?)\`|(.+?))\\s*$`, "mu"));
   const value = match?.[1] ?? match?.[2];
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
@@ -55,9 +53,7 @@ function extractManagedBlock(text: string): string | undefined {
   return normalized.match(managedBlock)?.[0];
 }
 
-function parseManagedTreeIdentity(
-  text: string,
-): Omit<ManagedTreeIdentity, "file" | "path"> | undefined {
+function parseManagedTreeIdentity(text: string): Omit<ManagedTreeIdentity, "file" | "path"> | undefined {
   const block = extractManagedBlock(text);
 
   if (block === undefined) {
@@ -118,11 +114,7 @@ function upsertManagedBlock(text: string, block: string): string {
 
   if (insertBefore && insertBefore.index >= 0) {
     return ensureTrailingNewline(
-      [
-        normalized.slice(0, insertBefore.index).trimEnd(),
-        block,
-        normalized.slice(insertBefore.index).trimStart(),
-      ]
+      [normalized.slice(0, insertBefore.index).trimEnd(), block, normalized.slice(insertBefore.index).trimStart()]
         .filter(Boolean)
         .join("\n\n"),
     );
@@ -216,10 +208,7 @@ export function readTreeIdentityContract(root: string): TreeIdentityContract | u
   };
 }
 
-export function syncTreeIdentityFiles(
-  treeRoot: string,
-  identity: TreeIdentityContract,
-): SyncAction {
+export function syncTreeIdentityFiles(treeRoot: string, identity: TreeIdentityContract): SyncAction {
   let overallAction: SyncAction = "skipped";
 
   for (const file of TREE_IDENTITY_FILES) {

@@ -1,20 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { ThreadStore } from "../../src/github-scan/engine/daemon/thread-store.js";
-import {
-  defaultThreadRecord,
-  type ThreadRecord,
-} from "../../src/github-scan/engine/runtime/task.js";
+import { defaultThreadRecord, type ThreadRecord } from "../../src/github-scan/engine/runtime/task.js";
 
 const tempRoots: string[] = [];
 
@@ -70,9 +60,7 @@ describe("ThreadStore.{write,read}TaskMetadata", () => {
     expect(metadata.get("status")).toBe("running");
     expect(metadata.get("repo")).toBe("o/r");
     // File exists at the expected location.
-    expect(
-      existsSync(join(store.tasksDir, "task-7", "task.env")),
-    ).toBe(true);
+    expect(existsSync(join(store.tasksDir, "task-7", "task.env"))).toBe(true);
   });
 
   it("listTaskMetadata returns each task dir sorted", () => {
@@ -124,11 +112,7 @@ describe("ThreadStore.cleanupOldWorkspaces", () => {
       workspace_path: workspacePath,
       finished_at: "1000",
     });
-    const removed = store.cleanupOldWorkspaces(
-      60,
-      [],
-      10_000 /* nowSec */,
-    );
+    const removed = store.cleanupOldWorkspaces(60, [], 10_000 /* nowSec */);
     expect(removed).toEqual([workspacePath]);
     expect(existsSync(workspacePath)).toBe(false);
   });
@@ -143,11 +127,7 @@ describe("ThreadStore.cleanupOldWorkspaces", () => {
       workspace_path: workspacePath,
       finished_at: "1000",
     });
-    const removed = store.cleanupOldWorkspaces(
-      60,
-      [workspacePath],
-      10_000,
-    );
+    const removed = store.cleanupOldWorkspaces(60, [workspacePath], 10_000);
     expect(removed).toEqual([]);
     expect(existsSync(workspacePath)).toBe(true);
   });

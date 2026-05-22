@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  resolveFirstTreePackageRoot,
-  spawnInherit,
-  type SpawnFn,
-} from "../../src/github-scan/engine/bridge.js";
+import { resolveFirstTreePackageRoot, type SpawnFn, spawnInherit } from "../../src/github-scan/engine/bridge.js";
 
 describe("resolveFirstTreePackageRoot", () => {
   it("returns a directory that contains the github-scan package.json", () => {

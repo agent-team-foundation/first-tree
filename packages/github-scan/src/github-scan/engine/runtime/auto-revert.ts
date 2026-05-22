@@ -354,11 +354,7 @@ function parseTimelinePage(stdout: string): TimelinePageParse | null {
  * is also the operationally worst failure mode, since a re-label after
  * the clipped boundary would be the one we'd want to see.
  */
-export function fetchHumanLabelAppliedAt(
-  gh: GhClient,
-  repo: string,
-  number: number,
-): string | null {
+export function fetchHumanLabelAppliedAt(gh: GhClient, repo: string, number: number): string | null {
   let latest: string | null = null;
   let latestMs = -Infinity;
 
@@ -398,12 +394,7 @@ export interface AutoRevertDeps {
   gh: GhClient;
   agentLogin: string;
   /** Test seam: override comment-fetch (default uses `fetchIssueComments`). */
-  fetchComments?: (
-    gh: GhClient,
-    repo: string,
-    number: number,
-    labelAppliedAt?: string,
-  ) => IssueComment[] | null;
+  fetchComments?: (gh: GhClient, repo: string, number: number, labelAppliedAt?: string) => IssueComment[] | null;
   /** Test seam: override timeline-fetch. */
   fetchLabelAppliedAt?: (gh: GhClient, repo: string, number: number) => string | null;
   /** Test seam: override PR-commits fetch (default uses `fetchPrCommits`). Issue #383. */
@@ -434,10 +425,7 @@ export interface AutoRevertOutcome {
  * set, which will no longer contain `github-scan:human`, so we will
  * not retry.
  */
-export function autoRevertHumanLabels(
-  entries: InboxEntry[],
-  deps: AutoRevertDeps,
-): AutoRevertOutcome {
+export function autoRevertHumanLabels(entries: InboxEntry[], deps: AutoRevertDeps): AutoRevertOutcome {
   const fetchComments = deps.fetchComments ?? fetchIssueComments;
   const fetchLabelAppliedAt = deps.fetchLabelAppliedAt ?? fetchHumanLabelAppliedAt;
   const fetchCommits = deps.fetchCommits ?? fetchPrCommits;
@@ -451,9 +439,7 @@ export function autoRevertHumanLabels(
 
     const labelAppliedAt = fetchLabelAppliedAt(deps.gh, entry.repo, entry.number);
     if (!labelAppliedAt) {
-      warnings.push(
-        `auto-revert: missing label-applied timestamp for ${entry.repo}#${entry.number}`,
-      );
+      warnings.push(`auto-revert: missing label-applied timestamp for ${entry.repo}#${entry.number}`);
       continue;
     }
 
@@ -491,9 +477,7 @@ export function autoRevertHumanLabels(
     // live label set and will retry naturally. See issue #364.
     const removed = deps.gh.removeLabel(entry.repo, entry.number, "github-scan:human");
     if (!removed) {
-      warnings.push(
-        `auto-revert: removeLabel failed for ${entry.repo}#${entry.number}; will retry next cycle`,
-      );
+      warnings.push(`auto-revert: removeLabel failed for ${entry.repo}#${entry.number}; will retry next cycle`);
       continue;
     }
     entry.labels = entry.labels.filter((l) => l !== "github-scan:human");

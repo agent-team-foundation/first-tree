@@ -84,10 +84,7 @@ function resolveScope(options: InitOptions, role: string): "repo" | "workspace" 
   return role.includes("workspace") ? "workspace" : "repo";
 }
 
-function resolveTreeMode(
-  options: InitOptions,
-  scope: "repo" | "workspace",
-): "dedicated" | "shared" {
+function resolveTreeMode(options: InitOptions, scope: "repo" | "workspace"): "dedicated" | "shared" {
   if (options.treeMode !== undefined) {
     return options.treeMode;
   }
@@ -112,11 +109,7 @@ function resolveTreeRoot(
   return join(dirname(sourceRoot), defaultName);
 }
 
-export function initializeSourceRoot(
-  sourceRoot: string,
-  role: string,
-  options: InitOptions = {},
-): InitSummary {
+export function initializeSourceRoot(sourceRoot: string, role: string, options: InitOptions = {}): InitSummary {
   const scope = resolveScope(options, role);
   const treeMode = resolveTreeMode(options, scope);
   const treeRoot = resolveTreeRoot(sourceRoot, options, treeMode);
@@ -155,9 +148,7 @@ export function initializeSourceRoot(
         process.exitCode = 1;
       }
     } else {
-      cascadedRepos.push(
-        ...cascadeRepoScopeOnboarding(sourceRoot, resolvedTreeRoot, options.treeUrl),
-      );
+      cascadedRepos.push(...cascadeRepoScopeOnboarding(sourceRoot, resolvedTreeRoot, options.treeUrl));
     }
   }
 
@@ -172,17 +163,11 @@ export function initializeSourceRoot(
   };
 }
 
-function cascadeRepoScopeOnboarding(
-  sourceRoot: string,
-  treeRoot: string,
-  treeUrl: string | undefined,
-): CascadedRepo[] {
+function cascadeRepoScopeOnboarding(sourceRoot: string, treeRoot: string, treeUrl: string | undefined): CascadedRepo[] {
   const resolvedTreeRoot = resolve(treeRoot);
   const resolvedSourceRoot = resolve(sourceRoot);
   const candidates = discoverWorkspaceRepos(sourceRoot).filter(
-    (candidate) =>
-      resolve(candidate.root) !== resolvedTreeRoot &&
-      resolve(candidate.root) !== resolvedSourceRoot,
+    (candidate) => resolve(candidate.root) !== resolvedTreeRoot && resolve(candidate.root) !== resolvedSourceRoot,
   );
 
   const cascaded: CascadedRepo[] = [];

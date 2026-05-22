@@ -18,10 +18,7 @@ Options:
 
 function configureCodeownersCommand(command: Command): void {
   command.option("--check", "exit non-zero if CODEOWNERS is out-of-date");
-  command.option(
-    "--always-include <handles...>",
-    "owner handles to append to every CODEOWNERS entry",
-  );
+  command.option("--always-include <handles...>", "owner handles to append to every CODEOWNERS entry");
 }
 
 export function runCodeownersCommand(context: CommandContext): void {

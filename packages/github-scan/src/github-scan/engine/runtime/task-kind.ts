@@ -30,9 +30,7 @@ export const ALL_TASK_KINDS: readonly TaskKind[] = [
 ];
 
 export function taskKindFromString(value: string): TaskKind | undefined {
-  return (ALL_TASK_KINDS as readonly string[]).includes(value)
-    ? (value as TaskKind)
-    : undefined;
+  return (ALL_TASK_KINDS as readonly string[]).includes(value) ? (value as TaskKind) : undefined;
 }
 
 /**
@@ -89,10 +87,7 @@ export function priorityFor(kind: TaskKind, reason: string): number {
  * Map subject_type + reason to a TaskKind. Review_requested wins
  * ahead of subject type; Discussion wins ahead of generic comment.
  */
-export function classifyNotification(
-  subjectType: string,
-  reason: string,
-): TaskKind {
+export function classifyNotification(subjectType: string, reason: string): TaskKind {
   if (reason === "review_requested") return "review_request";
   if (reason === "mention" || reason === "team_mention") return "mention";
   if (subjectType.includes("Discussion")) return "discussion";
@@ -100,9 +95,7 @@ export function classifyNotification(
     return "comment";
   }
   if (reason === "assign") {
-    return subjectType === "PullRequest"
-      ? "assigned_pull_request"
-      : "assigned_issue";
+    return subjectType === "PullRequest" ? "assigned_pull_request" : "assigned_issue";
   }
   return "other";
 }

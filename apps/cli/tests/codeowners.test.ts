@@ -53,9 +53,7 @@ describe("generateCodeowners — --always-include", () => {
     expect(existsSync(codeownersFile)).toBe(true);
     const content = readFileSync(codeownersFile, "utf-8");
 
-    const ownerLines = content
-      .split("\n")
-      .filter((line) => line.startsWith("/") && line.trim().length > 0);
+    const ownerLines = content.split("\n").filter((line) => line.startsWith("/") && line.trim().length > 0);
 
     expect(ownerLines.length).toBeGreaterThan(0);
 
@@ -66,11 +64,7 @@ describe("generateCodeowners — --always-include", () => {
 
   it("dedupes when an always-include handle is already an owner", () => {
     const root = makeTempDir("first-tree-codeowners-always-dedupe-");
-    write(
-      root,
-      "NODE.md",
-      `---\ntitle: Context Tree\nowners: [alice, first-tree-gate]\n---\n\n# Context Tree\n`,
-    );
+    write(root, "NODE.md", `---\ntitle: Context Tree\nowners: [alice, first-tree-gate]\n---\n\n# Context Tree\n`);
     write(root, "members/NODE.md", `---\ntitle: Members\nowners: [alice]\n---\n\n# Members\n`);
 
     vi.spyOn(console, "log").mockImplementation(() => {});

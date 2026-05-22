@@ -23,15 +23,7 @@
  * captured inline.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 
@@ -192,11 +184,7 @@ export function isLockStale(info: LockInfo, now: number = currentEpochSec()): bo
  * Resolve the directory that owns the `(host, login, profile)` tuple's
  * lock. Exported for `findServiceLock` / `stopServiceLock` callers.
  */
-export function serviceLockDir(
-  baseDir: string,
-  identity: DaemonIdentity,
-  profile: string,
-): string {
+export function serviceLockDir(baseDir: string, identity: DaemonIdentity, profile: string): string {
   return join(baseDir, sanitizeFilename(identityLockKey(identity, profile)));
 }
 
@@ -214,11 +202,7 @@ function readLockInfoFromPath(path: string): LockInfo | null {
  * Rust `find_lock` (`lock.rs:146-153`). Returns `null` when no lock.env
  * exists.
  */
-export function findServiceLock(
-  baseDir: string,
-  identity: DaemonIdentity,
-  profile: string,
-): LockInfo | null {
+export function findServiceLock(baseDir: string, identity: DaemonIdentity, profile: string): LockInfo | null {
   const dir = serviceLockDir(baseDir, identity, profile);
   return readLockInfoFromPath(join(dir, "lock.env"));
 }
@@ -241,9 +225,7 @@ export interface AcquireServiceLockOptions {
  * racing `acquireServiceLock` on the same machine at the exact same
  * moment. The outer directory is the durable marker.
  */
-export async function acquireServiceLock(
-  options: AcquireServiceLockOptions,
-): Promise<ServiceLockHandle> {
+export async function acquireServiceLock(options: AcquireServiceLockOptions): Promise<ServiceLockHandle> {
   const { baseDir, identity, profile } = options;
   if (!existsSync(baseDir)) mkdirSync(baseDir, { recursive: true });
   const dir = serviceLockDir(baseDir, identity, profile);
@@ -258,9 +240,7 @@ export async function acquireServiceLock(
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e.code !== "EEXIST") {
-        throw new Error(
-          `failed to create lock directory "${dir}": ${e.message}`,
-        );
+        throw new Error(`failed to create lock directory "${dir}": ${e.message}`);
       }
       const existing = readLockInfoFromPath(infoPath);
       if (existing && !isLockStale(existing)) {
@@ -275,9 +255,7 @@ export async function acquireServiceLock(
         /* ignore — next loop iteration will surface any remaining error */
       }
       if (attempt === maxTries) {
-        throw new Error(
-          `failed to reclaim stale lock directory "${dir}" after ${maxTries} attempts`,
-        );
+        throw new Error(`failed to reclaim stale lock directory "${dir}" after ${maxTries} attempts`);
       }
     }
   }
@@ -489,9 +467,7 @@ export function peekClaim(
   const ts = parseIsoUtc(readFileSync(atPath, "utf-8"));
   if (ts === null) return null;
   const byPath = join(claimDir, "claimed_by");
-  const owner = existsSync(byPath)
-    ? readFileSync(byPath, "utf-8").split("\n")[0]?.trim() ?? ""
-    : "";
+  const owner = existsSync(byPath) ? (readFileSync(byPath, "utf-8").split("\n")[0]?.trim() ?? "") : "";
   const ageSec = (Date.now() - ts) / 1000;
   return { owner, claimedAtMs: ts, ageSec };
 }

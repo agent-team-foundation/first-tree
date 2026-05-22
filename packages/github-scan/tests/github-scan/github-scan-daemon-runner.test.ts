@@ -12,16 +12,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import * as identityModule from "../../src/github-scan/engine/daemon/identity.js";
+import { extractBackendFlag } from "../../src/github-scan/cli.js";
 import * as httpModule from "../../src/github-scan/engine/daemon/http.js";
+import * as identityModule from "../../src/github-scan/engine/daemon/identity.js";
 import * as pollerModule from "../../src/github-scan/engine/daemon/poller.js";
 import {
   detectAvailableAgents,
   parseDaemonArgs,
   runDaemon,
 } from "../../src/github-scan/engine/daemon/runner-skeleton.js";
-import { extractBackendFlag } from "../../src/github-scan/cli.js";
 
 const tempRoots: string[] = [];
 const ORIGINAL_GITHUB_SCAN_DIR = process.env.GITHUB_SCAN_DIR;
@@ -179,8 +178,7 @@ describe("detectAvailableAgents", () => {
 
     const agents = detectAvailableAgents({
       startDir: sourceRoot,
-      executableFinder: (name) =>
-        name === "codex" || name === "claude" ? `/usr/bin/${name}` : null,
+      executableFinder: (name) => (name === "codex" || name === "claude" ? `/usr/bin/${name}` : null),
     });
 
     expect(agents).toEqual([
@@ -307,17 +305,15 @@ describe("runDaemon end-to-end skeleton", () => {
       scopes: ["repo", "notifications"],
     });
     vi.spyOn(identityModule, "identityHasRequiredScope").mockReturnValue(true);
-    vi.spyOn(httpModule, "startHttpServer").mockImplementation(
-      async ({ signal }: { signal?: AbortSignal }) => ({
-        port: 7878,
-        done: signal?.aborted
-          ? Promise.resolve()
-          : new Promise<void>((resolve) => {
-              signal?.addEventListener("abort", () => resolve(), { once: true });
-            }),
-        stop: async () => undefined,
-      }),
-    );
+    vi.spyOn(httpModule, "startHttpServer").mockImplementation(async ({ signal }: { signal?: AbortSignal }) => ({
+      port: 7878,
+      done: signal?.aborted
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      stop: async () => undefined,
+    }));
     vi.spyOn(pollerModule, "runPoller").mockImplementation(
       async ({ signal }: { signal?: AbortSignal }) =>
         await new Promise<void>((resolve) => {

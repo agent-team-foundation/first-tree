@@ -5,19 +5,19 @@ import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { ensureAgentContextHooks, formatAgentContextHookMessages } from "./agent-context-hooks.js";
-import { removeSourceState, TREE_VERSION_FILE } from "./binding-state.js";
 import { readSourceBindingContract } from "./binding-contract.js";
+import { removeSourceState, TREE_VERSION_FILE } from "./binding-state.js";
 import type { Tier0RuleLayerSummary } from "./rule-layer.js";
 import { ensureTier0RuleLayer, validateWorkflowPath } from "./rule-layer.js";
-import { readBundledSkillVersion, copyCanonicalSkills } from "./skill-lib.js";
-import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
-import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
-import { describeTemplateWriteResult } from "./template-write.js";
+import { copyCanonicalSkills, readBundledSkillVersion } from "./skill-lib.js";
 import {
   ensureWhitepaperSymlink,
   upsertLocalTreeGitIgnore,
   upsertSourceIntegrationFiles,
 } from "./source-integration.js";
+import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
+import { describeTemplateWriteResult } from "./template-write.js";
+import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
 
 type UpgradeSummary = {
   bundledSkillVersion: string;
@@ -46,9 +46,7 @@ function resolveTargetRoot(command: Command): string {
 function upgradeSourceRoot(targetRoot: string, bundledSkillVersion: string): UpgradeSummary {
   const sourceBinding = readSourceBindingContract(targetRoot);
   if (sourceBinding === undefined || sourceBinding.treeRepoName === undefined) {
-    throw new Error(
-      "No First Tree source/workspace binding was found in `AGENTS.md` or `CLAUDE.md`.",
-    );
+    throw new Error("No First Tree source/workspace binding was found in `AGENTS.md` or `CLAUDE.md`.");
   }
 
   copyCanonicalSkills(targetRoot);
@@ -130,10 +128,7 @@ function runUpgradeCommand(context: CommandContext): void {
     console.log(`  Bundled skill version: ${summary.bundledSkillVersion}`);
     if (summary.tier0RuleLayer) {
       console.log(
-        `  ${describeTemplateWriteResult(
-          validateWorkflowPath(summary.targetRoot),
-          summary.tier0RuleLayer.validate,
-        )}`,
+        `  ${describeTemplateWriteResult(validateWorkflowPath(summary.targetRoot), summary.tier0RuleLayer.validate)}`,
       );
     }
     for (const message of hookMessages) {

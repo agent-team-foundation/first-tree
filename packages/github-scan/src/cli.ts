@@ -8,9 +8,7 @@ export async function runCli(args: string[] = process.argv.slice(2)): Promise<nu
   return runGitHubScan(args, (text) => console.log(text));
 }
 
-const isMain =
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
+const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
   runCli().then((code) => {

@@ -29,17 +29,12 @@ export interface DaemonIdentity {
   scopes: string[];
 }
 
-export function identityLockKey(
-  identity: DaemonIdentity,
-  profile: string,
-): string {
+export function identityLockKey(identity: DaemonIdentity, profile: string): string {
   return `${identity.host}__${identity.login}__${profile}`;
 }
 
 export function identityHasRequiredScope(identity: DaemonIdentity): boolean {
-  return identity.scopes.some(
-    (scope) => scope === "repo" || scope === "notifications",
-  );
+  return identity.scopes.some((scope) => scope === "repo" || scope === "notifications");
 }
 
 export interface ResolveDaemonIdentityDeps {
@@ -92,9 +87,7 @@ export function pickActiveIdentityFromAuthStatus(
   const hosts = payload.hosts ?? {};
   for (const [host, bucket] of Object.entries(hosts)) {
     if (host !== targetHost) continue;
-    const candidates: AuthStatusHostEntry[] = Array.isArray(bucket)
-      ? bucket
-      : [bucket];
+    const candidates: AuthStatusHostEntry[] = Array.isArray(bucket) ? bucket : [bucket];
     const active = candidates.find((c) => c?.active === true) ?? candidates[0];
     if (!active) continue;
     const login = active.user ?? active.login;
@@ -114,9 +107,7 @@ export function pickActiveIdentityFromAuthStatus(
  * Resolve the active gh identity for the daemon. Uses
  * `gh auth status --json hosts` with a jq-free JSON parse in Node.
  */
-export function resolveDaemonIdentity(
-  deps: ResolveDaemonIdentityDeps = {},
-): DaemonIdentity {
+export function resolveDaemonIdentity(deps: ResolveDaemonIdentityDeps = {}): DaemonIdentity {
   const gh = deps.gh ?? new GhClient();
   const host = deps.host ?? "github.com";
 
@@ -144,9 +135,7 @@ export function resolveDaemonIdentity(
   try {
     parsed = JSON.parse(stdout) as AuthStatusPayload;
   } catch (err) {
-    throw new Error(
-      `gh auth status returned non-JSON output: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new Error(`gh auth status returned non-JSON output: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const identity = pickActiveIdentityFromAuthStatus(parsed, host);

@@ -7,17 +7,9 @@ import type { SpawnSyncReturns } from "node:child_process";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  DEFAULT_GH_MAX_BUFFER_BYTES,
-  GhClient,
-  GhExecError,
-} from "../../src/github-scan/engine/runtime/gh.js";
+import { DEFAULT_GH_MAX_BUFFER_BYTES, GhClient, GhExecError } from "../../src/github-scan/engine/runtime/gh.js";
 
-type SpawnFn = ConstructorParameters<typeof GhClient>[0] extends
-  | { spawn?: infer S }
-  | undefined
-  ? S
-  : never;
+type SpawnFn = ConstructorParameters<typeof GhClient>[0] extends { spawn?: infer S } | undefined ? S : never;
 
 function stubSuccess(stdout = "", stderr = ""): SpawnFn {
   return vi.fn().mockReturnValue({
@@ -67,11 +59,7 @@ describe("GhClient.run", () => {
     const spawn = stubSuccess();
     const gh = new GhClient({ spawn, binary: "/opt/gh" });
     gh.run(["api", "/user"]);
-    expect(spawn).toHaveBeenCalledWith(
-      "/opt/gh",
-      ["api", "/user"],
-      expect.anything(),
-    );
+    expect(spawn).toHaveBeenCalledWith("/opt/gh", ["api", "/user"], expect.anything());
   });
 
   it("passes a generous maxBuffer so gh api notifications does not ENOBUFS", () => {
@@ -88,20 +76,14 @@ describe("GhClient.run", () => {
       ["api", "notifications"],
       expect.objectContaining({ maxBuffer: DEFAULT_GH_MAX_BUFFER_BYTES }),
     );
-    expect(DEFAULT_GH_MAX_BUFFER_BYTES).toBeGreaterThanOrEqual(
-      16 * 1024 * 1024,
-    );
+    expect(DEFAULT_GH_MAX_BUFFER_BYTES).toBeGreaterThanOrEqual(16 * 1024 * 1024);
   });
 
   it("honors a custom maxBufferBytes override", () => {
     const spawn = stubSuccess();
     const gh = new GhClient({ spawn, maxBufferBytes: 128 });
     gh.run(["api", "/user"]);
-    expect(spawn).toHaveBeenCalledWith(
-      "gh",
-      ["api", "/user"],
-      expect.objectContaining({ maxBuffer: 128 }),
-    );
+    expect(spawn).toHaveBeenCalledWith("gh", ["api", "/user"], expect.objectContaining({ maxBuffer: 128 }));
   });
 });
 
@@ -125,15 +107,7 @@ describe("GhClient.removeLabel", () => {
     gh.removeLabel("owner/repo", 42, "github-scan:wip");
     expect(spawn).toHaveBeenCalledWith(
       "gh",
-      [
-        "issue",
-        "edit",
-        "42",
-        "--repo",
-        "owner/repo",
-        "--remove-label",
-        "github-scan:wip",
-      ],
+      ["issue", "edit", "42", "--repo", "owner/repo", "--remove-label", "github-scan:wip"],
       expect.anything(),
     );
   });
@@ -149,13 +123,7 @@ describe("GhClient.addLabelWithFallback", () => {
   it("single gh call when label exists on repo", () => {
     const spawn = stubSuccess();
     const gh = new GhClient({ spawn });
-    gh.addLabelWithFallback(
-      "owner/repo",
-      42,
-      "github-scan:wip",
-      "e4e669",
-      "work in progress",
-    );
+    gh.addLabelWithFallback("owner/repo", 42, "github-scan:wip", "e4e669", "work in progress");
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
@@ -174,13 +142,7 @@ describe("GhClient.addLabelWithFallback", () => {
       } satisfies SpawnSyncReturns<Buffer>;
     }) as SpawnFn;
     const gh = new GhClient({ spawn });
-    gh.addLabelWithFallback(
-      "owner/repo",
-      42,
-      "github-scan:wip",
-      "e4e669",
-      "work in progress",
-    );
+    gh.addLabelWithFallback("owner/repo", 42, "github-scan:wip", "e4e669", "work in progress");
     // call 1: add-label, call 2: label create, call 3: add-label retry.
     expect(calls.length).toBe(3);
     expect(calls[0][5]).toBe("--add-label");

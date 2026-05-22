@@ -5,17 +5,13 @@
  * `github-scan status`.
  */
 
-import { loadGitHubScanDaemonConfig } from "../runtime/config.js";
-import {
-  findServiceLock,
-  isLockStale,
-  type LockInfo,
-} from "../daemon/claim.js";
+import { findServiceLock, isLockStale, type LockInfo } from "../daemon/claim.js";
 import { resolveDaemonIdentity } from "../daemon/identity.js";
-import { RepoFilter } from "../runtime/repo-filter.js";
-import { parseAllowRepoArg } from "../runtime/allow-repo.js";
 import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
 import { ThreadStore } from "../daemon/thread-store.js";
+import { parseAllowRepoArg } from "../runtime/allow-repo.js";
+import { loadGitHubScanDaemonConfig } from "../runtime/config.js";
+import { RepoFilter } from "../runtime/repo-filter.js";
 
 export interface RunStatusOptions {
   write?: (line: string) => void;
@@ -33,18 +29,12 @@ const KEYS_TO_SHOW = [
   "last_poll_warning",
 ];
 
-export async function runStatus(
-  argv: readonly string[] = [],
-  options: RunStatusOptions = {},
-): Promise<number> {
+export async function runStatus(argv: readonly string[] = [], options: RunStatusOptions = {}): Promise<number> {
   const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
   const home = options.runnerHome ?? parseHome(argv) ?? resolveRunnerHome();
   const config = loadGitHubScanDaemonConfig();
   const repoFilterArg = options.allowRepo ?? parseAllowRepoArg(argv);
-  const filter =
-    repoFilterArg && repoFilterArg.length > 0
-      ? RepoFilter.parseCsv(repoFilterArg)
-      : RepoFilter.empty();
+  const filter = repoFilterArg && repoFilterArg.length > 0 ? RepoFilter.parseCsv(repoFilterArg) : RepoFilter.empty();
   const store = new ThreadStore({ runnerHome: home });
   const runtime = store.readRuntimeStatus();
 
@@ -57,17 +47,11 @@ export async function runStatus(
   } catch {
     /* fall through */
   }
-  const lock = findServiceLock(
-    `${home}/locks`,
-    { host: config.host, login, scopes: [], gitProtocol: "" },
-    "default",
-  );
+  const lock = findServiceLock(`${home}/locks`, { host: config.host, login, scopes: [], gitProtocol: "" }, "default");
 
   write("github-scan-runner status");
   write(`identity: ${identityLabel}`);
-  write(
-    `allowed repos: ${formatAllowedRepos(filter, runtime.get("allowed_repos"))}`,
-  );
+  write(`allowed repos: ${formatAllowedRepos(filter, runtime.get("allowed_repos"))}`);
   write(`lock: ${formatLock(lock)}`);
   if (runtime.size === 0) {
     write("runtime: no status recorded yet");
@@ -89,10 +73,7 @@ function parseHome(argv: readonly string[]): string | undefined {
   return undefined;
 }
 
-function formatAllowedRepos(
-  filter: RepoFilter,
-  runtimeValue: string | undefined,
-): string {
+function formatAllowedRepos(filter: RepoFilter, runtimeValue: string | undefined): string {
   if (!filter.isEmpty()) return filter.displayPatterns();
   if (runtimeValue && runtimeValue.length > 0) return runtimeValue;
   return "all";

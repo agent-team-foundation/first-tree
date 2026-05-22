@@ -61,22 +61,13 @@ export function formatAgentContextHookMessages(result: AgentContextHookSyncResul
 
 export function ensureAgentContextHooks(targetRoot: string): AgentContextHookSyncResult {
   return {
-    claudeSettings: writeManagedTextFile(
-      join(targetRoot, CLAUDE_SETTINGS_PATH),
-      buildClaudeSettingsDocument,
-    ),
-    codexConfig: writeManagedTextFile(
-      join(targetRoot, CODEX_CONFIG_PATH),
-      buildCodexConfigDocument,
-    ),
+    claudeSettings: writeManagedTextFile(join(targetRoot, CLAUDE_SETTINGS_PATH), buildClaudeSettingsDocument),
+    codexConfig: writeManagedTextFile(join(targetRoot, CODEX_CONFIG_PATH), buildCodexConfigDocument),
     codexHooks: writeManagedTextFile(join(targetRoot, CODEX_HOOKS_PATH), buildCodexHooksDocument),
   };
 }
 
-function writeManagedTextFile(
-  fullPath: string,
-  builder: (current: string | null) => string,
-): AgentConfigAction {
+function writeManagedTextFile(fullPath: string, builder: (current: string | null) => string): AgentConfigAction {
   const current = existsSync(fullPath) ? normalizeText(readFileSync(fullPath, "utf-8")) : null;
   const next = normalizeText(builder(current));
 
@@ -201,10 +192,7 @@ function rewriteLegacyCommandString(command: string): string {
   return result;
 }
 
-function stripManagedHooks(
-  groups: unknown[],
-  isManagedHook: (hook: Record<string, unknown>) => boolean,
-): unknown[] {
+function stripManagedHooks(groups: unknown[], isManagedHook: (hook: Record<string, unknown>) => boolean): unknown[] {
   const cleanedGroups: unknown[] = [];
 
   for (const candidate of groups) {

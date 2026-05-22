@@ -4,19 +4,14 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
-import {
-  removeSourceState,
-  SourceBindingMode,
-  TreeMode,
-  deriveDefaultEntrypoint,
-} from "./binding-state.js";
+import { deriveDefaultEntrypoint, removeSourceState, type SourceBindingMode, type TreeMode } from "./binding-state.js";
+import { readGitRemoteUrl, repoNameForRoot, resolveRepoRoot } from "./shared.js";
 import { copyCanonicalSkills } from "./skill-lib.js";
 import {
   ensureWhitepaperSymlink,
   upsertLocalTreeGitIgnore,
   upsertSourceIntegrationFiles,
 } from "./source-integration.js";
-import { readGitRemoteUrl, repoNameForRoot, resolveRepoRoot } from "./shared.js";
 
 type IntegrateModeOption = SourceBindingMode | "source";
 
@@ -47,10 +42,7 @@ function configureIntegrateCommand(command: Command): void {
     .requiredOption("--tree-path <path>", "local checkout of the tree repo")
     .option("--tree-url <url>", "remote URL of the tree repo")
     .option("--tree-mode <mode>", "dedicated or shared")
-    .option(
-      "--mode <mode>",
-      "source, standalone-source, shared-source, workspace-root, or workspace-member",
-    )
+    .option("--mode <mode>", "source, standalone-source, shared-source, workspace-root, or workspace-member")
     .option("--workspace-id <id>", "workspace identifier")
     .option("--entrypoint <path>", "tree entrypoint override");
 }
@@ -67,11 +59,7 @@ function readIntegrateOptions(command: Command): IntegrateOptions {
   };
 }
 
-function inferTreeMode(
-  sourceRepoName: string,
-  treeRepoName: string,
-  explicit?: TreeMode,
-): TreeMode {
+function inferTreeMode(sourceRepoName: string, treeRepoName: string, explicit?: TreeMode): TreeMode {
   if (explicit !== undefined) {
     if (explicit !== "dedicated" && explicit !== "shared") {
       throw new Error(`Unsupported value for --tree-mode: ${explicit}`);
@@ -84,10 +72,7 @@ function inferTreeMode(
     : "shared";
 }
 
-function resolveBindingMode(
-  explicit: IntegrateModeOption | undefined,
-  treeMode: TreeMode,
-): SourceBindingMode {
+function resolveBindingMode(explicit: IntegrateModeOption | undefined, treeMode: TreeMode): SourceBindingMode {
   if (explicit === "source") {
     return treeMode === "shared" ? "shared-source" : "standalone-source";
   }
@@ -130,8 +115,7 @@ function runIntegrateCommand(context: CommandContext): void {
       bindingMode === "workspace-root" || bindingMode === "workspace-member"
         ? options.workspaceId?.trim() || sourceRepoName
         : undefined;
-    const entrypoint =
-      options.entrypoint ?? deriveDefaultEntrypoint(bindingMode, sourceRepoName, workspaceId);
+    const entrypoint = options.entrypoint ?? deriveDefaultEntrypoint(bindingMode, sourceRepoName, workspaceId);
 
     copyCanonicalSkills(sourceRoot);
     ensureWhitepaperSymlink(sourceRoot);

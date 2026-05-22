@@ -1,8 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-
-import { TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
 import { readSourceBindingContract } from "./binding-contract.js";
+import { TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
 import { buildSourceRepoIndexTable } from "./source-repo-index.js";
 import { readTreeIdentityContract } from "./tree-identity.js";
 import { listKnownTreeCodeRepos } from "./tree-repo-registry.js";
@@ -35,11 +34,7 @@ export function buildTreeFirstContextBundle(currentRoot: string): TreeFirstConte
   const rootNode = readFileSync(nodePath, "utf-8").trimEnd();
   const repos = listKnownTreeCodeRepos(resolved.treeRoot);
   const sections = [rootNode];
-  const repoContext = buildRepoContextSection(
-    repos,
-    resolved.currentEntrypoint,
-    resolved.entrypointLabel,
-  );
+  const repoContext = buildRepoContextSection(repos, resolved.currentEntrypoint, resolved.entrypointLabel);
 
   if (repoContext !== null) {
     sections.push(repoContext);

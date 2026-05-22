@@ -3,19 +3,13 @@ import { dirname, join, resolve } from "node:path";
 import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { removeSourceState, TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
 import { readSourceBindingContract } from "./binding-contract.js";
-import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
+import { removeSourceState, TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
+import { isGitRepoRoot, parseGitHubRemoteUrl, readGitRemoteUrl, repoNameForRoot, runCommand } from "./shared.js";
 import { upsertSourceIntegrationFiles } from "./source-integration.js";
+import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
 import { listKnownTreeCodeRepos } from "./tree-repo-registry.js";
-import {
-  isGitRepoRoot,
-  parseGitHubRemoteUrl,
-  readGitRemoteUrl,
-  repoNameForRoot,
-  runCommand,
-} from "./shared.js";
 
 type PublishOptions = {
   commandRunner?: (command: string, args: string[], cwd: string) => string;
@@ -63,19 +57,13 @@ function runPublishCommandLine(command: string, args: string[], cwd: string): st
 function resolveTreeRoot(options: PublishOptions): string {
   const candidate = options.treePath ? resolve(process.cwd(), options.treePath) : process.cwd();
   if (readTreeIdentityContract(candidate) === undefined) {
-    throw new Error(
-      "Run `first-tree tree publish` from a tree repo, or pass `--tree-path <path>`.",
-    );
+    throw new Error("Run `first-tree tree publish` from a tree repo, or pass `--tree-path <path>`.");
   }
   return candidate;
 }
 
-function resolveTreeSlug(
-  treeRoot: string,
-  options: PublishOptions,
-): { cloneUrl: string; slug: string } {
-  const existingRemote =
-    readTreeIdentityContract(treeRoot)?.publishedTreeUrl ?? readGitRemoteUrl(treeRoot);
+function resolveTreeSlug(treeRoot: string, options: PublishOptions): { cloneUrl: string; slug: string } {
+  const existingRemote = readTreeIdentityContract(treeRoot)?.publishedTreeUrl ?? readGitRemoteUrl(treeRoot);
   const existingParsed = existingRemote ? parseGitHubRemoteUrl(existingRemote) : null;
   if (existingParsed !== null) {
     return {
@@ -84,13 +72,9 @@ function resolveTreeSlug(
     };
   }
 
-  const sourceRepoPath = options.sourceRepoPath
-    ? resolve(process.cwd(), options.sourceRepoPath)
-    : undefined;
+  const sourceRepoPath = options.sourceRepoPath ? resolve(process.cwd(), options.sourceRepoPath) : undefined;
   const sourceRemoteName = options.sourceRemote ?? "origin";
-  const sourceRemote = sourceRepoPath
-    ? readGitRemoteUrl(sourceRepoPath, sourceRemoteName)
-    : undefined;
+  const sourceRemote = sourceRepoPath ? readGitRemoteUrl(sourceRepoPath, sourceRemoteName) : undefined;
   const sourceParsed = sourceRemote ? parseGitHubRemoteUrl(sourceRemote) : null;
   if (sourceParsed !== null) {
     return {
@@ -145,18 +129,11 @@ function ensureGitHubRepo(
   try {
     commandRunner("gh", ["repo", "view", slug], treeRoot);
   } catch {
-    commandRunner(
-      "gh",
-      ["repo", "create", slug, "--private", "--source", treeRoot, "--remote", "origin"],
-      treeRoot,
-    );
+    commandRunner("gh", ["repo", "create", slug, "--private", "--source", treeRoot, "--remote", "origin"], treeRoot);
   }
 }
 
-function pushTree(
-  treeRoot: string,
-  commandRunner: NonNullable<PublishOptions["commandRunner"]>,
-): void {
+function pushTree(treeRoot: string, commandRunner: NonNullable<PublishOptions["commandRunner"]>): void {
   commandRunner("git", ["push", "-u", "origin", "HEAD:main"], treeRoot);
 }
 
@@ -176,11 +153,7 @@ function resolveLocalSourceRoots(treeRoot: string, options: PublishOptions): str
   return [...new Set(roots)];
 }
 
-function refreshBoundSourceRoots(
-  treeRoot: string,
-  publishedTreeUrl: string,
-  sourceRoots: string[],
-): string[] {
+function refreshBoundSourceRoots(treeRoot: string, publishedTreeUrl: string, sourceRoots: string[]): string[] {
   const refreshed: string[] = [];
 
   for (const sourceRoot of sourceRoots) {
@@ -220,11 +193,7 @@ export function publishTreeRoot(treeRoot: string, options: PublishOptions = {}):
     publishedTreeUrl: cloneUrl,
   });
 
-  const refreshedSourceRoots = refreshBoundSourceRoots(
-    treeRoot,
-    cloneUrl,
-    resolveLocalSourceRoots(treeRoot, options),
-  );
+  const refreshedSourceRoots = refreshBoundSourceRoots(treeRoot, cloneUrl, resolveLocalSourceRoots(treeRoot, options));
 
   return {
     publishedTreeUrl: cloneUrl,

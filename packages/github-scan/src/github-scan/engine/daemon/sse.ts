@@ -37,8 +37,8 @@
  * Phase 3c replaces it with the real in-process `Bus`.
  */
 
-import { type ServerResponse } from "node:http";
 import { promises as fsp } from "node:fs";
+import type { ServerResponse } from "node:http";
 
 export interface SseWritable {
   /** Write raw bytes. Returns false if the backpressure buffer is full. */
@@ -86,9 +86,7 @@ export function splitIntoLines(input: string): string[] {
     parts.pop();
   }
   // Strip the optional `\r` from each line (mirrors Rust behaviour).
-  return parts.map((line) =>
-    line.endsWith("\r") ? line.slice(0, -1) : line,
-  );
+  return parts.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
 }
 
 /** Keep-alive comment-frame bytes. Must match `http.rs:282` exactly. */
@@ -142,11 +140,7 @@ export function encodeSseEvent(event: SseEvent): string {
  * we silently skip the tick. We read via `fs.promises` to avoid blocking
  * the event loop on a slow disk.
  */
-export function createInboxMtimeBus(options: {
-  inboxPath: string;
-  intervalMs?: number;
-  signal?: AbortSignal;
-}): SseBus {
+export function createInboxMtimeBus(options: { inboxPath: string; intervalMs?: number; signal?: AbortSignal }): SseBus {
   const intervalMs = options.intervalMs ?? 1000;
   const listeners = new Set<(event: SseEvent) => void>();
   let lastMtimeMs = -1;
@@ -175,9 +169,7 @@ export function createInboxMtimeBus(options: {
         last_poll?: unknown;
         notifications?: unknown;
       };
-      const notifications = Array.isArray(p.notifications)
-        ? p.notifications
-        : [];
+      const notifications = Array.isArray(p.notifications) ? p.notifications : [];
       const last_poll = typeof p.last_poll === "string" ? p.last_poll : "";
       let new_count = 0;
       for (const entry of notifications) {

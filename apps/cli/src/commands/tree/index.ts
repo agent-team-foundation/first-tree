@@ -1,15 +1,14 @@
 import type { Command } from "commander";
-
-import type { CommandModule, SubcommandModule } from "../types.js";
 import { registerCommandGroup, registerSubcommands } from "../groups.js";
+import type { CommandModule, SubcommandModule } from "../types.js";
 import { automationSubcommands } from "./automation.js";
 import { bindCommand } from "./bind.js";
 import { bootstrapCommand } from "./bootstrap.js";
 import { claudeHookCommand } from "./claude-hook.js";
 import { codeownersCommand } from "./codeowners.js";
+import { initCommand } from "./init.js";
 import { injectCommand } from "./inject.js";
 import { inspectCommand } from "./inspect.js";
-import { initCommand } from "./init.js";
 import { integrateCommand } from "./integrate.js";
 import { publishCommand } from "./publish.js";
 import { reviewCommand } from "./review.js";
@@ -70,20 +69,13 @@ export const treeCommand: CommandModule = {
 
     registerSubcommands(command, treeSubcommands);
 
-    registerCommandGroup(command, "workspace", "Run workspace tree helpers.", [
-      workspaceSyncCommand,
-    ]);
+    registerCommandGroup(command, "workspace", "Run workspace tree helpers.", [workspaceSyncCommand]);
 
     registerCommandGroup(command, "automation", "Install or inspect tree GitHub automation.", [
       ...automationSubcommands,
     ]);
 
-    registerCommandGroup(
-      command,
-      "skill",
-      "Install and repair first-tree skill payloads.",
-      skillSubcommands,
-    );
+    registerCommandGroup(command, "skill", "Install and repair first-tree skill payloads.", skillSubcommands);
 
     registerCommandGroup(command, "help", "Show Context Tree help topics.", [
       {

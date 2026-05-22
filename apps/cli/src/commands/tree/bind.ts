@@ -5,22 +5,15 @@ import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
 import {
-  BoundTreeReference,
-  RootKind,
-  removeSourceState,
-  SourceBindingMode,
-  TreeMode,
+  type BoundTreeReference,
   buildTreeId,
   deriveDefaultEntrypoint,
+  type RootKind,
+  removeSourceState,
+  type SourceBindingMode,
+  type TreeMode,
 } from "./binding-state.js";
-import { copyCanonicalSkills } from "./skill-lib.js";
 import { bootstrapTreeRoot } from "./bootstrap.js";
-import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
-import {
-  ensureWhitepaperSymlink,
-  upsertLocalTreeGitIgnore,
-  upsertSourceIntegrationFiles,
-} from "./source-integration.js";
 import {
   isGitRepoRoot,
   parseGitHubRemoteUrl,
@@ -29,6 +22,13 @@ import {
   resolveRepoRoot,
   runCommand,
 } from "./shared.js";
+import { copyCanonicalSkills } from "./skill-lib.js";
+import {
+  ensureWhitepaperSymlink,
+  upsertLocalTreeGitIgnore,
+  upsertSourceIntegrationFiles,
+} from "./source-integration.js";
+import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { readTreeIdentityContract, syncTreeIdentityFiles } from "./tree-identity.js";
 import { upsertTreeCodeRepoRegistry } from "./tree-repo-registry.js";
 
@@ -83,10 +83,7 @@ function configureBindCommand(command: Command): void {
     .option("--tree-path <path>", "local checkout of the tree repo")
     .option("--tree-url <url>", "remote URL of the tree repo")
     .option("--tree-mode <mode>", "dedicated or shared")
-    .option(
-      "--mode <mode>",
-      "source, standalone-source, shared-source, workspace-root, or workspace-member",
-    )
+    .option("--mode <mode>", "source, standalone-source, shared-source, workspace-root, or workspace-member")
     .option("--workspace-id <id>", "workspace identifier")
     .option("--workspace-root <path>", "workspace root path for workspace-member binds")
     .option("--entrypoint <path>", "tree entrypoint override");
@@ -114,11 +111,7 @@ function inferTreeRepoNameFromUrl(treeUrl: string): string {
   return basename(treeUrl).replace(/\.git$/u, "");
 }
 
-function inferTreeMode(
-  sourceRepoName: string,
-  treeRepoName: string,
-  explicit?: TreeMode,
-): TreeMode {
+function inferTreeMode(sourceRepoName: string, treeRepoName: string, explicit?: TreeMode): TreeMode {
   if (explicit !== undefined) {
     if (explicit !== "dedicated" && explicit !== "shared") {
       throw new Error(`Unsupported value for --tree-mode: ${explicit}`);
@@ -131,10 +124,7 @@ function inferTreeMode(
   return defaultDedicatedNames.has(treeRepoName) ? "dedicated" : "shared";
 }
 
-function resolveBindingMode(
-  explicit: BindModeOption | undefined,
-  treeMode: TreeMode,
-): SourceBindingMode {
+function resolveBindingMode(explicit: BindModeOption | undefined, treeMode: TreeMode): SourceBindingMode {
   if (explicit === "source") {
     return treeMode === "shared" ? "shared-source" : "standalone-source";
   }
@@ -154,11 +144,7 @@ function resolveBindingMode(
   return treeMode === "shared" ? "shared-source" : "standalone-source";
 }
 
-function resolveWorkspaceId(
-  sourceRoot: string,
-  bindingMode: SourceBindingMode,
-  explicit?: string,
-): string | undefined {
+function resolveWorkspaceId(sourceRoot: string, bindingMode: SourceBindingMode, explicit?: string): string | undefined {
   if (bindingMode !== "workspace-root" && bindingMode !== "workspace-member") {
     return undefined;
   }
@@ -203,8 +189,7 @@ function ensureTreeCheckout(
     );
   }
 
-  treeUrl =
-    treeUrl ?? readGitRemoteUrl(treeRoot) ?? readTreeIdentityContract(treeRoot)?.publishedTreeUrl;
+  treeUrl = treeUrl ?? readGitRemoteUrl(treeRoot) ?? readTreeIdentityContract(treeRoot)?.publishedTreeUrl;
 
   return {
     treeRepoName: repoNameForRoot(treeRoot),
@@ -213,11 +198,7 @@ function ensureTreeCheckout(
   };
 }
 
-export function bindSourceRoot(
-  sourceRoot: string,
-  options: BindOptions,
-  commandCwd = process.cwd(),
-): BindSummary {
+export function bindSourceRoot(sourceRoot: string, options: BindOptions, commandCwd = process.cwd()): BindSummary {
   const treeResolution = ensureTreeCheckout(commandCwd, sourceRoot, options);
   const binding = deriveBindingContext(sourceRoot, treeResolution, options);
 
@@ -240,12 +221,7 @@ export function bindSourceRoot(
   });
   removeSourceState(sourceRoot);
 
-  writeBoundTreeState(
-    treeResolution.treeRoot,
-    treeResolution.treeRepoName,
-    binding.treeMode,
-    treeResolution.treeUrl,
-  );
+  writeBoundTreeState(treeResolution.treeRoot, treeResolution.treeRepoName, binding.treeMode, treeResolution.treeUrl);
 
   if (binding.sourceRemoteUrl && parseGitHubRemoteUrl(binding.sourceRemoteUrl) !== null) {
     upsertTreeCodeRepoRegistry(treeResolution.treeRoot, binding.sourceRemoteUrl);
@@ -273,8 +249,7 @@ function deriveBindingContext(
   const bindingMode = resolveBindingMode(options.mode, treeMode);
   const workspaceId = resolveWorkspaceId(sourceRoot, bindingMode, options.workspaceId);
   const sourceRemoteUrl = isGitRepoRoot(sourceRoot) ? readGitRemoteUrl(sourceRoot) : undefined;
-  const entrypoint =
-    options.entrypoint ?? deriveDefaultEntrypoint(bindingMode, sourceRepoName, workspaceId);
+  const entrypoint = options.entrypoint ?? deriveDefaultEntrypoint(bindingMode, sourceRepoName, workspaceId);
 
   return {
     bindingMode,
@@ -312,10 +287,7 @@ function writeBoundTreeState(
 
 function runBindCommand(context: CommandContext): void {
   try {
-    const summary = bindSourceRoot(
-      resolveRepoRoot(process.cwd()),
-      readBindOptions(context.command),
-    );
+    const summary = bindSourceRoot(resolveRepoRoot(process.cwd()), readBindOptions(context.command));
 
     if (context.options.json) {
       console.log(JSON.stringify(summary, null, 2));

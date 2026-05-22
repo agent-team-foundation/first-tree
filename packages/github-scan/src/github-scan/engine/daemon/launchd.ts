@@ -134,10 +134,7 @@ export const PASSTHROUGH_ENV_PREFIXES: readonly string[] = [
  * up variables the GUI session sets in the user's login shell. Mirrors
  * Rust `resolve_launchd_env_var` + `resolve_env_var_from_login_shell`.
  */
-export function resolveLaunchdEnvVar(
-  variable: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+export function resolveLaunchdEnvVar(variable: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
   const direct = env[variable];
   if (direct && direct.trim().length > 0) return direct;
   try {
@@ -212,9 +209,7 @@ export function escapeXml(value: string): string {
 export function renderLaunchdPlist(inputs: LaunchdPlistInputs): string {
   const label = launchdLabel(inputs.login, inputs.profile);
   const programArgs = [inputs.executable, ...inputs.arguments];
-  const argumentsXml = programArgs
-    .map((arg) => `    <string>${escapeXml(arg)}</string>`)
-    .join("\n");
+  const argumentsXml = programArgs.map((arg) => `    <string>${escapeXml(arg)}</string>`).join("\n");
 
   const envPairs: Array<[string, string]> = [];
   const seen = new Set<string>();
@@ -242,10 +237,7 @@ export function renderLaunchdPlist(inputs: LaunchdPlistInputs): string {
   }
 
   const environmentXml = envPairs
-    .map(
-      ([key, value]) =>
-        `    <key>${escapeXml(key)}</key>\n    <string>${escapeXml(value)}</string>`,
-    )
+    .map(([key, value]) => `    <key>${escapeXml(key)}</key>\n    <string>${escapeXml(value)}</string>`)
     .join("\n");
 
   // launchd jobs default to cwd `/`, which breaks the daemon's bound-tree
@@ -309,9 +301,7 @@ export interface BootstrapLaunchdJobResult {
  * Write the plist, `bootout` any previous instance, then `bootstrap` +
  * `kickstart -k`. Mirrors `start_with_launchctl`.
  */
-export function bootstrapLaunchdJob(
-  options: BootstrapLaunchdJobOptions,
-): BootstrapLaunchdJobResult {
+export function bootstrapLaunchdJob(options: BootstrapLaunchdJobOptions): BootstrapLaunchdJobResult {
   const label = launchdLabel(options.login, options.profile);
   const plistPath = launchdPlistPath(options.runnerHome, label);
   mkdirSync(dirname(plistPath), { recursive: true });
@@ -339,9 +329,7 @@ export function bootstrapLaunchdJob(
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (bootstrap.status !== 0) {
-    throw new Error(
-      `launchctl bootstrap failed (exit ${bootstrap.status}): ${bootstrap.stderr?.trim() ?? ""}`,
-    );
+    throw new Error(`launchctl bootstrap failed (exit ${bootstrap.status}): ${bootstrap.stderr?.trim() ?? ""}`);
   }
 
   const target = `${domain}/${label}`;
@@ -352,9 +340,7 @@ export function bootstrapLaunchdJob(
   // 113 means the job is already running; launchctl returns that when
   // kickstart is racing with RunAtLoad. Treat as success.
   if (kickstart.status !== 0 && kickstart.status !== 113) {
-    throw new Error(
-      `launchctl kickstart failed (exit ${kickstart.status}): ${kickstart.stderr?.trim() ?? ""}`,
-    );
+    throw new Error(`launchctl kickstart failed (exit ${kickstart.status}): ${kickstart.stderr?.trim() ?? ""}`);
   }
 
   return { label, domain, plistPath };

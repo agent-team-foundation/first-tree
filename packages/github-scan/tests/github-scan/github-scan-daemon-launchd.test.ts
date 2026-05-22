@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import { defaultDaemonArgs, resolveSelfCliInvocation } from "../../src/github-scan/engine/commands/start.js";
 import {
   collectLaunchdPassthroughEnvVars,
   escapeXml,
@@ -7,31 +7,21 @@ import {
   launchdPlistPath,
   renderLaunchdPlist,
 } from "../../src/github-scan/engine/daemon/launchd.js";
-import {
-  defaultDaemonArgs,
-  resolveSelfCliInvocation,
-} from "../../src/github-scan/engine/commands/start.js";
 
 describe("launchdLabel", () => {
   it("sanitizes login and profile into a dotted reverse-dns label", () => {
-    expect(launchdLabel("bingran-you", "default")).toBe(
-      "com.first-tree.github-scan.runner.bingran-you.default",
-    );
+    expect(launchdLabel("bingran-you", "default")).toBe("com.first-tree.github-scan.runner.bingran-you.default");
   });
 
   it("replaces filesystem-unsafe characters", () => {
-    expect(launchdLabel("alice@home", "prof/test")).toBe(
-      "com.first-tree.github-scan.runner.alice_home.prof_test",
-    );
+    expect(launchdLabel("alice@home", "prof/test")).toBe("com.first-tree.github-scan.runner.alice_home.prof_test");
   });
 });
 
 describe("launchdPlistPath", () => {
   it("lives under <runnerHome>/launchd/<label>.plist", () => {
     const label = launchdLabel("alice", "default");
-    expect(launchdPlistPath("/var/home/runner", label)).toBe(
-      `/var/home/runner/launchd/${label}.plist`,
-    );
+    expect(launchdPlistPath("/var/home/runner", label)).toBe(`/var/home/runner/launchd/${label}.plist`);
   });
 });
 
@@ -192,9 +182,7 @@ describe("start command self-invocation helpers", () => {
   });
 
   it("prepends the cli entrypoint before the daemon args", () => {
-    expect(
-      defaultDaemonArgs(["--allow-repo", "owner/repo"], ["/opt/github-scan/dist/cli.mjs"]),
-    ).toEqual([
+    expect(defaultDaemonArgs(["--allow-repo", "owner/repo"], ["/opt/github-scan/dist/cli.mjs"])).toEqual([
       "/opt/github-scan/dist/cli.mjs",
       "github",
       "scan",

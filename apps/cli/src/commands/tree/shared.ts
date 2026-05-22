@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 export type RootKind = "git-repo" | "folder";
@@ -94,9 +94,7 @@ export function normalizeRemoteForMatch(remoteUrl: string): string {
   const parsed = parseGitHubRemoteUrl(remoteUrl);
 
   if (parsed !== null) {
-    return [parsed.host.toLowerCase(), parsed.owner.toLowerCase(), parsed.repo.toLowerCase()].join(
-      "/",
-    );
+    return [parsed.host.toLowerCase(), parsed.owner.toLowerCase(), parsed.repo.toLowerCase()].join("/");
   }
 
   return remoteUrl.trim().replace(/\.git$/u, "");
@@ -237,7 +235,5 @@ export function discoverWorkspaceRepos(root: string): WorkspaceRepoCandidate[] {
     discoverNestedRepos(resolve(root), resolve(root), results);
   }
 
-  return [...results.values()].sort((left, right) =>
-    left.relativePath.localeCompare(right.relativePath),
-  );
+  return [...results.values()].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }

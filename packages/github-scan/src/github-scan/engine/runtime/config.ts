@@ -144,10 +144,7 @@ export interface LoadDaemonConfigDeps {
 /**
  * Location searched for `config.yaml`.
  */
-export function githubScanDaemonConfigSearchPaths(
-  homeDir: string = homedir(),
-  githubScanDir?: string,
-): string[] {
+export function githubScanDaemonConfigSearchPaths(homeDir: string = homedir(), githubScanDir?: string): string[] {
   return [join(githubScanDir ?? join(homeDir, ".first-tree/github-scan"), "config.yaml")];
 }
 
@@ -226,9 +223,7 @@ export function loadGitHubScanDaemonConfig(deps: LoadDaemonConfigDeps = {}): Dae
   const config: DaemonConfig = { ...DAEMON_CONFIG_DEFAULTS };
 
   // 2. YAML overlay.
-  const candidates = deps.configPath
-    ? [deps.configPath]
-    : githubScanDaemonConfigSearchPaths(homeDir(), githubScanDir);
+  const candidates = deps.configPath ? [deps.configPath] : githubScanDaemonConfigSearchPaths(homeDir(), githubScanDir);
   for (const path of candidates) {
     if (!fileExists(path)) continue;
     let raw: string;
@@ -271,10 +266,7 @@ export function loadGitHubScanDaemonConfig(deps: LoadDaemonConfigDeps = {}): Dae
   }
 
   // 3. Env overlay.
-  const envPoll = pickNumber(
-    env("GITHUB_SCAN_POLL_INTERVAL_SECS"),
-    env("GITHUB_SCAN_INBOX_POLL_INTERVAL_SECS"),
-  );
+  const envPoll = pickNumber(env("GITHUB_SCAN_POLL_INTERVAL_SECS"), env("GITHUB_SCAN_INBOX_POLL_INTERVAL_SECS"));
   if (envPoll !== undefined) config.pollIntervalSec = envPoll;
   const envTaskTimeout = pickNumber(env("GITHUB_SCAN_TASK_TIMEOUT_SECS"));
   if (envTaskTimeout !== undefined) config.taskTimeoutSec = envTaskTimeout;

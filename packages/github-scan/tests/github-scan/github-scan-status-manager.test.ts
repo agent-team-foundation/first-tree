@@ -6,23 +6,16 @@
  * deleted the bash script, so those parity cases have been converted
  * to pure TS assertions against the TS port.
  */
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runStatusManager } from "../../src/github-scan/engine/commands/status-manager.js";
-import { resolveGitHubScanPaths } from "../../src/github-scan/engine/runtime/paths.js";
-import { GhClient } from "../../src/github-scan/engine/runtime/gh.js";
 import { readActivityLog } from "../../src/github-scan/engine/runtime/activity-log.js";
+import { GhClient } from "../../src/github-scan/engine/runtime/gh.js";
+import { resolveGitHubScanPaths } from "../../src/github-scan/engine/runtime/paths.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "github-scan", "inbox-sample.json");
 
@@ -172,19 +165,16 @@ describe("status-manager: claim / release", () => {
   it("claim creates the directory and prints `claimed`", async () => {
     const { stdout, io } = captureIO();
     const paths = resolveGitHubScanPaths({ env: () => ctx.dir });
-    const code = await runStatusManager(
-      ["claim", "23576674030", "session-a"],
-      { io, paths, now: () => new Date("2026-04-16T20:15:30Z") },
-    );
+    const code = await runStatusManager(["claim", "23576674030", "session-a"], {
+      io,
+      paths,
+      now: () => new Date("2026-04-16T20:15:30Z"),
+    });
     expect(code).toBe(0);
     expect(stdout).toEqual(["claimed"]);
     expect(existsSync(join(ctx.claims, "23576674030", "claimed_by"))).toBe(true);
-    expect(
-      readFileSync(join(ctx.claims, "23576674030", "claimed_by"), "utf-8"),
-    ).toBe("session-a\n");
-    expect(
-      readFileSync(join(ctx.claims, "23576674030", "action"), "utf-8"),
-    ).toBe("working\n");
+    expect(readFileSync(join(ctx.claims, "23576674030", "claimed_by"), "utf-8")).toBe("session-a\n");
+    expect(readFileSync(join(ctx.claims, "23576674030", "action"), "utf-8")).toBe("working\n");
 
     // An activity-log `claimed` event was appended.
     const events = readActivityLog(ctx.activity);
@@ -199,14 +189,9 @@ describe("status-manager: claim / release", () => {
   it("claim honors a custom action positional arg", async () => {
     const { stdout, io } = captureIO();
     const paths = resolveGitHubScanPaths({ env: () => ctx.dir });
-    await runStatusManager(
-      ["claim", "23576674030", "session-a", "refactoring"],
-      { io, paths },
-    );
+    await runStatusManager(["claim", "23576674030", "session-a", "refactoring"], { io, paths });
     expect(stdout).toEqual(["claimed"]);
-    expect(
-      readFileSync(join(ctx.claims, "23576674030", "action"), "utf-8"),
-    ).toBe("refactoring\n");
+    expect(readFileSync(join(ctx.claims, "23576674030", "action"), "utf-8")).toBe("refactoring\n");
   });
 
   it("claim on an already-claimed id prints `already_claimed:<owner>`", async () => {
@@ -246,9 +231,7 @@ describe("status-manager: claim / release", () => {
     });
     expect(code).toBe(0);
     expect(second.stdout).toEqual(["claimed"]);
-    expect(
-      readFileSync(join(ctx.claims, "23576674030", "claimed_by"), "utf-8"),
-    ).toBe("session-b\n");
+    expect(readFileSync(join(ctx.claims, "23576674030", "claimed_by"), "utf-8")).toBe("session-b\n");
   });
 
   it("release removes the claim directory and prints `released`", async () => {
@@ -280,10 +263,7 @@ describe("status-manager: set", () => {
     writeFileSync(ctx.inbox, JSON.stringify(raw), "utf-8");
     const { stderr, io } = captureIO();
     const paths = resolveGitHubScanPaths({ env: () => ctx.dir });
-    const code = await runStatusManager(
-      ["set", raw.notifications[0].id, "wip"],
-      { io, paths },
-    );
+    const code = await runStatusManager(["set", raw.notifications[0].id, "wip"], { io, paths });
     expect(code).toBe(1);
     expect(stderr.join("\n")).toMatch(/cannot find repo\/number/u);
   });
@@ -291,10 +271,7 @@ describe("status-manager: set", () => {
   it("rejects unknown status", async () => {
     const { stderr, io } = captureIO();
     const paths = resolveGitHubScanPaths({ env: () => ctx.dir });
-    const code = await runStatusManager(
-      ["set", "23576674030", "nonsense"],
-      { io, paths },
-    );
+    const code = await runStatusManager(["set", "23576674030", "nonsense"], { io, paths });
     expect(code).toBe(1);
     expect(stderr.join("\n")).toMatch(/unknown status/u);
   });
@@ -317,15 +294,7 @@ describe("status-manager: set", () => {
     const { stdout, io } = captureIO();
     const paths = resolveGitHubScanPaths({ env: () => ctx.dir });
     const code = await runStatusManager(
-      [
-        "set",
-        "23576674030",
-        "wip",
-        "--by",
-        "session-a",
-        "--reason",
-        "picked up from PR",
-      ],
+      ["set", "23576674030", "wip", "--by", "session-a", "--reason", "picked up from PR"],
       {
         io,
         paths,
@@ -339,15 +308,8 @@ describe("status-manager: set", () => {
     // Removes every github-scan:* label.
     const removeCalls = calls.filter((c) => c.includes("--remove-label"));
     expect(removeCalls).toHaveLength(4);
-    const removedLabels = removeCalls
-      .map((c) => c[c.indexOf("--remove-label") + 1])
-      .sort();
-    expect(removedLabels).toEqual([
-      "github-scan:done",
-      "github-scan:human",
-      "github-scan:new",
-      "github-scan:wip",
-    ]);
+    const removedLabels = removeCalls.map((c) => c[c.indexOf("--remove-label") + 1]).sort();
+    expect(removedLabels).toEqual(["github-scan:done", "github-scan:human", "github-scan:new", "github-scan:wip"]);
 
     // Adds github-scan:wip.
     const addCalls = calls.filter((c) => c.includes("--add-label"));
@@ -461,12 +423,7 @@ describe("status-manager: ensure-labels", () => {
     // 4 label create calls.
     expect(calls).toHaveLength(4);
     const labels = calls.map((c) => c[2]).sort();
-    expect(labels).toEqual([
-      "github-scan:done",
-      "github-scan:human",
-      "github-scan:new",
-      "github-scan:wip",
-    ]);
+    expect(labels).toEqual(["github-scan:done", "github-scan:human", "github-scan:new", "github-scan:wip"]);
     // Colors match spec §7.
     const colorFor = (label: string): string => {
       const call = calls.find((c) => c[2] === label)!;
@@ -498,9 +455,7 @@ describe("status-manager: read-only commands (TS-only, post-bash-deletion)", () 
   });
   afterEach(() => rmSync(ctx.dir, { recursive: true, force: true }));
 
-  async function ts(
-    argv: string[],
-  ): Promise<{ stdout: string; status: number }> {
+  async function ts(argv: string[]): Promise<{ stdout: string; status: number }> {
     const { stdout, io } = captureIO();
     const paths = resolveGitHubScanPaths({ env: () => ctx.dir });
     const code = await runStatusManager(argv, { io, paths });

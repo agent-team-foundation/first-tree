@@ -18,9 +18,9 @@
  * Tests use an injected `runGit` to avoid hitting the network.
  */
 
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { spawn } from "node:child_process";
 
 export interface WorkspaceCandidate {
   repo: string;
@@ -51,10 +51,7 @@ export interface GitRunResult {
   statusCode: number;
 }
 
-export type GitRunner = (args: {
-  args: string[];
-  env?: Record<string, string>;
-}) => Promise<GitRunResult>;
+export type GitRunner = (args: { args: string[]; env?: Record<string, string> }) => Promise<GitRunResult>;
 
 export interface WorkspaceManagerOptions {
   reposDir: string;
@@ -93,11 +90,7 @@ export class WorkspaceManager {
       await this.ensureMirror(mirrorDir, repoUrl);
       const checkoutRef = await this.prepareRef(mirrorDir, task);
 
-      const workspaceDir = join(
-        this.workspacesDir,
-        slug,
-        `${task.kind}-${task.stableId}`,
-      );
+      const workspaceDir = join(this.workspacesDir, slug, `${task.kind}-${task.stableId}`);
       await this.pruneStaleWorktreeEntry(mirrorDir, workspaceDir);
       if (existsSync(workspaceDir)) {
         rmSync(workspaceDir, { recursive: true, force: true });
@@ -105,16 +98,7 @@ export class WorkspaceManager {
       mkdirSync(dirname(workspaceDir), { recursive: true });
 
       await this.runChecked({
-        args: [
-          "--git-dir",
-          mirrorDir,
-          "worktree",
-          "add",
-          "--force",
-          "--detach",
-          workspaceDir,
-          checkoutRef,
-        ],
+        args: ["--git-dir", mirrorDir, "worktree", "add", "--force", "--detach", workspaceDir, checkoutRef],
         context: "create task workspace",
       });
 
@@ -124,50 +108,27 @@ export class WorkspaceManager {
     });
   }
 
-  private async ensureMirror(
-    mirrorDir: string,
-    repoUrl: string,
-  ): Promise<void> {
+  private async ensureMirror(mirrorDir: string, repoUrl: string): Promise<void> {
     if (!existsSync(mirrorDir)) {
       await this.runChecked({
-        args: this.authArgs([
-          "clone",
-          "--bare",
-          repoUrl,
-          mirrorDir,
-        ]),
+        args: this.authArgs(["clone", "--bare", repoUrl, mirrorDir]),
         env: AUTH_ENV,
         context: "clone bare mirror",
       });
     }
     await this.normalizeRepositoryCache(mirrorDir);
     await this.runChecked({
-      args: this.authArgs([
-        "--git-dir",
-        mirrorDir,
-        "remote",
-        "update",
-        "--prune",
-      ]),
+      args: this.authArgs(["--git-dir", mirrorDir, "remote", "update", "--prune"]),
       env: AUTH_ENV,
       context: "update bare mirror",
     });
   }
 
-  private async prepareRef(
-    mirrorDir: string,
-    task: WorkspaceCandidate,
-  ): Promise<string> {
+  private async prepareRef(mirrorDir: string, task: WorkspaceCandidate): Promise<string> {
     if (task.prNumber && task.prNumber > 0) {
       const refName = `refs/remotes/origin/github-scan-runner-pr-${task.prNumber}`;
       await this.runChecked({
-        args: this.authArgs([
-          "--git-dir",
-          mirrorDir,
-          "fetch",
-          "origin",
-          `+refs/pull/${task.prNumber}/head:${refName}`,
-        ]),
+        args: this.authArgs(["--git-dir", mirrorDir, "fetch", "origin", `+refs/pull/${task.prNumber}/head:${refName}`]),
         env: AUTH_ENV,
         context: "fetch pull request head",
       });
@@ -184,78 +145,34 @@ export class WorkspaceManager {
 
   private async seedGitIdentity(workspaceDir: string): Promise<void> {
     await this.runGit({
-      args: [
-        "-C",
-        workspaceDir,
-        "config",
-        "user.name",
-        `${this.identity.login} via github-scan-runner`,
-      ],
+      args: ["-C", workspaceDir, "config", "user.name", `${this.identity.login} via github-scan-runner`],
     });
     await this.runGit({
-      args: [
-        "-C",
-        workspaceDir,
-        "config",
-        "user.email",
-        `${this.identity.login}@users.noreply.github.com`,
-      ],
+      args: ["-C", workspaceDir, "config", "user.email", `${this.identity.login}@users.noreply.github.com`],
     });
   }
 
   private async normalizeRepositoryCache(mirrorDir: string): Promise<void> {
     await this.runGit({
-      args: [
-        "--git-dir",
-        mirrorDir,
-        "config",
-        "--unset-all",
-        "remote.origin.mirror",
-      ],
+      args: ["--git-dir", mirrorDir, "config", "--unset-all", "remote.origin.mirror"],
     });
     await this.runGit({
-      args: [
-        "--git-dir",
-        mirrorDir,
-        "config",
-        "--unset-all",
-        "remote.origin.fetch",
-      ],
+      args: ["--git-dir", mirrorDir, "config", "--unset-all", "remote.origin.fetch"],
     });
-    for (const fetch of [
-      "+refs/heads/*:refs/remotes/origin/*",
-      "+refs/tags/*:refs/tags/*",
-    ]) {
+    for (const fetch of ["+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*"]) {
       await this.runChecked({
-        args: [
-          "--git-dir",
-          mirrorDir,
-          "config",
-          "--add",
-          "remote.origin.fetch",
-          fetch,
-        ],
+        args: ["--git-dir", mirrorDir, "config", "--add", "remote.origin.fetch", fetch],
         context: "configure repository cache fetch refspec",
       });
     }
   }
 
-  private async pruneStaleWorktreeEntry(
-    mirrorDir: string,
-    workspaceDir: string,
-  ): Promise<void> {
+  private async pruneStaleWorktreeEntry(mirrorDir: string, workspaceDir: string): Promise<void> {
     await this.runGit({
       args: ["--git-dir", mirrorDir, "worktree", "prune"],
     });
     await this.runGit({
-      args: [
-        "--git-dir",
-        mirrorDir,
-        "worktree",
-        "remove",
-        "--force",
-        workspaceDir,
-      ],
+      args: ["--git-dir", mirrorDir, "worktree", "remove", "--force", workspaceDir],
     });
   }
 
@@ -270,17 +187,12 @@ export class WorkspaceManager {
   }): Promise<GitRunResult> {
     const result = await this.runGit({ args: opts.args, env: opts.env });
     if (result.statusCode !== 0) {
-      throw new Error(
-        `${opts.context} failed (exit ${result.statusCode}): ${result.stderr || result.stdout}`,
-      );
+      throw new Error(`${opts.context} failed (exit ${result.statusCode}): ${result.stderr || result.stdout}`);
     }
     return result;
   }
 
-  private async withRepoLock<T>(
-    mirrorDir: string,
-    fn: () => Promise<T>,
-  ): Promise<T> {
+  private async withRepoLock<T>(mirrorDir: string, fn: () => Promise<T>): Promise<T> {
     const previous = this.repoLocks.get(mirrorDir) ?? Promise.resolve();
     let succeeded = false;
     let value!: T;

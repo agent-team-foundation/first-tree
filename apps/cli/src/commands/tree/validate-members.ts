@@ -83,16 +83,12 @@ function validateMember(nodePath: string, treeRoot: string): string[] {
   if (!memberType) {
     errors.push(`${location}: missing 'type' field`);
   } else if (!VALID_TYPES.has(memberType)) {
-    errors.push(
-      `${location}: invalid type '${memberType}' — must be one of: ${[...VALID_TYPES].sort().join(", ")}`,
-    );
+    errors.push(`${location}: invalid type '${memberType}' — must be one of: ${[...VALID_TYPES].sort().join(", ")}`);
   }
 
   const status = extractScalar(fm, "status");
   if (status !== null && !VALID_STATUSES.has(status)) {
-    errors.push(
-      `${location}: invalid status '${status}' — must be one of: ${[...VALID_STATUSES].sort().join(", ")}`,
-    );
+    errors.push(`${location}: invalid status '${status}' — must be one of: ${[...VALID_STATUSES].sort().join(", ")}`);
   }
 
   const role = extractScalar(fm, "role");

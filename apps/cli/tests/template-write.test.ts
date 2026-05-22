@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { bootstrapTreeRoot } from "../src/commands/tree/bootstrap.js";
 import { readCurrentCliVersion } from "../src/commands/tree/cli-version.js";
 import {
-  VALIDATE_WORKFLOW_TEMPLATE_VERSION,
   ensureTier0RuleLayer,
+  VALIDATE_WORKFLOW_TEMPLATE_VERSION,
   validateWorkflowPath,
 } from "../src/commands/tree/rule-layer.js";
 import { parseTemplateVersion, writeTemplatedFile } from "../src/commands/tree/template-write.js";
@@ -126,9 +126,7 @@ describe("tree rule-layer templates", () => {
 
     expect(summary.tier0RuleLayer?.validate).toEqual({ kind: "written" });
     expect(existsSync(validateWorkflowPath(root))).toBe(true);
-    expect(parseTemplateVersion(validateWorkflowPath(root))).toBe(
-      VALIDATE_WORKFLOW_TEMPLATE_VERSION,
-    );
+    expect(parseTemplateVersion(validateWorkflowPath(root))).toBe(VALIDATE_WORKFLOW_TEMPLATE_VERSION);
   });
 
   it("does not overwrite custom validate workflows when re-ensuring Tier 0", () => {

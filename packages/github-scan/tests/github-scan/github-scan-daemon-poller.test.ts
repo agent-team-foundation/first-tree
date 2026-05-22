@@ -11,24 +11,14 @@
  *   - `runPoller` loop exits cleanly on AbortSignal.
  */
 
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { isRateLimited, pollOnce, rateLimitBackoffMs, runPoller } from "../../src/github-scan/engine/daemon/poller.js";
 import { GhClient } from "../../src/github-scan/engine/runtime/gh.js";
 import { resolveGitHubScanPaths } from "../../src/github-scan/engine/runtime/paths.js";
-import {
-  isRateLimited,
-  pollOnce,
-  rateLimitBackoffMs,
-  runPoller,
-} from "../../src/github-scan/engine/daemon/poller.js";
 
 interface ResponseMatcher {
   match: (argv: readonly string[]) => boolean;
@@ -39,31 +29,29 @@ interface ResponseMatcher {
 
 function makeStubGh(matchers: ResponseMatcher[]): GhClient & { calls: string[][] } {
   const calls: string[][] = [];
-  const spawn = vi
-    .fn()
-    .mockImplementation((_cmd: string, argv: string[]) => {
-      calls.push([...argv]);
-      for (const m of matchers) {
-        if (m.match(argv)) {
-          return {
-            pid: 1,
-            status: m.status ?? 0,
-            signal: null,
-            stdout: Buffer.from(m.stdout ?? ""),
-            stderr: Buffer.from(m.stderr ?? ""),
-            output: [],
-          };
-        }
+  const spawn = vi.fn().mockImplementation((_cmd: string, argv: string[]) => {
+    calls.push([...argv]);
+    for (const m of matchers) {
+      if (m.match(argv)) {
+        return {
+          pid: 1,
+          status: m.status ?? 0,
+          signal: null,
+          stdout: Buffer.from(m.stdout ?? ""),
+          stderr: Buffer.from(m.stderr ?? ""),
+          output: [],
+        };
       }
-      return {
-        pid: 1,
-        status: 0,
-        signal: null,
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        output: [],
-      };
-    });
+    }
+    return {
+      pid: 1,
+      status: 0,
+      signal: null,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      output: [],
+    };
+  });
   const client = new GhClient({ spawn });
   return Object.assign(client, { calls });
 }
@@ -138,8 +126,7 @@ describe("pollOnce parity with Rust fetcher", () => {
           type: "PullRequest",
           title: "fix(tree): salvage nya1 member node from closed sync PR 282",
           url: "https://api.github.com/repos/serenakeyitan/paperclip-tree/pulls/290",
-          latest_comment_url:
-            "https://api.github.com/repos/serenakeyitan/paperclip-tree/issues/comments/4258143984",
+          latest_comment_url: "https://api.github.com/repos/serenakeyitan/paperclip-tree/issues/comments/4258143984",
         },
         repository: { full_name: "serenakeyitan/paperclip-tree" },
         reason: "review_requested",
@@ -184,9 +171,7 @@ describe("pollOnce parity with Rust fetcher", () => {
 
     // The daemon monitors the full notification stream, then constrains
     // visibility by the configured repo allow-list.
-    const notifCall = gh.calls.find(
-      (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
-    );
+    const notifCall = gh.calls.find((argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"));
     expect(notifCall).toBeDefined();
     expect(notifCall?.[1]).toBe("/notifications?all=true&per_page=100");
 
@@ -206,8 +191,7 @@ describe("pollOnce parity with Rust fetcher", () => {
       repo: "serenakeyitan/paperclip-tree",
       title: "fix(tree): salvage nya1 member node from closed sync PR 282",
       url: "https://api.github.com/repos/serenakeyitan/paperclip-tree/pulls/290",
-      last_actor:
-        "https://api.github.com/repos/serenakeyitan/paperclip-tree/issues/comments/4258143984",
+      last_actor: "https://api.github.com/repos/serenakeyitan/paperclip-tree/issues/comments/4258143984",
       updated_at: "2026-04-16T07:24:28Z",
       unread: false,
       priority: 1,
@@ -241,8 +225,7 @@ describe("pollOnce parity with Rust fetcher", () => {
   it("marks rateLimited=true when notifications fetch is rate-limited", async () => {
     const gh = makeStubGh([
       {
-        match: (argv) =>
-          argv[0] === "api" && argv[1]?.startsWith("/notifications"),
+        match: (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
         status: 1,
         stderr: "API rate limit exceeded (HTTP 403)",
       },
@@ -271,8 +254,7 @@ describe("pollOnce parity with Rust fetcher", () => {
     ]);
     const gh = makeStubGh([
       {
-        match: (argv) =>
-          argv[0] === "api" && argv[1]?.startsWith("/notifications"),
+        match: (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
         stdout: rawNotification,
       },
     ]);
@@ -301,8 +283,7 @@ describe("runPoller loop", () => {
   it("exits cleanly when the AbortSignal fires", async () => {
     const gh = makeStubGh([
       {
-        match: (argv) =>
-          argv[0] === "api" && argv[1]?.startsWith("/notifications"),
+        match: (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
         stdout: "[]",
       },
     ]);
@@ -348,8 +329,7 @@ describe("runPoller loop", () => {
     // them matches rateLimitBackoffMs(1) = 120_000.
     let callIdx = 0;
     const spawn = vi.fn().mockImplementation((_cmd: string, argv: string[]) => {
-      const isNotifications =
-        argv[0] === "api" && argv[1]?.startsWith("/notifications");
+      const isNotifications = argv[0] === "api" && argv[1]?.startsWith("/notifications");
       if (!isNotifications) {
         return {
           pid: 1,

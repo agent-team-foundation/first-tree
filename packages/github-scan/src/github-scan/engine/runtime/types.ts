@@ -137,10 +137,7 @@ export const GITHUB_SCAN_LABEL_META = {
     description: "GitHub Scan: needs human attention",
   },
   "github-scan:done": { color: "0e8a16", description: "GitHub Scan: handled" },
-} as const satisfies Record<
-  string,
-  { color: string; description: string }
->;
+} as const satisfies Record<string, { color: string; description: string }>;
 
 export const ALL_GITHUB_SCAN_LABELS = [
   "github-scan:new",

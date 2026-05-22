@@ -28,31 +28,22 @@
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-
+import type { TaskKind } from "../runtime/task-kind.js";
 import type { Bus } from "./bus.js";
+import { CLAIM_STALE_AFTER_SEC, peekClaim, releaseClaim, tryClaim } from "./claim.js";
+import type { GhClient } from "./gh-client.js";
 import {
-  CLAIM_STALE_AFTER_SEC,
-  peekClaim,
-  releaseClaim,
-  tryClaim,
-} from "./claim.js";
-import {
-  AgentPool,
-  executeAgent,
-  runWithTimeout,
   type AgentIdentity,
   type AgentOutcome,
+  AgentPool,
   type AgentRequest,
-  type AgentSpec,
   type AgentSpawner,
+  type AgentSpec,
   type AgentTask,
+  executeAgent,
+  runWithTimeout,
 } from "./runner.js";
-import {
-  WorkspaceManager,
-  type WorkspaceCandidate,
-} from "./workspace.js";
-import type { GhClient } from "./gh-client.js";
-import type { TaskKind } from "../runtime/task-kind.js";
+import type { WorkspaceCandidate, WorkspaceManager } from "./workspace.js";
 
 export interface TaskCandidate {
   /** Origin: `notifications` | `review-search` | `recovered-running`. */
@@ -214,18 +205,13 @@ export class Dispatcher {
     // Drain pending queue without running.
     this.pending.length = 0;
     this.queuedThreads.clear();
-    await Promise.all(
-      [...this.active.values()].map((t) => t.done.catch(() => undefined)),
-    );
+    await Promise.all([...this.active.values()].map((t) => t.done.catch(() => undefined)));
   }
 
   /** Pump the queue up to `maxParallel`. */
   private pump(): void {
     if (this.stopped) return;
-    while (
-      this.active.size < this.options.maxParallel &&
-      this.pending.length > 0
-    ) {
+    while (this.active.size < this.options.maxParallel && this.pending.length > 0) {
       const candidate = this.pending.shift();
       if (!candidate) break;
       this.queuedThreads.delete(candidate.threadKey);
@@ -270,19 +256,15 @@ export class Dispatcher {
       threadKey: candidate.threadKey,
       title: candidate.title,
       claimed: true,
-      done: this.runTask(taskId, taskDir, snapshotDir, candidate).finally(
-        () => {
-          try {
-            releaseClaim(this.options.claimsDir, candidate.notificationId);
-          } catch (err) {
-            this.logger.warn(
-              `dispatcher: failed to release claim: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          this.active.delete(taskId);
-          this.pump();
-        },
-      ),
+      done: this.runTask(taskId, taskDir, snapshotDir, candidate).finally(() => {
+        try {
+          releaseClaim(this.options.claimsDir, candidate.notificationId);
+        } catch (err) {
+          this.logger.warn(`dispatcher: failed to release claim: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        this.active.delete(taskId);
+        this.pump();
+      }),
     };
     this.active.set(taskId, active);
 
@@ -295,12 +277,7 @@ export class Dispatcher {
     });
   }
 
-  private async runTask(
-    taskId: string,
-    taskDir: string,
-    snapshotDir: string,
-    candidate: TaskCandidate,
-  ): Promise<void> {
+  private async runTask(taskId: string, taskDir: string, snapshotDir: string, candidate: TaskCandidate): Promise<void> {
     if (this.options.dryRun) {
       const record: CompletionRecord = {
         taskId,
@@ -318,9 +295,7 @@ export class Dispatcher {
 
     let workspaceDir: string;
     try {
-      const lease = await this.options.workspaceManager.prepare(
-        toWorkspaceCandidate(candidate),
-      );
+      const lease = await this.options.workspaceManager.prepare(toWorkspaceCandidate(candidate));
       workspaceDir = lease.workspaceDir;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -339,14 +314,9 @@ export class Dispatcher {
     let effectiveSnapshotDir = snapshotDir;
     if (this.options.snapshotWriter) {
       try {
-        effectiveSnapshotDir = await this.options.snapshotWriter.writeTaskSnapshot(
-          candidate,
-          taskDir,
-        );
+        effectiveSnapshotDir = await this.options.snapshotWriter.writeTaskSnapshot(candidate, taskDir);
       } catch (err) {
-        this.logger.warn(
-          `dispatcher: snapshot hydration failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        this.logger.warn(`dispatcher: snapshot hydration failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -372,10 +342,11 @@ export class Dispatcher {
     for (const spec of agents) {
       try {
         outcome = await runWithTimeout({
-          run: () => executeAgent(spec, request, {
-            timeoutMs: this.options.taskTimeoutMs,
-            spawner: this.options.spawner,
-          }),
+          run: () =>
+            executeAgent(spec, request, {
+              timeoutMs: this.options.taskTimeoutMs,
+              spawner: this.options.spawner,
+            }),
           // `executeAgent`'s spawner handles its own kill hook; we use
           // runWithTimeout as an additional safety net and propagate
           // the shutdown signal.
@@ -427,12 +398,7 @@ export class Dispatcher {
     if (record.phase === "skipped-claim") return;
     this.options.bus.publish({
       kind: "task",
-      phase:
-        record.phase === "timed_out"
-          ? "timed_out"
-          : record.phase === "failed"
-            ? "failed"
-            : "completed",
+      phase: record.phase === "timed_out" ? "timed_out" : record.phase === "failed" ? "failed" : "completed",
       task_id: record.taskId,
       thread_key: record.threadKey,
       status: record.status,

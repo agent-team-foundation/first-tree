@@ -1,28 +1,19 @@
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  Scheduler,
   failureRetryDelaySec,
   operatorRepoFor,
   readRoutingSnapshotText,
   retryDelaySec,
   routeWorkspaceCandidate,
+  Scheduler,
   shouldRouteToOperatorRepo,
 } from "../../src/github-scan/engine/daemon/scheduler.js";
 import { ThreadStore } from "../../src/github-scan/engine/daemon/thread-store.js";
-import {
-  buildReviewRequestCandidate,
-  toDispatcherCandidate,
-} from "../../src/github-scan/engine/runtime/task.js";
+import { buildReviewRequestCandidate, toDispatcherCandidate } from "../../src/github-scan/engine/runtime/task.js";
 
 const tempRoots: string[] = [];
 
@@ -386,9 +377,7 @@ describe("Scheduler.enqueueRecoverableTasks", () => {
       nowSec: () => 99,
     });
     const candidates = sched.enqueueRecoverableTasks("github.com");
-    expect(candidates.map((c) => c.threadKey)).toEqual([
-      "/repos/o/r/pulls/1",
-    ]);
+    expect(candidates.map((c) => c.threadKey)).toEqual(["/repos/o/r/pulls/1"]);
     const meta = store.readTaskMetadata("running-1");
     expect(meta.get("status")).toBe("orphaned");
     expect(meta.get("finished_at")).toBe("99");
@@ -409,8 +398,7 @@ describe("operator-repo routing helpers", () => {
       .toLowerCase();
     expect(shouldRouteToOperatorRepo(yes, "bingran-you")).toBe(true);
 
-    const no =
-      "please review this pull request — github-scan-runner already commented.".toLowerCase();
+    const no = "please review this pull request — github-scan-runner already commented.".toLowerCase();
     expect(shouldRouteToOperatorRepo(no, "bingran-you")).toBe(false);
   });
 
@@ -426,10 +414,7 @@ describe("operator-repo routing helpers", () => {
 
   it("routeWorkspaceCandidate routes when a snapshot asks for reconfiguration", () => {
     const dir = makeHome("route2");
-    writeFileSync(
-      join(dir, "subject.json"),
-      "@bingran-you please configure the github-scan-runner service",
-    );
+    writeFileSync(join(dir, "subject.json"), "@bingran-you please configure the github-scan-runner service");
     const candidate = buildReviewRequestCandidate({
       repo: "o/r",
       number: 10,

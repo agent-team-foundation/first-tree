@@ -56,12 +56,7 @@ function readCached(deps: IdentityDeps): Identity | null {
 function fetchFreshIdentity(deps: IdentityDeps): Identity {
   const gh = deps.gh ?? new GhClient();
   const host = deps.host ?? "github.com";
-  const stdout = gh.runChecked("api /user", [
-    "api",
-    "--hostname",
-    host,
-    "/user",
-  ]);
+  const stdout = gh.runChecked("api /user", ["api", "--hostname", host, "/user"]);
   const parsed = JSON.parse(stdout) as { login?: unknown };
   if (typeof parsed.login !== "string" || parsed.login.length === 0) {
     throw new Error("gh api /user returned no login");
@@ -82,9 +77,7 @@ export function resolveIdentity(deps: IdentityDeps): Identity {
     return cached;
   }
   const fresh = fetchFreshIdentity(deps);
-  const write =
-    deps.writeFile ??
-    ((p: string, data: string) => writeFileSync(p, data, "utf-8"));
+  const write = deps.writeFile ?? ((p: string, data: string) => writeFileSync(p, data, "utf-8"));
   write(deps.cachePath, `${JSON.stringify(fresh, null, 2)}\n`);
   return fresh;
 }

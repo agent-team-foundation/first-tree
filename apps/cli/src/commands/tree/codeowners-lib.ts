@@ -35,11 +35,7 @@ export function parseOwners(path: string): string[] | null {
     .filter(Boolean);
 }
 
-export function resolveNodeOwners(
-  folder: string,
-  treeRoot: string,
-  cache: Map<string, string[]>,
-): string[] {
+export function resolveNodeOwners(folder: string, treeRoot: string, cache: Map<string, string[]>): string[] {
   const cached = cache.get(folder);
   if (cached !== undefined) {
     return cached;
@@ -51,10 +47,7 @@ export function resolveNodeOwners(
   let resolved: string[];
   if (owners === null || owners.length === 0) {
     const parent = dirname(folder);
-    resolved =
-      parent.length >= treeRoot.length && parent !== folder
-        ? resolveNodeOwners(parent, treeRoot, cache)
-        : [];
+    resolved = parent.length >= treeRoot.length && parent !== folder ? resolveNodeOwners(parent, treeRoot, cache) : [];
   } else {
     resolved = owners;
   }
@@ -156,10 +149,7 @@ export function collectEntries(treeRoot: string): Array<[string, string[]]> {
 
         if (leafOwners && leafOwners.length > 0) {
           const inheritedOwners = folderOwners.filter((owner) => owner !== "*");
-          const combined = [
-            ...inheritedOwners,
-            ...leafOwners.filter((owner) => !inheritedOwners.includes(owner)),
-          ];
+          const combined = [...inheritedOwners, ...leafOwners.filter((owner) => !inheritedOwners.includes(owner))];
 
           if (combined.length > 0) {
             entries.push([codeownersPath(childPath, treeRoot), combined]);
@@ -191,10 +181,7 @@ export function collectEntries(treeRoot: string): Array<[string, string[]]> {
     }
 
     if (leafOwners && leafOwners.length > 0) {
-      const combined = [
-        ...rootOwners,
-        ...leafOwners.filter((owner) => !rootOwners.includes(owner)),
-      ];
+      const combined = [...rootOwners, ...leafOwners.filter((owner) => !rootOwners.includes(owner))];
       entries.push([codeownersPath(childPath, treeRoot), combined]);
     }
   }
@@ -206,10 +193,7 @@ export function collectEntries(treeRoot: string): Array<[string, string[]]> {
   return entries;
 }
 
-export function generateCodeowners(
-  treeRoot: string,
-  options?: { check?: boolean; alwaysInclude?: string[] },
-): number {
+export function generateCodeowners(treeRoot: string, options?: { check?: boolean; alwaysInclude?: string[] }): number {
   const check = options?.check ?? false;
   const alwaysInclude = options?.alwaysInclude ?? [];
   const entries = collectEntries(treeRoot);
@@ -234,9 +218,7 @@ export function generateCodeowners(
       return 0;
     }
 
-    console.log(
-      "CODEOWNERS is out-of-date. Run: npx -p first-tree first-tree tree codeowners",
-    );
+    console.log("CODEOWNERS is out-of-date. Run: npx -p first-tree first-tree tree codeowners");
     return 1;
   }
 

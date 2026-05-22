@@ -5,14 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { installTreeAutomation } from "../src/commands/tree/automation.js";
-import {
-  autoMergeWorkflowPath,
-  reviewEnforcerWorkflowPath,
-} from "../src/commands/tree/rule-layer.js";
-import {
-  renderAutoMergeWorkflow,
-  renderReviewEnforcerWorkflow,
-} from "../src/commands/tree/tree-templates.js";
+import { autoMergeWorkflowPath, reviewEnforcerWorkflowPath } from "../src/commands/tree/rule-layer.js";
+import { renderAutoMergeWorkflow, renderReviewEnforcerWorkflow } from "../src/commands/tree/tree-templates.js";
 
 const tempDirs: string[] = [];
 
@@ -22,10 +16,7 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
-function writeTreeFixture(
-  root: string,
-  remoteUrl = "https://github.com/acme/context-tree.git",
-): void {
+function writeTreeFixture(root: string, remoteUrl = "https://github.com/acme/context-tree.git"): void {
   mkdirSync(join(root, ".first-tree"), { recursive: true });
   writeFileSync(join(root, ".git"), "gitdir: /tmp/tree\n");
   writeFileSync(join(root, "AGENTS.md"), "# Agents\n");
@@ -76,12 +67,8 @@ describe("installTreeAutomation", () => {
     expect(summary.stage).toBe("write_rule_layer");
     expect(summary.repoSlug).toBe("acme/context-tree");
     expect(summary.workflowFiles.map((item) => item.status)).toEqual(["written", "written"]);
-    expect(readFileSync(autoMergeWorkflowPath(root), "utf8")).toContain(
-      "# first-tree-template-version: 1",
-    );
-    expect(readFileSync(reviewEnforcerWorkflowPath(root), "utf8")).toContain(
-      "# first-tree-template-version: 1",
-    );
+    expect(readFileSync(autoMergeWorkflowPath(root), "utf8")).toContain("# first-tree-template-version: 1");
+    expect(readFileSync(reviewEnforcerWorkflowPath(root), "utf8")).toContain("# first-tree-template-version: 1");
     expect(calls[0]).toBe("gh api repos/acme/context-tree");
     expect(calls).toContain("gh api repos/acme/context-tree/installation");
   });
@@ -114,9 +101,7 @@ describe("installTreeAutomation", () => {
     const summary = installTreeAutomation(root, { dryRun: true, tier: 2 }, runner);
 
     expect(summary.stage).toBe("create_ruleset");
-    expect(summary.nextCommands[0]).toContain(
-      "gh api repos/acme/context-tree/rulesets --method POST",
-    );
+    expect(summary.nextCommands[0]).toContain("gh api repos/acme/context-tree/rulesets --method POST");
     expect(summary.nextCommands[0]).toContain('"enforcement": "evaluate"');
     expect(summary.nextCommands[0]).toContain('"required_approving_review_count": 1');
     expect(summary.nextCommands[0]).toContain('"context": "gate"');
@@ -182,9 +167,7 @@ describe("installTreeAutomation", () => {
       id: 42,
       name: "first-tree owners gate",
     });
-    expect(summary.nextCommands[0]).toContain(
-      "gh api repos/acme/context-tree/rulesets/42 --method PUT",
-    );
+    expect(summary.nextCommands[0]).toContain("gh api repos/acme/context-tree/rulesets/42 --method PUT");
     expect(summary.nextCommands[0]).toContain('"enforcement": "active"');
   });
 

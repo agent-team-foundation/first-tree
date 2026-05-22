@@ -18,10 +18,7 @@ export const TREE_REPO_URL_MARKER = "FIRST-TREE-TREE-REPO-URL:";
 export const ENTRYPOINT_MARKER = "FIRST-TREE-ENTRYPOINT:";
 export const WORKSPACE_ID_MARKER = "FIRST-TREE-WORKSPACE-ID:";
 export const SOURCE_STATE_MARKER = "FIRST-TREE-SOURCE-STATE:";
-export const SOURCE_INTEGRATION_FILES: readonly SourceIntegrationFile[] = [
-  "AGENTS.md",
-  "CLAUDE.md",
-] as const;
+export const SOURCE_INTEGRATION_FILES: readonly SourceIntegrationFile[] = ["AGENTS.md", "CLAUDE.md"] as const;
 
 export type ParsedSourceBindingContract = {
   bindingContract?: string;
@@ -59,9 +56,7 @@ function extractManagedBlock(text: string): string | undefined {
 }
 
 function readMarker(block: string, marker: string): string | undefined {
-  const match = block.match(
-    new RegExp(`^${escapeForRegExp(marker)}\\s+(?:\`(.+?)\`|(.+?))\\s*$`, "mu"),
-  );
+  const match = block.match(new RegExp(`^${escapeForRegExp(marker)}\\s+(?:\`(.+?)\`|(.+?))\\s*$`, "mu"));
   const value = match?.[1] ?? match?.[2];
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
@@ -88,9 +83,7 @@ function deriveScope(bindingMode: SourceBindingMode | undefined): "repo" | "work
     return undefined;
   }
 
-  return bindingMode === "workspace-root" || bindingMode === "workspace-member"
-    ? "workspace"
-    : "repo";
+  return bindingMode === "workspace-root" || bindingMode === "workspace-member" ? "workspace" : "repo";
 }
 
 export function parseGitHubRepoReference(value: string | undefined): string | undefined {
@@ -113,9 +106,7 @@ export function parseGitHubRepoReference(value: string | undefined): string | un
   return `${parsed.owner}/${parsed.repo}`;
 }
 
-export function parseManagedSourceBindingText(
-  text: string,
-): ParsedSourceBindingContract | undefined {
+export function parseManagedSourceBindingText(text: string): ParsedSourceBindingContract | undefined {
   const block = extractManagedBlock(text);
 
   if (block === undefined) {
@@ -130,8 +121,7 @@ export function parseManagedSourceBindingText(
     return value === "pending publish" ? undefined : value;
   })();
   const treeRepoSlug =
-    parseGitHubRepoReference(readMarker(block, TREE_REPO_SLUG_MARKER)) ??
-    parseGitHubRepoReference(treeRepoUrl);
+    parseGitHubRepoReference(readMarker(block, TREE_REPO_SLUG_MARKER)) ?? parseGitHubRepoReference(treeRepoUrl);
   const entrypoint = readMarker(block, ENTRYPOINT_MARKER);
   const sourceStatePath = readMarker(block, SOURCE_STATE_MARKER);
   const workspaceId = readMarker(block, WORKSPACE_ID_MARKER);
@@ -184,9 +174,7 @@ export function readManagedSourceBinding(root: string): ManagedSourceBinding | u
   return undefined;
 }
 
-export function findUpwardsManagedSourceBinding(
-  startDir: string,
-): ManagedSourceBinding | undefined {
+export function findUpwardsManagedSourceBinding(startDir: string): ManagedSourceBinding | undefined {
   let currentDir = resolve(startDir);
 
   while (true) {

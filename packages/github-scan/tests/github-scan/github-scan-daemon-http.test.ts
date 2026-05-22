@@ -11,12 +11,8 @@
  * contract doc §8 flagged for TS verification.
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
-import {
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,16 +24,16 @@ import {
   startHttpServer,
   tailAsJsonArray,
 } from "../../src/github-scan/engine/daemon/http.js";
-import type { DashboardTask } from "../../src/github-scan/engine/daemon/thread-store.js";
 import {
-  encodeSseFrame,
   encodeSseEvent,
-  splitIntoLines,
+  encodeSseFrame,
   SSE_KEEPALIVE,
   SSE_READY_FRAME,
   type SseBus,
   type SseEvent,
+  splitIntoLines,
 } from "../../src/github-scan/engine/daemon/sse.js";
+import type { DashboardTask } from "../../src/github-scan/engine/daemon/thread-store.js";
 
 /** Minimal controllable bus for SSE tests. */
 function makeManualBus(): {
@@ -70,11 +66,7 @@ interface RawResponse {
   body: Buffer;
 }
 
-function fetchRaw(
-  port: number,
-  path: string,
-  method = "GET",
-): Promise<RawResponse> {
+function fetchRaw(port: number, path: string, method = "GET"): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const req = httpRequest(
       {
@@ -164,15 +156,9 @@ describe("tailAsJsonArray", () => {
   });
 
   it("keeps only the last N non-empty lines, comma-joined, without re-parsing", () => {
-    writeFileSync(
-      ctx.activity,
-      '{"n":1}\n{"n":2}\n\n{"n":3}\n',
-      "utf-8",
-    );
+    writeFileSync(ctx.activity, '{"n":1}\n{"n":2}\n\n{"n":3}\n', "utf-8");
     expect(tailAsJsonArray(ctx.activity, 2)).toBe('[{"n":2},{"n":3}]');
-    expect(tailAsJsonArray(ctx.activity, 10)).toBe(
-      '[{"n":1},{"n":2},{"n":3}]',
-    );
+    expect(tailAsJsonArray(ctx.activity, 10)).toBe('[{"n":1},{"n":2},{"n":3}]');
   });
 
   it("passes malformed JSON lines through unchanged (matches Rust)", () => {
@@ -229,9 +215,7 @@ describe("SSE framing — byte-level parity with Rust send_sse", () => {
       total: 422,
       new_count: 3,
     });
-    expect(frame).toBe(
-      'event: inbox\ndata: {"last_poll":"2026-04-16T20:15:30Z","total":422,"new_count":3}\n\n',
-    );
+    expect(frame).toBe('event: inbox\ndata: {"last_poll":"2026-04-16T20:15:30Z","total":422,"new_count":3}\n\n');
   });
 
   it("exposes the canonical ready and keep-alive constants", () => {

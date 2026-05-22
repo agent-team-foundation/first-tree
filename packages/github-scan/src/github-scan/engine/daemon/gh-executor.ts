@@ -94,10 +94,7 @@ export class GhExecutor {
   }
 
   /** Normalize a spec so `bucket` and `mutating` are always set. */
-  static normalize(spec: GhCommandSpec): Required<
-    Pick<GhCommandSpec, "bucket" | "mutating">
-  > &
-    GhCommandSpec {
+  static normalize(spec: GhCommandSpec): Required<Pick<GhCommandSpec, "bucket" | "mutating">> & GhCommandSpec {
     return {
       ...spec,
       bucket: spec.bucket ?? bucketForArgs(spec.args),
@@ -155,10 +152,7 @@ export class GhExecutor {
       }
       if (spec.mutating) {
         nextAllowed = Math.max(nextAllowed, this.nextWriteEpochMs);
-        nextAllowed = Math.max(
-          nextAllowed,
-          this.lastWriteEpochMs + this.writeCooldownMs,
-        );
+        nextAllowed = Math.max(nextAllowed, this.lastWriteEpochMs + this.writeCooldownMs);
       }
       const waitMs = Math.max(0, nextAllowed - now);
       if (waitMs === 0) return;
@@ -211,11 +205,7 @@ export function bucketForArgs(args: readonly string[]): GhBucket {
   if (first === "search") return "search";
   if (first === "api") {
     const path = args[1] ?? "";
-    if (
-      path.startsWith("search/") ||
-      path.includes("/search/") ||
-      path.includes("search/")
-    ) {
+    if (path.startsWith("search/") || path.includes("/search/") || path.includes("search/")) {
       return "search";
     }
   }
@@ -245,17 +235,9 @@ export function commandIsMutating(args: readonly string[]): boolean {
         "unpin",
       ]).has(args[1] ?? "");
     case "pr":
-      return new Set([
-        "close",
-        "comment",
-        "create",
-        "edit",
-        "merge",
-        "ready",
-        "reopen",
-        "review",
-        "update-branch",
-      ]).has(args[1] ?? "");
+      return new Set(["close", "comment", "create", "edit", "merge", "ready", "reopen", "review", "update-branch"]).has(
+        args[1] ?? "",
+      );
     case "label":
       return new Set(["clone", "create", "delete", "edit"]).has(args[1] ?? "");
     default:
@@ -274,13 +256,7 @@ function apiCommandIsMutating(args: readonly string[]): boolean {
         explicitMethod = next.toUpperCase();
       }
       i += 1;
-    } else if (
-      arg === "-f" ||
-      arg === "-F" ||
-      arg === "--field" ||
-      arg === "--raw-field" ||
-      arg === "--input"
-    ) {
+    } else if (arg === "-f" || arg === "-F" || arg === "--field" || arg === "--raw-field" || arg === "--input") {
       hasFields = true;
     }
   }

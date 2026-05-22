@@ -1,33 +1,20 @@
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  GhClient,
   deduplicate,
+  GhClient,
   isRateLimitError,
   parseThreadActivity,
   pickNewerActivity,
   shouldIgnoreLatestSelfActivity,
   shouldIgnoreSelfAuthored,
 } from "../../src/github-scan/engine/daemon/gh-client.js";
-import {
-  GhExecutor,
-  type ExecOutput,
-  type GhCommandSpec,
-} from "../../src/github-scan/engine/daemon/gh-executor.js";
+import { type ExecOutput, type GhCommandSpec, GhExecutor } from "../../src/github-scan/engine/daemon/gh-executor.js";
 import { RepoFilter } from "../../src/github-scan/engine/runtime/repo-filter.js";
-import {
-  buildNotificationCandidate,
-  buildReviewRequestCandidate,
-} from "../../src/github-scan/engine/runtime/task.js";
+import { buildNotificationCandidate, buildReviewRequestCandidate } from "../../src/github-scan/engine/runtime/task.js";
 
 const tempRoots: string[] = [];
 
@@ -55,9 +42,7 @@ interface StubExecutor {
 function makeStubExecutor(): { executor: GhExecutor; ctl: StubExecutor } {
   const calls: GhCommandSpec[] = [];
   let queue: Array<Partial<ExecOutput>> = [];
-  let responder:
-    | ((spec: GhCommandSpec) => Partial<ExecOutput>)
-    | undefined;
+  let responder: ((spec: GhCommandSpec) => Partial<ExecOutput>) | undefined;
   // Virtual clock that advances with each injected sleep. This lets
   // the executor's rate-limit backoff path terminate in tests.
   let nowMs = 1_000_000;
@@ -66,9 +51,7 @@ function makeStubExecutor(): { executor: GhExecutor; ctl: StubExecutor } {
     writeCooldownMs: 0,
     spawnGh: async (spec) => {
       calls.push(spec);
-      const out = responder
-        ? responder(spec)
-        : queue.shift() ?? { stdout: "", stderr: "", statusCode: 0 };
+      const out = responder ? responder(spec) : (queue.shift() ?? { stdout: "", stderr: "", statusCode: 0 });
       return {
         stdout: out.stdout ?? "",
         stderr: out.stderr ?? "",
@@ -262,7 +245,6 @@ describe("GhClient.reviewRequests", () => {
       updatedAt: "2026-04-15T12:05:00Z",
     });
   });
-
 });
 
 describe("GhClient.collectCandidates", () => {
@@ -328,8 +310,7 @@ describe("GhClient.collectCandidates", () => {
       }
       if (spec.args[0] === "pr" && spec.args[1] === "list") {
         return {
-          stdout:
-            "11\tReview me later\thttps://github.com/o/r/pull/11\t2026-04-15T12:00:00Z\t0\tREVIEW_REQUIRED",
+          stdout: "11\tReview me later\thttps://github.com/o/r/pull/11\t2026-04-15T12:00:00Z\t0\tREVIEW_REQUIRED",
         };
       }
       if (spec.args[0] === "search" && spec.args[1] === "issues") {
@@ -350,12 +331,8 @@ describe("GhClient.collectCandidates", () => {
       lookbackSecs: 3600,
     });
     expect(poll.tasks).toEqual([]);
-    expect(
-      ctl.calls.some((call) => call.args[0] === "pr" && call.args[1] === "list"),
-    ).toBe(false);
-    expect(
-      ctl.calls.some((call) => call.args[0] === "search" && call.args[1] === "issues"),
-    ).toBe(false);
+    expect(ctl.calls.some((call) => call.args[0] === "pr" && call.args[1] === "list")).toBe(false);
+    expect(ctl.calls.some((call) => call.args[0] === "search" && call.args[1] === "issues")).toBe(false);
   });
 });
 
@@ -389,23 +366,18 @@ describe("GhClient.writeTaskSnapshot", () => {
     expect(files).toContain("README.txt");
     expect(files).toContain("subject.json");
     expect(files).toContain("pr-view.json");
-    expect(readFileSync(join(snapshotDir, "pr-view.json"), "utf8")).toBe(
-      '{"number":42}',
+    expect(readFileSync(join(snapshotDir, "pr-view.json"), "utf8")).toBe('{"number":42}');
+    expect(readFileSync(join(snapshotDir, "tree-context.env"), "utf8")).toContain(
+      "tree_repo=agent-team-foundation/first-tree-context",
     );
-    expect(
-      readFileSync(join(snapshotDir, "tree-context.env"), "utf8"),
-    ).toContain("tree_repo=agent-team-foundation/first-tree-context");
-    expect(
-      readFileSync(join(snapshotDir, "task-summary.env"), "utf8"),
-    ).toContain("tree_repo=agent-team-foundation/first-tree-context");
+    expect(readFileSync(join(snapshotDir, "task-summary.env"), "utf8")).toContain(
+      "tree_repo=agent-team-foundation/first-tree-context",
+    );
     // pr-commits.json is required so snapshot-mode idempotency
     // check runs in snapshot mode — see #158.
     expect(files).toContain("pr-commits.json");
     // Meta has bucket/status lines.
-    const meta = readFileSync(
-      join(snapshotDir, "pr-view.json.meta"),
-      "utf8",
-    );
+    const meta = readFileSync(join(snapshotDir, "pr-view.json.meta"), "utf8");
     expect(meta).toContain("bucket=core");
     expect(meta).toContain("snapshot_status=ok");
     expect(readFileSync(join(snapshotDir, "README.txt"), "utf8")).toContain(
@@ -459,9 +431,7 @@ describe("pure helpers", () => {
   it("shouldIgnoreSelfAuthored filters comments but not review requests", () => {
     expect(shouldIgnoreSelfAuthored("alice", "alice", "comment")).toBe(true);
     expect(shouldIgnoreSelfAuthored("alice", "alice", "review_request")).toBe(false);
-    expect(
-      shouldIgnoreSelfAuthored("alice", "github-actions[bot]", "mention"),
-    ).toBe(true);
+    expect(shouldIgnoreSelfAuthored("alice", "github-actions[bot]", "mention")).toBe(true);
     expect(shouldIgnoreSelfAuthored("alice", "bob", "comment")).toBe(false);
   });
 
@@ -471,12 +441,8 @@ describe("pure helpers", () => {
       userType: "User",
       updatedAt: "2026-04-15T12:00:00Z",
     };
-    expect(
-      shouldIgnoreLatestSelfActivity("alice", activity, "2026-04-15T12:00:00Z"),
-    ).toBe(true);
-    expect(
-      shouldIgnoreLatestSelfActivity("alice", activity, "2026-04-15T13:00:00Z"),
-    ).toBe(false);
+    expect(shouldIgnoreLatestSelfActivity("alice", activity, "2026-04-15T12:00:00Z")).toBe(true);
+    expect(shouldIgnoreLatestSelfActivity("alice", activity, "2026-04-15T13:00:00Z")).toBe(false);
   });
 
   it("isRateLimitError detects secondary/abuse substrings", () => {

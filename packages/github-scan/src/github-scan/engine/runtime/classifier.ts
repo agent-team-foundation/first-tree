@@ -20,7 +20,7 @@
  * No I/O. No subprocesses. This module is safe to import from anywhere.
  */
 
-import type { GitHubScanStatus, GhState } from "./types.js";
+import type { GhState, GitHubScanStatus } from "./types.js";
 
 export interface ClassifierInput {
   /** GitHub label slugs as observed on the PR/issue. */
@@ -36,8 +36,7 @@ export interface ClassifierInput {
  * Derive the github-scan status. Pure function — input-only.
  */
 export function classifyGitHubScanStatus(input: ClassifierInput): GitHubScanStatus {
-  const has = (needle: string): boolean =>
-    input.labels.some((label) => label === needle);
+  const has = (needle: string): boolean => input.labels.some((label) => label === needle);
 
   // Spec §2 rule 1: `github-scan:done` wins absolutely, even over open+wip etc.
   // Spec §9 edge case: "Item with both github-scan:done and github-scan:wip → still

@@ -26,9 +26,9 @@ import {
   fetchHumanLabelAppliedAt,
   fetchIssueComments,
   fetchPrCommits,
-  shouldAutoRevertHuman,
   type IssueComment,
   type PrCommit,
+  shouldAutoRevertHuman,
 } from "../../src/github-scan/engine/runtime/auto-revert.js";
 import type { GhClient, GhExecResult } from "../../src/github-scan/engine/runtime/gh.js";
 import type { InboxEntry } from "../../src/github-scan/engine/runtime/types.js";
@@ -260,11 +260,7 @@ describe("autoRevertHumanLabels — driver", () => {
     });
 
     expect(removeLabel).toHaveBeenCalledTimes(1);
-    expect(removeLabel).toHaveBeenCalledWith(
-      "agent-team-foundation/first-tree",
-      42,
-      "github-scan:human",
-    );
+    expect(removeLabel).toHaveBeenCalledWith("agent-team-foundation/first-tree", 42, "github-scan:human");
     expect(entry.labels).not.toContain("github-scan:human");
     expect(out.reverted).toEqual(["n-1"]);
     expect(out.warnings).toEqual([]);
@@ -503,22 +499,12 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
 
   it("3-page accumulation: walks pages until natural short-page end (no labelAppliedAt provided)", () => {
     const fullPage1 = Array.from({ length: AUTO_REVERT_PAGE_SIZE }, (_, i) =>
-      commentRaw(
-        "u",
-        `body ${i} long enough`,
-        `2026-04-30T11:${String(i % 60).padStart(2, "0")}:00Z`,
-      ),
+      commentRaw("u", `body ${i} long enough`, `2026-04-30T11:${String(i % 60).padStart(2, "0")}:00Z`),
     );
     const fullPage2 = Array.from({ length: AUTO_REVERT_PAGE_SIZE }, (_, i) =>
-      commentRaw(
-        "u",
-        `body p2 ${i} long enough`,
-        `2026-04-29T11:${String(i % 60).padStart(2, "0")}:00Z`,
-      ),
+      commentRaw("u", `body p2 ${i} long enough`, `2026-04-29T11:${String(i % 60).padStart(2, "0")}:00Z`),
     );
-    const shortPage3 = [
-      commentRaw("alice", "tail comment that is plenty long here", "2026-04-28T10:00:00Z"),
-    ];
+    const shortPage3 = [commentRaw("alice", "tail comment that is plenty long here", "2026-04-28T10:00:00Z")];
     const stub = makeRunStub([fullPage1, fullPage2, shortPage3]);
     const gh = { run: stub.run } as unknown as GhClient;
     const out = fetchIssueComments(gh, "o/r", 1);
@@ -531,19 +517,11 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
     const labelAppliedAt = "2026-04-30T10:00:00Z";
     // Page 1: full page of post-label comments (newest first).
     const fullPage1 = Array.from({ length: AUTO_REVERT_PAGE_SIZE }, (_, i) =>
-      commentRaw(
-        "u",
-        `post-label ${i} long enough body`,
-        `2026-04-30T11:${String(i % 60).padStart(2, "0")}:00Z`,
-      ),
+      commentRaw("u", `post-label ${i} long enough body`, `2026-04-30T11:${String(i % 60).padStart(2, "0")}:00Z`),
     );
     // Page 2: full page where the FIRST (newest) comment is already pre-label.
     const fullPage2 = Array.from({ length: AUTO_REVERT_PAGE_SIZE }, (_, i) =>
-      commentRaw(
-        "u",
-        `pre-label ${i} long enough body`,
-        `2026-04-29T11:${String(i % 60).padStart(2, "0")}:00Z`,
-      ),
+      commentRaw("u", `pre-label ${i} long enough body`, `2026-04-29T11:${String(i % 60).padStart(2, "0")}:00Z`),
     );
     // Page 3 should never be requested. Make it explode if it is.
     const stub = makeRunStub([fullPage1, fullPage2]);
@@ -570,26 +548,14 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
     // and we walk to the natural short-page terminator on page 3.
     const labelAppliedAt = "2026-01-01T00:00:00Z";
     const fullPage1 = Array.from({ length: AUTO_REVERT_PAGE_SIZE }, (_, i) =>
-      commentRaw(
-        "u",
-        `body ${i} long enough body`,
-        `2026-04-30T11:${String(i % 60).padStart(2, "0")}:00Z`,
-      ),
+      commentRaw("u", `body ${i} long enough body`, `2026-04-30T11:${String(i % 60).padStart(2, "0")}:00Z`),
     );
     const fullPage2 = Array.from({ length: AUTO_REVERT_PAGE_SIZE }, (_, i) =>
-      commentRaw(
-        "u",
-        `body p2 ${i} long enough`,
-        `2026-03-30T11:${String(i % 60).padStart(2, "0")}:00Z`,
-      ),
+      commentRaw("u", `body p2 ${i} long enough`, `2026-03-30T11:${String(i % 60).padStart(2, "0")}:00Z`),
     );
     // The "post-label comment on page 3" — found, not skipped.
     const shortPage3 = [
-      commentRaw(
-        "alice",
-        "Final-page comment that is genuinely long enough to count.",
-        "2026-02-01T10:00:00Z",
-      ),
+      commentRaw("alice", "Final-page comment that is genuinely long enough to count.", "2026-02-01T10:00:00Z"),
     ];
     const stub = makeRunStub([fullPage1, fullPage2, shortPage3]);
     const gh = { run: stub.run } as unknown as GhClient;
@@ -889,9 +855,7 @@ describe("fetchPrCommits — pagination (issue #383)", () => {
   });
 
   it("hard-cap engages on > MAX_PAGES full pages and emits a console.warn", () => {
-    const fullPage = Array.from({ length: AUTO_REVERT_PAGE_SIZE }, () =>
-      commitRaw("alice", "2026-04-30T11:00:00Z"),
-    );
+    const fullPage = Array.from({ length: AUTO_REVERT_PAGE_SIZE }, () => commitRaw("alice", "2026-04-30T11:00:00Z"));
     let calls = 0;
     const gh = {
       run: () => {

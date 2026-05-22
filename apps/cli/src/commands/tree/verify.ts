@@ -4,8 +4,8 @@ import { join, resolve } from "node:path";
 import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
 import { readSourceBindingContract } from "./binding-contract.js";
+import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
 import { resolveRepoRoot } from "./shared.js";
 import { readTreeIdentityContract } from "./tree-identity.js";
 import { runValidateMembers } from "./validate-members.js";
@@ -84,10 +84,7 @@ function formatSourceRepoError(targetRoot: string): string {
 }
 
 function verifyTreeRoot(targetRoot: string): VerifySummary {
-  if (
-    readSourceBindingContract(targetRoot) !== undefined &&
-    readTreeIdentityContract(targetRoot) === undefined
-  ) {
+  if (readSourceBindingContract(targetRoot) !== undefined && readTreeIdentityContract(targetRoot) === undefined) {
     throw new Error(formatSourceRepoError(targetRoot));
   }
 
@@ -114,18 +111,14 @@ function verifyTreeRoot(targetRoot: string): VerifySummary {
         ok:
           existsSync(join(targetRoot, "AGENTS.md")) &&
           existsSync(join(targetRoot, "CLAUDE.md")) &&
-          readFileSync(join(targetRoot, "AGENTS.md"), "utf-8").includes(
-            "BEGIN CONTEXT-TREE FRAMEWORK",
-          ),
+          readFileSync(join(targetRoot, "AGENTS.md"), "utf-8").includes("BEGIN CONTEXT-TREE FRAMEWORK"),
         ...(existsSync(join(targetRoot, "AGENTS.md")) && existsSync(join(targetRoot, "CLAUDE.md"))
           ? {}
           : { errors: ["AGENTS.md and CLAUDE.md must both exist in the tree root."] }),
       },
       frameworkVersion: {
         ok: existsSync(join(targetRoot, TREE_VERSION_FILE)),
-        ...(existsSync(join(targetRoot, TREE_VERSION_FILE))
-          ? {}
-          : { errors: [`.first-tree/VERSION is missing.`] }),
+        ...(existsSync(join(targetRoot, TREE_VERSION_FILE)) ? {} : { errors: [`.first-tree/VERSION is missing.`] }),
       },
       members: {
         ok: memberResult.exitCode === 0,

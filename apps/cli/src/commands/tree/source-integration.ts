@@ -1,7 +1,5 @@
 import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-
-import { SourceBindingMode, TreeMode } from "./binding-state.js";
 import {
   BINDING_CONTRACT_MARKER,
   BINDING_MODE_MARKER,
@@ -19,8 +17,9 @@ import {
   TREE_REPO_URL_MARKER,
   WORKSPACE_ID_MARKER,
 } from "./binding-contract.js";
-import { ManagedFileAction, upsertWhitepaperFile } from "./skill-lib.js";
+import type { SourceBindingMode, TreeMode } from "./binding-state.js";
 import { ensureTrailingNewline } from "./shared.js";
+import { type ManagedFileAction, upsertWhitepaperFile } from "./skill-lib.js";
 
 export type SourceIntegrationFile = "AGENTS.md" | "CLAUDE.md";
 
@@ -46,16 +45,9 @@ export type GitIgnoreUpdate = {
 
 const LOCAL_TREE_TEMP_ROOT = ".first-tree/tmp";
 
-const LOCAL_TREE_GITIGNORE_ENTRIES = [
-  `${LOCAL_TREE_TEMP_ROOT}/`,
-  ".agents/skills/",
-  ".claude/skills/",
-] as const;
+const LOCAL_TREE_GITIGNORE_ENTRIES = [`${LOCAL_TREE_TEMP_ROOT}/`, ".agents/skills/", ".claude/skills/"] as const;
 
-export function buildSourceIntegrationBlock(
-  treeRepoName: string,
-  options?: SourceIntegrationOptions,
-): string {
+export function buildSourceIntegrationBlock(treeRepoName: string, options?: SourceIntegrationOptions): string {
   const details = deriveSourceIntegrationDetails(treeRepoName, options);
 
   return [
@@ -196,11 +188,7 @@ function buildFallbackInstruction(treeRepoName: string, treeRepoUrl: string | nu
   return `- If you do not already have that tree repo cloned locally, clone a temporary working copy from \`${treeRepoUrl}\` into \`${join(LOCAL_TREE_TEMP_ROOT, treeRepoName)}/\`, use it for the current task, and delete it before you finish.`;
 }
 
-function describeBinding(
-  bindingMode: SourceBindingMode,
-  treeMode: TreeMode,
-  treeRepoName: string,
-): string {
+function describeBinding(bindingMode: SourceBindingMode, treeMode: TreeMode, treeRepoName: string): string {
   switch (bindingMode) {
     case "workspace-root":
       return `workspace root bound to shared tree repo \`${treeRepoName}\``;
@@ -240,9 +228,7 @@ export function upsertSourceIntegrationFiles(
   treeRepoName: string,
   options?: SourceIntegrationOptions,
 ): SourceIntegrationUpdate[] {
-  return SOURCE_INTEGRATION_FILES.map((file) =>
-    upsertSourceIntegrationFile(root, file, treeRepoName, options),
-  );
+  return SOURCE_INTEGRATION_FILES.map((file) => upsertSourceIntegrationFile(root, file, treeRepoName, options));
 }
 
 function upsertSourceIntegrationFile(

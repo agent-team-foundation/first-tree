@@ -6,9 +6,9 @@
  */
 
 import { cleanupExpiredClaims } from "../daemon/claim.js";
-import { resolveGitHubScanPaths } from "../runtime/paths.js";
 import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
 import { ThreadStore } from "../daemon/thread-store.js";
+import { resolveGitHubScanPaths } from "../runtime/paths.js";
 
 export interface RunCleanupOptions {
   write?: (line: string) => void;
@@ -17,10 +17,7 @@ export interface RunCleanupOptions {
   workspaceTtlSec?: number;
 }
 
-export async function runCleanup(
-  argv: readonly string[] = [],
-  options: RunCleanupOptions = {},
-): Promise<number> {
+export async function runCleanup(argv: readonly string[] = [], options: RunCleanupOptions = {}): Promise<number> {
   const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
   const home = options.runnerHome ?? parseHome(argv) ?? resolveRunnerHome();
   const ttl = options.workspaceTtlSec ?? parseTtl(argv) ?? 48 * 3_600;

@@ -7,12 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import {
-  DEFAULT_IDENTITY_TTL_MS,
-  resolveIdentity,
-} from "../../src/github-scan/engine/runtime/identity.js";
 import { GhClient } from "../../src/github-scan/engine/runtime/gh.js";
+import { DEFAULT_IDENTITY_TTL_MS, resolveIdentity } from "../../src/github-scan/engine/runtime/identity.js";
 
 function mkTmp(): string {
   return mkdtempSync(join(tmpdir(), "github-scan-identity-"));

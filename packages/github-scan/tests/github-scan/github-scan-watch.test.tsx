@@ -13,10 +13,7 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 
 import { GitHubScanWatch } from "../../src/github-scan/engine/commands/watch.js";
-import type {
-  ActivityEvent,
-  Inbox,
-} from "../../src/github-scan/engine/runtime/types.js";
+import type { ActivityEvent, Inbox } from "../../src/github-scan/engine/runtime/types.js";
 
 function mkInbox(entries: Inbox["notifications"]): Inbox {
   return { last_poll: "2026-04-16T20:00:00Z", notifications: entries };
@@ -68,9 +65,7 @@ describe("GitHubScanWatch view", () => {
       pr("4", "human", "d"),
       pr("5", "done", "e"),
     ]);
-    const { lastFrame } = render(
-      <GitHubScanWatch inbox={inbox} events={[]} />,
-    );
+    const { lastFrame } = render(<GitHubScanWatch inbox={inbox} events={[]} />);
     const frame = strip(lastFrame());
     expect(frame).toMatch(/github-scan/u);
     expect(frame).toMatch(/status board/u);
@@ -82,9 +77,7 @@ describe("GitHubScanWatch view", () => {
 
   it("shows the HUMAN section when items exist", () => {
     const inbox = mkInbox([pr("9", "human", "needs review")]);
-    const { lastFrame } = render(
-      <GitHubScanWatch inbox={inbox} events={[]} />,
-    );
+    const { lastFrame } = render(<GitHubScanWatch inbox={inbox} events={[]} />);
     const frame = strip(lastFrame());
     expect(frame).toMatch(/NEED-YOU/u);
     expect(frame).toMatch(/\(1\)/u);
@@ -93,9 +86,7 @@ describe("GitHubScanWatch view", () => {
 
   it("shows 'nothing needs you' when no human items", () => {
     const inbox = mkInbox([pr("1", "new", "chore")]);
-    const { lastFrame } = render(
-      <GitHubScanWatch inbox={inbox} events={[]} />,
-    );
+    const { lastFrame } = render(<GitHubScanWatch inbox={inbox} events={[]} />);
     const frame = strip(lastFrame());
     expect(frame).toMatch(/nothing needs you right now/u);
   });
@@ -107,9 +98,7 @@ describe("GitHubScanWatch view", () => {
       pr("3", "new", "c", "o/repoB"),
       pr("4", "done", "d", "o/repoA"),
     ]);
-    const { lastFrame } = render(
-      <GitHubScanWatch inbox={inbox} events={[]} />,
-    );
+    const { lastFrame } = render(<GitHubScanWatch inbox={inbox} events={[]} />);
     const frame = strip(lastFrame());
     expect(frame).toMatch(/repoA/u);
     expect(frame).toMatch(/repoB/u);
@@ -134,9 +123,7 @@ describe("GitHubScanWatch view", () => {
         to: "wip",
       },
     ];
-    const { lastFrame } = render(
-      <GitHubScanWatch inbox={inbox} events={events} />,
-    );
+    const { lastFrame } = render(<GitHubScanWatch inbox={inbox} events={events} />);
     const frame = strip(lastFrame());
     expect(frame).toMatch(/live/u);
     expect(frame).toMatch(/NEW/u);
@@ -156,21 +143,15 @@ describe("GitHubScanWatch view", () => {
         url: "https://github.com/o/r/pull/8",
       },
     ];
-    const { lastFrame } = render(
-      <GitHubScanWatch inbox={null} events={events} />,
-    );
+    const { lastFrame } = render(<GitHubScanWatch inbox={null} events={events} />);
     const frame = strip(lastFrame());
     expect(frame).toMatch(/▸ NEW/u);
     expect(frame).toMatch(/fresh arrival/u);
   });
 
   it("does not render poll events", () => {
-    const events: ActivityEvent[] = [
-      { ts: "2026-04-16T20:05:00Z", event: "poll", count: 7 },
-    ];
-    const { lastFrame } = render(
-      <GitHubScanWatch inbox={null} events={events} />,
-    );
+    const events: ActivityEvent[] = [{ ts: "2026-04-16T20:05:00Z", event: "poll", count: 7 }];
+    const { lastFrame } = render(<GitHubScanWatch inbox={null} events={events} />);
     const frame = strip(lastFrame());
     // Just assert the feed header is there but the poll event isn't.
     expect(frame).toMatch(/live/u);

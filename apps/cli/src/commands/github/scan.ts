@@ -6,14 +6,7 @@ import type { Command } from "commander";
 import type { CommandModule } from "../types.js";
 
 const TREE_REPO_ENV = "FIRST_TREE_GITHUB_SCAN_TREE_REPO";
-const BINDING_REQUIRED_COMMANDS = new Set([
-  "install",
-  "start",
-  "poll",
-  "run",
-  "daemon",
-  "run-once",
-]);
+const BINDING_REQUIRED_COMMANDS = new Set(["install", "start", "poll", "run", "daemon", "run-once"]);
 
 type SourceBinding = {
   tree?: {

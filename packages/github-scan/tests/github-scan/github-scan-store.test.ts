@@ -9,23 +9,13 @@
  *   - concurrent writers: two simultaneous `updateInbox` calls are
  *     serialized by the advisory lock.
  */
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  readInbox,
-  updateInbox,
-  writeInbox,
-} from "../../src/github-scan/engine/runtime/store.js";
+import { readInbox, updateInbox, writeInbox } from "../../src/github-scan/engine/runtime/store.js";
 import type { Inbox } from "../../src/github-scan/engine/runtime/types.js";
 
 const FIXTURE = join(__dirname, "..", "fixtures", "github-scan", "inbox-sample.json");
@@ -63,13 +53,11 @@ describe("readInbox / writeInbox", () => {
     const onDisk = JSON.parse(readFileSync(inboxPath, "utf-8")) as {
       notifications: Array<Record<string, unknown>>;
     };
-    const discussion = onDisk.notifications.find(
-      (n) => n.type === "Discussion",
-    );
+    const discussion = onDisk.notifications.find((n) => n.type === "Discussion");
     expect(discussion).toBeDefined();
     // Explicitly confirm these keys exist with null values (not omitted).
-    expect(Object.prototype.hasOwnProperty.call(discussion!, "number")).toBe(true);
-    expect(Object.prototype.hasOwnProperty.call(discussion!, "gh_state")).toBe(true);
+    expect(Object.hasOwn(discussion!, "number")).toBe(true);
+    expect(Object.hasOwn(discussion!, "gh_state")).toBe(true);
     expect(discussion!.number).toBeNull();
     expect(discussion!.gh_state).toBeNull();
   });
@@ -89,10 +77,11 @@ describe("readInbox / writeInbox", () => {
     // Grep the first entry's key sequence and check the order.
     const firstEntryMatch = raw.match(/"notifications":\[\{([^}]+)\}/u);
     expect(firstEntryMatch).toBeTruthy();
-    const keyOrder =
-      Array.from(
-        firstEntryMatch![1].matchAll(/"(id|type|reason|repo|title|url|last_actor|updated_at|unread|priority|number|html_url|gh_state|labels|github_scan_status)"/gu),
-      ).map((m) => m[1]);
+    const keyOrder = Array.from(
+      firstEntryMatch![1].matchAll(
+        /"(id|type|reason|repo|title|url|last_actor|updated_at|unread|priority|number|html_url|gh_state|labels|github_scan_status)"/gu,
+      ),
+    ).map((m) => m[1]);
     expect(keyOrder).toEqual([
       "id",
       "type",
@@ -118,11 +107,7 @@ describe("readInbox / writeInbox", () => {
   });
 
   it("throws on schema mismatch", () => {
-    writeFileSync(
-      inboxPath,
-      JSON.stringify({ last_poll: 123, notifications: "nope" }),
-      "utf-8",
-    );
+    writeFileSync(inboxPath, JSON.stringify({ last_poll: 123, notifications: "nope" }), "utf-8");
     expect(() => readInbox(inboxPath)).toThrow(/schema validation/u);
   });
 
@@ -177,9 +162,7 @@ describe("updateInbox — concurrency / locking", () => {
           return {
             ...current,
             notifications: current.notifications.map((n) =>
-              n.id === "23576674030"
-                ? { ...n, labels: [...n.labels, label] }
-                : n,
+              n.id === "23576674030" ? { ...n, labels: [...n.labels, label] } : n,
             ),
           };
         },

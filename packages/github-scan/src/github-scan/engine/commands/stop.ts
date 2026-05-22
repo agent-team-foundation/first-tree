@@ -6,18 +6,12 @@
  */
 
 import { spawnSync } from "node:child_process";
-
-import { loadGitHubScanDaemonConfig } from "../runtime/config.js";
-import { resolveDaemonIdentity } from "../daemon/identity.js";
-import {
-  findServiceLock,
-  isLockStale,
-  serviceLockDir,
-  type LockInfo,
-} from "../daemon/claim.js";
-import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
-import { stopLaunchdJob, supportsLaunchd } from "../daemon/launchd.js";
 import { rmSync } from "node:fs";
+import { findServiceLock, isLockStale, type LockInfo, serviceLockDir } from "../daemon/claim.js";
+import { resolveDaemonIdentity } from "../daemon/identity.js";
+import { stopLaunchdJob, supportsLaunchd } from "../daemon/launchd.js";
+import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
+import { loadGitHubScanDaemonConfig } from "../runtime/config.js";
 
 export interface RunStopOptions {
   write?: (line: string) => void;
@@ -25,10 +19,7 @@ export interface RunStopOptions {
   profile?: string;
 }
 
-export async function runStop(
-  argv: readonly string[] = [],
-  options: RunStopOptions = {},
-): Promise<number> {
+export async function runStop(argv: readonly string[] = [], options: RunStopOptions = {}): Promise<number> {
   const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
   const home = options.runnerHome ?? parseHome(argv) ?? resolveRunnerHome();
   const profile = options.profile ?? parseProfile(argv) ?? "default";

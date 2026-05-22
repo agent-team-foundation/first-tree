@@ -22,24 +22,17 @@
  * client, and paths.
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-
+import { appendActivityEvent } from "../runtime/activity-log.js";
 import { loadGitHubScanConfig } from "../runtime/config.js";
 import { GhClient } from "../runtime/gh.js";
 import { resolveGitHubScanPaths } from "../runtime/paths.js";
-import { appendActivityEvent } from "../runtime/activity-log.js";
 import { readInbox, updateInbox } from "../runtime/store.js";
 import {
-  type GitHubScanStatus,
-  GITHUB_SCAN_LABEL_META,
   ALL_GITHUB_SCAN_LABELS,
+  GITHUB_SCAN_LABEL_META,
+  type GitHubScanStatus,
   type Inbox,
   type InboxEntry,
 } from "../runtime/types.js";
@@ -81,10 +74,7 @@ function findEntry(inbox: Inbox | null, id: string): InboxEntry | undefined {
 }
 
 /** Parse `[--flag value] ...` tail into a flag map. Unknown flags are dropped. */
-function parseFlagTail(
-  args: string[],
-  known: readonly string[],
-): Record<string, string> {
+function parseFlagTail(args: string[], known: readonly string[]): Record<string, string> {
   const out: Record<string, string> = {};
   let i = 0;
   while (i < args.length) {
@@ -104,22 +94,12 @@ function printHelp(io: StatusManagerIO): void {
   io.stdout("");
   io.stdout("Commands:");
   io.stdout("  get <id>                    Get github-scan status for a notification");
-  io.stdout(
-    "  set <id> <status>           Set status (new, wip, human, done) via GitHub labels",
-  );
-  io.stdout(
-    "  claim <id> <session>        Claim a notification for local agent coordination",
-  );
+  io.stdout("  set <id> <status>           Set status (new, wip, human, done) via GitHub labels");
+  io.stdout("  claim <id> <session>        Claim a notification for local agent coordination");
   io.stdout("  release <id>                Release a claim");
-  io.stdout(
-    "  list [--status <status>]    List notification IDs by status",
-  );
-  io.stdout(
-    "  count [--status <status>]   Count notifications by status",
-  );
-  io.stdout(
-    "  ensure-labels <repo>        Create github-scan:* labels on a repo",
-  );
+  io.stdout("  list [--status <status>]    List notification IDs by status");
+  io.stdout("  count [--status <status>]   Count notifications by status");
+  io.stdout("  ensure-labels <repo>        Create github-scan:* labels on a repo");
 }
 
 /** Read one line from a file, stripping trailing whitespace. Returns `""` if absent. */
@@ -137,14 +117,7 @@ function parseIsoUtc(s: string): number | null {
     return Number.isFinite(fallback) ? fallback : null;
   }
   const [, y, mo, d, h, mi, se] = m;
-  return Date.UTC(
-    Number(y),
-    Number(mo) - 1,
-    Number(d),
-    Number(h),
-    Number(mi),
-    Number(se),
-  );
+  return Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se));
 }
 
 /** `get` subcommand. Returns exit code. */
@@ -195,9 +168,7 @@ async function cmdSet(
     return 1;
   }
   if (!GITHUB_SCAN_STATUSES.includes(status)) {
-    io.stderr(
-      `ERROR: unknown status '${status}'. Use: new, wip, human, done`,
-    );
+    io.stderr(`ERROR: unknown status '${status}'. Use: new, wip, human, done`);
     return 1;
   }
   const flags = parseFlagTail(args.slice(2), ["by", "reason"]);
@@ -249,9 +220,7 @@ async function cmdSet(
       if (!current) return current;
       return {
         ...current,
-        notifications: current.notifications.map((n) =>
-          n.id === id ? { ...n, github_scan_status: status } : n,
-        ),
+        notifications: current.notifications.map((n) => (n.id === id ? { ...n, github_scan_status: status } : n)),
       };
     },
     { inboxPath: paths.inbox },
@@ -412,9 +381,7 @@ async function cmdCount(
   const filterStatus = (flags.status as GitHubScanStatus | undefined) ?? "new";
   const paths = deps.paths ?? resolveGitHubScanPaths();
   const inbox = readInbox(paths.inbox);
-  const count = !inbox
-    ? 0
-    : inbox.notifications.filter((n) => n.github_scan_status === filterStatus).length;
+  const count = !inbox ? 0 : inbox.notifications.filter((n) => n.github_scan_status === filterStatus).length;
   io.stdout(String(count));
   return 0;
 }
@@ -444,10 +411,7 @@ async function cmdEnsureLabels(
  * Entry point. `argv` is the argv *without* the leading `github-scan` or
  * `status-manager` tokens — i.e. what comes after them.
  */
-export async function runStatusManager(
-  argv: readonly string[],
-  deps: StatusManagerDeps = {},
-): Promise<number> {
+export async function runStatusManager(argv: readonly string[], deps: StatusManagerDeps = {}): Promise<number> {
   const io = deps.io ?? DEFAULT_IO;
   const fullDeps = { ...deps, io };
   // Touch config loader so CLI-vs-env overrides are validated early; kept

@@ -12,19 +12,19 @@
  *   - `peekClaim`: read-only inspection.
  */
 
-import { mkdtempSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  CLAIM_STALE_AFTER_SEC,
-  LOCK_STALE_AFTER_SEC,
   acquireServiceLock,
+  CLAIM_STALE_AFTER_SEC,
   cleanupExpiredClaims,
   findServiceLock,
   isLockStale,
+  LOCK_STALE_AFTER_SEC,
   peekClaim,
   releaseClaim,
   tryClaim,
@@ -99,10 +99,7 @@ describe("acquireServiceLock", () => {
 
   it("reclaims a stale lock when heartbeat is past the window", async () => {
     // Seed a stale lock file by hand.
-    const stale: string = join(
-      root,
-      "github.com__tester__default".replace(/[^A-Za-z0-9_.-]/g, "_"),
-    );
+    const stale: string = join(root, "github.com__tester__default".replace(/[^A-Za-z0-9_.-]/g, "_"));
     // mkdir + lock.env with ancient heartbeat.
     const { mkdirSync } = await import("node:fs");
     mkdirSync(stale, { recursive: true });
@@ -317,11 +314,7 @@ describe("tryClaim / releaseClaim", () => {
       now: () => new Date(base - (CLAIM_STALE_AFTER_SEC + 10) * 1000),
     });
 
-    const removed = cleanupExpiredClaims(
-      claimsDir,
-      CLAIM_STALE_AFTER_SEC,
-      base,
-    );
+    const removed = cleanupExpiredClaims(claimsDir, CLAIM_STALE_AFTER_SEC, base);
     expect(removed).toBe(1);
     expect(existsSync(join(claimsDir, "fresh"))).toBe(true);
     expect(existsSync(join(claimsDir, "stale"))).toBe(false);

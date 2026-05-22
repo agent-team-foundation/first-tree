@@ -32,15 +32,8 @@
  * in `runtime/config.ts::DAEMON_CONFIG_DEFAULTS.taskTimeoutSec`.
  */
 
-import {
-  createWriteStream,
-  existsSync,
-  readFileSync,
-  rmSync,
-  type WriteStream,
-  writeFileSync,
-} from "node:fs";
 import { spawn } from "node:child_process";
+import { createWriteStream, existsSync, readFileSync, rmSync, type WriteStream, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GITHUB_SCAN_TREE_REPO_ENV } from "../runtime/config.js";
 
@@ -118,8 +111,7 @@ export async function executeAgent(
   const promptText = buildPrompt(request, spec);
   const promptPath = join(request.taskDir, "prompt.txt");
   const outputPath = join(request.taskDir, "runner-output.txt");
-  const liveOutputPath =
-    spec.kind === "codex" ? join(request.taskDir, "runner-last-message.txt") : outputPath;
+  const liveOutputPath = spec.kind === "codex" ? join(request.taskDir, "runner-last-message.txt") : outputPath;
   const stdoutPath = join(request.taskDir, "runner-stdout.log");
   const stderrPath = join(request.taskDir, "runner-stderr.log");
 
@@ -176,8 +168,7 @@ function buildTemplatePromptSection(spec?: AgentSpec): string {
 
 export function buildPrompt(request: AgentRequest, spec?: AgentSpec): string {
   const task = request.task;
-  const workingRepoLine =
-    task.workspaceRepo !== task.repo ? `- Working repository: ${task.workspaceRepo}\n` : "";
+  const workingRepoLine = task.workspaceRepo !== task.repo ? `- Working repository: ${task.workspaceRepo}\n` : "";
   const firstTreeSkillSection = buildFirstTreeSkillSection(request);
   const templateSection = buildTemplatePromptSection(spec);
   return (
@@ -233,19 +224,12 @@ function buildFirstTreeSkillSection(request: AgentRequest): string {
   const workspaceRoot = request.workspaceDir;
   const whitepaperPath = join(workspaceRoot, "WHITEPAPER.md");
   const whitepaperSkillPath = join(workspaceRoot, ".agents", "skills", "first-tree", "SKILL.md");
-  const githubScanSkillPath = join(
-    workspaceRoot,
-    ".agents",
-    "skills",
-    "first-tree-github-scan",
-    "SKILL.md",
-  );
+  const githubScanSkillPath = join(workspaceRoot, ".agents", "skills", "first-tree-github-scan", "SKILL.md");
   const syncSkillPath = join(workspaceRoot, ".agents", "skills", "first-tree-sync", "SKILL.md");
   const writeSkillPath = join(workspaceRoot, ".agents", "skills", "first-tree-write", "SKILL.md");
   const agentsPath = join(workspaceRoot, "AGENTS.md");
   const claudePath = join(workspaceRoot, "CLAUDE.md");
-  const treeRepoLine =
-    request.treeRepo === undefined ? "" : `- Bound tree repo: ${request.treeRepo}\n`;
+  const treeRepoLine = request.treeRepo === undefined ? "" : `- Bound tree repo: ${request.treeRepo}\n`;
 
   return (
     `First Tree skill loading rules (REQUIRED):\n` +

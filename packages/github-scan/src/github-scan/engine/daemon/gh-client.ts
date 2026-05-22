@@ -11,33 +11,17 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-
-import {
-  bucketForArgs,
-  isRateLimited,
-  type GhCommandSpec,
-  type GhBucket,
-  type GhExecutor,
-} from "./gh-executor.js";
-import {
-  RepoFilter,
-  searchScopesFor,
-  type SearchScope,
-} from "../runtime/repo-filter.js";
+import { type RepoFilter, type SearchScope, searchScopesFor } from "../runtime/repo-filter.js";
 import {
   buildNotificationCandidate,
   buildReviewRequestCandidate,
+  type TaskCandidate,
   taskIssueNumber,
   taskPrNumber,
   taskUrl,
-  type TaskCandidate,
 } from "../runtime/task.js";
-import {
-  canonicalApiPath,
-  isRecentGithubTimestamp,
-  parseTsvLine,
-  shellQuote,
-} from "../runtime/task-util.js";
+import { canonicalApiPath, isRecentGithubTimestamp, parseTsvLine, shellQuote } from "../runtime/task-util.js";
+import { bucketForArgs, type GhBucket, type GhCommandSpec, type GhExecutor, isRateLimited } from "./gh-executor.js";
 
 export interface ThreadActivity {
   login: string;
@@ -77,10 +61,7 @@ export class GhClient {
   }
 
   /** `GET /notifications` with lookback + repo-filter enforcement. */
-  async recentNotifications(
-    nowEpoch: number,
-    lookbackSecs: number,
-  ): Promise<TaskCandidate[]> {
+  async recentNotifications(nowEpoch: number, lookbackSecs: number): Promise<TaskCandidate[]> {
     const jq =
       '.[] | [(.repository.full_name // ""), (.subject.type // ""), (.reason // ""), (.subject.title // ""), (.subject.url // ""), (.latest_comment_url // ""), (.updated_at // "")] | @tsv';
     const stdout = await this.runChecked(
@@ -169,8 +150,7 @@ export class GhClient {
   /** Last comment on `api_url`'s thread (empty api_url → null). */
   async latestCommentActivity(apiUrl: string): Promise<ThreadActivity | null> {
     if (apiUrl.trim().length === 0) return null;
-    const jq =
-      '[.user.login // "", .user.type // "", (.updated_at // .created_at // "")] | @tsv';
+    const jq = '[.user.login // "", .user.type // "", (.updated_at // .created_at // "")] | @tsv';
     const stdout = await this.runChecked(
       "inspect latest comment activity",
       ["api", canonicalApiPath(apiUrl), "--jq", jq],
@@ -180,10 +160,7 @@ export class GhClient {
   }
 
   /** Latest issue comment on the thread when we only have repo + number. */
-  async latestIssueCommentActivity(
-    repo: string,
-    issueNumber: number,
-  ): Promise<ThreadActivity | null> {
+  async latestIssueCommentActivity(repo: string, issueNumber: number): Promise<ThreadActivity | null> {
     const jq =
       'if length == 0 then empty else .[-1] | [(.user.login // ""), (.user.type // ""), (.updated_at // .created_at // "")] | @tsv end';
     const stdout = await this.runChecked(
@@ -202,10 +179,7 @@ export class GhClient {
   }
 
   /** Latest issue/PR event (labels, mentions, assignments, etc.). */
-  async latestIssueEventActivity(
-    repo: string,
-    issueNumber: number,
-  ): Promise<ThreadActivity | null> {
+  async latestIssueEventActivity(repo: string, issueNumber: number): Promise<ThreadActivity | null> {
     const jq =
       'if length == 0 then empty else .[-1] | [(.actor.login // ""), (.actor.type // ""), (.created_at // "")] | @tsv end';
     const stdout = await this.runChecked(
@@ -224,10 +198,7 @@ export class GhClient {
   }
 
   /** Last review on a PR. */
-  async latestReviewActivity(
-    repo: string,
-    prNumber: number,
-  ): Promise<ThreadActivity | null> {
+  async latestReviewActivity(repo: string, prNumber: number): Promise<ThreadActivity | null> {
     const jq =
       'if length == 0 then empty else .[-1] | [(.user.login // ""), (.user.type // ""), (.submitted_at // "")] | @tsv end';
     const stdout = await this.runChecked(
@@ -246,24 +217,18 @@ export class GhClient {
   }
 
   /** Max(latest comment, latest review). */
-  async latestVisibleActivity(
-    task: TaskCandidate,
-  ): Promise<ThreadActivity | null> {
+  async latestVisibleActivity(task: TaskCandidate): Promise<ThreadActivity | null> {
     const directComment = await this.latestCommentActivity(task.latestCommentApiUrl);
     const issueNumber = taskIssueNumber(task) ?? taskPrNumber(task);
     const fallbackComment =
       directComment === null && issueNumber !== undefined
         ? await this.latestIssueCommentActivity(task.repo, issueNumber)
         : null;
-    const latestEvent =
-      issueNumber !== undefined
-        ? await this.latestIssueEventActivity(task.repo, issueNumber)
-        : null;
+    const latestEvent = issueNumber !== undefined ? await this.latestIssueEventActivity(task.repo, issueNumber) : null;
     const comment = pickNewerActivity(directComment, fallbackComment);
     const threadActivity = pickNewerActivity(comment, latestEvent);
     const pr = taskPrNumber(task);
-    const review =
-      pr !== undefined ? await this.latestReviewActivity(task.repo, pr) : null;
+    const review = pr !== undefined ? await this.latestReviewActivity(task.repo, pr) : null;
     return pickNewerActivity(threadActivity, review);
   }
 
@@ -286,15 +251,10 @@ export class GhClient {
     };
 
     try {
-      const tasks = await this.recentNotifications(
-        options.nowEpoch,
-        options.lookbackSecs,
-      );
+      const tasks = await this.recentNotifications(options.nowEpoch, options.lookbackSecs);
       poll.tasks.push(...tasks);
     } catch (err) {
-      poll.warnings.push(
-        `notifications: ${errMessage(err).trim()}`,
-      );
+      poll.warnings.push(`notifications: ${errMessage(err).trim()}`);
     }
 
     if (options.includeSearch) {
@@ -324,10 +284,7 @@ export class GhClient {
    * Write local snapshot files for a task under `<taskDir>/snapshot/`.
    * Agents read these first to avoid redundant `gh` calls.
    */
-  async writeTaskSnapshot(
-    task: TaskCandidate,
-    taskDir: string,
-  ): Promise<string> {
+  async writeTaskSnapshot(task: TaskCandidate, taskDir: string): Promise<string> {
     const snapshotDir = join(taskDir, "snapshot");
     mkdirSync(snapshotDir, { recursive: true });
 
@@ -344,26 +301,15 @@ export class GhClient {
     ];
     writeFileSync(join(snapshotDir, "task-summary.env"), summaryLines.join("\n"));
     if (this.treeRepo) {
-      writeFileSync(
-        join(snapshotDir, "tree-context.env"),
-        `tree_repo=${this.treeRepo}\n`,
-      );
+      writeFileSync(join(snapshotDir, "tree-context.env"), `tree_repo=${this.treeRepo}\n`);
     }
-    writeFileSync(
-      join(snapshotDir, "README.txt"),
-      renderSnapshotReadme(task, snapshotDir, this.treeRepo),
-    );
+    writeFileSync(join(snapshotDir, "README.txt"), renderSnapshotReadme(task, snapshotDir, this.treeRepo));
 
     if (task.apiUrl.length > 0) {
       await this.captureSnapshot(snapshotDir, "subject.json", {
         context: "hydrate task subject",
         envs: this.hostEnv(),
-        args: [
-          "api",
-          canonicalApiPath(task.apiUrl),
-          "-H",
-          "X-GitHub-Api-Version: 2022-11-28",
-        ],
+        args: ["api", canonicalApiPath(task.apiUrl), "-H", "X-GitHub-Api-Version: 2022-11-28"],
         bucket: "core",
         mutating: false,
       });
@@ -372,12 +318,7 @@ export class GhClient {
       await this.captureSnapshot(snapshotDir, "latest-comment.json", {
         context: "hydrate latest comment",
         envs: this.hostEnv(),
-        args: [
-          "api",
-          canonicalApiPath(task.latestCommentApiUrl),
-          "-H",
-          "X-GitHub-Api-Version: 2022-11-28",
-        ],
+        args: ["api", canonicalApiPath(task.latestCommentApiUrl), "-H", "X-GitHub-Api-Version: 2022-11-28"],
         bucket: "core",
         mutating: false,
       });
@@ -500,19 +441,11 @@ export class GhClient {
       writeFileSync(stderrPath, output.stderr);
       metaLines.push(`stderr_file=${stderrPath}`);
     }
-    metaLines.push(
-      output.statusCode === 0
-        ? "snapshot_status=ok"
-        : "snapshot_status=partial",
-    );
+    metaLines.push(output.statusCode === 0 ? "snapshot_status=ok" : "snapshot_status=partial");
     writeFileSync(join(snapshotDir, `${filename}.meta`), metaLines.join("\n"));
   }
 
-  private async runChecked(
-    context: string,
-    args: string[],
-    bucket: GhBucket,
-  ): Promise<string> {
+  private async runChecked(context: string, args: string[], bucket: GhBucket): Promise<string> {
     return this.executor.runChecked({
       context,
       envs: this.hostEnv(),
@@ -536,10 +469,7 @@ export function parseThreadActivity(line: string | undefined): ThreadActivity | 
   return { login: fields[0], userType: fields[1], updatedAt: fields[2] };
 }
 
-export function pickNewerActivity(
-  left: ThreadActivity | null,
-  right: ThreadActivity | null,
-): ThreadActivity | null {
+export function pickNewerActivity(left: ThreadActivity | null, right: ThreadActivity | null): ThreadActivity | null {
   if (left && right) return right.updatedAt > left.updatedAt ? right : left;
   return left ?? right;
 }
@@ -570,10 +500,7 @@ export function shouldIgnoreSelfAuthored(
       return latestCommentAuthor?.endsWith("[bot]") ?? false;
     default:
       if (!latestCommentAuthor) return false;
-      return (
-        latestCommentAuthor === login ||
-        latestCommentAuthor.endsWith("[bot]")
-      );
+      return latestCommentAuthor === login || latestCommentAuthor.endsWith("[bot]");
   }
 }
 
@@ -587,11 +514,7 @@ export function shouldIgnoreLatestSelfActivity(
   if (activity.updatedAt < taskUpdatedAt) return false;
   const actorLogin = activity.login.trim();
   if (actorLogin.length === 0) return false;
-  return (
-    actorLogin === login ||
-    actorLogin.endsWith("[bot]") ||
-    activity.userType === "Bot"
-  );
+  return actorLogin === login || actorLogin.endsWith("[bot]") || activity.userType === "Bot";
 }
 
 /** Mirrors Rust `is_rate_limit_error`: surfaces message-only secondary rate-limit detection. */
@@ -627,20 +550,14 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function renderSnapshotReadme(
-  task: TaskCandidate,
-  snapshotDir: string,
-  treeRepo?: string,
-): string {
+function renderSnapshotReadme(task: TaskCandidate, snapshotDir: string, treeRepo?: string): string {
   return (
     "github-scan-runner prepared this local snapshot before the agent started.\n" +
     "\n" +
     "Use these files first to avoid redundant GitHub API calls.\n" +
     "\n" +
     `- Task summary: ${join(snapshotDir, "task-summary.env")}\n` +
-    (treeRepo
-      ? `- Tree context: ${join(snapshotDir, "tree-context.env")} (bound tree repo: ${treeRepo})\n`
-      : "") +
+    (treeRepo ? `- Tree context: ${join(snapshotDir, "tree-context.env")} (bound tree repo: ${treeRepo})\n` : "") +
     `- Primary subject payload: ${join(snapshotDir, "subject.json")}\n` +
     `- Latest comment payload: ${join(snapshotDir, "latest-comment.json")}\n` +
     "- PR or issue material is stored next to those files when available.\n" +
@@ -653,4 +570,4 @@ function renderSnapshotReadme(
   );
 }
 
-export { type GhBucket } from "./gh-executor.js";
+export type { GhBucket } from "./gh-executor.js";

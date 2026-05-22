@@ -3,20 +3,16 @@ import { describe, expect, it } from "vitest";
 import {
   classifyNotification,
   priorityFor,
-  shouldTrackReason,
   shouldProcessReason,
-  taskKindFromString,
+  shouldTrackReason,
   type TaskKind,
+  taskKindFromString,
 } from "../../src/github-scan/engine/runtime/task-kind.js";
 
 describe("classifyNotification", () => {
   it("returns review_request when reason=review_requested even on Issue subjects", () => {
-    expect(classifyNotification("PullRequest", "review_requested")).toBe(
-      "review_request",
-    );
-    expect(classifyNotification("Issue", "review_requested")).toBe(
-      "review_request",
-    );
+    expect(classifyNotification("PullRequest", "review_requested")).toBe("review_request");
+    expect(classifyNotification("Issue", "review_requested")).toBe("review_request");
   });
 
   it("maps mention and team_mention to mention", () => {
@@ -29,9 +25,7 @@ describe("classifyNotification", () => {
   });
 
   it("classifies assign by subject type", () => {
-    expect(classifyNotification("PullRequest", "assign")).toBe(
-      "assigned_pull_request",
-    );
+    expect(classifyNotification("PullRequest", "assign")).toBe("assigned_pull_request");
     expect(classifyNotification("Issue", "assign")).toBe("assigned_issue");
   });
 
@@ -61,15 +55,7 @@ describe("priorityFor", () => {
 
 describe("shouldProcessReason", () => {
   it("accepts actionable review, mention, comment, and assignment reasons", () => {
-    for (const r of [
-      "review_requested",
-      "mention",
-      "team_mention",
-      "comment",
-      "author",
-      "manual",
-      "assign",
-    ]) {
+    for (const r of ["review_requested", "mention", "team_mention", "comment", "author", "manual", "assign"]) {
       expect(shouldProcessReason(r)).toBe(true);
     }
   });

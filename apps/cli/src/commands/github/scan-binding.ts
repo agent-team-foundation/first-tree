@@ -1,22 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import {
-  findUpwardsManagedSourceBinding,
-  parseGitHubRepoReference,
-} from "../tree/binding-contract.js";
+import { findUpwardsManagedSourceBinding, parseGitHubRepoReference } from "../tree/binding-contract.js";
 
 const TREE_REPO_FLAG = "--tree-repo";
 const TREE_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 
-const BINDING_REQUIRED_SUBCOMMANDS = new Set([
-  "install",
-  "start",
-  "run",
-  "daemon",
-  "run-once",
-  "poll",
-]);
+const BINDING_REQUIRED_SUBCOMMANDS = new Set(["install", "start", "run", "daemon", "run-once", "poll"]);
 
 type SourceStateBinding = {
   sourceStatePath: string;

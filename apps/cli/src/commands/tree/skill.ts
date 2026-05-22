@@ -4,11 +4,11 @@ import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
 import {
-  SKILL_NAMES,
   collectSkillDiagnosis,
   collectSkillStatus,
   copyCanonicalSkills,
   repairClaudeSkillLinks,
+  SKILL_NAMES,
 } from "./skill-lib.js";
 
 const ROOT_OPTION_DESCRIPTION = "operate on a different root (default: cwd)";
@@ -126,9 +126,7 @@ function runLinkSkillCommand(context: CommandContext): void {
     console.log(message);
   }
   console.log("");
-  console.log(
-    `Linked ${result.linked} symlink(s); skipped ${result.skipped} skill(s) without an .agents install.`,
-  );
+  console.log(`Linked ${result.linked} symlink(s); skipped ${result.skipped} skill(s) without an .agents install.`);
 }
 
 export const skillSubcommands: SubcommandModule[] = [

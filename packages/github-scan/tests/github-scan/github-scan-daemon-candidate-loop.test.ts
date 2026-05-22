@@ -1,28 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBus } from "../../src/github-scan/engine/daemon/bus.js";
-import {
-  Dispatcher,
-  type TaskCandidate as DispatchCandidate,
-} from "../../src/github-scan/engine/daemon/dispatcher.js";
-import {
-  GhClient,
-  type CandidatePoll,
-} from "../../src/github-scan/engine/daemon/gh-client.js";
-import {
-  runCandidateCycle,
-  runCandidateLoop,
-} from "../../src/github-scan/engine/daemon/candidate-loop.js";
-import { buildReviewRequestCandidate } from "../../src/github-scan/engine/runtime/task.js";
-import {
-  WorkspaceManager,
-  type GitRunner,
-} from "../../src/github-scan/engine/daemon/workspace.js";
-import { RepoFilter } from "../../src/github-scan/engine/runtime/repo-filter.js";
+import { runCandidateCycle, runCandidateLoop } from "../../src/github-scan/engine/daemon/candidate-loop.js";
+import { type TaskCandidate as DispatchCandidate, Dispatcher } from "../../src/github-scan/engine/daemon/dispatcher.js";
+import { type CandidatePoll, GhClient } from "../../src/github-scan/engine/daemon/gh-client.js";
 import { GhExecutor } from "../../src/github-scan/engine/daemon/gh-executor.js";
+import { type GitRunner, WorkspaceManager } from "../../src/github-scan/engine/daemon/workspace.js";
+import { RepoFilter } from "../../src/github-scan/engine/runtime/repo-filter.js";
+import { buildReviewRequestCandidate } from "../../src/github-scan/engine/runtime/task.js";
 
 const tempRoots: string[] = [];
 
@@ -53,8 +41,7 @@ function makeClientStub(poll: CandidatePoll): GhClient {
     executor,
   });
   // Override collectCandidates for the test.
-  (client as unknown as { collectCandidates: unknown }).collectCandidates =
-    async () => poll;
+  (client as unknown as { collectCandidates: unknown }).collectCandidates = async () => poll;
   return client;
 }
 

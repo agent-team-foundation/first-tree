@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,12 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CLAUDE_SETTINGS_PATH,
   CODEX_HOOKS_PATH,
-  INJECT_CONTEXT_COMMAND,
   ensureAgentContextHooks,
+  INJECT_CONTEXT_COMMAND,
 } from "../src/commands/tree/agent-context-hooks.js";
 import { writeTreeState } from "../src/commands/tree/binding-state.js";
-import { buildSourceIntegrationBlock } from "../src/commands/tree/source-integration.js";
 import { runTreeReview } from "../src/commands/tree/review-helper.js";
+import { buildSourceIntegrationBlock } from "../src/commands/tree/source-integration.js";
 import { upgradeTargetRoot } from "../src/commands/tree/upgrade.js";
 
 const tempDirs: string[] = [];

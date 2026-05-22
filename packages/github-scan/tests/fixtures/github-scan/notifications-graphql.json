@@ -5,9 +5,7 @@
         "number": 300,
         "state": "OPEN",
         "labels": {
-          "nodes": [
-            { "name": "github-scan:wip" }
-          ]
+          "nodes": [{ "name": "github-scan:wip" }]
         }
       }
     }

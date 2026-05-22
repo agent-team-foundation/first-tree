@@ -20,12 +20,7 @@
  * or nothing when the inbox is empty/missing.
  */
 
-import {
-  existsSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -72,9 +67,7 @@ function readCounts(inboxPath: string): Counts | null {
   } catch {
     return null;
   }
-  const notifications = Array.isArray(parsed.notifications)
-    ? parsed.notifications
-    : [];
+  const notifications = Array.isArray(parsed.notifications) ? parsed.notifications : [];
   const counts: Counts = {
     last_poll: typeof parsed.last_poll === "string" ? parsed.last_poll : "",
     new: 0,
@@ -143,11 +136,7 @@ function readBellState(path: string): BellState | null {
 
 function writeBellState(path: string, counts: Counts): void {
   try {
-    writeFileSync(
-      path,
-      `${counts.last_poll} ${counts.new} ${counts.human}\n`,
-      "utf-8",
-    );
+    writeFileSync(path, `${counts.last_poll} ${counts.new} ${counts.human}\n`, "utf-8");
   } catch {
     // ignore — statusline is best-effort
   }
@@ -177,10 +166,7 @@ function drainStdin(): void {
  * nothing). Exposed so tests can exercise the formatter without touching
  * the filesystem.
  */
-export function renderStatusline(
-  counts: Counts,
-  prior: BellState | null,
-): { line: string | null; ring: boolean } {
+export function renderStatusline(counts: Counts, prior: BellState | null): { line: string | null; ring: boolean } {
   const humanPart = `⚠ ${counts.human} need-you · `;
   const newSummary = formatNewSummary(counts.new_by_type);
   const hasContent = newSummary.length > 0 || counts.human >= 0;
@@ -203,9 +189,7 @@ export function renderStatusline(
   return { line: `/github-scan: ${humanPart}${newSummary}${suffix}`, ring };
 }
 
-export function main(
-  nowSecs: number = Math.floor(Date.now() / 1000),
-): number {
+export function main(nowSecs: number = Math.floor(Date.now() / 1000)): number {
   // Per spec, always drain stdin first.
   drainStdin();
 

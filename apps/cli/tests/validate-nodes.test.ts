@@ -96,18 +96,12 @@ describe("runValidateNodes — personal-path relaxation", () => {
     const root = makeTempDir("validate-nodes-");
     write(root, "NODE.md", ROOT_FRONTMATTER);
     write(root, "members/alice/NODE.md", "---\ntitle: Alice\nowners: [alice]\n---\n");
-    write(
-      root,
-      "members/alice/notes.md",
-      "---\nsoft_links:\n  - /does/not/exist.md\n---\n# notes\n",
-    );
+    write(root, "members/alice/notes.md", "---\nsoft_links:\n  - /does/not/exist.md\n---\n# notes\n");
 
     const result = runValidateNodes(root);
 
     expect(result.exitCode).toBe(1);
-    expect(result.errors).toContain(
-      "members/alice/notes.md: broken soft_links target '/does/not/exist.md'",
-    );
+    expect(result.errors).toContain("members/alice/notes.md: broken soft_links target '/does/not/exist.md'");
   });
 
   it("relaxes nested personal subtrees too (members/<me>/sub/path.md)", () => {

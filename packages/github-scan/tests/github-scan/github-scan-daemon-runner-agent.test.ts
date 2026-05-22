@@ -1,18 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   AgentPool,
+  type AgentRequest,
+  type AgentSpawner,
   buildAgentEnv,
   buildCommand,
   buildPrompt,
   executeAgent,
   parseResult,
   runWithTimeout,
-  type AgentRequest,
-  type AgentSpawner,
 } from "../../src/github-scan/engine/daemon/runner.js";
 
 const tempRoots: string[] = [];
@@ -151,9 +151,7 @@ describe("buildPrompt", () => {
     expect(prompt).not.toContain("draft-node");
     expect(prompt).not.toContain("github.com/bingran-you/github-scan");
     expect(prompt).not.toContain("code repo");
-    expect(prompt).toContain(
-      'gh issue edit <number> --repo <owner>/<repo> --add-label "github-scan:<status>"',
-    );
+    expect(prompt).toContain('gh issue edit <number> --repo <owner>/<repo> --add-label "github-scan:<status>"');
     expect(prompt).not.toContain("first-tree gardener draft-node");
   });
 });
@@ -260,10 +258,7 @@ describe("executeAgent", () => {
     writeFileSync(finalOutputPath, "stale output");
     const spawner: AgentSpawner = async ({ outputPath }) => {
       expect(outputPath).not.toBe(finalOutputPath);
-      writeFileSync(
-        outputPath,
-        "doing things\nGITHUB_SCAN_RESULT: status=handled summary=all good",
-      );
+      writeFileSync(outputPath, "doing things\nGITHUB_SCAN_RESULT: status=handled summary=all good");
       return { statusCode: 0 };
     };
     const outcome = await executeAgent({ kind: "codex" }, request, { timeoutMs: 1_000, spawner });
@@ -282,9 +277,7 @@ describe("executeAgent", () => {
     };
     const outcome = await executeAgent({ kind: "claude" }, request, { timeoutMs: 1_000, spawner });
     expect(outcome.status).toBe("handled");
-    expect(readFileSync(join(request.taskDir, "runner-output.txt"), "utf8")).toContain(
-      "GITHUB_SCAN_RESULT:",
-    );
+    expect(readFileSync(join(request.taskDir, "runner-output.txt"), "utf8")).toContain("GITHUB_SCAN_RESULT:");
   });
 
   it("throws on non-zero exit code", async () => {

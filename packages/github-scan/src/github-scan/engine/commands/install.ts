@@ -13,11 +13,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import {
-  parseAllowRepoArg,
-  requireExplicitRepoFilter,
-  REQUIRED_ALLOW_REPO_USAGE,
-} from "../runtime/allow-repo.js";
+import { parseAllowRepoArg, REQUIRED_ALLOW_REPO_USAGE, requireExplicitRepoFilter } from "../runtime/allow-repo.js";
 
 const DEFAULT_CONFIG = `# github-scan configuration
 poll_interval_sec: 60
@@ -39,9 +35,10 @@ export interface InstallDeps {
   };
 }
 
-export function resolveSelfStartCommand(
-  entrypoint: string | undefined = process.argv[1],
-): { cmd: string; args: string[] } {
+export function resolveSelfStartCommand(entrypoint: string | undefined = process.argv[1]): {
+  cmd: string;
+  args: string[];
+} {
   if (entrypoint && entrypoint.length > 0) {
     return {
       cmd: process.execPath,
@@ -64,10 +61,7 @@ function defaultCheckGhAuth(): boolean {
   return result.status === 0;
 }
 
-export function runInstall(
-  args: readonly string[],
-  deps: InstallDeps = {},
-): number {
+export function runInstall(args: readonly string[], deps: InstallDeps = {}): number {
   if (args.length > 0 && (args[0] === "--help" || args[0] === "-h")) {
     (deps.write ?? console.log)(`usage: first-tree github scan install
 
@@ -90,15 +84,12 @@ export function runInstall(
   const checkCommand = deps.checkCommand ?? defaultCheckCommand;
   const checkGhAuth = deps.checkGhAuth ?? defaultCheckGhAuth;
   const spawn = deps.spawn ?? spawnSync;
-  const githubScanDir =
-    deps.githubScanDir ?? process.env.GITHUB_SCAN_DIR ?? join(homedir(), ".first-tree/github-scan");
+  const githubScanDir = deps.githubScanDir ?? process.env.GITHUB_SCAN_DIR ?? join(homedir(), ".first-tree/github-scan");
   const startCommand = deps.startCommand ?? resolveSelfStartCommand();
   try {
     requireExplicitRepoFilter(parseAllowRepoArg(args));
   } catch (err) {
-    write(
-      `ERROR: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    write(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
 
@@ -136,9 +127,7 @@ export function runInstall(
   if (result.status === 0) {
     write("  Daemon started");
   } else {
-    write(
-      "  WARN: daemon start failed; rerun `first-tree github scan start --allow-repo owner/repo` manually",
-    );
+    write("  WARN: daemon start failed; rerun `first-tree github scan start --allow-repo owner/repo` manually");
   }
   write("");
 

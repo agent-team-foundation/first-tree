@@ -1,13 +1,4 @@
-import {
-  cpSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,11 +67,7 @@ const FIRST_TREE_REFERENCE_FILES = [
   join("references", "llms.txt"),
 ] as const;
 
-const STANDARD_SKILL_REQUIRED_FILES = [
-  "SKILL.md",
-  "VERSION",
-  join("agents", "openai.yaml"),
-] as const;
+const STANDARD_SKILL_REQUIRED_FILES = ["SKILL.md", "VERSION", join("agents", "openai.yaml")] as const;
 
 const WHITEPAPER_FILE = "WHITEPAPER.md";
 const WHITEPAPER_SYMLINK_TARGET = join(".agents", "skills", "first-tree", "SKILL.md");
@@ -205,9 +192,7 @@ function readSkillFrontmatterMetadata(path: string): {
 
     const frontmatter = match[1];
     const versionMatch = frontmatter.match(/^version:\s*["']?(.+?)["']?\s*$/mu);
-    const cliCompatMatch = frontmatter.match(
-      /^cliCompat:\s*\n\s*first-tree:\s*["']?(.+?)["']?\s*$/mu,
-    );
+    const cliCompatMatch = frontmatter.match(/^cliCompat:\s*\n\s*first-tree:\s*["']?(.+?)["']?\s*$/mu);
 
     return {
       cliCompat: cliCompatMatch?.[1] ?? null,
@@ -370,8 +355,7 @@ export function collectSkillStatus(targetRoot: string): readonly SkillStatus[] {
     return {
       cliCompat: metadata.cliCompat,
       cliVersion,
-      compatible:
-        agents.kind === "missing" ? null : isCliCompatible(cliVersion, metadata.cliCompat),
+      compatible: agents.kind === "missing" ? null : isCliCompatible(cliVersion, metadata.cliCompat),
       name: layout.name,
       installed,
       version: agents.kind === "missing" ? null : readVersion(agentsFull),
@@ -436,9 +420,7 @@ export function collectSkillDiagnosis(targetRoot: string): readonly SkillDiagnos
     } else if (claude.kind !== "symlink") {
       problems.push(`${layout.claudePath} should be a symlink to ${layout.claudeSymlinkTarget}`);
     } else if (claude.target !== layout.claudeSymlinkTarget) {
-      problems.push(
-        `${layout.claudePath} -> ${claude.target}, expected ${layout.claudeSymlinkTarget}`,
-      );
+      problems.push(`${layout.claudePath} -> ${claude.target}, expected ${layout.claudeSymlinkTarget}`);
     }
 
     return {

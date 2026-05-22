@@ -1,7 +1,6 @@
 import { RepoFilter } from "./repo-filter.js";
 
-export const REQUIRED_ALLOW_REPO_USAGE =
-  "--allow-repo <owner/repo[,owner/*,...]>";
+export const REQUIRED_ALLOW_REPO_USAGE = "--allow-repo <owner/repo[,owner/*,...]>";
 
 export const REQUIRED_ALLOW_REPO_MESSAGE =
   "missing required --allow-repo <owner/repo[,owner/*,...]>; first-tree github scan startup now requires an explicit repo scope to avoid scanning all notifications";
@@ -17,9 +16,7 @@ export function parseAllowRepoArg(argv: readonly string[]): string | undefined {
   return undefined;
 }
 
-export function requireExplicitRepoFilter(
-  allowRepo: string | undefined,
-): RepoFilter {
+export function requireExplicitRepoFilter(allowRepo: string | undefined): RepoFilter {
   const trimmed = allowRepo?.trim();
   if (!trimmed) {
     throw new Error(REQUIRED_ALLOW_REPO_MESSAGE);

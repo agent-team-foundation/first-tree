@@ -3,11 +3,7 @@ import { join } from "node:path";
 
 import { TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
 import { ensureTrailingNewline, parseGitHubRemoteUrl } from "./shared.js";
-import {
-  buildTreeCodeRepoIndexNote,
-  listKnownTreeCodeRepos,
-  type ManagedTreeCodeRepo,
-} from "./tree-repo-registry.js";
+import { buildTreeCodeRepoIndexNote, listKnownTreeCodeRepos, type ManagedTreeCodeRepo } from "./tree-repo-registry.js";
 
 const ROOT_NODE_FILE = "NODE.md";
 const ROOT_REPO_INDEX_BEGIN = "<!-- BEGIN FIRST-TREE-SOURCE-REPO-INDEX -->";

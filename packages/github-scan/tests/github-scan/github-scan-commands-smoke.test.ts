@@ -5,23 +5,14 @@
  * covered by the thread-store + scheduler tests.
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runCleanup } from "../../src/github-scan/engine/commands/cleanup.js";
 import { runDoctor } from "../../src/github-scan/engine/commands/doctor.js";
-import {
-  resolveSelfStartCommand,
-  runInstall,
-} from "../../src/github-scan/engine/commands/install.js";
+import { resolveSelfStartCommand, runInstall } from "../../src/github-scan/engine/commands/install.js";
 import { runStatus } from "../../src/github-scan/engine/commands/status.js";
 import { ThreadStore } from "../../src/github-scan/engine/daemon/thread-store.js";
 
@@ -150,14 +141,7 @@ describe("runInstall", () => {
     expect(code).toBe(0);
     expect(spawn).toHaveBeenCalledWith(
       process.execPath,
-      [
-        "/tmp/github-scan/dist/cli.mjs",
-        "github",
-        "scan",
-        "start",
-        "--allow-repo",
-        "owner/repo",
-      ],
+      ["/tmp/github-scan/dist/cli.mjs", "github", "scan", "start", "--allow-repo", "owner/repo"],
       { stdio: "inherit" },
     );
     expect(lines.join("\n")).toContain("Daemon started");

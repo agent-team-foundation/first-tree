@@ -1,6 +1,6 @@
 export {
-  GITHUB_SCAN_USAGE,
   extractBackendFlag,
+  GITHUB_SCAN_USAGE,
   runGitHubScan,
 } from "./github-scan/cli.js";
 

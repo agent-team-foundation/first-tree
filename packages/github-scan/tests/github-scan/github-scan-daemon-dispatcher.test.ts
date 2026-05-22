@@ -1,27 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createBus, type BusEvent } from "../../src/github-scan/engine/daemon/bus.js";
+import { type BusEvent, createBus } from "../../src/github-scan/engine/daemon/bus.js";
+import { tryClaim } from "../../src/github-scan/engine/daemon/claim.js";
 import {
-  Dispatcher,
   type CompletionRecord,
+  Dispatcher,
   type TaskCandidate,
 } from "../../src/github-scan/engine/daemon/dispatcher.js";
-import {
-  WorkspaceManager,
-  type GitRunner,
-} from "../../src/github-scan/engine/daemon/workspace.js";
 import type { AgentSpawner } from "../../src/github-scan/engine/daemon/runner.js";
-import { tryClaim } from "../../src/github-scan/engine/daemon/claim.js";
+import { type GitRunner, WorkspaceManager } from "../../src/github-scan/engine/daemon/workspace.js";
 
 const tempRoots: string[] = [];
 
@@ -91,20 +81,19 @@ interface DispatcherEnv {
   completions: CompletionRecord[];
 }
 
-function setupDispatcher(opts: {
-  spawner?: AgentSpawner;
-  agents?: Array<{ kind: "codex" | "claude" }>;
-  maxParallel?: number;
-  taskTimeoutMs?: number;
-  dryRun?: boolean;
-  treeRepo?: string;
-  snapshotWriter?: {
-    writeTaskSnapshot: (
-      candidate: TaskCandidate,
-      taskDir: string,
-    ) => Promise<string>;
-  };
-} = {}): DispatcherEnv {
+function setupDispatcher(
+  opts: {
+    spawner?: AgentSpawner;
+    agents?: Array<{ kind: "codex" | "claude" }>;
+    maxParallel?: number;
+    taskTimeoutMs?: number;
+    dryRun?: boolean;
+    treeRepo?: string;
+    snapshotWriter?: {
+      writeTaskSnapshot: (candidate: TaskCandidate, taskDir: string) => Promise<string>;
+    };
+  } = {},
+): DispatcherEnv {
   const root = makeTempDir("env");
   const runnerHome = join(root, "runner-home");
   const claimsDir = join(root, "claims");
@@ -139,21 +128,13 @@ function setupDispatcher(opts: {
   return { dispatcher, runnerHome, claimsDir, events, completions };
 }
 
-function waitForCompletions(
-  env: DispatcherEnv,
-  count: number,
-  timeoutMs = 2_000,
-): Promise<void> {
+function waitForCompletions(env: DispatcherEnv, count: number, timeoutMs = 2_000): Promise<void> {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const tick = (): void => {
       if (env.completions.length >= count) return resolve();
       if (Date.now() - start > timeoutMs) {
-        return reject(
-          new Error(
-            `only ${env.completions.length}/${count} completions after ${timeoutMs}ms`,
-          ),
-        );
+        return reject(new Error(`only ${env.completions.length}/${count} completions after ${timeoutMs}ms`));
       }
       setTimeout(tick, 10);
     };
@@ -164,10 +145,7 @@ function waitForCompletions(
 describe("Dispatcher.submit", () => {
   it("dedupes repeated candidates with the same threadKey", () => {
     const spawner: AgentSpawner = async ({ outputPath }) => {
-      writeFileSync(
-        outputPath,
-        "GITHUB_SCAN_RESULT: status=handled summary=ok",
-      );
+      writeFileSync(outputPath, "GITHUB_SCAN_RESULT: status=handled summary=ok");
       return { statusCode: 0 };
     };
     const env = setupDispatcher({ spawner });
@@ -187,10 +165,7 @@ describe("Dispatcher.submit", () => {
       spawnedThreadKeys.push(request.task.title);
       return new Promise((resolve) => {
         resolver = (v) => {
-          writeFileSync(
-            outputPath,
-            "GITHUB_SCAN_RESULT: status=handled summary=ok",
-          );
+          writeFileSync(outputPath, "GITHUB_SCAN_RESULT: status=handled summary=ok");
           resolve(v);
         };
       });
@@ -291,23 +266,14 @@ describe("Dispatcher execution", () => {
     const spawner: AgentSpawner = async ({ outputPath }) =>
       new Promise((resolve) => {
         resolvers.push((v) => {
-          writeFileSync(
-            outputPath,
-            "GITHUB_SCAN_RESULT: status=handled summary=ok",
-          );
+          writeFileSync(outputPath, "GITHUB_SCAN_RESULT: status=handled summary=ok");
           resolve(v);
         });
       });
     const env = setupDispatcher({ spawner, maxParallel: 2 });
-    env.dispatcher.submit(
-      fakeCandidate({ threadKey: "a", notificationId: "na", stableId: "a" }),
-    );
-    env.dispatcher.submit(
-      fakeCandidate({ threadKey: "b", notificationId: "nb", stableId: "b" }),
-    );
-    env.dispatcher.submit(
-      fakeCandidate({ threadKey: "c", notificationId: "nc", stableId: "c" }),
-    );
+    env.dispatcher.submit(fakeCandidate({ threadKey: "a", notificationId: "na", stableId: "a" }));
+    env.dispatcher.submit(fakeCandidate({ threadKey: "b", notificationId: "nb", stableId: "b" }));
+    env.dispatcher.submit(fakeCandidate({ threadKey: "c", notificationId: "nc", stableId: "c" }));
     expect(env.dispatcher.activeCount()).toBe(2);
     expect(env.dispatcher.pendingCount()).toBe(1);
     // Drain resolvers as they appear until all three complete.
@@ -322,10 +288,7 @@ describe("Dispatcher execution", () => {
 
   it("marks completed and publishes task event", async () => {
     const spawner: AgentSpawner = async ({ outputPath }) => {
-      writeFileSync(
-        outputPath,
-        "GITHUB_SCAN_RESULT: status=handled summary=all done",
-      );
+      writeFileSync(outputPath, "GITHUB_SCAN_RESULT: status=handled summary=all done");
       return { statusCode: 0 };
     };
     const env = setupDispatcher({ spawner });
@@ -347,22 +310,16 @@ describe("Dispatcher execution", () => {
     const snapshotWriter = {
       writeTaskSnapshot: vi.fn(async (_candidate: TaskCandidate, taskDir: string) => {
         const snapshotDir = join(taskDir, "snapshot");
-        writeFileSync(
-          join(snapshotDir, "tree-context.env"),
-          "tree_repo=agent-team-foundation/first-tree-context\n",
-        );
+        writeFileSync(join(snapshotDir, "tree-context.env"), "tree_repo=agent-team-foundation/first-tree-context\n");
         return snapshotDir;
       }),
     };
     const spawner: AgentSpawner = async ({ outputPath, request }) => {
       expect(request.treeRepo).toBe("agent-team-foundation/first-tree-context");
-      expect(
-        readFileSync(join(request.snapshotDir, "tree-context.env"), "utf8"),
-      ).toContain("tree_repo=agent-team-foundation/first-tree-context");
-      writeFileSync(
-        outputPath,
-        "GITHUB_SCAN_RESULT: status=handled summary=snapshot ok",
+      expect(readFileSync(join(request.snapshotDir, "tree-context.env"), "utf8")).toContain(
+        "tree_repo=agent-team-foundation/first-tree-context",
       );
+      writeFileSync(outputPath, "GITHUB_SCAN_RESULT: status=handled summary=snapshot ok");
       return { statusCode: 0 };
     };
     const env = setupDispatcher({
@@ -383,10 +340,7 @@ describe("Dispatcher execution", () => {
       if (spec.kind === "codex") {
         return { statusCode: 1 };
       }
-      writeFileSync(
-        stdoutPath,
-        "GITHUB_SCAN_RESULT: status=handled summary=secondary",
-      );
+      writeFileSync(stdoutPath, "GITHUB_SCAN_RESULT: status=handled summary=secondary");
       writeFileSync(outputPath, "");
       return { statusCode: 0 };
     };
@@ -413,11 +367,7 @@ describe("Dispatcher execution", () => {
     expect(env.completions[0].error).toMatch(/codex:/);
     expect(env.completions[0].error).toMatch(/claude:/);
     const taskEvents = env.events.filter((e) => e.kind === "task");
-    expect(
-      taskEvents.map(
-        (e) => (e as Extract<BusEvent, { kind: "task" }>).phase,
-      ),
-    ).toEqual(["dispatched", "failed"]);
+    expect(taskEvents.map((e) => (e as Extract<BusEvent, { kind: "task" }>).phase)).toEqual(["dispatched", "failed"]);
   });
 
   it("publishes timed_out and stops trying further agents when timeout fires", async () => {
@@ -434,11 +384,10 @@ describe("Dispatcher execution", () => {
     await waitForCompletions(env, 1, 1_000);
     expect(env.completions[0].phase).toBe("timed_out");
     const taskEvents = env.events.filter((e) => e.kind === "task");
-    expect(
-      taskEvents.map(
-        (e) => (e as Extract<BusEvent, { kind: "task" }>).phase,
-      ),
-    ).toEqual(["dispatched", "timed_out"]);
+    expect(taskEvents.map((e) => (e as Extract<BusEvent, { kind: "task" }>).phase)).toEqual([
+      "dispatched",
+      "timed_out",
+    ]);
   });
 
   it("dryRun short-circuits agent execution", async () => {
@@ -463,21 +412,15 @@ describe("Dispatcher.stop", () => {
       maxParallel: 1,
       taskTimeoutMs: 10_000,
     });
-    env.dispatcher.submit(
-      fakeCandidate({ threadKey: "a", notificationId: "na", stableId: "a" }),
-    );
-    env.dispatcher.submit(
-      fakeCandidate({ threadKey: "b", notificationId: "nb", stableId: "b" }),
-    );
+    env.dispatcher.submit(fakeCandidate({ threadKey: "a", notificationId: "na", stableId: "a" }));
+    env.dispatcher.submit(fakeCandidate({ threadKey: "b", notificationId: "nb", stableId: "b" }));
     expect(env.dispatcher.activeCount()).toBe(1);
     expect(env.dispatcher.pendingCount()).toBe(1);
     await env.dispatcher.stop();
     expect(env.dispatcher.activeCount()).toBe(0);
     expect(env.dispatcher.pendingCount()).toBe(0);
     // Submissions after stop are ignored.
-    env.dispatcher.submit(
-      fakeCandidate({ threadKey: "c", notificationId: "nc", stableId: "c" }),
-    );
+    env.dispatcher.submit(fakeCandidate({ threadKey: "c", notificationId: "nc", stableId: "c" }));
     expect(env.dispatcher.activeCount()).toBe(0);
     expect(env.dispatcher.pendingCount()).toBe(0);
   });

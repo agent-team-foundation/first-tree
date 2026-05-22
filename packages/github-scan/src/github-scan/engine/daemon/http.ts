@@ -27,36 +27,19 @@
  *   3. Resolve once the listener has fully closed.
  */
 
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
 import { promises as fsp, readFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
-
-import {
-  createInboxMtimeBus,
-  runSseStream,
-  type SseBus,
-} from "./sse.js";
-import type { DashboardTask } from "./thread-store.js";
 import { resolveFirstTreePackageRoot } from "../bridge.js";
+import { createInboxMtimeBus, runSseStream, type SseBus } from "./sse.js";
+import type { DashboardTask } from "./thread-store.js";
 
 /**
  * Routes matched against the path component after the query is stripped.
  * `/`, `/dashboard`, `/index.html` all map to `dashboard`, matching
  * `http.rs::parse_route`.
  */
-export type Route =
-  | "dashboard"
-  | "healthz"
-  | "inbox"
-  | "tasks"
-  | "activity"
-  | "events"
-  | "not-found";
+export type Route = "dashboard" | "healthz" | "inbox" | "tasks" | "activity" | "events" | "not-found";
 
 export function parseRoute(method: string, url: string | undefined): Route {
   if (method !== "GET" || !url) return "not-found";
@@ -91,10 +74,7 @@ export const ACTIVITY_TAIL_LIMIT = 200;
  * wraps in `[...]`. Does NOT re-parse — matches Rust's pass-through.
  * Missing/unreadable file returns literal `"[]"` (200 OK).
  */
-export function tailAsJsonArray(
-  path: string,
-  maxLines: number,
-): string {
+export function tailAsJsonArray(path: string, maxLines: number): string {
   let text: string;
   try {
     text = readFileSync(path, "utf-8");
@@ -138,11 +118,7 @@ function loadDashboardHtml(override?: string): Buffer {
  * Headers and order match the Rust output; status reason phrase is
  * `OK`/`Not Found`/empty per `reason_phrase`.
  */
-export function writePlain(
-  res: ServerResponse,
-  status: number,
-  body: string,
-): void {
+export function writePlain(res: ServerResponse, status: number, body: string): void {
   res.writeHead(status, reasonPhrase(status), {
     "Content-Type": "text/plain; charset=utf-8",
     "Content-Length": Buffer.byteLength(body, "utf-8"),
@@ -173,10 +149,7 @@ function writeDashboard(res: ServerResponse, body: Buffer): void {
   res.end(body);
 }
 
-async function writeInboxJsonFile(
-  res: ServerResponse,
-  inboxPath: string,
-): Promise<void> {
+async function writeInboxJsonFile(res: ServerResponse, inboxPath: string): Promise<void> {
   let contents: string;
   try {
     contents = await fsp.readFile(inboxPath, "utf-8");
@@ -197,10 +170,7 @@ async function writeInboxJsonFile(
   res.end(contents);
 }
 
-function writeJson(
-  res: ServerResponse,
-  body: string,
-): void {
+function writeJson(res: ServerResponse, body: string): void {
   res.writeHead(200, "OK", {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body, "utf-8"),
@@ -210,11 +180,7 @@ function writeJson(
   res.end(body);
 }
 
-function writeActivityTail(
-  res: ServerResponse,
-  activityPath: string,
-  maxLines: number,
-): void {
+function writeActivityTail(res: ServerResponse, activityPath: string, maxLines: number): void {
   const body = tailAsJsonArray(activityPath, maxLines);
   res.writeHead(200, "OK", {
     "Content-Type": "application/json; charset=utf-8",
@@ -303,9 +269,7 @@ const DEFAULT_LOGGER: HttpLogger = {
  * (via `fs.promises`) or from the passed-in bus. Nothing here mutates
  * `~/.first-tree/github-scan`.
  */
-export async function startHttpServer(
-  options: StartHttpServerOptions,
-): Promise<RunningHttpServer> {
+export async function startHttpServer(options: StartHttpServerOptions): Promise<RunningHttpServer> {
   const logger = options.logger ?? DEFAULT_LOGGER;
   const dashboardBody = loadDashboardHtml(options.dashboardHtml);
 
@@ -322,92 +286,84 @@ export async function startHttpServer(
   // in-flight SSE streams on shutdown without leaking.
   const liveStreams = new Set<AbortController>();
 
-  const server: Server = createServer(
-    (req: IncomingMessage, res: ServerResponse) => {
-      const route = parseRoute(req.method ?? "GET", req.url);
-      try {
-        switch (route) {
-          case "dashboard":
-            writeDashboard(res, dashboardBody);
-            return;
-          case "healthz":
-            writePlain(res, 200, "ok\n");
-            return;
-          case "inbox":
-            void writeInboxJsonFile(res, options.inboxPath).catch((err) => {
-              logger.error(
-                `github-scan http: /inbox handler failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
-              if (!res.headersSent) writePlain(res, 404, "inbox.json not found\n");
-            });
-            return;
-          case "tasks":
-            writeJson(
-              res,
-              JSON.stringify({
-                tasks: (options.tasksProvider ?? (() => []))(),
-              }),
+  const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    const route = parseRoute(req.method ?? "GET", req.url);
+    try {
+      switch (route) {
+        case "dashboard":
+          writeDashboard(res, dashboardBody);
+          return;
+        case "healthz":
+          writePlain(res, 200, "ok\n");
+          return;
+        case "inbox":
+          void writeInboxJsonFile(res, options.inboxPath).catch((err) => {
+            logger.error(
+              `github-scan http: /inbox handler failed: ${err instanceof Error ? err.message : String(err)}`,
             );
-            return;
-          case "activity":
-            writeActivityTail(res, options.activityLogPath, ACTIVITY_TAIL_LIMIT);
-            return;
-          case "events": {
-            writeSseHeaders(res);
-            const streamController = new AbortController();
-            liveStreams.add(streamController);
-            // Link the server signal to this stream.
-            const onServerAbort = (): void => streamController.abort();
-            if (options.signal.aborted) streamController.abort();
-            else options.signal.addEventListener("abort", onServerAbort, { once: true });
-            runSseStream({
-              response: res,
-              bus,
-              signal: streamController.signal,
-              keepAliveMs: options.sseKeepAliveMs,
+            if (!res.headersSent) writePlain(res, 404, "inbox.json not found\n");
+          });
+          return;
+        case "tasks":
+          writeJson(
+            res,
+            JSON.stringify({
+              tasks: (options.tasksProvider ?? (() => []))(),
+            }),
+          );
+          return;
+        case "activity":
+          writeActivityTail(res, options.activityLogPath, ACTIVITY_TAIL_LIMIT);
+          return;
+        case "events": {
+          writeSseHeaders(res);
+          const streamController = new AbortController();
+          liveStreams.add(streamController);
+          // Link the server signal to this stream.
+          const onServerAbort = (): void => streamController.abort();
+          if (options.signal.aborted) streamController.abort();
+          else options.signal.addEventListener("abort", onServerAbort, { once: true });
+          runSseStream({
+            response: res,
+            bus,
+            signal: streamController.signal,
+            keepAliveMs: options.sseKeepAliveMs,
+          })
+            .catch((err) => {
+              logger.warn(
+                `github-scan http: sse stream ended with error: ${err instanceof Error ? err.message : String(err)}`,
+              );
             })
-              .catch((err) => {
-                logger.warn(
-                  `github-scan http: sse stream ended with error: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              })
-              .finally(() => {
-                liveStreams.delete(streamController);
-                options.signal.removeEventListener("abort", onServerAbort);
-              });
-            return;
-          }
-          case "not-found":
-          default:
-            writePlain(res, 404, "not found\n");
-            return;
+            .finally(() => {
+              liveStreams.delete(streamController);
+              options.signal.removeEventListener("abort", onServerAbort);
+            });
+          return;
         }
-      } catch (err) {
-        logger.error(
-          `github-scan http: handler crashed for ${req.method} ${req.url}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        if (!res.headersSent) writePlain(res, 404, "not found\n");
+        case "not-found":
+        default:
+          writePlain(res, 404, "not found\n");
+          return;
       }
-    },
-  );
+    } catch (err) {
+      logger.error(
+        `github-scan http: handler crashed for ${req.method} ${req.url}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      if (!res.headersSent) writePlain(res, 404, "not found\n");
+    }
+  });
 
   // Prevent the HTTP listener from keeping the process alive after the
   // daemon's main shutdown has fired but before `server.close()` fully
   // drains — we still await `done` explicitly in `runDaemon`.
   server.on("clientError", (err) => {
-    logger.warn(
-      `github-scan http: client error: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    logger.warn(`github-scan http: client error: ${err instanceof Error ? err.message : String(err)}`);
   });
 
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error): void => {
       server.removeListener("listening", onListening);
-      reject(
-        new Error(
-          `failed to bind http server on 127.0.0.1:${options.httpPort}: ${err.message}`,
-        ),
-      );
+      reject(new Error(`failed to bind http server on 127.0.0.1:${options.httpPort}: ${err.message}`));
     };
     const onListening = (): void => {
       server.removeListener("error", onError);
@@ -421,8 +377,7 @@ export async function startHttpServer(
   });
 
   const address = server.address();
-  const boundPort =
-    typeof address === "object" && address !== null ? address.port : options.httpPort;
+  const boundPort = typeof address === "object" && address !== null ? address.port : options.httpPort;
   logger.info(`github-scan: http server listening on http://127.0.0.1:${boundPort}`);
 
   let stopped = false;
@@ -437,9 +392,7 @@ export async function startHttpServer(
       liveStreams.clear();
       server.close((err) => {
         if (err) {
-          logger.warn(
-            `github-scan http: server.close error: ${err.message}`,
-          );
+          logger.warn(`github-scan http: server.close error: ${err.message}`);
         }
         resolve();
       });

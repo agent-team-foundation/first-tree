@@ -3,11 +3,11 @@ import { readdirSync, rmSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
 import {
-  RootKind,
   asString,
   isRecord,
   normalizeRemoteForMatch,
   parseGitHubRemoteUrl,
+  type RootKind,
   readJson,
   slugifyToken,
   writeJson,
@@ -17,11 +17,7 @@ export type { RootKind } from "./shared.js";
 
 export type TreeMode = "dedicated" | "shared";
 
-export type SourceBindingMode =
-  | "standalone-source"
-  | "shared-source"
-  | "workspace-root"
-  | "workspace-member";
+export type SourceBindingMode = "standalone-source" | "shared-source" | "workspace-root" | "workspace-member";
 
 export type SourceScope = "repo" | "workspace";
 
@@ -238,11 +234,7 @@ export function readTreeState(root: string): TreeState | null {
       ? { remoteUrl: parsed.published.remoteUrl as string }
       : undefined;
 
-  if (
-    treeId === undefined ||
-    treeRepoName === undefined ||
-    (treeMode !== "dedicated" && treeMode !== "shared")
-  ) {
+  if (treeId === undefined || treeRepoName === undefined || (treeMode !== "dedicated" && treeMode !== "shared")) {
     return null;
   }
 
@@ -335,9 +327,7 @@ export function listTreeBindings(root: string): TreeBindingState[] {
 }
 
 export function determineScope(bindingMode: SourceBindingMode): SourceScope {
-  return bindingMode === "workspace-root" || bindingMode === "workspace-member"
-    ? "workspace"
-    : "repo";
+  return bindingMode === "workspace-root" || bindingMode === "workspace-member" ? "workspace" : "repo";
 }
 
 export function buildStableSourceId(

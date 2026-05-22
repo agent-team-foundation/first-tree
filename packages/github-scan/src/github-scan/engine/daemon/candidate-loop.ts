@@ -12,15 +12,12 @@
  *   - Sleep is injectable for tests.
  */
 
+import { type TaskCandidate, toDispatcherCandidate } from "../runtime/task.js";
 import type { Bus } from "./bus.js";
 import type { Dispatcher } from "./dispatcher.js";
 import type { GhClient } from "./gh-client.js";
 import { rateLimitBackoffMs } from "./poller.js";
 import type { Scheduler } from "./scheduler.js";
-import {
-  toDispatcherCandidate,
-  type TaskCandidate,
-} from "../runtime/task.js";
 
 export interface CandidateLoopLogger {
   info: (line: string) => void;
@@ -77,9 +74,7 @@ export interface CandidateCycleOutcome {
   rateLimited: boolean;
 }
 
-export async function runCandidateLoop(
-  options: CandidateLoopOptions,
-): Promise<void> {
+export async function runCandidateLoop(options: CandidateLoopOptions): Promise<void> {
   const logger = options.logger ?? DEFAULT_LOGGER;
   const nowSec = options.nowSec ?? (() => Math.floor(Date.now() / 1_000));
   const sleep = options.sleep ?? defaultSleep;
@@ -88,10 +83,7 @@ export async function runCandidateLoop(
   // One-shot orphan recovery before the first cycle.
   if (options.recoverableCandidates) {
     for (const candidate of options.recoverableCandidates()) {
-      if (
-        options.scheduler &&
-        !(await options.scheduler.shouldSchedule(candidate))
-      ) {
+      if (options.scheduler && !(await options.scheduler.shouldSchedule(candidate))) {
         continue;
       }
       options.dispatcher.submit(toDispatcherCandidate(candidate));
@@ -105,9 +97,7 @@ export async function runCandidateLoop(
     try {
       outcome = await runCandidateCycle(options, nowSec);
     } catch (err) {
-      logger.error(
-        `candidate cycle crashed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      logger.error(`candidate cycle crashed: ${err instanceof Error ? err.message : String(err)}`);
       await sleep(options.pollIntervalSec * 1_000, signal);
       continue;
     }
@@ -120,9 +110,7 @@ export async function runCandidateLoop(
     if (outcome.rateLimited) {
       rateLimitStreak += 1;
       const backoff = rateLimitBackoffMs(rateLimitStreak);
-      logger.warn(
-        `candidate search rate-limited; sleeping ${Math.round(backoff / 1000)}s (streak=${rateLimitStreak})`,
-      );
+      logger.warn(`candidate search rate-limited; sleeping ${Math.round(backoff / 1000)}s (streak=${rateLimitStreak})`);
       await sleep(backoff, signal);
       continue;
     }
@@ -137,13 +125,7 @@ export async function runCandidateLoop(
 export async function runCandidateCycle(
   options: Pick<
     CandidateLoopOptions,
-    | "client"
-    | "dispatcher"
-    | "searchLimit"
-    | "includeSearch"
-    | "lookbackSecs"
-    | "onCycle"
-    | "scheduler"
+    "client" | "dispatcher" | "searchLimit" | "includeSearch" | "lookbackSecs" | "onCycle" | "scheduler"
   >,
   nowSec: () => number,
 ): Promise<CandidateCycleOutcome> {

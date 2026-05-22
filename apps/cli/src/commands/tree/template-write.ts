@@ -44,11 +44,7 @@ export function parseTemplateVersion(path: string): number | null {
   }
 }
 
-export function writeTemplatedFile(
-  path: string,
-  contents: string,
-  opts: { version: number },
-): TemplateWriteResult {
+export function writeTemplatedFile(path: string, contents: string, opts: { version: number }): TemplateWriteResult {
   if (!existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, ensureTrailingNewline(contents.trimEnd()));

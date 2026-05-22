@@ -13,16 +13,7 @@
  * the natural place to introduce rotation; spec doc 2 §2.4 flags this.
  */
 
-import {
-  appendFileSync,
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readSync,
-  statSync,
-} from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { type ActivityEvent, ActivityEventSchema } from "./types.js";

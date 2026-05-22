@@ -12,11 +12,7 @@
  * swallow (status-manager does `|| true` for every label op).
  */
 
-import {
-  type SpawnSyncOptionsWithBufferEncoding,
-  type SpawnSyncReturns,
-  spawnSync,
-} from "node:child_process";
+import { type SpawnSyncOptionsWithBufferEncoding, type SpawnSyncReturns, spawnSync } from "node:child_process";
 
 export interface GhExecResult {
   /** `gh` exit code. `null` if the process was signal-killed. */
@@ -116,29 +112,12 @@ export class GhClient {
    * Mirrors the historical label helper in the shell prototype.
    * All errors are swallowed (silent "non-labeler fallback", spec doc 3 §8).
    */
-  addLabelWithFallback(
-    repo: string,
-    number: number,
-    label: string,
-    color: string,
-    description: string,
-  ): void {
+  addLabelWithFallback(repo: string, number: number, label: string, color: string, description: string): void {
     const first = this.run(["issue", "edit", String(number), "--repo", repo, "--add-label", label]);
     if (first.status === 0) return;
 
     // Create (or `--force` upsert) the label, then retry.
-    this.run([
-      "label",
-      "create",
-      label,
-      "--repo",
-      repo,
-      "--color",
-      color,
-      "--description",
-      description,
-      "--force",
-    ]);
+    this.run(["label", "create", label, "--repo", repo, "--color", color, "--description", description, "--force"]);
     this.run(["issue", "edit", String(number), "--repo", repo, "--add-label", label]);
   }
 
@@ -154,15 +133,7 @@ export class GhClient {
    * still represented as `false`. See `bin/github-scan-status-manager:98-103`.
    */
   removeLabel(repo: string, number: number, label: string): boolean {
-    const result = this.run([
-      "issue",
-      "edit",
-      String(number),
-      "--repo",
-      repo,
-      "--remove-label",
-      label,
-    ]);
+    const result = this.run(["issue", "edit", String(number), "--repo", repo, "--remove-label", label]);
     return result.status === 0;
   }
 

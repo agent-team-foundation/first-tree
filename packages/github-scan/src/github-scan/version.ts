@@ -6,10 +6,7 @@ type PackageJson = {
 };
 
 function resolvePackageJsonPath(): string {
-  const candidates = [
-    new URL("../../package.json", import.meta.url),
-    new URL("../package.json", import.meta.url),
-  ];
+  const candidates = [new URL("../../package.json", import.meta.url), new URL("../package.json", import.meta.url)];
 
   for (const candidate of candidates) {
     const path = fileURLToPath(candidate);
@@ -20,9 +17,7 @@ function resolvePackageJsonPath(): string {
 }
 
 function loadVersion(): string {
-  const parsed = JSON.parse(
-    readFileSync(resolvePackageJsonPath(), "utf8"),
-  ) as PackageJson;
+  const parsed = JSON.parse(readFileSync(resolvePackageJsonPath(), "utf8")) as PackageJson;
 
   if (typeof parsed.version === "string" && parsed.version.length > 0) {
     return parsed.version;

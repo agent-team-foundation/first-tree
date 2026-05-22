@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { TREE_SOURCE_REPOS_FILE, listTreeBindings } from "./binding-state.js";
+import { listTreeBindings, TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
 import { ensureTrailingNewline, parseGitHubRemoteUrl } from "./shared.js";
 
 const TREE_CODE_REPO_REGISTRY_BEGIN = "<!-- BEGIN FIRST-TREE-CODE-REPO-REGISTRY -->";
@@ -111,11 +111,7 @@ function upsertManagedBlock(text: string, block: string): string {
 
   if (insertBefore && insertBefore.index >= 0) {
     return ensureTrailingNewline(
-      [
-        normalized.slice(0, insertBefore.index).trimEnd(),
-        block,
-        normalized.slice(insertBefore.index).trimStart(),
-      ]
+      [normalized.slice(0, insertBefore.index).trimEnd(), block, normalized.slice(insertBefore.index).trimStart()]
         .filter(Boolean)
         .join("\n\n"),
     );
@@ -199,10 +195,7 @@ export function upsertTreeCodeRepoRegistry(treeRoot: string, repoUrl: string): S
     return "skipped";
   }
 
-  return syncTreeCodeRepoRegistry(treeRoot, [
-    ...listKnownTreeCodeRepos(treeRoot).map((entry) => entry.url),
-    repo.url,
-  ]);
+  return syncTreeCodeRepoRegistry(treeRoot, [...listKnownTreeCodeRepos(treeRoot).map((entry) => entry.url), repo.url]);
 }
 
 export function buildTreeCodeRepoIndexNote(): string {

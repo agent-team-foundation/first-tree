@@ -19,28 +19,10 @@
  *   runtime/status.env                       — operator-visible status
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-
-import {
-  decodeMultiline,
-  parseKvLines,
-  stableFileId,
-} from "../runtime/task-util.js";
-import {
-  defaultThreadRecord,
-  threadRecordFromKv,
-  threadRecordToLines,
-  type ThreadRecord,
-} from "../runtime/task.js";
+import { defaultThreadRecord, type ThreadRecord, threadRecordFromKv, threadRecordToLines } from "../runtime/task.js";
+import { decodeMultiline, parseKvLines, stableFileId } from "../runtime/task-util.js";
 
 export interface ThreadStoreOptions {
   runnerHome: string;
@@ -185,10 +167,7 @@ export class ThreadStore {
       if (!workspacePath) continue;
       if (active.has(workspacePath)) continue;
       const finishedAt = Number.parseInt(metadata.get("finished_at") ?? "", 10);
-      const mtimeSec =
-        Number.isFinite(finishedAt) && finishedAt > 0
-          ? finishedAt
-          : fileMtimeEpoch(workspacePath);
+      const mtimeSec = Number.isFinite(finishedAt) && finishedAt > 0 ? finishedAt : fileMtimeEpoch(workspacePath);
       if (mtimeSec === undefined) continue;
       if (nowSec - mtimeSec < ttlSecs) continue;
       if (existsSync(workspacePath)) {

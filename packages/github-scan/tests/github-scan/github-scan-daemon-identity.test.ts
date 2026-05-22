@@ -9,14 +9,13 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-
-import { GhClient } from "../../src/github-scan/engine/runtime/gh.js";
 import {
   identityHasRequiredScope,
   identityLockKey,
   pickActiveIdentityFromAuthStatus,
   resolveDaemonIdentity,
 } from "../../src/github-scan/engine/daemon/identity.js";
+import { GhClient } from "../../src/github-scan/engine/runtime/gh.js";
 
 function makeGhReturning(stdout: string, status = 0): GhClient {
   const spawn = vi.fn().mockReturnValue({

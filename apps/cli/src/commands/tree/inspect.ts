@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
@@ -317,11 +317,7 @@ export function inspectCurrentWorkingTree(cwd = process.cwd()): InspectResult {
   const gitMarkerPath = findUpwards(cwd, ".git");
   const rootPath = resolveInspectRootPath(
     cwd,
-    managedBinding
-      ? dirname(managedBinding.path)
-      : managedTreeIdentity
-        ? dirname(managedTreeIdentity.path)
-        : undefined,
+    managedBinding ? dirname(managedBinding.path) : managedTreeIdentity ? dirname(managedTreeIdentity.path) : undefined,
     sourceStatePath,
     treeStatePath,
     gitMarkerPath,

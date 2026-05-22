@@ -4,8 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { readSourceBindingContract } from "./binding-contract.js";
 import { bindSourceRoot } from "./bind.js";
+import { readSourceBindingContract } from "./binding-contract.js";
 import { discoverWorkspaceRepos, isGitRepoRoot, repoNameForRoot, runCommand } from "./shared.js";
 import { upsertLocalTreeGitIgnore } from "./source-integration.js";
 
@@ -45,11 +45,7 @@ function readWorkspaceSyncOptions(command: Command): WorkspaceSyncOptions {
   };
 }
 
-function ensureWorkspaceTreePath(
-  workspaceRoot: string,
-  treeRepoName: string,
-  treeUrl?: string,
-): string | undefined {
+function ensureWorkspaceTreePath(workspaceRoot: string, treeRepoName: string, treeUrl?: string): string | undefined {
   const siblingRoot = join(dirname(workspaceRoot), treeRepoName);
   if (isGitRepoRoot(siblingRoot)) {
     return siblingRoot;
@@ -102,10 +98,7 @@ function resolveWorkspacePlan(context: CommandContext): {
   };
 }
 
-function printWorkspaceDryRun(
-  plan: ReturnType<typeof resolveWorkspacePlan>,
-  asJson: boolean,
-): void {
+function printWorkspaceDryRun(plan: ReturnType<typeof resolveWorkspacePlan>, asJson: boolean): void {
   const summary = {
     childRepos: plan.members,
     dryRun: true,
@@ -156,9 +149,7 @@ function applyWorkspaceSync(plan: ReturnType<typeof resolveWorkspacePlan>): bool
       console.log(`  Bound ${member.relativePath}`);
     } catch (error) {
       hadFailure = true;
-      console.log(
-        `  Failed ${member.relativePath}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      console.log(`  Failed ${member.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

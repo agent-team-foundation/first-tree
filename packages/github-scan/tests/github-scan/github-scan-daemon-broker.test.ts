@@ -1,29 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import {
-  GhExecutor,
-  type GhCommandSpec,
-  type ExecOutput,
-} from "../../src/github-scan/engine/daemon/gh-executor.js";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   MUTATION_CACHE_TTL_MS,
-  SHIM_SCRIPT,
   mutationFingerprint,
   readCachedMutationResponse,
+  SHIM_SCRIPT,
   stableFileId,
   startGhBroker,
   writeCachedMutationResponse,
 } from "../../src/github-scan/engine/daemon/broker.js";
+import { type ExecOutput, type GhCommandSpec, GhExecutor } from "../../src/github-scan/engine/daemon/gh-executor.js";
 
 const tempRoots: string[] = [];
 
@@ -221,9 +209,7 @@ describe("startGhBroker serve loop", () => {
 
   it("handles a request end-to-end, writing response.env", async () => {
     const brokerDir = makeTempDir("e2e");
-    const { executor, calls } = buildExecutor([
-      { stdout: "hello", stderr: "", statusCode: 0 },
-    ]);
+    const { executor, calls } = buildExecutor([{ stdout: "hello", stderr: "", statusCode: 0 }]);
     const broker = await startGhBroker({
       brokerDir,
       executor,
@@ -234,10 +220,7 @@ describe("startGhBroker serve loop", () => {
       mkdirSync(reqDir, { recursive: true });
       writeFileSync(join(reqDir, "cwd.txt"), "/tmp\n");
       writeFileSync(join(reqDir, "argv.txt"), "api\n/notifications\n");
-      await waitFor(
-        () => existsSync(join(reqDir, "response.env")),
-        2_000,
-      );
+      await waitFor(() => existsSync(join(reqDir, "response.env")), 2_000);
       const env = readFileSync(join(reqDir, "response.env"), "utf8");
       expect(env).toContain("status_code=0");
       expect(readFileSync(join(reqDir, "stdout.txt"), "utf8")).toBe("hello");
@@ -250,9 +233,7 @@ describe("startGhBroker serve loop", () => {
 
   it("serves a cached response without re-invoking gh", async () => {
     const brokerDir = makeTempDir("cached");
-    const { executor, calls } = buildExecutor([
-      { stdout: "first", stderr: "", statusCode: 0 },
-    ]);
+    const { executor, calls } = buildExecutor([{ stdout: "first", stderr: "", statusCode: 0 }]);
     const broker = await startGhBroker({
       brokerDir,
       executor,
@@ -262,15 +243,9 @@ describe("startGhBroker serve loop", () => {
       // First request: hits gh, stores in cache.
       const reqA = join(brokerDir, "requests", "req-A");
       mkdirSync(reqA, { recursive: true });
-      writeFileSync(
-        join(reqA, "argv.txt"),
-        "issue\ncomment\n1\n--body\nhello\n",
-      );
+      writeFileSync(join(reqA, "argv.txt"), "issue\ncomment\n1\n--body\nhello\n");
       writeFileSync(join(reqA, "cwd.txt"), "/tmp\n");
-      await waitFor(
-        () => existsSync(join(reqA, "response.env")),
-        2_000,
-      );
+      await waitFor(() => existsSync(join(reqA, "response.env")), 2_000);
       expect(readFileSync(join(reqA, "stdout.txt"), "utf8")).toBe("first");
       expect(calls).toHaveLength(1);
 
@@ -278,15 +253,9 @@ describe("startGhBroker serve loop", () => {
       // only primed with one response; a second spawnGh call would throw.
       const reqB = join(brokerDir, "requests", "req-B");
       mkdirSync(reqB, { recursive: true });
-      writeFileSync(
-        join(reqB, "argv.txt"),
-        "issue\ncomment\n1\n--body\nhello\n",
-      );
+      writeFileSync(join(reqB, "argv.txt"), "issue\ncomment\n1\n--body\nhello\n");
       writeFileSync(join(reqB, "cwd.txt"), "/tmp\n");
-      await waitFor(
-        () => existsSync(join(reqB, "response.env")),
-        2_000,
-      );
+      await waitFor(() => existsSync(join(reqB, "response.env")), 2_000);
       expect(readFileSync(join(reqB, "stdout.txt"), "utf8")).toBe("first");
       expect(calls).toHaveLength(1);
     } finally {
@@ -322,13 +291,8 @@ describe("startGhBroker serve loop", () => {
       mkdirSync(reqDir, { recursive: true });
       writeFileSync(join(reqDir, "argv.txt"), "api\n/notifications\n");
       writeFileSync(join(reqDir, "cwd.txt"), "/tmp\n");
-      await waitFor(
-        () => existsSync(join(reqDir, "response.env")),
-        2_000,
-      );
-      expect(readFileSync(join(reqDir, "response.env"), "utf8")).toContain(
-        "status_code=1",
-      );
+      await waitFor(() => existsSync(join(reqDir, "response.env")), 2_000);
+      expect(readFileSync(join(reqDir, "response.env"), "utf8")).toContain("status_code=1");
       // Serve loop survived: a subsequent request still completes.
       const reqDir2 = join(brokerDir, "requests", "req-after");
       mkdirSync(reqDir2, { recursive: true });
@@ -336,10 +300,7 @@ describe("startGhBroker serve loop", () => {
       writeFileSync(join(reqDir2, "cwd.txt"), "/tmp\n");
       // The executor was primed to throw for every call, but handleRequest
       // will still write a failure response and keep the loop alive.
-      await waitFor(
-        () => existsSync(join(reqDir2, "response.env")),
-        2_000,
-      );
+      await waitFor(() => existsSync(join(reqDir2, "response.env")), 2_000);
     } finally {
       await broker.stop();
     }
@@ -366,25 +327,17 @@ describe("startGhBroker serve loop", () => {
       mkdirSync(reqDir, { recursive: true });
       writeFileSync(join(reqDir, "argv.txt"), "api\n/notifications\n");
       writeFileSync(join(reqDir, "cwd.txt"), "/tmp\n");
-      await waitFor(
-        () => existsSync(join(reqDir, "response.env")),
-        2_000,
-      );
+      await waitFor(() => existsSync(join(reqDir, "response.env")), 2_000);
       const env = readFileSync(join(reqDir, "response.env"), "utf8");
       expect(env).toContain("status_code=1");
-      expect(readFileSync(join(reqDir, "stderr.txt"), "utf8")).toContain(
-        "boom",
-      );
+      expect(readFileSync(join(reqDir, "stderr.txt"), "utf8")).toContain("boom");
     } finally {
       await broker.stop();
     }
   });
 });
 
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs: number,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (predicate()) return;

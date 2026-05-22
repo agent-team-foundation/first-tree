@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,6 @@ import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCommandContext } from "../src/commands/context.js";
-import { registerSubcommands } from "../src/commands/groups.js";
 import {
   isGitHubScanHelpRequest,
   readTreeRepoArg,
@@ -15,6 +14,7 @@ import {
   resolveGitHubScanBinding,
   stripTreeRepoArg,
 } from "../src/commands/github/scan-binding.js";
+import { registerSubcommands } from "../src/commands/groups.js";
 import { inspectCurrentWorkingTree, runInspectCommand } from "../src/commands/tree/inspect.js";
 import { buildSourceIntegrationBlock } from "../src/commands/tree/source-integration.js";
 import { runStatusCommand } from "../src/commands/tree/status.js";
@@ -296,9 +296,11 @@ describe("github scan binding helpers", () => {
   it("reads and strips --tree-repo in both supported forms", () => {
     expect(readTreeRepoArg(["poll", "--tree-repo", "acme/context"])).toBe("acme/context");
     expect(readTreeRepoArg(["poll", "--tree-repo=acme/context"])).toBe("acme/context");
-    expect(
-      stripTreeRepoArg(["poll", "--tree-repo", "acme/context", "--allow-repo", "acme/*"]),
-    ).toEqual(["poll", "--allow-repo", "acme/*"]);
+    expect(stripTreeRepoArg(["poll", "--tree-repo", "acme/context", "--allow-repo", "acme/*"])).toEqual([
+      "poll",
+      "--allow-repo",
+      "acme/*",
+    ]);
     expect(stripTreeRepoArg(["poll", "--tree-repo=acme/context"])).toEqual(["poll"]);
   });
 

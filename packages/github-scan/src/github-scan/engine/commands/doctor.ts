@@ -8,18 +8,13 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-
-import { loadGitHubScanDaemonConfig } from "../runtime/config.js";
-import { identityHasRequiredScope, resolveDaemonIdentity } from "../daemon/identity.js";
 import { findServiceLock, isLockStale, type LockInfo } from "../daemon/claim.js";
-import { RepoFilter } from "../runtime/repo-filter.js";
-import {
-  detectAvailableAgents,
-  findExecutable,
-  resolveRunnerHome,
-} from "../daemon/runner-skeleton.js";
+import { identityHasRequiredScope, resolveDaemonIdentity } from "../daemon/identity.js";
 import { formatAgentSpecLabel } from "../daemon/runner.js";
+import { detectAvailableAgents, findExecutable, resolveRunnerHome } from "../daemon/runner-skeleton.js";
 import { ThreadStore } from "../daemon/thread-store.js";
+import { loadGitHubScanDaemonConfig } from "../runtime/config.js";
+import { RepoFilter } from "../runtime/repo-filter.js";
 
 export interface RunDoctorOptions {
   write?: (line: string) => void;
@@ -46,18 +41,14 @@ export function parseDoctorArgs(argv: readonly string[]): {
   return out;
 }
 
-export async function runDoctor(
-  argv: readonly string[] = [],
-  options: RunDoctorOptions = {},
-): Promise<number> {
+export async function runDoctor(argv: readonly string[] = [], options: RunDoctorOptions = {}): Promise<number> {
   const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
   const parsed = parseDoctorArgs(argv);
   const home = options.runnerHome ?? parsed.home ?? resolveRunnerHome();
   mkdirSync(home, { recursive: true });
   const config = loadGitHubScanDaemonConfig();
   const repoFilter = parsed.allowRepo ?? options.allowRepo;
-  const filter =
-    repoFilter && repoFilter.length > 0 ? RepoFilter.parseCsv(repoFilter) : RepoFilter.empty();
+  const filter = repoFilter && repoFilter.length > 0 ? RepoFilter.parseCsv(repoFilter) : RepoFilter.empty();
 
   let identityLine: string;
   let scopeLine: string;
@@ -92,9 +83,7 @@ export async function runDoctor(
   write(`git protocol: ${gitProtocol}`);
   write(`scopes: ${scopes}`);
   write(`lock: ${formatLockState(lock)}`);
-  write(
-    `agents: ${agents.length > 0 ? agents.map((r) => formatAgentSpecLabel(r)).join(", ") : "(none)"}`,
-  );
+  write(`agents: ${agents.length > 0 ? agents.map((r) => formatAgentSpecLabel(r)).join(", ") : "(none)"}`);
   write(`gh binary: ${findExecutable("gh") ?? "(missing)"}`);
   write(`required auth scope: ${scopeLine}`);
   write(`runtime status file: ${existsSync(store.runtimePath) ? "present" : "missing"}`);

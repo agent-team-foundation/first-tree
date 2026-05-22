@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  RepoFilter,
-  searchScopesFor,
-} from "../../src/github-scan/engine/runtime/repo-filter.js";
+import { RepoFilter, searchScopesFor } from "../../src/github-scan/engine/runtime/repo-filter.js";
 
 describe("RepoFilter.parseCsv", () => {
   it("accepts owner/repo and owner/*", () => {
@@ -13,9 +10,7 @@ describe("RepoFilter.parseCsv", () => {
   });
 
   it("rejects junk patterns", () => {
-    expect(() => RepoFilter.parseCsv("not/a/valid/pattern")).toThrow(
-      /invalid repo allow pattern/,
-    );
+    expect(() => RepoFilter.parseCsv("not/a/valid/pattern")).toThrow(/invalid repo allow pattern/);
     expect(() => RepoFilter.parseCsv("/*")).toThrow(/invalid repo allow pattern/);
   });
 

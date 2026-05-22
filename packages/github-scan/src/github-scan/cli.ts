@@ -159,16 +159,7 @@ type Output = (text: string) => void;
 type TsTarget = {
   kind: "ts";
   /** The node:module specifier to `await import()`. */
-  specifier:
-    | "status-manager"
-    | "poll"
-    | "watch"
-    | "doctor"
-    | "status"
-    | "cleanup"
-    | "start"
-    | "stop"
-    | "install";
+  specifier: "status-manager" | "poll" | "watch" | "doctor" | "status" | "cleanup" | "start" | "stop" | "install";
 };
 
 type StatuslineTarget = {

@@ -37,13 +37,6 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-
-import { appendActivityEvent } from "../runtime/activity-log.js";
-import { autoRevertHumanLabels } from "../runtime/auto-revert.js";
-import { GhClient, GhExecError } from "../runtime/gh.js";
-import { RepoFilter } from "../runtime/repo-filter.js";
-import type { GitHubScanPaths } from "../runtime/paths.js";
-import { updateInbox } from "../runtime/store.js";
 import {
   classifyEntries,
   diffEvents,
@@ -52,6 +45,12 @@ import {
   sortEntries,
   splitConcatenatedJsonArrays,
 } from "../commands/poll.js";
+import { appendActivityEvent } from "../runtime/activity-log.js";
+import { autoRevertHumanLabels } from "../runtime/auto-revert.js";
+import { GhClient, GhExecError } from "../runtime/gh.js";
+import type { GitHubScanPaths } from "../runtime/paths.js";
+import { RepoFilter } from "../runtime/repo-filter.js";
+import { updateInbox } from "../runtime/store.js";
 import type { Inbox } from "../runtime/types.js";
 
 export interface PollerLogger {
@@ -145,7 +144,7 @@ export function isRateLimited(stdout: string, stderr: string): boolean {
  */
 export function rateLimitBackoffMs(streak: number): number {
   const exponent = Math.min(Math.max(streak, 1), 4);
-  return 60_000 * Math.pow(2, exponent);
+  return 60_000 * 2 ** exponent;
 }
 
 async function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -224,9 +223,7 @@ export async function pollOnce(deps: PollOnceDeps): Promise<PollOutcome> {
     });
     for (const w of revert.warnings) warnings.push(w);
     if (revert.reverted.length > 0) {
-      warnings.push(
-        `auto-reverted github-scan:human on ${revert.reverted.length} item(s) (issue #358)`,
-      );
+      warnings.push(`auto-reverted github-scan:human on ${revert.reverted.length} item(s) (issue #358)`);
     }
   }
 
@@ -321,9 +318,7 @@ export async function runPoller(options: PollerOptions): Promise<void> {
     if (outcome.rateLimited) {
       rateLimitStreak += 1;
       const backoff = rateLimitBackoffMs(rateLimitStreak);
-      logger.warn(
-        `rate-limited by GitHub; sleeping ${Math.round(backoff / 1000)}s (streak=${rateLimitStreak})`,
-      );
+      logger.warn(`rate-limited by GitHub; sleeping ${Math.round(backoff / 1000)}s (streak=${rateLimitStreak})`);
       await sleep(backoff, signal);
       continue;
     }

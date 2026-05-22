@@ -4,20 +4,20 @@ import { dirname, join, resolve } from "node:path";
 import type { Command } from "commander";
 
 import type { CommandContext, SubcommandModule } from "../types.js";
-import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
 import { ensureAgentContextHooks, formatAgentContextHookMessages } from "./agent-context-hooks.js";
+import { TREE_PROGRESS_FILE, TREE_VERSION_FILE } from "./binding-state.js";
 import type { Tier0RuleLayerSummary } from "./rule-layer.js";
 import { ensureTier0RuleLayer, validateWorkflowPath } from "./rule-layer.js";
-import { copyCanonicalSkills } from "./skill-lib.js";
-import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
-import { ensureWhitepaperSymlink, upsertLocalTreeGitIgnore } from "./source-integration.js";
-import { syncTreeIdentityFiles } from "./tree-identity.js";
 import { isGitRepoRoot, repoNameForRoot, runCommand } from "./shared.js";
+import { copyCanonicalSkills } from "./skill-lib.js";
+import { ensureWhitepaperSymlink, upsertLocalTreeGitIgnore } from "./source-integration.js";
+import { syncTreeSourceRepoIndex } from "./source-repo-index.js";
 import { describeTemplateWriteResult } from "./template-write.js";
+import { syncTreeIdentityFiles } from "./tree-identity.js";
 import {
   renderCodeReviewerAgentTemplate,
-  renderDeveloperAgentTemplate,
   renderDefaultMemberNode,
+  renderDeveloperAgentTemplate,
   renderMembersDomainNode,
   renderOrgConfigPlaceholder,
   renderRootNode,
@@ -91,10 +91,7 @@ function ensureClaudeSymlink(targetRoot: string): void {
   symlinkSync("AGENTS.md", claudePath);
 }
 
-export function bootstrapTreeRoot(
-  targetRoot: string,
-  options?: BootstrapOptions,
-): BootstrapSummary {
+export function bootstrapTreeRoot(targetRoot: string, options?: BootstrapOptions): BootstrapSummary {
   const treeMode = options?.treeMode === "shared" ? "shared" : "dedicated";
   const treeRepoName = repoNameForRoot(targetRoot);
 
@@ -108,10 +105,7 @@ export function bootstrapTreeRoot(
   ensureClaudeSymlink(targetRoot);
   writeIfMissing(join(targetRoot, "members", "NODE.md"), renderMembersDomainNode());
   writeIfMissing(join(targetRoot, "members", "owner", "NODE.md"), renderDefaultMemberNode());
-  writeIfMissing(
-    join(targetRoot, ".first-tree", "agent-templates", "developer.yaml"),
-    renderDeveloperAgentTemplate(),
-  );
+  writeIfMissing(join(targetRoot, ".first-tree", "agent-templates", "developer.yaml"), renderDeveloperAgentTemplate());
   writeIfMissing(
     join(targetRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"),
     renderCodeReviewerAgentTemplate(),
@@ -164,10 +158,7 @@ function runBootstrapCommand(context: CommandContext): void {
     console.log(`  Ensured ${join(summary.root, "members", "NODE.md")}`);
     console.log(`  Ensured ${join(summary.root, "members", "owner", "NODE.md")}`);
     console.log(
-      `  ${describeTemplateWriteResult(
-        validateWorkflowPath(summary.root),
-        summary.tier0RuleLayer.validate,
-      )}`,
+      `  ${describeTemplateWriteResult(validateWorkflowPath(summary.root), summary.tier0RuleLayer.validate)}`,
     );
     for (const message of hookMessages) {
       console.log(`  ${message}`);

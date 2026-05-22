@@ -251,10 +251,9 @@ describe("runStart", () => {
     const { runStart } = await import("../../src/github-scan/engine/commands/start.js");
 
     const lines: string[] = [];
-    const code = await runStart(
-      ["--allow-repo", "owner/repo", "--home", "/custom/home", "--profile", "work"],
-      { write: (line) => lines.push(line) },
-    );
+    const code = await runStart(["--allow-repo", "owner/repo", "--home", "/custom/home", "--profile", "work"], {
+      write: (line) => lines.push(line),
+    });
 
     expect(code).toBe(1);
     const output = lines.join("\n");

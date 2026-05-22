@@ -7,12 +7,12 @@ import {
   displayUrl,
   effectiveWorkspaceRepo,
   stableIdFor,
+  type ThreadRecord,
   taskPrNumber,
   taskUrl,
   threadRecordFromKv,
   threadRecordToLines,
   toDispatcherCandidate,
-  type ThreadRecord,
 } from "../../src/github-scan/engine/runtime/task.js";
 
 describe("buildNotificationCandidate", () => {
@@ -42,15 +42,12 @@ describe("buildNotificationCandidate", () => {
       reason: "mention",
       title: "fix(sync): ...",
       apiUrl: "https://api.github.com/repos/bingran-you/github-scan/pulls/98",
-      latestCommentApiUrl:
-        "https://api.github.com/repos/bingran-you/github-scan/issues/comments/4247540715",
+      latestCommentApiUrl: "https://api.github.com/repos/bingran-you/github-scan/issues/comments/4247540715",
       updatedAt: "2026-04-14T22:18:56Z",
     });
     expect(candidate!.kind).toBe("mention");
     expect(taskPrNumber(candidate!)).toBe(98);
-    expect(taskUrl(candidate!)).toBe(
-      "https://github.com/bingran-you/github-scan/pull/98#issuecomment-4247540715",
-    );
+    expect(taskUrl(candidate!)).toBe("https://github.com/bingran-you/github-scan/pull/98#issuecomment-4247540715");
   });
 
   it("returns undefined for non-actionable reasons", () => {
@@ -132,9 +129,7 @@ describe("candidateFromTaskMetadata", () => {
   });
 
   it("returns undefined when required fields are missing", () => {
-    expect(
-      candidateFromTaskMetadata(new Map([["kind", "mention"]]), "github.com"),
-    ).toBeUndefined();
+    expect(candidateFromTaskMetadata(new Map([["kind", "mention"]]), "github.com")).toBeUndefined();
   });
 });
 
@@ -221,8 +216,6 @@ describe("displayUrl fallback", () => {
     });
     expect(displayUrl(c)).toBe("https://github.com/o/r/pull/1");
     const cNoWeb = { ...c, webUrl: "" };
-    expect(displayUrl(cNoWeb)).toBe(
-      "https://api.github.com/repos/o/r/pulls/1",
-    );
+    expect(displayUrl(cNoWeb)).toBe("https://api.github.com/repos/o/r/pulls/1");
   });
 });

@@ -3,11 +3,7 @@ import { join } from "node:path";
 import { readCurrentCliVersion } from "./cli-version.js";
 import type { TemplateWriteResult } from "./template-write.js";
 import { writeTemplatedFile } from "./template-write.js";
-import {
-  renderAutoMergeWorkflow,
-  renderReviewEnforcerWorkflow,
-  renderValidateWorkflow,
-} from "./tree-templates.js";
+import { renderAutoMergeWorkflow, renderReviewEnforcerWorkflow, renderValidateWorkflow } from "./tree-templates.js";
 
 export const VALIDATE_WORKFLOW_TEMPLATE_VERSION = 2;
 export const AUTO_MERGE_WORKFLOW_TEMPLATE_VERSION = 1;
@@ -36,13 +32,9 @@ export function reviewEnforcerWorkflowPath(targetRoot: string): string {
 
 export function ensureTier0RuleLayer(targetRoot: string): Tier0RuleLayerSummary {
   return {
-    validate: writeTemplatedFile(
-      validateWorkflowPath(targetRoot),
-      renderValidateWorkflow(readCurrentCliVersion()),
-      {
-        version: VALIDATE_WORKFLOW_TEMPLATE_VERSION,
-      },
-    ),
+    validate: writeTemplatedFile(validateWorkflowPath(targetRoot), renderValidateWorkflow(readCurrentCliVersion()), {
+      version: VALIDATE_WORKFLOW_TEMPLATE_VERSION,
+    }),
   };
 }
 
@@ -51,12 +43,8 @@ export function ensureTier2RuleLayer(targetRoot: string): Tier2RuleLayerSummary 
     autoMerge: writeTemplatedFile(autoMergeWorkflowPath(targetRoot), renderAutoMergeWorkflow(), {
       version: AUTO_MERGE_WORKFLOW_TEMPLATE_VERSION,
     }),
-    reviewEnforcer: writeTemplatedFile(
-      reviewEnforcerWorkflowPath(targetRoot),
-      renderReviewEnforcerWorkflow(),
-      {
-        version: REVIEW_ENFORCER_WORKFLOW_TEMPLATE_VERSION,
-      },
-    ),
+    reviewEnforcer: writeTemplatedFile(reviewEnforcerWorkflowPath(targetRoot), renderReviewEnforcerWorkflow(), {
+      version: REVIEW_ENFORCER_WORKFLOW_TEMPLATE_VERSION,
+    }),
   };
 }

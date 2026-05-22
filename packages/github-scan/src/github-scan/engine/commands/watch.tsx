@@ -16,13 +16,9 @@
 import { createReadStream, existsSync, statSync, watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import React, {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
+import type React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { resolveGitHubScanPaths } from "../runtime/paths.js";
 import {
@@ -122,13 +118,13 @@ const HeaderBanner = (): React.ReactElement => {
   ];
   return (
     <Box>
-      <Text>  </Text>
+      <Text> </Text>
       {letters.map(([ch, color], i) => (
         <Text key={i} color={color}>
           {ch}
         </Text>
       ))}
-      <Text color={COLOR.dim}>  status board</Text>
+      <Text color={COLOR.dim}> status board</Text>
     </Box>
   );
 };
@@ -143,24 +139,22 @@ const Header = ({ counts }: HeaderProps): React.ReactElement => (
     <HeaderBanner />
     <Text> </Text>
     <Box>
-      <Text>  </Text>
+      <Text> </Text>
       {counts.human > 0 ? (
         <Text color={COLOR.red} bold>
           ● {counts.human} need-you
         </Text>
       ) : (
-        <Text color={COLOR.dim}>● 0 need-you  </Text>
+        <Text color={COLOR.dim}>● 0 need-you </Text>
       )}
-      <Text color={COLOR.orange}>● {counts.new} new  </Text>
-      <Text color={COLOR.blue}>● {counts.wip} wip  </Text>
+      <Text color={COLOR.orange}>● {counts.new} new </Text>
+      <Text color={COLOR.blue}>● {counts.wip} wip </Text>
       <Text color={COLOR.green} dimColor>
         ● {counts.done} finished
       </Text>
     </Box>
     <Text> </Text>
-    <Text color={COLOR.dim}>
-      {"  ────────────────────────────────────────────────────────"}
-    </Text>
+    <Text color={COLOR.dim}>{"  ────────────────────────────────────────────────────────"}</Text>
     <Text> </Text>
   </Box>
 );
@@ -172,9 +166,7 @@ interface HumanSectionProps {
 }
 
 const HumanSection = ({ inbox }: HumanSectionProps): React.ReactElement => {
-  const humans = inbox?.notifications.filter(
-    (n) => n.github_scan_status === "human",
-  ) ?? [];
+  const humans = inbox?.notifications.filter((n) => n.github_scan_status === "human") ?? [];
   if (humans.length === 0) {
     return (
       <Box flexDirection="column">
@@ -182,9 +174,7 @@ const HumanSection = ({ inbox }: HumanSectionProps): React.ReactElement => {
           <Text color={COLOR.red} bold>
             ▶ NEED-YOU
           </Text>
-          <Text color={COLOR.dim}>
-            {"  (0) — ✨ nothing needs you right now"}
-          </Text>
+          <Text color={COLOR.dim}>{"  (0) — ✨ nothing needs you right now"}</Text>
         </Box>
         <Text> </Text>
       </Box>
@@ -222,7 +212,11 @@ const Board = ({ inbox }: BoardProps): React.ReactElement | null => {
   const groups = useMemo(() => {
     const byRepo = new Map<
       string,
-      { new: typeof inbox extends null ? never : Inbox["notifications"]; wip: Inbox["notifications"]; done: Inbox["notifications"] }
+      {
+        new: typeof inbox extends null ? never : Inbox["notifications"];
+        wip: Inbox["notifications"];
+        done: Inbox["notifications"];
+      }
     >();
     if (!inbox) return [];
     for (const n of inbox.notifications) {
@@ -252,9 +246,7 @@ const Board = ({ inbox }: BoardProps): React.ReactElement | null => {
         <Box key={g.repo} flexDirection="column">
           <Box>
             <Text bold>{shortRepo(g.repo)}</Text>
-            <Text color={COLOR.dim}>
-              {` (${g.open} active · ${g.done.length} finished)`}
-            </Text>
+            <Text color={COLOR.dim}>{` (${g.open} active · ${g.done.length} finished)`}</Text>
           </Box>
           {g.wip.length > 0 ? (
             <Box flexDirection="column">
@@ -267,11 +259,7 @@ const Board = ({ inbox }: BoardProps): React.ReactElement | null => {
                   <Text>{truncateTitle(n.title, 60)}</Text>
                 </Box>
               ))}
-              {g.wip.length > 5 ? (
-                <Text color={COLOR.dim}>
-                  {`    … and ${g.wip.length - 5} more`}
-                </Text>
-              ) : null}
+              {g.wip.length > 5 ? <Text color={COLOR.dim}>{`    … and ${g.wip.length - 5} more`}</Text> : null}
             </Box>
           ) : null}
           {g.new.length > 0 ? (
@@ -285,11 +273,7 @@ const Board = ({ inbox }: BoardProps): React.ReactElement | null => {
                   <Text>{truncateTitle(n.title, 60)}</Text>
                 </Box>
               ))}
-              {g.new.length > 5 ? (
-                <Text color={COLOR.dim}>
-                  {`    … and ${g.new.length - 5} more`}
-                </Text>
-              ) : null}
+              {g.new.length > 5 ? <Text color={COLOR.dim}>{`    … and ${g.new.length - 5} more`}</Text> : null}
             </Box>
           ) : null}
           {g.done.length > 0 ? (
@@ -312,9 +296,7 @@ interface LiveFeedProps {
 
 const LiveFeed = ({ events }: LiveFeedProps): React.ReactElement => (
   <Box flexDirection="column">
-    <Text color={COLOR.dim}>
-      {"────── live ─────────────────────────────────────────────"}
-    </Text>
+    <Text color={COLOR.dim}>{"────── live ─────────────────────────────────────────────"}</Text>
     <Text> </Text>
     {events.map((e, i) => (
       <LiveEvent key={i} event={e} />
@@ -334,7 +316,7 @@ const LiveEvent = ({ event }: LiveEventProps): React.ReactElement | null => {
       <Box>
         <Text color={COLOR.dim}>{time}</Text>
         <Text>{"  "}</Text>
-        <Text color={COLOR.orange}>▸ NEW         </Text>
+        <Text color={COLOR.orange}>▸ NEW </Text>
         <Text>{shortLink(event.url, event.repo)}</Text>
         <Text>{"  "}</Text>
         <Text>{truncateTitle(event.title, 50)}</Text>
@@ -347,14 +329,12 @@ const LiveEvent = ({ event }: LiveEventProps): React.ReactElement | null => {
         <Box>
           <Text color={COLOR.dim}>{time}</Text>
           <Text>{"  "}</Text>
-          <Text color={COLOR.blue}>⚡ CLAIM       </Text>
+          <Text color={COLOR.blue}>⚡ CLAIM </Text>
           <Text>{shortLink(event.url, event.repo)}</Text>
           <Text>{"  "}</Text>
           <Text>{truncateTitle(event.title, 50)}</Text>
         </Box>
-        {event.by ? (
-          <Text color={COLOR.dim}>{`              ↳ by ${event.by}`}</Text>
-        ) : null}
+        {event.by ? <Text color={COLOR.dim}>{`              ↳ by ${event.by}`}</Text> : null}
       </Box>
     );
   }
@@ -391,10 +371,7 @@ export interface GitHubScanWatchProps {
   events: readonly ActivityEvent[];
 }
 
-export const GitHubScanWatch = ({
-  inbox,
-  events,
-}: GitHubScanWatchProps): React.ReactElement => {
+export const GitHubScanWatch = ({ inbox, events }: GitHubScanWatchProps): React.ReactElement => {
   const counts = useMemo(() => {
     const out = { human: 0, new: 0, wip: 0, done: 0 };
     if (!inbox) return out;
@@ -488,9 +465,7 @@ const WatchApp = ({
         const raw = await readFile(paths.activityLog, "utf-8");
         const lines = raw.split("\n").filter((l) => l.trim());
         const tail = lines.slice(-LIVE_FEED_HISTORY);
-        const parsed = tail
-          .map(safeParseActivity)
-          .filter((e): e is ActivityEvent => e !== null);
+        const parsed = tail.map(safeParseActivity).filter((e): e is ActivityEvent => e !== null);
         if (!cancelled) setEvents(parsed);
         logPos.current = Buffer.byteLength(raw, "utf-8");
       } catch {
@@ -565,17 +540,12 @@ const WatchApp = ({
  *
  * Returns the exit code (always 0 for now — Ctrl-C exits cleanly).
  */
-export async function runWatch(
-  _argv: readonly string[],
-  deps: WatchDeps = {},
-): Promise<number> {
+export async function runWatch(_argv: readonly string[], deps: WatchDeps = {}): Promise<number> {
   const paths = deps.paths ?? resolveGitHubScanPaths();
   const renderImpl = deps.renderImpl ?? render;
   const inboxPollMs = deps.inboxPollMs ?? INBOX_POLL_MS;
 
-  const instance = renderImpl(
-    <WatchApp paths={paths} inboxPollMs={inboxPollMs} />,
-  );
+  const instance = renderImpl(<WatchApp paths={paths} inboxPollMs={inboxPollMs} />);
   await instance.waitUntilExit();
   return 0;
 }

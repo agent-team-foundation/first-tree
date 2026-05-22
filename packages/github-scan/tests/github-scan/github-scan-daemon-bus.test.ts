@@ -10,7 +10,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createBus, toSseBus, type BusEvent } from "../../src/github-scan/engine/daemon/bus.js";
+import { type BusEvent, createBus, toSseBus } from "../../src/github-scan/engine/daemon/bus.js";
 
 describe("createBus", () => {
   it("delivers events to every live subscriber in subscription order", () => {
@@ -170,9 +170,7 @@ describe("toSseBus", () => {
     sse.subscribe((ev) => seen.push(ev));
 
     bus.publish({ kind: "activity", line: '{"event":"new","id":"abc"}' });
-    expect(seen).toEqual([
-      { kind: "activity", line: '{"event":"new","id":"abc"}' },
-    ]);
+    expect(seen).toEqual([{ kind: "activity", line: '{"event":"new","id":"abc"}' }]);
   });
 
   it("renders task events as compact-JSON activity lines", () => {

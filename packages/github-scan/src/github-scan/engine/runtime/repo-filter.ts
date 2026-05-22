@@ -45,9 +45,7 @@ export class RepoFilter {
         if (!repos.includes(trimmed)) repos.push(trimmed);
         continue;
       }
-      throw new Error(
-        `invalid repo allow pattern \`${trimmed}\`; use owner/repo or owner/*`,
-      );
+      throw new Error(`invalid repo allow pattern \`${trimmed}\`; use owner/repo or owner/*`);
     }
     return new RepoFilter(owners, repos);
   }
@@ -87,25 +85,16 @@ export class RepoFilter {
 
   /** Human-readable patterns joined by `, `. */
   displayPatterns(): string {
-    return [
-      ...this.allowedRepos,
-      ...this.allowedOwners.map((o) => `${o}/*`),
-    ].join(", ");
+    return [...this.allowedRepos, ...this.allowedOwners.map((o) => `${o}/*`)].join(", ");
   }
 
   /** CLI-shaped value (comma-separated). */
   cliValue(): string {
-    return [
-      ...this.allowedRepos,
-      ...this.allowedOwners.map((o) => `${o}/*`),
-    ].join(",");
+    return [...this.allowedRepos, ...this.allowedOwners.map((o) => `${o}/*`)].join(",");
   }
 }
 
-export type SearchScope =
-  | { kind: "all" }
-  | { kind: "owner"; owner: string }
-  | { kind: "repo"; repo: string };
+export type SearchScope = { kind: "all" } | { kind: "owner"; owner: string } | { kind: "repo"; repo: string };
 
 /**
  * Compute the list of `gh search` scopes implied by a filter. Matches
