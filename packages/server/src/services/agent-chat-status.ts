@@ -75,6 +75,9 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
     return buildAgentChatStatus({
       agentId,
       reachable: p?.clientId != null,
+      // `failed` predicate: session errored OR runtime error. The chat-list
+      // path mirrors this as a SQL clause in `deriveFailedAgents` (me-chat.ts)
+      // — keep the two in lockstep if either changes (covered by tests).
       errored: state === "errored" || p?.runtimeState === "error",
       needsYou: pendingAgents.has(agentId),
       working: activity != null,

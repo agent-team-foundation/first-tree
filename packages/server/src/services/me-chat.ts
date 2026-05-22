@@ -709,7 +709,10 @@ export function previewToolArgs(args: unknown): string | undefined {
     raw = args;
   } else if (args && typeof args === "object") {
     const o = args as Record<string, unknown>;
-    const pick = o.command ?? o.cmd ?? o.file_path ?? o.path ?? o.pattern ?? o.query ?? o.url ?? o.description;
+    // Only fields that hold an *argument value* the user would recognise. NOT
+    // `description` (that's a tool's self-description, not what it's running);
+    // the JSON.stringify fallback below covers tools with no recognised field.
+    const pick = o.command ?? o.cmd ?? o.file_path ?? o.path ?? o.pattern ?? o.query ?? o.url;
     if (typeof pick === "string") raw = pick;
     else if (Object.keys(o).length > 0) raw = JSON.stringify(o); // empty {} → no detail
   }

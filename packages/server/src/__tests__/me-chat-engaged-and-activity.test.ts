@@ -393,4 +393,10 @@ describe("previewToolArgs", () => {
   it("falls back to JSON for objects without a known field", () => {
     expect(previewToolArgs({ foo: "bar" })).toBe('{"foo":"bar"}');
   });
+
+  it("does NOT treat `description` as an arg value (it's a tool self-description)", () => {
+    // `description` is not in the recognised-arg list → JSON fallback, not the
+    // raw description string. (Short value so it stays under the truncate cap.)
+    expect(previewToolArgs({ description: "hi" })).toBe('{"description":"hi"}');
+  });
 });
