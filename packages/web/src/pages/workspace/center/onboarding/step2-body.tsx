@@ -19,7 +19,7 @@ import { StepFrame, StepRailLine } from "./step-frame.js";
 
 const RUNTIME_READY_TIMEOUT_MS = 30_000;
 const RUNTIME_READY_POLL_MS = 1_000;
-const CLIENT_DETECT_POLL_MS = 3_000;
+const CLIENT_DETECT_POLL_MS = 5_000;
 
 type Phase = "form" | "creating" | "timeout";
 
@@ -124,6 +124,7 @@ export function Step2Body({
     if (phase !== "form") return;
     let cancelled = false;
     const detect = async (): Promise<void> => {
+      if (document.hidden) return;
       const seq = ++detectSeqRef.current;
       try {
         const clients = await listClients();
@@ -159,9 +160,14 @@ export function Step2Body({
     };
     void detect();
     const handle = setInterval(detect, CLIENT_DETECT_POLL_MS);
+    const onVisible = (): void => {
+      if (!document.hidden) void detect();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       clearInterval(handle);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [phase]);
 

@@ -32,7 +32,7 @@ export function selectArrivedClient(clients: HubClient[], openedAt: number, user
   );
 }
 
-const POLL_MS = 3_000;
+const POLL_MS = 5_000;
 const SUCCESS_HOLD_MS = 1_200;
 // Tolerance subtracted from the modal-open timestamp so a tiny clock skew
 // between the browser and the server (or a connect handshake that races a
@@ -98,9 +98,13 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
   // 2. While waiting: poll for a client whose handshake landed AFTER the modal
   //    opened. Timestamp comparison (not id-set diff) is what lets us catch a
   //    reconnect of a machine whose client_id row already existed.
+  //    Skip ticks when the tab is hidden — a new computer can't connect via
+  //    this dialog without a foreground CLI run elsewhere. `visibilitychange`
+  //    fires an immediate catch-up tick on return.
   useEffect(() => {
     if (!open || phase !== "waiting" || !user) return;
     const tick = async () => {
+      if (document.hidden) return;
       try {
         const fresh = await queryClient.fetchQuery({ queryKey: ["clients"], queryFn: listClients });
         const arrived = selectArrivedClient(fresh, openedAtRef.current, user.id);
@@ -113,7 +117,14 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
       }
     };
     const handle = setInterval(tick, POLL_MS);
-    return () => clearInterval(handle);
+    const onVisible = (): void => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(handle);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [open, phase, queryClient, user]);
 
   // 3. On success: brief hold so the user sees the green confirmation, then close.

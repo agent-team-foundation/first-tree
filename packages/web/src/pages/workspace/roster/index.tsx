@@ -49,14 +49,12 @@ export function AgentRoster({
   const { data: activity } = useQuery({
     queryKey: ["activity"],
     queryFn: getActivityOverview,
-    refetchInterval: 10_000,
   });
 
   const { data: sessions } = useQuery({
     queryKey: selectedAgentId ? agentSessionsQueryKey(selectedAgentId) : ["agent-sessions", null],
     queryFn: () => (selectedAgentId ? listAgentSessions(selectedAgentId) : Promise.resolve([])),
     enabled: !!selectedAgentId,
-    refetchInterval: 10_000,
   });
 
   const newChatMut = useMutation({

@@ -257,13 +257,16 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   }, [name, open]);
 
   // Poll `listClients` to keep the connected-computer list fresh while the
-  // dialog is open. 3s cadence matches onboarding step 2 so a computer
-  // coming online (or going offline) reflects without the user closing
-  // and reopening the dialog.
+  // dialog is open. 5s cadence so a computer coming online (or going
+  // offline) reflects without the user closing and reopening the dialog.
+  // Skip ticks when the tab is hidden — nothing on this surface progresses
+  // without a foreground CLI run, and `refetchOnWindowFocus`-equivalent
+  // resume happens via the `visibilitychange` handler below.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     const tick = async (): Promise<void> => {
+      if (document.hidden) return;
       try {
         const list = await listClients();
         if (cancelled) return;
@@ -280,10 +283,15 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       }
     };
     void tick();
-    const handle = window.setInterval(tick, 3_000);
+    const handle = window.setInterval(tick, 5_000);
+    const onVisible = (): void => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [open]);
 
@@ -300,11 +308,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     });
   }, [connectedClients]);
 
-  // Capability fetch — polls every 3s while a client is picked. Same
+  // Capability fetch — polls every 5s while a client is picked. Same
   // cadence as the listClients poll above so a transient API failure
   // self-heals on the next tick rather than freezing the UI in
   // "Detecting installed runtimes…" until the user reopens the dialog.
-  // Mirrors onboarding step 2's `detect` loop.
+  // Hidden-tab skip mirrors the listClients effect.
   useEffect(() => {
     if (!pickedClientId) {
       setCapabilities(null);
@@ -313,6 +321,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     }
     let cancelled = false;
     const fetchCaps = async (): Promise<void> => {
+      if (document.hidden) return;
       try {
         const res = await getClientCapabilities(pickedClientId);
         if (cancelled) return;
@@ -324,10 +333,15 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       }
     };
     void fetchCaps();
-    const handle = window.setInterval(fetchCaps, 3_000);
+    const handle = window.setInterval(fetchCaps, 5_000);
+    const onVisible = (): void => {
+      if (!document.hidden) void fetchCaps();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [pickedClientId]);
 

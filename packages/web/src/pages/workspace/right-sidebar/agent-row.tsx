@@ -40,10 +40,9 @@ export function AgentRow({
         throw err;
       }
     },
-    // The admin WebSocket `session:state` push invalidates `["sessions"]`
-    // and `["activity"]` but NOT our new query key, so fall back to a
-    // gentle poll for now. P6 (aggregate endpoint) will let us drop this.
-    refetchInterval: 10_000,
+    // The admin WebSocket `session:state` push now invalidates the
+    // `["chat-right-sidebar"]` prefix (use-admin-ws.ts), so the row stays
+    // live without an own poll.
   });
 
   const suspendMut = useMutation({

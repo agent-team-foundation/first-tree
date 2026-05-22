@@ -43,7 +43,6 @@ export function AgentContext({ agentId }: { agentId: string }) {
   const { data: activity } = useQuery({
     queryKey: ["activity"],
     queryFn: getActivityOverview,
-    refetchInterval: 10_000,
   });
 
   const agent: RuntimeAgent | undefined = activity?.agents?.find((a) => a.agentId === agentId);

@@ -816,7 +816,6 @@ export function ChatView({
   const { data: messagesData } = useQuery({
     queryKey: ["chat-messages", chatId],
     queryFn: () => listChatMessages(chatId, { limit: 50 }),
-    refetchInterval: 5_000,
   });
 
   // Fetch newest events first so the turn-grouping filter always sees the
@@ -826,7 +825,6 @@ export function ChatView({
   const { data: eventsData } = useQuery({
     queryKey: ["session-events", agentId, chatId],
     queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
-    refetchInterval: 5_000,
   });
 
   const { data: chatDetail, isLoading: chatDetailLoading } = useQuery({
@@ -2323,7 +2321,6 @@ function ParticipantAvatar({
       }
     },
     enabled: !isHuman,
-    refetchInterval: 10_000,
   });
 
   const state: string | null = isHuman ? null : (sessionQuery.data?.state ?? "none");
