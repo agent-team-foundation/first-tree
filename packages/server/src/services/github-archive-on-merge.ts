@@ -19,7 +19,7 @@
  * rows are left alone. Idempotent under GitHub webhook retries.
  */
 
-import { CHAT_ENGAGEMENT_STATUSES } from "@agent-team-foundation/first-tree-hub-shared";
+import { CHAT_ENGAGEMENT_STATUSES } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";

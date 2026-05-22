@@ -22,7 +22,7 @@ npm install -g @agent-team-foundation/first-tree-hub@latest
 顶栏 **Clients** → 点 **Generate Connect Command** → 复制命令到终端回车：
 
 ```bash
-first-tree-hub connect <connect-token>
+first-tree-hub login <connect-token>
 ```
 
 > Hub URL 由 token 内嵌的 `iss` claim 推导，**无需另传 `--server`**。这也意味着同一台电脑切到另一个 Hub 时只换 token、不改命令。自托管 / 多 Hub 场景下，每个 Hub 的 web 控制台都会生成它自己的 token，里头 `iss` 就指向该 Hub —— 跨环境用错 token 会直接报错而不是静默连到错误的 Hub。

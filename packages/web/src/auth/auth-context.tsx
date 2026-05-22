@@ -1,4 +1,4 @@
-import type { MeMembership } from "@agent-team-foundation/first-tree-hub-shared";
+import type { MeMembership } from "@first-tree/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { login as loginApi } from "../api/auth.js";

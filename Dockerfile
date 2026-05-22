@@ -10,36 +10,36 @@ COPY packages/shared/package.json packages/shared/
 COPY packages/server/package.json packages/server/
 COPY packages/web/package.json packages/web/
 RUN pnpm install --frozen-lockfile \
-    --filter @agent-team-foundation/first-tree-hub-shared... \
-    --filter @first-tree-hub/server... \
-    --filter @first-tree-hub/web...
+    --filter @first-tree/shared... \
+    --filter @first-tree/server... \
+    --filter @first-tree/web...
 
 # --- Build stage ---
 FROM deps AS build
 COPY . .
-RUN pnpm --filter @agent-team-foundation/first-tree-hub-shared build
-RUN pnpm --filter @first-tree-hub/server build
-RUN pnpm --filter @first-tree-hub/web build
+RUN pnpm --filter @first-tree/shared build
+RUN pnpm --filter @first-tree/server build
+RUN pnpm --filter @first-tree/web build
 
 # --- Production dependencies (no devDependencies) ---
 FROM deps AS prod-deps
 RUN pnpm install --frozen-lockfile --prod \
-    --filter @agent-team-foundation/first-tree-hub-shared... \
-    --filter @first-tree-hub/server...
+    --filter @first-tree/shared... \
+    --filter @first-tree/server...
 
 # --- Runtime ---
 FROM node:24-alpine
 WORKDIR /app
 
 # Bootstrap Command-package version baked into the image. CI passes this as
-# `--build-arg COMMAND_VERSION=$(node -p "require('./packages/command/package.json').version")`,
+# `--build-arg COMMAND_VERSION=$(node -p "require('./apps/cli/package.json').version")`,
 # so a freshly-built image always advertises the in-tree CLI version BEFORE
 # the npm-registry poller takes over at runtime. Default `0.0.0` keeps local
 # `docker build` (without the build-arg) from crashing — it's SemVer-valid so
 # the welcome frame stays well-formed, and the poller overwrites it within a
 # poll interval anyway.
 ARG COMMAND_VERSION=0.0.0
-ENV FIRST_TREE_HUB_COMMAND_VERSION=$COMMAND_VERSION
+ENV FIRST_TREE_COMMAND_VERSION=$COMMAND_VERSION
 
 # Production node_modules (includes compiled bcrypt, workspace links)
 COPY --from=prod-deps /app ./
@@ -57,7 +57,7 @@ COPY --from=build /app/packages/web/dist packages/server/web-dist/
 RUN apk add --no-cache git wget
 
 ENV NODE_ENV=production
-ENV FIRST_TREE_HUB_WEB_DIST_PATH=/app/packages/server/web-dist
+ENV FIRST_TREE_WEB_DIST_PATH=/app/packages/server/web-dist
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

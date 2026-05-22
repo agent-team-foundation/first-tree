@@ -1,4 +1,4 @@
-import type { ToolCallEventPayload } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ToolCallEventPayload } from "@first-tree/shared";
 
 /**
  * Phase 1 fallback path for chat ↔ GitHub entity binding.

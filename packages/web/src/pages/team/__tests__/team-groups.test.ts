@@ -1,4 +1,4 @@
-import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { buildGroups, fetchAllAgents, selectDelegateCandidates } from "../index.js";
 

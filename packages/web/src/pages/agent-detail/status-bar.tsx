@@ -1,4 +1,4 @@
-import type { Agent, AgentRuntimeConfig } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent, AgentRuntimeConfig } from "@first-tree/shared";
 import { cn, formatDate } from "../../lib/utils.js";
 
 /**

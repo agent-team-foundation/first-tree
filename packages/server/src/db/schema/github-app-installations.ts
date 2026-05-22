@@ -2,7 +2,7 @@ import type {
   GithubAccountType,
   GithubAppInstallationEvents,
   GithubAppInstallationPermissions,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { bigint, check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations.js";

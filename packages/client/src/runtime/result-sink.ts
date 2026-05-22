@@ -1,4 +1,4 @@
-import { documentContextSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { documentContextSchema } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { buildMessageDocumentSnapshots } from "./doc-snapshots.js";
 import type { AgentIdentity } from "./handler.js";
@@ -98,10 +98,16 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
             ? { workspacesRoot: deps.workspacesRoot, chatId: deps.chatId, selfSlug: deps.selfSlug }
             : undefined;
         const { docs, skipped, rewrittenText } = await buildMessageDocumentSnapshots(text, documentBasePath, fence);
-        content = rewrittenText;
+        // Validate BEFORE committing the rewritten body: `rewrittenText`
+        // contains explicit `[display](key)` links that only make sense paired
+        // with their snapshots. If schema validation throws, the catch must
+        // leave `content` as the ORIGINAL text — otherwise we'd ship explicit
+        // links with no matching snapshot (dead links), breaking the
+        // "rewritten ⇔ snapshotted" invariant (codex review finding).
         if (docs.length > 0) {
           metadata.documentContext = documentContextSchema.parse({ kind: "snapshot", docs });
         }
+        content = rewrittenText;
         if (skipped > 0) {
           deps.log(`doc snapshot: skipped ${skipped} unresolvable link(s)`);
         }

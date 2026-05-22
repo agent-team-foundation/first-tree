@@ -1,4 +1,4 @@
-import { updateAdapterConfigSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { updateAdapterConfigSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../errors.js";
 import { createLogger } from "../observability/index.js";

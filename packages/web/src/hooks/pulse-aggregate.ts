@@ -1,4 +1,4 @@
-import type { PulseBucket } from "@agent-team-foundation/first-tree-hub-shared";
+import type { PulseBucket } from "@first-tree/shared";
 
 export const EMPTY_BUCKETS: PulseBucket[] = Array.from({ length: 32 }, () => ({ workingCount: 0, errorMask: false }));
 

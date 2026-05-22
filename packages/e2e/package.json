@@ -1,5 +1,5 @@
 {
-  "name": "@first-tree-hub/e2e",
+  "name": "@first-tree/e2e",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -14,9 +14,9 @@
   },
   "devDependencies": {
     "@agent-team-foundation/first-tree-hub": "workspace:*",
-    "@agent-team-foundation/first-tree-hub-shared": "workspace:*",
+    "@first-tree/shared": "workspace:*",
     "@anthropic-ai/claude-agent-sdk": "^0.2.84",
-    "@first-tree-hub/server": "workspace:*",
+    "@first-tree/server": "workspace:*",
     "@types/node": "^22.16.0",
     "@types/pg": "^8.11.10",
     "fastify": "^5.2.0",

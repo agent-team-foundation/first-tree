@@ -3,7 +3,7 @@ import {
   listMeChatSourceCountsQuerySchema,
   listMeChatsQuerySchema,
   paginationQuerySchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { chats } from "../../db/schema/chats.js";

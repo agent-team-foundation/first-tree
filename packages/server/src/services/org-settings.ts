@@ -6,7 +6,7 @@ import {
   type OrgSettingNamespace,
   type OrgSettingOutput,
   type OrgSettingStorage,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
@@ -18,7 +18,7 @@ import { pickDefaultMembership } from "./auth.js";
 /**
  * Per-organization settings, keyed by `(organizationId, namespace)`. The
  * registry of valid namespaces and their storage / input / output schemas
- * lives in `@agent-team-foundation/first-tree-hub-shared`.
+ * lives in `@first-tree/shared`.
  *
  * Read path:  storage row → output (mask)
  * Write path: input → validate → merge with current storage → upsert (in tx)

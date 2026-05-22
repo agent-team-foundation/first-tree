@@ -9,7 +9,7 @@ import {
   type Message,
   type RuntimeProvider,
   type SendMessage,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 
 /**
  * Callback that returns the current member access JWT.

@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { extname, join, resolve } from "node:path";
-import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { FIRST_TREE_HUB_ATTR, redactUrl } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import fastifyOpenTelemetry from "@autotelic/fastify-opentelemetry";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { FIRST_TREE_ATTR, redactUrl } from "@first-tree/shared/observability";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
@@ -103,7 +103,7 @@ export type AppContext = {
  *
  *  1. `config.update.commandVersion` — explicit injection. Set by the
  *     Dockerfile at build time (via `COMMAND_VERSION` build-arg, which CI
- *     reads from `packages/command/package.json.version`), so a fresh image
+ *     reads from `apps/cli/package.json.version`), so a fresh image
  *     boots with a sane version even when the npm registry is unreachable
  *     at startup.
  *  2. Server workspace's own `package.json` — kept only for `pnpm --filter
@@ -140,7 +140,7 @@ function namePlugin<T extends FastifyPluginAsync>(name: string, fn: T): T {
 
 export async function buildApp(config: Config) {
   // Validate token-lifetime config eagerly so a typo in
-  // `FIRST_TREE_HUB_AUTH_*_EXPIRY` fails the boot, not the first
+  // `FIRST_TREE_AUTH_*_EXPIRY` fails the boot, not the first
   // /connect-tokens call hours later.
   try {
     expiryToSeconds(config.auth.accessTokenExpiry);
@@ -149,7 +149,7 @@ export async function buildApp(config: Config) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `${msg} — check FIRST_TREE_HUB_AUTH_*_EXPIRY env vars (got access=${config.auth.accessTokenExpiry}, refresh=${config.auth.refreshTokenExpiry}, connect=${config.auth.connectTokenExpiry}).`,
+      `${msg} — check FIRST_TREE_AUTH_*_EXPIRY env vars (got access=${config.auth.accessTokenExpiry}, refresh=${config.auth.refreshTokenExpiry}, connect=${config.auth.connectTokenExpiry}).`,
     );
   }
 
@@ -172,7 +172,7 @@ export async function buildApp(config: Config) {
     loggerInstance: rootLogger as unknown as FastifyBaseLogger,
     // When deployed behind Cloudflare / reverse proxy, `req.ip` must reflect
     // the real client IP rather than the proxy — otherwise every IP-keyed
-    // rate-limit key collapses. Operators set FIRST_TREE_HUB_TRUST_PROXY=true
+    // rate-limit key collapses. Operators set FIRST_TREE_TRUST_PROXY=true
     // when they control the upstream proxy chain.
     trustProxy: config.trustProxy,
   });
@@ -401,7 +401,7 @@ export async function buildApp(config: Config) {
       // structural fields by passing them with the same key.
       reportErrorToRoot(request, error.message, error, {
         ...(error.attrs ?? {}),
-        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error.name,
+        [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
       return reply.status(error.statusCode).send({ error: error.message, ...traceField });
@@ -409,7 +409,7 @@ export async function buildApp(config: Config) {
 
     if (error instanceof ZodError) {
       reportErrorToRoot(request, "Validation error", error, {
-        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: "ZodError",
+        [FIRST_TREE_ATTR.ERROR_TYPE]: "ZodError",
         "validation.issue_count": error.issues.length,
       });
       return reply.status(400).send({ error: "Validation error", details: error.issues, ...traceField });
@@ -428,7 +428,7 @@ export async function buildApp(config: Config) {
       error.statusCode < 500
     ) {
       reportErrorToRoot(request, error.message, error, {
-        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error.name,
+        [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
       return reply.status(error.statusCode).send({ error: error.message, ...traceField });
@@ -436,7 +436,7 @@ export async function buildApp(config: Config) {
 
     request.log.error({ err: error }, "unhandled request error");
     reportErrorToRoot(request, "Internal server error", error, {
-      [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error instanceof Error ? error.name : "UnknownError",
+      [FIRST_TREE_ATTR.ERROR_TYPE]: error instanceof Error ? error.name : "UnknownError",
       "http.status_code": 500,
     });
     return reply.status(500).send({ error: "Internal server error", ...traceField });

@@ -1,4 +1,4 @@
-import { contextTreeSnapshotSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { contextTreeSnapshotSchema } from "@first-tree/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { resolveOrgViewer } from "../scope/require-resource.js";

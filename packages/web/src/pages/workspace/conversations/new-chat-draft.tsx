@@ -1,5 +1,4 @@
-import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
-import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
+import { type Agent, extractMentions, type MentionParticipant } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";

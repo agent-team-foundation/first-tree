@@ -15,7 +15,7 @@ Use this distinction consistently when explaining the system or choosing where a
 
 - `packages/server` — Fastify API server, admin APIs, agent APIs, database access, adapters, notifications. Operated centrally as the SaaS Hub.
 - `packages/client` — Agent SDK, client runtime, WebSocket connection management, workspace/session handling.
-- `packages/command` — Unified CLI entry point plus reusable core orchestration helpers (auth, service install, onboard, doctor, Feishu binding). User-facing commands are limited to client / agent operations; the SaaS server runs from its own bundle (`packages/server/dist/index.mjs`).
+- `apps/cli` — Unified CLI entry point plus reusable core orchestration helpers (auth, service install, onboard, doctor, Feishu binding). User-facing commands are limited to client / agent operations; the SaaS server runs from its own bundle (`packages/server/dist/index.mjs`).
 - `packages/shared` — Zod schemas, TypeScript types, and the schema-driven config system shared across packages.
 - `packages/web` — React admin dashboard served by the server.
 
@@ -31,7 +31,7 @@ The command package depends on the client package; it does not invoke server boo
 
 ### Agent identity is managed by Hub
 
-- Agent identities are created, updated, and owned via Admin API (used both by the web UI and by the CLI's `agent create` / `agent claim` / `onboard`).
+- Agent identities are created, updated, and owned via Admin API (used both by the web UI and by the CLI's `agent create` / `agent claim` / `agent create`).
 - Agent profile (markdown self-description) is stored in the `agents.profile` column.
 - Each agent has exactly one `clientId` — the machine that runs it. Bind with `agent bind client <name> --client-id <id>`; the field is immutable once set.
 - Context Tree integration is optional — when configured, the client injects organizational context (`AGENT.md`, root `NODE.md`) into agent workspaces at startup.
@@ -45,10 +45,10 @@ The command package depends on the client package; it does not invoke server boo
 
 ### Auth uses one credential, everywhere
 
-- Clients sign in once via `first-tree-hub connect <token>`, which persists a member access JWT + refresh token in `~/.first-tree/hub/credentials.json`.
+- Clients sign in once via `first-tree-hub login <token>`, which persists a member access JWT + refresh token in `~/.first-tree/hub/credentials.json`.
 - Every subsequent CLI call runs through `ensureFreshAccessToken()`, which auto-refreshes 30s before expiry via `/api/v1/auth/refresh`.
 - Admin actions, agent-owner actions, Feishu binding, `agent config` mutations, and SDK debug calls all use the same member JWT. Server enforcement is role-based.
-- There is no separate admin JWT or per-agent bearer token in the current model. The legacy `FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` env vars and `agent token bootstrap` command are gone.
+- There is no separate admin JWT or per-agent bearer token in the current model. The legacy `FIRST_TREE_AGENT_TOKEN` / `FIRST_TREE_AGENT` env vars and `agent token bootstrap` command are gone.
 
 ### Messages are immutable and time-ordered
 
@@ -65,13 +65,13 @@ on startup:
 
 - loads server config from env / yaml
 - initializes telemetry with a generated instance ID
-- runs Drizzle migrations against `FIRST_TREE_HUB_DATABASE_URL`
+- runs Drizzle migrations against `FIRST_TREE_DATABASE_URL`
 - builds the Fastify app and serves the bundled web dist from
-  `FIRST_TREE_HUB_WEB_DIST_PATH` (set in the Docker image)
+  `FIRST_TREE_WEB_DIST_PATH` (set in the Docker image)
 
 ### Client startup
 
-`client start` runs every locally configured agent against one Hub server.
+`daemon start` runs every locally configured agent against one Hub server.
 
 The client runtime:
 
@@ -83,7 +83,7 @@ The client runtime:
 - manages session state and isolated chat workspaces
 - optionally syncs a shared Context Tree clone for organizational context
 
-The **background service** is installed automatically by `first-tree-hub connect <token>` (skip with `--no-service`). It runs `client start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. There is no `client service ...` CLI subcommand — `client doctor` shows current state, manual lifecycle ops go through `launchctl` / `systemctl` directly (see `docs/cli-reference.md`).
+The **background daemon** is installed automatically by `first-tree-hub login <token>` (skip with `--no-start`). It runs `daemon start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. The `daemon` namespace owns the daemon lifecycle (`start` / `stop` / `restart` / `status` / `doctor`); install / repair is folded into `login <token>`.
 
 ### Workspace bootstrap
 
@@ -96,19 +96,19 @@ When a handler starts, the client runtime bootstraps a per-chat workspace and wr
 
 ## Onboarding Mental Model
 
-`onboard` is intentionally higher-level than the rest of the CLI.
+`agent create` is intentionally higher-level than the rest of the CLI.
 
 - It creates the agent via Admin API, optionally creates a personal assistant, optionally binds a Feishu bot, and saves the local alias — all in one step.
-- It uses the signed-in member's JWT (from `credentials.json`). If no credentials exist, it exits with a clear pointer to `connect <token>`.
+- It uses the signed-in member's JWT (from `credentials.json`). If no credentials exist, it exits with a clear pointer to `login <token>`.
 - `--check` performs a dry-run that surfaces exactly which fields are missing, using the same check logic as the real path.
 
-Do not replace `onboard` with ad hoc Admin API calls unless the user explicitly wants to bypass the supported flow for development or debugging.
+Do not replace `agent create` with ad hoc Admin API calls unless the user explicitly wants to bypass the supported flow for development or debugging.
 
 ## Common Misunderstandings to Avoid
 
 - Do not say `agent add` creates an agent on the Hub. It only writes a local alias (`agents/<name>/agent.yaml`) mapping a friendly name to an existing `agentId`. Use `agent create` to create a server-side row.
-- Do not say `client start` starts the server. It only runs configured agent clients against a server that must already be running.
+- Do not say `daemon start` starts the server. It only runs configured agent clients against a server that must already be running.
 - Do not say the Context Tree owns agent identity. Hub does. Context Tree is an optional organizational knowledge source.
 - Do not frame the inbox as exactly-once delivery. The contract is at-least-once with client-side deduplication.
-- Do not reach for `FIRST_TREE_HUB_AGENT_TOKEN` or `FIRST_TREE_HUB_AGENT`. Neither env var is read by the CLI anymore; all auth flows through `credentials.json`.
+- Do not reach for `FIRST_TREE_AGENT_TOKEN` or `FIRST_TREE_AGENT`. Neither env var is read by the CLI anymore; all auth flows through `credentials.json`.
 - Do not conflate `agent config ...` (server-side runtime configuration) with `config -a <name> ...` (local YAML editing for the alias file). Both are legitimate; they operate on different state.

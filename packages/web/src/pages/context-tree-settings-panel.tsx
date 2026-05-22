@@ -7,7 +7,7 @@ import { SettingsField, SettingsSaveButton } from "../components/ui/settings-fie
 
 /**
  * Admin-only section for the per-org Context Tree binding (repo / branch).
- * Replaces the legacy global FIRST_TREE_HUB_CONTEXT_TREE_* env vars; each
+ * Replaces the legacy global FIRST_TREE_CONTEXT_TREE_* env vars; each
  * org now points at its own tree.
  *
  * Changes apply to *new* agent sessions: client agents fetch the latest

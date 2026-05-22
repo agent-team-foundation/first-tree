@@ -1,9 +1,4 @@
-import {
-  type Agent,
-  AVATAR_COLOR_TOKENS,
-  type AvatarColorToken,
-  type UpdateAgent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { type Agent, AVATAR_COLOR_TOKENS, type AvatarColorToken, type UpdateAgent } from "@first-tree/shared";
 import { Pencil } from "lucide-react";
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "react";
 import { deleteAgentAvatar, uploadAgentAvatar } from "../../api/agents.js";

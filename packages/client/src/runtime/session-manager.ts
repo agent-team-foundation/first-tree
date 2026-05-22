@@ -6,8 +6,8 @@ import type {
   RuntimeState,
   SessionEvent,
   SessionState,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import { deriveRepoLocalPath } from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
+import { deriveRepoLocalPath } from "@first-tree/shared";
 import { hasPendingForChat, tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
@@ -794,6 +794,24 @@ export class SessionManager {
     // now flows only into the inbound-formatter path.
     const participants = createParticipantCache(this.config.sdk, chatId, log);
 
+    // Cross-agent doc preview: `workspaceRoot` is `<workspaces>/<agentSlug>`
+    // (see agent-slot.ts), so the shared common root is its parent and this
+    // agent's slug is its basename — derived from existing config, no new
+    // config surface (decision: config-ascent).
+    const workspacesRoot = dirname(this.config.handlerConfig.workspaceRoot);
+    const selfSlug = basename(this.config.handlerConfig.workspaceRoot);
+    // Resolve the doc base SYNCHRONOUSLY from the already-populated config
+    // cache so it can ride the agent's env (`buildAgentEnv` is sync). This
+    // lets a `first-tree-hub chat send` sub-process snapshot referenced docs
+    // exactly like result-sink does (L3: unify capture across send paths).
+    // result-sink keeps its own async `getDocumentBasePath`; both read the
+    // same cache (`refreshIfNewer(_, 0)` returns the cached payload), so the
+    // base they compute agrees. Falls back to the per-chat root when the
+    // cache has no payload yet (== the single/zero-repo default).
+    const perChatRoot = join(this.config.handlerConfig.workspaceRoot, chatId);
+    const cachedPayload = this.config.agentConfigCache?.get(this.config.agentIdentity.agentId)?.payload;
+    const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, perChatRoot) : perChatRoot;
+
     const forwardResult = createResultSink({
       sdk: this.config.sdk,
       agent: this.config.agentIdentity,
@@ -804,15 +822,16 @@ export class SessionManager {
       },
       log,
       getDocumentBasePath: () => this.resolveDocumentBasePath(log, chatId),
-      // Cross-agent doc preview: `workspaceRoot` is `<workspaces>/<agentSlug>`
-      // (see agent-slot.ts), so the shared common root is its parent and this
-      // agent's slug is its basename — derived from existing config, no new
-      // config surface (decision: config-ascent).
-      workspacesRoot: dirname(this.config.handlerConfig.workspaceRoot),
-      selfSlug: basename(this.config.handlerConfig.workspaceRoot),
+      workspacesRoot,
+      selfSlug,
     });
 
-    const envCtx = { sdk: this.config.sdk, agent: this.config.agentIdentity, chatId };
+    const envCtx = {
+      sdk: this.config.sdk,
+      agent: this.config.agentIdentity,
+      chatId,
+      docContext: { base: docBase, workspacesRoot, selfSlug },
+    };
 
     return {
       agent: this.config.agentIdentity,

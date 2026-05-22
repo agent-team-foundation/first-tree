@@ -1,4 +1,4 @@
-import type { GithubEntityType } from "@agent-team-foundation/first-tree-hub-shared";
+import type { GithubEntityType } from "@first-tree/shared";
 
 /**
  * GitHub entity model — the unit of clustering for webhook → chat routing.

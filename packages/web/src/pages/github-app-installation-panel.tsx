@@ -1,4 +1,4 @@
-import type { GithubAppInstallationOutput } from "@agent-team-foundation/first-tree-hub-shared";
+import type { GithubAppInstallationOutput } from "@first-tree/shared";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Building2, ExternalLink, PauseCircle, User } from "lucide-react";
 import { ApiError } from "../api/client.js";
@@ -96,7 +96,7 @@ function NotInstalledState({ organizationId }: { organizationId: string | null }
       {slugMissing ? (
         <p className="text-body" style={{ color: "var(--state-error)" }}>
           The GitHub App slug isn't configured on this hub. Ask your operator to set{" "}
-          <code className="mono">FIRST_TREE_HUB_GITHUB_APP_SLUG</code>.
+          <code className="mono">FIRST_TREE_GITHUB_APP_SLUG</code>.
         </p>
       ) : (
         <>

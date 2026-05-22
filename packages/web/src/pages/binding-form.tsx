@@ -1,4 +1,4 @@
-import { ADAPTER_PLATFORMS } from "@agent-team-foundation/first-tree-hub-shared";
+import { ADAPTER_PLATFORMS } from "@first-tree/shared";
 import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";

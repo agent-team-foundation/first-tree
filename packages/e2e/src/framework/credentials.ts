@@ -6,7 +6,7 @@ import { Client as PgClient } from "pg";
 
 /**
  * E2E credentials helper — provisions the **minimum** set of rows needed for
- * a spawned `first-tree-hub client start --foreground` to authenticate +
+ * a spawned `first-tree-hub daemon start --foreground` to authenticate +
  * register against the server, plus a `credentials.json` + `client.yaml` on
  * disk so the CLI picks them up as if the user had run `first-tree-hub
  * connect`. Direct PG writes are kept deliberately narrow:
@@ -170,7 +170,7 @@ export async function provisionTestCredentials(opts: ProvisionOptions): Promise<
   const configDir = resolve(opts.home, "config");
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
 
-  // Mirrors `packages/command/src/core/bootstrap.ts::saveCredentials` shape.
+  // Mirrors `apps/cli/src/core/bootstrap.ts::saveCredentials` shape.
   writeFileSync(
     resolve(configDir, "credentials.json"),
     JSON.stringify({ accessToken, refreshToken, serverUrl: opts.serverUrl }, null, 2),

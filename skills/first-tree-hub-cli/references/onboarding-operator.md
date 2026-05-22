@@ -4,13 +4,17 @@ Use this file when an external agent receives an onboarding task such as:
 
 > "Install First Tree Hub CLI, read the onboarding guide with `gh`, and add a member. Server URL is `https://hub.example.com`."
 
-The goal is to run the supported CLI workflow — not to manually create agents via API calls or YAML edits.
+The single-shot `onboard` command was retired in Phase 1A of the
+repo-merge refactor. Onboarding is now a sequence of explicit verbs:
+`login` to bind the machine, `agent create` to register the agent on the
+Hub, optional `agent bind bot|user` for Feishu, then `daemon start` to
+bring the agent online.
 
-## Core Rule
+## Core Rules
 
-- Use `first-tree-hub onboard` for the end-to-end flow.
-- `onboard` depends on a valid credential file; if this machine is not yet signed in, run `first-tree-hub connect <token>` first (paste the connect token from the Hub web console's *Connect a machine* dialog).
+- Each verb in the sequence depends on a valid credential file. If this machine is not yet signed in, run `first-tree-hub login <token>` first (paste the connect token from the Hub web console's *Computers → New Connection* dialog).
 - Ensure `gh` is installed and authenticated (`gh auth login`) — required for GitHub-identity agent creation.
+- Always run `first-tree-hub status` after each verb to verify state before proceeding.
 
 ## When the Prompt Starts From Scratch
 
@@ -32,27 +36,31 @@ If the task only gives you a package name, a docs URL, and a server URL, transla
 4. Sign this machine into the Hub:
 
    ```bash
-   first-tree-hub connect <connect-token>
+   first-tree-hub login <connect-token>
    # or, in a container / CI:
-   first-tree-hub connect <connect-token> --no-service
+   first-tree-hub login <connect-token> --no-start
    ```
 
-5. Dry-run the onboarding to surface missing fields:
+5. Create the agent record on the Hub and bind it to this client:
 
    ```bash
-   first-tree-hub onboard --check --server <url> --id <id> --type <type> ...
+   first-tree-hub agent create <name> \
+     --server <url> --type <human|personal_assistant|autonomous_agent> \
+     --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
    ```
 
-6. Execute onboarding (creates the agent via Admin API + optional assistant + optional Feishu bot):
+6. (Optional) Bind a Feishu bot to the agent:
 
    ```bash
-   first-tree-hub onboard --server <url> --id <id> --type <type> ...
+   first-tree-hub agent bind bot --platform feishu \
+     --app-id "$FEISHU_APP_ID" --app-secret "$FEISHU_APP_SECRET" \
+     --agent <name>
    ```
 
-7. Start the runtime if this machine should host the agent and no service is installed:
+7. Start the daemon if this machine should host the agent and no service is installed:
 
    ```bash
-   first-tree-hub client start
+   first-tree-hub daemon start
    ```
 
 ## Prompt Template Interpretation
@@ -69,84 +77,74 @@ Interpret it as:
 
 - Install (or `npx`-invoke) the published CLI.
 - Fetch the onboarding guide with `gh` rather than relying on a browser.
-- If this machine has no `~/.first-tree/hub/credentials.json`, run `first-tree-hub connect <token>` first (paste a connect token from the Hub web console's *Connect a machine* dialog — its `iss` claim carries the hub URL).
-- Thread `https://first-tree.staging.unispark.dev/` through `--server` in every onboarding command.
-- Use the supported `onboard` flow instead of hand-rolling Admin API calls.
+- If this machine has no `~/.first-tree/hub/credentials.json`, run `first-tree-hub login <token>` first (paste a connect token from the Hub web console's *Computers → New Connection* dialog — its `iss` claim carries the hub URL).
+- Thread `https://first-tree.staging.unispark.dev/` through `--server` in every command.
+- Use the supported `agent create` + `agent bind` + `daemon start` sequence instead of hand-rolling Admin API calls.
 
 ## Minimal Inputs to Collect
 
 - **Required**
-  - member `type`: `human`, `personal_assistant`, or `autonomous_agent`
-  - `id`
-  - `role`
-  - `domains`
+  - agent `name`
+  - agent `type`: `human`, `personal_assistant`, or `autonomous_agent`
+  - `client-id` (run `first-tree-hub config get client.id` to read it)
   - `server` URL (unless already in `client.yaml` / env)
 - **Optional**
-  - `display-name` (defaults to `id`)
-  - `profile` (agent self-description in markdown)
-  - `assistant` (only valid when `type=human`)
-  - Feishu bot credentials (`--feishu-bot-app-id`, `--feishu-bot-app-secret`) when the bot should be bound
-
-Always prefer `first-tree-hub onboard --check` to reveal missing fields instead of guessing.
+  - `display-name` (defaults to `name`)
+  - `runtime` (defaults to `claude-code`)
+  - Feishu bot credentials (`--app-id`, `--app-secret`) — passed to `agent bind bot`, not `agent create`
+  - `org` (only when the member belongs to multiple organizations)
 
 ## Type-Specific Notes
 
 - **`human`**
-  - May include `--assistant <id>` to create a personal assistant in the same step.
-  - If a Feishu bot is bound, remind the human to send `/bind <id>` in Feishu after the command completes.
+  - After creating the human agent, create a separate `personal_assistant` agent if needed (`agent create <assistant-name> --type personal_assistant`).
+  - If a Feishu bot is bound, remind the human to send `/bind <name>` in Feishu after the command completes.
 - **`autonomous_agent`**
-  - Do **not** pass `--assistant`.
+  - Standalone — no companion assistant.
   - Feishu bot binding is optional; no `/bind` follow-up.
 - **`personal_assistant`**
-  - Usually created via `--assistant` on a human onboard, not as a separate top-level request.
+  - Usually paired with a human agent on the same machine.
 
 ## Example Commands
 
 ### Human + assistant
 
 ```bash
-first-tree-hub onboard --check \
-  --server https://first-tree.staging.unispark.dev/ \
-  --id alice \
-  --type human \
-  --role "Engineer" \
-  --domains "backend,infrastructure" \
-  --assistant alice-assistant
-```
+first-tree-hub login <token>                                 # one-time
 
-```bash
-first-tree-hub onboard \
+CLIENT_ID=$(first-tree-hub config get client.id | awk '{print $2}')
+
+first-tree-hub agent create alice \
   --server https://first-tree.staging.unispark.dev/ \
-  --id alice \
-  --type human \
-  --role "Engineer" \
-  --domains "backend,infrastructure" \
-  --assistant alice-assistant
+  --type human --display-name "Alice" --client-id "$CLIENT_ID"
+
+first-tree-hub agent create alice-assistant \
+  --server https://first-tree.staging.unispark.dev/ \
+  --type personal_assistant --client-id "$CLIENT_ID"
+
+first-tree-hub agent bind bot --platform feishu \
+  --app-id "$FEISHU_APP_ID" --app-secret "$FEISHU_APP_SECRET" \
+  --agent alice-assistant
+
+first-tree-hub daemon start
 ```
 
 ### Autonomous agent
 
 ```bash
-first-tree-hub onboard --check \
-  --server https://first-tree.staging.unispark.dev/ \
-  --id code-reviewer \
-  --type autonomous_agent \
-  --role "Code Review" \
-  --domains "code-review"
-```
+first-tree-hub login <token>
 
-```bash
-first-tree-hub onboard \
+first-tree-hub agent create code-reviewer \
   --server https://first-tree.staging.unispark.dev/ \
-  --id code-reviewer \
-  --type autonomous_agent \
-  --role "Code Review" \
-  --domains "code-review"
+  --type autonomous_agent --display-name "Code Review" \
+  --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
+
+first-tree-hub daemon start
 ```
 
 ## Common Pitfalls
 
-- **"No credentials found" error** → run `first-tree-hub connect <token>` before re-running `onboard`. Do not try to set an `AGENT_TOKEN` env var; that path no longer exists.
-- **`gh` not authenticated** → `gh auth login`. GitHub identity is what `onboard` uses to create the agent.
-- **Missing `--server`** → if the automation supplied a URL, thread it explicitly; do not rely on an unconfigured default. `onboard --check` will tell you when it's missing.
-- **Trying `onboard` twice with the same ID** → if the first run partially succeeded, `.onboard-state.json` has the previous args; re-running interactive mode picks up where it left off rather than starting over.
+- **"No credentials found" error** → run `first-tree-hub login <token>` before re-running `agent create`. Do not try to set an `AGENT_TOKEN` env var; that path no longer exists.
+- **`gh` not authenticated** → `gh auth login`. GitHub identity is what `agent create` uses to attribute the new agent.
+- **Missing `--server`** → if the automation supplied a URL, thread it explicitly; do not rely on an unconfigured default.
+- **Trying to take over a machine bound to a different user** → use `first-tree-hub login <token> --override` instead of `logout` + `login`. It transfers ownership and unpins the previous owner's agents in a single transaction.

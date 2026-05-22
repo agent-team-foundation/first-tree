@@ -1,4 +1,4 @@
-import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
+import type { RuntimeProvider } from "@first-tree/shared";
 import { Link2, Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";

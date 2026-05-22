@@ -3,7 +3,7 @@ import {
   type ClientCapabilities,
   RUNTIME_PROVIDERS,
   type RuntimeProvider,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";

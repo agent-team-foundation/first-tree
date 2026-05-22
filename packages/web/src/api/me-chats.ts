@@ -8,7 +8,7 @@ import type {
   MeChatReadResponse,
   MeChatSourceCounts,
   MeChatUnreadResponse,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 /**

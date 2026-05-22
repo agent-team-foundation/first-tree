@@ -1,4 +1,4 @@
-import type { ChatSource, MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatSource, MeChatRow } from "@first-tree/shared";
 
 export type GroupMode = "recency" | "source" | "type" | "none";
 

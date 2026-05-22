@@ -1,4 +1,4 @@
-import type { OnboardingEvent, OnboardingEventName } from "@agent-team-foundation/first-tree-hub-shared";
+import type { OnboardingEvent, OnboardingEventName } from "@first-tree/shared";
 import { api } from "./client.js";
 
 /**

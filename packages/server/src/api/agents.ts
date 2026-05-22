@@ -1,8 +1,4 @@
-import {
-  agentPinnedMessageSchema,
-  rebindAgentSchema,
-  updateAgentSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { agentPinnedMessageSchema, rebindAgentSchema, updateAgentSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, ForbiddenError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireAgentAccess } from "../scope/require-resource.js";
@@ -252,7 +248,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     if (health === "disconnected") {
       return reply.status(200).send({
         status: "offline",
-        message: "Agent is not connected. Connect the client with: first-tree-hub connect <token>",
+        message: "Agent is not connected. Connect the client with: first-tree-hub login <token>",
         connection,
       });
     }

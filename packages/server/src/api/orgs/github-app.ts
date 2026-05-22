@@ -2,7 +2,7 @@ import {
   type GithubAccountType,
   type GithubAppInstallationOutput,
   githubAppInstallationClaimBodySchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { authIdentities } from "../../db/schema/auth-identities.js";
@@ -110,10 +110,10 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       // The App may be configured for sign-in/webhooks but missing the
       // slug needed for the install dialog. 503 (not 404/400) — the
       // operator can fix it by setting one env var; the panel renders a
-      // "ask your operator to set FIRST_TREE_HUB_GITHUB_APP_SLUG" hint.
+      // "ask your operator to set FIRST_TREE_GITHUB_APP_SLUG" hint.
       return reply
         .status(503)
-        .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_HUB_GITHUB_APP_SLUG is not configured." });
+        .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_GITHUB_APP_SLUG is not configured." });
     }
 
     // `targetOrganizationId` rides inside the signed state so the OAuth

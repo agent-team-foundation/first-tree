@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionEvent } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 
@@ -8,7 +8,7 @@ export type AgentIdentity = {
   /**
    * Agent's inbox ID. Carried alongside the agent identity so the runtime
    * can identify the agent's row in `inbox_entries` (poll / push paths) and
-   * so child processes can read `FIRST_TREE_HUB_INBOX_ID` when they need a
+   * so child processes can read `FIRST_TREE_INBOX_ID` when they need a
    * stable identity handle. There is no `replyToInbox` envelope any more —
    * cross-chat reply routing was removed in first-tree-context PR #281.
    */

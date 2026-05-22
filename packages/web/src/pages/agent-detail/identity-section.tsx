@@ -1,4 +1,4 @@
-import { AGENT_VISIBILITY, type Agent, type UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_VISIBILITY, type Agent, type UpdateAgent } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";

@@ -19,17 +19,17 @@
     },
     "e2e:doctor": {
       "cache": false,
-      "passThroughEnv": ["E2E_*", "FIRST_TREE_HUB_*"]
+      "passThroughEnv": ["E2E_*", "FIRST_TREE_*"]
     },
     "e2e:smoke": {
       "dependsOn": ["^build"],
       "cache": false,
-      "passThroughEnv": ["E2E_*", "FIRST_TREE_HUB_*"]
+      "passThroughEnv": ["E2E_*", "FIRST_TREE_*"]
     },
     "e2e:full": {
       "dependsOn": ["^build"],
       "cache": false,
-      "passThroughEnv": ["E2E_*", "FIRST_TREE_HUB_*"]
+      "passThroughEnv": ["E2E_*", "FIRST_TREE_*"]
     }
   }
 }

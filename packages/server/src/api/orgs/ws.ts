@@ -1,4 +1,4 @@
-import { AGENT_STATUSES, AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_STATUSES, AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, ne, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";

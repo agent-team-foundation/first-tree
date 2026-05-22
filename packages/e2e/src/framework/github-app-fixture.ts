@@ -11,7 +11,7 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
  * sign payloads the server validates.
  *
  * Nothing here ever talks to api.github.com — the github-mock proxies via
- * `FIRST_TREE_HUB_GITHUB_API_BASE_URL` (F3 from the M0 spike), so neither
+ * `FIRST_TREE_GITHUB_API_BASE_URL` (F3 from the M0 spike), so neither
  * the private key nor the App id need to correspond to a real GitHub App.
  */
 export type GitHubAppFixture = {
@@ -45,11 +45,11 @@ export function makeGitHubAppFixture(): GitHubAppFixture {
     publicKeyPem,
     webhookSecret,
     toServerEnv: () => ({
-      FIRST_TREE_HUB_GITHUB_APP_ID: appId,
-      FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID: clientId,
-      FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET: clientSecret,
-      FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY: privateKeyPem,
-      FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET: webhookSecret,
+      FIRST_TREE_GITHUB_APP_ID: appId,
+      FIRST_TREE_GITHUB_APP_CLIENT_ID: clientId,
+      FIRST_TREE_GITHUB_APP_CLIENT_SECRET: clientSecret,
+      FIRST_TREE_GITHUB_APP_PRIVATE_KEY: privateKeyPem,
+      FIRST_TREE_GITHUB_APP_WEBHOOK_SECRET: webhookSecret,
     }),
   };
 }

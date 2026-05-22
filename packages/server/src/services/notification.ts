@@ -1,8 +1,4 @@
-import {
-  NOTIFICATION_TYPES,
-  type NotificationSeverity,
-  type NotificationType,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { NOTIFICATION_TYPES, type NotificationSeverity, type NotificationType } from "@first-tree/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -222,7 +218,7 @@ export async function markAgentFaultsResolved(db: Database, agentId: string): Pr
 // -- Outbound webhook (fire-and-forget) -----------------------------------
 
 async function pushToWebhook(notification: Record<string, unknown>): Promise<void> {
-  const webhookUrl = process.env.FIRST_TREE_HUB_NOTIFICATION_WEBHOOK_URL;
+  const webhookUrl = process.env.FIRST_TREE_NOTIFICATION_WEBHOOK_URL;
   if (!webhookUrl) return;
 
   try {

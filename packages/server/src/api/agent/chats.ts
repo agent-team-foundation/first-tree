@@ -1,8 +1,4 @@
-import {
-  addParticipantSchema,
-  createChatSchema,
-  paginationQuerySchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { addParticipantSchema, createChatSchema, paginationQuerySchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";

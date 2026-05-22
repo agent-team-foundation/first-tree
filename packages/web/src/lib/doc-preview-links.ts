@@ -3,7 +3,7 @@ import {
   normalizeDocLinkPath,
   scanBareDocPathTokens,
   stripDocPathLineSuffix,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 
 /**
  * Map an `<a href>` from a chat / drawer markdown render to the canonical

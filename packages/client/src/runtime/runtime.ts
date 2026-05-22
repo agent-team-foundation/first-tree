@@ -1,5 +1,5 @@
-import type { UpdateAttempt } from "@agent-team-foundation/first-tree-hub-shared";
-import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
+import type { UpdateAttempt } from "@first-tree/shared";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
 import { ClientConnection } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { AccessTokenProvider } from "../sdk.js";

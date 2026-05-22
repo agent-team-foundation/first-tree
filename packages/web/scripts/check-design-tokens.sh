@@ -82,5 +82,5 @@ if [ "$fail" -eq 0 ]; then
 fi
 
 echo ""
-echo "Fix the violations above, then re-run: pnpm --filter @first-tree-hub/web lint:tokens"
+echo "Fix the violations above, then re-run: pnpm --filter @first-tree/web lint:tokens"
 exit 1

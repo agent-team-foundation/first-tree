@@ -1,4 +1,4 @@
-import { getMeDocResponseSchema, getMeDocSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { getMeDocResponseSchema, getMeDocSchema } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";

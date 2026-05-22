@@ -38,7 +38,7 @@ import {
   type MeChatSourceCounts,
   type MeChatUnreadResponse,
   type ToolCallEventPayload,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";

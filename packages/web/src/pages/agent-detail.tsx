@@ -1,4 +1,4 @@
-import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
+import type { RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MessageSquare, Play } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -765,8 +765,8 @@ function BindClientList({
         }}
       >
         No connected computers available. Run{" "}
-        <code className="mono text-label">first-tree-hub connect &lt;token&gt;</code> on the computer that should run
-        this agent, then reopen this dialog.
+        <code className="mono text-label">first-tree-hub login &lt;token&gt;</code> on the computer that should run this
+        agent, then reopen this dialog.
       </div>
     );
   }

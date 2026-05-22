@@ -1,4 +1,4 @@
-import { safeRedirectPath } from "@agent-team-foundation/first-tree-hub-shared";
+import { safeRedirectPath } from "@first-tree/shared";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../auth/auth-context.js";

@@ -5,7 +5,7 @@ import type {
   RebindAgent,
   RuntimeProvider,
   UpdateAgent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import {
   AGENT_NAME_REGEX,
   AGENT_STATUSES,
@@ -14,7 +14,7 @@ import {
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
   isReservedAgentName,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, count, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
@@ -245,7 +245,7 @@ async function resolveAgentClient(
   if (!client.userId) {
     throw new BadRequestError(
       `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
-        "`first-tree-hub connect <token>` on that machine before pinning an agent to it.",
+        "`first-tree-hub login <token>` on that machine before pinning an agent to it.",
     );
   }
   if (client.userId !== manager.userId) {
@@ -322,7 +322,7 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
   if (!row) {
     throw new BadRequestError(
       `Cannot create agent in organization "${orgId}" — no admin member exists. ` +
-        "Create an admin member first (see `first-tree-hub onboard`).",
+        "Create an admin member first (see `first-tree-hub agent create`).",
     );
   }
   return row.id;

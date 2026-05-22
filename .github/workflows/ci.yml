@@ -51,6 +51,7 @@ jobs:
           filters: |
             code:
               - 'packages/**'
+              - 'apps/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'tsconfig.json'

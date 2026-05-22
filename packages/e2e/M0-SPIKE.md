@@ -10,7 +10,7 @@ This report covers the **code-level** spike — does the integration surface loo
 
 ## F1 — `client start --foreground` already exists
 
-`packages/command/src/commands/client.ts:85`:
+`apps/cli/src/commands/client.ts:85`:
 
 ```ts
 .option("--foreground", "Run inline instead of delegating to the background service (for debugging)")
@@ -18,7 +18,7 @@ This report covers the **code-level** spike — does the integration surface loo
 
 The handler treats `options.foreground === true || isSupervisorChild` as the inline branch (`wantInline`) and bypasses the systemd/launchd installation paths entirely. `--foreground` plus `--no-interactive` is what the e2e framework needs.
 
-**Status**: ✅ no client source change required. Framework spawns CLI via `node packages/command/dist/cli/index.mjs client start --foreground --no-interactive`.
+**Status**: ✅ no client source change required. Framework spawns CLI via `node apps/cli/dist/cli/index.mjs client start --foreground --no-interactive`.
 
 ## F2 — `/healthz` is the right liveness probe (not `/health`)
 
@@ -39,7 +39,7 @@ Old state (5 sites in `services/github-app.ts`, 1 site in `services/github-oauth
 New state (this branch): centralised in `services/github-api-base.ts`:
 
 ```ts
-export const GITHUB_API_BASE = normalize(process.env.FIRST_TREE_HUB_GITHUB_API_BASE_URL);
+export const GITHUB_API_BASE = normalize(process.env.FIRST_TREE_GITHUB_API_BASE_URL);
 ```
 
 Defaults to `https://api.github.com`, strips trailing `/`. All three service files now interpolate `${GITHUB_API_BASE}/...`.
@@ -60,14 +60,14 @@ The proposal v4 suggested `GET /api/v1/admin/clients` to confirm the client actu
 
 **Status**: ✅ documented; tracked as M2 entry condition.
 
-## F6 — GitHub App env vars all carry `FIRST_TREE_HUB_GITHUB_APP_*` prefix
+## F6 — GitHub App env vars all carry `FIRST_TREE_GITHUB_APP_*` prefix
 
 `packages/server/src/boot-guards.ts:44–48`:
 
 ```ts
-FIRST_TREE_HUB_GITHUB_APP_ID, FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID,
-FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET, FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY,
-FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET
+FIRST_TREE_GITHUB_APP_ID, FIRST_TREE_GITHUB_APP_CLIENT_ID,
+FIRST_TREE_GITHUB_APP_CLIENT_SECRET, FIRST_TREE_GITHUB_APP_PRIVATE_KEY,
+FIRST_TREE_GITHUB_APP_WEBHOOK_SECRET
 ```
 
 Same mapping in `packages/shared/src/config/server-config.ts:105–116`.
@@ -91,7 +91,7 @@ const claudeCodeExecutable =
 
 `packages/client/src/handlers/claude-executable.ts:29` resolves it from the `CLAUDE_CODE_EXECUTABLE` env var (or PATH lookup, or SDK-bundled fallback). The agent-mock can point this at a fake node binary in M2 — zero client source change required.
 
-**Note**: the proposal referenced `FIRST_TREE_HUB_CLAUDE_CODE_EXECUTABLE`. The real env var is plain `CLAUDE_CODE_EXECUTABLE`. `client-process.ts` injects under the correct name.
+**Note**: the proposal referenced `FIRST_TREE_CLAUDE_CODE_EXECUTABLE`. The real env var is plain `CLAUDE_CODE_EXECUTABLE`. `client-process.ts` injects under the correct name.
 
 **Status**: ✅ injection point confirmed; M2 will deliver the fake binary + JSONL protocol stub.
 
@@ -102,8 +102,8 @@ const claudeCodeExecutable =
 | Proposal claim | Actual | Action |
 |---|---|---|
 | M0.1 verify `--foreground` | Exists at `commands/client.ts:85` | Used as-is |
-| M0.3 add `FIRST_TREE_HUB_GITHUB_API_BASE_URL` (~15 lines) | Implemented (`github-api-base.ts` + 7 call sites) | Done in this PR |
-| Agent injection env var name `FIRST_TREE_HUB_CLAUDE_CODE_EXECUTABLE` | Real name is `CLAUDE_CODE_EXECUTABLE` | Corrected in `client-process.ts`; flag back to proposal for v5 errata |
+| M0.3 add `FIRST_TREE_GITHUB_API_BASE_URL` (~15 lines) | Implemented (`github-api-base.ts` + 7 call sites) | Done in this PR |
+| Agent injection env var name `FIRST_TREE_CLAUDE_CODE_EXECUTABLE` | Real name is `CLAUDE_CODE_EXECUTABLE` | Corrected in `client-process.ts`; flag back to proposal for v5 errata |
 | Readiness probe via `GET /api/v1/admin/clients` | Endpoint doesn't exist | M1 uses `/healthz` only; admin/clients-style probe deferred to M2 |
 | Three-track LLM interception spike runtime validation | Not exercised in M1 (agent runtime not driven) | Deferred to M2 entry condition |
 

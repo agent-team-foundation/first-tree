@@ -1,4 +1,4 @@
-import type { GithubEventCard, NormalizedEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { GithubEventCard, NormalizedEvent } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { createLogger } from "../observability/index.js";
@@ -63,20 +63,33 @@ export async function deliverNormalizedEvent(
 
       const card = buildCard(event, target);
       const mentionedUser = card.mentionedUser ?? undefined;
-      const { message, recipients } = await sendMessage(app.db, resolved.chatId, target.humanAgentId, {
-        format: "card",
-        content: card,
-        source: "github",
-        metadata: {
+      // The audience row resolved a specific (human, delegate) pair as the
+      // structural target of this event. Address the delegate explicitly so
+      // a bound chat that has been expanded to ≥3 speakers still wakes the
+      // agent — without this, card-format messages produce no mentionSet
+      // and the multi-speaker fan-out collapses to notify=false for
+      // everyone. Same pattern as `question_answer` (see SendMessageOptions
+      // `addressedToAgentIds`).
+      const { message, recipients } = await sendMessage(
+        app.db,
+        resolved.chatId,
+        target.humanAgentId,
+        {
+          format: "card",
+          content: card,
           source: "github",
-          event: event.rawEventType,
-          action: event.rawAction,
-          entityType: event.entity.type,
-          entityKey: event.entity.key,
-          reason: card.reason,
-          ...(mentionedUser ? { mentionedUser } : {}),
+          metadata: {
+            source: "github",
+            event: event.rawEventType,
+            action: event.rawAction,
+            entityType: event.entity.type,
+            entityKey: event.entity.key,
+            reason: card.reason,
+            ...(mentionedUser ? { mentionedUser } : {}),
+          },
         },
-      });
+        { addressedToAgentIds: [target.delegateAgentId] },
+      );
       notifyRecipients(app.notifier, recipients, message.id);
       stats.delivered += 1;
     } catch (err) {

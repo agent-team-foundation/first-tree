@@ -2,7 +2,7 @@
  * Logger core — format / level primitives shared between server and client.
  *
  * This module intentionally has no dependency on `pino` so it can live in
- * `@agent-team-foundation/first-tree-hub-shared`. Consumers construct their
+ * `@first-tree/shared`. Consumers construct their
  * own pino instance and pass the output stream built here.
  */
 

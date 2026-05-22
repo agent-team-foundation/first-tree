@@ -1,4 +1,4 @@
-import { createAdapterMappingSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { createAdapterMappingSchema } from "@first-tree/shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { adapterAgentMappings } from "../../db/schema/adapter-agent-mappings.js";

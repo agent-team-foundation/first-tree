@@ -1,4 +1,4 @@
-import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatParticipantDetail } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pause } from "lucide-react";
 import { agentSessionsQueryKey, getSession, type SessionListItem, suspendSession } from "../../../api/sessions.js";

@@ -1,4 +1,4 @@
-import { questionAnswerMessageContentSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { questionAnswerMessageContentSchema } from "@first-tree/shared";
 
 /**
  * Module-singleton bridge between the Claude Agent SDK `AskUserQuestion`

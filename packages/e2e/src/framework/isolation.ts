@@ -18,7 +18,7 @@ export type RunIdentity = {
   runId: string;
   /** Short-token form, safe inside docker names + filesystem paths. */
   shortId: string;
-  /** `$TMPDIR/hub-e2e-<shortId>` — passed to spawned CLI as FIRST_TREE_HUB_HOME. */
+  /** `$TMPDIR/hub-e2e-<shortId>` — passed to spawned CLI as FIRST_TREE_HOME. */
   home: string;
   /** Docker compose project name. Lowercase, underscored. */
   composeProject: string;

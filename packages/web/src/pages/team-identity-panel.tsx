@@ -1,4 +1,4 @@
-import type { Organization } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Organization } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { getOrganization, updateOrganization } from "../api/organizations.js";

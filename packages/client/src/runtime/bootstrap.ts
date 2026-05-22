@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import type { ChatContext } from "./chat-context.js";
@@ -523,5 +523,9 @@ this command.
   cannot render as markdown.
 - For multi-line / markdown / special chars (quotes, \`$\`, backticks, newlines),
   use **stdin** with real newlines, plus \`-f markdown\`.
+
+## Source Repos
+
+For development tasks, prefer the repo worktrees already present in this workspace.
 `;
 }

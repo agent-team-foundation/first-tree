@@ -2,12 +2,12 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { REPO_ROOT } from "../env.js";
 
-const CLI_ENTRY = resolve(REPO_ROOT, "packages/command/dist/cli/index.mjs");
+const CLI_ENTRY = resolve(REPO_ROOT, "apps/cli/dist/cli/index.mjs");
 
 export type CliEnvOptions = {
-  /** Per-CLI FIRST_TREE_HUB_HOME, where credentials.json / client.yaml live. */
+  /** Per-CLI FIRST_TREE_HOME, where credentials.json / client.yaml live. */
   home: string;
-  /** Per-CLI Hub URL — wins over any ambient `FIRST_TREE_HUB_SERVER_URL`. */
+  /** Per-CLI Hub URL — wins over any ambient `FIRST_TREE_SERVER_URL`. */
   serverBaseUrl: string;
   /** Optional extra env overrides (claude/codex executable paths, etc.). */
   extraEnv?: NodeJS.ProcessEnv;
@@ -18,7 +18,7 @@ export type CliEnvOptions = {
  *
  * Why the sanitization step matters: when the e2e harness itself runs inside
  * an agent runtime (e.g. yzw-assistant on prod hub), the parent process
- * exports `FIRST_TREE_HUB_SERVER_URL` and friends. The CLI config resolver
+ * exports `FIRST_TREE_SERVER_URL` and friends. The CLI config resolver
  * gives env > file priority, so without this step a per-run `client.yaml`
  * gets silently overridden by the parent's prod URL, and the WS handshake
  * fails with a JWT-secret mismatch. Re-injecting only the values we own
@@ -27,14 +27,14 @@ export type CliEnvOptions = {
 export function buildCliEnv(opts: CliEnvOptions): NodeJS.ProcessEnv {
   const sanitized: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (k.startsWith("FIRST_TREE_HUB_")) continue;
+    if (k.startsWith("FIRST_TREE_")) continue;
     sanitized[k] = v;
   }
   return {
     ...sanitized,
     NODE_ENV: "test",
-    FIRST_TREE_HUB_HOME: opts.home,
-    FIRST_TREE_HUB_SERVER_URL: opts.serverBaseUrl,
+    FIRST_TREE_HOME: opts.home,
+    FIRST_TREE_SERVER_URL: opts.serverBaseUrl,
     ...opts.extraEnv,
   };
 }
@@ -56,8 +56,8 @@ export type ExecCliOptions = CliEnvOptions & {
 
 /**
  * Run the dist CLI to completion and capture its stdout / stderr / exit code.
- * Use this for one-shot commands like `connect`, `agent list`, `chat send`
- * etc. Long-running entries (`client start --foreground`) belong on
+ * Use this for one-shot commands like `login`, `agent list`, `chat send`
+ * etc. Long-running entries (`daemon start --foreground`) belong on
  * `spawnCli` below — they never exit on their own.
  */
 export async function execCli(opts: ExecCliOptions): Promise<CliExecResult> {
@@ -125,7 +125,7 @@ export type SpawnCliOptions = CliEnvOptions & {
  * Spawn a long-running CLI process. The promise resolves once the child has
  * survived `immediateExitGraceMs` without exiting; the returned handle exposes
  * the underlying `ChildProcess` plus a `stop()` that does SIGTERM → SIGKILL
- * fallback. Use for `client start --foreground`, `connect --no-service`, etc.
+ * fallback. Use for `daemon start --foreground`, `login --no-start`, etc.
  */
 export async function spawnCli(opts: SpawnCliOptions): Promise<SpawnedCli> {
   const env = buildCliEnv(opts);

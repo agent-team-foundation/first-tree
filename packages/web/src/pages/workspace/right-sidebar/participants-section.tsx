@@ -1,4 +1,4 @@
-import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatParticipantDetail } from "@first-tree/shared";
 import { useMemo } from "react";
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";

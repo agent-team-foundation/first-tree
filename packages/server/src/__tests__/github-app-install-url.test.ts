@@ -113,6 +113,6 @@ describe("install-url when the App slug is not configured", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(503);
-    expect(res.json<{ error: string }>().error).toMatch(/FIRST_TREE_HUB_GITHUB_APP_SLUG/);
+    expect(res.json<{ error: string }>().error).toMatch(/FIRST_TREE_GITHUB_APP_SLUG/);
   });
 });

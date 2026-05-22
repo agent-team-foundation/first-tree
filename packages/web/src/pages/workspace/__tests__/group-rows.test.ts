@@ -1,4 +1,4 @@
-import type { MeChatRow } from "@agent-team-foundation/first-tree-hub-shared";
+import type { MeChatRow } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { groupRows } from "../conversations/group-rows.js";
 

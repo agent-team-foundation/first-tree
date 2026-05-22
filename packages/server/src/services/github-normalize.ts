@@ -1,9 +1,4 @@
-import type {
-  InvolveReason,
-  NormalizedEvent,
-  NormalizedEventKind,
-  WebhookSource,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { InvolveReason, NormalizedEvent, NormalizedEventKind, WebhookSource } from "@first-tree/shared";
 import { extractEventEntity, type GithubEntity, isRecord, parseFixesRefs } from "../api/webhooks/github-entity.js";
 
 const MENTION_REGEX = /(?<!\w)@([a-zA-Z0-9][\w-]*)(\/)?/g;

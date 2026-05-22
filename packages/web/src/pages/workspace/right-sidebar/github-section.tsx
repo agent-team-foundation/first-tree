@@ -1,8 +1,4 @@
-import type {
-  ChatGithubEntity,
-  GithubEntityLiveState,
-  GithubEntityType,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { ChatGithubEntity, GithubEntityLiveState, GithubEntityType } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { CircleDot, ExternalLink, GitCommit, GitMerge, GitPullRequest, MessageCircle } from "lucide-react";
 import { listChatGithubEntities } from "../../../api/chats.js";

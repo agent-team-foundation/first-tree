@@ -1,4 +1,4 @@
-import { AGENT_BIND_REJECT_REASONS, type AgentBindRejectReason } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_BIND_REJECT_REASONS, type AgentBindRejectReason } from "@first-tree/shared";
 
 /**
  * Outcome the bind-reject repair flow asks the caller to perform after

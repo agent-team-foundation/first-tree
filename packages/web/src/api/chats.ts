@@ -1,10 +1,4 @@
-import type {
-  Chat,
-  ChatDetail,
-  ChatEngagementStatus,
-  ChatGithubEntityListResponse,
-  Message,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { Chat, ChatDetail, ChatEngagementStatus, ChatGithubEntityListResponse, Message } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 type PaginatedChats = {
@@ -16,7 +10,7 @@ export type MessageWithDelivery = Message & {
   deliveryStatus?: "sent" | "pending" | "delivered" | "acked";
 };
 
-type PaginatedMessages = {
+export type PaginatedMessages = {
   items: MessageWithDelivery[];
   nextCursor: string | null;
 };

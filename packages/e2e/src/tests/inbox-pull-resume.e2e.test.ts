@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { InboxDeliverFrame } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxDeliverFrame } from "@first-tree/shared";
 import { Client as PgClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CurrentRunHandle, readCredentialsOrThrow, readCurrentHandle } from "../framework/current-handle.js";

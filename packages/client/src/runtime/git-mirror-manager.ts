@@ -213,7 +213,7 @@ export function isConfigLockError(err: unknown): boolean {
 export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirrorManager {
   const mirrorsRoot = join(opts.dataDir, "git-mirrors");
   const cloneTimeoutMs =
-    opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_HUB_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
+    opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
   const log = opts.log;
 
   // Per-URL serial queue. Prevents concurrent ensureMirror / fetchMirror /

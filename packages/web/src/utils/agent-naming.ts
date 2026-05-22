@@ -1,4 +1,4 @@
-import { AGENT_NAME_MAX_LENGTH } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_NAME_MAX_LENGTH } from "@first-tree/shared";
 
 /**
  * Lowercase, ASCII-only slug from arbitrary unicode display names. Strips

@@ -11,7 +11,7 @@
  * `user.id` etc. landed on a hook wrapper span instead of the route row).
  */
 
-import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 import type { Span } from "@opentelemetry/api";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { normalizeAttrs } from "./otel-helpers.js";
@@ -50,11 +50,11 @@ export async function attachRequestContext(request: FastifyRequest, _reply: Fast
   if (!span) return;
 
   if (request.user) {
-    span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ID, request.user.userId);
+    span.setAttribute(FIRST_TREE_ATTR.USER_ID, request.user.userId);
   }
 
   if (request.agent) {
-    span.setAttribute(FIRST_TREE_HUB_ATTR.AGENT_ID, request.agent.uuid);
+    span.setAttribute(FIRST_TREE_ATTR.AGENT_ID, request.agent.uuid);
     span.setAttribute("agent.inbox_id", request.agent.inboxId);
   }
 }
@@ -74,9 +74,9 @@ export function stampOrgScope(
 ): void {
   const span = rootSpanOf(request);
   if (!span) return;
-  span.setAttribute(FIRST_TREE_HUB_ATTR.ORGANIZATION_ID, scope.organizationId);
-  span.setAttribute(FIRST_TREE_HUB_ATTR.MEMBER_ID, scope.memberId);
-  span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ROLE, scope.role);
+  span.setAttribute(FIRST_TREE_ATTR.ORGANIZATION_ID, scope.organizationId);
+  span.setAttribute(FIRST_TREE_ATTR.MEMBER_ID, scope.memberId);
+  span.setAttribute(FIRST_TREE_ATTR.USER_ROLE, scope.role);
 }
 
 /**
@@ -88,7 +88,7 @@ export function stampOrgScope(
 export function stampAgentResource(request: FastifyRequest, agent: { uuid: string; inboxId: string }): void {
   const span = rootSpanOf(request);
   if (!span) return;
-  span.setAttribute(FIRST_TREE_HUB_ATTR.AGENT_ID, agent.uuid);
+  span.setAttribute(FIRST_TREE_ATTR.AGENT_ID, agent.uuid);
   span.setAttribute("agent.inbox_id", agent.inboxId);
 }
 
@@ -99,8 +99,8 @@ export function stampAgentResource(request: FastifyRequest, agent: { uuid: strin
 export function stampChatResource(request: FastifyRequest, chat: { id: string; type: string }): void {
   const span = rootSpanOf(request);
   if (!span) return;
-  span.setAttribute(FIRST_TREE_HUB_ATTR.CHAT_ID, chat.id);
-  span.setAttribute(FIRST_TREE_HUB_ATTR.CHAT_TYPE, chat.type);
+  span.setAttribute(FIRST_TREE_ATTR.CHAT_ID, chat.id);
+  span.setAttribute(FIRST_TREE_ATTR.CHAT_TYPE, chat.type);
 }
 
 /**
@@ -161,7 +161,7 @@ export async function bodyCaptureOnSendHook(
     const redacted = normalizeAttrs(request.body as Record<string, unknown>);
     const serialized = JSON.stringify(redacted);
     span.setAttribute(
-      FIRST_TREE_HUB_ATTR.HTTP_REQUEST_BODY,
+      FIRST_TREE_ATTR.HTTP_REQUEST_BODY,
       serialized.length <= MAX_BODY_ATTR_LEN
         ? serialized
         : `${serialized.slice(0, MAX_BODY_ATTR_LEN)}…[truncated ${serialized.length - MAX_BODY_ATTR_LEN} chars]`,

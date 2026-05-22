@@ -1,11 +1,11 @@
-import type { InboxEntryWithMessage, PrecedingMessage } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage, PrecedingMessage } from "@first-tree/shared";
 import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { ForbiddenError } from "../errors.js";
-import { FIRST_TREE_HUB_ATTR, withSpan } from "../observability/index.js";
+import { FIRST_TREE_ATTR, withSpan } from "../observability/index.js";
 import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 
 /** Claimed `inbox_entries` row, typed via Drizzle `$inferSelect` so column-mode
@@ -422,7 +422,7 @@ export async function ackEntryByIdForBoundAgents(
   inboxIds: string[],
 ): Promise<typeof inboxEntries.$inferSelect | null> {
   if (inboxIds.length === 0) return null;
-  return withSpan("inbox.ack.ws", { [FIRST_TREE_HUB_ATTR.INBOX_ENTRY_ID]: String(entryId) }, async () => {
+  return withSpan("inbox.ack.ws", { [FIRST_TREE_ATTR.INBOX_ENTRY_ID]: String(entryId) }, async () => {
     const [entry] = await db
       .update(inboxEntries)
       .set({ status: "acked", ackedAt: new Date() })

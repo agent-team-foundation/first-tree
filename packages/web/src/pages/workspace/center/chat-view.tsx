@@ -7,7 +7,7 @@ import {
   parseWorkspaceDocKey,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, MoreHorizontal, Paperclip, X } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +20,7 @@ import {
   type ImageRefContent,
   listChatMessages,
   type MessageWithDelivery,
+  type PaginatedMessages,
   patchChatEngagement,
   readFileAsBase64,
   renameChat,
@@ -850,11 +851,85 @@ export function ChatView({
     refetchInterval: 30_000,
   });
 
+  /**
+   * Optimistic-update helpers for the messages cache. Wrap setQueryData so
+   * the POST-then-refetch round trip doesn't gate the user's own message
+   * from appearing above the composer — we render a `pending` row instantly
+   * and reconcile with the server's row once the request resolves. Shared
+   * between text-only (sendMut) and the image upload path (handleSend).
+   *
+   * The query key is memoized so the three useCallback wrappers below get a
+   * stable reference (otherwise a new `[...]` literal every render would
+   * invalidate the callbacks on every parent re-render).
+   */
+  const messagesQueryKey = useMemo(() => ["chat-messages", chatId] as const, [chatId]);
+  const insertOptimisticMessage = useCallback(
+    (msg: MessageWithDelivery) => {
+      queryClient.setQueryData<PaginatedMessages>(messagesQueryKey, (prev) => ({
+        items: [...(prev?.items ?? []), msg],
+        nextCursor: prev?.nextCursor ?? null,
+      }));
+    },
+    [queryClient, messagesQueryKey],
+  );
+  const replaceOptimisticMessage = useCallback(
+    (tempId: string, saved: MessageWithDelivery) => {
+      queryClient.setQueryData<PaginatedMessages>(messagesQueryKey, (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          items: prev.items.map((m) => (m.id === tempId ? { ...saved, deliveryStatus: "sent" as const } : m)),
+        };
+      });
+    },
+    [queryClient, messagesQueryKey],
+  );
+  const removeOptimisticMessages = useCallback(
+    (tempIds: ReadonlySet<string>) => {
+      if (tempIds.size === 0) return;
+      queryClient.setQueryData<PaginatedMessages>(messagesQueryKey, (prev) => {
+        if (!prev) return prev;
+        return { ...prev, items: prev.items.filter((m) => !tempIds.has(m.id)) };
+      });
+    },
+    [queryClient, messagesQueryKey],
+  );
+  const buildOptimisticTextMessage = useCallback(
+    (text: string): MessageWithDelivery | null => {
+      if (!myAgentId) return null;
+      return {
+        id: `optimistic-${crypto.randomUUID()}`,
+        chatId,
+        senderId: myAgentId,
+        format: "text",
+        content: text,
+        metadata: {},
+        inReplyTo: null,
+        source: "web",
+        createdAt: new Date().toISOString(),
+        deliveryStatus: "pending",
+      };
+    },
+    [chatId, myAgentId],
+  );
+
   const sendMut = useMutation({
     mutationFn: (content: string) => sendChatMessage(chatId, content),
-    onSuccess: () => {
+    // Optimistic insert: render the user's row above the composer immediately
+    // and clear the draft so the input feels responsive even when the POST
+    // round-trip + follow-up GET take 1–2s. The ctx returned here is threaded
+    // to onError / onSuccess so we can reconcile with the server row.
+    onMutate: async (content: string) => {
+      await queryClient.cancelQueries({ queryKey: messagesQueryKey });
+      const previousDraft = draft;
       setDraft("");
-      queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
+      const optimistic = buildOptimisticTextMessage(content);
+      if (!optimistic) return { tempId: null, previousDraft };
+      insertOptimisticMessage(optimistic);
+      return { tempId: optimistic.id, previousDraft };
+    },
+    onSuccess: (saved, _content, ctx) => {
+      if (ctx?.tempId) replaceOptimisticMessage(ctx.tempId, saved);
       // Refresh the workspace sidebar the moment the message is durable —
       // server's predictive Step 1b (in services/message.ts) just upserted an
       // `active` agent_chat_sessions row, so the new chat now satisfies the
@@ -867,8 +942,22 @@ export function ChatView({
     // (e.g. user typed `@<outsider>` who's not in the chat) surface here.
     // Client no longer pre-flights — unresolved `@<token>` is treated as
     // plain text locally; the round-trip is the user's notification.
-    onError: (err) => {
+    onError: (err, _content, ctx) => {
       setUploadError(err instanceof Error ? err.message : "Failed to send message");
+      if (ctx?.tempId) removeOptimisticMessages(new Set([ctx.tempId]));
+      // Put the rejected text back so the user can edit and retry without
+      // re-typing — but only if the user hasn't already started typing
+      // something new during the in-flight window. Setting `previousDraft`
+      // unconditionally would overwrite the new keystrokes (PR review
+      // observation #1). Functional setState reads the latest draft inside
+      // React's commit so we don't race the textarea's controlled value.
+      if (ctx?.previousDraft) setDraft((current) => (current === "" ? ctx.previousDraft : current));
+    },
+    // Resync against the server in the background so any fan-out side-effects
+    // (e.g. server-rewritten content, mention resolution) eventually overwrite
+    // our optimistic snapshot.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: messagesQueryKey });
     },
   });
 
@@ -908,15 +997,23 @@ export function ChatView({
     if (images.length > 0) {
       setUploading(true);
       setUploadError(null);
+      // Carry the text-draft mentions onto each image message so the
+      // server's group-chat mention guard (services/message.ts) accepts
+      // file-format sends. Without this, every image POST is missing
+      // recipient mentions and 400s before the text message is sent
+      // (issue 387). In direct chats `draftMentions` is empty and the
+      // metadata field is omitted entirely — server check is skipped
+      // anyway, so this is a no-op for 1:1.
+      const imageMetadata = draftMentions.length > 0 ? { mentions: draftMentions } : undefined;
+      // Snapshot draft + clear inputs up front so the composer feels instant.
+      // Optimistic rows render into the cache below; rollback restores both
+      // the textarea draft and any not-yet-acked optimistic tempIds on error.
+      const previousDraft = draft;
+      setDraft("");
+      clearImages();
+      await queryClient.cancelQueries({ queryKey: messagesQueryKey });
+      const pendingTempIds = new Set<string>();
       try {
-        // Carry the text-draft mentions onto each image message so the
-        // server's group-chat mention guard (services/message.ts) accepts
-        // file-format sends. Without this, every image POST is missing
-        // recipient mentions and 400s before the text message is sent
-        // (issue 387). In direct chats `draftMentions` is empty and the
-        // metadata field is omitted entirely — server check is skipped
-        // anyway, so this is a no-op for 1:1.
-        const imageMetadata = draftMentions.length > 0 ? { mentions: draftMentions } : undefined;
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
           const imageId = crypto.randomUUID();
@@ -924,7 +1021,31 @@ export function ChatView({
           // its own message via the imageRef shape immediately on refetch,
           // even if the server write races ahead of the response.
           await putImage({ imageId, base64: data, mimeType: img.file.type });
-          await sendFileMessage(
+          let tempId: string | null = null;
+          if (myAgentId) {
+            const imageRef: ImageRefContent = {
+              imageId,
+              mimeType: img.file.type,
+              filename: img.file.name,
+              size: img.file.size,
+            };
+            const optimistic: MessageWithDelivery = {
+              id: `optimistic-${crypto.randomUUID()}`,
+              chatId,
+              senderId: myAgentId,
+              format: "file",
+              content: imageRef,
+              metadata: imageMetadata ?? {},
+              inReplyTo: null,
+              source: "web",
+              createdAt: new Date().toISOString(),
+              deliveryStatus: "pending",
+            };
+            tempId = optimistic.id;
+            pendingTempIds.add(tempId);
+            insertOptimisticMessage(optimistic);
+          }
+          const saved = await sendFileMessage(
             chatId,
             {
               data,
@@ -935,17 +1056,39 @@ export function ChatView({
             },
             imageMetadata,
           );
+          if (tempId) {
+            replaceOptimisticMessage(tempId, saved);
+            pendingTempIds.delete(tempId);
+          }
         }
-        clearImages();
-        if (text) await sendChatMessage(chatId, text);
-        setDraft("");
-        queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
-        // Mirror sendMut.onSuccess: predictive session-activation only shows
+        if (text) {
+          const optimistic = buildOptimisticTextMessage(text);
+          const tempId = optimistic?.id ?? null;
+          if (optimistic && tempId) {
+            pendingTempIds.add(tempId);
+            insertOptimisticMessage(optimistic);
+          }
+          const saved = await sendChatMessage(chatId, text);
+          if (tempId) {
+            replaceOptimisticMessage(tempId, saved);
+            pendingTempIds.delete(tempId);
+          }
+        }
+        // Mirror sendMut.onSettled: predictive session-activation only shows
         // up in the sidebar after we invalidate, otherwise the file-send path
         // for the first message in a new chat waits for 10s polling.
+        queryClient.invalidateQueries({ queryKey: messagesQueryKey });
         queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Failed to send image");
+        // Roll back unacknowledged optimistic rows + restore the draft so the
+        // user can retry. Already-acked rows have been swapped to real ids by
+        // replaceOptimisticMessage and are no longer in pendingTempIds.
+        removeOptimisticMessages(pendingTempIds);
+        // Only restore the pre-send draft if the user hasn't already started
+        // typing something new during the upload window (PR review
+        // observation #1).
+        if (previousDraft) setDraft((current) => (current === "" ? previousDraft : current));
       } finally {
         setUploading(false);
       }

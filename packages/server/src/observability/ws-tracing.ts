@@ -15,7 +15,7 @@
  * When tracing is disabled every function degrades to a transparent no-op.
  */
 
-import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 import type { Context, Span } from "@opentelemetry/api";
 import { context as otelContext, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { WebSocket } from "ws";
@@ -50,10 +50,10 @@ export function startWsConnectionSpan(
   } = {},
 ): void {
   const span = startTrackedSpan("ws.connection", {
-    [FIRST_TREE_HUB_ATTR.CLIENT_ID]: attrs.clientId,
-    [FIRST_TREE_HUB_ATTR.ORGANIZATION_ID]: attrs.organizationId,
-    [FIRST_TREE_HUB_ATTR.WS_REMOTE_IP]: attrs.remoteIp,
-    [FIRST_TREE_HUB_ATTR.HTTP_USER_AGENT]: attrs.userAgent,
+    [FIRST_TREE_ATTR.CLIENT_ID]: attrs.clientId,
+    [FIRST_TREE_ATTR.ORGANIZATION_ID]: attrs.organizationId,
+    [FIRST_TREE_ATTR.WS_REMOTE_IP]: attrs.remoteIp,
+    [FIRST_TREE_ATTR.HTTP_USER_AGENT]: attrs.userAgent,
   });
   if (!span) return;
   const ctx = trace.setSpan(otelContext.active(), span);
@@ -72,7 +72,7 @@ export function endWsConnectionSpan(socket: WebSocket, closeCode?: number): void
   const entry = connections.get(socket);
   if (!entry) return;
   if (closeCode !== undefined) {
-    entry.span.setAttributes({ [FIRST_TREE_HUB_ATTR.WS_CLOSE_CODE]: closeCode });
+    entry.span.setAttributes({ [FIRST_TREE_ATTR.WS_CLOSE_CODE]: closeCode });
   }
   entry.span.end();
   connections.delete(socket);
@@ -101,7 +101,7 @@ export async function withWsMessageSpan<T>(
   return otelContext.with(entry.context, () =>
     tracer.startActiveSpan(
       spanName,
-      { attributes: normalizeAttrs({ [FIRST_TREE_HUB_ATTR.WS_MESSAGE_TYPE]: type, ...attrs }) },
+      { attributes: normalizeAttrs({ [FIRST_TREE_ATTR.WS_MESSAGE_TYPE]: type, ...attrs }) },
       async (span) => {
         try {
           const result = await fn();

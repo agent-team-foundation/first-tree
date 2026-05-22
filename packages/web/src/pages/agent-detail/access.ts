@@ -1,4 +1,4 @@
-import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent } from "@first-tree/shared";
 
 export function canManageAgentDetail(
   agent: Pick<Agent, "managerId"> | null | undefined,

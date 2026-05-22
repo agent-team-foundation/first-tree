@@ -1,5 +1,5 @@
-import type { ToolCallEventPayload } from "@agent-team-foundation/first-tree-hub-shared";
-import { chatMetadataSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ToolCallEventPayload } from "@first-tree/shared";
+import { chatMetadataSchema } from "@first-tree/shared";
 import { and, asc, eq } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { formatEntityTitle } from "../api/webhooks/github-entity.js";

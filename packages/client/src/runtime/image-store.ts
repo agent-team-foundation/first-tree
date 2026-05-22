@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { IMAGE_MIME_TO_EXT, type SupportedImageMime } from "@agent-team-foundation/first-tree-hub-shared";
-import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { IMAGE_MIME_TO_EXT, type SupportedImageMime } from "@first-tree/shared";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
 
 /** UUIDs are the only shape we generate for imageId, but accept the same
  * loose character set as chatId sanitisers elsewhere so a malformed field

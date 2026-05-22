@@ -3,7 +3,7 @@ import { createLoggerOutputStream, type LogFormat } from "./logger-core.js";
 
 /**
  * Logger utilities for tests. Exported from
- * `@agent-team-foundation/first-tree-hub-shared/observability` so both the
+ * `@first-tree/shared/observability` so both the
  * client and server test suites can silence or record logs without each
  * reinventing the pattern.
  *

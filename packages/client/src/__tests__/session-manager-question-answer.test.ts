@@ -1,4 +1,4 @@
-import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearAllPendingQuestionsForTest,

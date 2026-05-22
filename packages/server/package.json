@@ -1,5 +1,5 @@
 {
-  "name": "@first-tree-hub/server",
+  "name": "@first-tree/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -25,7 +25,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@agent-team-foundation/first-tree-hub-shared": "workspace:*",
+    "@first-tree/shared": "workspace:*",
     "@autotelic/fastify-opentelemetry": "^0.23.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
@@ -45,7 +45,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@first-tree-hub/client": "workspace:*",
+    "@first-tree/client": "workspace:*",
     "@opentelemetry/context-async-hooks": "^2.7.0",
     "@opentelemetry/sdk-trace-base": "^2.7.0",
     "@testcontainers/postgresql": "^11.13.0",

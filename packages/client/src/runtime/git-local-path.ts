@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { getRepoLocalPathSafetyError } from "@agent-team-foundation/first-tree-hub-shared";
+import { getRepoLocalPathSafetyError } from "@first-tree/shared";
 
 export function resolveGitRepoTargetPath(workspace: string, localPath: string): string {
   const safetyError = getRepoLocalPathSafetyError(localPath);

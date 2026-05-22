@@ -23,7 +23,7 @@ if [[ -n "$REPO_ROOT" && "$SKILL_DIR" == "$REPO_ROOT/skills/first-tree-hub-cli" 
   (
     cd "$REPO_ROOT"
     pnpm --filter @agent-team-foundation/first-tree-hub build >/dev/null
-    node ./packages/command/dist/cli/index.mjs "$@"
+    node ./apps/cli/dist/cli/index.mjs "$@"
   )
   exit 0
 fi

@@ -4,18 +4,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
-  AgentRuntimeConfigPayload,
-  SessionEvent,
-  SupportedImageMime,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import {
-  deriveRepoLocalPath,
-  type QuestionItem,
-  type QuestionMessageContent,
-  questionItemSchema,
-  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import type {
   CanUseTool,
   McpServerConfig,
   PermissionMode,
@@ -24,6 +12,14 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
+import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  type QuestionItem,
+  type QuestionMessageContent,
+  questionItemSchema,
+  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
+} from "@first-tree/shared";
 import { z } from "zod";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, installFirstTreeIntegration } from "../runtime/bootstrap.js";
@@ -529,7 +525,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       for (const e of payload.env) env[e.key] = e.value;
     }
 
-    // Child processes receive the member access JWT as FIRST_TREE_HUB_ACCESS_TOKEN
+    // Child processes receive the member access JWT as FIRST_TREE_ACCESS_TOKEN
     // and pair it with X-Agent-Id (sent by the SDK automatically) to act as
     // the current agent. Obtaining the token at buildEnv-time means the child
     // sees the JWT valid at its spawn moment; long-lived runtimes should

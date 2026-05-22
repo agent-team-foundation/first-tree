@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import type { ContextTreeSnapshot } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ContextTreeSnapshot } from "@first-tree/shared";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { ContextTreeBinding } from "../services/context-tree-snapshot.js";
 import type { InstallationRow } from "../services/github-app-installations.js";

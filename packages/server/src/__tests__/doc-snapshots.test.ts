@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { MAX_DOC_SNAPSHOT_BYTES, MAX_TOTAL_DOC_SNAPSHOT_BYTES } from "@agent-team-foundation/first-tree-hub-shared";
+import { MAX_DOC_SNAPSHOT_BYTES, MAX_TOTAL_DOC_SNAPSHOT_BYTES } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { BadRequestError } from "../errors.js";
 import { validateDocumentContext } from "../services/doc-snapshots.js";
