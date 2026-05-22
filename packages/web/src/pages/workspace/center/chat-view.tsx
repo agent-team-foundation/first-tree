@@ -1025,13 +1025,6 @@ export function ChatView({
     refetchOnWindowFocus: false,
   });
   const storedBottomVisibleId = readState?.bottomVisibleMessageId ?? null;
-  // Highest message id the user had reached on a prior visit (their
-  // persisted session watermark). The pill uses this as a baseline
-  // so a re-visit without scrolling does not flash "↓ N new" for
-  // content the user already passed. Pre-fix snapshots lack this
-  // field — `latestKnownResolution` resolves to null and the
-  // session-only watermark takes over.
-  const storedLatestKnownId = readState?.latestKnownMessageId ?? null;
 
   // Resolve the stored bottom-visible id against the rendered set
   // so we can decide where to scroll on chat open. If the stored
@@ -1047,20 +1040,71 @@ export function ChatView({
     return null;
   }, [storedBottomVisibleId, mergedMessages]);
 
-  // `latestKnownResolution` resolves `storedLatestKnownId` against
-  // the rendered set. It is the IDB-persisted baseline for the
-  // pill's session high watermark below — re-visits inherit the
-  // prior session's progress immediately, so the pill does not
-  // flash "↓ N new" for messages the user has already passed.
-  const latestKnownResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
-    if (!storedLatestKnownId || mergedMessages.length === 0) return null;
-    const exact = mergedMessages.findIndex((m) => m.id === storedLatestKnownId);
-    if (exact >= 0) {
-      const exactMsg = mergedMessages[exact];
-      if (exactMsg) return { anchorId: exactMsg.id, index: exact };
-    }
-    return null;
-  }, [storedLatestKnownId, mergedMessages]);
+  // Frozen-at-open snapshot of `readState.latestKnownMessageId` —
+  // the chat tip the user left this chat at on the previous visit.
+  // Drives BOTH the "New Messages" divider and the "↓ N new messages"
+  // pill: the boundary between already-seen-before-leaving and
+  // arrived-since-then.
+  //
+  // Why frozen: as the user scrolls, the in-session read tracker
+  // writes fresh `latestKnownMessageId` values back into the IDB
+  // row (and the React Query cache), advancing the LIVE
+  // `readState.latestKnownMessageId` to the current DOM tip. If
+  // either the divider or the pill read from that live value, the
+  // anchor would slide forward during the visit — the divider
+  // would not render and the pill would never reach a non-zero
+  // count. Both must use this snapshot instead.
+  //
+  // History: PR 286 manual sign-off rev 8 — code-reviewer reproduced
+  // "pill never shows on return-to-chat-with-injected-messages" and
+  // root-caused it to the live readState read in the pill baseline.
+  const [dividerAnchorMessageId, setDividerAnchorMessageId] = useState<string | null>(null);
+  // Dismiss when the divider has scrolled out the top of the
+  // viewport (IntersectionObserver below). Kept as state so the
+  // render path can drop the divider once dismissed. Reset on chat
+  // switch.
+  const [dividerDismissed, setDividerDismissed] = useState<boolean>(false);
+  // Tracks which chatId we have already snapshotted the divider
+  // anchor for. Without this guard, the snapshot would re-fire on
+  // every tracker IDB write (each one updates the React Query
+  // cache for the chat-read-state key) and the anchor would slide
+  // forward — defeating the "frozen at open" intent.
+  const dividerSnapshotChatIdRef = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
+  useLayoutEffect(() => {
+    setDividerAnchorMessageId(null);
+    setDividerDismissed(false);
+    dividerSnapshotChatIdRef.current = null;
+  }, [chatId]);
+  // Snapshot once the read-state query for this chatId has resolved
+  // (data is `undefined` while loading, `null` for no row, and a
+  // `ReadState` otherwise). Skips when there is no prior IDB row —
+  // first-time visits intentionally show no divider.
+  useEffect(() => {
+    if (dividerSnapshotChatIdRef.current === chatId) return;
+    if (readState === undefined) return;
+    dividerSnapshotChatIdRef.current = chatId;
+    setDividerAnchorMessageId(readState?.latestKnownMessageId ?? null);
+  }, [chatId, readState]);
+
+  // Index of the snapshotted anchor in the current `mergedMessages`.
+  // -1 when there is no anchor (first-time visit or while readState
+  // is still loading) or when the anchor has aged out of the
+  // server window. Used as the boundary for BOTH the divider
+  // position and the pill's "new since last visit" baseline — the
+  // canonical "everything up to here was already on screen when the
+  // user last left" pointer.
+  //
+  // Index-based (not lex on message id) because `crypto.randomUUID()`
+  // in `server/src/services/message.ts:188` produces UUID v4, which
+  // is NOT time-sortable. A v4 id for a brand-new message can lex
+  // compare LESS than an older anchor's id and silently get
+  // classified as "already seen". `mergedMessages` is already sorted
+  // by `createdAt` ascending, so the index is the right ordering.
+  const unreadAnchorIdx = useMemo<number>(() => {
+    if (!dividerAnchorMessageId) return -1;
+    return mergedMessages.findIndex((m) => m.id === dividerAnchorMessageId);
+  }, [dividerAnchorMessageId, mergedMessages]);
 
   // Live bottom-visible id during the current session. Driven by
   // useReadTracker's `onBottomVisibleChange` callback. Used as the
@@ -1082,9 +1126,9 @@ export function ChatView({
   // via `findIndex` at advance time). Scrolling back UP after
   // reaching a high water leaves the id unchanged.
   //
-  // Combined with the IDB-persisted `latestKnownMessageId` from the
-  // prior visit (`latestKnownResolution.index`), this is the
-  // "everything up to here is known to the user" pointer that
+  // Combined with the frozen-at-open anchor index (`unreadAnchorIdx`,
+  // derived from the snapshotted `dividerAnchorMessageId`), this is
+  // the "everything up to here is known to the user" pointer that
   // drives the pill count.
   //
   // History: the previous implementation stored an integer
@@ -1165,14 +1209,19 @@ export function ChatView({
     setSessionHighestId(liveBottomVisibleId);
   }, [liveBottomVisibleId, mergedMessages, sessionHighestId]);
   // Effective high water index, resolved from `sessionHighestId`
-  // against the live `mergedMessages`. Max with the IDB baseline
-  // covers the re-visit-without-scroll path (no in-session advance,
-  // but the persisted prior-visit high water still applies).
+  // against the live `mergedMessages`. Max with the frozen-at-open
+  // anchor index covers the re-visit-without-scroll path (no
+  // in-session advance, but the prior-visit high water still
+  // applies). The baseline MUST come from the frozen anchor —
+  // reading the live `readState.latestKnownMessageId` here is the
+  // bug code-reviewer caught in rev 8: the tracker's debounced
+  // write at ~600ms after chat-open advances the live value to the
+  // current DOM tip, which would lift this baseline above every
+  // newly-injected message and suppress the pill.
   const sessionHighestIdx = useMemo<number>(() => {
     const sessionIdx = sessionHighestId ? mergedMessages.findIndex((m) => m.id === sessionHighestId) : -1;
-    const baseline = latestKnownResolution?.index ?? -1;
-    return Math.max(sessionIdx, baseline);
-  }, [sessionHighestId, mergedMessages, latestKnownResolution]);
+    return Math.max(sessionIdx, unreadAnchorIdx);
+  }, [sessionHighestId, mergedMessages, unreadAnchorIdx]);
 
   // Pill count = messages strictly newer than the effective high
   // watermark. Hides (count = 0) whenever the user has had every
@@ -1184,57 +1233,35 @@ export function ChatView({
     return Math.max(0, mergedMessages.length - 1 - sessionHighestIdx);
   }, [mergedMessages, sessionHighestIdx]);
 
-  // Snapshot the IDB latest-known id at chat-open: this fixes the
-  // "New Messages" divider to the boundary between
-  // already-in-chat-at-leave-time and arrived-since-then. Held
-  // through the visit so live tracker writes to IDB do not migrate
-  // the divider as the user scrolls. Reset on chatId change so the
-  // next visit recomputes from the freshly-persisted value.
-  const [dividerAnchorMessageId, setDividerAnchorMessageId] = useState<string | null>(null);
-  // Dismiss when the divider has scrolled out the top of the
-  // viewport (IntersectionObserver below). Kept as state so the
-  // render path can drop the divider once dismissed. Reset on chat
-  // switch.
-  const [dividerDismissed, setDividerDismissed] = useState<boolean>(false);
-  // Tracks which chatId we have already snapshotted the divider
-  // anchor for. Without this guard, the snapshot would re-fire on
-  // every tracker IDB write (each one updates the React Query
-  // cache for the chat-read-state key), and the divider would slide
-  // forward as the user scrolled — defeating the "frozen at open"
-  // intent.
-  const dividerSnapshotChatIdRef = useRef<string | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
-  useLayoutEffect(() => {
-    setDividerAnchorMessageId(null);
-    setDividerDismissed(false);
-    dividerSnapshotChatIdRef.current = null;
-  }, [chatId]);
-  // Snapshot once the read-state query for this chatId has resolved
-  // (data is `undefined` while loading, `null` for no row, and a
-  // `ReadState` otherwise). Skips when there is no prior IDB row —
-  // first-time visits intentionally show no divider.
-  useEffect(() => {
-    if (dividerSnapshotChatIdRef.current === chatId) return;
-    if (readState === undefined) return;
-    dividerSnapshotChatIdRef.current = chatId;
-    setDividerAnchorMessageId(readState?.latestKnownMessageId ?? null);
-  }, [chatId, readState]);
-
-  // Index of the first message strictly newer than the divider
-  // anchor — i.e., where the "New Messages" line slots in. UUID v7
-  // ids are time-sortable lexicographically, so `>` is a valid
-  // freshness comparison. Returns -1 when no divider should render
-  // (no anchor, no anchor message present, or no newer messages).
+  // Index of the first message strictly newer than the snapshotted
+  // anchor — i.e., where the "New Messages" line slots in.
+  //
+  // Comparison is by index in `mergedMessages` (which is sorted by
+  // `createdAt` ascending). DO NOT compare by lex order on the
+  // message id: `server/src/services/message.ts:188` generates ids
+  // with `crypto.randomUUID()` (UUID v4, random), so id ordering
+  // does not match time ordering. An earlier version used `id > anchor`
+  // and silently dropped the divider whenever the freshly-injected
+  // message's id happened to sort lexicographically below the
+  // anchor's — the bug code-reviewer reproduced in rev 8.
+  //
+  // Returns -1 when the divider should not render (no anchor, anchor
+  // has aged out of the window, or no newer messages).
   const firstNewItemIdx = useMemo<number>(() => {
-    if (!dividerAnchorMessageId) return -1;
-    if (!mergedMessages.some((m) => m.id === dividerAnchorMessageId)) return -1;
+    if (unreadAnchorIdx < 0) return -1;
+    const idxById = new Map<string, number>();
+    for (let i = 0; i < mergedMessages.length; i++) {
+      const msg = mergedMessages[i];
+      if (msg) idxById.set(msg.id, i);
+    }
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (!item || item.kind !== "message") continue;
-      if (item.data.id > dividerAnchorMessageId) return i;
+      const idx = idxById.get(item.data.id);
+      if (idx !== undefined && idx > unreadAnchorIdx) return i;
     }
     return -1;
-  }, [items, mergedMessages, dividerAnchorMessageId]);
+  }, [items, mergedMessages, unreadAnchorIdx]);
 
   // Hide the divider the moment it scrolls past the top of the
   // viewport — but keep it visible while the user is still looking

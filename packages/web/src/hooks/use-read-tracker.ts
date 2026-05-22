@@ -149,6 +149,15 @@ export function useReadTracker({
   // Latest computed bottom-visible id. Kept in a ref so write/flush
   // paths can read it without depending on React state churn.
   const bottomVisibleIdRef = useRef<string | null>(null);
+  // Latest known message id (chat tip) captured at the last
+  // successful recompute. Held in a ref so flushNow can persist it
+  // without re-querying the DOM — the DOM at unmount/cleanup time
+  // can already belong to the NEXT chat (React re-renders before
+  // effect cleanup runs), and re-querying then would write the
+  // wrong chat's tip into this chat's IDB row. Caught in PR 286
+  // rev 8: A → C → A → return-to-C produced a C-row with A's tip,
+  // which silently degraded next-visit unread detection on C.
+  const latestKnownIdRef = useRef<string | null>(null);
   // Debounced IDB write timer.
   const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -185,11 +194,12 @@ export function useReadTracker({
     onBottomVisibleChangeRef.current = onBottomVisibleChange;
   }, [onBottomVisibleChange]);
 
-  // Reset on chat switch — the previous chat's bottomVisibleId is
-  // not meaningful for the new chat.
+  // Reset on chat switch — the previous chat's bottomVisibleId /
+  // latestKnownId are not meaningful for the new chat.
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; the body only touches refs.
   useEffect(() => {
     bottomVisibleIdRef.current = null;
+    latestKnownIdRef.current = null;
     if (writeTimerRef.current) {
       clearTimeout(writeTimerRef.current);
       writeTimerRef.current = null;
@@ -213,6 +223,13 @@ export function useReadTracker({
       // pollute bottomVisibleIdRef with a foreign message id.
       if (currentChatIdRef.current !== chatId) return;
 
+      // Capture the chat tip live. flushNow reads this from the ref
+      // rather than re-querying the DOM (the DOM at unmount time
+      // belongs to the NEXT chat already — see latestKnownIdRef
+      // comment above).
+      const lk = findLatestMessageId(container);
+      if (lk) latestKnownIdRef.current = lk;
+
       const bottomVisible = findBottomVisibleMessageId(container);
       const bottomVisibleChanged = bottomVisible !== bottomVisibleIdRef.current;
       if (!bottomVisibleChanged) return;
@@ -220,10 +237,9 @@ export function useReadTracker({
       onBottomVisibleChangeRef.current?.(bottomVisible);
 
       // Schedule a debounced IDB write. The write captures whatever
-      // bottomVisibleIdRef + the caller's high-watermark callback
-      // hold at the moment the timer fires, not at the moment of
-      // scheduling — so back-to-back scroll events collapse into
-      // one write.
+      // the refs hold at the moment the timer fires, not at the
+      // moment of scheduling — so back-to-back scroll events
+      // collapse into one write.
       if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
       writeTimerRef.current = setTimeout(() => {
         writeTimerRef.current = null;
@@ -231,10 +247,9 @@ export function useReadTracker({
         // have happened between schedule and fire.
         if (currentChatIdRef.current !== chatId) return;
         const bv = bottomVisibleIdRef.current;
-        if (!bv) return;
-        const lk = findLatestMessageId(container);
-        if (!lk) return;
-        void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
+        const lkAtFire = latestKnownIdRef.current;
+        if (!bv || !lkAtFire) return;
+        void setReadState(chatId, bv, lkAtFire).then(() => onWriteRef.current?.(chatId, bv, lkAtFire));
       }, writeDebounceMs);
     };
 
@@ -253,7 +268,6 @@ export function useReadTracker({
 
   // Flush on tab hide and on unmount so closing the tab / switching
   // chats does not drop the latest snapshot.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: containerRef.current is read live inside flushNow on purpose; ref values intentionally do not appear in dep arrays.
   useEffect(() => {
     const flushNow = () => {
       if (writeTimerRef.current) {
@@ -265,14 +279,19 @@ export function useReadTracker({
       // gets persisted to IDB — that's the legitimate purpose. The
       // pollution-source race is already prevented in the recompute
       // path above (which bails on stale chatId), so by the time
-      // flushNow runs, the bottomVisible ref still holds the OLD
-      // chat's pre-switch value.
+      // flushNow runs, the refs still hold the OLD chat's
+      // pre-switch values.
       //
+      // Both ids are read from refs — NOT re-queried from the DOM.
+      // At cleanup time React has already committed the next chat's
+      // DOM into the container, so a fresh DOM query would return
+      // the new chat's tip and write it under the OLD chat's IDB
+      // row, corrupting the next visit to the OLD chat. The refs
+      // hold the last-observed values from when the OLD chat was
+      // actually on screen.
       const bv = bottomVisibleIdRef.current;
-      if (!bv) return;
-      const container = containerRef.current;
-      const lk = container ? findLatestMessageId(container) : null;
-      if (!lk) return;
+      const lk = latestKnownIdRef.current;
+      if (!bv || !lk) return;
       void setReadState(chatId, bv, lk).then(() => onWriteRef.current?.(chatId, bv, lk));
     };
     const onVis = () => {
