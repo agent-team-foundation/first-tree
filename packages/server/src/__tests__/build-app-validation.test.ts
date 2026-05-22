@@ -27,6 +27,9 @@ const baseConfig: Config = {
     maxRetryCount: 3,
     pollingIntervalSeconds: 5,
     presenceCleanupSeconds: 60,
+    archiveSweepIntervalSeconds: 0,
+    archiveMappedIdleSeconds: 60 * 60,
+    archiveUnmappedIdleSeconds: 12 * 60 * 60,
     notificationWebhookUrl: undefined,
   },
   update: {

@@ -14,6 +14,12 @@ import { organizations } from "./organizations.js";
  * `bound_via` distinguishes the first-touch row (`direct`) from a row written
  * by the `Fixes #N` linker (`fixes_link`). Routing logic ignores the
  * distinction; it exists for audit and future strategy tweaks.
+ *
+ * `entity_state` (added 0048) tracks the upstream PR/Issue lifecycle so the
+ * auto-archive sweeper can decide whether a chat's bound entities are all
+ * terminal (closed/merged) without making GitHub API calls. Updated by the
+ * webhook handler on `pull_request.closed/merged/reopened` and
+ * `issues.closed/reopened`. New rows default to `'open'`.
  */
 export const githubEntityChatMappings = pgTable(
   "github_entity_chat_mappings",
@@ -37,11 +43,15 @@ export const githubEntityChatMappings = pgTable(
     boundAt: timestamp("bound_at", { withTimezone: true }).notNull().defaultNow(),
     /** "direct" | "fixes_link" — see file header. */
     boundVia: text("bound_via").notNull(),
+    /** "open" (default) | "closed" | "merged". See file header. */
+    entityState: text("entity_state").notNull().default("open"),
+    entityStateUpdatedAt: timestamp("entity_state_updated_at", { withTimezone: true }),
   },
   (table) => [
     primaryKey({
       columns: [table.organizationId, table.humanAgentId, table.delegateAgentId, table.entityType, table.entityKey],
     }),
     index("idx_github_entity_chat_mappings_chat").on(table.chatId),
+    index("idx_github_entity_chat_mappings_chat_state").on(table.chatId, table.entityState),
   ],
 );
