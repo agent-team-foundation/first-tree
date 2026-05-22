@@ -82,7 +82,9 @@ export function viewOf(main: AgentMainStatus): AgentStatusView {
         shape: "dot",
         pulse: "needs-you",
         animationClass: "agent-status-pulse--needs-you",
-        label: "Needs you",
+        // Matches the visible "Needs reply" pill (screen-reader = eyes); this
+        // label is the status-point aria-label, not shown as visible text.
+        label: "Needs reply",
       };
     case "failed":
       // A red solid dot (not a triangle): the corner triangle read sharp /
