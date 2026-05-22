@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_HOME_DIR } from "@first-tree/shared/config";
@@ -593,6 +593,54 @@ export function installClientService(): ServiceInfo {
     `Background service install is not supported on ${process.platform}. ` +
       "Run `first-tree-hub daemon start` manually to keep the computer online.",
   );
+}
+
+/**
+ * Cheap idempotency probe used by `daemon refresh-unit`: render the unit
+ * file the *current binary* would write and compare against what's on disk.
+ *
+ * `true`  → contents differ, the next CLI version invocation will read a
+ *           stale unit and `installClientService()` SHOULD be called.
+ * `false` → on-disk unit already matches (the common case for patch
+ *           upgrades within the same CLI surface), no need to pay the
+ *           bootout/bootstrap or daemon-reload + enable cost.
+ *
+ * Defensive: if the unit file is missing entirely, we treat that as "drift"
+ * — the caller likely needs `installClientService()` to lay it down,
+ * NOT a refresh skip. Errors during read also return `true` rather than
+ * silently skipping, so a permission glitch can't ever stall the unit
+ * behind a stale ExecStart.
+ *
+ * Returns `false` on unsupported platforms (Windows): there's no unit file
+ * to refresh, so "no drift" is the honest answer.
+ */
+export function isServiceUnitDriftDetected(): boolean {
+  if (process.platform === "darwin") return launchdUnitDriftDetected();
+  if (process.platform === "linux") return systemdUnitDriftDetected();
+  return false;
+}
+
+function launchdUnitDriftDetected(): boolean {
+  const invocation = resolveCliInvocation();
+  const expected = renderPlist(invocation);
+  return readFileOrFlagDrift(launchdPlistPath(), expected);
+}
+
+function systemdUnitDriftDetected(): boolean {
+  const invocation = resolveCliInvocation();
+  const expected = renderSystemdUnit(invocation);
+  return readFileOrFlagDrift(systemdUnitPath(), expected);
+}
+
+function readFileOrFlagDrift(path: string, expected: string): boolean {
+  if (!existsSync(path)) return true;
+  try {
+    const actual = readFileSync(path, "utf-8");
+    return actual !== expected;
+  } catch {
+    // Treat unreadable as drift — better to install than silently skip.
+    return true;
+  }
 }
 
 /** Report the current service state without modifying anything. */
