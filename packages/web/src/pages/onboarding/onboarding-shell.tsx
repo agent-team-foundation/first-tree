@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useAuth } from "../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../components/first-tree-logo.js";
 import { COPY, STEP_COPY } from "./copy.js";
 import { OutcomeList } from "./flow-ui.js";
@@ -16,7 +17,8 @@ import { useOnboardingFlow } from "./onboarding-flow.js";
  * hidden.
  */
 export function OnboardingShell({ rail, children }: { rail: ReactNode; children: ReactNode }) {
-  const { activeStep, activeIndex, sequence, finishLater } = useOnboardingFlow();
+  const { activeStep, activeIndex, sequence, finishLater, hasAgent } = useOnboardingFlow();
+  const { logout } = useAuth();
   const copy = STEP_COPY[activeStep];
 
   return (
@@ -26,14 +28,30 @@ export function OnboardingShell({ rail, children }: { rail: ReactNode; children:
           <FirstTreeLogo width={22} height={25} />
           <span className="text-label font-semibold">{COPY.productName}</span>
         </span>
-        <button
-          type="button"
-          onClick={() => void finishLater()}
-          className="text-label"
-          style={{ background: "transparent", border: 0, cursor: "pointer", color: "var(--fg-4)" }}
-        >
-          {COPY.finishLater}
-        </button>
+        <div className="inline-flex items-center" style={{ gap: "var(--sp-4)" }}>
+          {/* "Finish later" only once a teammate exists — before that the
+              workspace is empty, so leaving is a dead end. Sign out is always
+              available so a user who can't finish right now isn't locked out
+              of their account. */}
+          {hasAgent && (
+            <button
+              type="button"
+              onClick={() => void finishLater()}
+              className="text-label"
+              style={{ background: "transparent", border: 0, cursor: "pointer", color: "var(--fg-4)" }}
+            >
+              {COPY.finishLater}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={logout}
+            className="text-label"
+            style={{ background: "transparent", border: 0, cursor: "pointer", color: "var(--fg-4)" }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <div

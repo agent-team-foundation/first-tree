@@ -34,6 +34,13 @@ export type OnboardingFlowValue = {
   createAgent: (args: CreateAgentArgs) => Promise<void>;
   retryAgent: () => Promise<void>;
   createdAgentUuid: string | null;
+  /**
+   * True once the user has an AI teammate (server reports `completed`, or one
+   * was just created this session). Gates whether leaving to the workspace is
+   * useful — before this there's nothing there, so the flow withholds the
+   * "I'll finish later" escape.
+   */
+  hasAgent: boolean;
 
   selectedRepoUrls: string[];
   setSelectedRepoUrls: (next: string[]) => void;
@@ -179,6 +186,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       createAgent,
       retryAgent,
       createdAgentUuid,
+      hasAgent: onboardingStep === "completed" || createdAgentUuid !== null,
       selectedRepoUrls,
       setSelectedRepoUrls,
       treeMode,
@@ -209,6 +217,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       createAgent,
       retryAgent,
       createdAgentUuid,
+      onboardingStep,
       selectedRepoUrls,
       treeMode,
       treeUrl,
