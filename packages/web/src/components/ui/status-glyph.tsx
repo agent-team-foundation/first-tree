@@ -24,6 +24,7 @@ export function StatusGlyph({
   size = 8,
   className,
   ariaLabel,
+  separator = false,
 }: {
   colorVar: string;
   shape: AgentStatusShape;
@@ -31,15 +32,31 @@ export function StatusGlyph({
   size?: number;
   className?: string;
   ariaLabel?: string;
+  /**
+   * Draw a thin cutout ring in the panel background around the glyph, so it
+   * reads as "lifted off" a (vivid) avatar it's pinned to. Opt-in: only the
+   * avatar-corner placements (AgentStatusPanel / chat header) pass it;
+   * standalone glyphs (compose summary, management StateDot) don't need it.
+   * Thin (`--hairline`) on purpose — the old `--hairline-bold` ring read too
+   * heavy at this size.
+   */
+  separator?: boolean;
 }) {
   const a11y = ariaLabel ? { role: "img", "aria-label": ariaLabel } : { "aria-hidden": true };
   const box: CSSProperties = { width: size, height: size, flexShrink: 0 };
+  const cutout = separator ? "0 0 0 var(--hairline) var(--bg-raised)" : undefined;
 
   if (shape === "hollow") {
     return (
       <span
         className={cn("inline-block shrink-0", className)}
-        style={{ ...box, borderRadius: "50%", border: `var(--hairline) solid ${colorVar}`, background: "transparent" }}
+        style={{
+          ...box,
+          borderRadius: "50%",
+          border: `var(--hairline) solid ${colorVar}`,
+          background: "transparent",
+          boxShadow: cutout,
+        }}
         {...a11y}
       />
     );
@@ -47,10 +64,18 @@ export function StatusGlyph({
 
   if (shape === "pause") {
     // Two vertical bars (⏸) — a distinct shape from the offline hollow ring,
-    // so "paused" and "offline" never read the same at a glance.
+    // so "paused" and "offline" never read the same at a glance. The cutout
+    // rides each bar (a round ring around the pair would clip the bar tops),
+    // giving the same "lifted off the avatar" separation.
     const barWidth = Math.max(2, Math.round(size * 0.3));
     const gap = Math.max(2, Math.round(size * 0.24));
-    const bar: CSSProperties = { width: barWidth, height: size, borderRadius: 1, background: colorVar };
+    const bar: CSSProperties = {
+      width: barWidth,
+      height: size,
+      borderRadius: 1,
+      background: colorVar,
+      boxShadow: cutout,
+    };
     return (
       <span
         className={cn("inline-flex shrink-0 items-center justify-center", className)}
@@ -69,7 +94,7 @@ export function StatusGlyph({
   return (
     <span
       className={cn("inline-block shrink-0", pulse ? PULSE_CLASS[pulse] : null, className)}
-      style={{ ...box, borderRadius: "50%", background: colorVar }}
+      style={{ ...box, borderRadius: "50%", background: colorVar, boxShadow: cutout }}
       {...a11y}
     />
   );

@@ -131,6 +131,7 @@ function AgentStatusRow({
               pulse={view.pulse}
               size={9}
               ariaLabel={view.label}
+              separator
             />
           </span>
         ) : null}
