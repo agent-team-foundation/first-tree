@@ -7,10 +7,10 @@
  *      Telegram-style split-disc composite (vertical bisection for 2,
  *      T-split for 3, 2x2 for exactly 4, 3 + "+N" tile for >=5).
  *   2. Attention. A single corner badge encodes the highest-priority
- *      "do I need to look here" signal: needs-you (a pending
- *      AskUserQuestion, amber `?`) outranks an unread-mention count
- *      (red N, numeric up to 99 then "99+"). Omitted when neither
- *      applies. The activity axis ("an agent is producing output now")
+ *      "do I need to look here" signal: failed (an agent errored, red `!`)
+ *      outranks needs-you (a pending AskUserQuestion, amber `?`) outranks an
+ *      unread-mention count (red N, numeric up to 99 then "99+"). Omitted when
+ *      none apply. The activity axis ("an agent is producing output now")
  *      lives in the row's time slot (the scrolling `•••`), not here.
  *
  * The avatar no longer carries the engaged breathe ring — "engaged but
@@ -26,6 +26,7 @@
  */
 
 import type { MeChatRow } from "@first-tree/shared";
+import type { ReactNode } from "react";
 
 type Participant = MeChatRow["participants"][number];
 
@@ -110,8 +111,9 @@ export function formatUnreadLabel(count: number): string | null {
  * already on the row button). When there is state, it's joined as
  * `"engaged, N unread"`.
  */
-export function buildAvatarAriaLabel(opts: { needsYou: boolean; unread: number }): string | null {
+export function buildAvatarAriaLabel(opts: { failed: boolean; needsYou: boolean; unread: number }): string | null {
   const parts: string[] = [];
+  if (opts.failed) parts.push("failed");
   if (opts.needsYou) parts.push("needs you");
   if (opts.unread > 0) parts.push(`${opts.unread} unread`);
   return parts.length > 0 ? parts.join(", ") : null;
@@ -124,6 +126,7 @@ export function ChatRowAvatar({
   selfAgentId,
   unreadCount,
   needsYou = false,
+  failed = false,
   size = 36,
 }: {
   /** Resolved chat title — used as a fallback initial when no peer exists. */
@@ -138,6 +141,9 @@ export function ChatRowAvatar({
   unreadCount: number;
   /** Any speaker in this chat has a pending AskUserQuestion (needs-you). */
   needsYou?: boolean;
+  /** Any speaker in this chat is in the composite `failed` state. Outranks
+   *  needs-you and unread for the corner badge. */
+  failed?: boolean;
   /** Pixel diameter of the avatar disc. Default 36 fits the narrow rail. */
   size?: number;
 }) {
@@ -149,7 +155,7 @@ export function ChatRowAvatar({
   const peers = safeParticipants.filter((p) => p.agentId !== selfAgentId);
   const peer = peers[0];
 
-  const ariaLabel = buildAvatarAriaLabel({ needsYou, unread: unreadCount });
+  const ariaLabel = buildAvatarAriaLabel({ failed, needsYou, unread: unreadCount });
   const a11yProps: { role?: string; "aria-label"?: string; "aria-hidden"?: boolean } =
     ariaLabel === null ? { "aria-hidden": true } : { role: "img", "aria-label": ariaLabel };
 
@@ -175,7 +181,7 @@ export function ChatRowAvatar({
       ) : (
         <CompositeAvatar size={size} peers={peers} />
       )}
-      <AttentionBadge needsYou={needsYou} unread={unreadCount} />
+      <AttentionBadge failed={failed} needsYou={needsYou} unread={unreadCount} />
     </span>
   );
 }
@@ -410,45 +416,26 @@ function SegMore({ count, fontSize }: { count: number; fontSize: number }) {
 
 /**
  * Attention badge on the avatar — one corner capsule encoding the
- * highest-priority "do I need to look here" signal. needs-you (a pending
- * AskUserQuestion, amber `?`) outranks an unread-mention count (red N).
- * Renders nothing when neither applies. The two cases share one capsule
- * geometry; only the color and glyph differ.
+ * highest-priority "do I need to look here" signal. failed (an agent errored,
+ * red `!`) outranks needs-you (a pending AskUserQuestion, amber `?`) outranks
+ * an unread-mention count (red N). Renders nothing when none apply. All three
+ * cases share one capsule geometry; only the colour and glyph differ —
+ * failed's `!` and unread's number are both red but never co-occur (failed
+ * wins), and the glyph keeps them legible.
  *
  * Geometry: --sp-4 (16) tall, --sp-2 (8) corner radius, offset 3 outside the
  * avatar so the hairline-bold border reads as a discrete signal.
  */
-function AttentionBadge({ needsYou, unread }: { needsYou: boolean; unread: number }) {
-  if (needsYou) {
-    return (
-      <span
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          bottom: -3,
-          right: -3,
-          minWidth: "var(--sp-4)",
-          height: "var(--sp-4)",
-          padding: "0 var(--sp-1)",
-          borderRadius: "var(--sp-2)",
-          background: "var(--state-blocked)",
-          color: "var(--fg-on-vivid)",
-          fontSize: "var(--text-caption)",
-          fontWeight: 700,
-          lineHeight: "var(--sp-4)",
-          textAlign: "center",
-          border: "var(--hairline-bold) solid var(--bg-raised)",
-          boxSizing: "content-box",
-          zIndex: 3,
-          userSelect: "none",
-        }}
-      >
-        ?
-      </span>
-    );
-  }
+function AttentionBadge({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: number }) {
+  if (failed) return <CornerBadge background="var(--state-error)">!</CornerBadge>;
+  if (needsYou) return <CornerBadge background="var(--state-blocked)">?</CornerBadge>;
   const label = formatUnreadLabel(unread);
   if (label === null) return null;
+  return <CornerBadge background="var(--state-error)">{label}</CornerBadge>;
+}
+
+/** Shared capsule geometry for the avatar corner badge (see AttentionBadge). */
+function CornerBadge({ background, children }: { background: string; children: ReactNode }) {
   return (
     <span
       aria-hidden="true"
@@ -460,7 +447,7 @@ function AttentionBadge({ needsYou, unread }: { needsYou: boolean; unread: numbe
         height: "var(--sp-4)",
         padding: "0 var(--sp-1)",
         borderRadius: "var(--sp-2)",
-        background: "var(--state-error)",
+        background,
         color: "var(--fg-on-vivid)",
         fontSize: "var(--text-caption)",
         fontWeight: 700,
@@ -472,7 +459,7 @@ function AttentionBadge({ needsYou, unread }: { needsYou: boolean; unread: numbe
         userSelect: "none",
       }}
     >
-      {label}
+      {children}
     </span>
   );
 }

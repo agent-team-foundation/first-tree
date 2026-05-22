@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { pendingQuestions } from "../db/schema/pending-questions.js";
 import { getChatAgentStatuses } from "../services/agent-chat-status.js";
-import { createMeChat } from "../services/me-chat.js";
+import { createMeChat, deriveFailedAgents } from "../services/me-chat.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 describe("getChatAgentStatuses", () => {
@@ -109,6 +109,74 @@ describe("getChatAgentStatuses", () => {
     expect(s?.working).toBe(true);
     expect(s?.main).toBe("working");
     expect(s?.activity?.label).toBe("Bash");
+  });
+});
+
+describe("deriveFailedAgents — chat-list failed signal", () => {
+  const getApp = useTestApp();
+
+  async function bindPresence(agentId: string, clientId: string, runtimeState = "idle"): Promise<void> {
+    await getApp().db.execute(sql`
+      INSERT INTO agent_presence (agent_id, status, client_id, runtime_state, last_seen_at)
+      VALUES (${agentId}, 'online', ${clientId}, ${runtimeState}, NOW())
+      ON CONFLICT (agent_id) DO UPDATE
+        SET status = 'online', client_id = EXCLUDED.client_id, runtime_state = EXCLUDED.runtime_state
+    `);
+  }
+
+  async function setSession(agentId: string, chatId: string, state: string): Promise<void> {
+    await getApp().db.execute(sql`
+      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, updated_at)
+      VALUES (${agentId}, ${chatId}, ${state}, NOW())
+      ON CONFLICT (agent_id, chat_id) DO UPDATE SET state = EXCLUDED.state
+    `);
+  }
+
+  async function newChatWithAgent() {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `df-${randomUUID().slice(0, 6)}` });
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    return { app, peer, chatId };
+  }
+
+  it("returns an empty map for no chatIds", async () => {
+    expect((await deriveFailedAgents(getApp().db, [])).size).toBe(0);
+  });
+
+  it("includes a reachable agent whose per-chat session is errored", async () => {
+    const { app, peer, chatId } = await newChatWithAgent();
+    await bindPresence(peer.agent.uuid, peer.clientId);
+    await setSession(peer.agent.uuid, chatId, "errored");
+
+    expect((await deriveFailedAgents(app.db, [chatId])).get(chatId)).toEqual([peer.agent.uuid]);
+  });
+
+  it("includes a reachable agent in global runtime error (no session row needed)", async () => {
+    const { app, peer, chatId } = await newChatWithAgent();
+    await bindPresence(peer.agent.uuid, peer.clientId, "error");
+
+    expect((await deriveFailedAgents(app.db, [chatId])).get(chatId)).toEqual([peer.agent.uuid]);
+  });
+
+  it("EXCLUDES an unreachable errored agent — it is offline, not failed", async () => {
+    const { app, peer, chatId } = await newChatWithAgent();
+    // No presence row → unreachable; session errored. offline outranks failed,
+    // so it must NOT appear in the chat-list failed set (stays consistent with
+    // the right sidebar).
+    await setSession(peer.agent.uuid, chatId, "errored");
+
+    expect((await deriveFailedAgents(app.db, [chatId])).has(chatId)).toBe(false);
+  });
+
+  it("does not flag a reachable agent with a healthy active session", async () => {
+    const { app, peer, chatId } = await newChatWithAgent();
+    await bindPresence(peer.agent.uuid, peer.clientId);
+    await setSession(peer.agent.uuid, chatId, "active");
+
+    expect((await deriveFailedAgents(app.db, [chatId])).has(chatId)).toBe(false);
   });
 });
 

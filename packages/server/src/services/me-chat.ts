@@ -39,9 +39,10 @@ import {
   type MeChatUnreadResponse,
   type ToolCallEventPayload,
 } from "@first-tree/shared";
-import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne, or, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
@@ -468,6 +469,11 @@ export async function listMeChats(
   // message scan), so superseded/answered questions are correctly excluded.
   const pendingByChat = await derivePendingQuestions(db, chatIds);
 
+  // failed — per-chat set of agents whose composite status is `failed`
+  // (reachable + session errored OR runtime error). Mirrors the chat-list
+  // needs-you signal so the list can pin failed chats above needs-you.
+  const failedByChat = await deriveFailedAgents(db, chatIds);
+
   // First-message lookup for auto-title fallback. Mirrors
   // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
   // logic is the same as before the schema refactor — first-message
@@ -519,6 +525,7 @@ export async function listMeChats(
       engagedAgentIds: engagedByChat.get(r.chat_id) ?? [],
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
       pendingQuestionAgentIds: pendingByChat.get(r.chat_id) ?? [],
+      failedAgentIds: failedByChat.get(r.chat_id) ?? [],
     };
   });
 
@@ -540,6 +547,49 @@ export async function derivePendingQuestions(db: Database, chatIds: string[]): P
   // Dedupe per chat: one agent may have several pending questions in the
   // same chat, but the field is "agents with a pending question" (a set), so
   // a future count / "+N" must not over-count.
+  const sets = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const set = sets.get(row.chatId);
+    if (set) set.add(row.agentId);
+    else sets.set(row.chatId, new Set([row.agentId]));
+  }
+  const out = new Map<string, string[]>();
+  for (const [chatId, set] of sets) out.set(chatId, [...set]);
+  return out;
+}
+
+/**
+ * Per-chat set of non-human speaker agents whose composite status is `failed`,
+ * grouped chatId → agentId[]. `failed` = reachable (`agent_presence.client_id`
+ * not null) AND (per-(agent,chat) session `errored` OR global runtime `error`)
+ * — the exact `errored` input `getChatAgentStatuses` folds into `failed`
+ * (agent-chat-status.ts:78). The reachable gate matters: an unreachable
+ * errored agent is `offline` (higher priority), not `failed`, so the chat-list
+ * pin stays consistent with the right sidebar. Chats with no failed agent are
+ * absent from the map (caller treats absence as []).
+ */
+export async function deriveFailedAgents(db: Database, chatIds: string[]): Promise<Map<string, string[]>> {
+  if (chatIds.length === 0) return new Map();
+  const rows = await db
+    .select({ chatId: chatMembership.chatId, agentId: chatMembership.agentId })
+    .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .leftJoin(
+      agentChatSessions,
+      and(eq(agentChatSessions.chatId, chatMembership.chatId), eq(agentChatSessions.agentId, chatMembership.agentId)),
+    )
+    .leftJoin(agentPresence, eq(agentPresence.agentId, chatMembership.agentId))
+    .where(
+      and(
+        inArray(chatMembership.chatId, chatIds),
+        eq(chatMembership.accessMode, "speaker"),
+        ne(agents.type, "human"),
+        isNotNull(agentPresence.clientId),
+        or(eq(agentChatSessions.state, "errored"), eq(agentPresence.runtimeState, "error")),
+      ),
+    );
+  // Dedupe per chat: an agent could match on both session-errored and
+  // runtime-error; the field is "agents that are failed" (a set).
   const sets = new Map<string, Set<string>>();
   for (const row of rows) {
     const set = sets.get(row.chatId);

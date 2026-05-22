@@ -12,7 +12,7 @@ import { SegmentedControl } from "../../../components/ui/segmented-control.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
 import { FilterPopover, originLabel } from "./filter-popover.js";
-import { type GroupMode, groupRows, splitNeedsYouRows } from "./group-rows.js";
+import { type GroupMode, groupRows, rowIsFailed, rowNeedsYou, splitAttentionRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -213,15 +213,16 @@ export function ConversationList({
   // (e.g. an inactive tab the browser throttles) won't see the bucket
   // shift until the next refetch lands; that's an acceptable degree
   // of staleness for a presentational concern.
-  // Hoist needs-you chats into a pinned section at the top WITHOUT touching
-  // cursor pagination or reordering the main list: partition them out, group
-  // the rest as usual, then prepend a synthetic "Needs you" bucket. A chat
-  // appears in exactly one place (pinned OR its normal group), never both.
+  // Hoist attention chats (failed + needs-you) into a pinned section at the top
+  // WITHOUT touching cursor pagination or reordering the main list: partition
+  // them out, group the rest as usual, then prepend a synthetic "Needs
+  // attention" bucket (failed pinned above needs-you). A chat appears in
+  // exactly one place (pinned OR its normal group), never both.
   const buckets = useMemo(() => {
-    const { needsYou, rest } = splitNeedsYouRows(allRows);
-    if (needsYou.length === 0) return groupRows(allRows, group);
+    const { attention, rest } = splitAttentionRows(allRows);
+    if (attention.length === 0) return groupRows(allRows, group);
     return [
-      { key: "needs-you", label: "Needs you", rows: needsYou, defaultCollapsed: false },
+      { key: "needs-attention", label: "Needs attention", rows: attention, defaultCollapsed: false },
       ...groupRows(rest, group),
     ];
   }, [allRows, group]);
@@ -579,7 +580,8 @@ export function ConversationList({
                   // the duplicate; the em-dash placeholder picks up below.
                   const subtitle = rawSubtitle && rawSubtitle !== row.title ? rawSubtitle : "";
                   const hasUnread = row.unreadMentionCount > 0;
-                  const needsYou = row.pendingQuestionAgentIds.length > 0;
+                  const failed = rowIsFailed(row);
+                  const needsYou = rowNeedsYou(row);
                   return (
                     <div
                       key={row.chatId}
@@ -598,7 +600,13 @@ export function ConversationList({
                           gap: "var(--sp-2_5)",
                           background: isSelected ? "var(--bg-active)" : "transparent",
                           borderLeft: `var(--hairline-bold) solid ${
-                            isSelected ? "var(--accent)" : needsYou ? "var(--state-blocked)" : "transparent"
+                            isSelected
+                              ? "var(--accent)"
+                              : failed
+                                ? "var(--state-error)"
+                                : needsYou
+                                  ? "var(--state-blocked)"
+                                  : "transparent"
                           }`,
                         }}
                       >
@@ -609,6 +617,7 @@ export function ConversationList({
                           selfAgentId={selfAgentId ?? ""}
                           unreadCount={row.unreadMentionCount}
                           needsYou={needsYou}
+                          failed={failed}
                         />
                         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
                           <div className="flex items-center" style={{ gap: 6 }}>

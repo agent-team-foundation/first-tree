@@ -1,6 +1,6 @@
 import type { MeChatRow } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { groupRows, splitNeedsYouRows } from "../conversations/group-rows.js";
+import { groupRows, splitAttentionRows } from "../conversations/group-rows.js";
 
 // Fixed reference "now" — picked to be mid-week so the
 // `startOfWeek` (Monday) maths is exercised non-trivially. UTC noon
@@ -27,6 +27,7 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     engagedAgentIds: overrides.engagedAgentIds ?? [],
     liveActivity: overrides.liveActivity ?? null,
     pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
+    failedAgentIds: overrides.failedAgentIds ?? [],
   };
 }
 
@@ -176,21 +177,42 @@ describe("groupRows — type", () => {
   });
 });
 
-describe("splitNeedsYouRows — pinned needs-you partition", () => {
-  it("separates rows with a pending question from the rest, preserving order", () => {
+describe("splitAttentionRows — pinned failed + needs-you partition", () => {
+  it("separates failed and needs-you rows from the rest, preserving order", () => {
     const rows = [
       row({ id: "a", lastMessageAt: offsetIso(-1) }),
       row({ id: "b", lastMessageAt: offsetIso(-2), pendingQuestionAgentIds: ["agent-1"] }),
       row({ id: "c", lastMessageAt: offsetIso(-3) }),
+      row({ id: "d", lastMessageAt: offsetIso(-4), failedAgentIds: ["agent-2"] }),
     ];
-    const { needsYou, rest } = splitNeedsYouRows(rows);
-    expect(needsYou.map((r) => r.chatId)).toEqual(["b"]);
+    const { attention, rest } = splitAttentionRows(rows);
+    // failed (d) ranks above needs-you (b); rest keeps source order.
+    expect(attention.map((r) => r.chatId)).toEqual(["d", "b"]);
     expect(rest.map((r) => r.chatId)).toEqual(["a", "c"]);
   });
 
-  it("all-quiet → empty needsYou", () => {
-    const { needsYou, rest } = splitNeedsYouRows([row({ id: "x", lastMessageAt: null })]);
-    expect(needsYou).toEqual([]);
+  it("failed ranks above needs-you within the attention bucket", () => {
+    const rows = [
+      row({ id: "n", lastMessageAt: offsetIso(-1), pendingQuestionAgentIds: ["a1"] }),
+      row({ id: "f", lastMessageAt: offsetIso(-2), failedAgentIds: ["a2"] }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["f", "n"]);
+  });
+
+  it("a chat that is both failed AND needs-you appears once, in the failed tier", () => {
+    const rows = [
+      row({ id: "both", lastMessageAt: offsetIso(-1), failedAgentIds: ["a1"], pendingQuestionAgentIds: ["a2"] }),
+      row({ id: "n", lastMessageAt: offsetIso(-2), pendingQuestionAgentIds: ["a3"] }),
+    ];
+    const { attention, rest } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["both", "n"]);
+    expect(rest).toEqual([]);
+  });
+
+  it("all-quiet → empty attention", () => {
+    const { attention, rest } = splitAttentionRows([row({ id: "x", lastMessageAt: null })]);
+    expect(attention).toEqual([]);
     expect(rest.map((r) => r.chatId)).toEqual(["x"]);
   });
 });

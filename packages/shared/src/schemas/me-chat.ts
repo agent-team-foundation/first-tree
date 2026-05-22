@@ -223,6 +223,17 @@ export const meChatRowSchema = z.object({
    * web-ahead deploy.
    */
   pendingQuestionAgentIds: z.array(z.string()).default([]),
+  /**
+   * Speakers in this chat whose composite status is `failed` — i.e. reachable
+   * and either their per-(agent,chat) session is `errored` OR their global
+   * runtime is in `error` (the same `errored` input `getChatAgentStatuses`
+   * folds into `failed`; an unreachable agent is `offline`, not `failed`, so
+   * those are excluded). Drives the chat-list "failed" attention signal
+   * (red `!` badge, pinned above needs-you) without opening the chat.
+   * Per-chat, derived at query time (no schema migration). `.default([])`
+   * for version skew, same rationale as `pendingQuestionAgentIds`.
+   */
+  failedAgentIds: z.array(z.string()).default([]),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 

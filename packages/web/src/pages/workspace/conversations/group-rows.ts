@@ -182,25 +182,40 @@ function groupByType(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket>
 }
 
 // ---------------------------------------------------------------------------
-// needs-you pinning
+// attention pinning (failed + needs-you)
 // ---------------------------------------------------------------------------
 
+/** A chat has a failed agent (composite `failed`) — see `MeChatRow.failedAgentIds`. */
+export function rowIsFailed(r: MeChatRow): boolean {
+  return r.failedAgentIds.length > 0;
+}
+
+/** A chat has an agent with a pending AskUserQuestion (composite `needs_you`). */
+export function rowNeedsYou(r: MeChatRow): boolean {
+  return r.pendingQuestionAgentIds.length > 0;
+}
+
 /**
- * Partition rows into those with a pending AskUserQuestion (needs-you) and the
- * rest, preserving order within each group. The caller hoists `needsYou` into
- * a pinned "Needs you" bucket at the top and groups `rest` normally — so a
- * chat appears in exactly one place.
+ * Partition rows into the pinned "Needs attention" set and the rest, preserving
+ * order within each priority tier. Failed chats rank above needs-you (mirrors
+ * the composite priority offline→failed→needs-you; offline isn't pinned), so
+ * the attention bucket is `[...failed, ...needsYouOnly]`. A chat that is both
+ * failed AND needs-you appears once, in the failed tier. The caller hoists
+ * `attention` into a single pinned bucket at the top and groups `rest`
+ * normally, so a chat appears in exactly one place.
  *
- * ⚠️ Operates on the already-loaded rows only: a needs-you chat outside the
+ * ⚠️ Operates on the already-loaded rows only: an attention chat outside the
  * loaded page(s) is not pinned (page-local v1; the cross-page pinned query is
  * the §8.1#2 follow-up).
  */
-export function splitNeedsYouRows(rows: ReadonlyArray<MeChatRow>): { needsYou: MeChatRow[]; rest: MeChatRow[] } {
+export function splitAttentionRows(rows: ReadonlyArray<MeChatRow>): { attention: MeChatRow[]; rest: MeChatRow[] } {
+  const failed: MeChatRow[] = [];
   const needsYou: MeChatRow[] = [];
   const rest: MeChatRow[] = [];
   for (const r of rows) {
-    if (r.pendingQuestionAgentIds.length > 0) needsYou.push(r);
+    if (rowIsFailed(r)) failed.push(r);
+    else if (rowNeedsYou(r)) needsYou.push(r);
     else rest.push(r);
   }
-  return { needsYou, rest };
+  return { attention: [...failed, ...needsYou], rest };
 }
