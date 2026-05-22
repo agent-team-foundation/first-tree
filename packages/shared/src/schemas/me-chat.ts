@@ -136,6 +136,15 @@ export const liveActivitySchema = z.object({
   label: z.string(),
   /** ISO timestamp of the originating event; web uses this as the ticker base. */
   startedAt: z.string(),
+  /**
+   * Optional truncated context for a tool call — a preview of the tool's args
+   * (e.g. "npm test" for Bash, a path for Read), already trimmed to a short
+   * length server-side. Only the compose status bar (the focal "what's
+   * happening now" strip) renders it; the chat-row WorkingChip and the
+   * AgentRow second line intentionally stay at `Using <tool> · <timer>`
+   * without it. Absent for thinking / writing and when there are no args.
+   */
+  detail: z.string().optional(),
 });
 export type LiveActivity = z.infer<typeof liveActivitySchema>;
 

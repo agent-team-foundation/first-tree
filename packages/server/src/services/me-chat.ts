@@ -693,6 +693,32 @@ export async function deriveLiveActivity(db: Database, chatIds: string[]): Promi
   return out;
 }
 
+/** Max length of the tool-arg preview surfaced in `LiveActivity.detail`. */
+const ARG_PREVIEW_MAX = 32;
+
+/**
+ * Best-effort short preview of a tool call's args, for the compose status bar's
+ * `Using Bash · npm test` detail. Picks a meaningful field for common tools
+ * (command / path / query / …), else stringifies; whitespace-collapsed and
+ * truncated to {@link ARG_PREVIEW_MAX}. Returns undefined when there's nothing
+ * useful to show. Exported for unit testing.
+ */
+export function previewToolArgs(args: unknown): string | undefined {
+  let raw: string | undefined;
+  if (typeof args === "string") {
+    raw = args;
+  } else if (args && typeof args === "object") {
+    const o = args as Record<string, unknown>;
+    const pick = o.command ?? o.cmd ?? o.file_path ?? o.path ?? o.pattern ?? o.query ?? o.url ?? o.description;
+    if (typeof pick === "string") raw = pick;
+    else if (Object.keys(o).length > 0) raw = JSON.stringify(o); // empty {} → no detail
+  }
+  if (!raw) return undefined;
+  const oneLine = raw.replace(/\s+/g, " ").trim();
+  if (oneLine.length === 0) return undefined;
+  return oneLine.length > ARG_PREVIEW_MAX ? `${oneLine.slice(0, ARG_PREVIEW_MAX - 1)}…` : oneLine;
+}
+
 /**
  * Translate a `session_events` row into a `LiveActivity`, or null when the
  * kind is terminal (`turn_end` / `error`) or unrecognised. Pure & exported
@@ -710,7 +736,8 @@ export function toLiveActivity(row: {
     case "tool_call": {
       const payload = (row.payload ?? {}) as Partial<ToolCallEventPayload>;
       const label = typeof payload.name === "string" && payload.name.length > 0 ? payload.name : "Tool";
-      return { agentId: row.agent_id, kind: "tool_call", label, startedAt };
+      const detail = previewToolArgs(payload.args);
+      return { agentId: row.agent_id, kind: "tool_call", label, startedAt, ...(detail ? { detail } : {}) };
     }
     case "thinking":
       return { agentId: row.agent_id, kind: "thinking", label: "Thinking", startedAt };
