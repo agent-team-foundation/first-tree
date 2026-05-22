@@ -39,6 +39,7 @@ import {
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
+import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   isQuestionAnswerContent,
   isQuestionContent,
@@ -551,6 +552,9 @@ function QuestionMessageRow({
   return (
     <div
       className="grid"
+      // Anchor for the compose status bar's [Reply] jump — it scrolls the
+      // latest still-pending question card into view.
+      data-pending-question={status === "pending" ? "true" : undefined}
       style={{
         gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
@@ -713,7 +717,7 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId } = useAuth();
+  const { agentId: myAgentId, role } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -1876,6 +1880,11 @@ export function ChatView({
                 </div>
               ) : (
                 <>
+                  <ComposeStatusBar
+                    chatId={chatId}
+                    agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                    canManage={(id) => role === "admin" || (managedByMeMap.get(id) ?? false)}
+                  />
                   {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                   <div
                     style={{
