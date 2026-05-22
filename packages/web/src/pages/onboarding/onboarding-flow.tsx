@@ -140,10 +140,11 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
       // Hide the inline workspace stepper AND stamp the terminal flag, then
-      // land in the freshly-created chat. Both writes are idempotent.
+      // land in the freshly-created chat. Both writes are idempotent and
+      // already flip optimistic client state, so run them in parallel and
+      // never let a transient failure strand the user — always navigate.
       clearPersistedStep(path);
-      await dismissOnboarding();
-      await markOnboardingCompleted();
+      await Promise.allSettled([dismissOnboarding(), markOnboardingCompleted()]);
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     },
     [path, dismissOnboarding, markOnboardingCompleted, navigate],

@@ -128,7 +128,7 @@ export function StepCreateAgent() {
           return (
             <label
               key={opt.value}
-              className="flex items-start text-body"
+              className="onboarding-choice flex items-start text-body"
               style={{
                 gap: "var(--sp-2)",
                 padding: "var(--sp-2) var(--sp-3)",
@@ -182,7 +182,7 @@ export function StepCreateAgent() {
         })}
       </fieldset>
 
-      {agentError && <FlowNote>{agentError}</FlowNote>}
+      {agentError && <FlowNote>{COPY.errors.agentFailed}</FlowNote>}
 
       <div className="flex">
         <Button type="button" onClick={handleCreate} disabled={!canCreate}>

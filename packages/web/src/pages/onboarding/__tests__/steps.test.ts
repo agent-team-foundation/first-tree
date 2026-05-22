@@ -5,6 +5,7 @@ import {
   getStepSequence,
   INVITEE_STEPS,
   inferInitialStepIndex,
+  resolveInviteeKickoffState,
   resolveOnboardingPath,
   shouldEnterOnboarding,
   shouldLeaveOnboarding,
@@ -112,6 +113,19 @@ describe("shouldEnterOnboarding", () => {
   });
   it("does not redirect a completed user", () => {
     expect(shouldEnterOnboarding({ ...base, onboardingCompletedAt: "2026-05-22T00:00:00Z" })).toBe(false);
+  });
+});
+
+describe("resolveInviteeKickoffState", () => {
+  it("waits when the team has no knowledge link yet (admin not done)", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "", teamRepoCount: 0 })).toBe("waiting");
+    expect(resolveInviteeKickoffState({ treeUrl: "", teamRepoCount: 3 })).toBe("waiting");
+  });
+  it("confirms from the team's projects when both link + projects exist", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", teamRepoCount: 2 })).toBe("confirm");
+  });
+  it("lets the invitee pick when the team has a link but listed no projects", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", teamRepoCount: 0 })).toBe("picker");
   });
 });
 

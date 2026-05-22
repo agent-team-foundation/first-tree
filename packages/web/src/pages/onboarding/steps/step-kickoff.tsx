@@ -17,9 +17,18 @@ import { COPY } from "../copy.js";
 import { FlowNote, RepoPicker, StatusRow } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
+import { resolveInviteeKickoffState } from "../steps.js";
 
 const NO_REPO_BOOTSTRAP =
   "Introduce yourself to the team — what can you help with, and what's a good first thing for me to try?";
+
+const LINK_STYLE = {
+  background: "transparent",
+  border: 0,
+  padding: 0,
+  cursor: "pointer",
+  color: "var(--accent)",
+} as const;
 
 function repoLabel(url: string): string {
   return url
@@ -65,9 +74,10 @@ async function runKickoff(args: {
   const chat = await createAgentChat(agent.uuid);
   try {
     await sendChatMessage(chat.id, args.bootstrap);
-  } catch {
-    // Non-fatal: the chat exists; the agent introduces itself when the
-    // user types.
+  } catch (err) {
+    // Non-fatal: the chat exists; the agent introduces itself when the user
+    // types. Log so operators can triage a silently-missing first message.
+    console.warn("onboarding: failed to send kickoff bootstrap message", err);
   }
   void reportOnboardingEvent("tree_chat_started", {
     agentUuid: agent.uuid,
@@ -138,24 +148,21 @@ function AdminKickoff() {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
       {hasRepos ? (
-        <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-          <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
-            {COPY.kickoff.existingTitle}
-          </p>
-          <ModeCard
-            active={treeMode === "new"}
-            title={COPY.kickoff.createOption}
-            hint={COPY.kickoff.createHint}
-            onSelect={() => setTreeMode("new")}
-          />
-          <ModeCard
-            active={treeMode === "existing"}
-            title={COPY.kickoff.existingOption}
-            hint={COPY.kickoff.existingHint}
-            onSelect={() => setTreeMode("existing")}
-          />
-          {treeMode === "existing" && (
-            <div className="flex flex-col" style={{ gap: "var(--sp-1_5)", marginTop: "var(--sp-1)" }}>
+        <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+          {treeMode === "new" ? (
+            <>
+              <FlowNote tone="info">{COPY.kickoff.createBlurb}</FlowNote>
+              <button
+                type="button"
+                onClick={() => setTreeMode("existing")}
+                className="text-label self-start"
+                style={LINK_STYLE}
+              >
+                {COPY.kickoff.haveExisting}
+              </button>
+            </>
+          ) : (
+            <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
               <label htmlFor="onboarding-tree-url" className="text-label" style={{ color: "var(--fg-3)" }}>
                 {COPY.kickoff.existingUrlLabel}
               </label>
@@ -175,9 +182,20 @@ function AdminKickoff() {
                 }}
               />
               {urlInvalid && <FlowNote>{COPY.kickoff.invalidUrl}</FlowNote>}
+              <button
+                type="button"
+                onClick={() => {
+                  setTreeUrl("");
+                  setTreeMode("new");
+                }}
+                className="text-label self-start"
+                style={LINK_STYLE}
+              >
+                {COPY.kickoff.createInstead}
+              </button>
             </div>
           )}
-          <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
+          <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
             Working on: {selectedRepoUrls.map(repoLabel).join(", ")}
           </p>
         </div>
@@ -214,6 +232,9 @@ function InviteeKickoff() {
       return { treeUrl: tree.repo ?? "", teamRepoUrls: (repos.repos ?? []).map((r) => r.url) };
     },
     enabled: !!organizationId,
+    // While the team has no knowledge link yet, keep polling so the invitee
+    // advances on its own the moment the admin finishes — no manual refresh.
+    refetchInterval: (query) => (query.state.data?.treeUrl ? false : 5000),
   });
 
   if (teamQuery.isLoading) {
@@ -224,13 +245,13 @@ function InviteeKickoff() {
     );
   }
 
-  // Read failure or no tree configured yet → waiting state.
+  // Read failure or no tree configured yet → waiting (auto-polls above).
   if (teamQuery.isError || !teamQuery.data?.treeUrl) {
     return <InviteeWaiting />;
   }
 
   const { treeUrl, teamRepoUrls } = teamQuery.data;
-  return teamRepoUrls.length > 0 ? (
+  return resolveInviteeKickoffState({ treeUrl, teamRepoCount: teamRepoUrls.length }) === "confirm" ? (
     <InviteeConfirm treeUrl={treeUrl} teamRepoUrls={teamRepoUrls} />
   ) : (
     <InviteePicker treeUrl={treeUrl} />
@@ -275,7 +296,7 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
           return (
             <label
               key={url}
-              className="flex items-center text-body"
+              className="onboarding-choice flex items-center text-body"
               style={{
                 gap: "var(--sp-2_5)",
                 padding: "var(--sp-2) var(--sp-2_5)",
@@ -385,65 +406,6 @@ function InviteeWaiting() {
 }
 
 // ── shared ──────────────────────────────────────────────────────────────
-
-function ModeCard({
-  active,
-  title,
-  hint,
-  onSelect,
-}: {
-  active: boolean;
-  title: string;
-  hint: string;
-  onSelect: () => void;
-}) {
-  return (
-    <label
-      className="flex items-start text-body"
-      style={{
-        gap: "var(--sp-2)",
-        padding: "var(--sp-2) var(--sp-3)",
-        background: active ? "color-mix(in oklch, var(--accent) 8%, var(--bg))" : "var(--bg)",
-        border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-faint)",
-        borderRadius: "var(--radius-input)",
-        cursor: "pointer",
-      }}
-    >
-      <input type="radio" name="onboarding-tree-mode" checked={active} onChange={onSelect} className="sr-only" />
-      <span
-        aria-hidden="true"
-        className="inline-flex items-center justify-center"
-        style={{
-          width: "var(--sp-3_5)",
-          height: "var(--sp-3_5)",
-          marginTop: "var(--sp-0_5)",
-          flexShrink: 0,
-          borderRadius: "50%",
-          border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
-        }}
-      >
-        {active && (
-          <span
-            style={{
-              width: "var(--sp-1_5)",
-              height: "var(--sp-1_5)",
-              borderRadius: "50%",
-              background: "var(--accent)",
-            }}
-          />
-        )}
-      </span>
-      <span className="flex flex-col" style={{ gap: "var(--sp-0_5)", minWidth: 0 }}>
-        <span className="font-medium" style={{ color: active ? "var(--fg)" : "var(--fg-2)" }}>
-          {title}
-        </span>
-        <span className="text-label" style={{ color: "var(--fg-3)" }}>
-          {hint}
-        </span>
-      </span>
-    </label>
-  );
-}
 
 function StartingState() {
   return (

@@ -1,4 +1,4 @@
-import { Check, Copy, ExternalLink, Lock } from "lucide-react";
+import { Check, CircleAlert, Copy, ExternalLink, Info, Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import type { GithubRepo } from "../../api/github.js";
@@ -42,10 +42,13 @@ export function FlowNote({ children, tone = "error" }: { children: ReactNode; to
     tone === "error"
       ? "color-mix(in oklch, var(--state-error) 28%, transparent)"
       : "color-mix(in oklch, var(--accent) 22%, transparent)";
+  const Icon = tone === "error" ? CircleAlert : Info;
   return (
     <div
-      className="text-label"
+      className="flex items-start text-label"
+      role={tone === "error" ? "alert" : undefined}
       style={{
+        gap: "var(--sp-2)",
         padding: "var(--sp-2_5) var(--sp-3)",
         background: bg,
         border: `var(--hairline) solid ${border}`,
@@ -53,7 +56,8 @@ export function FlowNote({ children, tone = "error" }: { children: ReactNode; to
         color,
       }}
     >
-      {children}
+      <Icon className="h-3.5 w-3.5" style={{ flexShrink: 0, marginTop: "var(--sp-0_5)" }} aria-hidden="true" />
+      <span style={{ minWidth: 0 }}>{children}</span>
     </div>
   );
 }
@@ -63,6 +67,8 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
   return (
     <div
       className="inline-flex items-center text-label"
+      role="status"
+      aria-live="polite"
       style={{
         gap: "var(--sp-2)",
         color: state === "ok" ? "color-mix(in oklch, var(--accent) 28%, var(--fg))" : "var(--fg-3)",
@@ -191,7 +197,7 @@ export function RepoPicker({
         return (
           <label
             key={repo.cloneUrl}
-            className="flex items-center text-body"
+            className="onboarding-choice flex items-center text-body"
             style={{
               gap: "var(--sp-2_5)",
               padding: "var(--sp-2) var(--sp-2_5)",

@@ -63,6 +63,22 @@ export function OnboardingShell({ rail, children }: { rail: ReactNode; children:
             {copy.why}
           </p>
           {children}
+
+          {/* On narrow screens the side panel is hidden — keep the "what
+              you'll have" reassurance inline so phone users don't lose it. */}
+          <div
+            className="xl:hidden"
+            style={{
+              marginTop: "var(--sp-6)",
+              paddingTop: "var(--sp-4)",
+              borderTop: "var(--hairline) solid var(--border-faint)",
+            }}
+          >
+            <p className="text-label font-semibold" style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-2)" }}>
+              What you'll have
+            </p>
+            <OutcomeList items={copy.outcomes} />
+          </div>
         </main>
 
         {/* right outcomes panel (wide screens) */}

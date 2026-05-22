@@ -94,6 +94,8 @@ export const COPY = {
       "Code connection isn't set up on this server yet. You can continue now and connect a project later from Settings.",
     notAdmin: "Only a team admin can connect code. Ask an admin to finish this, or continue for now.",
     continueWithout: "Continue without connecting code",
+    continueNoProject: "Continue without a project",
+    pickHint: "Pick the project your AI teammate should help with — or continue without one for now.",
   },
   /** connect-computer states */
   connectComputer: {
@@ -125,11 +127,10 @@ export const COPY = {
   },
   /** kickoff states */
   kickoff: {
-    existingTitle: "Do you already have team knowledge set up?",
-    createOption: "Create new team knowledge",
-    createHint: "Recommended — your AI teammate sets it up for you",
-    existingOption: "Connect to existing team knowledge",
-    existingHint: "Paste the link if your team already has one",
+    createBlurb:
+      "We'll set up a shared knowledge base for your project automatically — your AI teammate does the work, and you review the result.",
+    haveExisting: "I already have team knowledge",
+    createInstead: "Create new instead",
     existingUrlLabel: "Team knowledge link",
     start: "Start",
     starting: "Getting your AI teammate started…",
@@ -140,7 +141,7 @@ export const COPY = {
   invitee: {
     waitingTitle: "Your team is still being set up",
     waitingBody:
-      "An admin hasn't finished setting up your team's code and knowledge base yet. Once they do, you can connect your AI teammate. You can start chatting in the meantime.",
+      "An admin hasn't finished setting up your team's code and knowledge base yet. This page updates on its own once they're done — or you can start chatting in the meantime.",
     confirmTitle: "Your team is ready",
     confirmBody: "Your team already set up its projects and knowledge base. Pick what your AI teammate should work on.",
   },

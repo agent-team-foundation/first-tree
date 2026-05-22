@@ -1308,3 +1308,11 @@ tr[data-interactive]:hover {
     transition: none;
   }
 }
+
+/* Custom radio/checkbox cards hide the real input with `.sr-only` and render
+   a surrogate box; without this, keyboard focus lands on an invisible
+   control. Surface a visible ring on the label when its input is focused. */
+.onboarding-choice:focus-within {
+  outline: var(--hairline) solid var(--accent-ring);
+  outline-offset: var(--sp-0_5);
+}

@@ -147,3 +147,18 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
   return facts.onboardingCompletedAt !== null;
 }
+
+/**
+ * Which invitee kickoff sub-state to show, given what the team has set up.
+ * Pure so it's unit-testable (the React component just maps the result to a
+ * body):
+ *   - no team knowledge link yet            → "waiting" (admin isn't done)
+ *   - link + the team listed its projects   → "confirm" (pick from them)
+ *   - link but no team projects listed      → "picker"  (invitee picks own)
+ */
+export type InviteeKickoffState = "waiting" | "confirm" | "picker";
+
+export function resolveInviteeKickoffState(args: { treeUrl: string; teamRepoCount: number }): InviteeKickoffState {
+  if (!args.treeUrl) return "waiting";
+  return args.teamRepoCount > 0 ? "confirm" : "picker";
+}

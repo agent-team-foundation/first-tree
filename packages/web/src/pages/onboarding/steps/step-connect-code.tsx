@@ -43,6 +43,7 @@ export function StepConnectCode() {
     enabled: installed,
   });
   const scopeMissing = reposQuery.error instanceof ApiError && reposQuery.error.status === 403;
+  const hasPickableRepos = !scopeMissing && (reposQuery.data?.length ?? 0) > 0;
 
   const handleConnect = async (): Promise<void> => {
     if (!organizationId) return;
@@ -144,25 +145,18 @@ export function StepConnectCode() {
         )}
       </div>
 
-      <div className="flex items-center" style={{ gap: "var(--sp-3)" }}>
-        <Button
-          type="button"
-          onClick={goNext}
-          disabled={selectedRepoUrls.length === 0 && !scopeMissing && (reposQuery.data?.length ?? 0) > 0}
-        >
-          <span>{COPY.continue}</span>
+      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+        {hasPickableRepos && selectedRepoUrls.length === 0 && (
+          <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+            {COPY.connectCode.pickHint}
+          </p>
+        )}
+        {/* Primary is never disabled: with a project it binds, without one it
+            continues anyway — a beginner should never face a dead button. */}
+        <Button type="button" onClick={goNext} className="self-start">
+          <span>{selectedRepoUrls.length > 0 ? COPY.continue : COPY.connectCode.continueNoProject}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
-        {selectedRepoUrls.length === 0 && (
-          <button
-            type="button"
-            onClick={goNext}
-            className="text-label"
-            style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--fg-4)" }}
-          >
-            {COPY.connectCode.continueWithout}
-          </button>
-        )}
       </div>
     </div>
   );
