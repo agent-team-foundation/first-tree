@@ -12,9 +12,9 @@ import {
   markInstallationUnsuspended,
   upsertInstallationFromMetadata,
 } from "../../services/github-app-installations.js";
-import { archiveChatsForMergedPr } from "../../services/github-archive-on-merge.js";
 import { resolveAudience } from "../../services/github-audience.js";
 import { deliverNormalizedEvent } from "../../services/github-delivery.js";
+import { setEntityState } from "../../services/github-entity-state.js";
 import { normalizeGithubEvent } from "../../services/github-normalize.js";
 import { isRecord, readNumber, readString } from "./github-entity.js";
 
@@ -61,6 +61,53 @@ function parseInstallationMetadata(installation: Record<string, unknown>): AppIn
     events,
     suspendedAt,
   };
+}
+
+type EntityStateUpdate = {
+  entityType: "pull_request" | "issue";
+  entityKey: string;
+  state: "open" | "closed" | "merged";
+};
+
+/**
+ * Map a PR/Issue lifecycle action to the persisted `entity_state` column.
+ * Returns `null` for events that don't change lifecycle (e.g. comment, label).
+ */
+function resolveEntityStateUpdate(
+  eventType: string,
+  action: string,
+  payload: Record<string, unknown>,
+  repoFullName: string,
+): EntityStateUpdate | null {
+  if (eventType === "pull_request") {
+    const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+    const number = readNumber(pr?.number);
+    if (number === null) return null;
+    if (action === "closed") {
+      return {
+        entityType: "pull_request",
+        entityKey: `${repoFullName}#${number}`,
+        state: pr?.merged === true ? "merged" : "closed",
+      };
+    }
+    if (action === "reopened") {
+      return { entityType: "pull_request", entityKey: `${repoFullName}#${number}`, state: "open" };
+    }
+    return null;
+  }
+  if (eventType === "issues") {
+    const issue = isRecord(payload.issue) ? payload.issue : null;
+    const number = readNumber(issue?.number);
+    if (number === null) return null;
+    if (action === "closed") {
+      return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: "closed" };
+    }
+    if (action === "reopened") {
+      return { entityType: "issue", entityKey: `${repoFullName}#${number}`, state: "open" };
+    }
+    return null;
+  }
+  return null;
 }
 
 async function handleInstallationLifecycle(app: FastifyInstance, eventType: string, payload: unknown): Promise<string> {
@@ -202,30 +249,41 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
       const deliveryHeader = request.headers["x-github-delivery"];
       const deliveryId = typeof deliveryHeader === "string" && deliveryHeader.length > 0 ? deliveryHeader : null;
 
-      // Bypass: PR merged → auto-archive every chat bound to this PR for the
-      // owning humans. Runs independently of the normalize/audience/deliver
-      // pipeline (which still drops pull_request.closed in Stage 1) so this
-      // never produces an inbox message. Idempotent under retries — sits
-      // before claimEvent on purpose so the archive does not get dropped on
-      // a retry whose normalized event was already claimed by a previous
-      // delivery attempt.
-      if (eventType === "pull_request" && isRecord(payload) && payload.action === "closed") {
-        const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+      // Bypass: sync the upstream PR/Issue lifecycle onto
+      // `github_entity_chat_mappings.entity_state`. Runs independently of
+      // the normalize/audience/deliver pipeline so this branch never
+      // produces an inbox message. The chat-archive sweeper
+      // (services/chat-archive.ts) reads this column to decide when to
+      // archive. Idempotent under retries — sits before claimEvent on
+      // purpose so a retry whose normalized event was already claimed
+      // still gets its state column updated.
+      if (isRecord(payload)) {
         const repo = isRecord(payload.repository) ? payload.repository : null;
         const repoFullName = readString(repo?.full_name);
-        const prNumber = readNumber(pr?.number);
-        const isMerged = pr?.merged === true;
-        if (isMerged && repoFullName && prNumber !== null) {
-          try {
-            const stats = await archiveChatsForMergedPr(app.db, {
-              organizationId: installation.hubOrganizationId,
-              repoFullName,
-              prNumber,
-            });
-            log.info({ entityKey: `${repoFullName}#${prNumber}`, ...stats }, "auto-archived chats on PR merge");
-          } catch (err) {
-            // Best-effort: archive failure must not block normalize/deliver.
-            log.error({ err, repoFullName, prNumber }, "failed to auto-archive chats on PR merge");
+        const action = typeof payload.action === "string" ? payload.action : null;
+        if (repoFullName && action) {
+          const stateUpdate = resolveEntityStateUpdate(eventType, action, payload, repoFullName);
+          if (stateUpdate) {
+            try {
+              const stats = await setEntityState(app.db, {
+                organizationId: installation.hubOrganizationId,
+                entityType: stateUpdate.entityType,
+                entityKey: stateUpdate.entityKey,
+                state: stateUpdate.state,
+              });
+              if (stats.updated > 0) {
+                log.info(
+                  { entityKey: stateUpdate.entityKey, state: stateUpdate.state, rows: stats.updated },
+                  "synced github entity state",
+                );
+              }
+            } catch (err) {
+              // Best-effort: state-sync failure must not block normalize/deliver.
+              log.error(
+                { err, entityKey: stateUpdate.entityKey, state: stateUpdate.state },
+                "failed to sync github entity state",
+              );
+            }
           }
         }
       }
