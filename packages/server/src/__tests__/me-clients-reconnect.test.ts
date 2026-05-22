@@ -38,7 +38,7 @@ describe("GET /me/clients — reconnect path rewrites connectedAt", () => {
     const clientId = `cli-rc-${crypto.randomUUID().slice(0, 8)}`;
 
     // First handshake — INSERT branch of registerClient. Mirrors the very
-    // first `first-tree-hub connect <token>` on a fresh machine.
+    // first `first-tree login <token>` on a fresh machine.
     await clientService.registerClient(app.db, {
       clientId,
       userId: ctx.userId,
