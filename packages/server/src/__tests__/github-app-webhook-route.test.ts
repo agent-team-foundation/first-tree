@@ -563,6 +563,58 @@ describe("POST /webhooks/github-app", () => {
     expect(mappingRow?.entityState).toBe("closed");
   });
 
+  // M1 (#507): audience-empty must distinguish "no involves at all" from
+  // "had involves but resolved to zero agents" — the latter usually means
+  // a mentioned GitHub login has no `delegateMention`-configured agent in
+  // this org, which is a potential mis-configuration worth surfacing.
+  it("audience empty with no involves returns reason=audience_empty_no_involves", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100030;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const res = await postWebhook(app, "issues", {
+      action: "opened",
+      issue: {
+        number: 10,
+        title: "no involves",
+        html_url: "https://github.com/owner/repo/issues/10",
+        body: "",
+        assignees: [],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, audience: 0, reason: "audience_empty_no_involves" });
+  });
+
+  it("audience empty with involves returns reason=audience_empty_with_involves", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100031;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    // Assignee whose GitHub login has no matching agent in this org →
+    // involves resolves to an empty audience (mis-config signal).
+    const res = await postWebhook(app, "issues", {
+      action: "opened",
+      issue: {
+        number: 11,
+        title: "with involves but unknown login",
+        html_url: "https://github.com/owner/repo/issues/11",
+        body: "",
+        assignees: [{ login: "nobody-here", type: "User" }],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, audience: 0, reason: "audience_empty_with_involves" });
+  });
+
   it("duplicate delivery (same x-github-delivery) is deduped on the second call", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
