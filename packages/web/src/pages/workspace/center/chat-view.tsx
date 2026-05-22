@@ -14,6 +14,7 @@ import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, us
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { getActivityOverview } from "../../../api/activity.js";
+import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import {
   type FileMessageContent,
   getChat,
@@ -32,10 +33,8 @@ import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
   asErrorPayload,
-  getSession,
   listSessionEvents,
   type SessionEventRow,
-  type SessionListItem,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
@@ -54,6 +53,8 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
+import { StatusGlyph } from "../../../components/ui/status-glyph.js";
+import { viewOf } from "../../../lib/agent-status-view.js";
 import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
@@ -2275,26 +2276,20 @@ function ParticipantAvatar({
   const ident = agentIdentity(participant.agentId);
   const label = ident?.displayName ?? ident?.name ?? participant.agentId.slice(0, 8);
 
-  // Per-agent session state for the dot. Shares the same query key
-  // shape as the sidebar's AgentRow so React Query dedupes the request
-  // when the sidebar is open. Humans never query (no concept of session).
-  const sessionQuery = useQuery<SessionListItem | null>({
-    queryKey: ["chat-right-sidebar", "session", participant.agentId, chatId],
-    queryFn: async () => {
-      try {
-        return await getSession(participant.agentId, chatId);
-      } catch (err) {
-        if (err instanceof Error && err.message.toLowerCase().includes("not found")) return null;
-        throw err;
-      }
-    },
+  // Composite per-agent status for the dot, from the chat-level /agent-status
+  // query — the same key the sidebar's AgentStatusPanel uses, so React Query
+  // dedupes it to one request and the admin WS keeps it live (no per-avatar
+  // poll). Humans have no runtime status. Rendered through the shared
+  // viewOf / StatusGlyph vocabulary so the header strip and the sidebar agree.
+  const { data: statuses } = useQuery({
+    queryKey: chatAgentStatusQueryKey(chatId),
+    queryFn: () => fetchChatAgentStatuses(chatId),
     enabled: !isHuman,
-    refetchInterval: 10_000,
+    refetchInterval: 30_000,
   });
-
-  const state: string | null = isHuman ? null : (sessionQuery.data?.state ?? "none");
-  const stateText = state && state !== "none" ? state : isHuman ? "human" : "idle";
-  const dot = state ? participantDotView(state) : null;
+  const status = isHuman ? undefined : statuses?.find((s) => s.agentId === participant.agentId);
+  const view = status ? viewOf(status.main) : null;
+  const stateText = view ? view.label : isHuman ? "human" : "…";
 
   return (
     <button
@@ -2331,45 +2326,15 @@ function ParticipantAvatar({
           size={22}
         />
       </span>
-      {dot ? (
+      {view ? (
         <span
           aria-hidden="true"
-          style={{
-            position: "absolute",
-            right: -1,
-            bottom: -1,
-            width: 8,
-            height: 8,
-            borderRadius: 999,
-            background: dot.bg,
-            border: dot.border,
-            boxShadow: "0 0 0 var(--hairline-bold) var(--bg-raised)",
-          }}
-        />
+          className="absolute"
+          style={{ right: -1, bottom: -1, boxShadow: "0 0 0 var(--hairline-bold) var(--bg-raised)", borderRadius: 999 }}
+        >
+          <StatusGlyph colorVar={view.colorVar} shape={view.shape} pulse={view.pulse} size={8} ariaLabel={view.label} />
+        </span>
       ) : null}
     </button>
   );
-}
-
-/** Dot view-model for agent session states. Mirrors `describeState` in
- * `agent-row.tsx` so the header strip and the sidebar row never disagree
- * about what a given state looks like. Kept inline (rather than imported)
- * because the agent-row helper is intentionally private to that file. */
-function participantDotView(state: string): { bg: string; border: string } | null {
-  switch (state) {
-    case "active":
-      return { bg: "var(--state-idle)", border: "none" };
-    case "suspended":
-      return { bg: "var(--bg-raised)", border: "var(--hairline-bold) solid var(--fg-4)" };
-    case "errored":
-      return { bg: "var(--state-error)", border: "none" };
-    case "evicted":
-      return { bg: "var(--state-offline)", border: "none" };
-    case "none":
-    case "loading":
-      // Render nothing — no session row yet, dot would be visual noise.
-      return null;
-    default:
-      return null;
-  }
 }
