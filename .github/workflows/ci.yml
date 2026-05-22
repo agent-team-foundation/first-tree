@@ -155,10 +155,6 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
-    # NOTE: This job will fail until T3.2 (apps/cli/package.json bin rename to
-    # first-tree). Once T3.2 lands the bin/env renames repo-wide, remove the
-    # continue-on-error line below so the job becomes blocking.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: grep — forbid old hub-client subcommand syntax
