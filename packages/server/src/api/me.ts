@@ -18,6 +18,7 @@ import { listAgentsManagedByUser } from "../services/access-control.js";
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
+import { COMMAND_PACKAGE_NAME } from "../services/command-version-poller.js";
 import { decryptValue, encryptValue } from "../services/crypto.js";
 import { GithubAppApiError, refreshAppUserToken } from "../services/github-app.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
@@ -333,8 +334,19 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         app.config.auth,
         issuer,
       );
+      // Channel-aware npm spec. Web onboarding renders the returned
+      // `bootstrapCommand` directly so a fresh-machine install lands on
+      // the version this Hub actually advertises — without it, staging
+      // (channel=alpha) users `npm i -g …` land on stable, then watch
+      // auto-update yank them up to alpha 30s later (which used to be
+      // exactly the cross-edge scenario that bricked their service
+      // unit). `latest` is npm's default dist-tag so we keep the bare
+      // spec for prod; only non-latest channels get the `@<tag>` suffix.
+      const channel = app.config.update.channel;
+      const npmSpec = channel === "latest" ? COMMAND_PACKAGE_NAME : `${COMMAND_PACKAGE_NAME}@${channel}`;
       const command = `first-tree-hub login ${token}`;
-      return { token, expiresIn, command };
+      const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
+      return { token, expiresIn, command, bootstrapCommand, npmSpec };
     },
   );
 
