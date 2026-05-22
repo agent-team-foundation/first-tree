@@ -50,7 +50,14 @@ export function registerChatSendCommand(chat: Command): void {
 
         const result = await sdk.sendMessage(chatId, {
           format: options.format,
-          content: `@${agentName} ${content}`,
+          // Send the agent's raw content verbatim. The server owns mention
+          // injection: `receiverNames` declares routing intent, and the
+          // agent endpoint's `normalizeMentionsInContent` will prepend
+          // `@<name>` only when the content doesn't already contain it
+          // (idempotent, case-insensitive). Prepending here too would
+          // double-stamp when the agent already wrote `@<name>` in the
+          // body — see services/message.ts step 2c.
+          content,
           metadata,
           source: "cli",
           // Server resolves the name against the current chat's participant

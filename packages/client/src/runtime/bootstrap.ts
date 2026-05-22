@@ -523,5 +523,9 @@ this command.
   cannot render as markdown.
 - For multi-line / markdown / special chars (quotes, \`$\`, backticks, newlines),
   use **stdin** with real newlines, plus \`-f markdown\`.
+
+## Source Repos
+
+For development tasks, prefer the repo worktrees already present in this workspace.
 `;
 }
