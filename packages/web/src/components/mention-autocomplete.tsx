@@ -31,9 +31,10 @@ export type MentionCandidate = {
   /** True iff the caller's member is this agent's `managerId`. Drives
    *  participant-picker grouping (mine first, then teammates') and the
    *  empty-query branch of mention autocomplete so the user's own agents
-   *  always surface first. Populated from `/activity` (server-derived);
-   *  callers that can't determine it should pass `false` rather than
-   *  omitting — there's no "unknown" state. */
+   *  always surface first. Derived client-side by callers from the
+   *  agent row's `managerId` against the caller's `memberId` (see
+   *  `useAuth`); callers that can't determine it should pass `false`
+   *  rather than omitting — there's no "unknown" state. */
   managedByMe: boolean;
 };
 
