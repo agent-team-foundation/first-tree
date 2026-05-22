@@ -191,6 +191,8 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
   const ts = formatClockTime(event.createdAt);
   return (
     <div
+      // Anchor for the compose rail's jump-to-timeline (failed → this agent's error).
+      data-error-agent={event.agentId}
       style={{
         padding: "var(--sp-1_5) var(--sp-2_5)",
         borderLeft: "var(--hairline-bold) solid var(--state-error)",
@@ -552,9 +554,11 @@ function QuestionMessageRow({
   return (
     <div
       className="grid"
-      // Anchor for the compose status bar's [Reply] jump — it scrolls the
-      // latest still-pending question card into view.
+      // Anchors for the compose status bar's jump-to-timeline. The boolean
+      // flag drives the legacy "scroll to latest pending" path; the agent one
+      // lets the rail locate *this* agent's pending question by id.
       data-pending-question={status === "pending" ? "true" : undefined}
+      data-pending-question-agent={status === "pending" ? msg.senderId : undefined}
       style={{
         gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
@@ -1956,6 +1960,8 @@ export function ChatView({
                       />
                       <textarea
                         ref={textareaRef}
+                        // Focus target for the compose rail's [Reply] action.
+                        data-chat-composer="true"
                         value={draft}
                         onChange={(e) => {
                           setDraft(e.target.value);

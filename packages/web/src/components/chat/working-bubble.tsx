@@ -177,7 +177,9 @@ export function WorkingBubble({ events, defaultOpen }: WorkingBubbleProps) {
   const { toolCalls, thinkings, elapsedSec } = summarize(events);
 
   return (
-    <div>
+    // Anchor for the compose rail's jump-to-timeline (working → this agent's
+    // in-progress turn). Best-effort: the bubble unmounts when the turn ends.
+    <div data-working-agent={latest.agentId}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
