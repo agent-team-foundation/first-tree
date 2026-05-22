@@ -130,6 +130,47 @@ const LEGACY_SYSTEMD_UNIT = SERVICE_SUFFIX
 
 const LOG_DIR = join(DEFAULT_HOME_DIR, "logs");
 
+const PROXY_ENV_KEYS = [
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+] as const;
+
+/**
+ * Pick proxy env vars out of `env` (default `process.env`). Returns the subset
+ * that are present and non-empty, preserving case.
+ *
+ * Threaded into the unit / plist templates so a daemon started by launchd /
+ * systemd inherits the same proxy reachability the user's interactive shell
+ * already has. Without this, `git fetch` inside the daemon-spawned agent
+ * runtime can't route through the user's local proxy (Surge, Clash, mihomo,
+ * corporate proxy …) and fails with `SSL_ERROR_SYSCALL` whenever direct
+ * egress to github.com is blocked.
+ *
+ * Both lower- and upper-case keys are scanned because libcurl, git, OpenSSL,
+ * the JVM, and various Windows tools each prefer different cases. Pass through
+ * whatever the user set rather than guess.
+ *
+ * `refresh-unit` (called by the supervisor on auto-update) safely re-runs
+ * this: the supervisor inherits its env from the launchd plist it was started
+ * with, so once these vars land in the plist on first install they stay in
+ * the supervisor's env and the next refresh-rendered plist matches → no drift,
+ * no clobber.
+ */
+export function collectProxyEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of PROXY_ENV_KEYS) {
+    const value = env[key];
+    if (value && value.length > 0) out[key] = value;
+  }
+  return out;
+}
+
 type ResolvedBinary = { kind: "bin"; program: string } | { kind: "node"; program: string; args: string[] };
 
 function whichBin(name: string): string | null {
@@ -197,7 +238,7 @@ function launchdPlistPath(): string {
   return join(homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 }
 
-function renderPlist(invocation: ResolvedBinary): string {
+export function renderPlist(invocation: ResolvedBinary, proxyEnv: Record<string, string> = collectProxyEnv()): string {
   const programArgs: string[] =
     invocation.kind === "bin"
       ? [invocation.program, "daemon", "start", "--no-interactive"]
@@ -220,6 +261,11 @@ function renderPlist(invocation: ResolvedBinary): string {
     ? `\n    <key>FIRST_TREE_HOME</key>\n    <string>${escapeXml(DEFAULT_HOME_DIR)}</string>`
     : "";
 
+  // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
+  const proxyEnvXml = Object.entries(proxyEnv)
+    .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
+    .join("");
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -235,7 +281,7 @@ ${argsXml}
     <key>PATH</key>
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     <key>FIRST_TREE_SERVICE_MODE</key>
-    <string>1</string>${homeEnvXml}
+    <string>1</string>${homeEnvXml}${proxyEnvXml}
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -429,7 +475,10 @@ function systemdUnitPath(): string {
   return join(xdg, "systemd", "user", SYSTEMD_UNIT);
 }
 
-function renderSystemdUnit(invocation: ResolvedBinary): string {
+export function renderSystemdUnit(
+  invocation: ResolvedBinary,
+  proxyEnv: Record<string, string> = collectProxyEnv(),
+): string {
   const execStart: string =
     invocation.kind === "bin"
       ? `${shellQuote(invocation.program)} daemon start --no-interactive`
@@ -445,6 +494,11 @@ function renderSystemdUnit(invocation: ResolvedBinary): string {
   // Prod (suffix === "") deliberately omits the line so existing
   // installed units don't churn unnecessarily.
   const homeEnv = SERVICE_SUFFIX ? `Environment=FIRST_TREE_HOME=${shellQuote(DEFAULT_HOME_DIR)}\n` : "";
+
+  // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
+  const proxyEnvLines = Object.entries(proxyEnv)
+    .map(([k, v]) => `Environment=${k}=${shellQuote(v)}\n`)
+    .join("");
 
   // Restart policy split:
   //   - on-failure  → operator-issued `systemctl stop` (clean exit 0) really stops.
@@ -477,7 +531,7 @@ StandardError=journal
 SyslogIdentifier=${SYSLOG_IDENT}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=FIRST_TREE_SERVICE_MODE=1
-${homeEnv}[Install]
+${homeEnv}${proxyEnvLines}[Install]
 WantedBy=default.target
 `;
 }
