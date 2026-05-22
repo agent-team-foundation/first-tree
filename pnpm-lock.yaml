@@ -23,9 +23,6 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.84
         version: 0.2.84(zod@4.3.6)
-      '@first-tree/github-scan':
-        specifier: workspace:*
-        version: link:../../packages/github-scan
       '@inquirer/prompts':
         specifier: ^8.3.0
         version: 8.3.2(@types/node@22.19.15)
@@ -60,6 +57,9 @@ importers:
       '@first-tree/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@first-tree/github-scan':
+        specifier: workspace:*
+        version: link:../../packages/github-scan
       '@first-tree/server':
         specifier: workspace:*
         version: link:../../packages/server
