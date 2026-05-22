@@ -764,9 +764,7 @@ describe("GitMirrorManager — hubManagedRoots safety guards", () => {
   it("createGitMirrorManager accepts a strict subdir of dataDir (the production wiring)", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-"));
     try {
-      expect(() =>
-        createGitMirrorManager({ dataDir, hubManagedRoots: [join(dataDir, "workspaces")] }),
-      ).not.toThrow();
+      expect(() => createGitMirrorManager({ dataDir, hubManagedRoots: [join(dataDir, "workspaces")] })).not.toThrow();
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
