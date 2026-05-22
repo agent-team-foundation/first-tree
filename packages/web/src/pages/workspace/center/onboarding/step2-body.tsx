@@ -7,6 +7,7 @@ import { api, withOrg } from "../../../../api/client.js";
 import { reportOnboardingEvent } from "../../../../api/onboarding-events.js";
 import { useAuth } from "../../../../auth/auth-context.js";
 import { Button } from "../../../../components/ui/button.js";
+import { runVisibilityAwareInterval } from "../../../../lib/visibility-interval.js";
 import { slugify } from "../../../../utils/agent-naming.js";
 import {
   clearOnboardingDraft,
@@ -124,7 +125,6 @@ export function Step2Body({
     if (phase !== "form") return;
     let cancelled = false;
     const detect = async (): Promise<void> => {
-      if (document.hidden) return;
       const seq = ++detectSeqRef.current;
       try {
         const clients = await listClients();
@@ -158,16 +158,10 @@ export function Step2Body({
         // best-effort
       }
     };
-    void detect();
-    const handle = setInterval(detect, CLIENT_DETECT_POLL_MS);
-    const onVisible = (): void => {
-      if (!document.hidden) void detect();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    const dispose = runVisibilityAwareInterval(detect, CLIENT_DETECT_POLL_MS);
     return () => {
       cancelled = true;
-      clearInterval(handle);
-      document.removeEventListener("visibilitychange", onVisible);
+      dispose();
     };
   }, [phase]);
 

@@ -96,23 +96,61 @@ const activityInvalidator = createThrottledInvalidator(["activity"], INVALIDATE_
 const sessionsInvalidator = createThrottledInvalidator(["sessions"], INVALIDATE_THROTTLE_MS);
 // Replaces the per-component `refetchInterval` previously wired into
 // SessionContext, ChatView's right-sidebar session card, the per-agent
-// roster panel, and AgentRow. The frame already carries `agentId` +
-// `chatId` (see api/orgs/ws.ts:75 — `{ type, ...payload }`), so a prefix
-// invalidate refreshes every cached `["session", *]` / `["chat-right-sidebar",
-// "session", *]` / `["agent-sessions", *]` row in one shot without each
-// consumer running its own 5–10s poll. Throttled to align with
-// `activityInvalidator`.
+// roster panel, and AgentRow. The frame carries `agentId` + `chatId`
+// (see api/orgs/ws.ts:75 — `{ type, ...payload }`), so we invalidate the
+// exact three keys the affected agent reads — `["session", agentId,
+// chatId]`, `["chat-right-sidebar", "session", agentId, chatId]`,
+// `["agent-sessions", agentId]` — rather than fanning out a prefix
+// invalidate over every other agent in the chat. Throttling is per
+// (agentId, chatId) pair so bursts from one agent don't starve another
+// nor leak invalidations onto unrelated agents.
 //
-// The `chat-right-sidebar` prefix is scoped down to `["chat-right-sidebar",
-// "session"]` on purpose — the sibling `["chat-right-sidebar",
-// "github-entities", chatId]` query (github-section.tsx) hits the GitHub
-// REST API and must NOT refetch on every `session:state` burst.
-const sessionByKeyInvalidator = createThrottledInvalidator(["session"], INVALIDATE_THROTTLE_MS);
-const chatRightSidebarSessionInvalidator = createThrottledInvalidator(
-  ["chat-right-sidebar", "session"],
-  INVALIDATE_THROTTLE_MS,
-);
-const agentSessionsInvalidator = createThrottledInvalidator(["agent-sessions"], INVALIDATE_THROTTLE_MS);
+// `["chat-right-sidebar", "session", ...]` is targeted explicitly to keep
+// the sibling `["chat-right-sidebar", "github-entities", chatId]` query
+// (github-section.tsx) — a 60s GitHub REST poll — out of the invalidation
+// path on every `session:state` burst.
+type SessionPairThrottleState = {
+  lastAt: number;
+  trailingTimer: ReturnType<typeof setTimeout> | null;
+};
+const sessionPairThrottle = new Map<string, SessionPairThrottleState>();
+
+function fireSessionInvalidations(qc: QC, agentId: string, chatId: string): void {
+  qc.invalidateQueries({ queryKey: ["session", agentId, chatId] });
+  qc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session", agentId, chatId] });
+  qc.invalidateQueries({ queryKey: ["agent-sessions", agentId] });
+}
+
+function invalidateSessionPair(qc: QC, agentId: string, chatId: string): void {
+  const throttleKey = `${agentId}:${chatId}`;
+  const now = Date.now();
+  const state = sessionPairThrottle.get(throttleKey) ?? { lastAt: 0, trailingTimer: null };
+  const elapsed = now - state.lastAt;
+  if (elapsed >= INVALIDATE_THROTTLE_MS) {
+    state.lastAt = now;
+    sessionPairThrottle.set(throttleKey, state);
+    fireSessionInvalidations(qc, agentId, chatId);
+    return;
+  }
+  if (state.trailingTimer === null) {
+    state.trailingTimer = setTimeout(() => {
+      const cur = sessionPairThrottle.get(throttleKey);
+      if (cur) {
+        cur.trailingTimer = null;
+        cur.lastAt = Date.now();
+      }
+      if (latestQc) fireSessionInvalidations(latestQc, agentId, chatId);
+    }, INVALIDATE_THROTTLE_MS - elapsed);
+    sessionPairThrottle.set(throttleKey, state);
+  }
+}
+
+function disposeSessionPairThrottle(): void {
+  for (const state of sessionPairThrottle.values()) {
+    if (state.trailingTimer) clearTimeout(state.trailingTimer);
+  }
+  sessionPairThrottle.clear();
+}
 
 function broadcast(msg: WsMessage) {
   for (const sub of subscribers) {
@@ -133,12 +171,17 @@ function broadcast(msg: WsMessage) {
       // on / off in real time without waiting for the 15s `refetchInterval`.
       // Throttled because the upstream frames can burst tool-call-fast.
       meChatsInvalidator.invalidate(latestQc);
-      // Cover the per-(agent,chat) `["session", agentId, chatId]` cache used
-      // by SessionContext and the right-sidebar session card. Prefix
-      // invalidate so consumers don't each maintain their own poll.
-      sessionByKeyInvalidator.invalidate(latestQc);
-      chatRightSidebarSessionInvalidator.invalidate(latestQc);
-      agentSessionsInvalidator.invalidate(latestQc);
+      // Precise invalidate for the (agent, chat) the frame is about, so a
+      // burst for one agent doesn't fan out onto every sibling agent's
+      // sessionQuery in the same chat. See `invalidateSessionPair` for the
+      // per-pair throttle. Falls back to a no-op if either id is missing
+      // (defensive — the wider `activity` / `sessions` keys already covered
+      // above will still refresh broad UI state).
+      const agentId = typeof msg.agentId === "string" ? msg.agentId : null;
+      const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
+      if (agentId && chatId) {
+        invalidateSessionPair(latestQc, agentId, chatId);
+      }
     } else if (msg.type === "session:event") {
       // `MeChatRow.liveActivity` is derived from the most recent
       // `session_events` row for each chat. The same wire frame produced
@@ -305,9 +348,7 @@ function teardown() {
   meChatsInvalidator.dispose();
   activityInvalidator.dispose();
   sessionsInvalidator.dispose();
-  sessionByKeyInvalidator.dispose();
-  chatRightSidebarSessionInvalidator.dispose();
-  agentSessionsInvalidator.dispose();
+  disposeSessionPairThrottle();
   if (ws) {
     ws.close(1000, "unmount");
     ws = null;

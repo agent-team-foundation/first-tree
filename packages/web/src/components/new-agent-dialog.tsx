@@ -13,6 +13,7 @@ import { getClientCapabilities, type HubClient, listClients } from "../api/activ
 import { type AgentNameAvailability, checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
+import { runVisibilityAwareInterval } from "../lib/visibility-interval.js";
 import { slugify } from "../utils/agent-naming.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
@@ -259,14 +260,13 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   // Poll `listClients` to keep the connected-computer list fresh while the
   // dialog is open. 5s cadence so a computer coming online (or going
   // offline) reflects without the user closing and reopening the dialog.
-  // Skip ticks when the tab is hidden — nothing on this surface progresses
-  // without a foreground CLI run, and `refetchOnWindowFocus`-equivalent
-  // resume happens via the `visibilitychange` handler below.
+  // `runVisibilityAwareInterval` truly pauses the timer while the tab is
+  // hidden (clearInterval, not a tick-time skip) and fires a catch-up
+  // tick when the user returns.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     const tick = async (): Promise<void> => {
-      if (document.hidden) return;
       try {
         const list = await listClients();
         if (cancelled) return;
@@ -282,16 +282,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         if (!cancelled) setClientsLoaded(true);
       }
     };
-    void tick();
-    const handle = window.setInterval(tick, 5_000);
-    const onVisible = (): void => {
-      if (!document.hidden) void tick();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    const dispose = runVisibilityAwareInterval(tick, 5_000);
     return () => {
       cancelled = true;
-      window.clearInterval(handle);
-      document.removeEventListener("visibilitychange", onVisible);
+      dispose();
     };
   }, [open]);
 
@@ -312,7 +306,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   // cadence as the listClients poll above so a transient API failure
   // self-heals on the next tick rather than freezing the UI in
   // "Detecting installed runtimes…" until the user reopens the dialog.
-  // Hidden-tab skip mirrors the listClients effect.
+  // Visibility-aware (see `runVisibilityAwareInterval`).
   useEffect(() => {
     if (!pickedClientId) {
       setCapabilities(null);
@@ -321,7 +315,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     }
     let cancelled = false;
     const fetchCaps = async (): Promise<void> => {
-      if (document.hidden) return;
       try {
         const res = await getClientCapabilities(pickedClientId);
         if (cancelled) return;
@@ -332,16 +325,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         // prior success keeps the chips). The next tick will retry.
       }
     };
-    void fetchCaps();
-    const handle = window.setInterval(fetchCaps, 5_000);
-    const onVisible = (): void => {
-      if (!document.hidden) void fetchCaps();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    const dispose = runVisibilityAwareInterval(fetchCaps, 5_000);
     return () => {
       cancelled = true;
-      window.clearInterval(handle);
-      document.removeEventListener("visibilitychange", onVisible);
+      dispose();
     };
   }, [pickedClientId]);
 
