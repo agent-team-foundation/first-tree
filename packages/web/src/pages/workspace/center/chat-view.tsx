@@ -40,6 +40,7 @@ import {
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
+import { GithubEventCardMessage, isGithubEventCardContent } from "../../../components/chat/github-event-card.js";
 import {
   isQuestionAnswerContent,
   isQuestionContent,
@@ -411,6 +412,8 @@ function TextRow({
             <ImageFromRef content={msg.content} />
           ) : msg.format === "text" || msg.format === "markdown" ? (
             <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
+          ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
+            <GithubEventCardMessage content={msg.content} />
           ) : (
             <pre
               className="mono text-label"
