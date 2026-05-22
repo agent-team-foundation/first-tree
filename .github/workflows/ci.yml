@@ -149,3 +149,27 @@ jobs:
             ${{ runner.os }}-turbo-test-
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+
+  grep-legacy-names:
+    name: Forbid legacy CLI / env names
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # NOTE: This job will fail until T3.2 (apps/cli/package.json bin rename to
+    # first-tree). Once T3.2 lands the bin/env renames repo-wide, remove the
+    # continue-on-error line below so the job becomes blocking.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: grep — forbid old hub-client subcommand syntax
+        run: |
+          if grep -rEn "first-tree-hub (onboard|connect|disconnect|update|claim|client (start|stop|restart|status|doctor|claim|list|disconnect|config))" packages apps scripts docs skills .github; then
+            echo "::error::found legacy first-tree-hub subcommand syntax; should now be 'first-tree ...'"
+            exit 1
+          fi
+      - name: grep — forbid FIRST_TREE_HUB_ env vars
+        run: |
+          if grep -rEn "FIRST_TREE_HUB_(AGENT_ID|LOG_LEVEL|JSON)" packages apps scripts docs skills .github; then
+            echo "::error::found legacy FIRST_TREE_HUB_* env var references; should use FIRST_TREE_* (Phase 1A T1A.5)"
+            exit 1
+          fi
