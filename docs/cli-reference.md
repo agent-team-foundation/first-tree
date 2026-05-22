@@ -143,7 +143,7 @@ previous owner's machine because the verb must be requested by name. See
 
 ```bash
 # Linux: journald is authoritative under the new unit (StandardOutput=journal)
-journalctl --user -u first-tree-hub-client -f
+journalctl --user -u first-tree-hubent -f
 
 # Or read the rotating NDJSON file the client itself writes:
 tail -f ~/.first-tree/hub/logs/client.log
@@ -162,8 +162,8 @@ launchctl bootout gui/$UID/dev.first-tree-hub.client 2>/dev/null
 rm -f ~/Library/LaunchAgents/dev.first-tree-hub.client.plist
 
 # Linux
-systemctl --user disable --now first-tree-hub-client.service
-rm -f ~/.config/systemd/user/first-tree-hub-client.service
+systemctl --user disable --now first-tree-hubent.service
+rm -f ~/.config/systemd/user/first-tree-hubent.service
 systemctl --user daemon-reload
 
 # Both: clear local credentials and config

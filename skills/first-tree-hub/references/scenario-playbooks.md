@@ -84,8 +84,8 @@ launchctl bootout gui/$UID/dev.first-tree-hub.client
 rm -f ~/Library/LaunchAgents/dev.first-tree-hub.client.plist
 
 # Linux
-systemctl --user disable --now first-tree-hub-client.service
-rm -f ~/.config/systemd/user/first-tree-hub-client.service
+systemctl --user disable --now first-tree-hubent.service
+rm -f ~/.config/systemd/user/first-tree-hubent.service
 
 # Both
 rm -rf ~/.first-tree/hub

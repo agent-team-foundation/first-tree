@@ -179,7 +179,7 @@ curl -sf https://<hub-public-url>/healthz | jq
 ```
 
 If `daemon doctor` reports "service installed, inactive" persistently
-after `login`, run `journalctl --user -u first-tree-hub-client -n 50`
+after `login`, run `journalctl --user -u first-tree-hubent -n 50`
 (Linux) or `cat ~/.first-tree/hub/logs/client.stderr.log` (macOS) — a
 stale unit file from before the upgrade may still be on disk. Re-run
 `first-tree-hub logout && first-tree-hub login <token>` to force a

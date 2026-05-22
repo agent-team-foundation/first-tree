@@ -19,25 +19,25 @@ find_repo_root() {
 REPO_ROOT="$(find_repo_root || true)"
 SOURCE_DIR=""
 if [[ -n "$REPO_ROOT" ]]; then
-  SOURCE_DIR="$REPO_ROOT/skills/first-tree-hub-cli"
+  SOURCE_DIR="$REPO_ROOT/skills/first-tree-hub"
 fi
 
 if [[ -z "$REPO_ROOT" || "$SKILL_DIR" != "$SOURCE_DIR" ]]; then
-  echo "Run this script from the source-of-truth skill at skills/first-tree-hub-cli inside a live first-tree-hub checkout." >&2
+  echo "Run this script from the source-of-truth skill at skills/first-tree-hub inside a live first-tree-hub checkout." >&2
   exit 1
 fi
 
 errors=0
 
-for mirror in "$REPO_ROOT/.agents/skills/first-tree-hub-cli" "$REPO_ROOT/.claude/skills/first-tree-hub-cli"; do
+for mirror in "$REPO_ROOT/.agents/skills/first-tree-hub" "$REPO_ROOT/.claude/skills/first-tree-hub"; do
   if [[ ! -L "$mirror" ]]; then
     echo "Expected symlink at $mirror but it is not a symlink." >&2
     errors=$((errors + 1))
     continue
   fi
   target="$(readlink "$mirror")"
-  if [[ "$target" != "../../skills/first-tree-hub-cli" ]]; then
-    echo "Symlink $mirror points to '$target' instead of '../../skills/first-tree-hub-cli'." >&2
+  if [[ "$target" != "../../skills/first-tree-hub" ]]; then
+    echo "Symlink $mirror points to '$target' instead of '../../skills/first-tree-hub'." >&2
     errors=$((errors + 1))
   fi
 done

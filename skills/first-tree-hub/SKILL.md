@@ -1,5 +1,5 @@
 ---
-name: first-tree-hub-cli
+name: first-tree-hub
 description: Install, operate, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `login`/`daemon`/`agent`/`chat`/`config` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to the SaaS Hub, installing or running the daemon as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `apps/cli`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
 ---
 
@@ -41,7 +41,7 @@ This shape drives almost every command: `daemon` and `config` target this machin
    - Install: `npm install -g @agent-team-foundation/first-tree-hub`
    - Verify: `first-tree-hub --version`
    - For agent creation via GitHub identity, also: `gh auth status`
-5. **The skill lives inside the repo.** `.agents/skills/` and `.claude/skills/` are symlinks to `skills/` — when you edit `skills/first-tree-hub-cli/`, every runtime sees the change immediately. No sync step.
+5. **The skill lives inside the repo.** `.agents/skills/` and `.claude/skills/` are symlinks to `skills/` — when you edit `skills/first-tree-hub/`, every runtime sees the change immediately. No sync step.
 
 ## The Credential Model (read this once)
 

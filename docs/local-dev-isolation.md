@@ -7,7 +7,7 @@ running systemd unit / launchd plist keeping our personal agents online.
 Naively running an in-tree dev build against the same machine would:
 
 - overwrite `~/.first-tree/hub/credentials.json` with test credentials
-- rewrite `~/.config/systemd/user/first-tree-hub-client.service` to point
+- rewrite `~/.config/systemd/user/first-tree-hubent.service` to point
   at the dev binary, killing the prod service and replacing it with the
   in-progress code
 - leak crash-loop noise into the prod journald stream
@@ -32,15 +32,15 @@ don't have to remember either.
 ./scripts/dev-cli.sh daemon status
 ./scripts/dev-cli.sh daemon restart
 ./scripts/dev-cli.sh upgrade --check
-journalctl --user -u first-tree-hub-client-dev -f
+journalctl --user -u first-tree-hubent-dev -f
 ```
 
 After that, on Linux:
 
 ```bash
 $ systemctl --user list-units 'first-tree-hub*'
-  first-tree-hub-client.service       loaded active running    # prod, untouched
-  first-tree-hub-client-dev.service   loaded active running    # dev, installed by dev-cli.sh
+  first-tree-hubent.service       loaded active running    # prod, untouched
+  first-tree-hubent-dev.service   loaded active running    # dev, installed by dev-cli.sh
 ```
 
 The two services have independent unit files, independent PIDs,
@@ -56,10 +56,10 @@ Rules:
 
 | Home basename | systemd unit | launchd label |
 |---|---|---|
-| `hub` (default — what every prod machine in the field has) | `first-tree-hub-client.service` | `dev.first-tree-hub.client` |
-| `hub-dev` (script default) | `first-tree-hub-client-dev.service` | `dev.first-tree-hub.client.dev` |
-| `hub-test` | `first-tree-hub-client-test.service` | `dev.first-tree-hub.client.test` |
-| `scratch` (anything not starting with `hub`) | `first-tree-hub-client-scratch.service` | `dev.first-tree-hub.client.scratch` |
+| `hub` (default — what every prod machine in the field has) | `first-tree-hubent.service` | `dev.first-tree-hub.client` |
+| `hub-dev` (script default) | `first-tree-hubent-dev.service` | `dev.first-tree-hub.client.dev` |
+| `hub-test` | `first-tree-hubent-test.service` | `dev.first-tree-hub.client.test` |
+| `scratch` (anything not starting with `hub`) | `first-tree-hubent-scratch.service` | `dev.first-tree-hub.client.scratch` |
 
 The "`hub` → no suffix" rule is deliberate backwards-compatibility with
 every machine that already has the prod unit registered. We never want
@@ -100,8 +100,8 @@ a CLI upgrade to silently rename people's prod service.
 ```bash
 ./scripts/dev-cli.sh daemon stop
 # Optional — fully remove unit file + auto-start:
-systemctl --user disable first-tree-hub-client-dev.service
-rm ~/.config/systemd/user/first-tree-hub-client-dev.service
+systemctl --user disable first-tree-hubent-dev.service
+rm ~/.config/systemd/user/first-tree-hubent-dev.service
 systemctl --user daemon-reload
 
 # Wipe the isolated home if you want a fresh slate

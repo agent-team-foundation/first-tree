@@ -19,7 +19,7 @@ find_repo_root() {
 
 REPO_ROOT="$(find_repo_root || true)"
 
-if [[ -n "$REPO_ROOT" && "$SKILL_DIR" == "$REPO_ROOT/skills/first-tree-hub-cli" ]]; then
+if [[ -n "$REPO_ROOT" && "$SKILL_DIR" == "$REPO_ROOT/skills/first-tree-hub" ]]; then
   (
     cd "$REPO_ROOT"
     pnpm --filter @agent-team-foundation/first-tree-hub build >/dev/null

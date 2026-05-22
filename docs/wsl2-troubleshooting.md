@@ -32,7 +32,7 @@ no client can reach it because the path resolves to the empty WSLg
 overlay instead.
 
 Effect: `systemctl --user` always fails with `Failed to connect to bus`,
-even though the `first-tree-hub-client.service` unit may already be
+even though the `first-tree-hubent.service` unit may already be
 running fine — `systemd` itself was started before the over-mount and
 has the right view.
 
@@ -112,7 +112,7 @@ ls /run/user/$(id -u)/
 journalctl -t strip-wslg-overlay --no-pager
 # Expect: "stripped overlay after Ns" (typically 1–10s).
 
-systemctl --user status first-tree-hub-client --no-pager | head -5
+systemctl --user status first-tree-hubent --no-pager | head -5
 # Expect: Active: active (running)
 ```
 

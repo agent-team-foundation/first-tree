@@ -7,7 +7,7 @@
 # so prod and dev background services coexist as separate units.
 #
 # Default isolated home is `~/.first-tree/hub-dev` → service unit
-# `first-tree-hub-client-dev.service` (systemd) /
+# `first-tree-hubent-dev.service` (systemd) /
 # `dev.first-tree-hub.client.dev` (launchd). Override with
 # FIRST_TREE_DEV_HOME if you need multiple parallel dev installs
 # (e.g. one per branch).
@@ -75,7 +75,7 @@ ensure_dev_bin_in_service_path() {
   local home_marker="Environment=FIRST_TREE_HOME=${FIRST_TREE_HOME}"
   shopt -s nullglob
   local unit
-  for unit in "$units_dir"/first-tree-hub-client*.service; do
+  for unit in "$units_dir"/first-tree-hubent*.service; do
     grep -qxF "$home_marker" "$unit" || continue
     grep -q "^Environment=PATH=[^[:space:]]*${dev_bin}" "$unit" && continue
     sed -i.bak "s|^Environment=PATH=|Environment=PATH=${dev_bin}:|" "$unit"

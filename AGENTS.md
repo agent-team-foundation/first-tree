@@ -1,11 +1,17 @@
 # AGENTS.md
 
-First Tree Hub — infrastructure for Agent Team: agent registration/authentication, messaging, external IM bridging, and an admin dashboard. Monorepo: Server + Client + Command + Shared + Web.
+**First Tree** — unified CLI and infrastructure for Agent Teams. v1.0.0 merges
+the former `first-tree-hub` (collaboration infra) and `first-tree@0.4.x`
+(Context Tree + GitHub Scan) into one repo. Monorepo: Server + Client + Command
++ Shared + Web + GitHub Scan.
 
 ```
-First Tree Hub ≠ Agents themselves (LLM agent logic lives outside First Tree Hub)
-First Tree Hub ≠ Orchestration framework
-First Tree Hub ≠ Context Tree
+First Tree ≠ Agents themselves (LLM agent logic lives elsewhere)
+First Tree ≠ Orchestration framework
+First Tree IS:
+  - Hub      → agent identity, messaging, IM bridging, admin dashboard (Server + Client + Web)
+  - Tree     → Context Tree onboarding, validation, ownership, automation (CLI tree namespace)
+  - Scan     → GitHub notification daemon (CLI github scan namespace)
 ```
 
 ## Tech Stack
@@ -55,17 +61,19 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 ## Repo-Local Skill
 
-- Use `skills/first-tree-hub-cli/SKILL.md` as the source-of-truth skill when the task is about the unified CLI, onboarding, config flows, runtime boundaries, or other behavior spanning `apps/cli`, `packages/client`, `packages/server`, and `packages/shared`.
-- `.agents/skills/first-tree-hub-cli/` and `.claude/skills/first-tree-hub-cli/` are symlinks to `skills/first-tree-hub-cli/`. No sync step is needed.
+- Use `skills/first-tree-hub/SKILL.md` as the source-of-truth skill for hub flows (login, daemon, agent, chat, org, config). Use `skills/first-tree/SKILL.md` for Context Tree flows. Use `skills/first-tree-github-scan/` for GitHub Scan daemon work.
+- `.agents/skills/first-tree-hub/` and `.claude/skills/first-tree-hub/` are symlinks to `skills/first-tree-hub/`. No sync step is needed. The other repo-local skills (`first-tree`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`) live under `skills/` and follow the same convention.
 
 ## Monorepo Structure
 
 - `packages/shared/` — `@first-tree/shared` — Zod schemas + types + config system (internal, not published)
 - `packages/server/` — `@first-tree/server` — Fastify API server (private, bundled)
 - `packages/client/` — `@first-tree/client` — Agent SDK + Runtime (private, bundled)
-- `apps/cli/` — `@agent-team-foundation/first-tree-hub` — Unified CLI (**published**, the consumer-facing tarball)
 - `packages/web/` — `@first-tree/web` — React admin dashboard (private, bundled)
-- `docs/` — [cli-reference.md](docs/cli-reference.md), [claim-agent-guide.md](docs/claim-agent-guide.md)
+- `packages/github-scan/` — `@first-tree/github-scan` — GitHub notification daemon + inbox runtime
+- `apps/cli/` — `first-tree` — Unified CLI (**published**, the consumer-facing tarball; binaries `first-tree` and `ft`)
+- `docs/` — [cli-reference.md](docs/cli-reference.md), [claim-agent-guide.md](docs/claim-agent-guide.md), [migration/](docs/migration/), [development/git-history.md](docs/development/git-history.md)
+- `skills/` — repo-local skill payloads (`first-tree`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`)
 
 ## Architecture Rules
 
