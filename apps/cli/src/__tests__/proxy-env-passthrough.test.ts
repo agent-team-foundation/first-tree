@@ -128,4 +128,15 @@ describe("renderSystemdUnit proxy passthrough", () => {
     });
     expect(unit).toContain('Environment=https_proxy="http://user pass@proxy:8080"');
   });
+
+  it("shell-quotes credential-bearing proxy URLs (the `@` host separator is outside the safe-char set)", () => {
+    // Common proxy auth form `http://user:pass@host:port`. The `@` between
+    // userinfo and host is not in shellQuote's safe-char regex, so the value
+    // must be wrapped in double quotes — otherwise systemd's tokeniser would
+    // split on `@` and read `pass` + `host:port` as two separate values.
+    const unit = renderSystemdUnit(inv, {
+      https_proxy: "http://user:pass@proxy.example.com:6152",
+    });
+    expect(unit).toContain('Environment=https_proxy="http://user:pass@proxy.example.com:6152"');
+  });
 });
