@@ -115,18 +115,24 @@ export type OnboardingGateFacts = {
  * Should the workspace root (`/`) bounce an authenticated user into the
  * standalone onboarding flow?
  *
- * Yes only when: `/me` has loaded, the server reports an onboarding state
- * (so we're not looping on a transient `/me` failure), and the user has
- * neither completed setup (terminal) nor explicitly hidden it. A user who
- * dismissed onboarding lands in the normal workspace and reaches setup
- * again through Settings → Onboarding → Resume.
+ * Yes only when the user hasn't finished the *resource* setup yet — they
+ * have no AI teammate (server step `connect` or `create_agent`) — and they
+ * haven't completed or hidden onboarding.
+ *
+ * We deliberately do NOT bounce a server-`completed` user (one who already
+ * has a computer + an agent). Two reasons:
+ *   - A brand-new user reaches the final kickoff step via in-flow state
+ *     (create-agent advances to it); if they leave early, Settings → Setup
+ *     resumes it. The `/` gate doesn't need to drag them back.
+ *   - An existing, already-onboarded user must never be yanked into the
+ *     wizard on deploy just because they predate the `completed_at` stamp
+ *     (their server step is `completed` but the column was never written).
  */
 export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
-  if (facts.onboardingStep === null) return false;
   if (facts.onboardingCompletedAt) return false;
   if (facts.onboardingDismissedAt) return false;
-  return true;
+  return facts.onboardingStep === "connect" || facts.onboardingStep === "create_agent";
 }
 
 /**

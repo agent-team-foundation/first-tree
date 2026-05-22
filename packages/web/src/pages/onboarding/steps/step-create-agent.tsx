@@ -66,7 +66,7 @@ export function StepCreateAgent() {
         <p className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
           {COPY.createAgent.timeoutTitle}
         </p>
-        <FlowNote tone="info">{COPY.connectComputer.noRuntime}</FlowNote>
+        <FlowNote tone="info">{COPY.createAgent.timeoutBody}</FlowNote>
         <div className="flex">
           <Button type="button" onClick={() => void retryAgent()}>
             {COPY.createAgent.retry}

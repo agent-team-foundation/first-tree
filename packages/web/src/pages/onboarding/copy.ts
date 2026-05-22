@@ -83,6 +83,7 @@ export const COPY = {
   reviewReassurance: "We never change your code without asking — every change comes back as a request you review.",
   /** connect-code states */
   connectCode: {
+    intro: "Your code lives on GitHub. Connect it so your AI teammate can read your project and help with it.",
     cta: "Connect on GitHub",
     waiting: "Waiting for GitHub…",
     connected: "Connected",
@@ -96,12 +97,21 @@ export const COPY = {
   },
   /** connect-computer states */
   connectComputer: {
-    instruction: "Open a terminal on the computer you want to use and run this:",
+    instruction:
+      "On the computer your AI teammate will use, open Terminal (on a Mac) or PowerShell (on Windows), then paste this and press Enter:",
     waiting: "Waiting for your computer…",
     connected: "connected",
     noRuntime:
-      "This computer is connected, but no AI runtime is ready on it yet. Install Claude Code (or Codex) and sign in, then it'll show up here.",
+      "Your computer is connected, but it doesn't have an AI engine ready yet. Install one (like Claude Code) on that computer and sign in — then it'll show up here automatically.",
     detecting: "Checking what's installed…",
+    stuckTitle: "Taking a while? A few common reasons:",
+    stuckReasons: [
+      "If you saw “command not found”, your computer needs Node.js first — it's a free install. Get it, then run the command again.",
+      "Make sure you ran it on the computer you want your AI teammate to use.",
+      "A company firewall or VPN can sometimes block the connection.",
+    ],
+    nodeLinkLabel: "Install Node.js (free)",
+    nodeUrl: "https://nodejs.org",
   },
   /** create-agent states */
   createAgent: {
@@ -109,6 +119,8 @@ export const COPY = {
     creating: "Setting up your AI teammate…",
     creatingHint: "Usually about 10 seconds",
     timeoutTitle: "This is taking longer than expected.",
+    timeoutBody:
+      "Your AI teammate was created, but it hasn't come online yet. The computer it runs on may have gone to sleep or lost its connection, or its AI engine couldn't start. Check that computer, then try again.",
     retry: "Try again",
   },
   /** kickoff states */
@@ -121,7 +133,8 @@ export const COPY = {
     existingUrlLabel: "Team knowledge link",
     start: "Start",
     starting: "Getting your AI teammate started…",
-    invalidUrl: "That doesn't look like a valid link. It should start with https://",
+    invalidUrl:
+      "That doesn't look like a web link — paste the full address, e.g. https://github.com/your-team/knowledge",
   },
   /** invitee states */
   invitee: {

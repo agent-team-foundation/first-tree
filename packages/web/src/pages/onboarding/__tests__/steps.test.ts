@@ -92,11 +92,14 @@ describe("shouldEnterOnboarding", () => {
     onboardingDismissedAt: null,
     onboardingCompletedAt: null,
   };
-  it("redirects a fresh incomplete user", () => {
+  it("redirects a fresh incomplete user (no computer yet → connect)", () => {
     expect(shouldEnterOnboarding(base)).toBe(true);
   });
-  it("redirects a user whose agent exists but hasn't kicked off (step completed, not dismissed)", () => {
-    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed" })).toBe(true);
+  it("redirects a user with a computer but no agent (create_agent)", () => {
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent" })).toBe(true);
+  });
+  it("does NOT bounce a server-completed user (protects existing users on deploy; kickoff is resumed via Settings)", () => {
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed" })).toBe(false);
   });
   it("does not redirect before /me loads", () => {
     expect(shouldEnterOnboarding({ ...base, meLoaded: false })).toBe(false);

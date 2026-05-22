@@ -71,6 +71,9 @@ export function StepConnectCode() {
   if (!installed) {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+          {COPY.connectCode.intro}
+        </p>
         <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
           {COPY.reviewReassurance}
         </p>

@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
+import { COPY } from "./copy.js";
 
 /**
  * Progressive-disclosure visual help. Collapsed by default so confident
@@ -128,11 +129,23 @@ export function TerminalGuide() {
       </div>
       <GuideSteps
         steps={[
-          "Open the Terminal app on the computer you want to use.",
+          "On a Mac: open the app called Terminal. On Windows: press the Start button, type PowerShell, and open it.",
           "Paste the command above and press Enter.",
           "When it finishes, this page updates to “connected” on its own.",
         ]}
       />
+      <p className="text-label" style={{ margin: "var(--sp-3) 0 0", color: "var(--fg-4)" }}>
+        First time? Your computer may need Node.js (a free, one-time install) before the command works:{" "}
+        <a
+          href={COPY.connectComputer.nodeUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium"
+          style={{ color: "var(--accent)" }}
+        >
+          {COPY.connectComputer.nodeLinkLabel}
+        </a>
+      </p>
     </div>
   );
 }
