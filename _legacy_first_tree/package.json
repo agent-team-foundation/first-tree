@@ -1,0 +1,47 @@
+{
+  "name": "first-tree-monorepo",
+  "version": "0.4.0-alpha.1",
+  "private": true,
+  "description": "Workspace for the first-tree CLI, GitHub Scan automation, and shared packages.",
+  "keywords": [
+    "agents",
+    "cli",
+    "context-tree",
+    "first-tree",
+    "github"
+  ],
+  "homepage": "https://github.com/agent-team-foundation/first-tree#readme",
+  "bugs": {
+    "url": "https://github.com/agent-team-foundation/first-tree/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "Agent Team Foundation",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agent-team-foundation/first-tree.git"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "ci:check": "pnpm lint && pnpm check:no-old-names && pnpm typecheck && pnpm -r --workspace-concurrency=1 test",
+    "typecheck": "tsc -b",
+    "test": "pnpm -r test",
+    "test:coverage": "pnpm -r test:coverage",
+    "lint": "oxlint .",
+    "check:no-old-names": "bash scripts/check-no-old-names.sh",
+    "fmt": "oxfmt . --write",
+    "fmt:check": "oxfmt . --check",
+    "precommit": "pnpm ci:check && pnpm lint-staged",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "oxfmt": "^0.46.0",
+    "oxlint": "^1.61.0",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.32.1"
+}
