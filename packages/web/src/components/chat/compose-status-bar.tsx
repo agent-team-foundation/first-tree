@@ -9,7 +9,7 @@ import { ChevronDown, CornerDownLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
-import { anchorKey, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
+import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
 import { formatElapsed } from "./working-chip.js";
@@ -223,12 +223,13 @@ function RailRow({
   mounted: ReadonlySet<string>;
 }) {
   const view = viewOf(status.main);
+  const jumpable = isJumpable(mounted, status.main, status.agentId);
   return (
     <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
       <TimelineJumpButton
         agentId={status.agentId}
         main={status.main}
-        anchored={mounted.has(anchorKey(status.main, status.agentId))}
+        anchored={jumpable}
         ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
         className="flex-1 text-caption"
         style={{ color: view.colorVar }}
@@ -238,7 +239,9 @@ function RailRow({
         <Sep />
         <LeadDetail status={status} />
       </TimelineJumpButton>
-      {status.main === "needs_you" ? (
+      {/* Reply ↩ only when the question card is actually mounted — otherwise it
+          would be a clickable no-op, same gate as the row text. */}
+      {status.main === "needs_you" && jumpable ? (
         <button
           type="button"
           onClick={() => scrollToQuestionAnswer(status.agentId)}

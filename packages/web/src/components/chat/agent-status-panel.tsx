@@ -5,7 +5,7 @@ import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent
 import { suspendSession } from "../../api/sessions.js";
 import { viewOf } from "../../lib/agent-status-view.js";
 import { toneOf } from "../../lib/tones.js";
-import { anchorKey, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
+import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { Avatar } from "../avatar.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
@@ -179,7 +179,7 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
       <TimelineJumpButton
         agentId={status.agentId}
         main="working"
-        anchored={mounted.has(anchorKey("working", status.agentId))}
+        anchored={isJumpable(mounted, "working", status.agentId)}
         ariaLabel="Jump to this agent's activity in the timeline"
         className="text-caption"
         style={{ color: "var(--state-working)" }}
@@ -197,7 +197,7 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
         <TimelineJumpButton
           agentId={status.agentId}
           main="needs_you"
-          anchored={mounted.has(anchorKey("needs_you", status.agentId))}
+          anchored={isJumpable(mounted, "needs_you", status.agentId)}
           ariaLabel="Jump to this agent's question in the timeline"
         >
           <StatePill tone="blocked" label="Needs reply" />
@@ -212,7 +212,7 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
         <TimelineJumpButton
           agentId={status.agentId}
           main="failed"
-          anchored={mounted.has(anchorKey("failed", status.agentId))}
+          anchored={isJumpable(mounted, "failed", status.agentId)}
           ariaLabel="Jump to this agent's error in the timeline"
         >
           <StatePill tone="error" label="Failed" />

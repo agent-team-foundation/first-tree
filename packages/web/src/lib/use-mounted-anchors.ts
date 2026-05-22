@@ -17,6 +17,16 @@ export function anchorKey(main: AgentMainStatus, agentId: string): string {
   return `${main}:${agentId}`;
 }
 
+/**
+ * Whether an agent's status can jump to the timeline right now — i.e. its
+ * anchor is in the mounted set. The single predicate every jump affordance
+ * gates on (rail row text, rail `Reply ↩`, AgentRow pills/chip) so none can
+ * become a clickable no-op. Pure & exported for tests.
+ */
+export function isJumpable(mounted: ReadonlySet<string>, main: AgentMainStatus, agentId: string): boolean {
+  return mounted.has(anchorKey(main, agentId));
+}
+
 function scanAnchors(): Set<string> {
   const next = new Set<string>();
   for (const [main, attr] of Object.entries(ANCHOR_ATTR)) {
