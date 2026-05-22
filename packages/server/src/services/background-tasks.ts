@@ -30,8 +30,13 @@ export function createBackgroundTasks(
 
   return {
     start() {
-      // Inbox timeout reset — runs every 60 seconds
+      // Inbox timeout reset — runs every 60 seconds. The tick now bundles
+      // three independent maintenance steps; the `step` label tells the
+      // operator which one threw if the catch fires, so a silent failure
+      // in (say) the processed_events prune no longer masquerades as an
+      // inbox reset failure. See #519 review.
       inboxTimer = setInterval(async () => {
+        let step = "reset_timed_out";
         try {
           const timeoutSeconds = app.config.runtime.inboxTimeoutSeconds;
           const maxRetries = app.config.runtime.maxRetryCount;
@@ -41,6 +46,7 @@ export function createBackgroundTasks(
           // window for stale-pending; acked rows are deleted regardless of
           // age (they've fulfilled their context-replay purpose). See
           // pruneStaleSilentEntries jsdoc.
+          step = "prune_silent_inbox";
           const pruned = await inboxService.pruneStaleSilentEntries(app.db);
           if (pruned.ackedDeleted > 0 || pruned.stalePendingDeleted > 0) {
             log.debug(
@@ -51,6 +57,7 @@ export function createBackgroundTasks(
           // processed_events dedup ledger GC piggy-backs on the same
           // timer — the DELETE is small once steady-state retention
           // kicks in, and bundling avoids a second interval. See #509.
+          step = "prune_processed_events";
           const prunedEvents = await mappingService.pruneProcessedEvents(
             app.db,
             app.config.runtime.processedEventsRetentionSeconds,
@@ -59,7 +66,7 @@ export function createBackgroundTasks(
             log.debug({ deleted: prunedEvents.deleted }, "pruned processed_events");
           }
         } catch (err) {
-          log.error({ err }, "failed to reset timed-out inbox entries");
+          log.error({ err, step }, "inbox-timer tick failed");
         }
       }, 60_000);
 
