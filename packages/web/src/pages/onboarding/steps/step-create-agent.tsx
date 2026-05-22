@@ -2,7 +2,7 @@ import type { AgentVisibility } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
-import { FlowNote } from "../flow-ui.js";
+import { FlowNote, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 const VISIBILITY_OPTIONS: ReadonlyArray<{ value: AgentVisibility; title: string; description: string }> = [
@@ -48,16 +48,7 @@ export function StepCreateAgent() {
     agentPhase === "idle";
 
   if (agentPhase === "creating") {
-    return (
-      <div className="flex flex-col items-center text-center" style={{ paddingTop: "var(--sp-8)", gap: "var(--sp-3)" }}>
-        <p className="text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
-          {COPY.createAgent.creating}
-        </p>
-        <p className="text-label" style={{ color: "var(--fg-4)" }}>
-          {COPY.createAgent.creatingHint}
-        </p>
-      </div>
-    );
+    return <WorkingState label={COPY.createAgent.creating} hint={COPY.createAgent.creatingHint} />;
   }
 
   if (agentPhase === "timeout") {

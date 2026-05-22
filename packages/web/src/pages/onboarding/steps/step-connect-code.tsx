@@ -91,10 +91,12 @@ export function StepConnectCode() {
           </>
         ) : (
           <>
-            <Button type="button" onClick={() => void handleConnect()} disabled={redirecting || !organizationId}>
-              <Github className="h-4 w-4" />
-              {COPY.connectCode.cta}
-            </Button>
+            <div className="flex">
+              <Button type="button" onClick={() => void handleConnect()} disabled={redirecting || !organizationId}>
+                <Github className="h-4 w-4" />
+                {COPY.connectCode.cta}
+              </Button>
+            </div>
             {installError === "generic" && <FlowNote>{COPY.errors.generic}</FlowNote>}
             <StatusRow state="waiting" label={COPY.connectCode.waiting} />
             <ShowMeHow>
@@ -164,9 +166,11 @@ export function StepConnectCode() {
 
 function ContinueWithout({ onClick }: { onClick: () => void }) {
   return (
-    <Button type="button" variant="outline" onClick={onClick}>
-      <span>{COPY.connectCode.continueWithout}</span>
-      <ArrowRight className="h-4 w-4" />
-    </Button>
+    <div className="flex">
+      <Button type="button" variant="outline" onClick={onClick}>
+        <span>{COPY.connectCode.continueWithout}</span>
+        <ArrowRight className="h-4 w-4" />
+      </Button>
+    </div>
   );
 }

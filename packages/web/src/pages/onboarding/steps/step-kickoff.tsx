@@ -14,7 +14,7 @@ import {
 import { Button } from "../../../components/ui/button.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
-import { FlowNote, RepoPicker, StatusRow } from "../flow-ui.js";
+import { FlowNote, RepoPicker, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
@@ -195,9 +195,26 @@ function AdminKickoff() {
               </button>
             </div>
           )}
-          <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-            Working on: {selectedRepoUrls.map(repoLabel).join(", ")}
-          </p>
+          <div className="flex items-center" style={{ gap: "var(--sp-1_5)", flexWrap: "wrap" }}>
+            <span className="text-label" style={{ color: "var(--fg-4)" }}>
+              Working on
+            </span>
+            {selectedRepoUrls.map((url) => (
+              <span
+                key={url}
+                className="mono text-caption"
+                style={{
+                  padding: "var(--sp-0_5) var(--sp-2)",
+                  borderRadius: "var(--radius-input)",
+                  background: "color-mix(in oklch, var(--bg-sunken) 50%, transparent)",
+                  border: "var(--hairline) solid var(--border-faint)",
+                  color: "var(--fg-2)",
+                }}
+              >
+                {repoLabel(url)}
+              </span>
+            ))}
+          </div>
         </div>
       ) : (
         <FlowNote tone="info">
@@ -408,9 +425,5 @@ function InviteeWaiting() {
 // ── shared ──────────────────────────────────────────────────────────────
 
 function StartingState() {
-  return (
-    <div className="flex flex-col items-center text-center" style={{ paddingTop: "var(--sp-8)", gap: "var(--sp-3)" }}>
-      <StatusRow state="waiting" label={COPY.kickoff.starting} />
-    </div>
-  );
+  return <WorkingState label={COPY.kickoff.starting} />;
 }

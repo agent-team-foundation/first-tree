@@ -1,7 +1,17 @@
-import { Check } from "lucide-react";
+import { Bot, Check, GitBranch, type LucideIcon, MonitorSmartphone, Rocket, Sparkles, Users } from "lucide-react";
 import { STEP_COPY } from "./copy.js";
 import { useOnboardingFlow } from "./onboarding-flow.js";
-import { stepVisualState } from "./steps.js";
+import { type StepId, stepVisualState } from "./steps.js";
+
+/** Per-step glyphs — warmer + faster to scan than bare numbers. */
+const STEP_ICON: Record<StepId, LucideIcon> = {
+  team: Users,
+  "connect-code": GitBranch,
+  "connect-computer": MonitorSmartphone,
+  "create-agent": Bot,
+  kickoff: Rocket,
+  welcome: Sparkles,
+};
 
 /**
  * Vertical progress rail down the left of the onboarding shell. Shows every
@@ -19,28 +29,38 @@ export function ProgressRail() {
         const copy = STEP_COPY[id];
         const isLast = index === sequence.length - 1;
         const clickable = state === "complete";
+        const Icon = STEP_ICON[id];
         return (
           <li key={id} className="flex" style={{ gap: "var(--sp-3)" }}>
-            {/* circle + connector column */}
-            <div className="flex flex-col items-center" style={{ width: "var(--sp-5)" }}>
+            {/* icon disc + connector column */}
+            <div className="flex flex-col items-center" style={{ width: "var(--sp-6)" }}>
               <span
                 aria-hidden="true"
-                className="mono text-caption inline-flex items-center justify-center"
+                className="inline-flex items-center justify-center"
                 style={{
-                  width: "var(--sp-5)",
-                  height: "var(--sp-5)",
+                  width: "var(--sp-6)",
+                  height: "var(--sp-6)",
                   flexShrink: 0,
                   borderRadius: 999,
-                  background: state === "pending" ? "var(--bg)" : "color-mix(in oklch, var(--accent) 10%, var(--bg))",
+                  background:
+                    state === "active"
+                      ? "var(--accent)"
+                      : state === "complete"
+                        ? "color-mix(in oklch, var(--accent) 12%, var(--bg))"
+                        : "var(--bg)",
                   border:
                     state === "pending"
                       ? "var(--hairline) solid var(--border-faint)"
-                      : `var(--hairline) solid var(--accent)`,
-                  color: state === "pending" ? "var(--fg-4)" : "var(--accent)",
-                  fontWeight: state === "active" ? 600 : 400,
+                      : "var(--hairline) solid var(--accent)",
+                  color:
+                    state === "active"
+                      ? "var(--primary-foreground, var(--color-primary-foreground))"
+                      : state === "complete"
+                        ? "var(--accent)"
+                        : "var(--fg-4)",
                 }}
               >
-                {state === "complete" ? <Check className="h-3 w-3" /> : index + 1}
+                {state === "complete" ? <Check className="h-3.5 w-3.5" /> : <Icon className="h-3.5 w-3.5" />}
               </span>
               {!isLast && (
                 <span

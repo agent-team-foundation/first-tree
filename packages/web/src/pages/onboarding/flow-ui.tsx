@@ -62,6 +62,42 @@ export function FlowNote({ children, tone = "error" }: { children: ReactNode; to
   );
 }
 
+/**
+ * Centered "we're working on it" state for the two waits that are the
+ * emotional peaks (creating the teammate, getting it started). Three
+ * breathing dots + a reassuring line; motion stilled under reduced-motion.
+ */
+export function WorkingState({ label, hint }: { label: string; hint?: string }) {
+  return (
+    <div className="flex flex-col items-center text-center" style={{ paddingTop: "var(--sp-8)", gap: "var(--sp-4)" }}>
+      <span className="inline-flex items-center" style={{ gap: "var(--sp-1_5)" }}>
+        {[0, 160, 320].map((delay) => (
+          <span
+            key={delay}
+            aria-hidden="true"
+            className="onboarding-working-dot"
+            style={{
+              width: "var(--sp-2)",
+              height: "var(--sp-2)",
+              borderRadius: "50%",
+              background: "var(--accent)",
+              animationDelay: `${delay}ms`,
+            }}
+          />
+        ))}
+      </span>
+      <p className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+        {label}
+      </p>
+      {hint && (
+        <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Waiting / connected status row with a pulsing or solid dot. */
 export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: ReactNode }) {
   return (

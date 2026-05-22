@@ -1307,6 +1307,10 @@ tr[data-interactive]:hover {
   .onboarding-disclosure-chevron {
     transition: none;
   }
+  /* Step-to-step fade (shared `.fade-in`) is decorative — hold it still. */
+  .onboarding-shell-step.fade-in {
+    animation: none;
+  }
 }
 
 /* Custom radio/checkbox cards hide the real input with `.sr-only` and render
@@ -1315,4 +1319,15 @@ tr[data-interactive]:hover {
 .onboarding-choice:focus-within {
   outline: var(--hairline) solid var(--accent-ring);
   outline-offset: var(--sp-0_5);
+}
+
+/* Breathing dots for the "creating teammate" / "getting started" waits. The
+   animation lives here (not inline) so reduced-motion can override it. */
+.onboarding-working-dot {
+  animation: heartbeat-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-working-dot {
+    animation: none;
+  }
 }

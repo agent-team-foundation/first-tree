@@ -54,67 +54,80 @@ export function OnboardingShell({ rail, children }: { rail: ReactNode; children:
         </div>
       </header>
 
+      {/* The band is vertically centered in the remaining height (margin:auto
+          in a flex column) so short steps don't cling to the top with a big
+          empty lower half; `overflow-y:auto` keeps tall steps scrollable. */}
       <div
-        className="flex-1 w-full mx-auto flex flex-col lg:flex-row"
-        style={{ maxWidth: "68rem", gap: "var(--sp-8)", padding: "var(--sp-4) var(--sp-5) var(--sp-12)" }}
+        className="flex-1 flex flex-col"
+        style={{ overflowY: "auto", padding: "var(--sp-6) var(--sp-5) var(--sp-10)" }}
       >
-        {/* left rail (desktop) */}
-        <aside className="hidden lg:block" style={{ width: "12rem", flexShrink: 0, paddingTop: "var(--sp-4)" }}>
-          {rail}
-        </aside>
+        <div
+          className="flex flex-col lg:flex-row"
+          style={{ width: "100%", maxWidth: "68rem", margin: "auto", gap: "var(--sp-8)" }}
+        >
+          {/* left rail (desktop) */}
+          <aside className="hidden lg:block" style={{ width: "12rem", flexShrink: 0, paddingTop: "var(--sp-1)" }}>
+            {rail}
+          </aside>
 
-        {/* center content */}
-        <main className="flex-1 min-w-0" style={{ maxWidth: "34rem" }}>
-          <p
-            className="text-eyebrow lg:hidden"
-            style={{ margin: "0 0 var(--sp-2)", color: "var(--fg-4)", textTransform: "uppercase" }}
-          >
-            Step {activeIndex + 1} of {sequence.length}
-          </p>
-          <p className="text-eyebrow" style={{ margin: 0, color: "var(--accent)", textTransform: "uppercase" }}>
-            {COPY.flowEyebrow}
-          </p>
-          <h1 className="text-title font-semibold" style={{ margin: "var(--sp-2) 0 var(--sp-2)", color: "var(--fg)" }}>
-            {copy.title}
-          </h1>
-          <p className="text-body" style={{ margin: "0 0 var(--sp-6)", color: "var(--fg-3)" }}>
-            {copy.why}
-          </p>
-          {children}
+          {/* center content */}
+          <main className="flex-1 min-w-0" style={{ maxWidth: "34rem" }}>
+            <div key={activeStep} className="onboarding-shell-step fade-in">
+              <p
+                className="text-eyebrow lg:hidden"
+                style={{ margin: "0 0 var(--sp-2)", color: "var(--fg-4)", textTransform: "uppercase" }}
+              >
+                Step {activeIndex + 1} of {sequence.length}
+              </p>
+              <p className="text-eyebrow" style={{ margin: 0, color: "var(--accent)", textTransform: "uppercase" }}>
+                {COPY.flowEyebrow}
+              </p>
+              <h1
+                className="text-title font-semibold"
+                style={{ margin: "var(--sp-2) 0 var(--sp-2_5)", color: "var(--fg)" }}
+              >
+                {copy.title}
+              </h1>
+              <p className="text-body" style={{ margin: "0 0 var(--sp-6)", color: "var(--fg-3)" }}>
+                {copy.why}
+              </p>
+              {children}
 
-          {/* On narrow screens the side panel is hidden — keep the "what
-              you'll have" reassurance inline so phone users don't lose it. */}
-          <div
-            className="xl:hidden"
-            style={{
-              marginTop: "var(--sp-6)",
-              paddingTop: "var(--sp-4)",
-              borderTop: "var(--hairline) solid var(--border-faint)",
-            }}
-          >
-            <p className="text-label font-semibold" style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-2)" }}>
-              What you'll have
-            </p>
-            <OutcomeList items={copy.outcomes} />
-          </div>
-        </main>
+              {/* On narrow screens the side panel is hidden — keep the "what
+                  you'll have" reassurance inline so phone users don't lose it. */}
+              <div
+                className="xl:hidden"
+                style={{
+                  marginTop: "var(--sp-6)",
+                  paddingTop: "var(--sp-4)",
+                  borderTop: "var(--hairline) solid var(--border-faint)",
+                }}
+              >
+                <p className="text-label font-semibold" style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-2)" }}>
+                  What you'll have
+                </p>
+                <OutcomeList items={copy.outcomes} />
+              </div>
+            </div>
+          </main>
 
-        {/* right outcomes panel (wide screens) */}
-        <aside className="hidden xl:block" style={{ width: "16rem", flexShrink: 0, paddingTop: "var(--sp-9)" }}>
-          <div
-            style={{
-              padding: "var(--sp-4)",
-              borderRadius: "var(--radius-card, var(--radius-input))",
-              background: "color-mix(in oklch, var(--bg-raised) 40%, transparent)",
-              border: "var(--hairline) solid var(--border-faint)",
-            }}
-          >
-            <p className="text-label font-semibold" style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-2)" }}>
-              What you'll have
-            </p>
-            <OutcomeList items={copy.outcomes} />
-          </div>
-        </aside>
+          {/* right outcomes panel (wide screens) */}
+          <aside className="hidden xl:block" style={{ width: "16rem", flexShrink: 0, paddingTop: "var(--sp-6)" }}>
+            <div
+              style={{
+                padding: "var(--sp-4)",
+                borderRadius: "var(--radius-card, var(--radius-input))",
+                background: "color-mix(in oklch, var(--bg-raised) 40%, transparent)",
+                border: "var(--hairline) solid var(--border-faint)",
+              }}
+            >
+              <p className="text-label font-semibold" style={{ margin: "0 0 var(--sp-3)", color: "var(--fg-2)" }}>
+                What you'll have
+              </p>
+              <OutcomeList items={copy.outcomes} />
+            </div>
+          </aside>
+        </div>
       </div>
     </div>
   );
