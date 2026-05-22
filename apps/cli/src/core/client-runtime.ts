@@ -109,7 +109,7 @@ export class ClientRuntime {
     // instructions and exit 75 (TEMPFAIL) so systemd/launchd applies its
     // restart backoff instead of letting us thrash. The operator gets a
     // fresh token from the Web Computers page → New Connection and re-runs
-    // `first-tree-hub connect <token>`.
+    // `first-tree-hub login <token>`.
     this.connection.on("auth:fatal", (err) => {
       print.blank();
       print.status("✗", "auth expired — service is shutting down to break the reconnect loop.");

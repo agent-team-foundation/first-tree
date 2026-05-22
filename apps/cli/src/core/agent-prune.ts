@@ -59,7 +59,7 @@ const minimalAgentYamlSchema = z
 export async function findStaleAliases(opts: {
   clientId: string;
   listPinnedAgents: () => Promise<PinnedAgent[]>;
-  /** Override for tests; defaults to `$FIRST_TREE_HUB_HOME/config/agents`. */
+  /** Override for tests; defaults to `$FIRST_TREE_HOME/config/agents`. */
   agentsDir?: string;
 }): Promise<StaleAlias[]> {
   const agentsDir = opts.agentsDir ?? join(DEFAULT_CONFIG_DIR, "agents");

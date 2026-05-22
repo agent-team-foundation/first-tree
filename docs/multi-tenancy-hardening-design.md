@@ -209,8 +209,8 @@ Locations TBD — likely in `packages/client/src/runtime/bootstrap.ts` (the conn
 
 **Entry points that catch this:**
 
-- `first-tree-hub client start` — the most common path; rotate + ask operator to re-run.
-- `first-tree-hub connect <token> [--no-service]` — inline path after credential switch; same rotate + re-run flow, rerun command includes the connect token and any `--no-service` flag the user originally supplied.
+- `first-tree-hub daemon start` — the most common path; rotate + ask operator to re-run.
+- `first-tree-hub login <token> [--no-start]` — inline path after credential switch; same rotate + re-run flow, rerun command includes the connect token and any `--no-start` flag the user originally supplied.
 
 ## File change summary
 
@@ -246,7 +246,7 @@ Locations TBD — likely in `packages/client/src/runtime/bootstrap.ts` (the conn
    - Fresh install path: empty DB → migration applies cleanly → first client registration writes `organizationId`.
 4. Manual CLI dry-run:
    - Log in, connect — normal path still works (no mismatch).
-   - Manually swap `credentials.json` to a JWT for a different org → run `first-tree-hub connect` → verify interactive prompt appears, backup is created, new client is registered.
+   - Manually swap `credentials.json` to a JWT for a different org → run `first-tree-hub login` → verify interactive prompt appears, backup is created, new client is registered.
 
 ## Sequencing
 

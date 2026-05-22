@@ -19,7 +19,7 @@ export default async function setup(): Promise<() => Promise<void>> {
     // Tests that need a second-or-third user (client-claim, multi-org)
     // mint via dev-callback. Always on for the e2e run — the route 404s
     // unless this env is explicitly set, so it's still off in prod.
-    serverExtraEnv: { FIRST_TREE_HUB_DEV_CALLBACK_ENABLED: "1" },
+    serverExtraEnv: { FIRST_TREE_DEV_CALLBACK_ENABLED: "1" },
   });
   writeFileSync(
     HANDLE_PATH,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeJwtPayload, deriveHubUrlFromToken, HubUrlDerivationError } from "../commands/saas-connect.js";
+import { decodeJwtPayload, deriveHubUrlFromToken, HubUrlDerivationError } from "../commands/_shared/connect-token.js";
 
 /** Build a fake JWT (no signing — payload-only). */
 function fakeJwt(payload: Record<string, unknown>): string {

@@ -9,7 +9,7 @@ import type { InferConfig } from "./types.js";
 export const serverConfigSchema = defineConfig({
   database: {
     url: field(z.string(), {
-      env: "FIRST_TREE_HUB_DATABASE_URL",
+      env: "FIRST_TREE_DATABASE_URL",
       auto: "docker-pg",
       prompt: {
         message: "PostgreSQL:",
@@ -23,11 +23,11 @@ export const serverConfigSchema = defineConfig({
     provider: field(z.enum(["docker", "external"]).default("docker")),
   },
   server: {
-    port: field(z.number().default(8000), { env: "FIRST_TREE_HUB_PORT" }),
-    host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HUB_HOST" }),
+    port: field(z.number().default(8000), { env: "FIRST_TREE_PORT" }),
+    host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HOST" }),
     /**
      * Public-facing URL of this Hub server. Required in production — used to:
-     *   1. Stamp the `iss` claim on connect tokens so `first-tree-hub connect`
+     *   1. Stamp the `iss` claim on connect tokens so `first-tree-hub login`
      *      can derive the hub URL with no extra arg.
      *   2. Build invite-link URLs surfaced to admins.
      *   3. Construct the OAuth callback URL the GitHub app redirects back to.
@@ -35,21 +35,21 @@ export const serverConfigSchema = defineConfig({
      * for local quickstart, and the boot check below only fires when
      * `NODE_ENV === 'production'`.
      */
-    publicUrl: field(z.string().optional(), { env: "FIRST_TREE_HUB_PUBLIC_URL" }),
+    publicUrl: field(z.string().optional(), { env: "FIRST_TREE_PUBLIC_URL" }),
   },
   workspace: {
     root: field(z.string().default(join(DEFAULT_DATA_DIR, "workspaces")), {
-      env: "FIRST_TREE_HUB_WORKSPACES_ROOT",
+      env: "FIRST_TREE_WORKSPACES_ROOT",
     }),
   },
   secrets: {
     jwtSecret: field(z.string(), {
-      env: "FIRST_TREE_HUB_JWT_SECRET",
+      env: "FIRST_TREE_JWT_SECRET",
       auto: "random:base64url:32",
       secret: true,
     }),
     encryptionKey: field(z.string(), {
-      env: "FIRST_TREE_HUB_ENCRYPTION_KEY",
+      env: "FIRST_TREE_ENCRYPTION_KEY",
       auto: "random:hex:32",
       secret: true,
     }),
@@ -64,9 +64,9 @@ export const serverConfigSchema = defineConfig({
    * tighten it for high-security deployments, loosen for kiosk/lab boxes.
    */
   auth: {
-    accessTokenExpiry: field(z.string().default("30m"), { env: "FIRST_TREE_HUB_AUTH_ACCESS_TOKEN_EXPIRY" }),
-    refreshTokenExpiry: field(z.string().default("30d"), { env: "FIRST_TREE_HUB_AUTH_REFRESH_TOKEN_EXPIRY" }),
-    connectTokenExpiry: field(z.string().default("10m"), { env: "FIRST_TREE_HUB_AUTH_CONNECT_TOKEN_EXPIRY" }),
+    accessTokenExpiry: field(z.string().default("30m"), { env: "FIRST_TREE_AUTH_ACCESS_TOKEN_EXPIRY" }),
+    refreshTokenExpiry: field(z.string().default("30d"), { env: "FIRST_TREE_AUTH_REFRESH_TOKEN_EXPIRY" }),
+    connectTokenExpiry: field(z.string().default("10m"), { env: "FIRST_TREE_AUTH_CONNECT_TOKEN_EXPIRY" }),
   },
   // Context Tree (repo / branch / localPath) and GitHub integration
   // (webhook secret / allowed org) used to live here as global config.
@@ -101,18 +101,18 @@ export const serverConfigSchema = defineConfig({
     // upstream, empty clientId would let GitHub round-trip an
     // anonymous OAuth, etc. Fail loud at Zod parse time.
     githubApp: optional({
-      appId: field(z.string().min(1), { env: "FIRST_TREE_HUB_GITHUB_APP_ID" }),
-      clientId: field(z.string().min(1), { env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID" }),
+      appId: field(z.string().min(1), { env: "FIRST_TREE_GITHUB_APP_ID" }),
+      clientId: field(z.string().min(1), { env: "FIRST_TREE_GITHUB_APP_CLIENT_ID" }),
       clientSecret: field(z.string().min(1), {
-        env: "FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET",
+        env: "FIRST_TREE_GITHUB_APP_CLIENT_SECRET",
         secret: true,
       }),
       privateKeyPem: field(z.string().min(1), {
-        env: "FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY",
+        env: "FIRST_TREE_GITHUB_APP_PRIVATE_KEY",
         secret: true,
       }),
       webhookSecret: field(z.string().min(1), {
-        env: "FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET",
+        env: "FIRST_TREE_GITHUB_APP_WEBHOOK_SECRET",
         secret: true,
       }),
       /**
@@ -129,11 +129,11 @@ export const serverConfigSchema = defineConfig({
        * "Install on GitHub" CTA in Settings needs the slug, and that
        * endpoint returns 503 when it's unset rather than blocking boot.
        */
-      slug: field(z.string().min(1).optional(), { env: "FIRST_TREE_HUB_GITHUB_APP_SLUG" }),
+      slug: field(z.string().min(1).optional(), { env: "FIRST_TREE_GITHUB_APP_SLUG" }),
     }),
   }),
   cors: optional({
-    origin: field(z.string(), { env: "FIRST_TREE_HUB_CORS_ORIGIN" }),
+    origin: field(z.string(), { env: "FIRST_TREE_CORS_ORIGIN" }),
   }),
   /**
    * Trust upstream proxy headers (e.g. `x-forwarded-for`) for `req.ip`. Required
@@ -141,12 +141,12 @@ export const serverConfigSchema = defineConfig({
    * `req.ip` resolves to the proxy and every IP-keyed rate-limit key collapses
    * to the same value. Default false; safe for local development.
    */
-  trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_HUB_TRUST_PROXY" }),
+  trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_TRUST_PROXY" }),
   rateLimit: optional({
     /** Default cap applied to all routes that don't override; overridden per-route below. */
-    max: field(z.number().default(100), { env: "FIRST_TREE_HUB_RATE_LIMIT_MAX" }),
+    max: field(z.number().default(100), { env: "FIRST_TREE_RATE_LIMIT_MAX" }),
     /** Cap on `/auth/login`, `/auth/connect-token`, and other token-issuing paths. */
-    loginMax: field(z.number().default(5), { env: "FIRST_TREE_HUB_RATE_LIMIT_LOGIN_MAX" }),
+    loginMax: field(z.number().default(5), { env: "FIRST_TREE_RATE_LIMIT_LOGIN_MAX" }),
     /**
      * Cap on `/webhooks/github-app` (the GitHub App ingestion endpoint).
      * Sized for SaaS-wide aggregate traffic (single endpoint serves every
@@ -155,17 +155,17 @@ export const serverConfigSchema = defineConfig({
      * fix — no longer silenced) only add to the total. 600/min leaves
      * headroom for multi-org onboarding without per-installation tuning.
      */
-    webhookMax: field(z.number().default(600), { env: "FIRST_TREE_HUB_RATE_LIMIT_WEBHOOK_MAX" }),
+    webhookMax: field(z.number().default(600), { env: "FIRST_TREE_RATE_LIMIT_WEBHOOK_MAX" }),
     /** Cap on Context Tree snapshot reads. */
     contextTreeSnapshotMax: field(z.number().default(6), {
-      env: "FIRST_TREE_HUB_RATE_LIMIT_CONTEXT_TREE_SNAPSHOT_MAX",
+      env: "FIRST_TREE_RATE_LIMIT_CONTEXT_TREE_SNAPSHOT_MAX",
     }),
     /**
      * Per-agent cap on outbound message writes (`POST /agent/chats/:chatId/messages`
      * and `POST /agent/agents/:name/messages`). Tighter than the global default
      * because automated agents are the common loop-failure mode.
      */
-    agentMessageMax: field(z.number().default(30), { env: "FIRST_TREE_HUB_RATE_LIMIT_AGENT_MESSAGE_MAX" }),
+    agentMessageMax: field(z.number().default(30), { env: "FIRST_TREE_RATE_LIMIT_AGENT_MESSAGE_MAX" }),
   }),
   ws: optional({
     /**
@@ -177,10 +177,10 @@ export const serverConfigSchema = defineConfig({
      * heredoc payloads, MCP tools forwarding diffs/AST), while still bounding
      * worst-case memory per frame. Image content travels via HTTP, not WS.
      * Real OOM attackers send MB+, not KiB — this is a guardrail, not a DoS
-     * shield. Tighten or loosen via `FIRST_TREE_HUB_WS_MAX_PAYLOAD` once we
+     * shield. Tighten or loosen via `FIRST_TREE_WS_MAX_PAYLOAD` once we
      * have production P99 frame-size data.
      */
-    maxPayload: field(z.number().int().min(1024).default(262_144), { env: "FIRST_TREE_HUB_WS_MAX_PAYLOAD" }),
+    maxPayload: field(z.number().int().min(1024).default(262_144), { env: "FIRST_TREE_WS_MAX_PAYLOAD" }),
   }),
   inbox: optional({
     /**
@@ -198,19 +198,19 @@ export const serverConfigSchema = defineConfig({
      * poll path on bootstrap.
      */
     maxInFlightPerAgent: field(z.number().int().min(1).max(1024).default(32), {
-      env: "FIRST_TREE_HUB_INBOX_MAX_IN_FLIGHT_PER_AGENT",
+      env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT",
     }),
   }),
   kael: optional({
     endpoint: field(z.string(), { env: "KAEL_ENDPOINT" }),
     apiKey: field(z.string(), { env: "KAEL_API_KEY", secret: true }),
     /** Public URL of this Hub server, reachable from Kael for API callbacks */
-    hubPublicUrl: field(z.string(), { env: "FIRST_TREE_HUB_PUBLIC_URL" }),
+    hubPublicUrl: field(z.string(), { env: "FIRST_TREE_PUBLIC_URL" }),
   }),
   feedback: optional({
     /**
      * GitHub repo where feedback issues are filed (owner/name).
-     * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_HUB_GITHUB_* vars so
+     * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_GITHUB_* vars so
      * the feedback token can be scoped narrowly (issues:write on a single repo)
      * without widening the hub's Context Tree access.
      */
@@ -231,7 +231,7 @@ export const serverConfigSchema = defineConfig({
   observability: {
     logging: {
       level: field(logLevelSchema.default("info"), {
-        env: "FIRST_TREE_HUB_LOG_LEVEL",
+        env: "FIRST_TREE_LOG_LEVEL",
       }),
       /**
        * Output format. Defaults to `json` in production and `pretty` elsewhere —
@@ -246,12 +246,12 @@ export const serverConfigSchema = defineConfig({
        * OTLP endpoint. Non-empty value enables tracing; empty string disables it.
        * There is deliberately no separate `enabled` flag — endpoint presence is the switch.
        */
-      endpoint: field(z.string(), { env: "FIRST_TREE_HUB_OTEL_ENDPOINT" }),
+      endpoint: field(z.string(), { env: "FIRST_TREE_OTEL_ENDPOINT" }),
       /**
        * Exporter headers, serialized as `key1=value1,key2=value2` (one string — avoids
        * env-var record coercion issues). Secret because it typically holds the write token.
        */
-      headers: field(z.string().default(""), { env: "FIRST_TREE_HUB_OTEL_HEADERS", secret: true }),
+      headers: field(z.string().default(""), { env: "FIRST_TREE_OTEL_HEADERS", secret: true }),
       exporter: field(z.enum(["otlp-http", "otlp-grpc"]).default("otlp-http")),
       serviceName: field(z.string().default("first-tree-hub")),
       /**
@@ -261,7 +261,7 @@ export const serverConfigSchema = defineConfig({
        * letting you filter by env in the UI.
        */
       environment: field(z.string().default("development"), {
-        env: "FIRST_TREE_HUB_OTEL_ENVIRONMENT",
+        env: "FIRST_TREE_OTEL_ENVIRONMENT",
       }),
       sampleRate: field(z.number().min(0).max(1).default(1)),
       /**
@@ -277,7 +277,7 @@ export const serverConfigSchema = defineConfig({
        * own and have high day-to-day debug value.
        */
       captureClientIp: field(z.boolean().default(false), {
-        env: "FIRST_TREE_HUB_OTEL_CAPTURE_CLIENT_IP",
+        env: "FIRST_TREE_OTEL_CAPTURE_CLIENT_IP",
       }),
     }),
   },
@@ -306,16 +306,16 @@ export const serverConfigSchema = defineConfig({
    */
   update: {
     channel: field(z.enum(["latest", "alpha"]).default("latest"), {
-      env: "FIRST_TREE_HUB_UPDATE_CHANNEL",
+      env: "FIRST_TREE_UPDATE_CHANNEL",
     }),
     commandVersion: field(z.string().optional(), {
-      env: "FIRST_TREE_HUB_COMMAND_VERSION",
+      env: "FIRST_TREE_COMMAND_VERSION",
     }),
     pollIntervalMinutes: field(z.coerce.number().int().min(1).max(1440).default(60), {
-      env: "FIRST_TREE_HUB_UPDATE_POLL_INTERVAL_MINUTES",
+      env: "FIRST_TREE_UPDATE_POLL_INTERVAL_MINUTES",
     }),
     registryUrl: field(z.string().url().default("https://registry.npmjs.org"), {
-      env: "FIRST_TREE_HUB_UPDATE_REGISTRY_URL",
+      env: "FIRST_TREE_UPDATE_REGISTRY_URL",
     }),
   },
   /**
@@ -326,16 +326,16 @@ export const serverConfigSchema = defineConfig({
    */
   runtime: {
     inboxTimeoutSeconds: field(z.coerce.number().int().positive().default(300), {
-      env: "FIRST_TREE_HUB_INBOX_TIMEOUT_SECONDS",
+      env: "FIRST_TREE_INBOX_TIMEOUT_SECONDS",
     }),
     maxRetryCount: field(z.coerce.number().int().nonnegative().default(3), {
-      env: "FIRST_TREE_HUB_MAX_RETRY_COUNT",
+      env: "FIRST_TREE_MAX_RETRY_COUNT",
     }),
     pollingIntervalSeconds: field(z.coerce.number().int().positive().default(5), {
-      env: "FIRST_TREE_HUB_POLLING_INTERVAL_SECONDS",
+      env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
     }),
     presenceCleanupSeconds: field(z.coerce.number().int().positive().default(60), {
-      env: "FIRST_TREE_HUB_PRESENCE_CLEANUP_SECONDS",
+      env: "FIRST_TREE_PRESENCE_CLEANUP_SECONDS",
     }),
     /**
      * Optional outbound webhook URL — if set, every notification is
@@ -343,7 +343,7 @@ export const serverConfigSchema = defineConfig({
      * `notification_webhook_url` config row.
      */
     notificationWebhookUrl: field(z.string().url().optional(), {
-      env: "FIRST_TREE_HUB_NOTIFICATION_WEBHOOK_URL",
+      env: "FIRST_TREE_NOTIFICATION_WEBHOOK_URL",
     }),
   },
 });

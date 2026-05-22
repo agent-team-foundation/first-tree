@@ -39,7 +39,7 @@ WORKDIR /app
 # the welcome frame stays well-formed, and the poller overwrites it within a
 # poll interval anyway.
 ARG COMMAND_VERSION=0.0.0
-ENV FIRST_TREE_HUB_COMMAND_VERSION=$COMMAND_VERSION
+ENV FIRST_TREE_COMMAND_VERSION=$COMMAND_VERSION
 
 # Production node_modules (includes compiled bcrypt, workspace links)
 COPY --from=prod-deps /app ./
@@ -57,7 +57,7 @@ COPY --from=build /app/packages/web/dist packages/server/web-dist/
 RUN apk add --no-cache git wget
 
 ENV NODE_ENV=production
-ENV FIRST_TREE_HUB_WEB_DIST_PATH=/app/packages/server/web-dist
+ENV FIRST_TREE_WEB_DIST_PATH=/app/packages/server/web-dist
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

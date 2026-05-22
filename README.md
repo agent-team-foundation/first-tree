@@ -47,7 +47,7 @@ The **Server** is operated as a SaaS by the First Tree team. The Server, web das
 
 ```bash
 npm install -g @agent-team-foundation/first-tree-hub
-first-tree-hub connect <token>
+first-tree-hub login <token>
 ```
 
 Get the connect token from your Hub web console under *Connect your computer*. The CLI installs a background service (systemd / launchd) and stays online across reboots. See [docs/quickstart-zh.md](docs/quickstart-zh.md) for the full walkthrough (Chinese).
@@ -55,8 +55,8 @@ Get the connect token from your Hub web console under *Connect your computer*. T
 ## Diagnostics
 
 ```bash
-first-tree-hub client doctor   # Check client environment readiness
-first-tree-hub client status   # CLI version, service state, hub, agents
+first-tree-hub daemon doctor   # Check daemon environment readiness
+first-tree-hub daemon status   # CLI version, service state, hub, agents
 ```
 
 ## Documentation

@@ -25,10 +25,10 @@ describe("resolveServerUrl without prior initConfig", () => {
     testHome = join(tmpdir(), `ft-hub-resolve-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(join(testHome, "config"), { recursive: true });
 
-    originalHome = process.env.FIRST_TREE_HUB_HOME;
-    originalServerUrl = process.env.FIRST_TREE_HUB_SERVER_URL;
-    process.env.FIRST_TREE_HUB_HOME = testHome;
-    delete process.env.FIRST_TREE_HUB_SERVER_URL;
+    originalHome = process.env.FIRST_TREE_HOME;
+    originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
+    process.env.FIRST_TREE_HOME = testHome;
+    delete process.env.FIRST_TREE_SERVER_URL;
 
     // Force module-level constants (DEFAULT_HOME_DIR / DEFAULT_CONFIG_DIR) to
     // be re-evaluated from the updated env in the dynamic import below.
@@ -38,11 +38,11 @@ describe("resolveServerUrl without prior initConfig", () => {
   afterEach(() => {
     if (existsSync(testHome)) rmSync(testHome, { recursive: true, force: true });
 
-    if (originalHome === undefined) delete process.env.FIRST_TREE_HUB_HOME;
-    else process.env.FIRST_TREE_HUB_HOME = originalHome;
+    if (originalHome === undefined) delete process.env.FIRST_TREE_HOME;
+    else process.env.FIRST_TREE_HOME = originalHome;
 
-    if (originalServerUrl === undefined) delete process.env.FIRST_TREE_HUB_SERVER_URL;
-    else process.env.FIRST_TREE_HUB_SERVER_URL = originalServerUrl;
+    if (originalServerUrl === undefined) delete process.env.FIRST_TREE_SERVER_URL;
+    else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
   });
 
   it("returns server.url from client.yaml when initConfig was never called", async () => {
@@ -62,9 +62,9 @@ describe("resolveServerUrl without prior initConfig", () => {
     expect(resolveServerUrl("https://flag.example.com")).toBe("https://flag.example.com");
   });
 
-  it("prefers FIRST_TREE_HUB_SERVER_URL env var over yaml", async () => {
+  it("prefers FIRST_TREE_SERVER_URL env var over yaml", async () => {
     writeFileSync(join(testHome, "config", "client.yaml"), "server:\n  url: https://yaml.example.com\n");
-    process.env.FIRST_TREE_HUB_SERVER_URL = "https://env.example.com";
+    process.env.FIRST_TREE_SERVER_URL = "https://env.example.com";
 
     const { resolveServerUrl } = await import("../core/bootstrap.js");
     expect(resolveServerUrl()).toBe("https://env.example.com");

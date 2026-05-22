@@ -60,7 +60,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
       key: "connect",
       label: "Signed in",
       status: "missing_required",
-      hint: "Run `first-tree-hub connect <token>` first",
+      hint: "Run `first-tree-hub login <token>` first",
     });
   }
 
@@ -89,7 +89,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
       key: "server",
       label: "Server URL",
       status: "missing_required",
-      hint: "Provide via --server, FIRST_TREE_HUB_SERVER_URL, or config",
+      hint: "Provide via --server, FIRST_TREE_SERVER_URL, or config",
     });
   }
 
@@ -285,7 +285,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
 
   if (runtimeAgent) {
     print.line("\n  Start the agent:\n");
-    print.line("    first-tree-hub client start\n");
+    print.line("    first-tree-hub daemon start\n");
   }
   print.line("\n");
 }

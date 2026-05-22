@@ -3,13 +3,13 @@
 # cannot collide with a production `first-tree-hub` install on the same
 # machine. Pairs with the home-derived service-suffix logic in
 # apps/cli/src/core/service-install.ts: a non-default
-# FIRST_TREE_HUB_HOME yields a non-default systemd unit / launchd label,
+# FIRST_TREE_HOME yields a non-default systemd unit / launchd label,
 # so prod and dev background services coexist as separate units.
 #
 # Default isolated home is `~/.first-tree/hub-dev` → service unit
 # `first-tree-hub-client-dev.service` (systemd) /
 # `dev.first-tree-hub.client.dev` (launchd). Override with
-# FIRST_TREE_HUB_DEV_HOME if you need multiple parallel dev installs
+# FIRST_TREE_DEV_HOME if you need multiple parallel dev installs
 # (e.g. one per branch).
 #
 # Usage:
@@ -37,7 +37,7 @@ elif [[ ! -f "$DIST" ]]; then
   pnpm --filter @agent-team-foundation/first-tree-hub build
 fi
 
-export FIRST_TREE_HUB_HOME="${FIRST_TREE_HUB_DEV_HOME:-$HOME/.first-tree/hub-dev}"
+export FIRST_TREE_HOME="${FIRST_TREE_DEV_HOME:-$HOME/.first-tree/hub-dev}"
 
 # Prepend the in-tree CLI wrapper to PATH so any process started directly
 # from this shell (e.g. ad-hoc `dev-cli.sh chat send ...`) resolves
@@ -58,7 +58,7 @@ export PATH="$REPO_ROOT/scripts/dev-bin:$PATH"
 # This function patches the dev client's unit file in place to prepend
 # scripts/dev-bin to its PATH and restarts the unit if it is active.
 # Idempotent: once patched, subsequent runs are no-ops.
-# Scoped: only touches units whose FIRST_TREE_HUB_HOME matches this dev
+# Scoped: only touches units whose FIRST_TREE_HOME matches this dev
 # home, so the user's separate staging-client unit is left alone.
 ensure_dev_bin_in_service_path() {
   case "$(uname -s)" in
@@ -72,7 +72,7 @@ ensure_dev_bin_in_service_path() {
   local units_dir="$HOME/.config/systemd/user"
   [[ -d "$units_dir" ]] || return 0
   local dev_bin="$REPO_ROOT/scripts/dev-bin"
-  local home_marker="Environment=FIRST_TREE_HUB_HOME=${FIRST_TREE_HUB_HOME}"
+  local home_marker="Environment=FIRST_TREE_HOME=${FIRST_TREE_HOME}"
   shopt -s nullglob
   local unit
   for unit in "$units_dir"/first-tree-hub-client*.service; do

@@ -123,7 +123,7 @@ packages/e2e/
     │   │   ├── ws.ts            # M3: agent:ws client (auth → register → bind) + frame waiter + raw send
     │   │   └── dev-callback.ts  # M3: mint extra user JWTs via the dev-callback bypass
     │   ├── cli-driver/
-    │   │   ├── exec.ts          # M3: execCli (one-shot) + spawnCli (long-running) + ambient FIRST_TREE_HUB_* sanitization
+    │   │   ├── exec.ts          # M3: execCli (one-shot) + spawnCli (long-running) + ambient FIRST_TREE_* sanitization
     │   │   └── client-foreground.ts # M3: thin spawnCli wrapper for `client start --foreground`
     │   ├── credentials.ts       # M5 fixture: single-user PG seed for tests (paired with setup-devuser.ts; one is the fixture, the other is the live-seed)
     │   ├── setup-devuser.ts     # M5 dev-user seed: dev-callback → connect-token → CLI client start → agent/chat/message (driven from up.ts, not tests)

@@ -263,14 +263,14 @@ describe("buildAgentEnv", () => {
     });
     expect(env.PATH).toBe("/usr/bin");
     expect(env.FOO).toBe("bar");
-    expect(env.FIRST_TREE_HUB_SERVER_URL).toBe("http://hub");
-    expect(env.FIRST_TREE_HUB_AGENT_ID).toBe("agent-a");
-    expect(env.FIRST_TREE_HUB_INBOX_ID).toBe("inbox-a");
-    expect(env.FIRST_TREE_HUB_CHAT_ID).toBe("chat-1");
+    expect(env.FIRST_TREE_SERVER_URL).toBe("http://hub");
+    expect(env.FIRST_TREE_AGENT_ID).toBe("agent-a");
+    expect(env.FIRST_TREE_INBOX_ID).toBe("inbox-a");
+    expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
   });
 
-  it("overrides any pre-existing FIRST_TREE_HUB_* value in the parent env", () => {
-    const parent = { FIRST_TREE_HUB_CHAT_ID: "wrong-chat" } as NodeJS.ProcessEnv;
+  it("overrides any pre-existing FIRST_TREE_* value in the parent env", () => {
+    const parent = { FIRST_TREE_CHAT_ID: "wrong-chat" } as NodeJS.ProcessEnv;
     const env = buildAgentEnv(parent, {
       sdk: { serverUrl: "http://hub" },
       agent: {
@@ -283,7 +283,7 @@ describe("buildAgentEnv", () => {
       },
       chatId: "chat-right",
     });
-    expect(env.FIRST_TREE_HUB_CHAT_ID).toBe("chat-right");
+    expect(env.FIRST_TREE_CHAT_ID).toBe("chat-right");
   });
 
   it("injects doc-preview context (base + workspaces root + slug) when provided, for `chat send` capture", () => {
@@ -300,9 +300,9 @@ describe("buildAgentEnv", () => {
       chatId: "chat-1",
       docContext: { base: "/ws/coder/chat-1", workspacesRoot: "/ws", selfSlug: "coder" },
     });
-    expect(env.FIRST_TREE_HUB_DOC_BASE).toBe("/ws/coder/chat-1");
-    expect(env.FIRST_TREE_HUB_WORKSPACES_ROOT).toBe("/ws");
-    expect(env.FIRST_TREE_HUB_AGENT_SLUG).toBe("coder");
+    expect(env.FIRST_TREE_DOC_BASE).toBe("/ws/coder/chat-1");
+    expect(env.FIRST_TREE_WORKSPACES_ROOT).toBe("/ws");
+    expect(env.FIRST_TREE_AGENT_SLUG).toBe("coder");
   });
 
   it("omits doc-preview env vars when no docContext is provided (self-only / non-agent shells)", () => {
@@ -318,8 +318,8 @@ describe("buildAgentEnv", () => {
       },
       chatId: "chat-1",
     });
-    expect(env.FIRST_TREE_HUB_DOC_BASE).toBeUndefined();
-    expect(env.FIRST_TREE_HUB_WORKSPACES_ROOT).toBeUndefined();
-    expect(env.FIRST_TREE_HUB_AGENT_SLUG).toBeUndefined();
+    expect(env.FIRST_TREE_DOC_BASE).toBeUndefined();
+    expect(env.FIRST_TREE_WORKSPACES_ROOT).toBeUndefined();
+    expect(env.FIRST_TREE_AGENT_SLUG).toBeUndefined();
   });
 });

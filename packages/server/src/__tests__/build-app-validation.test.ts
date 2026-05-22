@@ -4,7 +4,7 @@ import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
 /**
- * Boot-time gate: a typo in `FIRST_TREE_HUB_AUTH_*_EXPIRY` must fail the
+ * Boot-time gate: a typo in `FIRST_TREE_AUTH_*_EXPIRY` must fail the
  * server boot, not the first `/connect-tokens` call hours later.
  *
  * The parser itself is covered by `auth-expiry-parse.test.ts`; this test

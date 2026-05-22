@@ -128,7 +128,12 @@ describe("Connect token carries iss claim", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json<{ token: string; command: string }>();
+    const body = res.json<{
+      token: string;
+      command: string;
+      bootstrapCommand: string;
+      npmSpec: string;
+    }>();
 
     // Decode the JWT payload (not verifying signature — it's our own key)
     const parts = body.token.split(".");
@@ -138,7 +143,13 @@ describe("Connect token carries iss claim", () => {
     expect(decoded.type).toBe("connect");
     expect(decoded.iss).toMatch(/^https?:\/\//);
 
-    expect(body.command).toBe(`first-tree-hub connect ${body.token}`);
+    expect(body.command).toBe(`first-tree-hub login ${body.token}`);
+    // `bootstrapCommand` combines the channel-resolved `npm install -g` line
+    // with the login command, so web onboarding renders a single copy-paste
+    // block that lands the user on the version this Hub actually advertises.
+    // Default test config runs channel=latest, so the npm spec stays bare.
+    expect(body.npmSpec).toBe("@agent-team-foundation/first-tree-hub");
+    expect(body.bootstrapCommand).toBe(`npm install -g ${body.npmSpec}\n${body.command}`);
   });
 });
 

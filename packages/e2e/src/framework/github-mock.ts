@@ -11,7 +11,7 @@ import Fastify, { type FastifyInstance } from "fastify";
  *      accepts them as if GitHub itself had delivered.
  *
  *   2. **Outbound from Hub**: serves a minimal `/api/*` surface. The server
- *      reaches it via `FIRST_TREE_HUB_GITHUB_API_BASE_URL` (F3 — landed in
+ *      reaches it via `FIRST_TREE_GITHUB_API_BASE_URL` (F3 — landed in
  *      M1). M2 only wires the webhook direction, so the proxy currently
  *      returns 404 by default — endpoints get stubbed lazily as the test
  *      suite needs them (e.g. installation access tokens for PR-event
@@ -47,7 +47,7 @@ export type GitHubMock = {
 export type GitHubMockOptions = {
   /** Hub server base URL — the mock POSTs webhooks to `${serverBaseUrl}/api/v1/webhooks/github-app`. */
   serverBaseUrl: string;
-  /** HMAC secret the server validates against. Must equal the server's `FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET`. */
+  /** HMAC secret the server validates against. Must equal the server's `FIRST_TREE_GITHUB_APP_WEBHOOK_SECRET`. */
   webhookSecret: string;
   /** Bind port. Default: 0 (ephemeral, OS-assigned). */
   port?: number;

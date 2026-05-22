@@ -4,7 +4,7 @@
 # runtime CLAUDE sessions spawned by the dev client) that invoke
 # `first-tree-hub chat send ...` resolve to this wrapper and hit the local
 # dist instead of the globally-installed staging CLI at
-# /usr/local/bin/first-tree-hub. FIRST_TREE_HUB_HOME is inherited from the
+# /usr/local/bin/first-tree-hub. FIRST_TREE_HOME is inherited from the
 # parent env so the hub-dev isolation set up by dev-cli.sh stays intact.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

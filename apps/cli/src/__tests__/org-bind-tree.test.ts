@@ -56,10 +56,10 @@ describe("org bind-tree CLI", () => {
     );
     writeFileSync(join(testHome, "config", "client.yaml"), "server:\n  url: http://hub.test\n");
 
-    originalHome = process.env.FIRST_TREE_HUB_HOME;
-    originalServerUrl = process.env.FIRST_TREE_HUB_SERVER_URL;
-    process.env.FIRST_TREE_HUB_HOME = testHome;
-    delete process.env.FIRST_TREE_HUB_SERVER_URL;
+    originalHome = process.env.FIRST_TREE_HOME;
+    originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
+    process.env.FIRST_TREE_HOME = testHome;
+    delete process.env.FIRST_TREE_SERVER_URL;
 
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -92,11 +92,11 @@ describe("org bind-tree CLI", () => {
   });
 
   afterEach(() => {
-    if (originalHome === undefined) delete process.env.FIRST_TREE_HUB_HOME;
-    else process.env.FIRST_TREE_HUB_HOME = originalHome;
+    if (originalHome === undefined) delete process.env.FIRST_TREE_HOME;
+    else process.env.FIRST_TREE_HOME = originalHome;
 
-    if (originalServerUrl === undefined) delete process.env.FIRST_TREE_HUB_SERVER_URL;
-    else process.env.FIRST_TREE_HUB_SERVER_URL = originalServerUrl;
+    if (originalServerUrl === undefined) delete process.env.FIRST_TREE_SERVER_URL;
+    else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
 
     rmSync(testHome, { recursive: true, force: true });
     vi.unstubAllGlobals();
@@ -108,7 +108,7 @@ describe("org bind-tree CLI", () => {
   async function buildProgram(): Promise<Command> {
     const program = new Command();
     program.exitOverride();
-    const { registerOrgCommands } = await import("../commands/org.js");
+    const { registerOrgCommands } = await import("../commands/org/index.js");
     registerOrgCommands(program);
     return program;
   }

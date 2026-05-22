@@ -23,7 +23,7 @@ gh auth status
 ### What to remember
 
 - First Tree Hub requires Node.js `>= 22.16`.
-- Do not jump to `client start`, `connect <token>`, or `onboard` on a machine where installation state is unknown.
+- Do not jump to `daemon start`, `login <token>`, or `agent create` on a machine where installation state is unknown.
 - If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree-hub ...` so they do not have to fight PATH.
 
 ## 1. "Connect this computer to an existing Hub server"
@@ -34,10 +34,10 @@ Use this when the Hub is already up and the user wants this machine to run agent
 
 ```bash
 # Paste a connect token from the Hub web console's "Connect a machine" dialog:
-first-tree-hub connect <connect-token>
+first-tree-hub login <connect-token>
 
 # Skip the background service install (useful in containers):
-first-tree-hub connect <connect-token> --no-service
+first-tree-hub login <connect-token> --no-start
 ```
 
 After `connect` succeeds, the machine is signed in and (by default on macOS/Linux) running as a background service.
@@ -45,16 +45,17 @@ After `connect` succeeds, the machine is signed in and (by default on macOS/Linu
 To verify:
 
 ```bash
-first-tree-hub client status          # local: configured agents
-first-tree-hub client doctor          # readiness checks (includes background-service state)
-first-tree-hub client list            # server-side: this client appears in the Hub
+first-tree-hub daemon status          # local: service state + hub + auth health
+first-tree-hub daemon doctor          # readiness checks (includes background-service state)
+# Server-side: open the Hub web admin → Computers tab to verify this
+# machine appears. (The legacy `client list` CLI verb was retired in Phase 1A.)
 ```
 
-If something breaks, `client doctor` usually points at the culprit (no credentials, wrong server URL, WebSocket blocked, etc.).
+If something breaks, `daemon doctor` usually points at the culprit (no credentials, wrong server URL, WebSocket blocked, etc.).
 
 ### What to remember
 
-- `connect <token>` is the **only** supported way to sign in. There is no separate `login`, username/password, or manual credential setup.
+- `login <token>` is the **only** supported way to sign in. There is no separate web login flow, username/password, or manual credential setup from the CLI side.
 - It writes `~/.first-tree/hub/credentials.json` and a generated `client.id` in `client.yaml`.
 - The hub URL is derived from the token's `iss` claim, so the operator never types a URL.
 - Agents are not registered by this command. Admins pin agents to this machine's `client.id` from the Hub UI (or via `agent create --client-id ...`). A running client auto-picks them up.
@@ -65,15 +66,15 @@ Use this for a production desktop or a server that should run agents permanently
 
 ### Flow
 
-`connect <token>` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
+`login <token>` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
 
 ```bash
-first-tree-hub connect <token>                 # auto-installs the service
-first-tree-hub client doctor                   # verify: shows running/inactive/not-installed
+first-tree-hub login <token>                 # auto-installs the service
+first-tree-hub daemon doctor                   # verify: shows running/inactive/not-installed
 tail -f ~/.first-tree/hub/logs/client.log      # tail logs (NDJSON)
 ```
 
-To repair a broken unit (binary moved, Node upgraded), re-run `connect <token>` — it rewrites the unit file. Re-authentication is required (paste a fresh connect token).
+To repair a broken unit (binary moved, Node upgraded), re-run `login <token>` — it rewrites the unit file. Re-authentication is required (paste a fresh connect token).
 
 To decommission a machine, remove the unit at the OS level and clear local state:
 
@@ -90,13 +91,13 @@ rm -f ~/.config/systemd/user/first-tree-hub-client.service
 rm -rf ~/.first-tree/hub
 ```
 
-To force-disconnect from the server side: `first-tree-hub client disconnect <clientId>`.
+To force-disconnect from the server side: use the Hub web admin (Computers → Disconnect). The CLI no longer ships an admin verb for this.
 
 ### What to remember
 
-- Windows is unsupported. `connect <token>` falls back to inline mode there — tell the user to use `first-tree-hub client start` inside a user-managed supervisor.
-- The service runs `client start --no-interactive`, so the machine must already have valid `credentials.json` — `connect <token>` writes that for you in the same step.
-- Re-running `connect <token>` is safe and idempotent for the unit file, but always re-authenticates.
+- Windows is unsupported. `login <token>` falls back to inline mode there — tell the user to use `first-tree-hub daemon start` inside a user-managed supervisor.
+- The service runs `daemon start --no-interactive`, so the machine must already have valid `credentials.json` — `login <token>` writes that for you in the same step.
+- Re-running `login <token>` is safe and idempotent for the unit file, but always re-authenticates.
 
 ## 3. "Onboard a new human member"
 
@@ -106,26 +107,30 @@ Add a real person to the team through the supported identity flow.
 
 ```bash
 # 0. Prereq on this machine: CLI installed, logged in.
-first-tree-hub connect <token>                         # if credentials.json does not exist
+first-tree-hub login <token>                                # if credentials.json does not exist
 
-# 1. Dry-run to surface missing fields:
-first-tree-hub onboard --check \
-  --server <url> --id alice --type human \
-  --role "Engineer" --domains "backend,infrastructure"
+# 1. Create the human agent record on the Hub + bind it to this client:
+first-tree-hub agent create alice \
+  --server <url> --type human --display-name "Alice" \
+  --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
 
-# 2. Create the member (and optionally a personal assistant):
-first-tree-hub onboard \
-  --server <url> --id alice --type human \
-  --role "Engineer" --domains "backend,infrastructure" \
-  --assistant alice-assistant
+# 2. (Optional) Pair Alice with a personal assistant agent:
+first-tree-hub agent create alice-assistant \
+  --server <url> --type personal_assistant \
+  --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
+
+# 3. (Optional) Bind a Feishu bot to the assistant:
+first-tree-hub agent bind bot --platform feishu \
+  --app-id "$FEISHU_APP_ID" --app-secret "$FEISHU_APP_SECRET" \
+  --agent alice-assistant
 ```
 
-If the machine should also run this human's personal assistant, run `client start` (or rely on the already-installed background service).
+If the machine should also run the assistant, run `first-tree-hub daemon start` (or rely on the already-installed background service started by `login`).
 
 ### What to remember
 
-- `onboard` creates the agent via Admin API and wires up the local alias + optional Feishu bot in one step.
-- It **does not** log you in. If `credentials.json` is missing, it exits with a pointer to `connect <token>`.
+- The single-shot `onboard` command was retired in Phase 1A. Onboarding is now a sequence of explicit verbs that can each fail and recover independently.
+- Each verb depends on a valid credential file. If `credentials.json` is missing, the command exits pointing at `login <token>`.
 - Pass the server URL explicitly (`--server`) whenever the user / automation supplied one — do not silently fall back to defaults.
 - Humans with a Feishu bot configured still need to send `/bind <id>` in Feishu afterwards to attach the human user to the assistant.
 
@@ -136,18 +141,19 @@ A bot with no human owner (code reviewer, monitor, pipeline agent).
 ### Flow
 
 ```bash
-first-tree-hub onboard --check \
-  --server <url> --id code-reviewer --type autonomous_agent \
-  --role "Code Review" --domains "code-review"
+first-tree-hub login <token>                                # if credentials.json does not exist
 
-first-tree-hub onboard \
-  --server <url> --id code-reviewer --type autonomous_agent \
-  --role "Code Review" --domains "code-review"
+first-tree-hub agent create code-reviewer \
+  --server <url> --type autonomous_agent \
+  --display-name "Code Review" \
+  --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
+
+first-tree-hub daemon start                                 # bring it online (no-op if already running)
 ```
 
 ### What to remember
 
-- Do **not** pass `--assistant` for `autonomous_agent`.
+- `autonomous_agent` does not pair with a `personal_assistant` — skip step 2 of the human flow.
 - Feishu bot binding is optional here (no `/bind` follow-up needed).
 - Thread through `--server <url>` whenever supplied.
 
@@ -182,15 +188,15 @@ Diagnose before editing code or YAML.
 ### Flow
 
 ```bash
-first-tree-hub client status          # local state: service, hub URL, agents
-first-tree-hub client doctor          # readiness checks (background-service state included)
-first-tree-hub client config show     # effective client YAML
+first-tree-hub daemon status          # local state: service, hub URL, agents
+first-tree-hub daemon doctor          # readiness checks (background-service state included)
+first-tree-hub config show     # effective client YAML
 ```
 
 ### What to remember
 
-- If `client doctor` flags "no credentials", the fix is `first-tree-hub connect <token>`, not a YAML edit.
-- If `client list` shows the client but `client status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
+- If `daemon doctor` flags "no credentials", the fix is `first-tree-hub login <token>`, not a YAML edit.
+- If `daemon status` / web admin Computers tab shows the client but `daemon status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
 - The Hub server is operated by the First Tree team as a SaaS — when a client cannot reach it, the issue is local connectivity / credentials, not server config.
 
 ## 7. "Debug messaging between agents"
@@ -215,7 +221,7 @@ first-tree-hub chat open <agent-name>                          # interactive REP
 
 ### What to remember
 
-- These are debugging / operator commands. For production, agents run under `client start` (or the service) and receive messages via WebSocket.
+- These are debugging / operator commands. For production, agents run under `daemon start` (or the service) and receive messages via WebSocket.
 - Use `--agent <name>` when multiple agent aliases are configured; with a single alias the flag is optional.
 
 ## 8. "Inspect or recover session state"
@@ -250,16 +256,16 @@ is no self-host path. Use this section when scaling out the *client* side.
 ### Flow
 
 1. Generate a connect token per machine from the Hub web console.
-2. On each machine, run `first-tree-hub connect <token>` once — it signs the
+2. On each machine, run `first-tree-hub login <token>` once — it signs the
    machine in and installs the background service in a single step so the
    runtime survives reboots.
-3. Verify with `first-tree-hub client doctor` and `first-tree-hub client list`.
+3. Verify with `first-tree-hub daemon doctor` and the Hub web admin (Computers tab).
 
 ### What to remember
 
 - Connect tokens carry the hub URL in their `iss` claim — operators never
   type a URL.
-- Windows is unsupported. `connect <token>` falls back to inline mode there;
+- Windows is unsupported. `login <token>` falls back to inline mode there;
   use a user-managed supervisor for permanent deployment.
 
 ## 10. "Change how the CLI behaves" (code change)

@@ -18,7 +18,7 @@ function assertProductionRequiresPublicUrl(config: Config): void {
   // to whatever the inbound proxy injected via Host headers (forgery
   // risk). Fail closed.
   if (process.env.NODE_ENV === "production" && !config.server.publicUrl) {
-    throw new Error("FIRST_TREE_HUB_PUBLIC_URL is required in production — set the public-facing hub URL.");
+    throw new Error("FIRST_TREE_PUBLIC_URL is required in production — set the public-facing hub URL.");
   }
 }
 
@@ -41,11 +41,11 @@ function assertGithubAppConfigComplete(config: Config): void {
   if (!ghApp) return;
 
   const required: Record<string, string | undefined> = {
-    FIRST_TREE_HUB_GITHUB_APP_ID: ghApp.appId,
-    FIRST_TREE_HUB_GITHUB_APP_CLIENT_ID: ghApp.clientId,
-    FIRST_TREE_HUB_GITHUB_APP_CLIENT_SECRET: ghApp.clientSecret,
-    FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY: ghApp.privateKeyPem,
-    FIRST_TREE_HUB_GITHUB_APP_WEBHOOK_SECRET: ghApp.webhookSecret,
+    FIRST_TREE_GITHUB_APP_ID: ghApp.appId,
+    FIRST_TREE_GITHUB_APP_CLIENT_ID: ghApp.clientId,
+    FIRST_TREE_GITHUB_APP_CLIENT_SECRET: ghApp.clientSecret,
+    FIRST_TREE_GITHUB_APP_PRIVATE_KEY: ghApp.privateKeyPem,
+    FIRST_TREE_GITHUB_APP_WEBHOOK_SECRET: ghApp.webhookSecret,
   };
   const missing = Object.entries(required)
     .filter(([, v]) => !v || v.trim().length === 0)
@@ -66,7 +66,7 @@ function assertGithubAppConfigComplete(config: Config): void {
     // undefined entirely); a present-but-empty block is ambiguous and
     // suggests env-file copy mistakes.
     throw new Error(
-      "GitHub App env block is present but every value is empty — unset the FIRST_TREE_HUB_GITHUB_APP_* vars to disable App sign-in.",
+      "GitHub App env block is present but every value is empty — unset the FIRST_TREE_GITHUB_APP_* vars to disable App sign-in.",
     );
   }
   // Belt-and-braces: a real PKCS#8 PEM starts with this header. Catches
@@ -74,7 +74,7 @@ function assertGithubAppConfigComplete(config: Config): void {
   // literal `\n` sequences instead of newlines. Cheap to check at boot.
   if (ghApp.privateKeyPem && !ghApp.privateKeyPem.includes("-----BEGIN PRIVATE KEY-----")) {
     throw new Error(
-      "FIRST_TREE_HUB_GITHUB_APP_PRIVATE_KEY does not look like a PKCS#8 PEM — expected `-----BEGIN PRIVATE KEY-----` header. " +
+      "FIRST_TREE_GITHUB_APP_PRIVATE_KEY does not look like a PKCS#8 PEM — expected `-----BEGIN PRIVATE KEY-----` header. " +
         "If the value came from a single-line env file, replace literal `\\n` with real newlines.",
     );
   }

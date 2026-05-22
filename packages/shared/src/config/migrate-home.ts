@@ -30,7 +30,7 @@ type MigrateOptions = {
   legacyHome?: string;
   /**
    * When set to a truthy value we treat the caller as "home path is
-   * user-overridden" and skip migration. Pass `process.env.FIRST_TREE_HUB_HOME`
+   * user-overridden" and skip migration. Pass `process.env.FIRST_TREE_HOME`
    * from the caller so the shared module stays free of direct env reads.
    */
   envOverride?: string | null | undefined;
@@ -48,7 +48,7 @@ type MigrateOptions = {
  * whether the legacy path still exists.
  *
  * Skip rules (in order):
- *   1. `FIRST_TREE_HUB_HOME` is set → user is driving the path explicitly.
+ *   1. `FIRST_TREE_HOME` is set → user is driving the path explicitly.
  *   2. Legacy path doesn't exist → nothing to migrate.
  *   3. New path already has content → treat as already-migrated (or a
  *      conflict the user must resolve). Either way, never merge.

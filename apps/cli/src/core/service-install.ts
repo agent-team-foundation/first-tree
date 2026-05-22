@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_HOME_DIR } from "@first-tree/shared/config";
@@ -70,10 +70,10 @@ export type ServiceInfo = {
 export type ServiceOpResult = { ok: true; detail?: string } | { ok: false; reason: string };
 
 /**
- * Map a `FIRST_TREE_HUB_HOME` basename to the suffix appended to the
+ * Map a `FIRST_TREE_HOME` basename to the suffix appended to the
  * service manager's unit name / label.
  *
- * Why this exists: `FIRST_TREE_HUB_HOME` already isolates config /
+ * Why this exists: `FIRST_TREE_HOME` already isolates config /
  * credentials / workspace under a separate home dir, but until now the
  * systemd unit name and launchd label were hard-coded — so a developer
  * running with an isolated home would still rewrite the same
@@ -144,7 +144,7 @@ function whichBin(name: string): string | null {
  *      atomically swaps the binary the unit launches, no unit rewrite
  *      needed.
  *
- *   ② Dev / isolated (non-empty suffix from a custom FIRST_TREE_HUB_HOME)
+ *   ② Dev / isolated (non-empty suffix from a custom FIRST_TREE_HOME)
  *      — pin to the running interpreter + script path. This skips the
  *      PATH lookup, which would otherwise resolve `first-tree-hub` to
  *      the operator's prod global install — making the dev unit silently
@@ -186,24 +186,24 @@ function launchdPlistPath(): string {
 function renderPlist(invocation: ResolvedBinary): string {
   const programArgs: string[] =
     invocation.kind === "bin"
-      ? [invocation.program, "client", "start", "--no-interactive"]
-      : [invocation.program, ...invocation.args, "client", "start", "--no-interactive"];
+      ? [invocation.program, "daemon", "start", "--no-interactive"]
+      : [invocation.program, ...invocation.args, "daemon", "start", "--no-interactive"];
 
   const argsXml = programArgs.map((a) => `    <string>${escapeXml(a)}</string>`).join("\n");
   // launchd's StandardOutPath / StandardErrorPath are the fallback sink — they
   // only catch bare stdout/stderr (crash messages, third-party spam) because
   // the client's own logger writes a rotating NDJSON file at `client.log`
-  // via FIRST_TREE_HUB_SERVICE_MODE. Naming these `.stdout.log` / `.stderr.log`
+  // via FIRST_TREE_SERVICE_MODE. Naming these `.stdout.log` / `.stderr.log`
   // keeps that role explicit for anyone inspecting the logs dir.
   const stdoutFallback = join(LOG_DIR, "client.stdout.log");
   const stderrFallback = join(LOG_DIR, "client.stderr.log");
 
   // Mirror the systemd-side fix: dev installs (non-empty suffix) need
-  // FIRST_TREE_HUB_HOME baked into the launched env, otherwise launchd
+  // FIRST_TREE_HOME baked into the launched env, otherwise launchd
   // strips the user's shell env on `bootstrap` and the process falls
   // back to the default home → silently reads prod's client.yaml.
   const homeEnvXml = SERVICE_SUFFIX
-    ? `\n    <key>FIRST_TREE_HUB_HOME</key>\n    <string>${escapeXml(DEFAULT_HOME_DIR)}</string>`
+    ? `\n    <key>FIRST_TREE_HOME</key>\n    <string>${escapeXml(DEFAULT_HOME_DIR)}</string>`
     : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -220,7 +220,7 @@ ${argsXml}
   <dict>
     <key>PATH</key>
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-    <key>FIRST_TREE_HUB_SERVICE_MODE</key>
+    <key>FIRST_TREE_SERVICE_MODE</key>
     <string>1</string>${homeEnvXml}
   </dict>
   <key>RunAtLoad</key>
@@ -345,7 +345,7 @@ function installLaunchd(): ServiceInfo {
     throw new Error(
       `launchctl bootstrap failed: ${lastBootstrapErr.stderr || `exit ${lastBootstrapErr.code ?? "unknown"}`}\n` +
         `    Command: launchctl bootstrap ${target} ${plistPath}\n` +
-        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree-hub connect <token>\`.`,
+        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree-hub login <token>\`.`,
     );
   }
 
@@ -394,19 +394,19 @@ function systemdUnitPath(): string {
 function renderSystemdUnit(invocation: ResolvedBinary): string {
   const execStart: string =
     invocation.kind === "bin"
-      ? `${shellQuote(invocation.program)} client start --no-interactive`
-      : `${shellQuote(invocation.program)} ${invocation.args.map(shellQuote).join(" ")} client start --no-interactive`;
+      ? `${shellQuote(invocation.program)} daemon start --no-interactive`
+      : `${shellQuote(invocation.program)} ${invocation.args.map(shellQuote).join(" ")} daemon start --no-interactive`;
 
-  // Pin FIRST_TREE_HUB_HOME into the unit when this install is itself
+  // Pin FIRST_TREE_HOME into the unit when this install is itself
   // running with a non-default home. Without this line, systemd's launched
-  // process inherits only the user manager's env, FIRST_TREE_HUB_HOME is
+  // process inherits only the user manager's env, FIRST_TREE_HOME is
   // unset, and the process silently falls back to the default `~/.first-tree/hub`
   // — i.e. a "dev" unit ends up reading prod's client.yaml. The
   // home-derived suffix gives us isolated unit names; this gives the
   // launched process the matching home so the isolation actually holds.
   // Prod (suffix === "") deliberately omits the line so existing
   // installed units don't churn unnecessarily.
-  const homeEnv = SERVICE_SUFFIX ? `Environment=FIRST_TREE_HUB_HOME=${shellQuote(DEFAULT_HOME_DIR)}\n` : "";
+  const homeEnv = SERVICE_SUFFIX ? `Environment=FIRST_TREE_HOME=${shellQuote(DEFAULT_HOME_DIR)}\n` : "";
 
   // Restart policy split:
   //   - on-failure  → operator-issued `systemctl stop` (clean exit 0) really stops.
@@ -417,7 +417,7 @@ function renderSystemdUnit(invocation: ResolvedBinary): string {
   // StartLimit* caps a crash storm (10 failures in 5 min → systemd holds back).
   // Logs go through journald — `journalctl --user -u first-tree-hub-client` is
   // the documented surface. The client itself still writes its rotating NDJSON
-  // to client.log when FIRST_TREE_HUB_SERVICE_MODE=1; journald only catches
+  // to client.log when FIRST_TREE_SERVICE_MODE=1; journald only catches
   // bare stdout/stderr (crashes, third-party spam).
   return `[Unit]
 Description=First Tree Hub Client
@@ -438,7 +438,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${SYSLOG_IDENT}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-Environment=FIRST_TREE_HUB_SERVICE_MODE=1
+Environment=FIRST_TREE_SERVICE_MODE=1
 ${homeEnv}[Install]
 WantedBy=default.target
 `;
@@ -534,7 +534,7 @@ function installSystemd(): ServiceInfo {
   if (!enableRes.ok) {
     throw new Error(
       `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
-        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree-hub connect <token>\`.`,
+        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree-hub login <token>\`.`,
     );
   }
 
@@ -591,8 +591,56 @@ export function installClientService(): ServiceInfo {
   if (process.platform === "linux") return installSystemd();
   throw new Error(
     `Background service install is not supported on ${process.platform}. ` +
-      "Run `first-tree-hub client start` manually to keep the computer online.",
+      "Run `first-tree-hub daemon start` manually to keep the computer online.",
   );
+}
+
+/**
+ * Cheap idempotency probe used by `daemon refresh-unit`: render the unit
+ * file the *current binary* would write and compare against what's on disk.
+ *
+ * `true`  → contents differ, the next CLI version invocation will read a
+ *           stale unit and `installClientService()` SHOULD be called.
+ * `false` → on-disk unit already matches (the common case for patch
+ *           upgrades within the same CLI surface), no need to pay the
+ *           bootout/bootstrap or daemon-reload + enable cost.
+ *
+ * Defensive: if the unit file is missing entirely, we treat that as "drift"
+ * — the caller likely needs `installClientService()` to lay it down,
+ * NOT a refresh skip. Errors during read also return `true` rather than
+ * silently skipping, so a permission glitch can't ever stall the unit
+ * behind a stale ExecStart.
+ *
+ * Returns `false` on unsupported platforms (Windows): there's no unit file
+ * to refresh, so "no drift" is the honest answer.
+ */
+export function isServiceUnitDriftDetected(): boolean {
+  if (process.platform === "darwin") return launchdUnitDriftDetected();
+  if (process.platform === "linux") return systemdUnitDriftDetected();
+  return false;
+}
+
+function launchdUnitDriftDetected(): boolean {
+  const invocation = resolveCliInvocation();
+  const expected = renderPlist(invocation);
+  return readFileOrFlagDrift(launchdPlistPath(), expected);
+}
+
+function systemdUnitDriftDetected(): boolean {
+  const invocation = resolveCliInvocation();
+  const expected = renderSystemdUnit(invocation);
+  return readFileOrFlagDrift(systemdUnitPath(), expected);
+}
+
+function readFileOrFlagDrift(path: string, expected: string): boolean {
+  if (!existsSync(path)) return true;
+  try {
+    const actual = readFileSync(path, "utf-8");
+    return actual !== expected;
+  } catch {
+    // Treat unreadable as drift — better to install than silently skip.
+    return true;
+  }
 }
 
 /** Report the current service state without modifying anything. */
@@ -634,7 +682,7 @@ export function getClientServiceStatus(): ServiceInfo {
 // ── start / stop / restart ──────────────────────────────────────────
 //
 // These delegate to the platform's service manager. Designed so the
-// `client start / stop / restart` CLI commands are thin wrappers — all
+// `daemon start / stop / restart` CLI commands are thin wrappers — all
 // platform-specific quirks (launchctl bootout vs kickstart, systemctl
 // start vs restart, "not loaded" tolerance) live here.
 
@@ -670,18 +718,25 @@ export function startClientService(): ServiceOpResult {
  * Stop the service without disabling auto-start on next boot/login.
  *
  * systemd: `systemctl --user stop` — unit stays enabled, so a reboot or
- * `client start` brings it back. Combined with `Restart=on-failure +
+ * `daemon start` brings it back. Combined with `Restart=on-failure +
  * SuccessExitStatus=0` in the unit, the SIGTERM path actually terminates
  * (the bug `Restart=always` had: stop would be immediately undone).
  *
  * launchd: `launchctl bootout` — unloads the running registration but
  * leaves the plist in `~/Library/LaunchAgents/`, so the next user login
- * (or `client start`) reloads it.
+ * (or `daemon start`) reloads it.
  */
 export function stopClientService(): ServiceOpResult {
   if (process.platform === "linux") {
     const res = runCapture("systemctl", ["--user", "stop", SYSTEMD_UNIT], 35_000);
-    if (!res.ok) return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+    if (!res.ok) {
+      // Mirror the launchd "stop on missing unit = ok" semantics below: a
+      // concurrent `daemon stop` or a manual `systemctl --user disable` can
+      // leave us racing systemd to a unit that's already gone. Without this
+      // tolerance, the second caller sees a spurious failure.
+      if (/not loaded|no such|unknown unit|not found/i.test(res.stderr)) return { ok: true, detail: "not running" };
+      return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+    }
     return { ok: true };
   }
   if (process.platform === "darwin") {

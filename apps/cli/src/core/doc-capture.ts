@@ -7,7 +7,7 @@ import { documentContextSchema } from "@first-tree/shared";
  * (L3: unify doc-preview capture across ALL send paths, not just final-text).
  *
  * The runtime injects the resolved doc context into the agent's environment
- * (`buildAgentEnv` → `FIRST_TREE_HUB_DOC_BASE` / `_WORKSPACES_ROOT` /
+ * (`buildAgentEnv` → `FIRST_TREE_DOC_BASE` / `_WORKSPACES_ROOT` /
  * `_AGENT_SLUG`); we read it here so the CLI sub-process resolves against the
  * exact same base + cross-agent fence as the runtime — no config reconstruction,
  * no server round-trip.
@@ -24,12 +24,12 @@ export async function captureOutboundDocs(
   content: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ content: string; documentContext?: unknown }> {
-  const base = env.FIRST_TREE_HUB_DOC_BASE;
+  const base = env.FIRST_TREE_DOC_BASE;
   if (!base) return { content };
 
-  const chatId = env.FIRST_TREE_HUB_CHAT_ID;
-  const workspacesRoot = env.FIRST_TREE_HUB_WORKSPACES_ROOT;
-  const selfSlug = env.FIRST_TREE_HUB_AGENT_SLUG;
+  const chatId = env.FIRST_TREE_CHAT_ID;
+  const workspacesRoot = env.FIRST_TREE_WORKSPACES_ROOT;
+  const selfSlug = env.FIRST_TREE_AGENT_SLUG;
   const fence: WorkspaceFence | undefined =
     workspacesRoot && selfSlug && chatId ? { workspacesRoot, chatId, selfSlug } : undefined;
 

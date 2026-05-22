@@ -1,21 +1,9 @@
 import type { Command } from "commander";
-import { fail, success } from "../cli/output.js";
-import { ensureFreshAccessToken, resolveServerUrl } from "../core/bootstrap.js";
-import { print } from "../core/output.js";
+import { fail, success } from "../../cli/output.js";
+import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
+import { print } from "../../core/output.js";
 
-/**
- * `first-tree-hub org` — organization-level operations.
- *
- * Today this only ships `bind-tree`, called by Step 3 onboarding agents
- * after they create a fresh context-tree GitHub repo so the Hub records
- * the binding in the org's `context_tree` settings namespace. The verb
- * mirrors first-tree CLI's own `tree bind` vocabulary so agents reading
- * "bind-tree" know what it means without translation. See
- * docs/new-user-onboarding-design.md §7.4 (Path B).
- */
-export function registerOrgCommands(program: Command): void {
-  const org = program.command("org").description("Organization-level operations");
-
+export function registerOrgBindTreeCommand(org: Command): void {
   org
     .command("bind-tree")
     .description("Bind the caller's organization to a context-tree GitHub URL")

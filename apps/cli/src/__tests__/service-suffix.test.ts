@@ -20,7 +20,7 @@ describe("deriveServiceSuffix", () => {
   });
 
   it("uses the entire basename for non-'hub-*' homes", () => {
-    // A user who points FIRST_TREE_HUB_HOME at e.g. ~/.first-tree/scratch
+    // A user who points FIRST_TREE_HOME at e.g. ~/.first-tree/scratch
     // gets `first-tree-hub-client-scratch.service` rather than colliding
     // with prod.
     expect(deriveServiceSuffix("scratch")).toBe("scratch");

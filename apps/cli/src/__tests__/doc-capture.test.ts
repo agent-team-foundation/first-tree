@@ -29,7 +29,7 @@ describe("captureOutboundDocs (chat send L3 capture)", () => {
   });
 
   it("snapshots a referenced workspace .md and attaches documentContext (explicit link)", async () => {
-    const out = await captureOutboundDocs("see design.md please", { FIRST_TREE_HUB_DOC_BASE: base });
+    const out = await captureOutboundDocs("see design.md please", { FIRST_TREE_DOC_BASE: base });
     expect(out.content).toBe("see [design.md](design.md) please");
     const ctx = out.documentContext as { kind?: string; docs?: Array<{ path: string }> } | undefined;
     expect(ctx?.kind).toBe("snapshot");
@@ -38,20 +38,20 @@ describe("captureOutboundDocs (chat send L3 capture)", () => {
 
   it("rewrites an absolute-in-base path into an explicit relative link + snapshots it", async () => {
     const abs = join(base, "design.md");
-    const out = await captureOutboundDocs(`wrote ${abs} now`, { FIRST_TREE_HUB_DOC_BASE: base });
+    const out = await captureOutboundDocs(`wrote ${abs} now`, { FIRST_TREE_DOC_BASE: base });
     expect(out.content).toBe("wrote [design.md](design.md) now");
     const ctx = out.documentContext as { docs?: Array<{ path: string }> } | undefined;
     expect(ctx?.docs?.map((d) => d.path)).toEqual(["design.md"]);
   });
 
   it("no documentContext when the referenced path is not in the workspace", async () => {
-    const out = await captureOutboundDocs("see /etc/nope/missing.md", { FIRST_TREE_HUB_DOC_BASE: base });
+    const out = await captureOutboundDocs("see /etc/nope/missing.md", { FIRST_TREE_DOC_BASE: base });
     expect(out.content).toBe("see /etc/nope/missing.md");
     expect(out.documentContext).toBeUndefined();
   });
 
   it("no documentContext when the message references no .md", async () => {
-    const out = await captureOutboundDocs("just a plain message", { FIRST_TREE_HUB_DOC_BASE: base });
+    const out = await captureOutboundDocs("just a plain message", { FIRST_TREE_DOC_BASE: base });
     expect(out.content).toBe("just a plain message");
     expect(out.documentContext).toBeUndefined();
   });

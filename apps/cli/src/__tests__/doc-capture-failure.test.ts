@@ -22,7 +22,7 @@ import { captureOutboundDocs } from "../core/doc-capture.js";
 
 describe("captureOutboundDocs — failure preserves the original body", () => {
   it("returns the original content and no documentContext when validation throws", async () => {
-    const out = await captureOutboundDocs("see design.md please", { FIRST_TREE_HUB_DOC_BASE: "/ws/coder/chat-1" });
+    const out = await captureOutboundDocs("see design.md please", { FIRST_TREE_DOC_BASE: "/ws/coder/chat-1" });
     expect(out.content).toBe("see design.md please");
     expect(out.documentContext).toBeUndefined();
   });

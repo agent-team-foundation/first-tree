@@ -25,7 +25,7 @@ import { authedFetch, authedJson } from "../framework/server-driver/http.js";
  * service call.
  *
  * Requires `E2E_WITH_CLIENT=1` so globalSetup provisioned credentials, AND
- * `FIRST_TREE_HUB_DEV_CALLBACK_ENABLED=1` on the server (globalSetup turns
+ * `FIRST_TREE_DEV_CALLBACK_ENABLED=1` on the server (globalSetup turns
  * this on for all e2e runs).
  */
 

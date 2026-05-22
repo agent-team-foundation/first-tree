@@ -31,8 +31,8 @@ observability:
 Or via environment variables (preferred for secret tokens):
 
 ```bash
-FIRST_TREE_HUB_OTEL_ENDPOINT=https://<your-otlp-endpoint>/v1/traces
-FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer <write-token>"
+FIRST_TREE_OTEL_ENDPOINT=https://<your-otlp-endpoint>/v1/traces
+FIRST_TREE_OTEL_HEADERS="Authorization=Bearer <write-token>"
 ```
 
 Restart the server. You should see `tracing enabled: exporter=otlp-http ...`
@@ -42,11 +42,11 @@ in the startup log.
 
 | Path | Env var | Default | Notes |
 |---|---|---|---|
-| `observability.logging.level` | `FIRST_TREE_HUB_LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
+| `observability.logging.level` | `FIRST_TREE_LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `observability.logging.format` | — | `pretty` (dev), `json` (prod) | Pretty for humans, JSON for log collectors |
 | `observability.logging.bridgeToSpanLevel` | — | `error` | Minimum pino level whose records are attached to the active span. `warn` / `error` / `off` |
-| `observability.tracing.endpoint` | `FIRST_TREE_HUB_OTEL_ENDPOINT` | `""` (disabled) | OTLP/HTTP traces URL |
-| `observability.tracing.headers` | `FIRST_TREE_HUB_OTEL_HEADERS` | `""` | `key1=val1,key2=val2` format |
+| `observability.tracing.endpoint` | `FIRST_TREE_OTEL_ENDPOINT` | `""` (disabled) | OTLP/HTTP traces URL |
+| `observability.tracing.headers` | `FIRST_TREE_OTEL_HEADERS` | `""` | `key1=val1,key2=val2` format |
 | `observability.tracing.exporter` | — | `otlp-http` | `otlp-http` or `otlp-grpc` |
 | `observability.tracing.serviceName` | — | `first-tree-hub` | Shown in trace backends |
 | `observability.tracing.environment` | — | `development` | `deployment.environment.name` OTel attr |
@@ -67,7 +67,7 @@ backends treat as first-class:
 | Attribute | Value | Configured by |
 |---|---|---|
 | `service.name` | `first-tree-hub` (customizable) | `observability.tracing.serviceName` |
-| `deployment.environment.name` | `development` / `staging` / `production` / … | `observability.tracing.environment` or `FIRST_TREE_HUB_OTEL_ENVIRONMENT` |
+| `deployment.environment.name` | `development` / `staging` / `production` / … | `observability.tracing.environment` or `FIRST_TREE_OTEL_ENVIRONMENT` |
 | `service.instance.id` | `srv_<8-char-hex>` — unique per process | auto-generated at startup |
 
 ### Typical deployment
@@ -77,10 +77,10 @@ OTLP env vars to the container (e.g. via the platform's secrets store):
 
 ```bash
 docker run \
-  -e FIRST_TREE_HUB_OTEL_ENDPOINT=https://logfire-us.pydantic.dev/v1/traces \
-  -e FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer <token>" \
-  -e FIRST_TREE_HUB_OTEL_ENVIRONMENT=production \
-  -e FIRST_TREE_HUB_DATABASE_URL=... \
+  -e FIRST_TREE_OTEL_ENDPOINT=https://logfire-us.pydantic.dev/v1/traces \
+  -e FIRST_TREE_OTEL_HEADERS="Authorization=Bearer <token>" \
+  -e FIRST_TREE_OTEL_ENVIRONMENT=production \
+  -e FIRST_TREE_DATABASE_URL=... \
   ghcr.io/agent-team-foundation/first-tree-hub:latest
 ```
 
@@ -272,9 +272,9 @@ Inject the env vars when launching the SaaS server container:
 
 ```
 docker run \
-  -e FIRST_TREE_HUB_LOG_LEVEL=debug \
-  -e FIRST_TREE_HUB_OTEL_ENDPOINT=https://... \
-  -e FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer ..." \
+  -e FIRST_TREE_LOG_LEVEL=debug \
+  -e FIRST_TREE_OTEL_ENDPOINT=https://... \
+  -e FIRST_TREE_OTEL_HEADERS="Authorization=Bearer ..." \
   ghcr.io/agent-team-foundation/first-tree-hub:latest
 ```
 

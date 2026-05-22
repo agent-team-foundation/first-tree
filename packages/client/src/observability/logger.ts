@@ -22,12 +22,12 @@ const SERVICE_LOG_MAX_FILES = 7;
  * so we skip tracing, context propagation, and error sinks.
  */
 
-const initialLevel = parseLogLevel(process.env.FIRST_TREE_HUB_LOG_LEVEL);
-// Tests get a silent logger unless FIRST_TREE_HUB_LOG_LEVEL is explicitly set,
+const initialLevel = parseLogLevel(process.env.FIRST_TREE_LOG_LEVEL);
+// Tests get a silent logger unless FIRST_TREE_LOG_LEVEL is explicitly set,
 // otherwise vitest output would be flooded by runtime logs that happen to run
 // during setup.
 const initialPinoLevel: LogLevel | "silent" =
-  process.env.NODE_ENV === "test" && !process.env.FIRST_TREE_HUB_LOG_LEVEL ? "silent" : initialLevel.level;
+  process.env.NODE_ENV === "test" && !process.env.FIRST_TREE_LOG_LEVEL ? "silent" : initialLevel.level;
 let _format: LogFormat = process.env.NODE_ENV === "production" ? "json" : "pretty";
 let _destination: Writable = process.stderr;
 // Tracks whether the level was pinned by an explicit operator decision (CLI
@@ -65,10 +65,7 @@ export const rootLogger = pino(
 );
 
 if (initialLevel.fellBack) {
-  rootLogger.warn(
-    { envValue: process.env.FIRST_TREE_HUB_LOG_LEVEL },
-    "invalid FIRST_TREE_HUB_LOG_LEVEL; falling back to info",
-  );
+  rootLogger.warn({ envValue: process.env.FIRST_TREE_LOG_LEVEL }, "invalid FIRST_TREE_LOG_LEVEL; falling back to info");
 }
 
 export function createLogger(module: string): pino.Logger {
@@ -82,7 +79,7 @@ export function createLogger(module: string): pino.Logger {
  * `StandardError` as a fallback for crash-time stderr; this routes normal
  * operational logs into a size-rotated NDJSON file at
  * `<logDir>/client.log` so it doesn't grow unbounded. Must be called once
- * at `client start` when running under `FIRST_TREE_HUB_SERVICE_MODE=1`.
+ * at `client start` when running under `FIRST_TREE_SERVICE_MODE=1`.
  */
 export function configureClientLoggerForService(logDir: string): void {
   const stream = new RotatingFileStream({

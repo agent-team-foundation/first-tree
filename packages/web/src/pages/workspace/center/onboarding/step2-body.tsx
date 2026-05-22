@@ -79,6 +79,11 @@ export function Step2Body({
   const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
   const [connectToken, setConnectToken] = useState<string | null>(() => initialConnectToken);
   const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(() => initialConnectTokenExpiresAt);
+  // Server-built bootstrap command (npm install + login) with channel-aware
+  // npm spec. Replaces the client-side hardcoded `@latest` so staging users
+  // (channel=alpha) install the right package on first run instead of
+  // landing on stable and watching auto-update yank them forward.
+  const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null);
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [phase, setPhase] = useState<Phase>("form");
   const [error, setError] = useState<string | null>(null);
@@ -177,10 +182,14 @@ export function Step2Body({
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.post<{ token: string; expiresIn: number }>("/me/connect-tokens", {});
+        const r = await api.post<{ token: string; expiresIn: number; bootstrapCommand: string }>(
+          "/me/connect-tokens",
+          {},
+        );
         if (!cancelled) {
           setConnectToken(r.token);
           setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
+          setBootstrapCommand(r.bootstrapCommand);
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to generate connect token");
@@ -216,9 +225,15 @@ export function Step2Body({
   const trimmedName = displayName.trim();
   const nameOrFallback = trimmedName || "your agent";
 
-  const cliCommand = connectToken
-    ? `npm install -g @agent-team-foundation/first-tree-hub\nfirst-tree-hub connect ${connectToken}`
-    : null;
+  // Prefer the server-built command (channel-aware npm spec); fall back to
+  // a client-side construction only if the bootstrap field is missing —
+  // e.g. an old server, or a transient race where `connectToken` arrives
+  // but `bootstrapCommand` hasn't landed in state yet.
+  const cliCommand =
+    bootstrapCommand ??
+    (connectToken
+      ? `npm install -g @agent-team-foundation/first-tree-hub\nfirst-tree-hub login ${connectToken}`
+      : null);
 
   const pollUntilReady = useCallback(
     async (agentUuid: string): Promise<void> => {
@@ -631,7 +646,7 @@ function CommandBox({ command }: { command: string | null }) {
 
   const lines = command ? command.split("\n") : [];
   const connectLine = lines.find((l) => l.startsWith("first-tree-hub")) ?? "";
-  const connectPrefix = "first-tree-hub connect ";
+  const connectPrefix = "first-tree-hub login ";
   const commandPreview = connectLine.startsWith(connectPrefix)
     ? `${connectPrefix}${connectLine.slice(connectPrefix.length, connectPrefix.length + 22)}…`
     : connectLine.length > 52
