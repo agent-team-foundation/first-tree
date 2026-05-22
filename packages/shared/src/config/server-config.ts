@@ -338,6 +338,45 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_PRESENCE_CLEANUP_SECONDS",
     }),
     /**
+     * Chat auto-archive sweeper cadence. Set to 0 to disable the sweeper
+     * (useful in tests and one-off CLI runs). Default 300s (5 min) sits
+     * comfortably below the smallest idle threshold (1h) so worst-case
+     * archive latency is bounded by the threshold plus one tick.
+     */
+    archiveSweepIntervalSeconds: field(z.coerce.number().int().nonnegative().default(300), {
+      env: "FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS",
+    }),
+    /**
+     * Idle threshold for chats bound to GitHub PRs/Issues. Once every
+     * bound entity is closed/merged AND the chat has been silent this
+     * long, the sweeper flips every mapped human's view to `archived`.
+     */
+    archiveMappedIdleSeconds: field(
+      z.coerce
+        .number()
+        .int()
+        .positive()
+        .default(60 * 60),
+      {
+        env: "FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS",
+      },
+    ),
+    /**
+     * Idle threshold for chats with no GitHub mapping. Per (chat, user) —
+     * users with unread mentions are skipped; users without an unread
+     * stay archived after this much silence.
+     */
+    archiveUnmappedIdleSeconds: field(
+      z.coerce
+        .number()
+        .int()
+        .positive()
+        .default(12 * 60 * 60),
+      {
+        env: "FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS",
+      },
+    ),
+    /**
      * Optional outbound webhook URL — if set, every notification is
      * fire-and-forget POSTed here in JSON. Replaces the prior DB-backed
      * `notification_webhook_url` config row.
