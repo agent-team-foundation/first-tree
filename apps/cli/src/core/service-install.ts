@@ -161,6 +161,13 @@ const PROXY_ENV_KEYS = [
  * with, so once these vars land in the plist on first install they stay in
  * the supervisor's env and the next refresh-rendered plist matches → no drift,
  * no clobber.
+ *
+ * Security note: if a proxy URL embeds credentials (e.g.
+ * `http://user:pass@host:port`), those credentials land in the rendered
+ * plist / systemd unit on disk (mode 0o644 for plist, default file perms
+ * for systemd user units — both group- and world-readable). Exposure level
+ * matches `.zshrc` if the user originally `export`ed the URL there, but
+ * operators relying on credential-bearing proxy URLs should be aware.
  */
 export function collectProxyEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
