@@ -16,10 +16,10 @@ import { WorkingChip } from "./working-chip.js";
  * (see use-admin-ws) — no per-agent poll.
  *
  * Each row reads its main status through the shared `viewOf` vocabulary:
- * a status-point (StatusGlyph) on the avatar + a second line that's only
- * spent on the states with detail worth surfacing (working → the live
- * activity, needs-you / failed → a short reason); ready / paused / offline
- * collapse to just the name line, distinguished by the dot's shape/colour.
+ * a status-point (StatusGlyph) on the avatar + a second line for every state
+ * (working → the live activity, needs-you / failed → a short reason, ready /
+ * paused / offline → a muted state word), so all rows stay uniform / equal-
+ * height. The dot carries the shape + colour distinction.
  */
 export function AgentStatusPanel({
   chatId,
@@ -146,10 +146,10 @@ function AgentStatusRow({
 }
 
 /**
- * The row's detail line. working → the live activity (Using <tool> · 12s) via
- * the shared WorkingChip; needs-you / failed → a short coloured reason;
- * ready / paused / offline → no second line at all (the dot's shape + colour
- * carries it, so the row collapses to a single name line).
+ * The row's second line — present for every state so all rows stay uniform.
+ * working → the live activity (Using <tool> · 12s) via the shared WorkingChip;
+ * needs-you / failed → a short coloured reason; ready / paused / offline → a
+ * muted state word (--fg-4). The dot still carries shape + colour.
  */
 function SecondLine({ status }: { status: AgentChatStatus | null }) {
   if (!status) {
@@ -180,9 +180,14 @@ function SecondLine({ status }: { status: AgentChatStatus | null }) {
       </div>
     );
   }
-  // ready / paused / offline carry no detail worth a second line — the dot's
-  // shape + colour already says it. Collapse to the single name row (§3.2).
-  return null;
+  // ready / paused / offline → a muted state word. No dynamic detail, but
+  // every state gets a second line so all rows stay uniform / equal-height
+  // (§3.2); the dot still carries shape + colour, this is its text echo.
+  return (
+    <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+      {viewOf(status.main).label}
+    </div>
+  );
 }
 
 /** Compact one-click Pause (suspend). Reversible — the next message in the
