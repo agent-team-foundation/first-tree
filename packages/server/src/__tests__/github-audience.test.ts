@@ -112,7 +112,7 @@ describe("identifyActor", () => {
     const id = await identifyActor(
       app.db,
       admin.organizationId,
-      { githubLogin: "First-Tree-Hub[bot]", isBot: true },
+      { githubLogin: "First-Tree[bot]", isBot: true },
       "first-tree",
     );
     expect(id).toEqual({ kind: "our-app-bot" });
