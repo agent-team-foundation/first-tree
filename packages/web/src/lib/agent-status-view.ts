@@ -104,12 +104,14 @@ export function viewOf(main: AgentMainStatus): AgentStatusView {
         label: "Paused",
       };
     case "ready":
+      // Internal enum stays `ready`; the user-facing word is "Idle" (matches
+      // the runtime-A `idle` label and reads clearer than "ready for what?").
       return {
         colorVar: "var(--state-idle)",
         shape: "dot",
         pulse: null,
         animationClass: null,
-        label: "Ready",
+        label: "Idle",
       };
     case "offline":
       return {
