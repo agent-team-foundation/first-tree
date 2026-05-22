@@ -215,7 +215,7 @@ describe("GitMirrorManager — lifecycle", () => {
     const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot] });
     await m.ensureMirror(fixtureUrl);
 
-    const target = join(managedRoot, "agent-x", "chat-X", "first-tree-hub");
+    const target = join(managedRoot, "agent-x", "chat-X", "agent-worktree");
     // Recreate the production shape — packages/web/.vite/deps/_metadata.json,
     // no `.git` marker.
     mkdirSync(join(target, "packages", "web", ".vite", "deps"), { recursive: true });
@@ -270,7 +270,7 @@ describe("GitMirrorManager — lifecycle", () => {
     const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot] });
     await m.ensureMirror(fixtureUrl);
 
-    const target = join(managedRoot, "agent-x", "chat-Y", "first-tree-hub");
+    const target = join(managedRoot, "agent-x", "chat-Y", "agent-worktree");
     mkdirSync(target, { recursive: true });
     writeFileSync(join(target, "leftover.txt"), "cache");
 
@@ -314,7 +314,7 @@ describe("GitMirrorManager — lifecycle", () => {
     mkdirSync(managedRoot, { recursive: true });
     const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot] });
     await m.ensureMirror(fixtureUrl);
-    const target = join(managedRoot, "agent-x", "chat-Z", "first-tree-hub");
+    const target = join(managedRoot, "agent-x", "chat-Z", "agent-worktree");
     const { branchName } = await m.createWorktree({
       url: fixtureUrl,
       targetPath: target,

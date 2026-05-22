@@ -21,6 +21,14 @@ import type { pino } from "../observability/logger.js";
  *   - `createWorktree` calls `killProcessesHoldingPath` then `rmSync` when a
  *     non-managed leftover sits in a path under a hub-managed root — see the
  *     `hubManagedRoots` option on `GitMirrorManager`.
+ *
+ * Platform support: `lsof` is the universal way to enumerate file holders
+ * on POSIX. We try a few well-known paths before falling back to PATH (macOS
+ * launchd / systemd strip `/usr/sbin` from `Environment=PATH`). Windows ships
+ * no equivalent; `resolveLsofBinary` returns `null` there and the helpers
+ * become no-ops — the self-heal path then relies on `existsSync(absTarget)`
+ * after the post-cleanup attempt to surface failure. Windows isn't in Hub's
+ * supported daemon matrix today; revisit if/when that changes.
  */
 
 /** Generous upper bound on a single lsof run before we give up. */
