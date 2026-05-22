@@ -414,14 +414,14 @@ export function splitConcatenatedJsonArrays(raw: string): string[] {
   let depth = 0;
   let start = -1;
   let inString = false;
-  let escape = false;
+  let escaping = false;
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw[i];
     if (inString) {
-      if (escape) {
-        escape = false;
+      if (escaping) {
+        escaping = false;
       } else if (ch === "\\") {
-        escape = true;
+        escaping = true;
       } else if (ch === '"') {
         inString = false;
       }

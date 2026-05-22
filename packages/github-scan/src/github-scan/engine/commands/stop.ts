@@ -25,7 +25,7 @@ export async function runStop(argv: readonly string[] = [], options: RunStopOpti
   const profile = options.profile ?? parseProfile(argv) ?? "default";
   const config = loadGitHubScanDaemonConfig();
 
-  let identity;
+  let identity: ReturnType<typeof resolveDaemonIdentity>;
   try {
     identity = resolveDaemonIdentity({ host: config.host });
   } catch (err) {

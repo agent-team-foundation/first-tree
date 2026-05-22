@@ -120,6 +120,7 @@ const HeaderBanner = (): React.ReactElement => {
     <Box>
       <Text> </Text>
       {letters.map(([ch, color], i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static title array; positions never change
         <Text key={i} color={color}>
           {ch}
         </Text>
@@ -299,6 +300,7 @@ const LiveFeed = ({ events }: LiveFeedProps): React.ReactElement => (
     <Text color={COLOR.dim}>{"────── live ─────────────────────────────────────────────"}</Text>
     <Text> </Text>
     {events.map((e, i) => (
+      // biome-ignore lint/suspicious/noArrayIndexKey: append-only chronological feed; existing rows never reorder
       <LiveEvent key={i} event={e} />
     ))}
   </Box>

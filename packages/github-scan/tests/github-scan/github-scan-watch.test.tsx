@@ -9,7 +9,6 @@
  */
 
 import { render } from "ink-testing-library";
-import React from "react";
 import { describe, expect, it } from "vitest";
 
 import { GitHubScanWatch } from "../../src/github-scan/engine/commands/watch.js";
@@ -48,10 +47,10 @@ function pr(
 function strip(s: string | undefined): string {
   if (!s) return "";
   // OSC-8: ESC ] 8 ; ; URL BEL TEXT ESC ] 8 ; ; BEL
-  // oxlint-disable-next-line no-control-regex
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escape sequences requires matching control chars
   let out = s.replace(/\x1b\]8;;[^\x07]*\x07/gu, "");
   // ANSI SGR
-  // oxlint-disable-next-line no-control-regex
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escape sequences requires matching control chars
   out = out.replace(/\x1b\[[0-9;]*m/gu, "");
   return out;
 }

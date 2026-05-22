@@ -42,7 +42,9 @@
       "!**/*.code-workspace",
       "!**/.gstack",
       "!**/.first-tree/tmp",
-      "!packages/e2e/.e2e-runs"
+      "!packages/e2e/.e2e-runs",
+      "!packages/github-scan/assets",
+      "!_legacy_first_tree"
     ]
   },
   "overrides": [

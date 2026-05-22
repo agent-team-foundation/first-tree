@@ -58,8 +58,8 @@ describe("readInbox / writeInbox", () => {
     // Explicitly confirm these keys exist with null values (not omitted).
     expect(Object.hasOwn(discussion!, "number")).toBe(true);
     expect(Object.hasOwn(discussion!, "gh_state")).toBe(true);
-    expect(discussion!.number).toBeNull();
-    expect(discussion!.gh_state).toBeNull();
+    expect(discussion?.number).toBeNull();
+    expect(discussion?.gh_state).toBeNull();
   });
 
   it("writes atomically (no .tmp file left after success)", () => {
@@ -78,7 +78,7 @@ describe("readInbox / writeInbox", () => {
     const firstEntryMatch = raw.match(/"notifications":\[\{([^}]+)\}/u);
     expect(firstEntryMatch).toBeTruthy();
     const keyOrder = Array.from(
-      firstEntryMatch![1].matchAll(
+      firstEntryMatch?.[1].matchAll(
         /"(id|type|reason|repo|title|url|last_actor|updated_at|unread|priority|number|html_url|gh_state|labels|github_scan_status)"/gu,
       ),
     ).map((m) => m[1]);

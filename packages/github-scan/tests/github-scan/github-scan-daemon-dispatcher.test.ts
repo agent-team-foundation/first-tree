@@ -132,9 +132,13 @@ function waitForCompletions(env: DispatcherEnv, count: number, timeoutMs = 2_000
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const tick = (): void => {
-      if (env.completions.length >= count) return resolve();
+      if (env.completions.length >= count) {
+        resolve();
+        return;
+      }
       if (Date.now() - start > timeoutMs) {
-        return reject(new Error(`only ${env.completions.length}/${count} completions after ${timeoutMs}ms`));
+        reject(new Error(`only ${env.completions.length}/${count} completions after ${timeoutMs}ms`));
+        return;
       }
       setTimeout(tick, 10);
     };

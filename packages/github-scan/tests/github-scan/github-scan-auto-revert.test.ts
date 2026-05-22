@@ -456,7 +456,7 @@ describe("fetchHumanLabelAppliedAt — pagination (issue #365)", () => {
       expect(calls).toBe(AUTO_REVERT_MAX_PAGES);
       // The warn is emitted on the final page (the cap notice).
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0]![0]).toMatch(/cap/);
+      expect(warnSpy.mock.calls[0]?.[0]).toMatch(/cap/);
     } finally {
       warnSpy.mockRestore();
     }
@@ -509,7 +509,7 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
     const gh = { run: stub.run } as unknown as GhClient;
     const out = fetchIssueComments(gh, "o/r", 1);
     expect(out).not.toBeNull();
-    expect(out!.length).toBe(AUTO_REVERT_PAGE_SIZE * 2 + 1);
+    expect(out?.length).toBe(AUTO_REVERT_PAGE_SIZE * 2 + 1);
     expect(stub.state.calls).toBe(3);
   });
 
@@ -539,7 +539,7 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
     // Page 1 is accumulated; page 2 is fetched but early-exit fires
     // BEFORE its (entirely pre-label) comments are pushed, so they're
     // not wastefully accumulated just to be filtered downstream.
-    expect(out!.length).toBe(AUTO_REVERT_PAGE_SIZE);
+    expect(out?.length).toBe(AUTO_REVERT_PAGE_SIZE);
     expect(stub.state.requestedPages).toEqual([1, 2]);
   });
 
@@ -561,9 +561,9 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
     const gh = { run: stub.run } as unknown as GhClient;
     const out = fetchIssueComments(gh, "o/r", 1, labelAppliedAt);
     expect(out).not.toBeNull();
-    expect(out!.length).toBe(AUTO_REVERT_PAGE_SIZE * 2 + 1);
+    expect(out?.length).toBe(AUTO_REVERT_PAGE_SIZE * 2 + 1);
     expect(stub.state.calls).toBe(3);
-    expect(out![out!.length - 1]!.createdAt).toBe("2026-02-01T10:00:00Z");
+    expect(out?.[out?.length - 1]?.createdAt).toBe("2026-02-01T10:00:00Z");
   });
 
   it("hard-cap engages on > MAX_PAGES full pages and emits a console.warn", () => {
@@ -583,7 +583,7 @@ describe("fetchIssueComments — pagination (issue #365)", () => {
       fetchIssueComments(gh, "o/r", 1);
       expect(calls).toBe(AUTO_REVERT_MAX_PAGES);
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0]![0]).toMatch(/cap/);
+      expect(warnSpy.mock.calls[0]?.[0]).toMatch(/cap/);
     } finally {
       warnSpy.mockRestore();
     }
@@ -850,7 +850,7 @@ describe("fetchPrCommits — pagination (issue #383)", () => {
     const gh = { run: stub.run } as unknown as GhClient;
     const out = fetchPrCommits(gh, "o/r", 1);
     expect(out).not.toBeNull();
-    expect(out!.length).toBe(AUTO_REVERT_PAGE_SIZE + 1);
+    expect(out?.length).toBe(AUTO_REVERT_PAGE_SIZE + 1);
     expect(stub.state.calls).toBe(2);
   });
 
@@ -869,7 +869,7 @@ describe("fetchPrCommits — pagination (issue #383)", () => {
       fetchPrCommits(gh, "o/r", 1);
       expect(calls).toBe(AUTO_REVERT_MAX_PAGES);
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0]![0]).toMatch(/cap/);
+      expect(warnSpy.mock.calls[0]?.[0]).toMatch(/cap/);
     } finally {
       warnSpy.mockRestore();
     }

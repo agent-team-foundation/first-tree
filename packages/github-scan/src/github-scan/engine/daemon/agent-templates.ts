@@ -211,7 +211,7 @@ function templateOrder(name: string | undefined): number {
   }
 
   const normalized = name.trim().toLowerCase();
-  const index = TEMPLATE_NAME_ORDER.findIndex((candidate) => candidate === normalized);
+  const index = TEMPLATE_NAME_ORDER.indexOf(normalized);
   return index >= 0 ? index : TEMPLATE_NAME_ORDER.length;
 }
 

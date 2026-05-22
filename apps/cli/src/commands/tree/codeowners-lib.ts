@@ -57,7 +57,7 @@ export function resolveNodeOwners(folder: string, treeRoot: string, cache: Map<s
 }
 
 function isWildcard(owners: string[] | null): boolean {
-  return owners !== null && owners.includes("*");
+  return owners?.includes("*") ?? false;
 }
 
 function codeownersPath(path: string, treeRoot: string): string {

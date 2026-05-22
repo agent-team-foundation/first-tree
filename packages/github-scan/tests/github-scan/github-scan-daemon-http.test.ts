@@ -270,7 +270,7 @@ describe("startHttpServer — route contracts", () => {
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toBe("text/html; charset=utf-8");
     expect(res.headers["cache-control"]).toBe("no-store");
-    expect(res.headers["connection"]).toBe("close");
+    expect(res.headers.connection).toBe("close");
     expect(res.body.includes("<title>github-scan</title>")).toBe(true);
     // Dashboard embeds all its JS and CSS inline; no external refs.
     expect(res.body.includes('new EventSource("/events")')).toBe(true);
@@ -433,7 +433,7 @@ describe("startHttpServer — /events SSE stream", () => {
         expect(res.statusCode).toBe(200);
         expect(res.headers["content-type"]).toBe("text/event-stream");
         expect(res.headers["cache-control"]).toBe("no-store");
-        expect(res.headers["connection"]).toBe("keep-alive");
+        expect(res.headers.connection).toBe("keep-alive");
         expect(res.headers["x-accel-buffering"]).toBe("no");
         res.on("data", (chunk: Buffer) => {
           chunks.push(chunk);
@@ -442,7 +442,7 @@ describe("startHttpServer — /events SSE stream", () => {
           const frames = combined.split("\n\n");
           // The last element is the in-progress frame (no trailing \n\n yet).
           for (let i = 0; i < frames.length - 1; i += 1) {
-            const frame = frames[i] + "\n\n";
+            const frame = `${frames[i]}\n\n`;
             if (seenFrames.includes(frame)) continue;
             seenFrames.push(frame);
             if (frame.startsWith("event: ready")) {

@@ -61,7 +61,7 @@ export async function runStart(argv: readonly string[] = [], options: RunStartOp
   const profile = options.profile ?? parseProfile(argv) ?? "default";
   const config = loadGitHubScanDaemonConfig();
 
-  let identity;
+  let identity: ReturnType<typeof resolveDaemonIdentity>;
   try {
     identity = resolveDaemonIdentity({ host: config.host });
   } catch (err) {

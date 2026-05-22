@@ -1,3 +1,5 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: this file emits GitHub Actions workflow YAML; `${{ ... }}` is the expression syntax and must remain a literal.
+
 export function renderRootNode(treeTitle: string): string {
   return [
     "---",

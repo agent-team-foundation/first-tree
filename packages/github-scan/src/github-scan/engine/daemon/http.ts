@@ -340,7 +340,6 @@ export async function startHttpServer(options: StartHttpServerOptions): Promise<
             });
           return;
         }
-        case "not-found":
         default:
           writePlain(res, 404, "not found\n");
           return;

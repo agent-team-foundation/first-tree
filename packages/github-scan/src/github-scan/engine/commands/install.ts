@@ -80,7 +80,7 @@ export function runInstall(args: readonly string[], deps: InstallDeps = {}): num
     return 0;
   }
 
-  const write = deps.write ?? ((text: string) => process.stdout.write(text + "\n"));
+  const write = deps.write ?? ((text: string) => process.stdout.write(`${text}\n`));
   const checkCommand = deps.checkCommand ?? defaultCheckCommand;
   const checkGhAuth = deps.checkGhAuth ?? defaultCheckGhAuth;
   const spawn = deps.spawn ?? spawnSync;

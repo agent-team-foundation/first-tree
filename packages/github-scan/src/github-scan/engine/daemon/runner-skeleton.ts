@@ -136,22 +136,22 @@ export function parseDaemonArgs(argv: readonly string[]): DaemonCliOverrides {
     const advance = (): void => {
       i += 1;
     };
-    if (arg && arg.startsWith("--allow-repo=")) {
+    if (arg?.startsWith("--allow-repo=")) {
       const value = arg.slice("--allow-repo=".length);
       if (value.length > 0) overrides.allowRepo = value;
       continue;
     }
-    if (arg && arg.startsWith("--max-parallel=")) {
+    if (arg?.startsWith("--max-parallel=")) {
       const value = Number.parseInt(arg.slice("--max-parallel=".length), 10);
       if (Number.isFinite(value) && value > 0) overrides.maxParallel = value;
       continue;
     }
-    if (arg && arg.startsWith("--search-limit=")) {
+    if (arg?.startsWith("--search-limit=")) {
       const value = Number.parseInt(arg.slice("--search-limit=".length), 10);
       if (Number.isFinite(value) && value > 0) overrides.searchLimit = value;
       continue;
     }
-    if (arg && arg.startsWith("--agent-login=")) {
+    if (arg?.startsWith("--agent-login=")) {
       const value = arg.slice("--agent-login=".length);
       if (value.length > 0) overrides.agentLogin = value;
       continue;

@@ -214,7 +214,7 @@ export function fetchIssueComments(
     // before pushing to avoid accumulating an entire pre-label page that
     // would just be filtered downstream.
     if (haveLabelTs) {
-      const firstMs = Date.parse(pageComments[0]!.createdAt);
+      const firstMs = Date.parse(pageComments[0]?.createdAt);
       if (!Number.isNaN(firstMs) && firstMs <= labelMs) return all;
     }
 
