@@ -415,44 +415,68 @@ function SegMore({ count, fontSize }: { count: number; fontSize: number }) {
 }
 
 /**
- * Attention badge on the avatar — one corner capsule encoding the
- * highest-priority "do I need to look here" signal. failed (an agent errored,
- * red `!`) outranks needs-you (a pending AskUserQuestion, amber `?`) outranks
- * an unread-mention count (red N). Renders nothing when none apply. All three
- * cases share one capsule geometry; only the colour and glyph differ —
- * failed's `!` and unread's number are both red but never co-occur (failed
- * wins), and the glyph keeps them legible.
+ * Attention badge on the whole avatar unit (single or group composite) —
+ * one small corner circle encoding the highest-priority "do I need to look
+ * here" signal. failed (an agent errored, red `!`) outranks needs-you (a
+ * pending AskUserQuestion, amber `?`) outranks an unread-mention count (red N).
+ * Renders nothing when none apply. All three share one circle; only the colour
+ * and glyph differ — failed's `!` and unread's number are both red but never
+ * co-occur (failed wins), and the glyph keeps them legible.
  *
- * Geometry: --sp-4 (16) tall, --sp-2 (8) corner radius, offset 3 outside the
- * avatar so the hairline-bold border reads as a discrete signal.
+ * A tight circle (not a horizontal pill) so it reads as an avatar badge, not a
+ * standalone tag stealing the title's attention. Only the rare ≥3-char unread
+ * ("99+") flexes to a small capsule; `!` / `?` / 1–2 digits stay circular.
  */
 function AttentionBadge({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: number }) {
   if (failed) return <CornerBadge background="var(--state-error)">!</CornerBadge>;
   if (needsYou) return <CornerBadge background="var(--state-blocked)">?</CornerBadge>;
   const label = formatUnreadLabel(unread);
   if (label === null) return null;
-  return <CornerBadge background="var(--state-error)">{label}</CornerBadge>;
+  return (
+    <CornerBadge background="var(--state-error)" wide={label.length >= 3}>
+      {label}
+    </CornerBadge>
+  );
 }
 
-/** Shared capsule geometry for the avatar corner badge (see AttentionBadge). */
-function CornerBadge({ background, children }: { background: string; children: ReactNode }) {
+/** Diameter of the avatar corner badge. Small enough to read as a badge, not a
+ *  tag; the bold theme-bg stroke around it adds a touch more. */
+const CORNER_BADGE_SIZE = 18;
+
+/**
+ * Shared geometry for the avatar corner badge (see AttentionBadge): a solid
+ * colour circle with a white glyph and a theme-background stroke that lifts it
+ * off the (vivid) avatar. Static — no animation. `wide` lets the overflow
+ * unread ("99+") flex to a small capsule; everything else is a fixed circle.
+ */
+function CornerBadge({
+  background,
+  children,
+  wide = false,
+}: {
+  background: string;
+  children: ReactNode;
+  wide?: boolean;
+}) {
   return (
     <span
       aria-hidden="true"
       style={{
         position: "absolute",
-        bottom: -3,
-        right: -3,
-        minWidth: "var(--sp-4)",
-        height: "var(--sp-4)",
-        padding: "0 var(--sp-1)",
-        borderRadius: "var(--sp-2)",
+        bottom: -2,
+        right: -2,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: CORNER_BADGE_SIZE,
+        height: CORNER_BADGE_SIZE,
+        padding: wide ? "0 var(--sp-1)" : 0,
+        borderRadius: wide ? CORNER_BADGE_SIZE / 2 : "50%",
         background,
         color: "var(--fg-on-vivid)",
         fontSize: "var(--text-caption)",
         fontWeight: 700,
-        lineHeight: "var(--sp-4)",
-        textAlign: "center",
+        lineHeight: 1,
         border: "var(--hairline-bold) solid var(--bg-raised)",
         boxSizing: "content-box",
         zIndex: 3,
