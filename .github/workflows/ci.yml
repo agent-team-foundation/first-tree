@@ -171,7 +171,10 @@ jobs:
           fi
       - name: grep — forbid FIRST_TREE_HUB_ env vars
         run: |
-          if grep -rEn "FIRST_TREE_HUB_(AGENT_ID|LOG_LEVEL|JSON)" packages apps scripts docs skills .github; then
+          # `--exclude-dir=migration` keeps the docs/migration/ env-var rename
+          # tables (which legitimately list the old FIRST_TREE_HUB_* names
+          # alongside the new FIRST_TREE_* ones) from tripping the check.
+          if grep -rEn --exclude-dir=migration "FIRST_TREE_HUB_(AGENT_ID|LOG_LEVEL|JSON)" packages apps scripts docs skills .github; then
             echo "::error::found legacy FIRST_TREE_HUB_* env var references; should use FIRST_TREE_* (Phase 1A T1A.5)"
             exit 1
           fi
