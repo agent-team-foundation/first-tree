@@ -1,6 +1,5 @@
 import {
   type AgentChatStatus,
-  type AgentMainStatus,
   type ChatParticipantDetail,
   compareMainStatus,
   type LiveActivity,
@@ -11,6 +10,7 @@ import { useEffect, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
+import { TimelineJumpButton } from "./timeline-jump-button.js";
 import { formatElapsed } from "./working-chip.js";
 
 /**
@@ -82,21 +82,6 @@ export function pickLead(
   const heldStillWorking = current !== null && working.some((w) => w.agentId === current.agentId);
   if (heldStillWorking && now - current.since < holdMs) return current; // hold the current face
   return { agentId: mostRecent.agentId, since: now };
-}
-
-/** Best-effort jump to an agent's place in the timeline (by agentId anchor). */
-function scrollToAgentTimeline(agentId: string, main: AgentMainStatus): void {
-  const attr =
-    main === "needs_you"
-      ? "data-pending-question-agent"
-      : main === "failed"
-        ? "data-error-agent"
-        : main === "working"
-          ? "data-working-agent"
-          : null;
-  if (!attr) return;
-  const els = document.querySelectorAll<HTMLElement>(`[${attr}="${agentId}"]`);
-  els[els.length - 1]?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 /** [Reply ↩]: scroll to the agent's question card AND focus its own answer
@@ -226,25 +211,18 @@ function RailRow({ status, nameOf }: { status: AgentChatStatus; nameOf: (id: str
   const view = viewOf(status.main);
   return (
     <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
-      <button
-        type="button"
-        onClick={() => scrollToAgentTimeline(status.agentId, status.main)}
-        className="flex min-w-0 flex-1 items-center text-caption"
-        style={{
-          gap: 4,
-          border: 0,
-          background: "transparent",
-          padding: 0,
-          cursor: "pointer",
-          textAlign: "left",
-          color: view.colorVar,
-        }}
+      <TimelineJumpButton
+        agentId={status.agentId}
+        main={status.main}
+        ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
+        className="flex-1 text-caption"
+        style={{ color: view.colorVar }}
       >
         <StatusGlyph colorVar={view.colorVar} shape={view.shape} pulse={view.pulse} size={8} ariaLabel={view.label} />
         <span className="shrink-0">{nameOf(status.agentId)}</span>
         <Sep />
         <LeadDetail status={status} />
-      </button>
+      </TimelineJumpButton>
       {status.main === "needs_you" ? (
         <button
           type="button"

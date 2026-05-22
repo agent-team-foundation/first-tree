@@ -7,6 +7,7 @@ import { viewOf } from "../../lib/agent-status-view.js";
 import { toneOf } from "../../lib/tones.js";
 import { Avatar } from "../avatar.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
+import { TimelineJumpButton } from "./timeline-jump-button.js";
 import { WorkingChip } from "./working-chip.js";
 
 /**
@@ -167,26 +168,47 @@ function SecondLine({ status }: { status: AgentChatStatus | null }) {
   }
   if (status.main === "working" && status.activity) {
     // "Working" (sans word) · "Bash · 0s" (mono tool + live timer). No leading
-    // pulse dot — the avatar already carries the breathing status dot.
+    // pulse dot — the avatar already carries the breathing status dot. The
+    // whole chip is clickable → jumps to this agent's WorkingBubble.
     return (
-      <div className="flex items-center text-caption" style={{ gap: 4, color: "var(--state-working)" }}>
+      <TimelineJumpButton
+        agentId={status.agentId}
+        main="working"
+        ariaLabel="Jump to this agent's activity in the timeline"
+        className="text-caption"
+        style={{ color: "var(--state-working)" }}
+      >
         <span>Working</span>
         <span aria-hidden="true">·</span>
         <WorkingChip activity={status.activity} showDot={false} monochrome />
-      </div>
+      </TimelineJumpButton>
     );
   }
   if (status.main === "needs_you") {
+    // Pill is clickable → jumps to this agent's question card.
     return (
       <div className="flex">
-        <StatePill tone="blocked" label="Needs reply" />
+        <TimelineJumpButton
+          agentId={status.agentId}
+          main="needs_you"
+          ariaLabel="Jump to this agent's question in the timeline"
+        >
+          <StatePill tone="blocked" label="Needs reply" />
+        </TimelineJumpButton>
       </div>
     );
   }
   if (status.main === "failed") {
+    // Pill is clickable → jumps to this agent's error in the timeline.
     return (
       <div className="flex">
-        <StatePill tone="error" label="Failed" />
+        <TimelineJumpButton
+          agentId={status.agentId}
+          main="failed"
+          ariaLabel="Jump to this agent's error in the timeline"
+        >
+          <StatePill tone="error" label="Failed" />
+        </TimelineJumpButton>
       </div>
     );
   }
