@@ -56,6 +56,9 @@ describe("buildCodexThreadOptions", () => {
       }),
       "/tmp/wsk",
     );
+    // Per the 2026-05-22 redesign: predeclared source repos materialise at
+    // the TOP LEVEL of the agent home — no `worktrees/` prefix. The
+    // `additionalDirectories` allowlist follows the same paths.
     expect(opts.additionalDirectories).toEqual(["/tmp/wsk/bar", "/tmp/wsk/custom-path"]);
   });
 
