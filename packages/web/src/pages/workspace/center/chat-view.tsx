@@ -1871,11 +1871,11 @@ export function ChatView({
                     padding: "var(--sp-2) var(--sp-3)",
                     border: "var(--hairline) solid var(--border)",
                     borderRadius: 6,
-                    // Blend into the timeline surface (`--bg`) rather than a
-                    // sunken grey box — the hairline border alone delineates
-                    // the slot. Mirrors the editable composer below so the
-                    // read-only state occupies the same visual footprint.
-                    background: "var(--bg)",
+                    // Raised surface (`--bg-raised`) so the slot reads as a
+                    // distinct input card lifted above the timeline (`--bg`),
+                    // sharing the header chrome's surface. Mirrors the editable
+                    // composer below so the read-only state shares its footprint.
+                    background: "var(--bg-raised)",
                   }}
                 >
                   <Eye className="h-4 w-4 shrink-0" style={{ color: "var(--fg-3)" }} />
@@ -1910,10 +1910,11 @@ export function ChatView({
                       position: "relative",
                       border: "var(--hairline) solid var(--border)",
                       borderRadius: 6,
-                      // Composer blends into the timeline surface (`--bg`)
-                      // instead of a sunken grey box; the hairline border
-                      // keeps the input field discernible against it.
-                      background: "var(--bg)",
+                      // Raised surface (`--bg-raised`) lifts the composer above
+                      // the timeline (`--bg`) so it reads as a focused input card
+                      // rather than blending into the page; the hairline border
+                      // still defines its edge.
+                      background: "var(--bg-raised)",
                     }}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {
