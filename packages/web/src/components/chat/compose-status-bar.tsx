@@ -24,6 +24,16 @@ import { WorkingChip } from "./working-chip.js";
  */
 const ATTENTION: ReadonlySet<string> = new Set(["needs_you", "failed", "working"]);
 
+/**
+ * The agents worth raising the bar for — needs-you / failed / working —
+ * sorted highest-attention first (so `[0]` is the line the compact bar tops).
+ * ready / paused / offline are filtered out (they never raise the bar).
+ * Exported for tests.
+ */
+export function selectAttention(statuses: AgentChatStatus[]): AgentChatStatus[] {
+  return statuses.filter((s) => ATTENTION.has(s.main)).sort((a, b) => compareMainStatus(a.main, b.main));
+}
+
 function scrollToPendingQuestion(): void {
   const els = document.querySelectorAll<HTMLElement>('[data-pending-question="true"]');
   els[els.length - 1]?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -48,9 +58,7 @@ export function ComposeStatusBar({
 
   const nameOf = (id: string) => agents.find((a) => a.agentId === id)?.displayName ?? id.slice(0, 8);
 
-  const attention = (statuses ?? [])
-    .filter((s) => ATTENTION.has(s.main))
-    .sort((a, b) => compareMainStatus(a.main, b.main));
+  const attention = selectAttention(statuses ?? []);
 
   const top = attention[0];
   if (!top) return null; // all agents quiet (ready / offline) → no bar

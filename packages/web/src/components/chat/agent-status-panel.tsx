@@ -68,6 +68,17 @@ export function AgentStatusPanel({
   );
 }
 
+/**
+ * Pause is offered only when the agent is BOTH actively producing output
+ * (`main === "working"`) and on a live session (`engagement === "active"`).
+ * That's the only state with a meaningful Pause — and the only transition the
+ * server accepts (anything else 409s). ready / needs-you / failed / offline,
+ * or a working-but-already-suspended row, get no Pause. Exported for tests.
+ */
+export function canPauseStatus(status: AgentChatStatus | null): boolean {
+  return status?.main === "working" && status.engagement === "active";
+}
+
 function AgentStatusRow({
   chatId,
   agent,
@@ -90,10 +101,7 @@ function AgentStatusRow({
   });
 
   const view = status ? viewOf(status.main) : null;
-  // Pause is offered only for a live session the caller can manage; the
-  // server rejects any other transition, so surfacing it otherwise just
-  // produces a 409 on click.
-  const showPause = canManage && status?.engagement === "active";
+  const showPause = canManage && canPauseStatus(status);
 
   return (
     <div

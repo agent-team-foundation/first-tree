@@ -180,3 +180,27 @@ function groupByType(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket>
   }
   return buckets;
 }
+
+// ---------------------------------------------------------------------------
+// needs-you pinning
+// ---------------------------------------------------------------------------
+
+/**
+ * Partition rows into those with a pending AskUserQuestion (needs-you) and the
+ * rest, preserving order within each group. The caller hoists `needsYou` into
+ * a pinned "Needs you" bucket at the top and groups `rest` normally — so a
+ * chat appears in exactly one place.
+ *
+ * ⚠️ Operates on the already-loaded rows only: a needs-you chat outside the
+ * loaded page(s) is not pinned (page-local v1; the cross-page pinned query is
+ * the §8.1#2 follow-up).
+ */
+export function splitNeedsYouRows(rows: ReadonlyArray<MeChatRow>): { needsYou: MeChatRow[]; rest: MeChatRow[] } {
+  const needsYou: MeChatRow[] = [];
+  const rest: MeChatRow[] = [];
+  for (const r of rows) {
+    if (r.pendingQuestionAgentIds.length > 0) needsYou.push(r);
+    else rest.push(r);
+  }
+  return { needsYou, rest };
+}

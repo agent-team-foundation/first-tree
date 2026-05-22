@@ -1,6 +1,6 @@
 import type { MeChatRow } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { groupRows } from "../conversations/group-rows.js";
+import { groupRows, splitNeedsYouRows } from "../conversations/group-rows.js";
 
 // Fixed reference "now" — picked to be mid-week so the
 // `startOfWeek` (Monday) maths is exercised non-trivially. UTC noon
@@ -173,5 +173,24 @@ describe("groupRows — type", () => {
     const buckets = groupRows(rows, "type", NOW);
     expect(buckets.map((b) => b.key)).toEqual(["direct", "other"]);
     expect(buckets[1]?.label).toBe("Other");
+  });
+});
+
+describe("splitNeedsYouRows — pinned needs-you partition", () => {
+  it("separates rows with a pending question from the rest, preserving order", () => {
+    const rows = [
+      row({ id: "a", lastMessageAt: offsetIso(-1) }),
+      row({ id: "b", lastMessageAt: offsetIso(-2), pendingQuestionAgentIds: ["agent-1"] }),
+      row({ id: "c", lastMessageAt: offsetIso(-3) }),
+    ];
+    const { needsYou, rest } = splitNeedsYouRows(rows);
+    expect(needsYou.map((r) => r.chatId)).toEqual(["b"]);
+    expect(rest.map((r) => r.chatId)).toEqual(["a", "c"]);
+  });
+
+  it("all-quiet → empty needsYou", () => {
+    const { needsYou, rest } = splitNeedsYouRows([row({ id: "x", lastMessageAt: null })]);
+    expect(needsYou).toEqual([]);
+    expect(rest.map((r) => r.chatId)).toEqual(["x"]);
   });
 });

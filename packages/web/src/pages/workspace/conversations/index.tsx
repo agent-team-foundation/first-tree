@@ -12,7 +12,7 @@ import { SegmentedControl } from "../../../components/ui/segmented-control.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
 import { FilterPopover, originLabel } from "./filter-popover.js";
-import { type GroupMode, groupRows } from "./group-rows.js";
+import { type GroupMode, groupRows, splitNeedsYouRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -218,11 +218,10 @@ export function ConversationList({
   // the rest as usual, then prepend a synthetic "Needs you" bucket. A chat
   // appears in exactly one place (pinned OR its normal group), never both.
   const buckets = useMemo(() => {
-    const needsYouRows = allRows.filter((r) => r.pendingQuestionAgentIds.length > 0);
-    if (needsYouRows.length === 0) return groupRows(allRows, group);
-    const rest = allRows.filter((r) => r.pendingQuestionAgentIds.length === 0);
+    const { needsYou, rest } = splitNeedsYouRows(allRows);
+    if (needsYou.length === 0) return groupRows(allRows, group);
     return [
-      { key: "needs-you", label: "Needs you", rows: needsYouRows, defaultCollapsed: false },
+      { key: "needs-you", label: "Needs you", rows: needsYou, defaultCollapsed: false },
       ...groupRows(rest, group),
     ];
   }, [allRows, group]);
