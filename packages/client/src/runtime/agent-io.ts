@@ -24,7 +24,20 @@ import type { AgentIdentity, SessionMessage } from "./handler.js";
  */
 export function buildAgentEnv(
   parentEnv: NodeJS.ProcessEnv,
-  ctx: { sdk: Pick<FirstTreeHubSDK, "serverUrl">; agent: AgentIdentity; chatId: string },
+  ctx: {
+    sdk: Pick<FirstTreeHubSDK, "serverUrl">;
+    agent: AgentIdentity;
+    chatId: string;
+    /**
+     * Resolved doc-preview context for this session, so a `first-tree-hub
+     * chat send` sub-process can snapshot referenced `.md` the same way
+     * `result-sink` does for final-text (L3: unify capture across send
+     * paths). Absent → `chat send` skips snapshotting (self-only fallback /
+     * no doc base). All three are required together for cross-agent
+     * resolution; `base` alone still enables self snapshots.
+     */
+    docContext?: { base: string; workspacesRoot: string; selfSlug: string };
+  },
 ): NodeJS.ProcessEnv {
   return {
     ...parentEnv,
@@ -32,6 +45,13 @@ export function buildAgentEnv(
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
     FIRST_TREE_CHAT_ID: ctx.chatId,
+    ...(ctx.docContext
+      ? {
+          FIRST_TREE_DOC_BASE: ctx.docContext.base,
+          FIRST_TREE_WORKSPACES_ROOT: ctx.docContext.workspacesRoot,
+          FIRST_TREE_AGENT_SLUG: ctx.docContext.selfSlug,
+        }
+      : {}),
   };
 }
 

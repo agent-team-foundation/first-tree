@@ -1,6 +1,7 @@
 import type { MessageFormat } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
+import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { readStdin } from "./_shared/io.js";
 
@@ -48,17 +49,29 @@ export function registerChatSendCommand(chat: Command): void {
 
         const sdk = createSdk(options.agent);
 
+        // L3: snapshot any `.md` this message references, exactly like the
+        // runtime's result-sink does for final-text — closing the biggest
+        // doc-preview gap (chat-send messages never built snapshots before).
+        // Pure pass-through outside an agent session / when the runtime did
+        // not inject FIRST_TREE_DOC_BASE. `content` may come back rewritten
+        // (absolute-in-root paths → relative) so the web preview can match.
+        const captured = await captureOutboundDocs(content);
+        const outboundMetadata = captured.documentContext
+          ? { ...(metadata ?? {}), documentContext: captured.documentContext }
+          : metadata;
+
         const result = await sdk.sendMessage(chatId, {
           format: options.format,
-          // Send the agent's raw content verbatim. The server owns mention
-          // injection: `receiverNames` declares routing intent, and the
-          // agent endpoint's `normalizeMentionsInContent` will prepend
-          // `@<name>` only when the content doesn't already contain it
-          // (idempotent, case-insensitive). Prepending here too would
-          // double-stamp when the agent already wrote `@<name>` in the
-          // body — see services/message.ts step 2c.
-          content,
-          metadata,
+          // Send the agent's content verbatim (modulo the doc-path rewrite
+          // above). The server owns mention injection: `receiverNames`
+          // declares routing intent, and the agent endpoint's
+          // `normalizeMentionsInContent` will prepend `@<name>` only when
+          // the content doesn't already contain it (idempotent,
+          // case-insensitive). Prepending here too would double-stamp when
+          // the agent already wrote `@<name>` in the body — see
+          // services/message.ts step 2c.
+          content: captured.content,
+          metadata: outboundMetadata,
           source: "cli",
           // Server resolves the name against the current chat's participant
           // list and adds it to mentions; an unknown name fails the write

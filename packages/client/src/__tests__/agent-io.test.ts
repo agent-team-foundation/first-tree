@@ -285,4 +285,41 @@ describe("buildAgentEnv", () => {
     });
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-right");
   });
+
+  it("injects doc-preview context (base + workspaces root + slug) when provided, for `chat send` capture", () => {
+    const env = buildAgentEnv({} as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://hub" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+      docContext: { base: "/ws/coder/chat-1", workspacesRoot: "/ws", selfSlug: "coder" },
+    });
+    expect(env.FIRST_TREE_DOC_BASE).toBe("/ws/coder/chat-1");
+    expect(env.FIRST_TREE_WORKSPACES_ROOT).toBe("/ws");
+    expect(env.FIRST_TREE_AGENT_SLUG).toBe("coder");
+  });
+
+  it("omits doc-preview env vars when no docContext is provided (self-only / non-agent shells)", () => {
+    const env = buildAgentEnv({} as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://hub" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+    });
+    expect(env.FIRST_TREE_DOC_BASE).toBeUndefined();
+    expect(env.FIRST_TREE_WORKSPACES_ROOT).toBeUndefined();
+    expect(env.FIRST_TREE_AGENT_SLUG).toBeUndefined();
+  });
 });
