@@ -305,17 +305,45 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
 describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
   const getApp = useTestApp();
 
-  it("archives a chat once it has been idle past the unmapped threshold and user is read", async () => {
+  async function seedReadAcknowledgement(app: App, chatId: string, agentId: string): Promise<void> {
+    await app.db.insert(chatUserState).values({
+      chatId,
+      agentId,
+      engagementStatus: "active",
+      unreadMentionCount: 0,
+      lastReadAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    });
+  }
+
+  it("archives a chat once it has been idle past the unmapped threshold and user has acknowledged read", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const chatId = await seedChat(app, admin.organizationId, longAgo());
     await addHumanMember(app, chatId, human);
+    await seedReadAcknowledgement(app, chatId, human);
 
     const result = await sweepChatArchive(app.db);
 
     expect(result.unmappedRowsArchived).toBeGreaterThanOrEqual(1);
     expect(await getEngagement(app, chatId, human)).toBe("archived");
+  });
+
+  it("does not archive a user who has never opened the chat (last_read_at IS NULL)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    await addHumanMember(app, chatId, human);
+    // No chat_user_state row at all — user has never opened the chat. The
+    // sweeper must leave the implicit-active view alone, otherwise the user
+    // returns to find the chat already in the Archived tab without ever
+    // having seen it.
+
+    const result = await sweepChatArchive(app.db);
+
+    expect(result.unmappedRowsArchived).toBe(0);
+    expect(await getEngagement(app, chatId, human)).toBeNull();
   });
 
   it("does not archive a user with unread mentions", async () => {
@@ -329,6 +357,7 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
       agentId: human,
       engagementStatus: "active",
       unreadMentionCount: 2,
+      lastReadAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
     });
 
     await sweepChatArchive(app.db);
@@ -342,10 +371,11 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const chatId = await seedChat(app, admin.organizationId, recent());
     await addHumanMember(app, chatId, human);
+    await seedReadAcknowledgement(app, chatId, human);
 
     await sweepChatArchive(app.db);
 
-    expect(await getEngagement(app, chatId, human)).toBeNull();
+    expect(await getEngagement(app, chatId, human)).toBe("active");
   });
 
   it("does not archive chats that have GitHub mappings (Route A's responsibility)", async () => {
@@ -355,6 +385,9 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
     const chatId = await seedChat(app, admin.organizationId, longAgo());
     await addHumanMember(app, chatId, human);
+    // Make the user a Route-B-eligible candidate so the assertion only
+    // succeeds because the mapping presence excludes the chat from Route B.
+    await seedReadAcknowledgement(app, chatId, human);
     // Mapping with an open entity → Route A should NOT fire either, and
     // Route B must skip this chat entirely.
     await app.db.insert(githubEntityChatMappings).values({
@@ -372,7 +405,7 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
 
     expect(result.unmappedRowsArchived).toBe(0);
     expect(result.mappedRowsArchived).toBe(0);
-    expect(await getEngagement(app, chatId, human)).toBeNull();
+    expect(await getEngagement(app, chatId, human)).toBe("active");
   });
 
   it("ignores non-human members", async () => {

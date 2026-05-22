@@ -108,31 +108,46 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
 
 /**
  * Route B: chats with no GitHub mapping that have been silent past
- * `idleSeconds`, restricted to per-(chat, user) rows whose user has no
- * unread mentions and whose engagement is currently `active` (either an
- * explicit row or the implicit default via missing row).
+ * `idleSeconds`, restricted to per-(chat, user) rows that all of:
+ *
+ *   - the user has acknowledged the chat at least once (`last_read_at IS
+ *     NOT NULL`) — never auto-archive a view the user has never even
+ *     opened; without this guard a never-clicked watcher would find the
+ *     chat in their Archived tab without ever having seen it,
+ *   - the user has no unread mentions,
+ *   - the user's engagement is currently `active` (either an explicit
+ *     row or the implicit default via missing row).
+ *
+ * The `last_read_at IS NOT NULL` condition implies `cus` is materialised,
+ * so the `COALESCE(cus.engagement_status, 'active') = 'active'` clause
+ * effectively reduces to `engagement_status = 'active'`. The COALESCE is
+ * left in place for resilience — historical rows that predate the engagement
+ * column were backfilled to `'active'` so this is a no-op today, but the
+ * defensive read shape costs nothing.
  *
  * Implementation note: `chat_user_state` rows are lazy-materialised, so
  * the candidate set is enumerated via `chat_membership` (filtered to
- * humans) with a LEFT JOIN on the state table.
+ * humans) with an INNER JOIN on the state table — implicit-active users
+ * intentionally do NOT match (see "the user has acknowledged" above).
  */
 async function sweepUnmapped(db: Database, idleSeconds: number, batchSize: number): Promise<number> {
   const rows = await db.execute<{ chat_id: string }>(sql`
     INSERT INTO chat_user_state (chat_id, agent_id, unread_mention_count, engagement_status)
-    SELECT cm.chat_id, cm.agent_id, 0, 'archived'
+    SELECT cm.chat_id, cm.agent_id, cus.unread_mention_count, 'archived'
       FROM chat_membership cm
       JOIN chats c ON c.id = cm.chat_id
       JOIN agents a ON a.uuid = cm.agent_id
-      LEFT JOIN github_entity_chat_mappings m ON m.chat_id = cm.chat_id
-      LEFT JOIN chat_user_state cus
+      JOIN chat_user_state cus
              ON cus.chat_id = cm.chat_id AND cus.agent_id = cm.agent_id
+      LEFT JOIN github_entity_chat_mappings m ON m.chat_id = cm.chat_id
      WHERE m.chat_id IS NULL
        AND a.type = 'human'
        AND c.parent_chat_id IS NULL
        AND c.last_message_at IS NOT NULL
        AND c.last_message_at < NOW() - make_interval(secs => ${idleSeconds})
-       AND COALESCE(cus.unread_mention_count, 0) = 0
-       AND COALESCE(cus.engagement_status, 'active') = 'active'
+       AND cus.last_read_at IS NOT NULL
+       AND cus.unread_mention_count = 0
+       AND cus.engagement_status = 'active'
      LIMIT ${batchSize}
         ON CONFLICT (chat_id, agent_id) DO UPDATE
            SET engagement_status = 'archived'
