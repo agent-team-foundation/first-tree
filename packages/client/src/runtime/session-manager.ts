@@ -528,7 +528,17 @@ export class SessionManager {
     entry.lastActivity = Date.now();
 
     try {
-      await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
+      // Mirror the pattern in `startNewSession` (line 449): the handler may
+      // return a DIFFERENT sessionId than the one passed in — e.g. when the
+      // claude-code handler detects a stale SDK transcript and falls
+      // through to fresh-start semantics — and `entry.claudeSessionId` has
+      // to track the handler's truth or future resume cycles will keep
+      // calling the stale id. PR #530 nit baixiaohang flagged: without the
+      // assignment back, a fresh-start fallback would persist the OLD id,
+      // and the next suspend→resume cycle would re-trigger the same
+      // missing-transcript fallback ad infinitum.
+      const resumedSessionId = await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
+      entry.claudeSessionId = resumedSessionId;
       this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
       this.notifySessionState(entry.chatId, "active");

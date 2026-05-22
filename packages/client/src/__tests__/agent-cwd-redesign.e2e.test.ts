@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfig } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -348,5 +348,106 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     // Legacy must STILL survive after shutdown (no rm of cwd or sibling).
     expect(existsSync(legacyChatDir)).toBe(true);
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("E8: resume of a stale pre-upgrade sessionId falls back to fresh start (R2 fallback)", async () => {
+    // Defensive fallback path: when sessionId can't be located at EITHER
+    // cwd (legacy chatId dir or agent home), the handler mints a fresh
+    // id and starts cold — Hub-side chat history is preserved.
+    // SessionManager then persists the returned id, so subsequent inbox
+    // messages resume against the new id cleanly (no permanent error loop).
+    capturedSdkOptions.length = 0;
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-e8-"));
+    const workspaceRoot = join(dataDir, "workspaces", "agent-1");
+    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir });
+
+    const cache = buildCache([]);
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+    // No transcript exists anywhere under `~/.claude/projects/<encoded-cwd>/`.
+    const staleSessionId = "72a19485-ca9e-4bc3-9add-a57e8314e5c3";
+    const returnedSessionId = await handler.resume(
+      makeMessage("chat-e8", "msg-e8"),
+      staleSessionId,
+      buildSessionCtx("chat-e8"),
+    );
+
+    // Returned sessionId MUST differ from the stale input — that's how
+    // SessionManager learns to update its registry.
+    expect(returnedSessionId).not.toBe(staleSessionId);
+    expect(returnedSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+
+    // The SDK was invoked WITHOUT a resume argument (fresh start semantics).
+    expect(capturedSdkOptions.length).toBeGreaterThan(0);
+    const lastOptions = capturedSdkOptions[capturedSdkOptions.length - 1]?.options;
+    expect(lastOptions?.resume).toBeUndefined();
+    expect(lastOptions?.sessionId).toBe(returnedSessionId);
+
+    await handler.shutdown();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("E9: resume of a pre-redesign session routes to the legacy chat-dir cwd (R2 primary path)", async () => {
+    // Primary R2 path: a session created BEFORE the cwd reversal has its
+    // Claude SDK transcript keyed off the OLD per-chat cwd encoding.
+    // `resume()` must detect this and run the SDK against the legacy cwd
+    // verbatim, preserving the agent's SDK turn history across upgrade.
+    capturedSdkOptions.length = 0;
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-e9-"));
+    const workspaceRoot = join(dataDir, "workspaces", "agent-1");
+    const chatId = "chat-e9";
+    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir });
+
+    // Simulate the v1.x layout that pre-existed on disk before the upgrade.
+    const legacyCwd = join(workspaceRoot, chatId);
+    mkdirSync(join(legacyCwd, ".agent"), { recursive: true });
+    writeFileSync(join(legacyCwd, "CLAUDE.md"), "legacy session prompt\n");
+    writeFileSync(join(legacyCwd, ".agent", "identity.json"), '{"agentId":"legacy"}');
+
+    // Materialise the SDK transcript at the legacy-cwd-encoded path under
+    // `~/.claude/projects/`. The probe (`claudeSessionFileExists`) follows
+    // the same encoding rule the SDK uses: replace every non-alphanumeric
+    // char in the absolute cwd with "-".
+    const legacySessionId = "abcd1234-5678-90ab-cdef-1234567890ab";
+    const legacyEncoded = legacyCwd.replace(/[^a-zA-Z0-9-]/g, "-");
+    const legacyTranscriptDir = join(homedir(), ".claude", "projects", legacyEncoded);
+    mkdirSync(legacyTranscriptDir, { recursive: true });
+    const legacyTranscriptPath = join(legacyTranscriptDir, `${legacySessionId}.jsonl`);
+    writeFileSync(legacyTranscriptPath, '{"type":"system","subtype":"init"}\n');
+
+    try {
+      const cache = buildCache([]);
+      await cache.refresh(AGENT_ID);
+
+      const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+      const returnedSessionId = await handler.resume(
+        makeMessage(chatId, "msg-e9"),
+        legacySessionId,
+        buildSessionCtx(chatId),
+      );
+
+      // The legacy sessionId MUST be preserved — no fresh-id rotation here.
+      expect(returnedSessionId).toBe(legacySessionId);
+
+      // SDK was invoked with the legacy sessionId on the `resume` channel.
+      expect(capturedSdkOptions.length).toBeGreaterThan(0);
+      const lastOptions = capturedSdkOptions[capturedSdkOptions.length - 1]?.options;
+      expect(lastOptions?.resume).toBe(legacySessionId);
+      // cwd points at the legacy chat dir, NOT at the agent home root.
+      expect(lastOptions?.cwd).toBe(legacyCwd);
+
+      // The legacy dir's existing files are untouched — we intentionally
+      // skip ensureAgentBootstrap so the v1.x layout (CLAUDE.md, identity.json)
+      // is not overwritten with new-design files.
+      expect(readFileSync(join(legacyCwd, "CLAUDE.md"), "utf-8")).toBe("legacy session prompt\n");
+      expect(readFileSync(join(legacyCwd, ".agent", "identity.json"), "utf-8")).toBe('{"agentId":"legacy"}');
+
+      await handler.shutdown();
+    } finally {
+      // Always clean up the fake SDK transcript so this test stays hermetic.
+      rmSync(legacyTranscriptDir, { recursive: true, force: true });
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
