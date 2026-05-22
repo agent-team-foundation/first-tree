@@ -661,39 +661,25 @@
 }
 
 /* ── Canonical agent-status pulses (agent-status-ui §9.3) ──────────────
-   ONE working/live cadence (~1.6s) for the unified agent-status indicators
-   produced by `viewOf` (lib/agent-status-view.ts). New surfaces use these.
-   The legacy per-surface pulses (ring-pulse / heartbeat-pulse /
-   chat-row-live-pulse / chat-row-avatar-working-breathe) are retired onto
-   these as each surface migrates (step 2+); kept for now so this step stays
-   additive / zero-behavior-change. opacity-led so long lists stay
-   GPU-cheap. */
-@keyframes working-pulse {
-  0% {
-    transform: scale(1);
-    opacity: 0.55;
-  }
-  100% {
-    transform: scale(2.4);
-    opacity: 0;
-  }
-}
-@keyframes needs-you-pulse {
+   working / needs-you breathe the dot body's own opacity — no concentric
+   ring — so every status point keeps an identical footprint and a long
+   roster column stays aligned. opacity-led → GPU-cheap. working breathes a
+   touch faster (reads "alive"); needs-you slower (a calm "waiting for you",
+   not an alarm). reduced-motion falls back to a solid dot. */
+@keyframes status-dot-breathe {
   0%,
   100% {
-    opacity: 0.4;
-  }
-  50% {
     opacity: 1;
   }
+  50% {
+    opacity: 0.4;
+  }
 }
-/* working = solid dot + an expanding ring element carrying this animation. */
 .agent-status-pulse--working {
-  animation: working-pulse 1.6s ease-out infinite;
+  animation: status-dot-breathe 1.4s ease-in-out infinite;
 }
-/* needs-you = solid dot + a calm opacity breathe ("waiting for you", not an alarm). */
 .agent-status-pulse--needs-you {
-  animation: needs-you-pulse 1.6s ease-in-out infinite;
+  animation: status-dot-breathe 1.9s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .agent-status-pulse--working,

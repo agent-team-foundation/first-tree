@@ -19,7 +19,7 @@ import { WorkingChip } from "./working-chip.js";
  * a status-point (StatusGlyph) on the avatar + a second line that's only
  * spent on the states with detail worth surfacing (working → the live
  * activity, needs-you / failed → a short reason); ready / paused / offline
- * collapse to a single inline label, distinguished by the dot's shape/colour.
+ * collapse to just the name line, distinguished by the dot's shape/colour.
  */
 export function AgentStatusPanel({
   chatId,
@@ -122,8 +122,6 @@ function AgentStatusRow({
             style={{
               right: -2,
               bottom: -2,
-              boxShadow: "0 0 0 var(--hairline-bold) var(--bg-raised)",
-              borderRadius: 999,
             }}
           >
             <StatusGlyph
@@ -150,7 +148,8 @@ function AgentStatusRow({
 /**
  * The row's detail line. working → the live activity (Using <tool> · 12s) via
  * the shared WorkingChip; needs-you / failed → a short coloured reason;
- * ready / paused / offline → an inline muted label (the dot carries the rest).
+ * ready / paused / offline → no second line at all (the dot's shape + colour
+ * carries it, so the row collapses to a single name line).
  */
 function SecondLine({ status }: { status: AgentChatStatus | null }) {
   if (!status) {
@@ -181,11 +180,9 @@ function SecondLine({ status }: { status: AgentChatStatus | null }) {
       </div>
     );
   }
-  return (
-    <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-      {viewOf(status.main).label}
-    </div>
-  );
+  // ready / paused / offline carry no detail worth a second line — the dot's
+  // shape + colour already says it. Collapse to the single name row (§3.2).
+  return null;
 }
 
 /** Compact one-click Pause (suspend). Reversible — the next message in the

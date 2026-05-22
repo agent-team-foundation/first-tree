@@ -2336,11 +2336,7 @@ function ParticipantAvatar({
         />
       </span>
       {view ? (
-        <span
-          aria-hidden="true"
-          className="absolute"
-          style={{ right: -1, bottom: -1, boxShadow: "0 0 0 var(--hairline-bold) var(--bg-raised)", borderRadius: 999 }}
-        >
+        <span aria-hidden="true" className="absolute" style={{ right: -1, bottom: -1 }}>
           <StatusGlyph colorVar={view.colorVar} shape={view.shape} pulse={view.pulse} size={8} ariaLabel={view.label} />
         </span>
       ) : null}

@@ -73,17 +73,14 @@ export function StatusGlyph({
     );
   }
 
-  // shape === "dot": solid disc, with an optional pulse ring around it.
+  // shape === "dot": a solid disc. working / needs-you breathe the disc's own
+  // opacity (no concentric ring) so every status point keeps an identical
+  // footprint — a long roster column stays aligned regardless of state.
   return (
-    <span className={cn("inline-block shrink-0", className)} style={{ ...box, position: "relative" }} {...a11y}>
-      <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: colorVar }} />
-      {pulse ? (
-        <span
-          aria-hidden="true"
-          className={PULSE_CLASS[pulse]}
-          style={{ position: "absolute", inset: -3, borderRadius: "50%", border: `var(--hairline) solid ${colorVar}` }}
-        />
-      ) : null}
-    </span>
+    <span
+      className={cn("inline-block shrink-0", pulse ? PULSE_CLASS[pulse] : null, className)}
+      style={{ ...box, borderRadius: "50%", background: colorVar }}
+      {...a11y}
+    />
   );
 }
