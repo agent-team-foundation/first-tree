@@ -231,7 +231,21 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   const cloneTimeoutMs =
     opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
   const log = opts.log;
+  const resolvedDataDir = resolve(opts.dataDir);
   const hubManagedRoots = (opts.hubManagedRoots ?? []).map((p) => resolve(p));
+  // Fail loud at construction if any managed root would let the self-heal
+  // branch escape `<dataDir>`. Without this guard a misconfigured caller
+  // (`hubManagedRoots: ["/"]`, `[os.homedir()]`, etc.) would weaponise the
+  // `createWorktree` rm -rf path against arbitrary host paths. Strict subdir:
+  // the root itself MUST sit inside `dataDir` and MUST NOT equal `dataDir`
+  // (so we never grant "the whole hub data dir is fair game").
+  for (const root of hubManagedRoots) {
+    if (!isUnderManagedRoot(root, [resolvedDataDir])) {
+      throw new GitMirrorError(
+        `hubManagedRoots entry "${root}" is not inside dataDir "${resolvedDataDir}" — refusing to construct manager (would let self-heal rm -rf escape the hub data dir)`,
+      );
+    }
+  }
 
   // Per-URL serial queue. Prevents concurrent ensureMirror / fetchMirror /
   // gcMirrors for the same URL from racing on the same directory.

@@ -18,6 +18,7 @@ import {
   isLikelySshAuthFailure,
   sshToHttpsBaseRewrite,
 } from "../runtime/git-mirror-manager.js";
+import { isUnderManagedRoot } from "../runtime/worktree-cleanup.js";
 
 let workRoot: string;
 let fixtureRepo: string;
@@ -681,6 +682,70 @@ describe("GitMirrorManager — SSH auth failure heuristic (isLikelySshAuthFailur
     "fatal: could not read Username for 'https://github.com'",
   ])("does NOT match: %s", (msg) => {
     expect(isLikelySshAuthFailure(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — hubManagedRoots safety guards", () => {
+  it("isUnderManagedRoot returns false when target === root (refuses to nuke the managed root itself)", () => {
+    // Without this guard, a caller that accidentally passes the managed root
+    // as a worktree target would let the self-heal branch `rm -rf` the entire
+    // `<dataDir>/workspaces` tree (every agent, every session). Worktree
+    // targets always sit at least two levels deeper; the exact-match case is
+    // never a legitimate request.
+    expect(isUnderManagedRoot("/data/ws", ["/data/ws"])).toBe(false);
+    expect(isUnderManagedRoot("/data/ws/", ["/data/ws"])).toBe(false);
+  });
+
+  it("isUnderManagedRoot returns true for proper descendants", () => {
+    expect(isUnderManagedRoot("/data/ws/agent/chat/repo", ["/data/ws"])).toBe(true);
+    expect(isUnderManagedRoot("/data/ws/a", ["/data/ws"])).toBe(true);
+  });
+
+  it("isUnderManagedRoot returns false for siblings whose name shares a prefix (path traversal guard)", () => {
+    // `/data/ws-evil` looks like a sibling of `/data/ws` and a naive
+    // `startsWith` check would say it's "inside" — the helper uses `relative`
+    // so the result starts with `..` and is correctly rejected.
+    expect(isUnderManagedRoot("/data/ws-evil/agent", ["/data/ws"])).toBe(false);
+    expect(isUnderManagedRoot("/elsewhere/repo", ["/data/ws"])).toBe(false);
+  });
+
+  it("createGitMirrorManager throws when a managed root is outside dataDir (fail-loud against weaponised config)", () => {
+    // The dangerous shapes: `["/"]`, `[os.homedir()]`, `[tmpdir()]`. Each one
+    // would let the createWorktree self-heal branch `rm -rf` arbitrary host
+    // paths. Catch them at construction so the operator sees a startup error
+    // rather than a quiet, much-later data-loss event.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-"));
+    try {
+      expect(() => createGitMirrorManager({ dataDir, hubManagedRoots: ["/"] })).toThrow(GitMirrorError);
+      expect(() => createGitMirrorManager({ dataDir, hubManagedRoots: [join(dataDir, "..", "elsewhere")] })).toThrow(
+        GitMirrorError,
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("createGitMirrorManager throws when a managed root equals dataDir itself", () => {
+    // Granting `dataDir` as a managed root would expose `git-mirrors/`,
+    // `chats/`, `images/`, etc. to the self-heal rm -rf — too broad. The
+    // root must be a STRICT subdir.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-"));
+    try {
+      expect(() => createGitMirrorManager({ dataDir, hubManagedRoots: [dataDir] })).toThrow(GitMirrorError);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("createGitMirrorManager accepts a strict subdir of dataDir (the production wiring)", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-"));
+    try {
+      expect(() =>
+        createGitMirrorManager({ dataDir, hubManagedRoots: [join(dataDir, "workspaces")] }),
+      ).not.toThrow();
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });
 

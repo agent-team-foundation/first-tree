@@ -58,15 +58,18 @@ function resolveLsofBinary(): string | null {
 }
 
 /**
- * True when `target` is `root`, or contained inside `root` after path
- * normalisation. Used to guard destructive cleanup behind an explicit
- * "Hub owns this directory" assertion — operator-supplied paths outside any
- * managed root must NOT be auto-cleaned.
+ * True when `target` is contained STRICTLY inside `root` after path
+ * normalisation. The exact-match case (`target === root`) returns false on
+ * purpose: a caller that passes the managed root itself as a worktree target
+ * would otherwise let the self-heal branch `rm -rf` the entire
+ * `<dataDir>/workspaces` tree. Worktree targets always sit at least two levels
+ * deeper (`<agent>/<chatId>/<repo>`), so the exact-match path is never a
+ * legitimate request — fail closed.
  */
 export function isUnderManagedRoot(target: string, roots: readonly string[]): boolean {
   for (const root of roots) {
     const rel = relative(root, target);
-    if (rel === "") return true;
+    if (rel === "") continue; // target === root: never auto-clean the root itself
     if (rel.startsWith("..")) continue;
     // `path.relative` returns OS-native separators; reject if it bottoms out
     // to an absolute path on the foreign side (relative across volumes on
