@@ -114,7 +114,7 @@ describe("deliverNormalizedEvent", () => {
     });
     const stats = await deliverNormalizedEvent(app, event, [target]);
 
-    expect(stats).toEqual({ delivered: 1, newChats: 0 });
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
     const sent = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
     expect(sent).toHaveLength(1);
     expect(sent[0]?.format).toBe("card");
@@ -155,7 +155,7 @@ describe("deliverNormalizedEvent", () => {
     });
     const stats = await deliverNormalizedEvent(app, event, [target]);
 
-    expect(stats).toEqual({ delivered: 1, newChats: 1 });
+    expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
 
     // A new mapping row exists pointing at a chat row
     const [mapping] = await app.db
@@ -237,6 +237,10 @@ describe("deliverNormalizedEvent", () => {
 
     const stats = await deliverNormalizedEvent(app, event, [broken, ok]);
     expect(stats.delivered).toBe(1);
+    // M1 (#507): the broken target's exception must be counted, not
+    // silently swallowed by the per-target catch — operators dashboard
+    // off this counter to spot regressions in single-target reliability.
+    expect(stats.failed).toBe(1);
     const sent = await app.db.select().from(messages).where(eq(messages.chatId, goodChatId));
     expect(sent).toHaveLength(1);
   });
@@ -298,7 +302,7 @@ describe("deliverNormalizedEvent", () => {
       entityKey: "owner/repo#900",
     });
     const stats = await deliverNormalizedEvent(app, event, [target]);
-    expect(stats).toEqual({ delivered: 1, newChats: 0 });
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
 
     const [delegateAgent] = await app.db
       .select({ inboxId: agents.inboxId })
