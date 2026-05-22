@@ -33,11 +33,11 @@ export function sessionStateToMain(state: SessionState | "none" | null | undefin
 
 /**
  * Indicator shape. Mirrors the existing StateDot shape+color double-encoding
- * (shape carries meaning too, so color-blind users can still distinguish
- * states): `dot` solid circle, `triangle` warning glyph, `pause` double-bar
- * glyph, `hollow` outline ring.
+ * (shape carries meaning too, so color-blind users can still distinguish the
+ * non-dot states): `dot` solid circle, `pause` double-bar glyph, `hollow`
+ * outline ring.
  */
-export type AgentStatusShape = "dot" | "triangle" | "pause" | "hollow";
+export type AgentStatusShape = "dot" | "pause" | "hollow";
 
 /** Pulse kind for the indicator; null = static. */
 export type AgentStatusPulse = "working" | "needs-you" | null;
@@ -85,9 +85,12 @@ export function viewOf(main: AgentMainStatus): AgentStatusView {
         label: "Needs you",
       };
     case "failed":
+      // A red solid dot (not a triangle): the corner triangle read sharp /
+      // aliased at the small avatar-corner size. Red + the "Failed" reason
+      // line carry the meaning; unified with the other dots for a clean column.
       return {
         colorVar: "var(--state-error)",
-        shape: "triangle",
+        shape: "dot",
         pulse: null,
         animationClass: null,
         label: "Failed",

@@ -21,10 +21,10 @@ describe("viewOf — §9.1 visual vocabulary", () => {
     expect(v.animationClass).toBe("agent-status-pulse--needs-you");
   });
 
-  it("failed = red triangle, static", () => {
+  it("failed = red solid dot, static", () => {
     const v = viewOf("failed");
     expect(v.colorVar).toBe("var(--state-error)");
-    expect(v.shape).toBe("triangle");
+    expect(v.shape).toBe("dot");
     expect(v.pulse).toBeNull();
     expect(v.animationClass).toBeNull();
   });

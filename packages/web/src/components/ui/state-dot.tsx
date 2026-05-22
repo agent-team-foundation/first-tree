@@ -18,7 +18,7 @@ function runtimeStateView(state: AgentState): { colorVar: string; shape: AgentSt
     case "blocked":
       return { colorVar: "var(--state-blocked)", shape: "dot", pulse: null };
     case "error":
-      return { colorVar: "var(--state-error)", shape: "triangle", pulse: null };
+      return { colorVar: "var(--state-error)", shape: "dot", pulse: null };
     case "idle":
       return { colorVar: "var(--state-idle)", shape: "dot", pulse: null };
     case "offline":

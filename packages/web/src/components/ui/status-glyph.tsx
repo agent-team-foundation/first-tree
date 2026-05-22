@@ -35,16 +35,6 @@ export function StatusGlyph({
   const a11y = ariaLabel ? { role: "img", "aria-label": ariaLabel } : { "aria-hidden": true };
   const box: CSSProperties = { width: size, height: size, flexShrink: 0 };
 
-  if (shape === "triangle") {
-    return (
-      <span
-        className={cn("inline-block shrink-0", className)}
-        style={{ ...box, background: colorVar, clipPath: "polygon(50% 0%, 100% 100%, 0% 100%)", borderRadius: 1 }}
-        {...a11y}
-      />
-    );
-  }
-
   if (shape === "hollow") {
     return (
       <span
