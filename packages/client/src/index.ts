@@ -54,6 +54,14 @@ export type {
   UpdatePromptFn,
 } from "./runtime/update-manager.js";
 export { UpdateManager } from "./runtime/update-manager.js";
-export { acquireWorkspace, cleanWorkspaces, DEFAULT_WORKSPACE_TTL_MS } from "./runtime/workspace.js";
+export {
+  acquireAgentHome,
+  acquireWorkspace,
+  cleanWorkspaces,
+  clearWorkspaceInitComplete,
+  DEFAULT_WORKSPACE_TTL_MS,
+  INIT_COMPLETE_SENTINEL_REL,
+  markWorkspaceInitComplete,
+} from "./runtime/workspace.js";
 export type { AccessTokenProvider, PaginatedResult, RegisterResult, SdkConfig } from "./sdk.js";
 export { FirstTreeHubSDK, SdkError } from "./sdk.js";
