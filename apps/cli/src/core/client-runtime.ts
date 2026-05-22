@@ -96,6 +96,10 @@ export class ClientRuntime {
     this.gitMirrorManager = createGitMirrorManager({
       dataDir: DEFAULT_DATA_DIR,
       log: createLogger("git-mirror"),
+      // Authorise auto-recovery of orphaned worktree leftovers (kill holders +
+      // rm -rf) for any target under the per-agent workspaces tree. Operator
+      // paths outside this root still fail loud — see GitMirrorManagerOptions.
+      hubManagedRoots: [join(DEFAULT_DATA_DIR, "workspaces")],
     });
     registerBuiltinHandlers();
 
