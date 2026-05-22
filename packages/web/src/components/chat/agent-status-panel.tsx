@@ -146,10 +146,11 @@ function AgentStatusRow({
 }
 
 /**
- * The row's second line — present for every state so all rows stay uniform.
- * working → the live activity (Using <tool> · 12s) via the shared WorkingChip;
- * needs-you / failed → a short coloured reason; ready / paused / offline → a
- * muted state word (--fg-4). The dot still carries shape + colour.
+ * The row's second line — present for every state so all rows stay uniform,
+ * and each line's text is coloured by its own state token (matching the dot).
+ * working → "Working · <tool> · <timer>" via the shared WorkingChip (no leading
+ * dot — the avatar dot already pulses); needs-you / failed → a short reason;
+ * ready / paused / offline → the state word in its own colour.
  */
 function SecondLine({ status }: { status: AgentChatStatus | null }) {
   if (!status) {
@@ -160,9 +161,12 @@ function SecondLine({ status }: { status: AgentChatStatus | null }) {
     );
   }
   if (status.main === "working" && status.activity) {
+    // "Working · Bash · 0s" — the state word + activity + timer, no leading
+    // pulse dot (the avatar already carries the breathing status dot, so a
+    // second dot here would be redundant). All in working blue.
     return (
       <div className="flex items-center">
-        <WorkingChip activity={status.activity} />
+        <WorkingChip activity={status.activity} showDot={false} prefix="Working" monochrome />
       </div>
     );
   }
@@ -180,12 +184,14 @@ function SecondLine({ status }: { status: AgentChatStatus | null }) {
       </div>
     );
   }
-  // ready / paused / offline → a muted state word. No dynamic detail, but
-  // every state gets a second line so all rows stay uniform / equal-height
-  // (§3.2); the dot still carries shape + colour, this is its text echo.
+  // ready / paused / offline → the state word, coloured by the state's own
+  // token (idle=green, paused=grey, offline=grey) so the second-line text
+  // matches its dot. No dynamic detail, but every state gets a second line so
+  // all rows stay uniform / equal-height (§3.2).
+  const view = viewOf(status.main);
   return (
-    <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-      {viewOf(status.main).label}
+    <div className="mono text-caption" style={{ color: view.colorVar }}>
+      {view.label}
     </div>
   );
 }
