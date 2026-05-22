@@ -6,7 +6,7 @@ import { getClientServiceStatus, isServiceSupported, stopClientService } from ".
 import { print } from "../core/output.js";
 
 /**
- * `first-tree-hub logout` — symmetric counterpart to `login`. Stops the
+ * `first-tree logout` — symmetric counterpart to `login`. Stops the
  * background daemon and removes persisted credentials. `client.yaml` is
  * kept by default (it carries harmless config like `server.url` and the
  * stable `client.id`); `--purge` opts in to wiping that too.
@@ -39,6 +39,6 @@ export function registerLogoutCommand(program: Command): void {
           print.line(`  ✓ Removed client.yaml\n`);
         }
       }
-      print.line(`\n  Logged out. Run \`first-tree-hub login <token>\` to reconnect.\n\n`);
+      print.line(`\n  Logged out. Run \`first-tree login <token>\` to reconnect.\n\n`);
     });
 }

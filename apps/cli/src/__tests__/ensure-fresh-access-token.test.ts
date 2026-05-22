@@ -92,7 +92,7 @@ describe("ensureFreshAccessToken — safety margin", () => {
     await expect(ensureFreshAccessToken()).rejects.toThrow(AuthRefreshFailedError);
     // Message is operator-facing; spot-check the recovery hint instead of the
     // word "failed" so future copy edits don't break the test.
-    await expect(ensureFreshAccessToken()).rejects.toThrow(/Re-run `first-tree-hub login/);
+    await expect(ensureFreshAccessToken()).rejects.toThrow(/Re-run `first-tree login/);
   });
 
   it("throws a generic Error (not AuthRefreshFailedError) on non-401 failures so transient outages still retry", async () => {

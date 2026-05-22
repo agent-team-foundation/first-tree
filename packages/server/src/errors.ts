@@ -71,7 +71,7 @@ export class ClientOrgMismatchError extends AppError {
 /**
  * Thrown when a client.yaml is presented with a JWT whose user_id does not
  * match the row's owner. The CLI responds by guiding the operator through
- * `first-tree-hub login <token> --override` to take over ownership, which
+ * `first-tree login <token> --override` to take over ownership, which
  * unpins the previous owner's agents from this machine.
  */
 export class ClientUserMismatchError extends AppError {

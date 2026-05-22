@@ -230,10 +230,7 @@ export function Step2Body({
   // e.g. an old server, or a transient race where `connectToken` arrives
   // but `bootstrapCommand` hasn't landed in state yet.
   const cliCommand =
-    bootstrapCommand ??
-    (connectToken
-      ? `npm install -g @agent-team-foundation/first-tree-hub\nfirst-tree-hub login ${connectToken}`
-      : null);
+    bootstrapCommand ?? (connectToken ? `npm install -g first-tree\nfirst-tree login ${connectToken}` : null);
 
   const pollUntilReady = useCallback(
     async (agentUuid: string): Promise<void> => {
@@ -645,8 +642,8 @@ function CommandBox({ command }: { command: string | null }) {
   const [copied, setCopied] = useState(false);
 
   const lines = command ? command.split("\n") : [];
-  const connectLine = lines.find((l) => l.startsWith("first-tree-hub")) ?? "";
-  const connectPrefix = "first-tree-hub login ";
+  const connectLine = lines.find((l) => l.startsWith("first-tree")) ?? "";
+  const connectPrefix = "first-tree login ";
   const commandPreview = connectLine.startsWith(connectPrefix)
     ? `${connectPrefix}${connectLine.slice(connectPrefix.length, connectPrefix.length + 22)}…`
     : connectLine.length > 52

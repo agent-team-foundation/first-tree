@@ -353,7 +353,7 @@ describe("supersede hooks", () => {
 });
 
 /**
- * Regression: github.com/agent-team-foundation/first-tree-hub#404 — when a
+ * Regression: github.com/agent-team-foundation/first-tree#404 — when a
  * `direct → group` upgrade re-grades the asker to `mention_only` AFTER the
  * question is posted, the `format=question_answer` fan-out used to set
  * `notify=false` for the asker (structured content carries no @<name>

@@ -515,7 +515,7 @@ async function processInboundMessage(
 /** Reply to unknown (unbound) user with binding instructions. */
 async function replyUnknownUser(bot: ConnectedBot, event: InboundEvent, log: FastifyBaseLogger): Promise<void> {
   const text = [
-    "Your account is not linked to First Tree Hub yet.",
+    "Your account is not linked to First Tree yet.",
     "To bind, send:  /bind <your-agent-id>",
     "",
     "Example:  /bind alice",

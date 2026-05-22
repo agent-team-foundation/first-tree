@@ -10,7 +10,7 @@ the Hub, optional `agent bind bot|user` for Feishu integration, then
 
 ## Prerequisites
 
-- **First Tree Hub CLI** (`first-tree-hub`) — installed (`npm i -g @agent-team-foundation/first-tree-hub`)
+- **First Tree Hub CLI** (`first-tree`) — installed (`npm i -g first-tree`)
 - **Hub Server** — running and accessible (or a SaaS Hub you have a connect token for)
 - **A connect token** — generated from the Hub web console's *Computers → New Connection* dialog
 
@@ -19,23 +19,23 @@ the Hub, optional `agent bind bot|user` for Feishu integration, then
 ```bash
 # 1. Sign this machine into the Hub. Persists credentials and installs
 #    the background daemon on macOS / Linux.
-first-tree-hub login <connect-token>
+first-tree login <connect-token>
 
 # 2. Create the agent record on the Hub and bind it to this client.
 #    The same JWT signs every request — no per-agent token needed.
-first-tree-hub agent create alice \
+first-tree agent create alice \
   --type human \
-  --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
+  --client-id "$(first-tree config get client.id | awk '{print $2}')"
 
 # 3. (Optional) Bind a Feishu bot to the agent.
-first-tree-hub agent bind bot \
+first-tree agent bind bot \
   --platform feishu \
   --app-id cli_abcdef \
   --app-secret "$FEISHU_APP_SECRET" \
   --agent alice
 
 # 4. Start the daemon (no-op if `login` already started it).
-first-tree-hub daemon start
+first-tree daemon start
 ```
 
 `--type` accepts `human`, `personal_assistant`, or `autonomous_agent`. The
@@ -46,14 +46,14 @@ exactly one client machine.
 
 | Need | Command |
 |------|---------|
-| One-screen overview | `first-tree-hub status` |
-| Daemon readiness check | `first-tree-hub daemon doctor` |
-| Cross-subsystem readiness check | `first-tree-hub doctor` |
-| List local agent bindings | `first-tree-hub agent list` |
-| List every agent you manage on the Hub | `first-tree-hub agent list --remote` |
-| Take over a machine bound to another user | `first-tree-hub login <token> --override` |
-| Sign out (stop daemon + delete credentials) | `first-tree-hub logout` |
-| Self-update CLI + restart daemon | `first-tree-hub upgrade` |
+| One-screen overview | `first-tree status` |
+| Daemon readiness check | `first-tree daemon doctor` |
+| Cross-subsystem readiness check | `first-tree doctor` |
+| List local agent bindings | `first-tree agent list` |
+| List every agent you manage on the Hub | `first-tree agent list --remote` |
+| Take over a machine bound to another user | `first-tree login <token> --override` |
+| Sign out (stop daemon + delete credentials) | `first-tree logout` |
+| Self-update CLI + restart daemon | `first-tree upgrade` |
 
 ## Choosing the right `--type`
 
@@ -78,12 +78,12 @@ supplied when binding a Feishu bot via `agent bind bot`.
 - Walk the user through the four-step flow above. There is no single
   command that does it end-to-end anymore — that's intentional, each verb
   has clear independent failure modes you can recover from.
-- Always run `first-tree-hub status` after each step to verify state
+- Always run `first-tree status` after each step to verify state
   before proceeding to the next.
 - `--agent <name>` defaults to the first locally-configured agent. Pass
   it explicitly when more than one agent runs on the same client to
   avoid `AMBIGUOUS_AGENT`.
 - If the user already has a connect token bound to a different account
-  on this machine, use `first-tree-hub login <token> --override` rather
+  on this machine, use `first-tree login <token> --override` rather
   than `logout` + `login`: it transfers ownership and unpins the
   previous owner's agents in a single transaction.

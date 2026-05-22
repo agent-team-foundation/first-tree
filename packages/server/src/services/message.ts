@@ -234,7 +234,7 @@ async function sendMessageInner(
       throw new BadRequestError(
         `Cannot route to "${sample}" — they are not a participant of this chat. ` +
           "Add them first:\n" +
-          `  first-tree-hub chat invite ${sample}\n` +
+          `  first-tree chat invite ${sample}\n` +
           "Then retry your send. Or ask a human in this chat to add them.",
       );
     }
@@ -327,7 +327,7 @@ async function sendMessageInner(
       if (recipientMentions.length === 0) {
         throw new BadRequestError(
           "Sending to a group chat requires an explicit @mention. " +
-            "Use `first-tree-hub chat send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
+            "Use `first-tree chat send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
         );
       }
     }
@@ -369,7 +369,7 @@ async function sendMessageInner(
           throw new BadRequestError(
             `Cannot @-mention "${sample}" — they are not a participant of this chat. ` +
               "Add them first:\n" +
-              `  first-tree-hub chat invite ${sample}\n` +
+              `  first-tree chat invite ${sample}\n` +
               "Then retry your send. Or ask a human in this chat to add them.",
           );
         }

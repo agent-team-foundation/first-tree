@@ -27,8 +27,8 @@ runHomeMigration();
 const program = new Command();
 
 program
-  .name("first-tree-hub")
-  .description("First Tree Hub — centralized collaboration platform for agent teams")
+  .name("first-tree")
+  .description("First Tree — Context Tree, GitHub Scan, and Hub agent collaboration in one CLI")
   .version(COMMAND_VERSION)
   .option("--json", "emit only machine-readable JSON on stdout; silence human status lines on stderr")
   .option("--verbose", "raise log level to debug (overrides FIRST_TREE_LOG_LEVEL)")
@@ -73,7 +73,6 @@ registerOrgCommands(program);
 registerDaemonCommands(program);
 registerConfigCommands(program);
 
-// Phase 3 placeholders — wired up so `--help` documents the eventual shape.
 registerTreeCommands(program);
 registerGithubCommands(program);
 

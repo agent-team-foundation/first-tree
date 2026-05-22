@@ -112,8 +112,8 @@ describe("identifyActor", () => {
     const id = await identifyActor(
       app.db,
       admin.organizationId,
-      { githubLogin: "First-Tree-Hub[bot]", isBot: true },
-      "first-tree-hub",
+      { githubLogin: "First-Tree[bot]", isBot: true },
+      "first-tree",
     );
     expect(id).toEqual({ kind: "our-app-bot" });
   });
@@ -125,7 +125,7 @@ describe("identifyActor", () => {
       app.db,
       admin.organizationId,
       { githubLogin: "dependabot[bot]", isBot: true },
-      "first-tree-hub",
+      "first-tree",
     );
     expect(id).toEqual({ kind: "external" });
   });
@@ -133,12 +133,7 @@ describe("identifyActor", () => {
   it("returns external when appSlug is null even for bot senders", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const id = await identifyActor(
-      app.db,
-      admin.organizationId,
-      { githubLogin: "first-tree-hub[bot]", isBot: true },
-      null,
-    );
+    const id = await identifyActor(app.db, admin.organizationId, { githubLogin: "first-tree[bot]", isBot: true }, null);
     expect(id).toEqual({ kind: "external" });
   });
 
@@ -156,7 +151,7 @@ describe("identifyActor", () => {
       app.db,
       admin.organizationId,
       { githubLogin: row.name.toUpperCase(), isBot: false },
-      "first-tree-hub",
+      "first-tree",
     );
     expect(id).toEqual({ kind: "agent", agentId });
   });
@@ -168,7 +163,7 @@ describe("identifyActor", () => {
       app.db,
       admin.organizationId,
       { githubLogin: "stranger", isBot: false },
-      "first-tree-hub",
+      "first-tree",
     );
     expect(id).toEqual({ kind: "external" });
   });
@@ -210,7 +205,7 @@ describe("resolveAudience", () => {
         actorLogin: "outsider",
         kind: "synchronized",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([
@@ -251,7 +246,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "review_requested" }],
         kind: "review_requested",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([
@@ -301,7 +296,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -347,11 +342,11 @@ describe("resolveAudience", () => {
         orgId: admin.organizationId,
         entityType: "pull_request",
         entityKey: "owner/repo#103",
-        actorLogin: "first-tree-hub[bot]",
+        actorLogin: "first-tree[bot]",
         actorIsBot: true,
         kind: "synchronized",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -381,12 +376,12 @@ describe("resolveAudience", () => {
         orgId: admin.organizationId,
         entityType: "pull_request",
         entityKey: "owner/repo#104",
-        actorLogin: "first-tree-hub[bot]",
+        actorLogin: "first-tree[bot]",
         actorIsBot: true,
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -447,7 +442,7 @@ describe("resolveAudience", () => {
         actorLogin: humanRow?.name ?? "",
         kind: "synchronized",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
     expect(audience).toHaveLength(1);
     expect(audience[0]?.humanAgentId).toBe(otherHuman);
@@ -484,7 +479,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -542,7 +537,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -576,7 +571,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanInactiveName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -602,7 +597,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -649,7 +644,7 @@ describe("resolveAudience", () => {
         ],
         kind: "opened",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toHaveLength(2);

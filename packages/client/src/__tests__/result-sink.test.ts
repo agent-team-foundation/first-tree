@@ -102,7 +102,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     // documentContext at all (and still no auto-mentions array).
     const { sink, sendMessage } = buildSink({
       trigger: { messageId: "m1", senderId: "agent-peer" },
-      getDocumentBasePath: vi.fn().mockResolvedValue("first-tree-hub"),
+      getDocumentBasePath: vi.fn().mockResolvedValue("first-tree"),
     });
 
     await sink("see [design](docs/design.md)");

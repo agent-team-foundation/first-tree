@@ -4,7 +4,7 @@ import { deriveServiceSuffix } from "../core/service-install.js";
 describe("deriveServiceSuffix", () => {
   it("returns empty string for the canonical 'hub' basename so prod unit names stay unchanged", () => {
     // Backwards compatibility: every machine already running prod has its
-    // unit registered under `first-tree-hub-client.service` / `dev.first-tree-hub.client`.
+    // unit registered under `first-tree-client.service` / `dev.first-tree.client`.
     // The suffix derivation must NOT rename those out from under existing installs.
     expect(deriveServiceSuffix("hub")).toBe("");
   });
@@ -21,7 +21,7 @@ describe("deriveServiceSuffix", () => {
 
   it("uses the entire basename for non-'hub-*' homes", () => {
     // A user who points FIRST_TREE_HOME at e.g. ~/.first-tree/scratch
-    // gets `first-tree-hub-client-scratch.service` rather than colliding
+    // gets `first-tree-client-scratch.service` rather than colliding
     // with prod.
     expect(deriveServiceSuffix("scratch")).toBe("scratch");
     expect(deriveServiceSuffix("my-stuff")).toBe("my-stuff");
@@ -30,7 +30,7 @@ describe("deriveServiceSuffix", () => {
   it("falls back to empty (= prod unit name) for empty input", () => {
     // Defensive: if basename() ever returns "" we'd rather degrade to the
     // prod unit name (which we already detect/handle) than write a weird
-    // `first-tree-hub-client-.service`.
+    // `first-tree-client-.service`.
     expect(deriveServiceSuffix("")).toBe("");
   });
 

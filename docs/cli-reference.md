@@ -3,8 +3,8 @@
 ## Prerequisites
 
 ```bash
-npm install -g @agent-team-foundation/first-tree-hub
-first-tree-hub --version
+npm install -g first-tree
+first-tree --version
 ```
 
 - Node.js `>= 22.16`
@@ -13,7 +13,7 @@ first-tree-hub --version
 ## Commands
 
 ```
-first-tree-hub
+first-tree
 ├── connect <token> [--no-start]
 ├── client
 │   ├── start [--no-interactive] [--foreground]
@@ -73,8 +73,8 @@ in *Connect your computer*; the CLI decodes the token's `iss` claim to
 derive the hub URL — no `--server-url` argument needed.
 
 ```bash
-first-tree-hub login eyJhbGciOi...           # default: install background service
-first-tree-hub login eyJhbGciOi... --no-start   # run inline until Ctrl+C
+first-tree login eyJhbGciOi...           # default: install background service
+first-tree login eyJhbGciOi... --no-start   # run inline until Ctrl+C
 ```
 
 Hard-fails (no fallback) when the token is missing an `iss` claim or the
@@ -84,36 +84,36 @@ environment from accidentally re-targeting another.
 ## client
 
 Client runtime — connects all configured agents to the server. First-time
-setup happens via the top-level `first-tree-hub login <token>` (see
+setup happens via the top-level `first-tree login <token>` (see
 above); the commands below cover ongoing operation.
 
 ```bash
 # Service lifecycle (delegates to systemd / launchd when a service is installed)
-first-tree-hub daemon start          # Start the background service
-first-tree-hub daemon start --foreground   # Run inline instead (debug / no-service users)
-first-tree-hub daemon stop           # Stop the service (preserves auto-start on next login)
-first-tree-hub daemon restart        # Restart the service
+first-tree daemon start          # Start the background service
+first-tree daemon start --foreground   # Run inline instead (debug / no-service users)
+first-tree daemon stop           # Stop the service (preserves auto-start on next login)
+first-tree daemon restart        # Restart the service
 
 # Check environment readiness (includes background-service state)
-first-tree-hub daemon doctor
+first-tree daemon doctor
 
 # One-screen overview: CLI version, service state, hub URL, configured agents
-first-tree-hub daemon status
+first-tree daemon status
 
 # Hub-side client inventory and administration is exposed in the web admin UI
 # (Computers tab). The legacy `client list` / `client disconnect` CLI verbs
 # have been removed.
 
 # View / modify this machine's client.yaml
-first-tree-hub config show
-first-tree-hub config show update.policy
-first-tree-hub config set update.policy auto
+first-tree config show
+first-tree config show update.policy
+first-tree config set update.policy auto
 
 # Transfer ownership of this machine's client.yaml to the currently
 # logged-in user (run after a 4403 CLIENT_USER_MISMATCH on `daemon start`).
 # Unpins the previous owner's agents from this machine in a single
 # transaction.
-first-tree-hub login <token> --override
+first-tree login <token> --override
 ```
 
 `login <token>` automatically installs a background service on macOS (launchd) and Linux (`systemd --user`) so the computer stays online across reboots. Use `--no-start` to skip this and run inline (Ctrl+C to stop). Windows is not supported — `login` falls back to inline mode.
@@ -123,7 +123,7 @@ first-tree-hub login <token> --override
 A `client.yaml` is bound to exactly one user. When a different user logs in
 and runs `daemon start`, the WebSocket handshake refuses with code
 `CLIENT_USER_MISMATCH` (close 4403) and the CLI prints a guide pointing at
-`first-tree-hub login <token> --override`. Running override:
+`first-tree login <token> --override`. Running override:
 
 1. Updates `clients.user_id` to the calling JWT's user.
 2. Unpins every agent whose manager belonged to the previous owner
@@ -137,13 +137,13 @@ previous owner's machine because the verb must be requested by name. See
 
 ### Manual service operations
 
-`daemon start / stop / restart` cover day-to-day service control. Install happens during `first-tree-hub login <token>`; uninstall is a manual OS-level step (see *Decommission* below). `daemon status` and `daemon doctor` report state.
+`daemon start / stop / restart` cover day-to-day service control. Install happens during `first-tree login <token>`; uninstall is a manual OS-level step (see *Decommission* below). `daemon status` and `daemon doctor` report state.
 
 **Tail logs:**
 
 ```bash
 # Linux: journald is authoritative under the new unit (StandardOutput=journal)
-journalctl --user -u first-tree-hub-client -f
+journalctl --user -u first-tree-client -f
 
 # Or read the rotating NDJSON file the client itself writes:
 tail -f ~/.first-tree/hub/logs/client.log
@@ -158,12 +158,12 @@ Logs are NDJSON; pipe through `jq` for filtering by level/time.
 
 ```bash
 # macOS
-launchctl bootout gui/$UID/dev.first-tree-hub.client 2>/dev/null
-rm -f ~/Library/LaunchAgents/dev.first-tree-hub.client.plist
+launchctl bootout gui/$UID/dev.first-tree.client 2>/dev/null
+rm -f ~/Library/LaunchAgents/dev.first-tree.client.plist
 
 # Linux
-systemctl --user disable --now first-tree-hub-client.service
-rm -f ~/.config/systemd/user/first-tree-hub-client.service
+systemctl --user disable --now first-tree-client.service
+rm -f ~/.config/systemd/user/first-tree-client.service
 systemctl --user daemon-reload
 
 # Both: clear local credentials and config
@@ -172,7 +172,7 @@ rm -rf ~/.first-tree/hub
 
 To force-disconnect a client from the server side, use the Hub web admin UI (Computers tab → "Disconnect"). The CLI no longer ships an admin verb for this — it's a destructive cross-machine operation that lives in the admin surface.
 
-**Repair after Node upgrade or binary move** (plist still points at the old path): re-run `first-tree-hub login <token>` — re-authentication is required (paste a fresh connect token from the Hub web console), but the command rewrites the unit file with the current binary path.
+**Repair after Node upgrade or binary move** (plist still points at the old path): re-run `first-tree login <token>` — re-authentication is required (paste a fresh connect token from the Hub web console), but the command rewrites the unit file with the current binary path.
 
 ## agent
 
@@ -182,42 +182,42 @@ Agent management — configuration, tokens, bindings, and messaging.
 
 ```bash
 # Register an existing Hub agent on this client (interactive or --agent-id).
-# Optional: a running `first-tree-hub daemon start` auto-registers any agent
+# Optional: a running `first-tree daemon start` auto-registers any agent
 # the admin pins to this clientId via the Hub UI / API, so this command is
 # only needed for unattended setups or scripted seeding.
 #
 # The local config dir is always keyed by the agent's name on the Hub —
 # there is no separate "local alias" concept.
-first-tree-hub agent add
-first-tree-hub agent add --agent-id <uuid>
+first-tree agent add
+first-tree agent add --agent-id <uuid>
 
 # List / remove (name = Hub agent name)
-first-tree-hub agent list                           # locally configured agents on this machine
-first-tree-hub agent list --remote                  # every agent you manage on the Hub (cross-org)
-first-tree-hub agent list --org <organizationId>    # restrict the remote list to one org
-first-tree-hub agent remove <name>
+first-tree agent list                           # locally configured agents on this machine
+first-tree agent list --remote                  # every agent you manage on the Hub (cross-org)
+first-tree agent list --org <organizationId>    # restrict the remote list to one org
+first-tree agent remove <name>
 
 # Workspace cleanup
-first-tree-hub agent workspace clean              # all agents
-first-tree-hub agent workspace clean my-agent      # specific agent
-first-tree-hub agent workspace clean --ttl 14       # custom TTL (days)
+first-tree agent workspace clean              # all agents
+first-tree agent workspace clean my-agent      # specific agent
+first-tree agent workspace clean --ttl 14       # custom TTL (days)
 ```
 
 ### Bindings (Feishu)
 
 ```bash
 # Bind Feishu bot to an agent
-first-tree-hub agent bind bot --platform feishu --app-id <id> --app-secret <secret>
+first-tree agent bind bot --platform feishu --app-id <id> --app-secret <secret>
 
 # Bind Feishu user to a human agent
-first-tree-hub agent bind user <humanAgentId> --platform feishu --feishu-id <ou_xxx>
+first-tree agent bind user <humanAgentId> --platform feishu --feishu-id <ou_xxx>
 ```
 
 ### Messaging — see the `chat` command group
 
-Day-to-day messaging lives under `first-tree-hub chat`. See the
+Day-to-day messaging lives under `first-tree chat`. See the
 [chat](#chat) section below. Low-level SDK debugging (`register` / `pull`)
-moved to the hidden `agent debug` subgroup; run `first-tree-hub agent
+moved to the hidden `agent debug` subgroup; run `first-tree agent
 debug --help` to list those.
 
 ### Agent → user structured questions (Claude runtime)
@@ -226,7 +226,7 @@ Claude-runtime agents can pause execution mid-turn and prompt the operator with 
 
 - **Activation**: automatic for any agent on `runtimeProvider: claude-code` — no CLI flag.
 - **UI**: the question renders inline in the chat timeline as a card with three states (pending / answered / superseded).
-- **Lifecycle**: a pending question is auto-superseded when the chat session is archived (`agent session terminate`) or when the owning client is reclaimed by a different user (`first-tree-hub login <token> --override`). The agent receives a clean deny in either case.
+- **Lifecycle**: a pending question is auto-superseded when the chat session is archived (`agent session terminate`) or when the owning client is reclaimed by a different user (`first-tree login <token> --override`). The agent receives a clean deny in either case.
 
 ## chat
 
@@ -235,24 +235,24 @@ Day-to-day messaging — send messages, list chats, view history, open an intera
 ```bash
 # Send a message to an agent (positional is the agent name).
 # The recipient MUST already be a participant of your current chat.
-first-tree-hub chat send <agentName> "hello"
-echo "piped message" | first-tree-hub chat send <agentName>
+first-tree chat send <agentName> "hello"
+echo "piped message" | first-tree chat send <agentName>
 
 # Pull a non-member into your current chat first, then send normally.
 # Replaces the retired `chat send --direct` escape hatch — Hub keeps a single
 # group-chat model, so there is no side-conversation fallback.
-first-tree-hub chat invite <agentName>
-first-tree-hub chat send <agentName> "now we can talk"
+first-tree chat invite <agentName>
+first-tree chat send <agentName> "now we can talk"
 
 # Attach metadata
-first-tree-hub chat send <agentName> "hello" -m '{"priority":"high"}'
+first-tree chat send <agentName> "hello" -m '{"priority":"high"}'
 
 # List chats / view history
-first-tree-hub chat list
-first-tree-hub chat history <chatId>
+first-tree chat list
+first-tree chat history <chatId>
 
 # Open an interactive REPL chat with an agent
-first-tree-hub chat open <agent-name>
+first-tree chat open <agent-name>
 ```
 
 `chat invite <agentName>` adds the named agent to the chat identified by
@@ -274,15 +274,15 @@ Read / write the local `client.yaml` for this machine. Scope is implicit
 (this client's YAML at `~/.first-tree/hub/config/client.yaml`).
 
 ```bash
-first-tree-hub config show                    # print every key/value
-first-tree-hub config show update.policy      # print a single dotted key
-first-tree-hub config show --show-secrets     # un-mask secret fields
-first-tree-hub config set update.policy auto
-first-tree-hub config get update.policy       # alias for `show <key>`
+first-tree config show                    # print every key/value
+first-tree config show update.policy      # print a single dotted key
+first-tree config show --show-secrets     # un-mask secret fields
+first-tree config set update.policy auto
+first-tree config get update.policy       # alias for `show <key>`
 ```
 
 Agent-side runtime configuration (model / prompt / MCP / env / repos)
-lives in `first-tree-hub agent config ...` and mutates the Hub database
+lives in `first-tree agent config ...` and mutates the Hub database
 via the admin API.
 
 ## Onboarding a new agent
@@ -292,25 +292,25 @@ verbs. Today onboarding is a sequence:
 
 ```bash
 # 1. Log this machine into the Hub (one-time)
-first-tree-hub login <connect-token>
+first-tree login <connect-token>
 
 # 2. Create the agent record on the Hub + bind it to this client
-first-tree-hub agent create alice --type human --client-id <this-client-id>
+first-tree agent create alice --type human --client-id <this-client-id>
 
 # 3. Start the daemon (auto-installs on macOS/Linux via `login`)
-first-tree-hub daemon start
+first-tree daemon start
 ```
 
-For Feishu bot / user bindings see `first-tree-hub agent bind`.
+For Feishu bot / user bindings see `first-tree agent bind`.
 
 ## upgrade
 
 Self-update for the CLI. Queries the npm registry for the latest published version, installs it globally, refreshes the systemd unit / launchd plist on top of the new bits, then restarts the client service.
 
 ```bash
-first-tree-hub upgrade              # Install latest + refresh unit + restart service
-first-tree-hub upgrade --check      # Only check; print "update available" or "already on latest"
-first-tree-hub upgrade --no-restart # Install latest + refresh unit, but leave the running service alone
+first-tree upgrade              # Install latest + refresh unit + restart service
+first-tree upgrade --check      # Only check; print "update available" or "already on latest"
+first-tree upgrade --no-restart # Install latest + refresh unit, but leave the running service alone
 ```
 
 `--no-restart` is for staged rollouts where the operator wants to time the cutover. Refusing to run from a source checkout (anywhere with a `.git` ancestor) is intentional — keeps a dev build from accidentally `npm i -g`-overwriting a prod global.

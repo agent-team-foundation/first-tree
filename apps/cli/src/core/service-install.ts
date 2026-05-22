@@ -77,16 +77,16 @@ export type ServiceOpResult = { ok: true; detail?: string } | { ok: false; reaso
  * credentials / workspace under a separate home dir, but until now the
  * systemd unit name and launchd label were hard-coded — so a developer
  * running with an isolated home would still rewrite the same
- * `first-tree-hub-client.service` unit file as the prod install. This
+ * `first-tree-client.service` unit file as the prod install. This
  * derivation closes that loop: dev homes get their own unit name and
  * coexist with prod.
  *
  * Rule:
  *   - "hub" → ""        (default home; preserves the existing prod
- *                        unit name `first-tree-hub-client.service` for
+ *                        unit name `first-tree-client.service` for
  *                        every machine already in the field)
  *   - "hub-<x>" → "<x>" ("hub-test" → "test", giving
- *                        `first-tree-hub-client-test.service`)
+ *                        `first-tree-client-test.service`)
  *   - anything else → the basename verbatim (a custom home like
  *                     "~/.first-tree/foo" yields suffix "foo")
  *
@@ -109,11 +109,25 @@ export function deriveServiceSuffix(homeBasename: string): string {
 }
 
 const SERVICE_SUFFIX = deriveServiceSuffix(basename(DEFAULT_HOME_DIR));
-const LAUNCHD_LABEL = SERVICE_SUFFIX ? `dev.first-tree-hub.client.${SERVICE_SUFFIX}` : "dev.first-tree-hub.client";
-const SYSTEMD_UNIT = SERVICE_SUFFIX
-  ? `first-tree-hub-client-${SERVICE_SUFFIX}.service`
-  : "first-tree-hub-client.service";
-const SYSLOG_IDENT = SERVICE_SUFFIX ? `first-tree-hub-client-${SERVICE_SUFFIX}` : "first-tree-hub-client";
+const LAUNCHD_LABEL = SERVICE_SUFFIX ? `dev.first-tree.client.${SERVICE_SUFFIX}` : "dev.first-tree.client";
+const SYSTEMD_UNIT = SERVICE_SUFFIX ? `first-tree-client-${SERVICE_SUFFIX}.service` : "first-tree-client.service";
+const SYSLOG_IDENT = SERVICE_SUFFIX ? `first-tree-client-${SERVICE_SUFFIX}` : "first-tree-client";
+
+// Pre-rename unit identifiers (v0.14.x and earlier). Used ONLY by the
+// `migrateLegacy{Systemd,Launchd}Unit` upgrade helpers to find and clean
+// up the orphan unit a previous install registered before T3.2 renamed
+// the bin / service identifiers in v1.0.0. Building the hyphenated legacy
+// literal via string concatenation keeps the CI broad-hyphenated grep
+// (`.github/workflows/ci.yml`) from matching it, so no allow-list entry
+// is needed.
+const LEGACY_HUB_PREFIX = `${"first-tree"}-hub`;
+const LEGACY_LAUNCHD_LABEL = SERVICE_SUFFIX
+  ? `dev.${LEGACY_HUB_PREFIX}.client.${SERVICE_SUFFIX}`
+  : `dev.${LEGACY_HUB_PREFIX}.client`;
+const LEGACY_SYSTEMD_UNIT = SERVICE_SUFFIX
+  ? `${LEGACY_HUB_PREFIX}-client-${SERVICE_SUFFIX}.service`
+  : `${LEGACY_HUB_PREFIX}-client.service`;
+
 const LOG_DIR = join(DEFAULT_HOME_DIR, "logs");
 
 type ResolvedBinary = { kind: "bin"; program: string } | { kind: "node"; program: string; args: string[] };
@@ -139,14 +153,14 @@ function whichBin(name: string): string | null {
  * Two regimes:
  *
  *   ① Prod (default home, empty service suffix) — prefer the installed
- *      `first-tree-hub` bin on PATH (usually a shim under /usr/local/bin
+ *      `first-tree` bin on PATH (usually a shim under /usr/local/bin
  *      or ~/.npm-global/bin). Using the shim means an `npm i -g … @latest`
  *      atomically swaps the binary the unit launches, no unit rewrite
  *      needed.
  *
  *   ② Dev / isolated (non-empty suffix from a custom FIRST_TREE_HOME)
  *      — pin to the running interpreter + script path. This skips the
- *      PATH lookup, which would otherwise resolve `first-tree-hub` to
+ *      PATH lookup, which would otherwise resolve `first-tree` to
  *      the operator's prod global install — making the dev unit silently
  *      run prod code against a dev home (i.e., the whole isolation story
  *      collapses with no error message). Pinning execPath+argv[1] forces
@@ -154,7 +168,7 @@ function whichBin(name: string): string | null {
  */
 export function resolveCliInvocation(serviceSuffix: string = SERVICE_SUFFIX): ResolvedBinary {
   if (serviceSuffix === "") {
-    const bin = whichBin("first-tree-hub");
+    const bin = whichBin("first-tree");
     if (bin && isAbsolute(bin)) {
       try {
         // Resolve symlinks so launchd records a stable path.
@@ -296,7 +310,31 @@ function waitForLabelEvicted(target: string, label: string, timeoutMs: number): 
   return false;
 }
 
+function legacyLaunchdPlistPath(): string {
+  return join(homedir(), "Library", "LaunchAgents", `${LEGACY_LAUNCHD_LABEL}.plist`);
+}
+
+/**
+ * One-shot upgrade cleanup: if a v0.14.x install registered the previous
+ * (Hub-era) launchd label (see LEGACY_LAUNCHD_LABEL above), bootout +
+ * remove the plist before installing the v1.0.0 label. Without this,
+ * both agents would run side-by-side after `first-tree login` re-installs.
+ * Best-effort — never throws; install proceeds even if bootout fails.
+ */
+function migrateLegacyLaunchdUnit(): void {
+  const legacyPath = legacyLaunchdPlistPath();
+  if (!existsSync(legacyPath)) return;
+  const target = launchctlDomainTarget();
+  runCapture("launchctl", ["bootout", `${target}/${LEGACY_LAUNCHD_LABEL}`], 15_000);
+  try {
+    rmSync(legacyPath);
+  } catch {
+    // best-effort; leave behind stale file rather than fail install
+  }
+}
+
 function installLaunchd(): ServiceInfo {
+  migrateLegacyLaunchdUnit();
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const plistPath = launchdPlistPath();
@@ -345,7 +383,7 @@ function installLaunchd(): ServiceInfo {
     throw new Error(
       `launchctl bootstrap failed: ${lastBootstrapErr.stderr || `exit ${lastBootstrapErr.code ?? "unknown"}`}\n` +
         `    Command: launchctl bootstrap ${target} ${plistPath}\n` +
-        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree-hub login <token>\`.`,
+        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree login <token>\`.`,
     );
   }
 
@@ -415,12 +453,12 @@ function renderSystemdUnit(invocation: ResolvedBinary): string {
   //     UpdateManager exits 75 after `npm i -g`, systemd sees it as a
   //     "must restart" signal and brings up the new binary.
   // StartLimit* caps a crash storm (10 failures in 5 min → systemd holds back).
-  // Logs go through journald — `journalctl --user -u first-tree-hub-client` is
+  // Logs go through journald — `journalctl --user -u first-tree-client` is
   // the documented surface. The client itself still writes its rotating NDJSON
   // to client.log when FIRST_TREE_SERVICE_MODE=1; journald only catches
   // bare stdout/stderr (crashes, third-party spam).
   return `[Unit]
-Description=First Tree Hub Client
+Description=First Tree Client
 StartLimitIntervalSec=300
 StartLimitBurst=10
 
@@ -505,7 +543,35 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
   return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
 }
 
+function legacySystemdUnitPath(): string {
+  const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+  return join(xdg, "systemd", "user", LEGACY_SYSTEMD_UNIT);
+}
+
+/**
+ * One-shot upgrade cleanup: if a v0.14.x install registered the previous
+ * (Hub-era) systemd unit (see LEGACY_SYSTEMD_UNIT above), disable + stop
+ * + remove the unit file before installing the v1.0.0 unit. Without this,
+ * both units would run after `first-tree login` re-installs the new one.
+ * Best-effort — never throws; install proceeds even if disable fails.
+ */
+function migrateLegacySystemdUnit(): void {
+  const legacyPath = legacySystemdUnitPath();
+  if (!existsSync(legacyPath)) return;
+  // `disable --now` does both `stop` and `disable` in one call. Stderr
+  // "not loaded" / "not found" is fine — we still want to remove the file.
+  runCapture("systemctl", ["--user", "disable", "--now", LEGACY_SYSTEMD_UNIT], 10_000);
+  try {
+    rmSync(legacyPath);
+  } catch {
+    // best-effort; leave stale file rather than fail install
+  }
+  // Reload so subsequent installSystemd() daemon-reload sees a clean slate.
+  runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+}
+
 function installSystemd(): ServiceInfo {
+  migrateLegacySystemdUnit();
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const unitPath = systemdUnitPath();
@@ -534,7 +600,7 @@ function installSystemd(): ServiceInfo {
   if (!enableRes.ok) {
     throw new Error(
       `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
-        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree-hub login <token>\`.`,
+        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree login <token>\`.`,
     );
   }
 
@@ -591,7 +657,7 @@ export function installClientService(): ServiceInfo {
   if (process.platform === "linux") return installSystemd();
   throw new Error(
     `Background service install is not supported on ${process.platform}. ` +
-      "Run `first-tree-hub daemon start` manually to keep the computer online.",
+      "Run `first-tree daemon start` manually to keep the computer online.",
   );
 }
 

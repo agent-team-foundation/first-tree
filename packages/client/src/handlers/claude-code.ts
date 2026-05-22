@@ -115,7 +115,7 @@ function sanitizeChatId(chatId: string): string {
  * image_payload WS push which pre-writes to the data dir before delivery.
  */
 async function writeLegacyImageToTempFile(content: LegacyImageFileContent, chatId: string): Promise<string> {
-  const dir = join(tmpdir(), "first-tree-hub", "images", sanitizeChatId(chatId));
+  const dir = join(tmpdir(), "first-tree", "images", sanitizeChatId(chatId));
   await mkdir(dir, { recursive: true });
   const ext = MIME_TO_EXT[content.mimeType];
   const path = join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`);

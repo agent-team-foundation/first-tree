@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree CLI"
+  short_description: "Install, operate, and modify First Tree CLI"
+  default_prompt: "Use $first-tree-cli to install, inspect, configure, onboard, debug, and operate First Tree correctly."

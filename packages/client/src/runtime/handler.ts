@@ -56,7 +56,7 @@ export type SessionContext = HandlerContext & {
   forwardResult: (text: string) => Promise<void>;
 
   /**
-   * Build env for CLI sub-processes that shell out to the `first-tree-hub`
+   * Build env for CLI sub-processes that shell out to the `first-tree`
    * CLI. Layers Agent-Hub envelope vars (server/agent/inbox/chat IDs) on
    * top of the parent env. Handlers pass their own cleaned `process.env`.
    */

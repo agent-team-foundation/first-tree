@@ -22,7 +22,7 @@ import type { AgentIdentity } from "./handler.js";
  * text always woke the trigger sender, so a courteous "thanks / got it"
  * reply kept the conversation alive forever. Final text now reaches the
  * chat for **human observers** only; to make another agent take action,
- * the agent must explicitly call `first-tree-hub chat send <name>` (see
+ * the agent must explicitly call `first-tree chat send <name>` (see
  * the "Communication Rules" section in `tools.md`).
  *
  * Content-level `@<name>` resolution (extracting tokens and cross-validating
@@ -121,7 +121,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // v1 §四 改造 4: the trigger-sender mention auto-injection that used to
     // live here was deleted to break the agent ↔ agent echo loop. Final
     // text reaches the chat for human observers only; agent-to-agent
-    // wake-ups now require an explicit `first-tree-hub chat send <name>`.
+    // wake-ups now require an explicit `first-tree chat send <name>`.
 
     return { content, metadata: Object.keys(metadata).length > 0 ? metadata : undefined };
   }

@@ -20,7 +20,8 @@
     { "path": "packages/server" },
     { "path": "packages/client" },
     { "path": "apps/cli" },
-    { "path": "packages/web" }
+    { "path": "packages/web" },
+    { "path": "packages/github-scan" }
   ],
   "files": []
 }

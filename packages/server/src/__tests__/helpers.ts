@@ -94,7 +94,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       publicUrl: undefined,
     },
     workspace: {
-      root: "/tmp/first-tree-hub-test-workspaces",
+      root: "/tmp/first-tree-test-workspaces",
     },
     secrets: {
       jwtSecret: process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest",

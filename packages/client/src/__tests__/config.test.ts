@@ -6,7 +6,7 @@ import { loadRuntimeConfig } from "../runtime/config.js";
 import { CONCURRENCY, IDLE_TIMEOUT_MS, MAX_SESSIONS } from "../runtime/constants.js";
 
 function writeTempYaml(content: string): string {
-  const path = join(tmpdir(), `first-tree-hub-test-${crypto.randomUUID().slice(0, 8)}.yaml`);
+  const path = join(tmpdir(), `first-tree-test-${crypto.randomUUID().slice(0, 8)}.yaml`);
   writeFileSync(path, content, "utf-8");
   return path;
 }

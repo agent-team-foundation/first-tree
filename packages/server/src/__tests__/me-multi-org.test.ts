@@ -143,12 +143,12 @@ describe("Connect token carries iss claim", () => {
     expect(decoded.type).toBe("connect");
     expect(decoded.iss).toMatch(/^https?:\/\//);
 
-    expect(body.command).toBe(`first-tree-hub login ${body.token}`);
+    expect(body.command).toBe(`first-tree login ${body.token}`);
     // `bootstrapCommand` combines the channel-resolved `npm install -g` line
     // with the login command, so web onboarding renders a single copy-paste
     // block that lands the user on the version this Hub actually advertises.
     // Default test config runs channel=latest, so the npm spec stays bare.
-    expect(body.npmSpec).toBe("@agent-team-foundation/first-tree-hub");
+    expect(body.npmSpec).toBe("first-tree");
     expect(body.bootstrapCommand).toBe(`npm install -g ${body.npmSpec}\n${body.command}`);
   });
 });

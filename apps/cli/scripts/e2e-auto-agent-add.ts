@@ -17,7 +17,7 @@
  *   5. Hit `POST /api/v1/admin/agents` with the seeded client as `clientId`.
  *   6. Assert that:
  *        - The runtime's local `agents/<name>/agent.yaml` was written — same
- *          file `first-tree-hub agent add` would produce.
+ *          file `first-tree agent add` would produce.
  *        - A bound AgentSlot is running for that agentId (i.e. we did not
  *          just drop the event on the floor).
  *

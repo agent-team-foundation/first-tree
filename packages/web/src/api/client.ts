@@ -1,5 +1,5 @@
 const BASE_URL = "/api/v1";
-const TOKEN_KEY = "first-tree-hub:tokens";
+const TOKEN_KEY = "first-tree:tokens";
 
 /**
  * Currently selected organization id, set by the auth-context after `/me`

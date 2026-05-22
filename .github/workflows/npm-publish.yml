@@ -59,7 +59,7 @@ jobs:
         id: release
         working-directory: apps/cli
         env:
-          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub"
+          PACKAGE_NAME: "first-tree"
         run: |
           if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
             echo "::error::Stable npm releases must run from a git tag, got ref type '$GITHUB_REF_TYPE'."
@@ -135,9 +135,9 @@ jobs:
           INPUT_TITLE: ${{ job.status == 'success' && 'npm latest publish ✅ 成功' || 'npm latest publish ❌ 失败' }}
           INPUT_CONTENT: |
             发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
-            Package: ${{ steps.release.outputs.package_name || '@agent-team-foundation/first-tree-hub' }}
+            Package: ${{ steps.release.outputs.package_name || 'first-tree' }}
             Version: ${{ steps.release.outputs.package_version || 'unresolved' }}
-            Install: npm install -g @agent-team-foundation/first-tree-hub@latest
+            Install: npm install -g first-tree@latest
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [[ -z "${INPUT_WEBHOOK:-}" ]]; then
@@ -178,7 +178,7 @@ jobs:
         id: version
         working-directory: apps/cli
         env:
-          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub"
+          PACKAGE_NAME: "first-tree"
         run: |
           BASE_VERSION=$(node -p "require('./package.json').version")
           if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -227,7 +227,7 @@ jobs:
         working-directory: apps/cli
         env:
           ALPHA_VERSION: ${{ steps.version.outputs.alpha_version }}
-          PACKAGE_NAME: "@agent-team-foundation/first-tree-hub"
+          PACKAGE_NAME: "first-tree"
         run: |
           node <<'NODE'
           const fs = require("node:fs");
@@ -261,9 +261,9 @@ jobs:
           INPUT_TITLE: ${{ job.status == 'success' && 'npm alpha publish ✅ 成功' || 'npm alpha publish ❌ 失败' }}
           INPUT_CONTENT: |
             发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
-            Package: @agent-team-foundation/first-tree-hub
+            Package: first-tree
             Version: ${{ steps.version.outputs.alpha_version || 'unresolved' }}
-            Install: npm install -g @agent-team-foundation/first-tree-hub@alpha
+            Install: npm install -g first-tree@alpha
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [[ -z "${INPUT_WEBHOOK:-}" ]]; then

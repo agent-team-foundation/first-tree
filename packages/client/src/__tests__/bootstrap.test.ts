@@ -92,7 +92,7 @@ describe("bootstrapWorkspace", () => {
     const content = readFileSync(toolsPath, "utf-8");
     expect(content).toContain("Agent Hub");
     expect(content).toContain("[From: <agent-name>]");
-    expect(content).toContain("first-tree-hub chat send");
+    expect(content).toContain("first-tree chat send");
     // L4 silent-turn protocol: the prompt directive that pairs with the
     // result-sink empty-output guard. Tells the agent that silence is the
     // correct response when it has nothing new — drops courtesy fillers
@@ -154,7 +154,7 @@ describe("bootstrapWorkspace", () => {
     const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
     // Sending Messages section must teach the add-participant flow as the
     // canonical way to reach a non-member of the current chat.
-    expect(content).toContain("first-tree-hub chat invite");
+    expect(content).toContain("first-tree chat invite");
     // Member-default routing description (the recipient must be in this chat).
     expect(content).toMatch(/recipient MUST be a participant/);
     // The retired escape hatches must NOT be taught — agents that try them

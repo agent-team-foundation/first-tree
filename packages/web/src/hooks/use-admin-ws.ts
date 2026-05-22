@@ -152,7 +152,7 @@ function connect() {
   // context populates `selectedOrganizationId`.
   let orgId: string | null = null;
   try {
-    orgId = localStorage.getItem("first-tree-hub:selectedOrganizationId");
+    orgId = localStorage.getItem("first-tree:selectedOrganizationId");
   } catch {
     orgId = null;
   }

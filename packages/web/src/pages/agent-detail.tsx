@@ -764,9 +764,8 @@ function BindClientList({
           color: "var(--fg-3)",
         }}
       >
-        No connected computers available. Run{" "}
-        <code className="mono text-label">first-tree-hub login &lt;token&gt;</code> on the computer that should run this
-        agent, then reopen this dialog.
+        No connected computers available. Run <code className="mono text-label">first-tree login &lt;token&gt;</code> on
+        the computer that should run this agent, then reopen this dialog.
       </div>
     );
   }

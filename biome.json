@@ -42,7 +42,8 @@
       "!**/*.code-workspace",
       "!**/.gstack",
       "!**/.first-tree/tmp",
-      "!packages/e2e/.e2e-runs"
+      "!packages/e2e/.e2e-runs",
+      "!packages/github-scan/assets"
     ]
   },
   "overrides": [
@@ -74,7 +75,7 @@
                 "paths": {
                   "@first-tree/server": "packages/e2e must treat server as a black box — spawn the built dist instead (see proposal §三.3, 'no source imports').",
                   "@first-tree/client": "packages/e2e must treat client as a black box — drive it via the CLI dist instead (see proposal §三.3).",
-                  "@agent-team-foundation/first-tree-hub": "packages/e2e must drive the CLI by spawning its dist binary, not by importing its source (see proposal §三.3)."
+                  "first-tree": "packages/e2e must drive the CLI by spawning its dist binary, not by importing its source (see proposal §三.3)."
                 }
               }
             }

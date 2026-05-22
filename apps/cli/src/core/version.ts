@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { print } from "./output.js";
 
 /**
- * Version of the consumer-facing `@agent-team-foundation/first-tree-hub`
+ * Version of the consumer-facing `first-tree`
  * package. Read once at module load so the CLI, client runtime, and server
  * bootstrap all quote the same string.
  *
@@ -17,7 +17,7 @@ import { print } from "./output.js";
  * dev runs (`tsx src/cli/index.ts`) and the published bundle
  * (`dist/cli/index.mjs`) both resolve the same file.
  */
-const PACKAGE_NAME = "@agent-team-foundation/first-tree-hub";
+const PACKAGE_NAME = "first-tree";
 
 /**
  * Sentinel returned when the walker exhausts every parent directory without
@@ -56,7 +56,7 @@ export function resolveCommandVersion(moduleUrl: string = import.meta.url): stri
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") {
         const message = err instanceof Error ? err.message : String(err);
-        print.line(`[first-tree-hub] warning: could not read ${dir}/package.json: ${message}\n`);
+        print.line(`[first-tree] warning: could not read ${dir}/package.json: ${message}\n`);
       }
     }
     const parent = dirname(dir);
@@ -75,4 +75,4 @@ export const COMMAND_VERSION: string = resolveCommandVersion();
  * backends — see issue #246. The format follows RFC 7231 §5.5.3 conventions
  * (`product/version (comment)`).
  */
-export const CLI_USER_AGENT = `first-tree-hub-cli/${COMMAND_VERSION} (${process.platform} ${process.arch})`;
+export const CLI_USER_AGENT = `first-tree-cli/${COMMAND_VERSION} (${process.platform} ${process.arch})`;

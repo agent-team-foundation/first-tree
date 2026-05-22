@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCommandVersion } from "../core/version.js";
 
-const PACKAGE_NAME = "@agent-team-foundation/first-tree-hub";
+const PACKAGE_NAME = "first-tree";
 
 describe("resolveCommandVersion", () => {
   let root: string;
