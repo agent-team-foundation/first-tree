@@ -356,20 +356,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.post<{
-          token: string;
-          expiresIn: number;
-          command: string;
-          bootstrapCommand?: string;
-        }>("/me/connect-tokens", {});
+        const r = await api.post<{ token: string; expiresIn: number; command: string }>("/me/connect-tokens", {});
         if (cancelled) return;
         setConnectToken(r.token);
-        // Prefer the server-built bootstrap command (channel-aware
-        // `npm install -g …@<channel>\n` + login on a fresh machine).
-        // Fall back to the login-only `command` field for older servers
-        // that haven't shipped the bootstrap field yet, so this dialog
-        // still copies *something* sensible instead of nothing.
-        setConnectCommand(r.bootstrapCommand ?? r.command);
+        setConnectCommand(r.command);
         setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
       } catch {
         // Best-effort. The UI shows "Generating token…" until the user
