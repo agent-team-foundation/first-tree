@@ -31,15 +31,8 @@ import {
   saveCredentials,
 } from "../core/index.js";
 import { print } from "../core/output.js";
-import {
-  cleanupStaleAliasesAfterClaim,
-  postClaim,
-} from "./_shared/account-transfer.js";
-import {
-  decodeJwtPayload,
-  deriveHubUrlFromToken,
-  HubUrlDerivationError,
-} from "./_shared/connect-token.js";
+import { cleanupStaleAliasesAfterClaim, postClaim } from "./_shared/account-transfer.js";
+import { decodeJwtPayload, deriveHubUrlFromToken, HubUrlDerivationError } from "./_shared/connect-token.js";
 
 async function promptReplaceOrCancel(newMemberId: string): Promise<"proceed" | "cancel"> {
   const existing = loadCredentials();

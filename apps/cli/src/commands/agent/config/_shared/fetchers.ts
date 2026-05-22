@@ -1,7 +1,7 @@
 import type { AgentRuntimeConfig, AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { fail } from "../../../../cli/output.js";
 import { cliFetch } from "../../../../core/cli-fetch.js";
-import { resolveAgent, type ResolvedAgent } from "../../../_shared/resolve-agent.js";
+import { type ResolvedAgent, resolveAgent } from "../../../_shared/resolve-agent.js";
 
 /**
  * Shared helpers for the `agent config ...` subcommands. Every command is a

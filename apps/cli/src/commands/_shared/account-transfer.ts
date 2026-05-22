@@ -73,9 +73,7 @@ export async function cleanupStaleAliasesAfterClaim(opts: {
       print.line("  No stale local aliases — local config already matches the server.\n");
       return;
     }
-    print.line(
-      `\n  ${stale.length} local ${stale.length === 1 ? "alias" : "aliases"} won't bind on this client:\n\n`,
-    );
+    print.line(`\n  ${stale.length} local ${stale.length === 1 ? "alias" : "aliases"} won't bind on this client:\n\n`);
     for (const s of stale) {
       const id = s.agentId ?? "—";
       print.line(`    - ${s.name.padEnd(30)} ${id.padEnd(38)} ${formatStaleReason(s.reason)}\n`);
@@ -108,9 +106,7 @@ export async function cleanupStaleAliasesAfterClaim(opts: {
         failed++;
       }
     }
-    print.line(
-      `\n  ${removed} pruned${failed > 0 ? `, ${failed} failed (re-run \`agent prune\` to retry)` : ""}.\n`,
-    );
+    print.line(`\n  ${removed} pruned${failed > 0 ? `, ${failed} failed (re-run \`agent prune\` to retry)` : ""}.\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     print.line(`  (Could not check for stale aliases: ${msg.slice(0, 100)})\n`);

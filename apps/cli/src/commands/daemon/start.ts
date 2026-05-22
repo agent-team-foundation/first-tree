@@ -1,5 +1,11 @@
 import { join } from "node:path";
-import { applyClientLoggerConfig, ClientOrgMismatchError, ClientUserMismatchError, configureClientLoggerForService, probeCapabilities } from "@first-tree/client";
+import {
+  applyClientLoggerConfig,
+  ClientOrgMismatchError,
+  ClientUserMismatchError,
+  configureClientLoggerForService,
+  probeCapabilities,
+} from "@first-tree/client";
 import {
   agentConfigSchema,
   clientConfigSchema,

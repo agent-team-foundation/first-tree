@@ -144,10 +144,7 @@ export const rootLogger = pino(
 );
 
 if (initialLevel.fellBack) {
-  rootLogger.warn(
-    { envValue: process.env.FIRST_TREE_LOG_LEVEL },
-    "invalid FIRST_TREE_LOG_LEVEL; falling back to info",
-  );
+  rootLogger.warn({ envValue: process.env.FIRST_TREE_LOG_LEVEL }, "invalid FIRST_TREE_LOG_LEVEL; falling back to info");
 }
 
 /** Create a module-scoped child logger. Module name is shown as `[Module]` in pretty output. */

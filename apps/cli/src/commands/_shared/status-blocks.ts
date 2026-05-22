@@ -3,10 +3,7 @@ import { join } from "node:path";
 import { agentConfigSchema, DEFAULT_CONFIG_DIR, loadAgents, readConfigFile } from "@first-tree/shared/config";
 import { loadCredentials } from "../../core/bootstrap.js";
 import { print } from "../../core/output.js";
-import {
-  getClientServiceStatus,
-  isServiceSupported,
-} from "../../core/service-install.js";
+import { getClientServiceStatus, isServiceSupported } from "../../core/service-install.js";
 import { COMMAND_VERSION } from "../../core/version.js";
 
 /**

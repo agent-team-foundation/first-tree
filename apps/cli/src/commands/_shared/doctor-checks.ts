@@ -1,5 +1,6 @@
 import { FirstTreeHubSDK } from "@first-tree/client";
 import { clientConfigSchema, initConfig, resetConfig, resetConfigMeta } from "@first-tree/shared/config";
+import type { CheckResult } from "../../core/doctor.js";
 import {
   CLI_USER_AGENT,
   checkAgentConfigs,
@@ -12,7 +13,6 @@ import {
   reconcileAgentConfigs,
   resolveServerUrl,
 } from "../../core/index.js";
-import type { CheckResult } from "../../core/doctor.js";
 
 /**
  * Daemon-side readiness checks. Shared by `daemon doctor` (which renders

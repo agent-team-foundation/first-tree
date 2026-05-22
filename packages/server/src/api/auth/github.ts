@@ -229,10 +229,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     }
     const devCallbackOptIn = process.env.FIRST_TREE_DEV_CALLBACK_ENABLED;
     if (devCallbackOptIn !== "1" && devCallbackOptIn !== "true") {
-      app.log.info(
-        { url: request.url },
-        "dev-callback request refused — FIRST_TREE_DEV_CALLBACK_ENABLED is not set",
-      );
+      app.log.info({ url: request.url }, "dev-callback request refused — FIRST_TREE_DEV_CALLBACK_ENABLED is not set");
       return reply.status(404).send({ error: "Not found" });
     }
     const params = githubDevCallbackQuerySchema.parse(request.query);
