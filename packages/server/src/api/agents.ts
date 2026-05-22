@@ -248,7 +248,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     if (health === "disconnected") {
       return reply.status(200).send({
         status: "offline",
-        message: "Agent is not connected. Connect the client with: first-tree-hub login <token>",
+        message: "Agent is not connected. Connect the client with: first-tree login <token>",
         connection,
       });
     }

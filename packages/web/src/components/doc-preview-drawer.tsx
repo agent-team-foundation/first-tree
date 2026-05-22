@@ -33,7 +33,7 @@ const MIN_DRAWER_WIDTH = 360;
  */
 const RESERVED_MAIN_WIDTH = 640;
 const RESIZE_KEY_STEP = 24;
-const WIDTH_STORAGE_KEY = "first-tree-hub:doc-preview-drawer:width:v1";
+const WIDTH_STORAGE_KEY = "first-tree:doc-preview-drawer:width:v1";
 
 function defaultDrawerWidth(): number {
   if (typeof window === "undefined") return DEFAULT_MAX_WIDTH;

@@ -27,7 +27,7 @@ export const serverConfigSchema = defineConfig({
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HOST" }),
     /**
      * Public-facing URL of this Hub server. Required in production — used to:
-     *   1. Stamp the `iss` claim on connect tokens so `first-tree-hub login`
+     *   1. Stamp the `iss` claim on connect tokens so `first-tree login`
      *      can derive the hub URL with no extra arg.
      *   2. Build invite-link URLs surfaced to admins.
      *   3. Construct the OAuth callback URL the GitHub app redirects back to.
@@ -191,7 +191,7 @@ export const serverConfigSchema = defineConfig({
      *
      * The WS data plane is the only delivery path on this server build. The
      * legacy `new_message` doorbell + HTTP poll fallback was removed in
-     * `@agent-team-foundation/first-tree-hub@0.14.3`. Clients older than
+     * `first-tree@0.14.3`. Clients older than
      * 0.10.4 (before the WS push data plane was introduced) are no longer
      * supported; clients in 0.10.4 ~ 0.14.2 continue to work because they
      * read `server:welcome.capabilities.wsInboxDeliver` to skip their own
@@ -253,7 +253,7 @@ export const serverConfigSchema = defineConfig({
        */
       headers: field(z.string().default(""), { env: "FIRST_TREE_OTEL_HEADERS", secret: true }),
       exporter: field(z.enum(["otlp-http", "otlp-grpc"]).default("otlp-http")),
-      serviceName: field(z.string().default("first-tree-hub")),
+      serviceName: field(z.string().default("first-tree")),
       /**
        * Deployment environment label. Emitted as the OTel resource attribute
        * `deployment.environment.name` — trace backends (Logfire, Honeycomb, …)

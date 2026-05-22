@@ -14,7 +14,7 @@ import {
 import { print } from "../core/output.js";
 
 /**
- * `first-tree-hub upgrade` — user-driven CLI upgrade.
+ * `first-tree upgrade` — user-driven CLI upgrade.
  *
  * Lives at the top level (not under `daemon`) because the tarball bundles
  * server / client / web / shared into a single artifact: upgrading affects
@@ -29,7 +29,7 @@ import { print } from "../core/output.js";
 export function registerUpgradeCommand(program: Command): void {
   program
     .command("upgrade")
-    .description("Upgrade first-tree-hub to the latest published version and restart the daemon")
+    .description("Upgrade first-tree to the latest published version and restart the daemon")
     .option("--check", "Only check whether a newer version is available; do not install")
     .option("--no-restart", "Install the new version but skip restarting the background service")
     .action(async (options: { check?: boolean; restart?: boolean }) => {
@@ -61,7 +61,7 @@ export function registerUpgradeCommand(program: Command): void {
 
       if (options.check) {
         print.line(`  Upgrade available: ${current} → ${latest.version}\n`);
-        print.line("  Run `first-tree-hub upgrade` to install.\n\n");
+        print.line("  Run `first-tree upgrade` to install.\n\n");
         return;
       }
 
@@ -78,7 +78,7 @@ export function registerUpgradeCommand(program: Command): void {
       // connections. Skipped under --no-restart so power users can stage
       // the bits and time the cutover themselves.
       if (options.restart === false) {
-        print.line("  Skipping restart (--no-restart). Run `first-tree-hub daemon restart` when ready.\n\n");
+        print.line("  Skipping restart (--no-restart). Run `first-tree daemon restart` when ready.\n\n");
         return;
       }
 
@@ -91,7 +91,7 @@ export function registerUpgradeCommand(program: Command): void {
       const svc = getClientServiceStatus();
       if (svc.state === "not-installed") {
         print.line("  No background service installed — nothing to restart.\n");
-        print.line("  Run `first-tree-hub login <token>` to set one up.\n\n");
+        print.line("  Run `first-tree login <token>` to set one up.\n\n");
         return;
       }
 
@@ -123,7 +123,7 @@ export function registerUpgradeCommand(program: Command): void {
       const restartRes = restartClientService();
       if (!restartRes.ok) {
         print.line(`\n  Service restart failed: ${restartRes.reason}\n`);
-        print.line("  Run `first-tree-hub daemon restart` to retry.\n\n");
+        print.line("  Run `first-tree daemon restart` to retry.\n\n");
         process.exit(1);
       }
       print.line(`  Service restarted on ${installed}.\n\n`);

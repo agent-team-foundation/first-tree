@@ -5,7 +5,7 @@ import type { AgentIdentity, SessionMessage } from "./handler.js";
 /**
  * Cross-handler plumbing for Agent Hub ↔ agent-runtime interaction.
  *
- * Every handler that shells out to the `first-tree-hub` CLI or otherwise acts
+ * Every handler that shells out to the `first-tree` CLI or otherwise acts
  * on behalf of the agent needs the same envelope variables (server URL, agent
  * id, inbox id, chat id). And every handler that hands inbound messages to an
  * LLM benefits from the same `[From: <name>]` attribution header so the LLM
@@ -16,7 +16,7 @@ import type { AgentIdentity, SessionMessage } from "./handler.js";
  */
 
 /**
- * Build the env for CLI sub-processes that need to call `first-tree-hub ...`.
+ * Build the env for CLI sub-processes that need to call `first-tree ...`.
  * Layers the Agent-Hub envelope variables on top of the parent env. Handlers
  * that start sub-processes should call this so every one of them sees the
  * same envelope — enabling replyTo inference, access-token propagation, and
@@ -29,7 +29,7 @@ export function buildAgentEnv(
     agent: AgentIdentity;
     chatId: string;
     /**
-     * Resolved doc-preview context for this session, so a `first-tree-hub
+     * Resolved doc-preview context for this session, so a `first-tree
      * chat send` sub-process can snapshot referenced `.md` the same way
      * `result-sink` does for final-text (L3: unify capture across send
      * paths). Absent → `chat send` skips snapshotting (self-only fallback /

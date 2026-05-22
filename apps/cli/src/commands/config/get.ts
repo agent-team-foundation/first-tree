@@ -7,7 +7,7 @@ import { isSecretField } from "./_shared/format.js";
 export function registerConfigGetCommand(config: Command): void {
   const clientSchema = clientConfigSchema as Record<string, unknown>;
   // `get` exists alongside `show` for scripts that previously called
-  // `first-tree-hub config get <key>` — same semantics as `show <key>`.
+  // `first-tree config get <key>` — same semantics as `show <key>`.
   config
     .command("get <key>")
     .description("Get a value from client.yaml (alias for `show <key>`)")

@@ -344,7 +344,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       // spec for prod; only non-latest channels get the `@<tag>` suffix.
       const channel = app.config.update.channel;
       const npmSpec = channel === "latest" ? COMMAND_PACKAGE_NAME : `${COMMAND_PACKAGE_NAME}@${channel}`;
-      const command = `first-tree-hub login ${token}`;
+      const command = `first-tree login ${token}`;
       const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
       return { token, expiresIn, command, bootstrapCommand, npmSpec };
     },

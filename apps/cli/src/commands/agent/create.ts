@@ -11,7 +11,7 @@ export function registerAgentCreateCommand(agent: Command): void {
     .requiredOption("--type <type>", "Agent type (human, personal_assistant, autonomous_agent)")
     .requiredOption(
       "--client-id <id>",
-      "Client (machine) that will run this agent — must be owned by you. Run `first-tree-hub login <token>` on that machine first.",
+      "Client (machine) that will run this agent — must be owned by you. Run `first-tree login <token>` on that machine first.",
     )
     .option("--runtime <runtime>", "Runtime handler (default: claude-code)", "claude-code")
     .option("--display-name <name>", "Display name")

@@ -14,7 +14,7 @@ import { print } from "../../core/output.js";
 import { readClientId } from "../_shared/local-agent.js";
 
 /**
- * `first-tree-hub agent prune` — drop local aliases the server no longer
+ * `first-tree agent prune` — drop local aliases the server no longer
  * pins to me. Counterpart to `daemon doctor`'s "stale aliases" warning.
  * Walks the local `agents/<name>/` dirs and removes any whose `agentId` is
  * not returned by `/api/v1/me/pinned-agents`. Common after `login --override`,

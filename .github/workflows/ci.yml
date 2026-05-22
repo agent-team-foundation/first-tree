@@ -163,7 +163,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: grep — forbid old hub-client subcommand syntax
         run: |
-          if grep -rEn "first-tree-hub (onboard|connect|disconnect|update|claim|client (start|stop|restart|status|doctor|claim|list|disconnect|config))" packages apps scripts docs skills .github; then
+          # The `[f]` char-class is a self-immunity trick: the regex still
+          # matches the literal `first-tree-hub`, but `grep -r first-tree-hub`
+          # over this file does NOT self-match the regex itself.
+          if grep -rEn "[f]irst-tree-hub (onboard|connect|disconnect|update|claim|client (start|stop|restart|status|doctor|claim|list|disconnect|config))" packages apps scripts docs skills .github; then
             echo "::error::found legacy first-tree-hub subcommand syntax; should now be 'first-tree ...'"
             exit 1
           fi

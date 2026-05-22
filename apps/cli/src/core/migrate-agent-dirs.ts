@@ -284,7 +284,7 @@ export async function migrateLocalAgentDirs(opts: {
       if (orphanSessions.length > 0) parts.push(`sessions: ${orphanSessions.join(", ")}`);
       print.status(
         "",
-        `orphaned local state detected (${parts.join("; ")}). Run \`first-tree-hub agent workspace clean\` to reclaim disk.`,
+        `orphaned local state detected (${parts.join("; ")}). Run \`first-tree agent workspace clean\` to reclaim disk.`,
       );
     }
   } catch {

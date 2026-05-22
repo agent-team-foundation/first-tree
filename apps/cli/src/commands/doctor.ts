@@ -4,7 +4,7 @@ import { print } from "../core/output.js";
 import { runDaemonChecks } from "./_shared/doctor-checks.js";
 
 /**
- * Top-level `first-tree-hub doctor` — cross-subsystem readiness check.
+ * Top-level `first-tree doctor` — cross-subsystem readiness check.
  * Phase 1A ships only the daemon-side checks (delegated to `runDaemonChecks`,
  * shared with `daemon doctor`); Phase 3 will push additional tree / git /
  * claude-code binary checks onto the result list before rendering.

@@ -1,4 +1,4 @@
-const REPO_URL = "https://github.com/agent-team-foundation/first-tree-hub";
+const REPO_URL = "https://github.com/agent-team-foundation/first-tree";
 const PARENT_URL = "https://first-tree.ai";
 
 /**

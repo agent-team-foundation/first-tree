@@ -264,7 +264,7 @@ export function parseResult(output: string): {
 } {
   const lines = output.split(/\r?\n/);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const trimmed = lines[i].trim();
+    const trimmed = lines[i]?.trim() ?? "";
     if (!trimmed.startsWith("GITHUB_SCAN_RESULT:")) continue;
     const payload = trimmed.slice("GITHUB_SCAN_RESULT:".length).trim();
     const status =
@@ -308,9 +308,12 @@ export class AgentPool {
     const n = this.agents.length;
     const start = this.nextIndex % n;
     this.nextIndex = (this.nextIndex + 1) % n;
-    return Array.from({ length: n }, (_, offset) => ({
-      ...this.agents[(start + offset) % n],
-    }));
+    const result: AgentSpec[] = [];
+    for (let offset = 0; offset < n; offset += 1) {
+      const spec = this.agents[(start + offset) % n];
+      if (spec) result.push({ ...spec });
+    }
+    return result;
   }
 }
 

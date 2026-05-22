@@ -5,7 +5,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * Coverage for `first-tree-hub org bind-tree` (Phase B handoff #7). The
+ * Coverage for `first-tree org bind-tree` (Phase B handoff #7). The
  * command is wired to Step 3 onboarding agents that just created a fresh
  * context-tree repo and need the Hub to record the binding under
  * `orgs/:orgId/settings/context_tree`. We assert:
@@ -140,7 +140,7 @@ describe("org bind-tree CLI", () => {
     const program = await buildProgram();
     let caught: unknown;
     try {
-      await program.parseAsync(["node", "first-tree-hub", "org", "bind-tree", "not-a-url"]);
+      await program.parseAsync(["node", "first-tree", "org", "bind-tree", "not-a-url"]);
     } catch (err) {
       caught = err;
     }
@@ -156,7 +156,7 @@ describe("org bind-tree CLI", () => {
     const program = await buildProgram();
     let caught: unknown;
     try {
-      await program.parseAsync(["node", "first-tree-hub", "org", "bind-tree", "   "]);
+      await program.parseAsync(["node", "first-tree", "org", "bind-tree", "   "]);
     } catch (err) {
       caught = err;
     }
@@ -172,7 +172,7 @@ describe("org bind-tree CLI", () => {
     const program = await buildProgram();
     await program.parseAsync([
       "node",
-      "first-tree-hub",
+      "first-tree",
       "org",
       "bind-tree",
       "https://github.com/acme/tree",
@@ -201,7 +201,7 @@ describe("org bind-tree CLI", () => {
     const program = await buildProgram();
     await program.parseAsync([
       "node",
-      "first-tree-hub",
+      "first-tree",
       "org",
       "bind-tree",
       "https://github.com/acme/tree",
@@ -229,7 +229,7 @@ describe("org bind-tree CLI", () => {
     });
 
     const program = await buildProgram();
-    await program.parseAsync(["node", "first-tree-hub", "org", "bind-tree", "https://github.com/acme/tree"]);
+    await program.parseAsync(["node", "first-tree", "org", "bind-tree", "https://github.com/acme/tree"]);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const putUrl = String(fetchMock.mock.calls[1]?.[0] ?? "");
@@ -257,7 +257,7 @@ describe("org bind-tree CLI", () => {
     const program = await buildProgram();
     let caught: unknown;
     try {
-      await program.parseAsync(["node", "first-tree-hub", "org", "bind-tree", "https://github.com/acme/tree"]);
+      await program.parseAsync(["node", "first-tree", "org", "bind-tree", "https://github.com/acme/tree"]);
     } catch (err) {
       caught = err;
     }
@@ -286,7 +286,7 @@ describe("org bind-tree CLI", () => {
     });
 
     const program = await buildProgram();
-    await program.parseAsync(["node", "first-tree-hub", "org", "bind-tree", "https://github.com/acme/tree"]);
+    await program.parseAsync(["node", "first-tree", "org", "bind-tree", "https://github.com/acme/tree"]);
 
     const putUrl = String(fetchMock.mock.calls[1]?.[0] ?? "");
     expect(putUrl).toBe("http://hub.test/api/v1/orgs/org-default/settings/context_tree");
@@ -300,7 +300,7 @@ describe("org bind-tree CLI", () => {
     try {
       await program.parseAsync([
         "node",
-        "first-tree-hub",
+        "first-tree",
         "org",
         "bind-tree",
         "https://github.com/acme/tree",

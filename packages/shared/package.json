@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/agent-team-foundation/first-tree-hub.git",
+    "url": "https://github.com/agent-team-foundation/first-tree.git",
     "directory": "packages/shared"
   },
   "exports": {

@@ -55,7 +55,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
       if (!loadCredentials()) {
         fail(
           "NO_CREDENTIALS",
-          "no credentials — run `first-tree-hub login <token>` to sign in before starting the daemon.",
+          "no credentials — run `first-tree login <token>` to sign in before starting the daemon.",
           1,
         );
       }
@@ -77,7 +77,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           if (svc.state === "active") {
             print.line("\n");
             print.line(`  Service is already running (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""}).\n`);
-            print.line("  Use `first-tree-hub daemon restart` to restart, or `--foreground` to run inline.\n\n");
+            print.line("  Use `first-tree daemon restart` to restart, or `--foreground` to run inline.\n\n");
             return;
           }
           if (svc.state === "inactive") {
@@ -132,7 +132,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
             print.line(
               `\n  Service state could not be determined (${svc.platform}${svc.detail ? `: ${svc.detail}` : ""}).\n`,
             );
-            print.line("  Inspect with `first-tree-hub daemon doctor`, or pass `--foreground` to bypass.\n\n");
+            print.line("  Inspect with `first-tree daemon doctor`, or pass `--foreground` to bypass.\n\n");
             process.exit(1);
           }
           // state === "not-installed" → fall through to inline run.
@@ -262,7 +262,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         if (error instanceof ClientUserMismatchError) {
           print.line("\n");
           print.line("  ⚠️  This client.yaml is owned by a different user.\n");
-          print.line("  Run `first-tree-hub login <token> --override` to transfer ownership\n");
+          print.line("  Run `first-tree login <token> --override` to transfer ownership\n");
           print.line("  to your account. The previous owner's agents will be unpinned\n");
           print.line("  from this machine.\n\n");
           process.exit(1);
@@ -271,7 +271,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           await handleClientOrgMismatch(error, {
             managed: options.interactive === false,
             configDir: DEFAULT_CONFIG_DIR,
-            rerunCommand: "first-tree-hub daemon start",
+            rerunCommand: "first-tree daemon start",
           });
         }
         const msg = error instanceof Error ? error.message : String(error);

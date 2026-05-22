@@ -9,7 +9,7 @@ import {
 } from "./_shared/status-blocks.js";
 
 /**
- * Top-level `first-tree-hub status` — one-screen overview across every
+ * Top-level `first-tree status` — one-screen overview across every
  * subsystem (CLI version, daemon, hub binding, auth health, agents). For a
  * daemon-only view (faster, fewer lines), use `daemon status`. Future tree /
  * chat status blocks plug in once Phase 3 wires those subsystems through.

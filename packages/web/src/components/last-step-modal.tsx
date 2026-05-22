@@ -76,8 +76,8 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
   const baseCommand = tokenQuery.data?.command ?? "";
   const command =
     baseCommand && agent.name
-      ? `npm install -g @agent-team-foundation/first-tree-hub && ` +
-        `first-tree-hub agent add ${shellQuote(agent.name)} --agent-id ${agent.uuid} && ` +
+      ? `npm install -g first-tree && ` +
+        `first-tree agent add ${shellQuote(agent.name)} --agent-id ${agent.uuid} && ` +
         baseCommand
       : baseCommand;
 

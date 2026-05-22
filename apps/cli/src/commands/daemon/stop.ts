@@ -28,6 +28,6 @@ export function registerDaemonStopCommand(daemon: Command): void {
         process.exit(1);
       }
       print.line(`\n  Stopped ${svc.platform} service.\n`);
-      print.line("  Auto-start on next login is preserved. Run `first-tree-hub daemon start` to bring it back.\n\n");
+      print.line("  Auto-start on next login is preserved. Run `first-tree daemon start` to bring it back.\n\n");
     });
 }

@@ -193,7 +193,7 @@ export async function reconcileAgentConfigs(opts: {
     detail:
       `${localCount} configured locally, ${pinnedCount} pinned to this client; ` +
       `${stale.length} stale: ${staleSummary}${truncated} — ` +
-      "run `first-tree-hub agent prune` to clean up",
+      "run `first-tree agent prune` to clean up",
   };
 }
 
@@ -223,7 +223,7 @@ export function checkBackgroundService(): CheckResult {
   return {
     label: "Background service",
     ok: false,
-    detail: "not installed — re-run `first-tree-hub login <token>` to install",
+    detail: "not installed — re-run `first-tree login <token>` to install",
   };
 }
 

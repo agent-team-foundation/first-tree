@@ -90,11 +90,11 @@ describe("extractMentions", () => {
 
   it("does not match npm scoped package names (`@scope/pkg`)", () => {
     // The composer's pre-flight check uses the same regex; without the
-    // trailing `/`-rejecting lookahead, `npm i @agent-team-foundation/first-tree-hub`
+    // trailing `/`-rejecting lookahead, `npm i first-tree`
     // would surface `agent-team-foundation` as an unresolved mention token
     // and block the send. Defend the npm-scope shape for the participant
     // names too — `@alice/foo` is not a mention of alice.
-    expect(extractMentions("npm i @agent-team-foundation/first-tree-hub", participants)).toEqual([]);
+    expect(extractMentions("npm i first-tree", participants)).toEqual([]);
     expect(extractMentions("see @alice/foo for details", participants)).toEqual([]);
   });
 
@@ -127,7 +127,7 @@ describe("scanMentionTokens", () => {
     // Without the strict trailing lookahead the engine backtracked the greedy
     // `[A-Za-z0-9_-]{0,63}` and surfaced `agent-team-` as a partial-match
     // mention token of `@agent-team-foundation/...`. Pin both forms.
-    expect(scanMentionTokens("npm i @agent-team-foundation/first-tree-hub-shared")).toEqual([]);
+    expect(scanMentionTokens("npm i first-tree-shared")).toEqual([]);
     expect(scanMentionTokens("@alice/foo and @bob/bar")).toEqual([]);
   });
 });

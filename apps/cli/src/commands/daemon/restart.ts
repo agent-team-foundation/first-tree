@@ -15,7 +15,7 @@ export function registerDaemonRestartCommand(daemon: Command): void {
       const svc = getClientServiceStatus();
       if (svc.state === "not-installed") {
         print.line("\n  No background service installed.\n");
-        print.line("  Run `first-tree-hub login <token>` first.\n\n");
+        print.line("  Run `first-tree login <token>` first.\n\n");
         process.exit(1);
       }
       const res = restartClientService();

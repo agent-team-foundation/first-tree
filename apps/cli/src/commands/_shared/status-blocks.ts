@@ -15,7 +15,7 @@ import { COMMAND_VERSION } from "../../core/version.js";
 
 export function renderCliVersionBlock(): void {
   // CLI version. Drift check (npm registry) is intentionally NOT run here —
-  // `status` should be fast (< 1s, no network). Use `first-tree-hub upgrade --check` instead.
+  // `status` should be fast (< 1s, no network). Use `first-tree upgrade --check` instead.
   print.line(`  CLI:      ${COMMAND_VERSION}\n`);
 }
 
@@ -32,7 +32,7 @@ export function renderServiceBlock(): void {
   } else if (svc.state === "inactive") {
     print.line(`  Service:  ✗ stopped (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})\n`);
   } else if (svc.state === "not-installed") {
-    print.line("  Service:  not installed — run `first-tree-hub login <token>`\n");
+    print.line("  Service:  not installed — run `first-tree login <token>`\n");
   } else {
     print.line(`  Service:  unknown (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})\n`);
   }
@@ -41,7 +41,7 @@ export function renderServiceBlock(): void {
 export function renderHubBlock(): void {
   const clientYaml = join(DEFAULT_CONFIG_DIR, "client.yaml");
   if (!existsSync(clientYaml)) {
-    print.line("  Hub:      (not configured — run `first-tree-hub login <token>`)\n");
+    print.line("  Hub:      (not configured — run `first-tree login <token>`)\n");
     return;
   }
   try {
@@ -64,7 +64,7 @@ export function renderAuthBlock(): void {
   // to keep this command < 1s and offline-safe.
   const creds = loadCredentials();
   if (!creds) {
-    print.line("  Auth:     (no credentials — run `first-tree-hub login <token>`)\n");
+    print.line("  Auth:     (no credentials — run `first-tree login <token>`)\n");
     return;
   }
   const exp = decodeJwtExpSeconds(creds.refreshToken);
@@ -74,7 +74,7 @@ export function renderAuthBlock(): void {
   }
   const remainingSec = exp - Math.floor(Date.now() / 1000);
   if (remainingSec <= 0) {
-    print.line("  Auth:     ✗ refresh token EXPIRED — re-run `first-tree-hub login <token>`\n");
+    print.line("  Auth:     ✗ refresh token EXPIRED — re-run `first-tree login <token>`\n");
     print.line("              (get a fresh token from your Hub's Web admin → Computers → New Connection)\n");
   } else if (remainingSec < 2 * 86400) {
     const hours = Math.floor(remainingSec / 3600);

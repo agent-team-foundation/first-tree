@@ -23,6 +23,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.84
         version: 0.2.84(zod@4.3.6)
+      '@first-tree/github-scan':
+        specifier: workspace:*
+        version: link:../../packages/github-scan
       '@inquirer/prompts':
         specifier: ^8.3.0
         version: 8.3.2(@types/node@22.19.15)
@@ -130,9 +133,6 @@ importers:
 
   packages/e2e:
     devDependencies:
-      '@agent-team-foundation/first-tree-hub':
-        specifier: workspace:*
-        version: link:../../apps/cli
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.84
         version: 0.2.84(zod@4.3.6)
@@ -154,6 +154,9 @@ importers:
       fastify:
         specifier: ^5.2.0
         version: 5.8.2
+      first-tree:
+        specifier: workspace:*
+        version: link:../../apps/cli
       get-port:
         specifier: ^7.1.0
         version: 7.1.0

@@ -62,7 +62,7 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
     }
     if (mode === "npx") {
       print.line(
-        "  [update] Cannot self-update — not launched from a global npm install.\n  Run `npm i -g @agent-team-foundation/first-tree-hub` manually.\n",
+        "  [update] Cannot self-update — not launched from a global npm install.\n  Run `npm i -g first-tree` manually.\n",
       );
       return { installed: false };
     }
@@ -92,7 +92,7 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
         `  [update] Refusing to retry ${targetVersion} — a previous attempt completed without\n` +
           "           advancing the on-disk version. The most likely cause is npm's `latest`\n" +
           "           dist-tag resolving to the same version this client is already running.\n" +
-          "           Operator action: manually run `npm install -g @agent-team-foundation/first-tree-hub@latest`,\n" +
+          "           Operator action: manually run `npm install -g first-tree@latest`,\n" +
           "           then restart the service.\n",
       );
       return { installed: true };
@@ -104,7 +104,7 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
     // lives on a different dist-tag), and even on the stable track it could
     // race to a different version than the one drift-check approved. The
     // server is the authoritative source of "what should this client run".
-    print.line(`  [update] Running \`npm install -g @agent-team-foundation/first-tree-hub@${targetVersion}\`...\n`);
+    print.line(`  [update] Running \`npm install -g first-tree@${targetVersion}\`...\n`);
     const result = await installGlobalSpec(targetVersion);
     if (!result.ok) {
       print.line(`  [update] Install failed: ${result.reason}\n`);
@@ -176,22 +176,22 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       //
       // Best-effort: failure logs and falls through to exit-75 anyway
       // (matches `commands/upgrade.ts`'s "warn and continue" stance — the
-      // operator can recover with `first-tree-hub logout && login` if the
+      // operator can recover with `first-tree logout && login` if the
       // unit ends up stale).
       refreshServiceUnit();
       print.line(`  [update] Installed ${installedLabel}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
       process.exit(SELF_RESTART_EXIT_CODE);
     }
     print.line(
-      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`first-tree-hub daemon start\`) to pick up the new version.\n`,
+      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`first-tree daemon start\`) to pick up the new version.\n`,
     );
     return { installed: true };
   };
 }
 
 /**
- * Spawn the newly-installed `first-tree-hub` binary (now on PATH at
- * `/usr/local/bin/first-tree-hub` or the equivalent global location) to
+ * Spawn the newly-installed `first-tree` binary (now on PATH at
+ * `/usr/local/bin/first-tree` or the equivalent global location) to
  * rewrite the service unit using its OWN templates.
  *
  * Why a subprocess: this whole function runs inside the OLD daemon process,
@@ -211,7 +211,7 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
  */
 function refreshServiceUnit(): void {
   try {
-    const res = spawnSync("first-tree-hub", ["daemon", "refresh-unit"], {
+    const res = spawnSync("first-tree", ["daemon", "refresh-unit"], {
       stdio: ["ignore", "inherit", "inherit"],
       timeout: 45_000,
       // Sanitize FIRST_TREE_SERVICE_MODE so the child doesn't think it's
@@ -224,14 +224,14 @@ function refreshServiceUnit(): void {
       print.line(
         `  [update] warning: 'daemon refresh-unit' exited with status ${res.status ?? "unknown"} ` +
           `(signal=${res.signal ?? "none"}). If the supervisor restart fails after exit ${SELF_RESTART_EXIT_CODE}, ` +
-          "recover with `first-tree-hub logout && first-tree-hub login <token>`.\n",
+          "recover with `first-tree logout && first-tree login <token>`.\n",
       );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     print.line(
       `  [update] warning: could not spawn 'daemon refresh-unit': ${msg}. If the supervisor restart fails, ` +
-        "recover with `first-tree-hub logout && first-tree-hub login <token>`.\n",
+        "recover with `first-tree logout && first-tree login <token>`.\n",
     );
   }
 }

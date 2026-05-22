@@ -151,7 +151,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       lines.push("");
     }
     lines.push("Refer to `.agent/identity.json` for your agent identity, `.agent/tools.md` for the");
-    lines.push("first-tree-hub SDK reference, and `.agent/context/` for organisational context");
+    lines.push("first-tree SDK reference, and `.agent/context/` for organisational context");
     lines.push("(when configured).");
     return lines.join("\n").concat("\n");
   }
