@@ -7,6 +7,7 @@ import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/g
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
 import { FlowNote, RepoPicker, StatusRow } from "../flow-ui.js";
+import { InstallGuide, ShowMeHow } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
@@ -92,6 +93,9 @@ export function StepConnectCode() {
             </Button>
             {installError === "generic" && <FlowNote>{COPY.errors.generic}</FlowNote>}
             <StatusRow state="waiting" label={COPY.connectCode.waiting} />
+            <ShowMeHow>
+              <InstallGuide />
+            </ShowMeHow>
             <button
               type="button"
               onClick={goNext}

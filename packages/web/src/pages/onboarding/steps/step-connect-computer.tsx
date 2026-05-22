@@ -2,6 +2,7 @@ import { ArrowRight } from "lucide-react";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
 import { CommandBox, FlowNote, StatusRow } from "../flow-ui.js";
+import { ShowMeHow, TerminalGuide } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
@@ -30,6 +31,9 @@ export function StepConnectComputer() {
           ) : (
             <StatusRow state="waiting" label={COPY.connectComputer.waiting} />
           )}
+          <ShowMeHow>
+            <TerminalGuide />
+          </ShowMeHow>
         </>
       ) : (
         <>
