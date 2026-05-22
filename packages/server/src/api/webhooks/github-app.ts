@@ -305,11 +305,25 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
       try {
         const audience = await resolveAudience(app.db, event, appSlug);
         if (audience.length === 0) {
+          // Distinguish "expected nobody" (no involves, no subscription)
+          // from "had explicit involves but resolved to zero agents" — the
+          // latter usually means a mentioned GitHub login has no
+          // `delegateMention`-configured agent in this org, which is a
+          // potential mis-configuration worth surfacing on a dashboard.
+          // See #507.
+          const reason: "audience_empty_no_involves" | "audience_empty_with_involves" =
+            event.involves.length > 0 ? "audience_empty_with_involves" : "audience_empty_no_involves";
           log.info(
-            { entityType: event.entity.type, entityKey: event.entity.key, actor: event.actor.githubLogin },
+            {
+              entityType: event.entity.type,
+              entityKey: event.entity.key,
+              actor: event.actor.githubLogin,
+              involvesCount: event.involves.length,
+              reason,
+            },
             "audience empty, skipping",
           );
-          return reply.status(200).send({ ok: true, event: eventType, audience: 0 });
+          return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason });
         }
         const stats = await deliverNormalizedEvent(app, event, audience);
         return reply.status(200).send({ ok: true, event: eventType, ...stats });
