@@ -150,11 +150,13 @@ function CompactSummary({ top, nameOf }: { top: AgentChatStatus; nameOf: (id: st
   if (top.main === "failed") {
     return wrap(<span className="truncate">{nameOf(top.agentId)} failed</span>);
   }
-  // working
+  // working — drop WorkingChip's leading dot (the summary glyph already carries
+  // the status point, same "no two dots on a row" rule as the AgentRow) and
+  // prefix the activity with the state word: `<name> · Working · Bash · 0s`.
   return wrap(
     <>
       <span className="truncate">{nameOf(top.agentId)}</span>
-      {top.activity ? <WorkingChip activity={top.activity} /> : null}
+      {top.activity ? <WorkingChip activity={top.activity} showDot={false} prefix="Working" /> : null}
     </>,
   );
 }
