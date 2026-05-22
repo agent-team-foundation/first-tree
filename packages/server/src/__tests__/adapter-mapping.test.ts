@@ -1,4 +1,6 @@
+import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { processedEvents } from "../db/schema/processed-events.js";
 import * as mappingService from "../services/adapter-mapping.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
@@ -25,6 +27,33 @@ describe("Adapter mapping service", () => {
       const r2 = await mappingService.claimEvent(app.db, "evt_cross_1", "slack");
       expect(r1).toBe(true);
       expect(r2).toBe(true);
+    });
+
+    // M3 (#509): the dedup ledger must not grow unboundedly. Rows older
+    // than the retention window are deleted so the table stays bounded
+    // and the `INSERT ... ON CONFLICT` unique-index lookup at every
+    // claim doesn't degrade as load scales.
+    it("pruneProcessedEvents deletes rows older than the retention window and keeps fresh ones", async () => {
+      const app = getApp();
+
+      // Seed three rows: one fresh, one borderline (just inside the
+      // window), one stale (older than the window).
+      await mappingService.claimEvent(app.db, "evt_fresh", "feishu");
+      await mappingService.claimEvent(app.db, "evt_borderline", "feishu");
+      await mappingService.claimEvent(app.db, "evt_stale", "feishu");
+
+      // Force the stale row's `created_at` back by 60 days; the
+      // borderline row stays under the 30-day window we'll prune with.
+      await app.db.execute(
+        sql`UPDATE processed_events SET created_at = NOW() - interval '60 days' WHERE event_id = 'evt_stale'`,
+      );
+
+      const result = await mappingService.pruneProcessedEvents(app.db, 30 * 24 * 60 * 60);
+      expect(result.deleted).toBe(1);
+
+      const remaining = await app.db.select({ eventId: processedEvents.eventId }).from(processedEvents);
+      const ids = remaining.map((r) => r.eventId).sort();
+      expect(ids).toEqual(["evt_borderline", "evt_fresh"]);
     });
   });
 

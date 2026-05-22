@@ -140,6 +140,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       archiveMappedIdleSeconds: 60 * 60,
       archiveUnmappedIdleSeconds: 12 * 60 * 60,
       notificationWebhookUrl: undefined,
+      processedEventsRetentionSeconds: 30 * 24 * 60 * 60,
     },
     update: {
       // Pin a deterministic version so welcome-frame tests can assert

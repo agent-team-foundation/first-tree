@@ -31,6 +31,7 @@ const baseConfig: Config = {
     archiveMappedIdleSeconds: 60 * 60,
     archiveUnmappedIdleSeconds: 12 * 60 * 60,
     notificationWebhookUrl: undefined,
+    processedEventsRetentionSeconds: 30 * 24 * 60 * 60,
   },
   update: {
     channel: "latest",

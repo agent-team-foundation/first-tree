@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
 import type { AdapterManager } from "./adapter-manager.js";
+import * as mappingService from "./adapter-mapping.js";
 import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
@@ -46,6 +47,16 @@ export function createBackgroundTasks(
               { ackedDeleted: pruned.ackedDeleted, stalePendingDeleted: pruned.stalePendingDeleted },
               "pruned silent inbox rows",
             );
+          }
+          // processed_events dedup ledger GC piggy-backs on the same
+          // timer — the DELETE is small once steady-state retention
+          // kicks in, and bundling avoids a second interval. See #509.
+          const prunedEvents = await mappingService.pruneProcessedEvents(
+            app.db,
+            app.config.runtime.processedEventsRetentionSeconds,
+          );
+          if (prunedEvents.deleted > 0) {
+            log.debug({ deleted: prunedEvents.deleted }, "pruned processed_events");
           }
         } catch (err) {
           log.error({ err }, "failed to reset timed-out inbox entries");

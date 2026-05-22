@@ -32,6 +32,26 @@ export async function unclaimEvent(db: Database, eventId: string, platform: stri
   await db.execute(sql`DELETE FROM processed_events WHERE event_id = ${eventId} AND platform = ${platform}`);
 }
 
+/**
+ * Drop dedup-ledger rows older than `maxAgeSeconds`. The ledger is only
+ * meaningful for as long as a redelivery could still arrive (GitHub
+ * retries for ~8h, Feishu similar); anything older is safe to delete and
+ * keeping it just inflates the `INSERT ... ON CONFLICT` index lookup at
+ * every claim. The `idx_processed_events_created_at` btree (migration
+ * 0049) keeps this DELETE bounded once the table is in steady state.
+ *
+ * Returns the row count so the background task can log a meaningful
+ * counter when cleanup runs.
+ *
+ * See #509.
+ */
+export async function pruneProcessedEvents(db: Database, maxAgeSeconds: number): Promise<{ deleted: number }> {
+  const result = await db.execute<{ event_id: string }>(
+    sql`DELETE FROM processed_events WHERE created_at < NOW() - make_interval(secs => ${maxAgeSeconds}) RETURNING event_id`,
+  );
+  return { deleted: result.length };
+}
+
 // ── Agent mapping ───────────────────────────────────────────────────
 
 /** Look up the internal agent ID for an external user. */

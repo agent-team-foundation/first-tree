@@ -384,6 +384,25 @@ export const serverConfigSchema = defineConfig({
     notificationWebhookUrl: field(z.string().url().optional(), {
       env: "FIRST_TREE_NOTIFICATION_WEBHOOK_URL",
     }),
+    /**
+     * Retention window for the `processed_events` dedup ledger (used by
+     * GitHub App + Feishu webhook claim/unclaim). Rows older than this
+     * are deleted on every inbox-timer tick. Default 30 days is overkill-
+     * safe — GitHub's webhook retry policy redelivers for ~8h, Feishu
+     * similar, so anything beyond a day has zero dedup value. Without
+     * cleanup the table grows ~1M rows/year and degrades every claim's
+     * unique-index lookup. See #509.
+     */
+    processedEventsRetentionSeconds: field(
+      z.coerce
+        .number()
+        .int()
+        .positive()
+        .default(30 * 24 * 60 * 60),
+      {
+        env: "FIRST_TREE_PROCESSED_EVENTS_RETENTION_SECONDS",
+      },
+    ),
   },
 });
 
