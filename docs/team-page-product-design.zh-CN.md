@@ -2,7 +2,7 @@
 
 ## 状态
 
-实现于 [agent-team-foundation/first-tree-hub#205](https://github.com/agent-team-foundation/first-tree-hub/pull/205)。
+实现于 [agent-team-foundation/first-tree#205](https://github.com/agent-team-foundation/first-tree/pull/205)。
 
 相关 issue:
 
@@ -65,7 +65,7 @@ Other private agents        ← admin governance view,collapsed by default
 
 ### `human`-type agent 在 UI 中的定位
 
-`human`-type 是 first-tree-hub 后端为了让 chat 系统统一对待"参与者"而存在的实现机制 —— **每个 user 加入 org 时自动生成一行 `agents.type=human`**,作为 user 在 chat / @-mention / inbox 路由中的身份载体。
+`human`-type 是 first-tree 后端为了让 chat 系统统一对待"参与者"而存在的实现机制 —— **每个 user 加入 org 时自动生成一行 `agents.type=human`**,作为 user 在 chat / @-mention / inbox 路由中的身份载体。
 
 代码层面已经在区别对待:
 

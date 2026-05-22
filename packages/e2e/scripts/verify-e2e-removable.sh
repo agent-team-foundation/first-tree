@@ -6,7 +6,7 @@
 #   2. Strip `e2e:*` script entries from the root `package.json`.
 #   3. Strip e2e task definitions from `turbo.json`.
 #   4. Run `pnpm install`, `pnpm typecheck`, `pnpm test`, `pnpm build`,
-#      and `pnpm --filter @agent-team-foundation/first-tree-hub build`.
+#      and `pnpm --filter first-tree build`.
 #   5. Capture the CLI tarball file hash, restore everything, rebuild,
 #      and assert the published artifact hash is byte-identical.
 #

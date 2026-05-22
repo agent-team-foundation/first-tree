@@ -65,8 +65,8 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - [CLI Reference](docs/cli-reference.md) — every command and environment variable
 - [docs/tree/](docs/tree/) — Context Tree concepts and migration history
 - [docs/migration/](docs/migration/) — coming from the old CLI names?
-  - [from-first-tree-hub.md](docs/migration/from-first-tree-hub.md) for users of `@agent-team-foundation/first-tree-hub`
-  - [from-first-tree-v0.md](docs/migration/from-first-tree-v0.md) for users of `first-tree@0.4.x`
+  - [from-first-tree-hub.md](docs/migration/from-first-tree-hub.md) for users of `first-tree-hub` (the legacy collaboration CLI)
+  - [from-first-tree-v0.md](docs/migration/from-first-tree-v0.md) for users of `first-tree@0.4.x` (the legacy Context Tree CLI)
 - [docs/development/git-history.md](docs/development/git-history.md) — how to
   navigate history across the repo-merge boundary
 

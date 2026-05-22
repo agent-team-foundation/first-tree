@@ -19,7 +19,7 @@ Read first: [`../first-tree/SKILL.md`](../first-tree/SKILL.md) and [`../first-tr
 3. The tree's `NODE.md`, `members/owner/NODE.md`, and `.first-tree/org.yaml` contain real content (no remaining placeholder strings — see [`references/content-drafting.md`](references/content-drafting.md) §Detection).
 4. `first-tree tree skill doctor --root <source_root>` exits 0.
 5. If the user opted in to the daemon: `first-tree github scan doctor` exits 0.
-6. The agent has confirmed that Tier 0's `validate.yml` exists, explained that Tier 1 lives in `first-tree-hub`, and either skipped Tier 2 or run `first-tree tree automation install --tier 2 --tree-path <tree_root>` and recorded the returned stage.
+6. The agent has confirmed that Tier 0's `validate.yml` exists, explained that Tier 1 lives in `first-tree cloud`, and either skipped Tier 2 or run `first-tree tree automation install --tier 2 --tree-path <tree_root>` and recorded the returned stage.
 7. The user has explicitly confirmed which agent templates to keep in `.first-tree/agent-templates/`.
 
 If any of these fails, stop and report — never silently mark onboarding complete.
@@ -138,7 +138,7 @@ If none match → skip Phase C. The combined check is reliable because all three
 1. Confirm `<tree_root>/.github/workflows/validate.yml` exists. If it does not, run `first-tree tree upgrade --tree-path <tree_root>` once and re-check.
 2. Tell the user, explicitly:
    - Tier 0 (`validate.yml`) is installed by default and is rule-based.
-   - Tier 1 (AI PR review) is **not** installed by this skill and belongs to `first-tree-hub`.
+   - Tier 1 (AI PR review) is **not** installed by this skill and belongs to `first-tree cloud`.
    - Tier 2 (`owners:` gate + auto-merge / review-enforcer) is optional and rule-based; if the user wants it now, the CLI will prepare workflow files and print the GitHub ruleset commands, but the agent must not execute those policy-changing `gh api` calls.
    - The exact current parity target with `first-tree-context`'s rule layer lives in [`references/github-automation.md`](references/github-automation.md). Use that file as the source of truth for what "proper tree GitHub automation" means.
 3. Ask once: "Do you want to start Tier 2 now, or leave it for later?"
@@ -186,7 +186,7 @@ If none match → skip Phase C. The combined check is reliable because all three
    Tree URL:    <treeRemoteUrl or "not published">
    Daemon:      <running for <owner/repo> | skipped>
    GitHub Actions: validate.yml installed (Tier 0, rule-based)
-   AI PR review:  not installed by this skill. Enable via your first-tree-hub deployment / onboarding flow.
+   AI PR review:  not installed by this skill. Enable via your first-tree cloud deployment / onboarding flow.
    Owners gate:   <skipped | pending via `first-tree tree automation install --tier 2 --tree-path <tree_root>` | configured>
    Agents:      <comma-separated template names>
 

@@ -41,7 +41,7 @@ drizzle/meta/
 .claude/*
 !.claude/skills/
 .claude/skills/*
-!.claude/skills/first-tree-hub
+!.claude/skills/first-tree-cloud
 .gstack/
 
 # Playwright MCP

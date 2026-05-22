@@ -31,9 +31,9 @@ jobs:
             echo "Branch '$BRANCH' is auto-named by the hub agent runtime; skipping convention check."
             exit 0
           fi
-          PATTERN="^(feat|fix|refactor|test|docs|chore)/"
+          PATTERN="^(feat|fix|refactor|test|docs|chore|merge)/"
           if [[ ! "$BRANCH" =~ $PATTERN ]]; then
-            echo "::error::Branch name '$BRANCH' does not follow convention: feat/, fix/, refactor/, test/, docs/, chore/"
+            echo "::error::Branch name '$BRANCH' does not follow convention: feat/, fix/, refactor/, test/, docs/, chore/, merge/"
             exit 1
           fi
 
@@ -173,5 +173,34 @@ jobs:
         run: |
           if grep -rEn "FIRST_TREE_HUB_(AGENT_ID|LOG_LEVEL|JSON)" packages apps scripts docs skills .github; then
             echo "::error::found legacy FIRST_TREE_HUB_* env var references; should use FIRST_TREE_* (Phase 1A T1A.5)"
+            exit 1
+          fi
+      - name: grep — forbid any literal first-tree-hub (broad sweep)
+        run: |
+          # N-1 broad sweep: forbid any first-tree-hub literal anywhere except
+          # the documented legitimate residues. The narrow subcommand regex above
+          # only catches Phase 1A's hub-client verbs; this catches future
+          # regressions where someone re-introduces `first-tree-hub <new-cmd>`,
+          # `@agent-team-foundation/first-tree-hub`, or naked `first-tree-hub`
+          # mentions in any code/config/docs.
+          #
+          # Legitimate residues (allow-listed and filtered out via the trailing
+          # `grep -v` pipeline):
+          # - docs/migration/**                          : migration tables show old↔new
+          # - docs/development/git-history.md            : merge anchor doc cites legacy repo URL
+          # - .github/workflows/ci.yml                   : this file's own regex literals (self-immunity via [f])
+          # - packages/server/drizzle/*.sql              : SQL migrations are immutable historical artifacts
+          hits=$(grep -rEn \
+            --exclude-dir=migration \
+            --exclude-dir=node_modules \
+            --exclude-dir=dist \
+            --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
+            --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
+            "[f]irst-tree-hub" packages apps scripts docs skills .github \
+            | grep -v -E '^docs/development/git-history\.md:|^\.github/workflows/ci\.yml:' \
+            || true)
+          if [ -n "$hits" ]; then
+            echo "::error::found a 'first-tree-hub' literal outside the documented allow-list — see N-1 in PR-1 description"
+            echo "$hits"
             exit 1
           fi

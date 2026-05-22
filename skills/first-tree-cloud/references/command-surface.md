@@ -4,23 +4,23 @@
 
 | User intent | Preferred entry point | Non-obvious note |
 | --- | --- | --- |
-| Install or verify the CLI on a fresh machine | `npm install -g @agent-team-foundation/first-tree-hub` then `first-tree-hub --version` | Requires Node.js `>= 22.16` |
-| Check whether a machine is ready for Hub | `first-tree-hub daemon doctor` | `doctor` = readiness; top-level `status` = current state summary |
-| Sign this computer into a Hub server | `first-tree-hub login <token> [--no-start]` | Paste a connect token from the Hub web console; hub URL is derived from the token's `iss` claim. Stores a member JWT at `~/.first-tree/hub/credentials.json`, writes `client.yaml`, and (by default) installs the background service |
-| Run the client inline instead of via service | `first-tree-hub daemon start` | Loads credentials written by `connect`; fails if there are none or if no agents are pinned to this client |
-| Keep the computer online across reboots | `first-tree-hub login <token>` (omit `--no-start`) | Auto-installs launchd on macOS or `systemd --user` on Linux; Windows unsupported (falls back to inline) |
+| Install or verify the CLI on a fresh machine | `npm install -g first-tree` then `first-tree --version` | Requires Node.js `>= 22.16` |
+| Check whether a machine is ready for Hub | `first-tree daemon doctor` | `doctor` = readiness; top-level `status` = current state summary |
+| Sign this computer into a Hub server | `first-tree login <token> [--no-start]` | Paste a connect token from the Hub web console; hub URL is derived from the token's `iss` claim. Stores a member JWT at `~/.first-tree/hub/credentials.json`, writes `client.yaml`, and (by default) installs the background service |
+| Run the client inline instead of via service | `first-tree daemon start` | Loads credentials written by `connect`; fails if there are none or if no agents are pinned to this client |
+| Keep the computer online across reboots | `first-tree login <token>` (omit `--no-start`) | Auto-installs launchd on macOS or `systemd --user` on Linux; Windows unsupported (falls back to inline) |
 | List machines the Hub currently sees | Hub web admin → Computers tab | The legacy `client list` / `client disconnect` CLI verbs were retired in Phase 1A — admin actions now live in the web admin |
 | Forcibly drop a machine from the Hub | Hub web admin → Computers → Disconnect | Same as above |
-| View / edit this machine's client.yaml | `first-tree-hub config show/set/get` | Local YAML editing; scope is implicit |
-| Register a local alias for a Hub agent on this machine | `first-tree-hub agent add [--agent-id <uuid>]` | Local-only; a running client auto-registers any agent an admin pins to this `clientId`, so `agent add` is mostly for scripted or unattended setups |
-| Create a fresh agent from the CLI | `first-tree-hub agent create <name> --type <t> --client-id <id>` | Writes to the Hub via Admin API and saves the local alias in one step |
-| Take ownership of an existing agent | `first-tree-hub agent claim <agentName>` | Sets `managerId` to the signed-in member |
-| Change an agent's runtime config (model, prompt, MCP, env, repos) | `first-tree-hub agent config <sub>` | Server-side edit via `/api/v1/admin/agents/:id/config` — affects the running agent everywhere |
-| Day-to-day messaging | `first-tree-hub chat send/list/history/open` | Authenticates as the signed-in member (no agent-specific token) |
-| Inspect session runtime state | `first-tree-hub agent status [name]`, `agent session list <name>`, `agent session <suspend\|terminate>` | Reads `/api/v1/admin/agents/activity`, `/admin/sessions/agents/...` |
-| Reset an agent stuck in `error` state | `first-tree-hub agent reset <name>` | POSTs `reset-activity` |
-| Clean old isolated chat workspaces | `first-tree-hub agent workspace clean` | Respects the session registry — only removes evicted or untracked chats |
-| Onboard a new human or autonomous agent | `first-tree-hub agent create` | Guided flow; requires prior `connect <token>` for credentials |
+| View / edit this machine's client.yaml | `first-tree config show/set/get` | Local YAML editing; scope is implicit |
+| Register a local alias for a Hub agent on this machine | `first-tree agent add [--agent-id <uuid>]` | Local-only; a running client auto-registers any agent an admin pins to this `clientId`, so `agent add` is mostly for scripted or unattended setups |
+| Create a fresh agent from the CLI | `first-tree agent create <name> --type <t> --client-id <id>` | Writes to the Hub via Admin API and saves the local alias in one step |
+| Take ownership of an existing agent | `first-tree agent claim <agentName>` | Sets `managerId` to the signed-in member |
+| Change an agent's runtime config (model, prompt, MCP, env, repos) | `first-tree agent config <sub>` | Server-side edit via `/api/v1/admin/agents/:id/config` — affects the running agent everywhere |
+| Day-to-day messaging | `first-tree chat send/list/history/open` | Authenticates as the signed-in member (no agent-specific token) |
+| Inspect session runtime state | `first-tree agent status [name]`, `agent session list <name>`, `agent session <suspend\|terminate>` | Reads `/api/v1/admin/agents/activity`, `/admin/sessions/agents/...` |
+| Reset an agent stuck in `error` state | `first-tree agent reset <name>` | POSTs `reset-activity` |
+| Clean old isolated chat workspaces | `first-tree agent workspace clean` | Respects the session registry — only removes evicted or untracked chats |
+| Onboard a new human or autonomous agent | `first-tree agent create` | Guided flow; requires prior `connect <token>` for credentials |
 
 ## The Credential Model
 
@@ -28,13 +28,13 @@ Every CLI command that talks to the Hub reaches for `~/.first-tree/hub/credentia
 
 There are no separate admin or agent tokens. The member's JWT is used for every authenticated call — admin endpoints, Feishu binding, agent creation, agent config, messaging, SDK debugging, everything. The old `FIRST_TREE_AGENT_TOKEN` / `FIRST_TREE_AGENT` environment variables and the `agent token bootstrap` subcommand have been removed.
 
-If `credentials.json` is missing or refresh fails, the CLI exits with a message pointing at `first-tree-hub login <token>`. Do not paper over this with manual env vars — run `connect <token>`.
+If `credentials.json` is missing or refresh fails, the CLI exits with a message pointing at `first-tree login <token>`. Do not paper over this with manual env vars — run `connect <token>`.
 
 ## Command Families
 
 ### `daemon`
 
-Everything that controls "the background process running on this machine". First-time setup lives at top-level `first-tree-hub login <token>`, which also installs the daemon. The legacy `client ...` namespace was split in Phase 1A: lifecycle moved to `daemon`, local YAML editing moved to top-level `config`, server-side admin actions moved to the web admin UI.
+Everything that controls "the background process running on this machine". First-time setup lives at top-level `first-tree login <token>`, which also installs the daemon. The legacy `client ...` namespace was split in Phase 1A: lifecycle moved to `daemon`, local YAML editing moved to top-level `config`, server-side admin actions moved to the web admin UI.
 
 - `daemon start` — foreground runtime loop. Loads credentials, initializes config, spins up `ClientRuntime`, watches the agents config directory for hot-add, and stays alive until SIGINT/SIGTERM. Fails closed when no credentials exist, pointing at `login`.
 - `daemon stop` / `daemon restart` — service-manager backed stop / restart against launchd or `systemd --user`.
@@ -127,14 +127,14 @@ now a sequence of explicit verbs, each of which can fail and recover
 independently:
 
 ```bash
-first-tree-hub login <token>                                   # bind this machine
-first-tree-hub agent create <name> --type <t> --client-id <id> # create the agent on the Hub
-first-tree-hub agent bind bot --platform feishu ...            # optional: Feishu bot
-first-tree-hub daemon start                                    # bring the agent online
+first-tree login <token>                                   # bind this machine
+first-tree agent create <name> --type <t> --client-id <id> # create the agent on the Hub
+first-tree agent bind bot --platform feishu ...            # optional: Feishu bot
+first-tree daemon start                                    # bring the agent online
 ```
 
 Each verb depends on a valid credential file. If `loadCredentials()`
-returns null, the command errors out and points at `first-tree-hub login
+returns null, the command errors out and points at `first-tree login
 <token>`.
 
 ## Config and Environment Model

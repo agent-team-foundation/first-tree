@@ -45,7 +45,7 @@ The command package depends on the client package; it does not invoke server boo
 
 ### Auth uses one credential, everywhere
 
-- Clients sign in once via `first-tree-hub login <token>`, which persists a member access JWT + refresh token in `~/.first-tree/hub/credentials.json`.
+- Clients sign in once via `first-tree login <token>`, which persists a member access JWT + refresh token in `~/.first-tree/hub/credentials.json`.
 - Every subsequent CLI call runs through `ensureFreshAccessToken()`, which auto-refreshes 30s before expiry via `/api/v1/auth/refresh`.
 - Admin actions, agent-owner actions, Feishu binding, `agent config` mutations, and SDK debug calls all use the same member JWT. Server enforcement is role-based.
 - There is no separate admin JWT or per-agent bearer token in the current model. The legacy `FIRST_TREE_AGENT_TOKEN` / `FIRST_TREE_AGENT` env vars and `agent token bootstrap` command are gone.
@@ -83,7 +83,7 @@ The client runtime:
 - manages session state and isolated chat workspaces
 - optionally syncs a shared Context Tree clone for organizational context
 
-The **background daemon** is installed automatically by `first-tree-hub login <token>` (skip with `--no-start`). It runs `daemon start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. The `daemon` namespace owns the daemon lifecycle (`start` / `stop` / `restart` / `status` / `doctor`); install / repair is folded into `login <token>`.
+The **background daemon** is installed automatically by `first-tree login <token>` (skip with `--no-start`). It runs `daemon start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. The `daemon` namespace owns the daemon lifecycle (`start` / `stop` / `restart` / `status` / `doctor`); install / repair is folded into `login <token>`.
 
 ### Workspace bootstrap
 

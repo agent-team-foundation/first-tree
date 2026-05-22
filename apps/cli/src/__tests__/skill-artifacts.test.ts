@@ -9,19 +9,19 @@ const ROOT = resolve(HERE, "../../../../");
 
 describe("skill artifacts", () => {
   it("keeps the source-of-truth skill present", () => {
-    expect(existsSync(join(ROOT, "skills", "first-tree-cli", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "first-tree-cloud", "SKILL.md"))).toBe(true);
   });
 
   it("has symlinks for agent discovery directories", () => {
-    for (const mirror of [".agents/skills/first-tree-cli", ".claude/skills/first-tree-cli"]) {
+    for (const mirror of [".agents/skills/first-tree-cloud", ".claude/skills/first-tree-cloud"]) {
       const mirrorPath = join(ROOT, mirror);
       expect(lstatSync(mirrorPath).isSymbolicLink(), `${mirror} should be a symlink`).toBe(true);
-      expect(readlinkSync(mirrorPath)).toBe("../../skills/first-tree-cli");
+      expect(readlinkSync(mirrorPath)).toBe("../../skills/first-tree-cloud");
     }
   });
 
   it("passes the symlink validation check", () => {
-    execFileSync("bash", ["./skills/first-tree-cli/scripts/check-skill-sync.sh"], {
+    execFileSync("bash", ["./skills/first-tree-cloud/scripts/check-skill-sync.sh"], {
       cwd: ROOT,
       stdio: "pipe",
       encoding: "utf-8",

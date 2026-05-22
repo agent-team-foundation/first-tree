@@ -164,8 +164,8 @@ handshake 流程([ws-client.ts:380-458](packages/server/src/api/agent/ws-client.
 | # | 动作 |
 |---|---|
 | 1 | server 抛 `CLIENT_USER_MISMATCH`,WS close 4403 |
-| 2 | CLI 收到关闭码 → 输出 *"This client is currently owned by alice@example.com. Run `first-tree-hub login <token> --override` to transfer ownership. This will unpin Alice's N agents from this machine."* |
-| 3 | 用户跑 `first-tree-hub login <token> --override`(交互式二次确认 — 显示当前 owner、新 owner、被解绑 agent 列表与计数)→ 调 `POST /clients/:id/claim` |
+| 2 | CLI 收到关闭码 → 输出 *"This client is currently owned by alice@example.com. Run `first-tree login <token> --override` to transfer ownership. This will unpin Alice's N agents from this machine."* |
+| 3 | 用户跑 `first-tree login <token> --override`(交互式二次确认 — 显示当前 owner、新 owner、被解绑 agent 列表与计数)→ 调 `POST /clients/:id/claim` |
 | 4 | server 在单事务内执行(注意:`agents` 表无 `manager_user_id` 列,通过 `members` join 解出):`UPDATE clients SET user_id = ?` ; `UPDATE agents SET client_id = NULL WHERE client_id = ? AND manager_id IN (SELECT id FROM members WHERE user_id = $oldOwnerId)` ; `UPDATE agent_presence SET status='offline', client_id = NULL, runtime_state=NULL, … WHERE client_id = ?`;事务提交后写一条结构化 log(`event: client.owner_transfer`)|
 | 5 | CLI 重连 WS handshake → 通过 |
 
@@ -337,9 +337,9 @@ PR-D 实施前必须基于当时的 main HEAD 重新扫一遍 — 上述行号 8
 
 | PR | 影响 | 与本设计的兼容性 |
 |---|---|---|
-| [#201](https://github.com/agent-team-foundation/first-tree-hub/pull/201) topbar disconnect chip + new-connection modal | `pages/clients/new-connection-dialog.tsx:73` 用 `c.userId === user.id` 判 success;`hooks/use-disconnected-computers.ts:18-20` 同样过滤 | **完全对齐** — 本设计 `clients.user_id NOT NULL` 与之一致;切 user 后 disconnect-chip 自然消失(`c.userId !== oldUser.id`),良性 UX |
-| [#202](https://github.com/agent-team-foundation/first-tree-hub/pull/202) mention_only 防回环 | 新 migration `0029`,改 messaging 路径 | 本设计 4 个 PR 全部 schema 零改动,无 migration 编号冲突;mention_only 与 R-RUN 路径无关 |
-| [#203](https://github.com/agent-team-foundation/first-tree-hub/pull/203) onboarding single-card flow | 仅 web 改动 | 不影响(PR-C 改 web auth state 时单独 review) |
+| [#201](https://github.com/agent-team-foundation/first-tree/pull/201) topbar disconnect chip + new-connection modal | `pages/clients/new-connection-dialog.tsx:73` 用 `c.userId === user.id` 判 success;`hooks/use-disconnected-computers.ts:18-20` 同样过滤 | **完全对齐** — 本设计 `clients.user_id NOT NULL` 与之一致;切 user 后 disconnect-chip 自然消失(`c.userId !== oldUser.id`),良性 UX |
+| [#202](https://github.com/agent-team-foundation/first-tree/pull/202) mention_only 防回环 | 新 migration `0029`,改 messaging 路径 | 本设计 4 个 PR 全部 schema 零改动,无 migration 编号冲突;mention_only 与 R-RUN 路径无关 |
+| [#203](https://github.com/agent-team-foundation/first-tree/pull/203) onboarding single-card flow | 仅 web 改动 | 不影响(PR-C 改 web auth state 时单独 review) |
 
 ---
 
@@ -526,7 +526,7 @@ Alice 跑了一阵子;Bob 想用同一台机器:
 | 1 | Alice `hub logout`(可选)|
 | 2 | Bob `hub login` → 得 Bob 的 JWT |
 | 3 | Client WS handshake → `CLIENT_USER_MISMATCH` |
-| 4 | CLI 输出 *"This client is owned by alice@example.com. Run `first-tree-hub login <token> --override` to transfer. This will unpin Alice's 3 agents from this machine."* |
+| 4 | CLI 输出 *"This client is owned by alice@example.com. Run `first-tree login <token> --override` to transfer. This will unpin Alice's 3 agents from this machine."* |
 | 5 | Bob 跑 `login <token> --override` → 二次确认 → owner 切换 + Alice 名下 3 agent 全 unpin;server 日志记录 `event: client.owner_transfer` 一行 |
 | 6 | Bob 重连成功;Bob 在多 org 中也自动覆盖 |
 

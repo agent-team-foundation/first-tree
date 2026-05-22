@@ -19,7 +19,7 @@
     "e2e:full": "turbo run e2e:full --filter=@first-tree/e2e",
     "e2e:up": "pnpm --filter @first-tree/e2e e2e:up",
     "e2e:clean": "pnpm --filter @first-tree/e2e e2e:clean",
-    "validate:skill": "python3 ./skills/first-tree-hub/scripts/quick_validate.py ./skills/first-tree-hub && bash ./skills/first-tree-hub/scripts/check-skill-sync.sh"
+    "validate:skill": "python3 ./skills/first-tree-cloud/scripts/quick_validate.py ./skills/first-tree-cloud && bash ./skills/first-tree-cloud/scripts/check-skill-sync.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",

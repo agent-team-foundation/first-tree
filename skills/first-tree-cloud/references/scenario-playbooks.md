@@ -2,7 +2,7 @@
 
 Use this file when the user describes a goal in natural language and you need to translate it into a First Tree Hub CLI sequence.
 
-## 0. "I do not have `first-tree-hub` installed yet"
+## 0. "I do not have `first-tree` installed yet"
 
 Run this before any operational flow when the machine may not have the CLI.
 
@@ -10,8 +10,8 @@ Run this before any operational flow when the machine may not have the CLI.
 
 ```bash
 node --version                                        # must be >= 22.16
-npm install -g @agent-team-foundation/first-tree-hub
-first-tree-hub --version
+npm install -g first-tree
+first-tree --version
 ```
 
 For any task that creates agents via GitHub identity, also check:
@@ -24,7 +24,7 @@ gh auth status
 
 - First Tree Hub requires Node.js `>= 22.16`.
 - Do not jump to `daemon start`, `login <token>`, or `agent create` on a machine where installation state is unknown.
-- If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree-hub ...` so they do not have to fight PATH.
+- If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree ...` so they do not have to fight PATH.
 
 ## 1. "Connect this computer to an existing Hub server"
 
@@ -34,10 +34,10 @@ Use this when the Hub is already up and the user wants this machine to run agent
 
 ```bash
 # Paste a connect token from the Hub web console's "Connect a machine" dialog:
-first-tree-hub login <connect-token>
+first-tree login <connect-token>
 
 # Skip the background service install (useful in containers):
-first-tree-hub login <connect-token> --no-start
+first-tree login <connect-token> --no-start
 ```
 
 After `connect` succeeds, the machine is signed in and (by default on macOS/Linux) running as a background service.
@@ -45,8 +45,8 @@ After `connect` succeeds, the machine is signed in and (by default on macOS/Linu
 To verify:
 
 ```bash
-first-tree-hub daemon status          # local: service state + hub + auth health
-first-tree-hub daemon doctor          # readiness checks (includes background-service state)
+first-tree daemon status          # local: service state + hub + auth health
+first-tree daemon doctor          # readiness checks (includes background-service state)
 # Server-side: open the Hub web admin → Computers tab to verify this
 # machine appears. (The legacy `client list` CLI verb was retired in Phase 1A.)
 ```
@@ -69,8 +69,8 @@ Use this for a production desktop or a server that should run agents permanently
 `login <token>` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
 
 ```bash
-first-tree-hub login <token>                 # auto-installs the service
-first-tree-hub daemon doctor                   # verify: shows running/inactive/not-installed
+first-tree login <token>                 # auto-installs the service
+first-tree daemon doctor                   # verify: shows running/inactive/not-installed
 tail -f ~/.first-tree/hub/logs/client.log      # tail logs (NDJSON)
 ```
 
@@ -80,12 +80,12 @@ To decommission a machine, remove the unit at the OS level and clear local state
 
 ```bash
 # macOS
-launchctl bootout gui/$UID/dev.first-tree-hub.client
-rm -f ~/Library/LaunchAgents/dev.first-tree-hub.client.plist
+launchctl bootout gui/$UID/dev.first-tree.client
+rm -f ~/Library/LaunchAgents/dev.first-tree.client.plist
 
 # Linux
-systemctl --user disable --now first-tree-hubent.service
-rm -f ~/.config/systemd/user/first-tree-hubent.service
+systemctl --user disable --now first-treeent.service
+rm -f ~/.config/systemd/user/first-treeent.service
 
 # Both
 rm -rf ~/.first-tree/hub
@@ -95,7 +95,7 @@ To force-disconnect from the server side: use the Hub web admin (Computers → D
 
 ### What to remember
 
-- Windows is unsupported. `login <token>` falls back to inline mode there — tell the user to use `first-tree-hub daemon start` inside a user-managed supervisor.
+- Windows is unsupported. `login <token>` falls back to inline mode there — tell the user to use `first-tree daemon start` inside a user-managed supervisor.
 - The service runs `daemon start --no-interactive`, so the machine must already have valid `credentials.json` — `login <token>` writes that for you in the same step.
 - Re-running `login <token>` is safe and idempotent for the unit file, but always re-authenticates.
 
@@ -107,25 +107,25 @@ Add a real person to the team through the supported identity flow.
 
 ```bash
 # 0. Prereq on this machine: CLI installed, logged in.
-first-tree-hub login <token>                                # if credentials.json does not exist
+first-tree login <token>                                # if credentials.json does not exist
 
 # 1. Create the human agent record on the Hub + bind it to this client:
-first-tree-hub agent create alice \
+first-tree agent create alice \
   --server <url> --type human --display-name "Alice" \
-  --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
+  --client-id "$(first-tree config get client.id | awk '{print $2}')"
 
 # 2. (Optional) Pair Alice with a personal assistant agent:
-first-tree-hub agent create alice-assistant \
+first-tree agent create alice-assistant \
   --server <url> --type personal_assistant \
-  --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
+  --client-id "$(first-tree config get client.id | awk '{print $2}')"
 
 # 3. (Optional) Bind a Feishu bot to the assistant:
-first-tree-hub agent bind bot --platform feishu \
+first-tree agent bind bot --platform feishu \
   --app-id "$FEISHU_APP_ID" --app-secret "$FEISHU_APP_SECRET" \
   --agent alice-assistant
 ```
 
-If the machine should also run the assistant, run `first-tree-hub daemon start` (or rely on the already-installed background service started by `login`).
+If the machine should also run the assistant, run `first-tree daemon start` (or rely on the already-installed background service started by `login`).
 
 ### What to remember
 
@@ -141,14 +141,14 @@ A bot with no human owner (code reviewer, monitor, pipeline agent).
 ### Flow
 
 ```bash
-first-tree-hub login <token>                                # if credentials.json does not exist
+first-tree login <token>                                # if credentials.json does not exist
 
-first-tree-hub agent create code-reviewer \
+first-tree agent create code-reviewer \
   --server <url> --type autonomous_agent \
   --display-name "Code Review" \
-  --client-id "$(first-tree-hub config get client.id | awk '{print $2}')"
+  --client-id "$(first-tree config get client.id | awk '{print $2}')"
 
-first-tree-hub daemon start                                 # bring it online (no-op if already running)
+first-tree daemon start                                 # bring it online (no-op if already running)
 ```
 
 ### What to remember
@@ -164,13 +164,13 @@ Use this whenever the user wants the live agent to behave differently — *not* 
 ### Flow
 
 ```bash
-first-tree-hub agent config show alice                                     # read current config
-first-tree-hub agent config set-model alice claude-opus-4-7                # swap model
-cat ./house-prompt.md | first-tree-hub agent config append-prompt alice    # replace prompt append
-first-tree-hub agent config add-mcp alice --name gh --transport stdio --command gh --args mcp
-first-tree-hub agent config set-env alice OPENAI_API_KEY=sk-... --sensitive
-first-tree-hub agent config add-repo alice https://github.com/acme/monorepo --ref main
-first-tree-hub agent config dry-run alice -f ./patch.json                  # preview + validate
+first-tree agent config show alice                                     # read current config
+first-tree agent config set-model alice claude-opus-4-7                # swap model
+cat ./house-prompt.md | first-tree agent config append-prompt alice    # replace prompt append
+first-tree agent config add-mcp alice --name gh --transport stdio --command gh --args mcp
+first-tree agent config set-env alice OPENAI_API_KEY=sk-... --sensitive
+first-tree agent config add-repo alice https://github.com/acme/monorepo --ref main
+first-tree agent config dry-run alice -f ./patch.json                  # preview + validate
 ```
 
 ### What to remember
@@ -188,14 +188,14 @@ Diagnose before editing code or YAML.
 ### Flow
 
 ```bash
-first-tree-hub daemon status          # local state: service, hub URL, agents
-first-tree-hub daemon doctor          # readiness checks (background-service state included)
-first-tree-hub config show     # effective client YAML
+first-tree daemon status          # local state: service, hub URL, agents
+first-tree daemon doctor          # readiness checks (background-service state included)
+first-tree config show     # effective client YAML
 ```
 
 ### What to remember
 
-- If `daemon doctor` flags "no credentials", the fix is `first-tree-hub login <token>`, not a YAML edit.
+- If `daemon doctor` flags "no credentials", the fix is `first-tree login <token>`, not a YAML edit.
 - If `daemon status` / web admin Computers tab shows the client but `daemon status` shows 0 agents, no agent is pinned to this machine — create one with `agent create --client-id <this-client-id>` or bind an existing agent with `agent bind client <name> --client-id <id>`.
 - The Hub server is operated by the First Tree team as a SaaS — when a client cannot reach it, the issue is local connectivity / credentials, not server config.
 
@@ -208,15 +208,15 @@ Verify delivery, inspect chats, send test messages manually.
 ```bash
 # Prereq: this machine must have credentials.json (connect <token>).
 
-first-tree-hub chat send <agentName> "hello"                   # send to an agent in the current chat
-first-tree-hub chat invite <agentName>                # pull a non-member into the current chat first
-first-tree-hub chat send <agentName> "now we can talk"         # then send normally
-echo "piped" | first-tree-hub chat send <agentName>            # stdin
-first-tree-hub chat send <agentName> "hi" -m '{"priority":"high"}'
+first-tree chat send <agentName> "hello"                   # send to an agent in the current chat
+first-tree chat invite <agentName>                # pull a non-member into the current chat first
+first-tree chat send <agentName> "now we can talk"         # then send normally
+echo "piped" | first-tree chat send <agentName>            # stdin
+first-tree chat send <agentName> "hi" -m '{"priority":"high"}'
 
-first-tree-hub chat list
-first-tree-hub chat history <chatId>
-first-tree-hub chat open <agent-name>                          # interactive REPL
+first-tree chat list
+first-tree chat history <chatId>
+first-tree chat open <agent-name>                          # interactive REPL
 ```
 
 ### What to remember
@@ -231,16 +231,16 @@ Use these when a user reports a stuck or misbehaving session.
 ### Flow
 
 ```bash
-first-tree-hub agent status                     # fleet-wide snapshot (runtime states, session counts)
-first-tree-hub agent status <name>              # single-agent detail
-first-tree-hub agent session list <name>            # list sessions for one agent
-first-tree-hub agent session list <name> --state suspended
+first-tree agent status                     # fleet-wide snapshot (runtime states, session counts)
+first-tree agent status <name>              # single-agent detail
+first-tree agent session list <name>            # list sessions for one agent
+first-tree agent session list <name> --state suspended
 
-first-tree-hub agent session suspend <name> <chat-id>
-first-tree-hub agent session terminate <name> <chat-id>
+first-tree agent session suspend <name> <chat-id>
+first-tree agent session terminate <name> <chat-id>
 
-first-tree-hub agent reset <name>               # move an error-state agent back to idle
-first-tree-hub agent workspace clean            # remove stale chat workspaces safely
+first-tree agent reset <name>               # move an error-state agent back to idle
+first-tree agent workspace clean            # remove stale chat workspaces safely
 ```
 
 ### What to remember
@@ -256,10 +256,10 @@ is no self-host path. Use this section when scaling out the *client* side.
 ### Flow
 
 1. Generate a connect token per machine from the Hub web console.
-2. On each machine, run `first-tree-hub login <token>` once — it signs the
+2. On each machine, run `first-tree login <token>` once — it signs the
    machine in and installs the background service in a single step so the
    runtime survives reboots.
-3. Verify with `first-tree-hub daemon doctor` and the Hub web admin (Computers tab).
+3. Verify with `first-tree daemon doctor` and the Hub web admin (Computers tab).
 
 ### What to remember
 
@@ -279,7 +279,7 @@ Use this when the task is a code change, not an operation.
 3. If flags / env vars / schema change, update `packages/shared/src/config/*.ts`.
 4. Register new top-level commands from `apps/cli/src/cli/index.ts`.
 5. Update `docs/cli-reference.md` (and `docs/onboarding-guide.md` if onboarding flow changes).
-6. Run the smallest relevant validation first: `pnpm check`, `pnpm typecheck`, `pnpm --filter @agent-team-foundation/first-tree-hub test`.
+6. Run the smallest relevant validation first: `pnpm check`, `pnpm typecheck`, `pnpm --filter first-tree test`.
 
 ### What to remember
 

@@ -176,7 +176,7 @@ Interpret the output in three buckets:
 Always tell the user:
 
 - Tier 0 (`validate.yml`) is installed by default.
-- Tier 1 AI PR review is not installed by this skill; it belongs to `first-tree-hub`.
+- Tier 1 AI PR review is not installed by this skill; it belongs to `first-tree cloud`.
 - Tier 2 is optional and rule-based; the onboarding skill can prepare files and explain the rollout, but hard-to-reverse policy changes stay manual.
 - The current parity target for "proper automation similar to `first-tree-context`" is documented in [`github-automation.md`](github-automation.md). Use that file when you need the exact workflow roles, ruleset assumptions, App/secrets names, or rollout sequence.
 
@@ -207,7 +207,7 @@ GitHub automation lines are mandatory:
 
 ```text
 GitHub Actions: validate.yml installed (Tier 0, rule-based)
-AI PR review:  not installed by this skill. Enable via your first-tree-hub deployment / onboarding flow.
+AI PR review:  not installed by this skill. Enable via your first-tree cloud deployment / onboarding flow.
 Owners gate:   <skipped | pending via `first-tree tree automation install --tier 2 --tree-path <tree_root>` | configured>
 ```
 

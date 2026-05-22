@@ -123,7 +123,7 @@ Run the smallest relevant set first, then expand if the change touches cross-pac
 ```bash
 pnpm check
 pnpm typecheck
-pnpm --filter @agent-team-foundation/first-tree-hub test
+pnpm --filter first-tree test
 pnpm --filter @first-tree/client test
 pnpm --filter @first-tree/server test
 ```
@@ -132,10 +132,10 @@ Use the package-specific commands when only one area changed, but keep in mind t
 
 ## External Consumption
 
-The published CLI package is `@agent-team-foundation/first-tree-hub`. Its public CLI binary is:
+The published CLI package is `first-tree`. Its public CLI binary is:
 
 ```bash
-first-tree-hub
+first-tree
 ```
 
 Reusable code is also importable. When adding reusable CLI-adjacent behavior, preserve the separation:

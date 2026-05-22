@@ -5,7 +5,7 @@ This reference backs Phase D.5 in `SKILL.md`.
 ## The split
 
 - **Tier 0** — `validate.yml`, installed by default, rule-based, no secrets.
-- **Tier 1** — AI PR review, not installed by this skill, owned by `first-tree-hub`.
+- **Tier 1** — AI PR review, not installed by this skill, owned by `first-tree cloud`.
 - **Tier 2** — `owners:` gate plus `auto-merge.yml` / `review-enforcer.yml`, optional, rule-based, but tied to GitHub rulesets and App setup.
 
 The onboarding skill owns Tier 0 by default and can help stage Tier 2. It does
@@ -22,7 +22,7 @@ rule layer the skill teaches should be functionally similar to what
 | `validate.yml`        | Run `first-tree tree verify` on every PR                                                   | yes                   | onboarding skill |
 | `auto-merge.yml`      | Classify a PR by `owners:` / `members/` rules and auto-approve / auto-merge the safe cases | no, opt-in            | onboarding skill |
 | `review-enforcer.yml` | Dismiss non-owner approvals on cross-owner PRs                                             | no, opt-in            | onboarding skill |
-| AI PR review          | Summaries, comments, model calls, Hub dispatch                                             | no                    | `first-tree-hub` |
+| AI PR review          | Summaries, comments, model calls, Hub dispatch                                             | no                    | `first-tree cloud` |
 
 That is the practical meaning of "set up the tree repo like `first-tree-context`
 does today" for the current product surface.

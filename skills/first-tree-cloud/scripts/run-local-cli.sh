@@ -8,7 +8,7 @@ INSTALL_GUIDE="${SKILL_DIR}/references/portable-quickstart.md"
 find_repo_root() {
   local dir="$SKILL_DIR"
   while [[ "$dir" != "/" ]]; do
-    if [[ -f "$dir/package.json" ]] && grep -q '"name": "first-tree-hub"' "$dir/package.json"; then
+    if [[ -f "$dir/package.json" ]] && grep -q '"name": "first-tree"' "$dir/package.json"; then
       printf '%s\n' "$dir"
       return 0
     fi
@@ -19,19 +19,19 @@ find_repo_root() {
 
 REPO_ROOT="$(find_repo_root || true)"
 
-if [[ -n "$REPO_ROOT" && "$SKILL_DIR" == "$REPO_ROOT/skills/first-tree-hub" ]]; then
+if [[ -n "$REPO_ROOT" && "$SKILL_DIR" == "$REPO_ROOT/skills/first-tree" ]]; then
   (
     cd "$REPO_ROOT"
-    pnpm --filter @agent-team-foundation/first-tree-hub build >/dev/null
+    pnpm --filter first-tree build >/dev/null
     node ./apps/cli/dist/cli/index.mjs "$@"
   )
   exit 0
 fi
 
-if command -v first-tree-hub >/dev/null 2>&1; then
-  exec first-tree-hub "$@"
+if command -v first-tree >/dev/null 2>&1; then
+  exec first-tree "$@"
 fi
 
-echo "No live first-tree-hub checkout or installed first-tree-hub binary found." >&2
+echo "No live first-tree checkout or installed first-tree binary found." >&2
 echo "See ${INSTALL_GUIDE} for repo and portable install instructions." >&2
 exit 1

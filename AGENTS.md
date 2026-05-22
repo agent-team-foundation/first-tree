@@ -61,8 +61,8 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 ## Repo-Local Skill
 
-- Use `skills/first-tree-hub/SKILL.md` as the source-of-truth skill for hub flows (login, daemon, agent, chat, org, config). Use `skills/first-tree/SKILL.md` for Context Tree flows. Use `skills/first-tree-github-scan/` for GitHub Scan daemon work.
-- `.agents/skills/first-tree-hub/` and `.claude/skills/first-tree-hub/` are symlinks to `skills/first-tree-hub/`. No sync step is needed. The other repo-local skills (`first-tree`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`) live under `skills/` and follow the same convention.
+- Use `skills/first-tree-cloud/SKILL.md` as the source-of-truth skill for hub (cloud / collaboration) flows (login, daemon, agent, chat, org, config). Use `skills/first-tree/SKILL.md` for Context Tree flows. Use `skills/first-tree-github-scan/` for GitHub Scan daemon work.
+- `.agents/skills/first-tree-cloud/` and `.claude/skills/first-tree-cloud/` are symlinks to `skills/first-tree-cloud/`. No sync step is needed. The other repo-local skills (`first-tree`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`) live under `skills/` and follow the same convention.
 
 ## Monorepo Structure
 
@@ -83,7 +83,7 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 **PostgreSQL only:** No Redis / MQ. PG covers storage, queuing (SKIP LOCKED), and notifications (LISTEN/NOTIFY).
 
-**Unified user-JWT auth:** Single user JWT (issued by `first-tree-hub login <token>`, stored at `~/.first-tree/hub/config/credentials.json`) authorizes both Web/Admin API and every agent the user manages on the Client WebSocket. JWT shape, route classification, and middleware choice live in [docs/http-path-conventions.md](docs/http-path-conventions.md) — this section covers only the runtime *binding* facts not in that spec. Agents bind via `agents.client_id` + a server-pushed `agent:pinned` frame; **R-RUN** is re-evaluated at every `agent:bind` against the live `agents → manager → user` join (cross-org under one user is allowed; revoked memberships refuse the bind immediately). Switching user requires `first-tree-hub login <token> --override`, which atomically transfers `clients.user_id` and unpins the previous owner's agents. Per-agent `aghub_*` tokens retired by migration `0020`. Background: [docs/decouple-client-from-identity-design-zh.md](docs/decouple-client-from-identity-design-zh.md) (client-from-identity decoupling) and [proposals/hub-strip-jwt-ambient-scope.20260508.md](../first-tree-context/proposals/hub-strip-jwt-ambient-scope.20260508.md) (JWT-scope strip + route refactor).
+**Unified user-JWT auth:** Single user JWT (issued by `first-tree login <token>`, stored at `~/.first-tree/hub/config/credentials.json`) authorizes both Web/Admin API and every agent the user manages on the Client WebSocket. JWT shape, route classification, and middleware choice live in [docs/http-path-conventions.md](docs/http-path-conventions.md) — this section covers only the runtime *binding* facts not in that spec. Agents bind via `agents.client_id` + a server-pushed `agent:pinned` frame; **R-RUN** is re-evaluated at every `agent:bind` against the live `agents → manager → user` join (cross-org under one user is allowed; revoked memberships refuse the bind immediately). Switching user requires `first-tree login <token> --override`, which atomically transfers `clients.user_id` and unpins the previous owner's agents. Per-agent `aghub_*` tokens retired by migration `0020`. Background: [docs/decouple-client-from-identity-design-zh.md](docs/decouple-client-from-identity-design-zh.md) (client-from-identity decoupling) and [proposals/hub-strip-jwt-ambient-scope.20260508.md](../first-tree-context/proposals/hub-strip-jwt-ambient-scope.20260508.md) (JWT-scope strip + route refactor).
 
 **Inbox is the Server/Client boundary:** Server writes to Inbox (fan-out on write), Client pulls / receives WebSocket notifications. At-least-once delivery; Client is responsible for deduplication.
 
@@ -148,7 +148,7 @@ This repo is a workspace member. Keep all Context Tree files only in the shared 
 
 - **Tree repo:** `first-tree-context` (shared)
 - **Binding mode:** `workspace-member`
-- **Entrypoint:** `/workspaces/first-tree-all/repos/first-tree-hub`
+- **Entrypoint:** `/workspaces/first-tree-all/repos/first-tree`
 - **Workspace ID:** `first-tree-all`
 - **Tree repo URL:** <https://github.com/agent-team-foundation/first-tree-context>
 - **Source state:** `.first-tree/local-tree.json`
@@ -159,7 +159,7 @@ FIRST-TREE-TREE-REPO: `first-tree-context`
 FIRST-TREE-TREE-MODE: `shared`
 FIRST-TREE-BINDING-MODE: `workspace-member`
 FIRST-TREE-TREE-REPO-URL: `https://github.com/agent-team-foundation/first-tree-context`
-FIRST-TREE-ENTRYPOINT: `/workspaces/first-tree-all/repos/first-tree-hub`
+FIRST-TREE-ENTRYPOINT: `/workspaces/first-tree-all/repos/first-tree`
 FIRST-TREE-WORKSPACE-ID: `first-tree-all`
 FIRST-TREE-SOURCE-STATE: `.first-tree/local-tree.json`
 -->

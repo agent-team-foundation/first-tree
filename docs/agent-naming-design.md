@@ -190,8 +190,8 @@ name := lowercase(input)
 把每机一份的别名收敛到服务端 agent name。改动：
 
 - 目录改为 `~/.first-tree/hub/config/agents/<name>/agent.yaml`（以 agent name 而非自由别名为 key）
-- `first-tree-hub agent add <name>` —— 去掉本地名参数；name 在服务端解析
-- `first-tree-hub agent create <name>` —— 服务端和本地 key 永远一致
+- `first-tree agent add <name>` —— 去掉本地名参数；name 在服务端解析
+- `first-tree agent create <name>` —— 服务端和本地 key 永远一致
 - `--agent <name>` flag 语义明确地指向 agent name
 - 客户端 runtime 启动时做一次迁移：对每个本地 agent dir，用 `agentId` 查当前 server `name`，如果目录名不同则重命名 dir + 对应的 `sessions/<old-alias>.json`。幂等，冲突时仅 log 跳过
 
@@ -265,7 +265,7 @@ name := lowercase(input)
 
 **改动**
 
-- `first-tree-hub agent add <name>` 去掉本地名参数
+- `first-tree agent add <name>` 去掉本地名参数
 - `agent list` 用 agent name 作主键；去掉别名列
 - 客户端 runtime 启动时做迁移：重命名与 server `name` 不一致的目录，同步重命名 `sessions/<old-alias>.json`
 - `--agent <name>` flag 文档 + 错误文案更新
@@ -313,7 +313,7 @@ name := lowercase(input)
 
 - **Agent name 保留字黑名单是否公开？** 显示在创建表单帮助文案会暴露系统结构；或只在碰撞时才告知。倾向：碰撞时告知 + 在文档页列出完整名单
 - **Mention 自动补全的匹配策略**：display name 是否做内部字符模糊匹配？agent name 是否只做前缀匹配？倾向：display name 做模糊（体验好），agent name 做前缀（精准）
-- **CLI：`first-tree-hub chat send @coder-agent` 是推荐写法，还是 `@` 可选？** 倾向：两者都接受，内部统一剥离 `@` 前缀
+- **CLI：`first-tree chat send @coder-agent` 是推荐写法，还是 `@` 可选？** 倾向：两者都接受，内部统一剥离 `@` 前缀
 
 > 原草案中"API 响应是否除了 `name` 也暴露 `handle` 字段"这一问题已**作废** —— 因为 UI 术语已统一为 "Agent name"（不引入 "handle" 新概念），API 字段继续用 `name` 即可，下游无迁移压力
 

@@ -39,7 +39,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
    visual-guard form of proposal §三.4; the cross-package `!packages/e2e/**`
    glob the proposal mentions is package-local in turbo 2 semantics and a
    no-op, but the per-package default already gives the same isolation).
-   The published CLI tarball (`@agent-team-foundation/first-tree-hub`) never
+   The published CLI tarball (`first-tree`) never
    references this package.
 2. **Independently deletable.** `scripts/verify-e2e-removable.sh` proves this:
    it stashes `packages/e2e` aside, confirms `pnpm install / typecheck / test
@@ -61,7 +61,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
 
   ```bash
   pnpm --filter @first-tree/server build
-  pnpm --filter @agent-team-foundation/first-tree-hub build
+  pnpm --filter first-tree build
   ```
 
 ## Commands

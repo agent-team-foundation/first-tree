@@ -7,7 +7,7 @@ SKILL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 find_repo_root() {
   local dir="$SKILL_DIR"
   while [[ "$dir" != "/" ]]; do
-    if [[ -f "$dir/package.json" ]] && grep -q '"name": "first-tree-hub"' "$dir/package.json"; then
+    if [[ -f "$dir/package.json" ]] && grep -q '"name": "first-tree-monorepo"' "$dir/package.json"; then
       printf '%s\n' "$dir"
       return 0
     fi
@@ -19,25 +19,25 @@ find_repo_root() {
 REPO_ROOT="$(find_repo_root || true)"
 SOURCE_DIR=""
 if [[ -n "$REPO_ROOT" ]]; then
-  SOURCE_DIR="$REPO_ROOT/skills/first-tree-hub"
+  SOURCE_DIR="$REPO_ROOT/skills/first-tree-cloud"
 fi
 
 if [[ -z "$REPO_ROOT" || "$SKILL_DIR" != "$SOURCE_DIR" ]]; then
-  echo "Run this script from the source-of-truth skill at skills/first-tree-hub inside a live first-tree-hub checkout." >&2
+  echo "Run this script from the source-of-truth skill at skills/first-tree-cloud inside a live first-tree checkout." >&2
   exit 1
 fi
 
 errors=0
 
-for mirror in "$REPO_ROOT/.agents/skills/first-tree-hub" "$REPO_ROOT/.claude/skills/first-tree-hub"; do
+for mirror in "$REPO_ROOT/.agents/skills/first-tree-cloud" "$REPO_ROOT/.claude/skills/first-tree-cloud"; do
   if [[ ! -L "$mirror" ]]; then
     echo "Expected symlink at $mirror but it is not a symlink." >&2
     errors=$((errors + 1))
     continue
   fi
   target="$(readlink "$mirror")"
-  if [[ "$target" != "../../skills/first-tree-hub" ]]; then
-    echo "Symlink $mirror points to '$target' instead of '../../skills/first-tree-hub'." >&2
+  if [[ "$target" != "../../skills/first-tree-cloud" ]]; then
+    echo "Symlink $mirror points to '$target' instead of '../../skills/first-tree-cloud'." >&2
     errors=$((errors + 1))
   fi
 done

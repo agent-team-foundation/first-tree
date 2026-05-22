@@ -10,13 +10,13 @@ top. Each section pins a single self-contained migration.
 **Affects**: everyone on a Hub CLI from before this change, and every
 production deployment of the Hub server.
 
-**Why**: pre-merge snapshot for the `first-tree-hub` ↔ `first-tree` repo
+**Why**: pre-merge snapshot for the `first-tree` ↔ `first-tree` repo
 consolidation (Phase 2 + 3). The CLI command surface and env names are
 flipping to their post-merge shape now so the actual merge diff stays
 small.
 
-**Not included**: bin name (`first-tree-hub`), npm name
-(`@agent-team-foundation/first-tree-hub`), and `program.name(...)` are
+**Not included**: bin name (`first-tree`), npm name
+(`first-tree`), and `program.name(...)` are
 unchanged. Those flip at Phase 3 T3.2 when v1.0.0 ships as `first-tree`.
 
 ### 1. CLI users on a machine that already runs the daemon
@@ -28,8 +28,8 @@ enough on its own — the old unit file still on disk will try to spawn
 the retired `client start` verb (now an `unknown command`).
 
 ```bash
-first-tree-hub logout
-first-tree-hub login <token>
+first-tree logout
+first-tree login <token>
 ```
 
 `logout` stops the running daemon and clears credentials.
@@ -38,7 +38,7 @@ with the new ExecStart, and starts the daemon. Pass `--no-start` if you
 want to skip the auto-install (for containers / CI).
 
 Equivalent one-shot for users on the published CLI who upgrade via
-`first-tree-hub upgrade`: nothing extra — `upgrade` already calls
+`first-tree upgrade`: nothing extra — `upgrade` already calls
 `installClientService()` to refresh the unit file before restarting.
 The reinstall above is only required for users who bypass that path
 (direct `npm i -g`, dev source checkouts, custom installers).
@@ -52,21 +52,21 @@ that changed.
 
 | Old | New | Notes |
 | --- | --- | --- |
-| `first-tree-hub connect <token>` | `first-tree-hub login <token>` | `--no-service` renamed to `--no-start`. New `--override` flag folds in the retired `client claim`. |
-| `first-tree-hub client claim --confirm` | `first-tree-hub login <token> --override` | Same server-side `POST /clients/:id/claim` + stale-alias cleanup, but folded into `login` so the operator does both steps with one command. |
-| `first-tree-hub update [--check] [--no-restart]` | `first-tree-hub upgrade [--check] [--no-restart]` | Flags unchanged. |
-| `first-tree-hub client start` | `first-tree-hub daemon start` | `daemon start` is **fail-closed** when no credentials exist — it exits 1 with a `NO_CREDENTIALS` error pointing at `login` instead of dropping into the interactive prompt path the old `client start` had. |
-| `first-tree-hub client stop` | `first-tree-hub daemon stop` | — |
-| `first-tree-hub client restart` | `first-tree-hub daemon restart` | — |
-| `first-tree-hub client status` | `first-tree-hub daemon status` *or* top-level `first-tree-hub status` | `daemon status` is the local service view; the top-level `status` is the cross-subsystem overview (CLI version + service + hub + auth + agents). |
-| `first-tree-hub client doctor` | `first-tree-hub daemon doctor` *or* top-level `first-tree-hub doctor` | Same split as `status`. |
-| `first-tree-hub client config show/set/get` | `first-tree-hub config show/set/get` | Promoted out of the `client` namespace; flags / dot-notation unchanged. |
-| `first-tree-hub client list` | (removed) | The Hub web admin's *Computers* tab is now the canonical surface. |
-| `first-tree-hub client disconnect <clientId>` | (removed) | Same — *Computers* tab → Disconnect. |
-| `first-tree-hub onboard [...]` | (sequence: `login` + `agent create` + optional `agent bind bot|user` + `daemon start`) | Each verb fails / recovers independently. See `docs/onboarding-guide.md` for the full sequence. |
-| New: `first-tree-hub logout [--purge]` | — | Symmetric to `login`. Stops the daemon + deletes `credentials.json`. `--purge` also deletes `client.yaml`. |
-| New placeholder: `first-tree-hub tree` | — | Visible in `--help` with description `"(Phase 3 — not yet implemented)"`. Wired in Phase 3 T3.1. |
-| New placeholder: `first-tree-hub github` | — | Same. |
+| `first-tree connect <token>` | `first-tree login <token>` | `--no-service` renamed to `--no-start`. New `--override` flag folds in the retired `client claim`. |
+| `first-tree client claim --confirm` | `first-tree login <token> --override` | Same server-side `POST /clients/:id/claim` + stale-alias cleanup, but folded into `login` so the operator does both steps with one command. |
+| `first-tree update [--check] [--no-restart]` | `first-tree upgrade [--check] [--no-restart]` | Flags unchanged. |
+| `first-tree client start` | `first-tree daemon start` | `daemon start` is **fail-closed** when no credentials exist — it exits 1 with a `NO_CREDENTIALS` error pointing at `login` instead of dropping into the interactive prompt path the old `client start` had. |
+| `first-tree client stop` | `first-tree daemon stop` | — |
+| `first-tree client restart` | `first-tree daemon restart` | — |
+| `first-tree client status` | `first-tree daemon status` *or* top-level `first-tree status` | `daemon status` is the local service view; the top-level `status` is the cross-subsystem overview (CLI version + service + hub + auth + agents). |
+| `first-tree client doctor` | `first-tree daemon doctor` *or* top-level `first-tree doctor` | Same split as `status`. |
+| `first-tree client config show/set/get` | `first-tree config show/set/get` | Promoted out of the `client` namespace; flags / dot-notation unchanged. |
+| `first-tree client list` | (removed) | The Hub web admin's *Computers* tab is now the canonical surface. |
+| `first-tree client disconnect <clientId>` | (removed) | Same — *Computers* tab → Disconnect. |
+| `first-tree onboard [...]` | (sequence: `login` + `agent create` + optional `agent bind bot|user` + `daemon start`) | Each verb fails / recovers independently. See `docs/onboarding-guide.md` for the full sequence. |
+| New: `first-tree logout [--purge]` | — | Symmetric to `login`. Stops the daemon + deletes `credentials.json`. `--purge` also deletes `client.yaml`. |
+| New placeholder: `first-tree tree` | — | Visible in `--help` with description `"(Phase 3 — not yet implemented)"`. Wired in Phase 3 T3.1. |
+| New placeholder: `first-tree github` | — | Same. |
 
 ### 3. Production server env rename (zero-alias breaking)
 
@@ -170,17 +170,17 @@ followed by `login <token>`:
 
 ```bash
 # CLI side — should all be green:
-first-tree-hub status                 # CLI version + service + hub + auth + agents
-first-tree-hub daemon doctor          # service + agent configs + WS reachability
-first-tree-hub --help                 # 5 top-level verbs + 7 namespaces
+first-tree status                 # CLI version + service + hub + auth + agents
+first-tree daemon doctor          # service + agent configs + WS reachability
+first-tree --help                 # 5 top-level verbs + 7 namespaces
 
 # Server side — usual health check:
 curl -sf https://<hub-public-url>/healthz | jq
 ```
 
 If `daemon doctor` reports "service installed, inactive" persistently
-after `login`, run `journalctl --user -u first-tree-hubent -n 50`
+after `login`, run `journalctl --user -u first-tree-client -n 50`
 (Linux) or `cat ~/.first-tree/hub/logs/client.stderr.log` (macOS) — a
 stale unit file from before the upgrade may still be on disk. Re-run
-`first-tree-hub logout && first-tree-hub login <token>` to force a
+`first-tree logout && first-tree login <token>` to force a
 clean rewrite.
