@@ -717,7 +717,7 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId, role } = useAuth();
+  const { agentId: myAgentId } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -1883,7 +1883,6 @@ export function ChatView({
                   <ComposeStatusBar
                     chatId={chatId}
                     agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
-                    canManage={(id) => role === "admin" || (managedByMeMap.get(id) ?? false)}
                   />
                   {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                   <div
