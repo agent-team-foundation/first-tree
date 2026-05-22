@@ -20,7 +20,7 @@
  * live in copy.ts.
  */
 
-export const ADMIN_STEPS = ["team", "connect-code", "connect-computer", "create-agent", "kickoff"] as const;
+export const ADMIN_STEPS = ["team", "connect-computer", "create-agent", "connect-code", "kickoff"] as const;
 export const INVITEE_STEPS = ["welcome", "connect-computer", "create-agent", "kickoff"] as const;
 
 export type AdminStepId = (typeof ADMIN_STEPS)[number];
@@ -64,7 +64,8 @@ export type InitialStepFacts = {
  * Pick the step to land on when the page first mounts (or the user reloads
  * mid-flow). Driven by the few facts the server can vouch for:
  *
- *   - `completed` (client + agent both exist) → the final kickoff step
+ *   - `completed` (client + agent both exist) → admin resumes at connect-code
+ *     (connect-code + kickoff are still ahead of create-agent); invitee at kickoff
  *   - `create_agent` (client exists, no agent) → create the teammate
  *   - `connect` / null (no client yet) → the earliest unfinished setup step
  *
@@ -75,11 +76,16 @@ export type InitialStepFacts = {
  */
 export function inferInitialStepIndex(path: OnboardingPath, facts: InitialStepFacts): number {
   const seq = getStepSequence(path);
-  if (facts.onboardingStep === "completed") return seq.indexOf("kickoff");
+  if (facts.onboardingStep === "completed") {
+    // Server proves client + agent exist (through create-agent). For admins,
+    // connect-code + kickoff are still ahead and aren't server-tracked, so
+    // resume at connect-code. For invitees, kickoff is the only step left.
+    return path === "admin" ? seq.indexOf("connect-code") : seq.indexOf("kickoff");
+  }
   if (facts.onboardingStep === "create_agent") return seq.indexOf("create-agent");
   // "connect" or null — no computer connected yet.
   if (path === "admin") {
-    return facts.teamSettled ? seq.indexOf("connect-code") : 0;
+    return facts.teamSettled ? seq.indexOf("connect-computer") : 0;
   }
   return 0; // invitee → welcome
 }

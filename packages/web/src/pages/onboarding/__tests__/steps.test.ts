@@ -38,6 +38,10 @@ describe("getStepSequence", () => {
       expect(seq.indexOf("connect-computer")).toBeLessThan(seq.indexOf("create-agent"));
     }
   });
+  it("admin: connect-code comes after create-agent (defer the GitHub ask past the first win)", () => {
+    expect(ADMIN_STEPS.indexOf("connect-code")).toBeGreaterThan(ADMIN_STEPS.indexOf("create-agent"));
+    expect(ADMIN_STEPS.indexOf("connect-code")).toBeLessThan(ADMIN_STEPS.indexOf("kickoff"));
+  });
 });
 
 describe("inferInitialStepIndex", () => {
@@ -46,9 +50,9 @@ describe("inferInitialStepIndex", () => {
       ADMIN_STEPS.indexOf("team"),
     );
   });
-  it("admin: returning user past the team step lands on connect-code", () => {
+  it("admin: returning user past the team step lands on connect-computer", () => {
     expect(inferInitialStepIndex("admin", { onboardingStep: "connect", teamSettled: true })).toBe(
-      ADMIN_STEPS.indexOf("connect-code"),
+      ADMIN_STEPS.indexOf("connect-computer"),
     );
   });
   it("create_agent state → the create-agent step (computer already exists)", () => {
@@ -56,9 +60,9 @@ describe("inferInitialStepIndex", () => {
       ADMIN_STEPS.indexOf("create-agent"),
     );
   });
-  it("completed state → the final kickoff step", () => {
+  it("completed state → admin resumes at connect-code, invitee at kickoff", () => {
     expect(inferInitialStepIndex("admin", { onboardingStep: "completed", teamSettled: true })).toBe(
-      ADMIN_STEPS.indexOf("kickoff"),
+      ADMIN_STEPS.indexOf("connect-code"),
     );
     expect(inferInitialStepIndex("invitee", { onboardingStep: "completed", teamSettled: true })).toBe(
       INVITEE_STEPS.indexOf("kickoff"),
