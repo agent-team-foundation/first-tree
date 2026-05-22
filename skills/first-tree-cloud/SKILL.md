@@ -1,6 +1,6 @@
 ---
 name: first-tree-cloud
-description: Install, operate, and modify First Tree's cloud / collaboration layer (the former first-tree-hub surface) with emphasis on the unified `first-tree` CLI, its `login`/`daemon`/`agent`/`chat`/`config` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions connecting a machine to the First Tree SaaS, installing or running the daemon as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `apps/cli`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
+description: Install, operate, and modify First Tree's cloud / collaboration layer (the legacy Hub CLI surface) with emphasis on the unified `first-tree` CLI, its `login`/`daemon`/`agent`/`chat`/`config` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions connecting a machine to the First Tree SaaS, installing or running the daemon as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `apps/cli`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
 ---
 
 # First Tree CLI — Cloud (Hub) Layer
