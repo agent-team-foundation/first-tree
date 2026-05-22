@@ -4,6 +4,7 @@ import { Loader2, Pause } from "lucide-react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { suspendSession } from "../../api/sessions.js";
 import { viewOf } from "../../lib/agent-status-view.js";
+import { toneOf } from "../../lib/tones.js";
 import { Avatar } from "../avatar.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { WorkingChip } from "./working-chip.js";
@@ -17,9 +18,9 @@ import { WorkingChip } from "./working-chip.js";
  *
  * Each row reads its main status through the shared `viewOf` vocabulary:
  * a status-point (StatusGlyph) on the avatar + a second line for every state
- * (working → the live activity, needs-you / failed → a short reason, ready /
- * paused / offline → a muted state word), so all rows stay uniform / equal-
- * height. The dot carries the shape + colour distinction.
+ * (working → the live activity, needs-you / failed → a tinted attention pill,
+ * idle / paused / offline → the state word in its own colour), so all rows
+ * stay uniform / equal-height. The dot carries the shape + colour distinction.
  */
 export function AgentStatusPanel({
   chatId,
@@ -146,53 +147,81 @@ function AgentStatusRow({
 }
 
 /**
- * The row's second line — present for every state so all rows stay uniform,
- * and each line's text is coloured by its own state token (matching the dot).
- * working → "Working · <tool> · <timer>" via the shared WorkingChip (no leading
- * dot — the avatar dot already pulses); needs-you / failed → a short reason;
- * ready / paused / offline → the state word in its own colour.
+ * The row's second line — present for every state so all rows stay uniform.
+ * Status words are sans (natural language); only technical info (tool name,
+ * timer) is mono. The two *attention* states get a subtle tinted pill so they
+ * jump out; the quiet states stay dot + plain coloured text:
+ *   working            → "Working" (sans, blue) · "Bash · 0s" (mono, live)
+ *   needs-you          → "Needs reply" pill (amber)
+ *   failed             → "Failed" pill (red)
+ *   idle/paused/offline → the state word in its own colour (sans)
  */
 function SecondLine({ status }: { status: AgentChatStatus | null }) {
   if (!status) {
     return (
-      <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+      <div className="text-caption" style={{ color: "var(--fg-4)" }}>
         …
       </div>
     );
   }
   if (status.main === "working" && status.activity) {
-    // "Working · Bash · 0s" — the state word + activity + timer, no leading
-    // pulse dot (the avatar already carries the breathing status dot, so a
-    // second dot here would be redundant). All in working blue.
+    // "Working" (sans word) · "Bash · 0s" (mono tool + live timer). No leading
+    // pulse dot — the avatar already carries the breathing status dot.
     return (
-      <div className="flex items-center">
-        <WorkingChip activity={status.activity} showDot={false} prefix="Working" monochrome />
+      <div className="flex items-center text-caption" style={{ gap: 4, color: "var(--state-working)" }}>
+        <span>Working</span>
+        <span aria-hidden="true">·</span>
+        <WorkingChip activity={status.activity} showDot={false} monochrome />
       </div>
     );
   }
   if (status.main === "needs_you") {
     return (
-      <div className="mono text-caption" style={{ color: "var(--state-blocked)" }}>
-        Waiting for your reply
+      <div className="flex">
+        <StatePill tone="blocked" label="Needs reply" />
       </div>
     );
   }
   if (status.main === "failed") {
     return (
-      <div className="mono text-caption" style={{ color: "var(--state-error)" }}>
-        Failed
+      <div className="flex">
+        <StatePill tone="error" label="Failed" />
       </div>
     );
   }
-  // ready / paused / offline → the state word, coloured by the state's own
-  // token (idle=green, paused=grey, offline=grey) so the second-line text
-  // matches its dot. No dynamic detail, but every state gets a second line so
-  // all rows stay uniform / equal-height (§3.2).
+  // idle / paused / offline → the state word in its own colour, sans. No pill:
+  // these are the quiet, lowest-attention states — a tinted pill would
+  // over-weight them. The dot still carries the shape + colour.
   const view = viewOf(status.main);
   return (
-    <div className="mono text-caption" style={{ color: view.colorVar }}>
+    <div className="text-caption" style={{ color: view.colorVar }}>
       {view.label}
     </div>
+  );
+}
+
+/**
+ * A subtle tinted pill for the attention states (needs-you / failed) — the
+ * states that *should* jump out. Quiet states stay dot + plain coloured text.
+ * sans (not mono): the status word is natural language. Geometry mirrors
+ * DenseBadge; tone colours come from the shared `tones` map.
+ */
+function StatePill({ tone, label }: { tone: "blocked" | "error"; label: string }) {
+  const t = toneOf(tone);
+  return (
+    <span
+      className="text-caption inline-flex items-center"
+      style={{
+        background: t.bg,
+        color: t.fg,
+        border: `var(--hairline) solid ${t.bd}`,
+        padding: "var(--hairline) var(--sp-1_75)",
+        borderRadius: "var(--radius-chip)",
+        lineHeight: 1.6,
+      }}
+    >
+      {label}
+    </span>
   );
 }
 

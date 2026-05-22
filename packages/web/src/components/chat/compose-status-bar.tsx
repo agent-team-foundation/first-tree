@@ -145,7 +145,7 @@ function CompactSummary({ top, nameOf }: { top: AgentChatStatus; nameOf: (id: st
   );
 
   if (top.main === "needs_you") {
-    return wrap(<span className="truncate">{nameOf(top.agentId)} is waiting for your reply</span>);
+    return wrap(<span className="truncate">{nameOf(top.agentId)} needs your reply</span>);
   }
   if (top.main === "failed") {
     return wrap(<span className="truncate">{nameOf(top.agentId)} failed</span>);
