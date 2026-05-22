@@ -122,7 +122,7 @@ function AgentStatusRow({
             className="absolute"
             style={{
               right: -2,
-              bottom: -2,
+              bottom: -3,
             }}
           >
             <StatusGlyph

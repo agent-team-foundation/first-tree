@@ -2335,7 +2335,7 @@ function ParticipantAvatar({
         />
       </span>
       {view ? (
-        <span aria-hidden="true" className="absolute" style={{ right: -1, bottom: -1 }}>
+        <span aria-hidden="true" className="absolute" style={{ right: -1, bottom: -2 }}>
           <StatusGlyph
             colorVar={view.colorVar}
             shape={view.shape}
