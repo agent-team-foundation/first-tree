@@ -1960,8 +1960,6 @@ export function ChatView({
                       />
                       <textarea
                         ref={textareaRef}
-                        // Focus target for the compose rail's [Reply] action.
-                        data-chat-composer="true"
                         value={draft}
                         onChange={(e) => {
                           setDraft(e.target.value);

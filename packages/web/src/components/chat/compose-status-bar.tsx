@@ -6,11 +6,10 @@ import {
   type LiveActivity,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, CornerDownLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
-import { Button } from "../ui/button.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { formatElapsed } from "./working-chip.js";
 
@@ -32,9 +31,10 @@ import { formatElapsed } from "./working-chip.js";
  *     active agent (≤ ~5 visible, then internal scroll).
  *   - All quiet → the whole rail is hidden.
  *
- * Click zones: the lead text → jump to that agent's timeline anchor; [Reply] →
- * jump + focus the composer; +N / chevron → expand. Data is the shared
- * /agent-status query (React-Query-deduped, admin-WS-live, ~1s-throttled).
+ * Click zones: the lead/row text → jump to that agent's timeline anchor;
+ * `Reply ↩` (needs-you only) → jump + focus the question card's own answer
+ * input; +N / chevron → expand. Data is the shared /agent-status query
+ * (React-Query-deduped, admin-WS-live, ~1s-throttled).
  */
 const ATTENTION: ReadonlySet<string> = new Set(["needs_you", "failed", "working"]);
 const TICK_INTERVAL_MS = 1000;
@@ -85,7 +85,7 @@ export function pickLead(
 }
 
 /** Best-effort jump to an agent's place in the timeline (by agentId anchor). */
-function scrollToAgentTimeline(agentId: string, main: AgentMainStatus, opts?: { focusComposer?: boolean }): void {
+function scrollToAgentTimeline(agentId: string, main: AgentMainStatus): void {
   const attr =
     main === "needs_you"
       ? "data-pending-question-agent"
@@ -94,13 +94,23 @@ function scrollToAgentTimeline(agentId: string, main: AgentMainStatus, opts?: { 
         : main === "working"
           ? "data-working-agent"
           : null;
-  if (attr) {
-    const els = document.querySelectorAll<HTMLElement>(`[${attr}="${agentId}"]`);
-    els[els.length - 1]?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
-  if (opts?.focusComposer) {
-    document.querySelector<HTMLTextAreaElement>('[data-chat-composer="true"]')?.focus();
-  }
+  if (!attr) return;
+  const els = document.querySelectorAll<HTMLElement>(`[${attr}="${agentId}"]`);
+  els[els.length - 1]?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/** [Reply ↩]: scroll to the agent's question card AND focus its own answer
+ *  input — the structured AskUserQuestion is answered inside the card, not the
+ *  main composer. Falls back to the first focusable element in the card. */
+function scrollToQuestionAnswer(agentId: string): void {
+  const els = document.querySelectorAll<HTMLElement>(`[data-pending-question-agent="${agentId}"]`);
+  const card = els[els.length - 1];
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  // preventScroll so focusing doesn't fight the smooth scroll above.
+  card.querySelector<HTMLElement>('textarea, input, button, [tabindex]:not([tabindex="-1"])')?.focus({
+    preventScroll: true,
+  });
 }
 
 /** Live wall-clock elapsed since `startedAt`, re-rendering each second. */
@@ -236,14 +246,22 @@ function RailRow({ status, nameOf }: { status: AgentChatStatus; nameOf: (id: str
         <LeadDetail status={status} />
       </button>
       {status.main === "needs_you" ? (
-        <Button
+        <button
           type="button"
-          variant="secondary"
-          size="sm"
-          onClick={() => scrollToAgentTimeline(status.agentId, "needs_you", { focusComposer: true })}
+          onClick={() => scrollToQuestionAnswer(status.agentId)}
+          className="text-caption inline-flex shrink-0 items-center transition-opacity hover:opacity-70"
+          style={{
+            gap: 2,
+            border: 0,
+            background: "transparent",
+            padding: 0,
+            cursor: "pointer",
+            color: "var(--state-blocked)",
+          }}
         >
           Reply
-        </Button>
+          <CornerDownLeft className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
       ) : null}
     </div>
   );
