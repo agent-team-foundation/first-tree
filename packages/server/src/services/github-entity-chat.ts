@@ -298,6 +298,7 @@ async function resolveBindingPair(
     .select({
       chatOrganizationId: chats.organizationId,
       agentId: chatMembership.agentId,
+      agentOrganizationId: agents.organizationId,
       agentType: agents.type,
       agentStatus: agents.status,
       delegateMention: agents.delegateMention,
@@ -313,6 +314,25 @@ async function resolveBindingPair(
   const reporter = rows.find((r) => r.agentId === reporterAgentId);
   if (!reporter) return null;
   if (reporter.agentType === "human") return null;
+
+  // Defense-in-depth: `createChat` enforces same-org participants, but
+  // grandfathered cross-org chat_membership rows or admin-override paths
+  // can sneak through. If the reporter is from org A and the chat is in
+  // org B, writing the mapping under org B would orphan it from org A's
+  // installation webhooks (audience scopes by org). Refuse the binding
+  // rather than write a row that will silently fail to route. See #508.
+  if (reporter.agentOrganizationId !== reporter.chatOrganizationId) {
+    log.warn(
+      {
+        chatId,
+        reporterAgentId,
+        reporterOrg: reporter.agentOrganizationId,
+        chatOrg: reporter.chatOrganizationId,
+      },
+      "agent_binding skipped: reporter/chat organization mismatch",
+    );
+    return null;
+  }
 
   const humans = rows.filter((r) => r.agentType === "human" && r.agentStatus === "active");
   if (humans.length === 0) return null;

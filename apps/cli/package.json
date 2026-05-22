@@ -48,7 +48,6 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.84",
-    "@first-tree/github-scan": "workspace:*",
     "@inquirer/prompts": "^8.3.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@openai/codex-sdk": "^0.125.0",
@@ -62,6 +61,7 @@
   },
   "devDependencies": {
     "@first-tree/client": "workspace:*",
+    "@first-tree/github-scan": "workspace:*",
     "@first-tree/server": "workspace:*",
     "@first-tree/shared": "workspace:*",
     "@first-tree/web": "workspace:*",
