@@ -59,17 +59,24 @@ function actionPhrase(card: GithubEventCard): string {
 
 function highlightMention(body: string, mentionedUser: string | undefined): ReactNode {
   if (!mentionedUser) return body;
-  const idx = body.indexOf(mentionedUser);
-  if (idx < 0) return body;
-  return (
-    <>
-      {body.slice(0, idx)}
-      <span className="font-medium" style={{ color: "var(--accent)" }}>
-        {body.slice(idx, idx + mentionedUser.length)}
-      </span>
-      {body.slice(idx + mentionedUser.length)}
-    </>
-  );
+  // github-delivery writes the bare login (no `@`); GitHub bodies usually
+  // carry the `@` prefix. Try `@login` first, fall back to bare login so
+  // we still highlight if upstream ever changes the convention.
+  const candidates = [`@${mentionedUser}`, mentionedUser];
+  for (const needle of candidates) {
+    const idx = body.indexOf(needle);
+    if (idx < 0) continue;
+    return (
+      <>
+        {body.slice(0, idx)}
+        <span className="font-medium" style={{ color: "var(--accent)" }}>
+          {body.slice(idx, idx + needle.length)}
+        </span>
+        {body.slice(idx + needle.length)}
+      </>
+    );
+  }
+  return body;
 }
 
 const BODY_PREVIEW_MAX = 320;
@@ -84,7 +91,10 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
   const tone = REASON_TONE[content.reason];
   const toneStyle = TONE_STYLE[tone];
   const previewBody = content.body.trim().length > 0 ? truncateBody(content.body) : null;
-  const link = content.entity.url ?? content.url;
+  // schema types both urls as `z.string()` (no `.url()` / `.min(1)`), so an
+  // empty string is a possible wire value; `??` would only catch `null` and
+  // would render `<a href="">` as a dead link.
+  const link = content.entity.url || content.url || null;
 
   return (
     <div className="text-body">
@@ -105,23 +115,28 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
           {REASON_LABEL[content.reason]}
         </span>
         <span style={{ color: "var(--fg-3)" }}>{actionPhrase(content)}</span>
-        <a
-          href={link}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium text-[color:var(--fg)] no-underline hover:text-[color:var(--accent-dim)] hover:underline"
-        >
-          <span className="mono" style={{ color: "var(--fg-3)" }}>
-            {content.repository}
-          </span>
-          <span className="mono" style={{ color: "var(--fg-4)" }}>
-            {content.entity.key}
-          </span>
-          {content.title ? <span> — {content.title}</span> : null}
-        </a>
+        {link ? (
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-[color:var(--fg)] no-underline hover:text-[color:var(--accent-dim)] hover:underline"
+          >
+            {/* Inner spans inherit `color` from <a> so hover recolors the
+                whole link, not just the title. Fade weight comes from
+                varying the dim factor via opacity instead. */}
+            <span className="mono" style={{ opacity: 0.65 }}>
+              {content.repository}
+            </span>
+            <span className="mono" style={{ opacity: 0.5 }}>
+              {content.entity.key}
+            </span>
+            {content.title ? <span> — {content.title}</span> : null}
+          </a>
+        ) : null}
         {content.sender ? (
           <span style={{ color: "var(--fg-3)" }}>
-            by <span className="mono">{content.sender}</span>
+            by <span className="mono">@{content.sender}</span>
           </span>
         ) : null}
       </span>
