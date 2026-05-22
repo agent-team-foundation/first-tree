@@ -239,12 +239,15 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   // `createWorktree` rm -rf path against arbitrary host paths. Strict subdir:
   // the root itself MUST sit inside `dataDir` and MUST NOT equal `dataDir`
   // (so we never grant "the whole hub data dir is fair game").
-  for (const root of hubManagedRoots) {
-    if (!isUnderManagedRoot(root, [resolvedDataDir])) {
-      throw new GitMirrorError(
-        `hubManagedRoots entry "${root}" is not inside dataDir "${resolvedDataDir}" — refusing to construct manager (would let self-heal rm -rf escape the hub data dir)`,
-      );
-    }
+  //
+  // Aggregate every bad root into one error so an operator who misconfigured
+  // multiple entries sees the whole picture on their first startup attempt
+  // instead of grinding through one-fix-then-restart cycles.
+  const badRoots = hubManagedRoots.filter((root) => !isUnderManagedRoot(root, [resolvedDataDir]));
+  if (badRoots.length > 0) {
+    throw new GitMirrorError(
+      `hubManagedRoots contains ${badRoots.length} entr${badRoots.length === 1 ? "y" : "ies"} not strictly inside dataDir "${resolvedDataDir}" — refusing to construct manager (would let self-heal rm -rf escape the hub data dir): ${badRoots.map((p) => `"${p}"`).join(", ")}`,
+    );
   }
 
   // Per-URL serial queue. Prevents concurrent ensureMirror / fetchMirror /

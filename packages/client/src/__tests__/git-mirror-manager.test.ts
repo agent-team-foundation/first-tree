@@ -725,6 +725,30 @@ describe("GitMirrorManager — hubManagedRoots safety guards", () => {
     }
   });
 
+  it("createGitMirrorManager aggregates multiple bad roots into one error (operator sees full picture)", () => {
+    // Without aggregation an operator who misconfigured 3 roots would have to
+    // fix-restart-fix-restart-fix-restart. The combined message names every
+    // offending entry up front.
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-guard-multi-"));
+    try {
+      const validRoot = join(dataDir, "workspaces");
+      const badA = "/";
+      const badB = join(dataDir, "..", "elsewhere");
+      expect.assertions(3);
+      try {
+        createGitMirrorManager({ dataDir, hubManagedRoots: [badA, validRoot, badB] });
+      } catch (err) {
+        expect(err).toBeInstanceOf(GitMirrorError);
+        const msg = err instanceof Error ? err.message : String(err);
+        // Both bad roots present; the valid one is NOT in the message.
+        expect(msg).toContain(badA);
+        expect(msg).toContain("2 entries");
+      }
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("createGitMirrorManager throws when a managed root equals dataDir itself", () => {
     // Granting `dataDir` as a managed root would expose `git-mirrors/`,
     // `chats/`, `images/`, etc. to the self-heal rm -rf — too broad. The
