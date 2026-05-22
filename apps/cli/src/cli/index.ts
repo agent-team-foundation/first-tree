@@ -73,7 +73,6 @@ registerOrgCommands(program);
 registerDaemonCommands(program);
 registerConfigCommands(program);
 
-// Phase 3 placeholders — wired up so `--help` documents the eventual shape.
 registerTreeCommands(program);
 registerGithubCommands(program);
 

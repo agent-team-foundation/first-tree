@@ -15,6 +15,10 @@ type CommandWithUnknownCommand = Command & {
 
 const GITHUB_SCAN_TREE_REPO_ENV = "FIRST_TREE_GITHUB_SCAN_TREE_REPO";
 
+export function registerGithubCommands(program: Command): void {
+  githubCommand.register(program);
+}
+
 export const githubCommand: CommandModule = {
   name: "github",
   description: "Work with GitHub automation commands.",

@@ -49,6 +49,10 @@ const treeSubcommands: SubcommandModule[] = [
   reviewCommand,
 ];
 
+export function registerTreeCommands(program: Command): void {
+  treeCommand.register(program);
+}
+
 export const treeCommand: CommandModule = {
   name: "tree",
   description: "Work with Context Tree commands.",
