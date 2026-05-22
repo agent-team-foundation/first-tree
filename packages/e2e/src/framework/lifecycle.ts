@@ -13,21 +13,21 @@ import { type ServerProcess, type ServerSpawnOptions, spawnServer } from "./serv
 /**
  * M2 boots `pg + server` and — when `withClient: true` — provisions a real
  * user via raw-SQL helper + JWT minting, writes credentials.json into the
- * run-scoped home, and spawns `client start --foreground` against the live
+ * run-scoped home, and spawns `daemon start --foreground` against the live
  * server. The provisioned identifiers (userId / orgId / agentIds / clientId)
  * are surfaced on the returned world so tests can drive real HTTP requests
  * without re-deriving them.
  */
 export type StartRunOptions = {
   /**
-   * When true, spawn `client start --foreground` after provisioning a real
+   * When true, spawn `daemon start --foreground` after provisioning a real
    * user + connecting credentials. M1 default: false.
    */
   withClient?: boolean;
   /**
    * Extra env injected into the spawned server process. Used by mocks (e.g.
-   * `github-mock` sets `FIRST_TREE_HUB_GITHUB_API_BASE_URL` +
-   * `FIRST_TREE_HUB_GITHUB_APP_*`) so the server's outbound calls land on
+   * `github-mock` sets `FIRST_TREE_GITHUB_API_BASE_URL` +
+   * `FIRST_TREE_GITHUB_APP_*`) so the server's outbound calls land on
    * the mock instead of api.github.com.
    */
   serverExtraEnv?: ServerSpawnOptions["extraEnv"];

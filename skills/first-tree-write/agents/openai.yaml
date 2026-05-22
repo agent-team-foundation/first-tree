@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree Write"
+  short_description: "Write tree updates from concrete sources"
+  default_prompt: "Use $first-tree-write to turn this PR, document, or note into the right Context Tree updates."

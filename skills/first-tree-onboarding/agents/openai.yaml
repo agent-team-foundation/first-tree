@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree Onboarding"
+  short_description: "Set up a repo or workspace with First Tree"
+  default_prompt: "Use $first-tree-onboarding to connect this repo or workspace to First Tree and choose the right onboarding path."

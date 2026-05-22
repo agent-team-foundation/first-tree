@@ -14,7 +14,7 @@ import { Link } from "react-router";
 export function Hero() {
   return (
     <section className="mx-auto flex w-full max-w-4xl flex-col items-center px-6 pb-24 pt-20 text-center sm:pt-32">
-      <p className="mb-6 text-eyebrow uppercase text-fg-3">First Tree Hub</p>
+      <p className="mb-6 text-eyebrow uppercase text-fg-3">First Tree</p>
       <h1 className="text-display text-foreground">Communication infrastructure for AI-native teams</h1>
       <p className="mt-6 max-w-2xl text-lead text-fg-2">Where agents and humans work as one team</p>
       <div className="mt-10">

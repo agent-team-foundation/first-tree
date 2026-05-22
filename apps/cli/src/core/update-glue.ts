@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import type { ExecuteUpdateFn, UpdatePromptFn } from "@first-tree/client";
 import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
@@ -15,7 +16,7 @@ export const promptUpdate: UpdatePromptFn = async ({ currentVersion, targetVersi
   // at. "Server recommends" (rather than "bundled with") because the version
   // now comes from the server's npm-registry poll for the configured
   // channel, not from the server image build.
-  const message = `A newer First Tree Hub client is available.\n  You: ${currentVersion}\n  Server recommends: ${targetVersion}\n  Will install: ${targetVersion}\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
+  const message = `A newer First Tree client is available.\n  You: ${currentVersion}\n  Server recommends: ${targetVersion}\n  Will install: ${targetVersion}\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
@@ -46,7 +47,7 @@ export const declineUpdate: UpdatePromptFn = async () => false;
  * relaunch picks up the new binary.
  *
  * `managed=false` means the process is running standalone (e.g. manual
- * `client start`, `connect <token> --no-service`, CI without a supervisor).
+ * `client start`, `connect <token> --no-start`, CI without a supervisor).
  * Exiting in that mode would leave the client offline until an operator
  * noticed — so the callback instead prints a restart hint, returns
  * `{ installed: true }`, and the UpdateManager stops retrying until the
@@ -61,7 +62,7 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
     }
     if (mode === "npx") {
       print.line(
-        "  [update] Cannot self-update — not launched from a global npm install.\n  Run `npm i -g @agent-team-foundation/first-tree-hub` manually.\n",
+        "  [update] Cannot self-update — not launched from a global npm install.\n  Run `npm i -g first-tree` manually.\n",
       );
       return { installed: false };
     }
@@ -91,7 +92,7 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
         `  [update] Refusing to retry ${targetVersion} — a previous attempt completed without\n` +
           "           advancing the on-disk version. The most likely cause is npm's `latest`\n" +
           "           dist-tag resolving to the same version this client is already running.\n" +
-          "           Operator action: manually run `npm install -g @agent-team-foundation/first-tree-hub@latest`,\n" +
+          "           Operator action: manually run `npm install -g first-tree@latest`,\n" +
           "           then restart the service.\n",
       );
       return { installed: true };
@@ -103,7 +104,7 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
     // lives on a different dist-tag), and even on the stable track it could
     // race to a different version than the one drift-check approved. The
     // server is the authoritative source of "what should this client run".
-    print.line(`  [update] Running \`npm install -g @agent-team-foundation/first-tree-hub@${targetVersion}\`...\n`);
+    print.line(`  [update] Running \`npm install -g first-tree@${targetVersion}\`...\n`);
     const result = await installGlobalSpec(targetVersion);
     if (!result.ok) {
       print.line(`  [update] Install failed: ${result.reason}\n`);
@@ -164,12 +165,73 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       at: new Date().toISOString(),
     });
     if (managed) {
+      // Refresh the launchd plist / systemd unit using the NEW binary's
+      // templates BEFORE we exit 75. We're still running the OLD binary in
+      // memory, so calling `installClientService()` here writes the unit
+      // with the old templates — which is the bug that traps users in an
+      // "unknown command" restart loop when the CLI surface changes (e.g.
+      // `client start` → `daemon start`). Spawning the new binary in a
+      // one-shot hidden mode (`daemon refresh-unit`) lets the new code
+      // rewrite the unit before the supervisor restart picks it up.
+      //
+      // Best-effort: failure logs and falls through to exit-75 anyway
+      // (matches `commands/upgrade.ts`'s "warn and continue" stance — the
+      // operator can recover with `first-tree logout && login` if the
+      // unit ends up stale).
+      refreshServiceUnit();
       print.line(`  [update] Installed ${installedLabel}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
       process.exit(SELF_RESTART_EXIT_CODE);
     }
     print.line(
-      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`first-tree-hub client start\`) to pick up the new version.\n`,
+      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`first-tree daemon start\`) to pick up the new version.\n`,
     );
     return { installed: true };
   };
+}
+
+/**
+ * Spawn the newly-installed `first-tree` binary (now on PATH at
+ * `/usr/local/bin/first-tree` or the equivalent global location) to
+ * rewrite the service unit using its OWN templates.
+ *
+ * Why a subprocess: this whole function runs inside the OLD daemon process,
+ * which has the OLD `installClientService()` code loaded in memory.
+ * Calling `installClientService()` directly here would write the OLD unit
+ * shape, defeating the entire point of the refresh.
+ *
+ * Why best-effort: the worst outcome on failure is "supervisor restart
+ * crashes on stale unit", which is exactly what the operator-facing
+ * `MIGRATION.md` walkthrough (`logout && login`) recovers from. We never
+ * want a transient spawn failure to *block* the binary install — the new
+ * binary on disk is the load-bearing fix.
+ *
+ * Timeout is generous (45s) because `installClientService()` on systemd
+ * runs `daemon-reload` + `enable --now` and on launchd runs `bootout` +
+ * `bootstrap`, both of which routinely take 10-30s under load.
+ */
+function refreshServiceUnit(): void {
+  try {
+    const res = spawnSync("first-tree", ["daemon", "refresh-unit"], {
+      stdio: ["ignore", "inherit", "inherit"],
+      timeout: 45_000,
+      // Sanitize FIRST_TREE_SERVICE_MODE so the child doesn't think it's
+      // being invoked by the supervisor and recursively delegate to
+      // systemctl. Everything else (PATH, HOME, FIRST_TREE_HOME) passes
+      // through so the child resolves the same home / config as we do.
+      env: { ...process.env, FIRST_TREE_SERVICE_MODE: "" },
+    });
+    if (res.status !== 0) {
+      print.line(
+        `  [update] warning: 'daemon refresh-unit' exited with status ${res.status ?? "unknown"} ` +
+          `(signal=${res.signal ?? "none"}). If the supervisor restart fails after exit ${SELF_RESTART_EXIT_CODE}, ` +
+          "recover with `first-tree logout && first-tree login <token>`.\n",
+      );
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    print.line(
+      `  [update] warning: could not spawn 'daemon refresh-unit': ${msg}. If the supervisor restart fails, ` +
+        "recover with `first-tree logout && first-tree login <token>`.\n",
+    );
+  }
 }

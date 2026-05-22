@@ -12,7 +12,7 @@ const baseInput = {
 };
 
 async function makeWorkspace(): Promise<{ workspacesRoot: string; workspaceRoot: string }> {
-  const workspacesRoot = await mkdtemp(join(tmpdir(), "first-tree-hub-workspaces-"));
+  const workspacesRoot = await mkdtemp(join(tmpdir(), "first-tree-workspaces-"));
   const workspaceRoot = join(workspacesRoot, baseInput.agentName, baseInput.chatId);
   await mkdir(workspaceRoot, { recursive: true });
   return { workspacesRoot, workspaceRoot };
@@ -32,20 +32,20 @@ describe("getMeDocPreview", () => {
 
   it("supports an optional base path inside the workspace", async () => {
     const { workspacesRoot, workspaceRoot } = await makeWorkspace();
-    await mkdir(join(workspaceRoot, "first-tree-hub", "docs"), { recursive: true });
-    await writeFile(join(workspaceRoot, "first-tree-hub", "docs", "design.md"), "# Design", "utf8");
+    await mkdir(join(workspaceRoot, "first-tree", "docs"), { recursive: true });
+    await writeFile(join(workspaceRoot, "first-tree", "docs", "design.md"), "# Design", "utf8");
 
     await expect(
-      getMeDocPreview({ ...baseInput, basePath: "first-tree-hub", path: "docs/design.md", workspacesRoot }),
+      getMeDocPreview({ ...baseInput, basePath: "first-tree", path: "docs/design.md", workspacesRoot }),
     ).resolves.toMatchObject({
       ref: {
         type: "workspace",
         chatId: "chat-1",
         agentId: "agent-1",
-        basePath: "first-tree-hub",
+        basePath: "first-tree",
         path: "docs/design.md",
       },
-      path: "first-tree-hub/docs/design.md",
+      path: "first-tree/docs/design.md",
       content: "# Design",
     });
   });

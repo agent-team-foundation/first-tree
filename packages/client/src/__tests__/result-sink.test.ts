@@ -102,7 +102,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     // documentContext at all (and still no auto-mentions array).
     const { sink, sendMessage } = buildSink({
       trigger: { messageId: "m1", senderId: "agent-peer" },
-      getDocumentBasePath: vi.fn().mockResolvedValue("first-tree-hub"),
+      getDocumentBasePath: vi.fn().mockResolvedValue("first-tree"),
     });
 
     await sink("see [design](docs/design.md)");
@@ -323,9 +323,9 @@ describe("createResultSink — forwardResult enrichment", () => {
       expect(body.metadata?.documentContext).toBeUndefined();
     });
 
-    it("sends content with absolute-in-root paths rewritten to relative (Option R wiring)", async () => {
+    it("sends content with referenced docs rewritten to explicit links (Option R wiring)", async () => {
       // The sink must forward `rewrittenText`, not the agent's original body, so
-      // web's unchanged re-scan sees a relative token and matches the snapshot.
+      // web renders a native link whose href is the snapshot key.
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
@@ -339,7 +339,7 @@ describe("createResultSink — forwardResult enrichment", () => {
         content?: string;
         metadata?: { documentContext?: { docs?: Array<{ path: string }> } };
       };
-      expect(sent.content).toBe("done — wrote design.md for review");
+      expect(sent.content).toBe("done — wrote [design.md](design.md) for review");
       expect(sent.metadata?.documentContext?.docs?.map((d) => d.path)).toEqual(["design.md"]);
     });
   });

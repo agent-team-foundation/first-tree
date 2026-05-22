@@ -1,0 +1,11 @@
+# Commits listed here are skipped by `git blame --ignore-revs-file=.git-blame-ignore-revs`
+# (and automatically by GitHub's Blame view). Use this file ONLY for one-shot
+# mechanical reformats / renames that would otherwise show up as the author of
+# every line.
+
+# T2.3 — biome reformat first-tree-sourced files (one-shot per D5)
+# Applied `pnpm biome check --write .` after merging legacy/first-tree into this
+# repo at SHA 032569d. Touched 121 files under apps/cli/src/, packages/github-scan/,
+# skills/, scripts/, tests/. Pure auto-fix: format/indentation, import sort,
+# useImportType. See docs/development/git-history.md.
+a08c6688bd2f9d99e544feb13a97f2b85779e504

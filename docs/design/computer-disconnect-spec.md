@@ -368,10 +368,10 @@ If we later move to push-based updates, the seam is `broadcastToAdmins({ type: "
 ### 9.1 Type + lint
 - `pnpm check && pnpm typecheck` after every edit.
 
-### 9.2 Manual verification (against an isolated `FIRST_TREE_HUB_HOME` per CLAUDE.md)
+### 9.2 Manual verification (against an isolated `FIRST_TREE_HOME` per CLAUDE.md)
 
 1. Start the hub + web server. Connect one client. Confirm topbar shows no chip.
-2. Pin an agent to that client. Kill the client process (`pkill -f first-tree-hub`).
+2. Pin an agent to that client. Kill the client process (`pkill -f first-tree`).
 3. Within ~10s, the topbar chip appears with `<host> disconnected`. Verify pulsing dot animates.
 4. Click the chip — should land on `/clients`. Verify the row's `Status` cell reads `offline`.
 5. Reconnect the client. Within ~10s the chip disappears.

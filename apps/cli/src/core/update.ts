@@ -6,7 +6,7 @@ import { print } from "./output.js";
 
 export type InstallMode = "global" | "npx" | "source";
 
-export const PACKAGE_NAME = "@agent-team-foundation/first-tree-hub";
+export const PACKAGE_NAME = "first-tree";
 
 /**
  * Pick the `npm` binary to invoke for self-update. Background service units
@@ -148,7 +148,7 @@ function isSafeInstallSpec(spec: string): boolean {
  * the server `welcome` frame and MUST install that exact version — using
  * `@latest` from auto-update would silently mis-resolve once the server
  * starts advertising alpha builds (alpha lives on a different dist-tag).
- * The manual `first-tree-hub update` CLI keeps the dist-tag form so users
+ * The manual `first-tree upgrade` CLI keeps the dist-tag form so users
  * who type the command without args still get "newest stable on npm".
  */
 export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResult> {
@@ -193,7 +193,7 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
 }
 
 /**
- * Back-compat shim: install `<pkg>@latest`. The manual `first-tree-hub
+ * Back-compat shim: install `<pkg>@latest`. The manual `first-tree
  * update` CLI uses this so an operator-typed `update` keeps the
  * "newest stable on npm" behaviour. Auto-update prefers `installGlobalSpec`
  * with the welcome frame's `targetVersion`.
@@ -204,7 +204,7 @@ export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
 
 /**
  * Best-effort extraction of the version npm reported as installed. npm's
- * stdout lines look like `+ @agent-team-foundation/first-tree-hub@0.9.2`.
+ * stdout lines look like `+ first-tree@0.9.2`.
  * Returns null if nothing matches — callers treat null as "install succeeded
  * but version unknown".
  */

@@ -1,6 +1,6 @@
 /**
  * Pure `@<name>` mention extraction. Lives in `@agent-team-foundation/
- * first-tree-hub-shared` so the server (authoritative resolver during
+ * first-tree-shared` so the server (authoritative resolver during
  * fan-out) and client handlers (e.g. auto-forward enrichment) share one
  * implementation — otherwise the two sides drift on corner cases like code
  * fencing or email addresses and cause hard-to-debug routing mismatches.
@@ -33,7 +33,7 @@ export type MentionParticipant = {
 // being followed by `/`, so npm scoped package names (`@scope/pkg`) don't
 // surface as a `scope` mention — the bare `\b` accepts `/` as a boundary and
 // would otherwise (with backtracking) match a truncated prefix like
-// `agent-team-` from `@agent-team-foundation/first-tree-hub-shared`.
+// `agent-team-` from `first-tree-shared`.
 export const MENTION_REGEX = /(?<![A-Za-z0-9_.@-])@([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?![A-Za-z0-9_/-])/g;
 
 /**

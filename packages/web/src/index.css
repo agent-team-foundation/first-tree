@@ -371,13 +371,14 @@
 
 /* ============================================================================
    Marketing surface — pins the public landing page to the first-tree.ai
-   palette regardless of the dashboard's light/dark toggle. First Tree Hub
-   is a sub-product of first-tree, so the marketing entry point should
-   always read as the parent brand: near-black canvas + cool-light text +
-   the shared green accent. Scoped to `.landing-marketing` so the dashboard
-   chrome (when an authenticated user happens to land on a marketing-styled
-   route) is untouched. Same `--bg` / `--fg` variable names — every
-   component utility (bg-background, text-foreground, etc.) inherits.
+   palette regardless of the dashboard's light/dark toggle. The cloud /
+   collaboration layer (formerly first-tree-hub) is part of First Tree, so
+   the marketing entry point should always read as the parent brand:
+   near-black canvas + cool-light text + the shared green accent. Scoped to
+   `.landing-marketing` so the dashboard chrome (when an authenticated user
+   happens to land on a marketing-styled route) is untouched. Same `--bg`
+   / `--fg` variable names — every component utility (bg-background,
+   text-foreground, etc.) inherits.
    ============================================================================ */
 .landing-marketing {
   /* Surface — hex equivalents shown as comments for first-tree.ai parity. */

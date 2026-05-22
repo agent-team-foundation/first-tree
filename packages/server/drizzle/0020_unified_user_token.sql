@@ -18,7 +18,7 @@
 --      member of each org onto the unmanaged rows.
 --
 -- There is no compatibility layer: operators stop SDK/CLI processes, run
--- `db:migrate`, then re-login via `first-tree-hub connect`. See the proposal
+-- `db:migrate`, then re-login via `first-tree login`. See the proposal
 -- "unified-user-token.20260417" for the full upgrade runbook.
 --
 -- NOTE: Do NOT wrap this file in BEGIN;/COMMIT;. The Drizzle migrator already

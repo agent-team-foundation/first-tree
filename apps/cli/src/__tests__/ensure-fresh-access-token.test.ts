@@ -18,8 +18,8 @@ describe("ensureFreshAccessToken — safety margin", () => {
     testHome = join(tmpdir(), `ft-hub-fresh-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(join(testHome, "config"), { recursive: true });
 
-    originalHome = process.env.FIRST_TREE_HUB_HOME;
-    process.env.FIRST_TREE_HUB_HOME = testHome;
+    originalHome = process.env.FIRST_TREE_HOME;
+    process.env.FIRST_TREE_HOME = testHome;
 
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -27,8 +27,8 @@ describe("ensureFreshAccessToken — safety margin", () => {
   });
 
   afterEach(() => {
-    if (originalHome === undefined) delete process.env.FIRST_TREE_HUB_HOME;
-    else process.env.FIRST_TREE_HUB_HOME = originalHome;
+    if (originalHome === undefined) delete process.env.FIRST_TREE_HOME;
+    else process.env.FIRST_TREE_HOME = originalHome;
     rmSync(testHome, { recursive: true, force: true });
     vi.unstubAllGlobals();
   });
@@ -92,7 +92,7 @@ describe("ensureFreshAccessToken — safety margin", () => {
     await expect(ensureFreshAccessToken()).rejects.toThrow(AuthRefreshFailedError);
     // Message is operator-facing; spot-check the recovery hint instead of the
     // word "failed" so future copy edits don't break the test.
-    await expect(ensureFreshAccessToken()).rejects.toThrow(/Re-run `first-tree-hub connect/);
+    await expect(ensureFreshAccessToken()).rejects.toThrow(/Re-run `first-tree login/);
   });
 
   it("throws a generic Error (not AuthRefreshFailedError) on non-401 failures so transient outages still retry", async () => {

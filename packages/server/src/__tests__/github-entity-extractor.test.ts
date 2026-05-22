@@ -18,13 +18,13 @@ describe("extractGithubEntity", () => {
     const result = extractGithubEntity(
       basePayload({
         args: { command: 'gh pr create --title "Refactor inbox" --body "Fixes #42"' },
-        resultPreview: "https://github.com/agent-team-foundation/first-tree-hub/pull/123\n",
+        resultPreview: "https://github.com/agent-team-foundation/first-tree/pull/123\n",
       }),
     );
     expect(result).toEqual({
       entityType: "pull_request",
-      entityKey: "agent-team-foundation/first-tree-hub#123",
-      entityUrl: "https://github.com/agent-team-foundation/first-tree-hub/pull/123",
+      entityKey: "agent-team-foundation/first-tree#123",
+      entityUrl: "https://github.com/agent-team-foundation/first-tree/pull/123",
       source: "bash-gh-pr",
     });
   });

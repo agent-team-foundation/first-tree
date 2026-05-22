@@ -14,7 +14,7 @@ https://first-tree.staging.unispark.dev
 ### 1. Update 最新包
 
 ```bash
-npm install -g @agent-team-foundation/first-tree-hub@latest
+npm install -g first-tree@latest
 ```
 
 ### 2. Client connect
@@ -22,7 +22,7 @@ npm install -g @agent-team-foundation/first-tree-hub@latest
 顶栏 **Clients** → 点 **Generate Connect Command** → 复制命令到终端回车：
 
 ```bash
-first-tree-hub connect <connect-token>
+first-tree login <connect-token>
 ```
 
 > Hub URL 由 token 内嵌的 `iss` claim 推导，**无需另传 `--server`**。这也意味着同一台电脑切到另一个 Hub 时只换 token、不改命令。自托管 / 多 Hub 场景下，每个 Hub 的 web 控制台都会生成它自己的 token，里头 `iss` 就指向该 Hub —— 跨环境用错 token 会直接报错而不是静默连到错误的 Hub。
@@ -40,7 +40,7 @@ first-tree-hub connect <connect-token>
 点 **Create**，弹出的 **Agent Created** 对话框里复制命令到**同一台电脑**终端回车：
 
 ```bash
-first-tree-hub agent add my-assistant --agent-id <uuid>
+first-tree agent add my-assistant --agent-id <uuid>
 ```
 
 点 **Done**。

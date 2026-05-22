@@ -1,4 +1,4 @@
-import { FIRST_TREE_HUB_ATTR } from "@first-tree/shared/observability";
+import { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import { trace } from "@opentelemetry/api";
 import { and, eq, ne, sql } from "drizzle-orm";
@@ -515,7 +515,7 @@ async function processInboundMessage(
 /** Reply to unknown (unbound) user with binding instructions. */
 async function replyUnknownUser(bot: ConnectedBot, event: InboundEvent, log: FastifyBaseLogger): Promise<void> {
   const text = [
-    "Your account is not linked to First Tree Hub yet.",
+    "Your account is not linked to First Tree yet.",
     "To bind, send:  /bind <your-agent-id>",
     "",
     "Example:  /bind alice",
@@ -677,8 +677,8 @@ async function processFeishuOutbound(
     "adapter.outbound feishu",
     {
       ...adapterAttrs({ platform: "feishu" }),
-      [FIRST_TREE_HUB_ATTR.BG_TASK_NAME]: "adapter.outbound.feishu",
-      [FIRST_TREE_HUB_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
+      [FIRST_TREE_ATTR.BG_TASK_NAME]: "adapter.outbound.feishu",
+      [FIRST_TREE_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
     },
     () => processFeishuOutboundClaimed(db, findBotByAgentId, log, claimed),
   );
@@ -776,8 +776,8 @@ async function processFeishuOutboundClaimed(
   // of the claimed entries actually shipped vs. errored without a join.
   const span = trace.getActiveSpan();
   if (span) {
-    span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_SENT_COUNT, sent);
-    span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_ERROR_COUNT, errorCount);
+    span.setAttribute(FIRST_TREE_ATTR.BG_TASK_SENT_COUNT, sent);
+    span.setAttribute(FIRST_TREE_ATTR.BG_TASK_ERROR_COUNT, errorCount);
   }
 
   return { sent, errors: errorCount };

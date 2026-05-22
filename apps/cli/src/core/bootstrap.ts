@@ -19,7 +19,7 @@ type StoredCredentials = {
  */
 export function resolveServerUrl(flagValue?: string): string {
   if (flagValue) return flagValue;
-  if (process.env.FIRST_TREE_HUB_SERVER_URL) return process.env.FIRST_TREE_HUB_SERVER_URL;
+  if (process.env.FIRST_TREE_SERVER_URL) return process.env.FIRST_TREE_SERVER_URL;
 
   const config = resolveConfigReadonly({ schema: clientConfigSchema, role: "client" });
   const server = config.server;
@@ -30,8 +30,8 @@ export function resolveServerUrl(flagValue?: string): string {
 
   throw new Error(
     "Server URL not configured.\n" +
-      "  Provide via: --server <url>, FIRST_TREE_HUB_SERVER_URL env var, or\n" +
-      "  first-tree-hub client config set server.url <url>",
+      "  Provide via: --server <url>, FIRST_TREE_SERVER_URL env var, or\n" +
+      "  first-tree config set server.url <url>",
   );
 }
 
@@ -39,14 +39,13 @@ export function resolveServerUrl(flagValue?: string): string {
  * Resolve the current member access JWT from persisted credentials.
  *
  * Unified-user-token milestone: the CLI has a single credential store and a
- * single onboarding path (`first-tree-hub connect <token>`). The legacy
- * `FIRST_TREE_HUB_TOKEN` env var is no longer read — callers get a clear
- * error pointing at `connect <token>` instead.
+ * single onboarding path (`first-tree login <token>`). Callers without
+ * a credentials.json get a clear error pointing at `login <token>`.
  */
 export function resolveAccessToken(): string {
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error("No credentials found. Run `first-tree-hub connect <token>` to sign in.");
+    throw new Error("No credentials found. Run `first-tree login <token>` to sign in.");
   }
   return creds.accessToken;
 }
@@ -135,7 +134,7 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
   const minValidityMs = opts?.minValidityMs ?? DEFAULT_MIN_VALIDITY_MS;
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error("No credentials found. Run `first-tree-hub connect <token>` to sign in.");
+    throw new Error("No credentials found. Run `first-tree login <token>` to sign in.");
   }
 
   if (!isTokenStale(creds.accessToken, minValidityMs)) {
@@ -156,7 +155,7 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
 
     if (res.status === 401) {
       throw new AuthRefreshFailedError(
-        "Refresh token rejected by server. Re-run `first-tree-hub connect <token>` " +
+        "Refresh token rejected by server. Re-run `first-tree login <token>` " +
           "(get a fresh token from the Web Computers page → New Connection).",
       );
     }

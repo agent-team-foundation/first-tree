@@ -3,7 +3,7 @@
   "version": "0.1.2",
   "private": true,
   "type": "module",
-  "description": "First Tree Hub SDK — programmatic client for First Tree Hub server",
+  "description": "First Tree SDK — programmatic client for the First Tree cloud (Hub) server",
   "exports": {
     ".": {
       "types": "./src/index.ts",

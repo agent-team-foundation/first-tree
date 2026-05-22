@@ -7,6 +7,7 @@ import { api, withOrg } from "../../../../api/client.js";
 import { reportOnboardingEvent } from "../../../../api/onboarding-events.js";
 import { useAuth } from "../../../../auth/auth-context.js";
 import { Button } from "../../../../components/ui/button.js";
+import { runVisibilityAwareInterval } from "../../../../lib/visibility-interval.js";
 import { slugify } from "../../../../utils/agent-naming.js";
 import {
   clearOnboardingDraft,
@@ -19,7 +20,7 @@ import { StepFrame, StepRailLine } from "./step-frame.js";
 
 const RUNTIME_READY_TIMEOUT_MS = 30_000;
 const RUNTIME_READY_POLL_MS = 1_000;
-const CLIENT_DETECT_POLL_MS = 3_000;
+const CLIENT_DETECT_POLL_MS = 5_000;
 
 type Phase = "form" | "creating" | "timeout";
 
@@ -79,6 +80,11 @@ export function Step2Body({
   const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
   const [connectToken, setConnectToken] = useState<string | null>(() => initialConnectToken);
   const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(() => initialConnectTokenExpiresAt);
+  // Server-built bootstrap command (npm install + login) with channel-aware
+  // npm spec. Replaces the client-side hardcoded `@latest` so staging users
+  // (channel=alpha) install the right package on first run instead of
+  // landing on stable and watching auto-update yank them forward.
+  const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null);
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [phase, setPhase] = useState<Phase>("form");
   const [error, setError] = useState<string | null>(null);
@@ -152,11 +158,10 @@ export function Step2Body({
         // best-effort
       }
     };
-    void detect();
-    const handle = setInterval(detect, CLIENT_DETECT_POLL_MS);
+    const dispose = runVisibilityAwareInterval(detect, CLIENT_DETECT_POLL_MS);
     return () => {
       cancelled = true;
-      clearInterval(handle);
+      dispose();
     };
   }, [phase]);
 
@@ -177,10 +182,14 @@ export function Step2Body({
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.post<{ token: string; expiresIn: number }>("/me/connect-tokens", {});
+        const r = await api.post<{ token: string; expiresIn: number; bootstrapCommand: string }>(
+          "/me/connect-tokens",
+          {},
+        );
         if (!cancelled) {
           setConnectToken(r.token);
           setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
+          setBootstrapCommand(r.bootstrapCommand);
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to generate connect token");
@@ -216,9 +225,12 @@ export function Step2Body({
   const trimmedName = displayName.trim();
   const nameOrFallback = trimmedName || "your agent";
 
-  const cliCommand = connectToken
-    ? `npm install -g @agent-team-foundation/first-tree-hub\nfirst-tree-hub connect ${connectToken}`
-    : null;
+  // Prefer the server-built command (channel-aware npm spec); fall back to
+  // a client-side construction only if the bootstrap field is missing —
+  // e.g. an old server, or a transient race where `connectToken` arrives
+  // but `bootstrapCommand` hasn't landed in state yet.
+  const cliCommand =
+    bootstrapCommand ?? (connectToken ? `npm install -g first-tree\nfirst-tree login ${connectToken}` : null);
 
   const pollUntilReady = useCallback(
     async (agentUuid: string): Promise<void> => {
@@ -630,8 +642,8 @@ function CommandBox({ command }: { command: string | null }) {
   const [copied, setCopied] = useState(false);
 
   const lines = command ? command.split("\n") : [];
-  const connectLine = lines.find((l) => l.startsWith("first-tree-hub")) ?? "";
-  const connectPrefix = "first-tree-hub connect ";
+  const connectLine = lines.find((l) => l.startsWith("first-tree")) ?? "";
+  const connectPrefix = "first-tree login ";
   const commandPreview = connectLine.startsWith(connectPrefix)
     ? `${connectPrefix}${connectLine.slice(connectPrefix.length, connectPrefix.length + 22)}…`
     : connectLine.length > 52

@@ -18,7 +18,7 @@
  *
  * All other moving parts (sampling, scrubbing, OTLP endpoint, headers)
  * come from the existing `config.observability.tracing.*` schema, so
- * deployments do not need to change `FIRST_TREE_HUB_OTEL_*` env vars.
+ * deployments do not need to change `FIRST_TREE_OTEL_*` env vars.
  */
 
 import { TRACING_SENSITIVE_KEY_PATTERNS } from "@first-tree/shared/observability";
@@ -130,7 +130,7 @@ export async function initTelemetry(config: TracingConfig | undefined, instanceI
   // each reinit — OTel takes the last value so it works, but the env var
   // grows unboundedly and is ugly to inspect.
   if (instanceId) {
-    const baseEnvKey = "__FIRST_TREE_HUB_OTEL_RESOURCE_ATTRIBUTES_BASE";
+    const baseEnvKey = "__FIRST_TREE_OTEL_RESOURCE_ATTRIBUTES_BASE";
     const baseFromCache = process.env[baseEnvKey];
     const baseInitial = baseFromCache ?? process.env.OTEL_RESOURCE_ATTRIBUTES ?? "";
     if (baseFromCache === undefined) process.env[baseEnvKey] = baseInitial;

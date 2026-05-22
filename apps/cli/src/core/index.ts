@@ -38,7 +38,7 @@ export { bindFeishuBot, bindFeishuUser } from "./feishu.js";
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";
 export { createApiNameResolver, migrateLocalAgentDirs } from "./migrate-agent-dirs.js";
-// Legacy home auto-migration (pre-v0.9 `~/.first-tree-hub` → `~/.first-tree/hub`)
+// Legacy home auto-migration (pre-v0.9 `~/.first-tree` → `~/.first-tree/hub`)
 export { runHomeMigration } from "./migrate-home.js";
 // Onboard
 export {
@@ -61,6 +61,7 @@ export {
   getClientServiceStatus,
   installClientService,
   isServiceSupported,
+  isServiceUnitDriftDetected,
   resolveCliInvocation,
   restartClientService,
   startClientService,

@@ -1,8 +1,20 @@
 {
-  "name": "@agent-team-foundation/first-tree-hub",
-  "version": "0.14.9",
+  "name": "first-tree",
+  "version": "0.5.0",
   "type": "module",
-  "description": "First Tree Hub — unified CLI for client and agent management",
+  "description": "First Tree — unified CLI for Context Tree onboarding, GitHub Scan automation, agent management, and Hub messaging.",
+  "keywords": [
+    "agents",
+    "cli",
+    "context-tree",
+    "first-tree",
+    "github",
+    "hub"
+  ],
+  "homepage": "https://github.com/agent-team-foundation/first-tree#readme",
+  "bugs": {
+    "url": "https://github.com/agent-team-foundation/first-tree/issues"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -10,7 +22,8 @@
     }
   },
   "bin": {
-    "first-tree-hub": "./dist/cli/index.mjs"
+    "first-tree": "./dist/cli/index.mjs",
+    "ft": "./dist/cli/index.mjs"
   },
   "files": [
     "dist"
@@ -27,7 +40,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/agent-team-foundation/first-tree-hub.git",
+    "url": "https://github.com/agent-team-foundation/first-tree.git",
     "directory": "apps/cli"
   },
   "engines": {
@@ -35,9 +48,10 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.84",
-    "@openai/codex-sdk": "^0.125.0",
+    "@first-tree/github-scan": "workspace:*",
     "@inquirer/prompts": "^8.3.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
+    "@openai/codex-sdk": "^0.125.0",
     "commander": "^13.1.0",
     "gray-matter": "^4.0.3",
     "jose": "^6.0.0",

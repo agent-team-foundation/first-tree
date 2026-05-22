@@ -8,7 +8,7 @@ import type { FastifyBaseLogger } from "fastify";
  * fail. The string is part of npm's public API; renaming it would break
  * every installed client anyway.
  */
-export const COMMAND_PACKAGE_NAME = "@agent-team-foundation/first-tree-hub";
+export const COMMAND_PACKAGE_NAME = "first-tree";
 
 /**
  * Tracks the Command-package version the server should advertise to every

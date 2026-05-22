@@ -82,7 +82,7 @@ vi.mock("../core/output.js", () => ({
 }));
 
 vi.mock("../core/version.js", () => ({
-  CLI_USER_AGENT: "first-tree-hub-test/0.0.0",
+  CLI_USER_AGENT: "first-tree-test/0.0.0",
 }));
 
 describe("ClientRuntime context-tree wiring", () => {

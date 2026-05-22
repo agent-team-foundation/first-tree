@@ -100,6 +100,63 @@ const sessionsInvalidator = createThrottledInvalidator(["sessions"], INVALIDATE_
 // working), and chat:message (needs-you supersede). Prefix-invalidate so
 // every open chat's panel refreshes; throttled like the rest.
 const chatAgentStatusInvalidator = createThrottledInvalidator(["chat-agent-status"], INVALIDATE_THROTTLE_MS);
+// Replaces the per-component `refetchInterval` previously wired into
+// SessionContext, ChatView's right-sidebar session card, the per-agent
+// roster panel, and AgentRow. The frame carries `agentId` + `chatId`
+// (see api/orgs/ws.ts:75 — `{ type, ...payload }`), so we invalidate the
+// exact three keys the affected agent reads — `["session", agentId,
+// chatId]`, `["chat-right-sidebar", "session", agentId, chatId]`,
+// `["agent-sessions", agentId]` — rather than fanning out a prefix
+// invalidate over every other agent in the chat. Throttling is per
+// (agentId, chatId) pair so bursts from one agent don't starve another
+// nor leak invalidations onto unrelated agents.
+//
+// `["chat-right-sidebar", "session", ...]` is targeted explicitly to keep
+// the sibling `["chat-right-sidebar", "github-entities", chatId]` query
+// (github-section.tsx) — a 60s GitHub REST poll — out of the invalidation
+// path on every `session:state` burst.
+type SessionPairThrottleState = {
+  lastAt: number;
+  trailingTimer: ReturnType<typeof setTimeout> | null;
+};
+const sessionPairThrottle = new Map<string, SessionPairThrottleState>();
+
+function fireSessionInvalidations(qc: QC, agentId: string, chatId: string): void {
+  qc.invalidateQueries({ queryKey: ["session", agentId, chatId] });
+  qc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session", agentId, chatId] });
+  qc.invalidateQueries({ queryKey: ["agent-sessions", agentId] });
+}
+
+function invalidateSessionPair(qc: QC, agentId: string, chatId: string): void {
+  const throttleKey = `${agentId}:${chatId}`;
+  const now = Date.now();
+  const state = sessionPairThrottle.get(throttleKey) ?? { lastAt: 0, trailingTimer: null };
+  const elapsed = now - state.lastAt;
+  if (elapsed >= INVALIDATE_THROTTLE_MS) {
+    state.lastAt = now;
+    sessionPairThrottle.set(throttleKey, state);
+    fireSessionInvalidations(qc, agentId, chatId);
+    return;
+  }
+  if (state.trailingTimer === null) {
+    state.trailingTimer = setTimeout(() => {
+      const cur = sessionPairThrottle.get(throttleKey);
+      if (cur) {
+        cur.trailingTimer = null;
+        cur.lastAt = Date.now();
+      }
+      if (latestQc) fireSessionInvalidations(latestQc, agentId, chatId);
+    }, INVALIDATE_THROTTLE_MS - elapsed);
+    sessionPairThrottle.set(throttleKey, state);
+  }
+}
+
+function disposeSessionPairThrottle(): void {
+  for (const state of sessionPairThrottle.values()) {
+    if (state.trailingTimer) clearTimeout(state.trailingTimer);
+  }
+  sessionPairThrottle.clear();
+}
 
 function broadcast(msg: WsMessage) {
   for (const sub of subscribers) {
@@ -121,6 +178,17 @@ function broadcast(msg: WsMessage) {
       // Throttled because the upstream frames can burst tool-call-fast.
       meChatsInvalidator.invalidate(latestQc);
       chatAgentStatusInvalidator.invalidate(latestQc);
+      // Precise invalidate for the (agent, chat) the frame is about, so a
+      // burst for one agent doesn't fan out onto every sibling agent's
+      // sessionQuery in the same chat. See `invalidateSessionPair` for the
+      // per-pair throttle. Falls back to a no-op if either id is missing
+      // (defensive — the wider `activity` / `sessions` keys already covered
+      // above will still refresh broad UI state).
+      const agentId = typeof msg.agentId === "string" ? msg.agentId : null;
+      const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
+      if (agentId && chatId) {
+        invalidateSessionPair(latestQc, agentId, chatId);
+      }
     } else if (msg.type === "session:event") {
       // `MeChatRow.liveActivity` is derived from the most recent
       // `session_events` row for each chat. The same wire frame produced
@@ -131,6 +199,15 @@ function broadcast(msg: WsMessage) {
       // `session:state` (window defined by `INVALIDATE_THROTTLE_MS`).
       meChatsInvalidator.invalidate(latestQc);
       chatAgentStatusInvalidator.invalidate(latestQc);
+      // Frame carries `agentId` + `chatId` (api/orgs/ws.ts:82 spreads the
+      // notifier payload), so we can target the exact session-events query
+      // ChatView reads (`["session-events", agentId, chatId]`) rather than
+      // fanning out a prefix invalidate.
+      const agentId = typeof msg.agentId === "string" ? msg.agentId : null;
+      const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
+      if (agentId && chatId) {
+        latestQc.invalidateQueries({ queryKey: ["session-events", agentId, chatId] });
+      }
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
       // carries `{ type, chatId }` (see shared/me-chat.ts:chatMessageFrameSchema);
@@ -161,7 +238,7 @@ function connect() {
   // context populates `selectedOrganizationId`.
   let orgId: string | null = null;
   try {
-    orgId = localStorage.getItem("first-tree-hub:selectedOrganizationId");
+    orgId = localStorage.getItem("first-tree:selectedOrganizationId");
   } catch {
     orgId = null;
   }
@@ -200,6 +277,17 @@ function connect() {
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
       latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
       latestQc.invalidateQueries({ queryKey: ["chat-agent-status"] });
+      // Catch-up parity with the steady-state `session:state` /
+      // `session:event` branches: these prefixes back panels that used to
+      // self-poll, so reconnect must refresh them too.
+      latestQc.invalidateQueries({ queryKey: ["session"] });
+      latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session"] });
+      latestQc.invalidateQueries({ queryKey: ["session-events"] });
+      latestQc.invalidateQueries({ queryKey: ["agent-sessions"] });
+      // `["chat-messages"]` used to recover from a WS gap via the 5s
+      // refetchInterval in ChatView; now that the poll is gone, reconnect
+      // must explicitly catch up the open chat's message timeline.
+      latestQc.invalidateQueries({ queryKey: ["chat-messages"] });
       // The chat-first workspace reads `viewerMembershipKind` (and other
       // viewer-scoped fields) off `["chat-detail", chatId]`. Without this,
       // a frame that fired while the WS was down (e.g. the caller was
@@ -271,6 +359,7 @@ function teardown() {
   activityInvalidator.dispose();
   sessionsInvalidator.dispose();
   chatAgentStatusInvalidator.dispose();
+  disposeSessionPairThrottle();
   if (ws) {
     ws.close(1000, "unmount");
     ws = null;

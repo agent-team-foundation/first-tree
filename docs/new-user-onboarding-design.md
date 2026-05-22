@@ -3,7 +3,7 @@
 **Status:** Implemented in PR #248 with **amendments** — see §13 for the locked decisions that were reversed during implementation. Read §13 alongside §6 / §7 / §8 / §11 for the actual shipped behaviour.
 **Branch:** `feat/onboarding-redesign`
 **Scope:** Hosted Hub (first-tree.ai) post-signup onboarding for brand-new users.
-**Out of scope:** Local self-hosted onboarding (`first-tree-hub start`) — covered in [docs/onboarding-redesign.md](onboarding-redesign.md). NewAgentDialog rewrite — covered in PR #237.
+**Out of scope:** Local self-hosted onboarding (`first-tree start`) — covered in [docs/onboarding-redesign.md](onboarding-redesign.md). NewAgentDialog rewrite — covered in PR #237.
 
 ---
 
@@ -297,7 +297,7 @@ Why this matters for the v1 design: keeping Step 1 in the wizard structure (even
 2. Form has 3 required inputs:
    - **Agent name** (display name, free text)
    - **Source repository** (GitHub repo picker — populated from user's accessible repos via OAuth)
-   - **Computer** (CLI command box; user runs `first-tree-hub connect <token>` on their machine)
+   - **Computer** (CLI command box; user runs `first-tree login <token>` on their machine)
 3. Runtime auto-picks first available `ok` capability (Claude Code preferred); user has no choice in Step 2 (advanced option deferred to post-onboarding settings)
 4. User clicks Create → server creates the agent with `gitRepos: [{url: <selected repo>}]` + clientId + runtime → polls until agent is online → advances `onboardingStep = step3`
 
@@ -319,14 +319,14 @@ Why this matters for the v1 design: keeping Step 1 in the wizard structure (even
 │        │                                             │              │
 │        │ 2. Repository it works on                   │              │
 │        │    ┌──────────────────────────────────┐     │              │
-│        │    │ ▾ gandyxiong/first-tree-hub      │     │              │
+│        │    │ ▾ gandyxiong/first-tree      │     │              │
 │        │    └──────────────────────────────────┘     │              │
 │        │    (picker, listed via GitHub OAuth)        │              │
 │        │                                             │              │
 │        │ 3. Computer it runs on                      │              │
 │        │    ╭─ Waiting for your computer… ──────╮    │              │
 │        │    │ Open Terminal and run:            │    │              │
-│        │    │   first-tree-hub connect 9f3a… 📋 │    │              │
+│        │    │   first-tree login 9f3a… 📋 │    │              │
 │        │    ╰───────────────────────────────────╯    │              │
 │        │    (flips to ✓ <hostname> connected         │              │
 │        │     when client connects)                   │              │
@@ -356,7 +356,7 @@ Why not deferred / per-step incremental upgrade: a second GitHub redirect mid-on
 
 Identical mechanism to current OnboardingView ([packages/web/src/pages/workspace/center/onboarding-view.tsx:144-174](../packages/web/src/pages/workspace/center/onboarding-view.tsx)):
 - Lazy-mint a connect token on Step 2 mount
-- Display `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub connect <token>`
+- Display `npm install -g first-tree && first-tree login <token>`
 - Poll `listClients()` every 3s; flip from "Waiting" pulsing dot to "✓ <hostname> connected" pill when a client comes online
 - Once connected, fetch capabilities to confirm at least one runtime is `ok`
 
@@ -365,7 +365,7 @@ Identical mechanism to current OnboardingView ([packages/web/src/pages/workspace
 **Decision (P-3): no runtime UI for first-time onboarding. Runtime is auto-selected.**
 
 - Pick first `ok` runtime in priority order: `claude-code` first, then `codex`
-- If neither is `ok`, show an actionable hint per [PR #237's runtime hint copy](https://github.com/agent-team-foundation/first-tree-hub/pull/237) (`Install Claude Code on the host first` / `Run \`claude\` to sign in`)
+- If neither is `ok`, show an actionable hint per [PR #237's runtime hint copy](https://github.com/agent-team-foundation/first-tree/pull/237) (`Install Claude Code on the host first` / `Run \`claude\` to sign in`)
 - The "Powered by" runtime chip UI from current `OnboardingView` is **removed** in this redesign — first-time users don't see runtime as a decision
 
 Rationale: new users don't know the distinction between Claude Code and Codex; surfacing two equally-named engines invites a decision they can't make confidently. They can change runtime in agent settings post-onboarding. Multi-runtime UI lives in the post-onboarding `NewAgentDialog` (where the user is making a deliberate "create another agent" choice and may have a preference).
@@ -408,7 +408,7 @@ The previously per-tab "intro dismissed" flag is gone — there is one server-si
 │      │                                           │                  │
 │      │  Your agent @code-reviewer is ready on    │                  │
 │      │  gandy-mac and has cloned                 │                  │
-│      │  gandyxiong/first-tree-hub.               │                  │
+│      │  gandyxiong/first-tree.               │                  │
 │      │                                           │                  │
 │      │  Set up first-tree on it now? It takes    │                  │
 │      │  ~2 minutes — agent does the scaffolding, │                  │
@@ -749,7 +749,7 @@ line shared with PR #237 and any other first-tree install trigger:
 **Reversal:** bootstrap is now two prose helpers (`buildBindBootstrap` /
 `buildCreateBootstrap`) selected by the user's "have a tree?" choice. Both
 describe what to accomplish in natural language and reference the
-`first-tree` / `first-tree-hub` CLIs by name; neither inlines literal shell
+`first-tree` / `first-tree` CLIs by name; neither inlines literal shell
 commands.
 
 **Why:**
@@ -830,11 +830,11 @@ namespace. Three additions shipped:
   stepper `✕` becomes a hostile one-way action without a recovery path. Same
   flag-flip mechanics as the design assumed; just a UI affordance for the
   user-visible inverse.
-- **`first-tree-hub org bind-tree <url>` CLI subcommand** — the agent invoked
+- **`first-tree org bind-tree <url>` CLI subcommand** — the agent invoked
   in Step 3's "Create new tree" path needs to record the freshly-created tree
   URL on the Hub so future agents in the team can find it. Doing this via the
   user's existing CLI credentials (rather than a new HTTP route the agent
-  would need to learn) follows the same pattern as `first-tree-hub client
+  would need to learn) follows the same pattern as `first-tree client
   connect`. Test coverage for the CLI command itself is currently nil — flagged
   as a follow-up, not a merge blocker.
 - **`organization_settings(context_tree)` namespace usage** — the Hub-side cache
@@ -884,4 +884,4 @@ For clarity, these remain as locked in §4-§12:
 - Agent runtime config (gitRepos): [packages/shared/src/schemas/agent-runtime-config.ts](../packages/shared/src/schemas/agent-runtime-config.ts)
 - Git worktree materialization: [packages/client/src/handlers/claude-code.ts:682-700](../packages/client/src/handlers/claude-code.ts:682)
 - first-tree skill onboarding doc: [skills/first-tree/references/onboarding.md](https://github.com/agent-team-foundation/first-tree/blob/main/skills/first-tree/references/onboarding.md)
-- Related PR (NewAgentDialog rewrite, separate scope): [#237](https://github.com/agent-team-foundation/first-tree-hub/pull/237)
+- Related PR (NewAgentDialog rewrite, separate scope): [#237](https://github.com/agent-team-foundation/first-tree/pull/237)

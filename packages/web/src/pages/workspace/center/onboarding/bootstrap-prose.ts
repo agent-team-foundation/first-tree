@@ -10,7 +10,7 @@
  * frontend best-effort PUTs the URL into the org's `context_tree`
  * settings namespace before sending the chat (non-fatal — agent still
  * proceeds if the PUT fails). Path B (new tree) tells the agent to call
- * back into the first-tree-hub CLI to record the freshly created URL.
+ * back into the first-tree CLI to record the freshly created URL.
  *
  * Single source of truth: only Step 3 IntroBody currently sends these.
  * If a future surface needs the same prompts, hoist these builders to
@@ -65,7 +65,7 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
     "",
     skillLine,
     "",
-    "Once you know the URL of the new tree repo, use the first-tree-hub CLI's `org bind-tree` command to record it on the Hub so future agents in this team can find it.",
+    "Once you know the URL of the new tree repo, use the first-tree CLI's `org bind-tree` command to record it on the Hub so future agents in this team can find it.",
     "",
     "When everything is up, walk me through what was created — which directory, which repo, which PRs.",
     "",

@@ -85,14 +85,14 @@ export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{
   // instead of letting `ensureFreshAccessToken` or `resolveServerUrl`
   // throw a cryptic message after the user already typed a UUID.
   if (loadCredentials() === null) {
-    throw new Error("Not connected. Run `first-tree-hub connect <token>` first.");
+    throw new Error("Not connected. Run `first-tree login <token>` first.");
   }
   let serverUrl: string;
   try {
-    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
+    serverUrl = resolveServerUrl(process.env.FIRST_TREE_SERVER_URL);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`${msg} Run \`first-tree-hub connect <token>\` or set FIRST_TREE_HUB_SERVER_URL.`);
+    throw new Error(`${msg} Run \`first-tree login <token>\` or set FIRST_TREE_SERVER_URL.`);
   }
 
   const agentId =

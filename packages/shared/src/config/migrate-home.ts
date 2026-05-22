@@ -3,11 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
- * Pre-v0.9 path. The home directory was a flat `~/.first-tree-hub/` — this
+ * Pre-v0.9 path. The home directory was a flat `~/.first-tree/` — this
  * was renamed to `~/.first-tree/hub/` so the `.first-tree/` parent can be
  * shared with sibling products (context-tree etc.) under the same brand.
  */
-export const LEGACY_HOME_DIR = join(homedir(), ".first-tree-hub");
+export const LEGACY_HOME_DIR = join(homedir(), ".first-tree");
 
 export type HomeMigrationResult =
   | {
@@ -26,18 +26,18 @@ type MigrateOptions = {
    * user home.
    */
   newHome: string;
-  /** Override the legacy source path (for tests). Defaults to `~/.first-tree-hub`. */
+  /** Override the legacy source path (for tests). Defaults to `~/.first-tree`. */
   legacyHome?: string;
   /**
    * When set to a truthy value we treat the caller as "home path is
-   * user-overridden" and skip migration. Pass `process.env.FIRST_TREE_HUB_HOME`
+   * user-overridden" and skip migration. Pass `process.env.FIRST_TREE_HOME`
    * from the caller so the shared module stays free of direct env reads.
    */
   envOverride?: string | null | undefined;
 };
 
 /**
- * Auto-migrate the legacy `~/.first-tree-hub/` home to the new
+ * Auto-migrate the legacy `~/.first-tree/` home to the new
  * `~/.first-tree/hub/` layout. Designed to be called once at CLI startup —
  * idempotent, never throws, and skips any case that could merge state.
  *
@@ -48,7 +48,7 @@ type MigrateOptions = {
  * whether the legacy path still exists.
  *
  * Skip rules (in order):
- *   1. `FIRST_TREE_HUB_HOME` is set → user is driving the path explicitly.
+ *   1. `FIRST_TREE_HOME` is set → user is driving the path explicitly.
  *   2. Legacy path doesn't exist → nothing to migrate.
  *   3. New path already has content → treat as already-migrated (or a
  *      conflict the user must resolve). Either way, never merge.

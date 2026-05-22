@@ -1,0 +1,26 @@
+{
+  "skill_name": "first-tree-cli",
+  "evals": [
+    {
+      "id": 0,
+      "name": "new-machine",
+      "prompt": "I just bought a new Mac and want it to run as a Hub client, permanently connected to our team's Hub at https://hub.example.com/. Walk me through it from zero. One more thing — previously I always set FIRST_TREE_AGENT_TOKEN and ran `first-tree agent token bootstrap` to get my agent running. Do I still do that on the new machine?",
+      "expected_output": "Should recommend npm install → first-tree login <token> (paste the connect token from the Hub web console; the hub URL is derived from the token's iss claim), explain that the background service is installed automatically on macOS (launchd), and explicitly correct the user's outdated assumption: FIRST_TREE_AGENT_TOKEN and `agent token bootstrap` are gone; auth is now a single member JWT stored in credentials.json written by `connect <token>`.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "agent-config",
+      "prompt": "I want to switch my 'alice' agent to use claude-opus-4-7 and also add a GitHub MCP server to it. Walk me through it via the first-tree CLI.",
+      "expected_output": "Should use `first-tree agent config set-model alice claude-opus-4-7` and `first-tree agent config add-mcp alice --name <n> --transport stdio --command gh --args mcp`. Must NOT suggest hand-editing ~/.first-tree/hub/config/agents/alice/agent.yaml (that's the local alias, not the runtime config). Bonus: mentions `agent config show alice` to verify, or `agent config dry-run` for preview.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "stuck-session",
+      "prompt": "Our 'code-reviewer' autonomous agent seems stuck — it stopped responding in its chat about an hour ago. I need to figure out what's wrong and recover it without redeploying. What's the CLI flow?",
+      "expected_output": "Should suggest inspecting with `first-tree agent status code-reviewer`, listing sessions via `agent session list code-reviewer`, then recovering with `agent session suspend/terminate <name> <chat-id>` as appropriate, and `agent reset code-reviewer` if it's in error state. May also mention `agent workspace clean` for stale workspaces. Should NOT suggest restarting the whole client or redeploying.",
+      "files": []
+    }
+  ]
+}

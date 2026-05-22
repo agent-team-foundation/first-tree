@@ -129,7 +129,7 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const SELECTED_ORG_KEY = "first-tree-hub:selectedOrganizationId";
+const SELECTED_ORG_KEY = "first-tree:selectedOrganizationId";
 
 function readSelectedOrgId(): string | null {
   try {

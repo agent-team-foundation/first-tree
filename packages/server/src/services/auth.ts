@@ -9,7 +9,7 @@ import { UnauthorizedError } from "../errors.js";
 import { classifyJoseError, decodeJwtForTrace, untrustedAttrs } from "../observability/jwt-trace.js";
 
 /**
- * Token lifetime configuration. Driven by `FIRST_TREE_HUB_AUTH_*_EXPIRY`
+ * Token lifetime configuration. Driven by `FIRST_TREE_AUTH_*_EXPIRY`
  * env vars. Refresh tokens slide: every successful refresh issues a fresh
  * pair, so an active client never hits the absolute expiry — the configured
  * `refreshTokenExpiry` is the safety net for clients that go offline.

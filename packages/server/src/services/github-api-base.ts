@@ -1,7 +1,7 @@
 /**
  * Single source of truth for the GitHub REST API base URL.
  *
- * Reads `FIRST_TREE_HUB_GITHUB_API_BASE_URL` once at module load. Default is
+ * Reads `FIRST_TREE_GITHUB_API_BASE_URL` once at module load. Default is
  * the public host. Override is read at process start, so tests that need to
  * point GitHub traffic at a mock must spawn the server with the env var set
  * (the in-process `fastify.inject` tests under `__tests__/` keep working
@@ -19,4 +19,4 @@ function normalize(raw: string | undefined): string {
   return raw.replace(/\/+$/, "");
 }
 
-export const GITHUB_API_BASE = normalize(process.env.FIRST_TREE_HUB_GITHUB_API_BASE_URL);
+export const GITHUB_API_BASE = normalize(process.env.FIRST_TREE_GITHUB_API_BASE_URL);

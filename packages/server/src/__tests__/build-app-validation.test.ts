@@ -4,7 +4,7 @@ import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
 /**
- * Boot-time gate: a typo in `FIRST_TREE_HUB_AUTH_*_EXPIRY` must fail the
+ * Boot-time gate: a typo in `FIRST_TREE_AUTH_*_EXPIRY` must fail the
  * server boot, not the first `/connect-tokens` call hours later.
  *
  * The parser itself is covered by `auth-expiry-parse.test.ts`; this test
@@ -14,7 +14,7 @@ import type { Config } from "../config.js";
 const baseConfig: Config = {
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
-  workspace: { root: "/tmp/first-tree-hub-test-workspaces" },
+  workspace: { root: "/tmp/first-tree-test-workspaces" },
   secrets: {
     jwtSecret: "test-jwt-secret-key-for-vitest",
     encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -27,6 +27,9 @@ const baseConfig: Config = {
     maxRetryCount: 3,
     pollingIntervalSeconds: 5,
     presenceCleanupSeconds: 60,
+    archiveSweepIntervalSeconds: 0,
+    archiveMappedIdleSeconds: 60 * 60,
+    archiveUnmappedIdleSeconds: 12 * 60 * 60,
     notificationWebhookUrl: undefined,
   },
   update: {

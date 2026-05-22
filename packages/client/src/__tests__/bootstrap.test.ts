@@ -1,10 +1,16 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bootstrapWorkspace,
+  buildChatSystemPrompt,
+  CONTEXT_TREE_HEAD_REL,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
+  readCachedContextTreeHead,
+  readContextTreeHead,
+  writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import type { AgentIdentity } from "../runtime/handler.js";
 
@@ -51,7 +57,7 @@ describe("contextTreeCloneDir", () => {
 });
 
 describe("bootstrapWorkspace", () => {
-  it("writes identity.json with correct fields", () => {
+  it("writes identity.json with agent-level stable fields only (no chatId / chatContext)", () => {
     const workspace = join(tmpBase, "ws-identity");
     mkdirSync(workspace, { recursive: true });
 
@@ -60,7 +66,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity({ agentId: "my-agent", type: "personal_assistant", delegateMention: "owner" }),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-123",
     });
 
     const identityPath = join(workspace, ".agent", "identity.json");
@@ -70,8 +75,11 @@ describe("bootstrapWorkspace", () => {
     expect(data.agentId).toBe("my-agent");
     expect(data.type).toBe("personal_assistant");
     expect(data.delegateMention).toBe("owner");
-    expect(data.chatId).toBe("chat-123");
     expect(data.serverUrl).toBe("http://localhost:8000");
+    // Per agent-session-cwd-redesign: identity.json holds agent-level state
+    // only. chatId / chatContext now live in the per-turn system prompt.
+    expect("chatId" in data).toBe(false);
+    expect("chatContext" in data).toBe(false);
   });
 
   it("writes tools.md with SDK reference", () => {
@@ -83,7 +91,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity(),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const toolsPath = join(workspace, ".agent", "tools.md");
@@ -92,7 +99,7 @@ describe("bootstrapWorkspace", () => {
     const content = readFileSync(toolsPath, "utf-8");
     expect(content).toContain("Agent Hub");
     expect(content).toContain("[From: <agent-name>]");
-    expect(content).toContain("first-tree-hub chat send");
+    expect(content).toContain("first-tree chat send");
     // L4 silent-turn protocol: the prompt directive that pairs with the
     // result-sink empty-output guard. Tells the agent that silence is the
     // correct response when it has nothing new — drops courtesy fillers
@@ -117,7 +124,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity(),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
@@ -148,13 +154,12 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity(),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
     // Sending Messages section must teach the add-participant flow as the
     // canonical way to reach a non-member of the current chat.
-    expect(content).toContain("first-tree-hub chat invite");
+    expect(content).toContain("first-tree chat invite");
     // Member-default routing description (the recipient must be in this chat).
     expect(content).toMatch(/recipient MUST be a participant/);
     // The retired escape hatches must NOT be taught — agents that try them
@@ -179,7 +184,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity({ agentId: "my-agent" }),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const selfPath = join(workspace, ".agent", "context", "self.md");
@@ -195,7 +199,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity(),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const selfPath = join(workspace, ".agent", "context", "self.md");
@@ -213,7 +216,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity({ agentId: "nonexistent" }),
       contextTreePath: ctxTree,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const selfPath = join(workspace, ".agent", "context", "self.md");
@@ -234,7 +236,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity(),
       contextTreePath: ctxTree,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const instructionsPath = join(workspace, ".agent", "context", "agent-instructions.md");
@@ -254,7 +255,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity(),
       contextTreePath: ctxTree,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const domainMapPath = join(workspace, ".agent", "context", "domain-map.md");
@@ -271,62 +271,16 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity(),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const degradedPath = join(workspace, ".agent", "context", "degraded.md");
     expect(existsSync(degradedPath)).toBe(false);
   });
 
-  it("writes chatContext into identity.json when provided", () => {
-    const workspace = join(tmpBase, "ws-chat-context");
-    mkdirSync(workspace, { recursive: true });
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: makeIdentity({ agentId: "a", type: "autonomous_agent" }),
-      contextTreePath: null,
-      serverUrl: "http://localhost:8000",
-      chatId: "chat-cc",
-      chatContext: {
-        chatId: "chat-cc",
-        title: "ship v1",
-        topic: "ship v1",
-        participants: [
-          { name: "alice", displayName: "Alice", type: "human" },
-          { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
-        ],
-      },
-    });
-
-    const data = JSON.parse(readFileSync(join(workspace, ".agent", "identity.json"), "utf-8"));
-    expect(data.chatContext).toMatchObject({
-      chatId: "chat-cc",
-      title: "ship v1",
-      topic: "ship v1",
-      participants: [
-        { name: "alice", displayName: "Alice", type: "human" },
-        { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
-      ],
-    });
-    expect(data.chatContext.selfOwner).toBeUndefined();
-  });
-
-  it("omits chatContext from identity.json when not provided (degradation)", () => {
-    const workspace = join(tmpBase, "ws-no-chat-context");
-    mkdirSync(workspace, { recursive: true });
-
-    bootstrapWorkspace({
-      workspacePath: workspace,
-      identity: makeIdentity({ agentId: "a" }),
-      contextTreePath: null,
-      serverUrl: "http://localhost:8000",
-      chatId: "chat-nc",
-    });
-
-    const data = JSON.parse(readFileSync(join(workspace, ".agent", "identity.json"), "utf-8"));
-    expect("chatContext" in data).toBe(false);
-  });
+  // Tests that pinned `chatContext` being written into identity.json were
+  // dropped here: per agent-session-cwd-redesign, per-chat fields no longer
+  // live on disk. The new injection path is covered by `buildChatSystemPrompt`
+  // below.
 
   it("overwrites existing files on re-bootstrap", () => {
     const workspace = join(tmpBase, "ws-overwrite");
@@ -338,7 +292,6 @@ describe("bootstrapWorkspace", () => {
       identity: makeIdentity({ agentId: "new-agent" }),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
-      chatId: "chat-1",
     });
 
     const data = JSON.parse(readFileSync(join(workspace, ".agent", "identity.json"), "utf-8"));
@@ -567,5 +520,154 @@ describe("installFirstTreeIntegration", () => {
     });
 
     expect(calls[0]?.args).not.toContain("--tree-url");
+  });
+});
+
+describe("buildChatSystemPrompt", () => {
+  const AGENT_HOME = "/var/lib/agent-hub/workspaces/test-agent";
+
+  it("emits the working-directory convention and on-demand worktree block", () => {
+    const text = buildChatSystemPrompt({
+      agentHome: AGENT_HOME,
+      chatContext: undefined,
+      sourceRepos: [],
+    });
+
+    expect(text).toContain("# Working Directory Convention");
+    expect(text).toContain(AGENT_HOME);
+    // No worktrees are pre-created in the 2026-05-22 redesign; the agent is
+    // instructed to create them on demand.
+    expect(text).toContain("## Creating Worktrees On Demand");
+    expect(text).toContain("No worktrees are pre-created");
+    expect(text).toContain("git worktree add");
+    expect(text).toContain("worktrees/<task-name>");
+  });
+
+  it("renders predeclared source repos with top-level paths and upstream coordinates", () => {
+    const text = buildChatSystemPrompt({
+      agentHome: AGENT_HOME,
+      chatContext: undefined,
+      sourceRepos: [
+        {
+          absolutePath: `${AGENT_HOME}/api`,
+          url: "git@github.com:example/api.git",
+          ref: "main",
+          branch: "session/test-agent",
+        },
+        {
+          absolutePath: `${AGENT_HOME}/web`,
+          url: "git@github.com:example/web.git",
+        },
+      ],
+    });
+
+    expect(text).toContain("## Source Repositories");
+    // Top-level paths — no `worktrees/` prefix.
+    expect(text).toContain(`\`${AGENT_HOME}/api\``);
+    expect(text).not.toContain(`\`${AGENT_HOME}/worktrees/api\``);
+    expect(text).toContain("url=git@github.com:example/api.git");
+    expect(text).toContain("ref=main");
+    expect(text).toContain("branch=session/test-agent");
+    expect(text).toContain(`\`${AGENT_HOME}/web\``);
+    // For the second entry — only url should appear, ref/branch lines omitted.
+    expect(text).not.toMatch(/url=git@github.com:example\/web\.git,\s*ref=/);
+  });
+
+  it("appends the Current Chat Context block when chatContext is provided", () => {
+    const text = buildChatSystemPrompt({
+      agentHome: AGENT_HOME,
+      chatContext: {
+        chatId: "chat-123",
+        title: "ship redesign",
+        topic: "ship redesign",
+        participants: [
+          { name: "alice", displayName: "Alice", type: "human" },
+          { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
+        ],
+      },
+      sourceRepos: [],
+    });
+
+    expect(text).toContain("## Current Chat Context");
+    expect(text).toContain("Chat ID: chat-123");
+    expect(text).toContain("@alice");
+    expect(text).toContain("@bob-bot");
+  });
+
+  it("omits the Current Chat Context block when chatContext is undefined (degraded fetch)", () => {
+    const text = buildChatSystemPrompt({
+      agentHome: AGENT_HOME,
+      chatContext: undefined,
+      sourceRepos: [],
+    });
+
+    expect(text).not.toContain("## Current Chat Context");
+  });
+});
+
+describe("Context Tree HEAD drift helpers", () => {
+  function makeTreeRepo(dir: string, initialFile = "AGENT.md"): string {
+    mkdirSync(dir, { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "t@test"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+    writeFileSync(join(dir, initialFile), "v1");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-q", "-m", "seed"], { cwd: dir });
+    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf-8" }).trim();
+  }
+
+  it("readContextTreeHead returns the commit hash when the path is a git repo", () => {
+    const treeDir = join(tmpBase, "tree-head-1");
+    const head = makeTreeRepo(treeDir);
+    expect(readContextTreeHead(treeDir)).toBe(head);
+  });
+
+  it("readContextTreeHead returns null for non-existent or non-git paths", () => {
+    expect(readContextTreeHead(null)).toBeNull();
+    expect(readContextTreeHead("/nonexistent/path-does-not-exist")).toBeNull();
+
+    const notGit = join(tmpBase, "tree-head-non-git");
+    mkdirSync(notGit, { recursive: true });
+    writeFileSync(join(notGit, "some-file"), "x");
+    expect(readContextTreeHead(notGit)).toBeNull();
+  });
+
+  it("write/read roundtrip pins the HEAD value for drift comparison", () => {
+    const workspace = join(tmpBase, "tree-head-cache");
+    mkdirSync(workspace, { recursive: true });
+
+    expect(readCachedContextTreeHead(workspace)).toBeNull();
+
+    writeContextTreeHead(workspace, "abc123def456");
+    expect(readCachedContextTreeHead(workspace)).toBe("abc123def456");
+    expect(existsSync(join(workspace, CONTEXT_TREE_HEAD_REL))).toBe(true);
+  });
+
+  it("writeContextTreeHead is a no-op when the HEAD is null (unknown)", () => {
+    const workspace = join(tmpBase, "tree-head-null");
+    mkdirSync(workspace, { recursive: true });
+    writeContextTreeHead(workspace, null);
+    expect(existsSync(join(workspace, CONTEXT_TREE_HEAD_REL))).toBe(false);
+  });
+
+  it("detects drift across commits when used together", () => {
+    const treeDir = join(tmpBase, "tree-head-drift");
+    const workspace = join(tmpBase, "tree-head-drift-ws");
+    mkdirSync(workspace, { recursive: true });
+
+    const firstHead = makeTreeRepo(treeDir);
+    writeContextTreeHead(workspace, firstHead);
+
+    // Drift: another commit upstream.
+    writeFileSync(join(treeDir, "NODE.md"), "v2");
+    execFileSync("git", ["add", "."], { cwd: treeDir });
+    execFileSync("git", ["commit", "-q", "-m", "v2"], { cwd: treeDir });
+    const secondHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: treeDir, encoding: "utf-8" }).trim();
+
+    expect(secondHead).not.toBe(firstHead);
+    expect(readContextTreeHead(treeDir)).toBe(secondHead);
+    expect(readCachedContextTreeHead(workspace)).toBe(firstHead);
+    // The handler compares these two; mismatch ⇒ re-bootstrap.
   });
 });

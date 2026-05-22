@@ -36,7 +36,7 @@ describe("validateDocumentContext", () => {
   });
 
   it("normalises legacy `{ basePath }` to kind=path via the shared preprocessor", () => {
-    expect(() => validateDocumentContext({ documentContext: { basePath: "first-tree-hub" } })).not.toThrow();
+    expect(() => validateDocumentContext({ documentContext: { basePath: "first-tree" } })).not.toThrow();
   });
 
   it("rejects a sha256 that disagrees with the content", () => {

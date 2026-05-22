@@ -9,7 +9,7 @@ import { getClientServiceStatus, installClientService } from "./service-install.
  * baked into the plist/unit file at install time — when we populate the new
  * home, those paths would otherwise still point at the old location).
  *
- * Copy-only semantics: the legacy `~/.first-tree-hub/` tree is preserved
+ * Copy-only semantics: the legacy `~/.first-tree/` tree is preserved
  * as a safety net. The user can inspect/fall-back to it, and can delete it
  * manually once they've confirmed the new layout is healthy.
  *
@@ -26,7 +26,7 @@ import { getClientServiceStatus, installClientService } from "./service-install.
 export function runHomeMigration(): void {
   const result: HomeMigrationResult = migrateLegacyHome({
     newHome: DEFAULT_HOME_DIR,
-    envOverride: process.env.FIRST_TREE_HUB_HOME ?? null,
+    envOverride: process.env.FIRST_TREE_HOME ?? null,
   });
 
   if (!result.migrated) {
@@ -36,7 +36,7 @@ export function runHomeMigration(): void {
     // staying silent avoids noise on every CLI call.
     if (result.reason === "failed") {
       print.line(
-        `[first-tree-hub] WARNING: failed to auto-migrate legacy home ${result.from} → ${result.to}: ${result.error ?? "unknown error"}\n` +
+        `[first-tree] WARNING: failed to auto-migrate legacy home ${result.from} → ${result.to}: ${result.error ?? "unknown error"}\n` +
           `  Resolve manually: cp -R "${result.from}" "${result.to}"\n`,
       );
     }
@@ -44,7 +44,7 @@ export function runHomeMigration(): void {
   }
 
   print.line(
-    `[first-tree-hub] Copied client home to new layout: ${result.from} → ${result.to}\n` +
+    `[first-tree] Copied client home to new layout: ${result.from} → ${result.to}\n` +
       `  (Legacy directory preserved as a backup — delete it manually once you've verified the new location works.)\n`,
   );
 
@@ -55,8 +55,8 @@ export function runHomeMigration(): void {
   const runningAsService = process.argv.includes("--no-interactive");
   if (runningAsService) {
     print.line(
-      `[first-tree-hub] Note: running as background service — skipped auto re-register to avoid self-termination.\n` +
-        `  Service paths will refresh on the next \`first-tree-hub connect <token>\`.\n`,
+      `[first-tree] Note: running as background service — skipped auto re-register to avoid self-termination.\n` +
+        `  Service paths will refresh on the next \`first-tree login <token>\`.\n`,
     );
     return;
   }
@@ -68,12 +68,12 @@ export function runHomeMigration(): void {
 
   try {
     installClientService();
-    print.line(`[first-tree-hub] Re-registered background service with new home paths.\n`);
+    print.line(`[first-tree] Re-registered background service with new home paths.\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     print.line(
-      `[first-tree-hub] WARNING: home migration succeeded but re-registering the background service failed: ${msg}\n` +
-        `  Re-run \`first-tree-hub connect <token>\` to refresh service paths.\n`,
+      `[first-tree] WARNING: home migration succeeded but re-registering the background service failed: ${msg}\n` +
+        `  Re-run \`first-tree login <token>\` to refresh service paths.\n`,
     );
   }
 }

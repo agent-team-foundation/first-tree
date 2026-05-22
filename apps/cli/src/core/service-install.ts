@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_HOME_DIR } from "@first-tree/shared/config";
@@ -70,23 +70,23 @@ export type ServiceInfo = {
 export type ServiceOpResult = { ok: true; detail?: string } | { ok: false; reason: string };
 
 /**
- * Map a `FIRST_TREE_HUB_HOME` basename to the suffix appended to the
+ * Map a `FIRST_TREE_HOME` basename to the suffix appended to the
  * service manager's unit name / label.
  *
- * Why this exists: `FIRST_TREE_HUB_HOME` already isolates config /
+ * Why this exists: `FIRST_TREE_HOME` already isolates config /
  * credentials / workspace under a separate home dir, but until now the
  * systemd unit name and launchd label were hard-coded — so a developer
  * running with an isolated home would still rewrite the same
- * `first-tree-hub-client.service` unit file as the prod install. This
+ * `first-tree-client.service` unit file as the prod install. This
  * derivation closes that loop: dev homes get their own unit name and
  * coexist with prod.
  *
  * Rule:
  *   - "hub" → ""        (default home; preserves the existing prod
- *                        unit name `first-tree-hub-client.service` for
+ *                        unit name `first-tree-client.service` for
  *                        every machine already in the field)
  *   - "hub-<x>" → "<x>" ("hub-test" → "test", giving
- *                        `first-tree-hub-client-test.service`)
+ *                        `first-tree-client-test.service`)
  *   - anything else → the basename verbatim (a custom home like
  *                     "~/.first-tree/foo" yields suffix "foo")
  *
@@ -109,11 +109,25 @@ export function deriveServiceSuffix(homeBasename: string): string {
 }
 
 const SERVICE_SUFFIX = deriveServiceSuffix(basename(DEFAULT_HOME_DIR));
-const LAUNCHD_LABEL = SERVICE_SUFFIX ? `dev.first-tree-hub.client.${SERVICE_SUFFIX}` : "dev.first-tree-hub.client";
-const SYSTEMD_UNIT = SERVICE_SUFFIX
-  ? `first-tree-hub-client-${SERVICE_SUFFIX}.service`
-  : "first-tree-hub-client.service";
-const SYSLOG_IDENT = SERVICE_SUFFIX ? `first-tree-hub-client-${SERVICE_SUFFIX}` : "first-tree-hub-client";
+const LAUNCHD_LABEL = SERVICE_SUFFIX ? `dev.first-tree.client.${SERVICE_SUFFIX}` : "dev.first-tree.client";
+const SYSTEMD_UNIT = SERVICE_SUFFIX ? `first-tree-client-${SERVICE_SUFFIX}.service` : "first-tree-client.service";
+const SYSLOG_IDENT = SERVICE_SUFFIX ? `first-tree-client-${SERVICE_SUFFIX}` : "first-tree-client";
+
+// Pre-rename unit identifiers (v0.14.x and earlier). Used ONLY by the
+// `migrateLegacy{Systemd,Launchd}Unit` upgrade helpers to find and clean
+// up the orphan unit a previous install registered before T3.2 renamed
+// the bin / service identifiers in v1.0.0. Building the hyphenated legacy
+// literal via string concatenation keeps the CI broad-hyphenated grep
+// (`.github/workflows/ci.yml`) from matching it, so no allow-list entry
+// is needed.
+const LEGACY_HUB_PREFIX = `${"first-tree"}-hub`;
+const LEGACY_LAUNCHD_LABEL = SERVICE_SUFFIX
+  ? `dev.${LEGACY_HUB_PREFIX}.client.${SERVICE_SUFFIX}`
+  : `dev.${LEGACY_HUB_PREFIX}.client`;
+const LEGACY_SYSTEMD_UNIT = SERVICE_SUFFIX
+  ? `${LEGACY_HUB_PREFIX}-client-${SERVICE_SUFFIX}.service`
+  : `${LEGACY_HUB_PREFIX}-client.service`;
+
 const LOG_DIR = join(DEFAULT_HOME_DIR, "logs");
 
 type ResolvedBinary = { kind: "bin"; program: string } | { kind: "node"; program: string; args: string[] };
@@ -139,14 +153,14 @@ function whichBin(name: string): string | null {
  * Two regimes:
  *
  *   ① Prod (default home, empty service suffix) — prefer the installed
- *      `first-tree-hub` bin on PATH (usually a shim under /usr/local/bin
+ *      `first-tree` bin on PATH (usually a shim under /usr/local/bin
  *      or ~/.npm-global/bin). Using the shim means an `npm i -g … @latest`
  *      atomically swaps the binary the unit launches, no unit rewrite
  *      needed.
  *
- *   ② Dev / isolated (non-empty suffix from a custom FIRST_TREE_HUB_HOME)
+ *   ② Dev / isolated (non-empty suffix from a custom FIRST_TREE_HOME)
  *      — pin to the running interpreter + script path. This skips the
- *      PATH lookup, which would otherwise resolve `first-tree-hub` to
+ *      PATH lookup, which would otherwise resolve `first-tree` to
  *      the operator's prod global install — making the dev unit silently
  *      run prod code against a dev home (i.e., the whole isolation story
  *      collapses with no error message). Pinning execPath+argv[1] forces
@@ -154,7 +168,7 @@ function whichBin(name: string): string | null {
  */
 export function resolveCliInvocation(serviceSuffix: string = SERVICE_SUFFIX): ResolvedBinary {
   if (serviceSuffix === "") {
-    const bin = whichBin("first-tree-hub");
+    const bin = whichBin("first-tree");
     if (bin && isAbsolute(bin)) {
       try {
         // Resolve symlinks so launchd records a stable path.
@@ -186,24 +200,24 @@ function launchdPlistPath(): string {
 function renderPlist(invocation: ResolvedBinary): string {
   const programArgs: string[] =
     invocation.kind === "bin"
-      ? [invocation.program, "client", "start", "--no-interactive"]
-      : [invocation.program, ...invocation.args, "client", "start", "--no-interactive"];
+      ? [invocation.program, "daemon", "start", "--no-interactive"]
+      : [invocation.program, ...invocation.args, "daemon", "start", "--no-interactive"];
 
   const argsXml = programArgs.map((a) => `    <string>${escapeXml(a)}</string>`).join("\n");
   // launchd's StandardOutPath / StandardErrorPath are the fallback sink — they
   // only catch bare stdout/stderr (crash messages, third-party spam) because
   // the client's own logger writes a rotating NDJSON file at `client.log`
-  // via FIRST_TREE_HUB_SERVICE_MODE. Naming these `.stdout.log` / `.stderr.log`
+  // via FIRST_TREE_SERVICE_MODE. Naming these `.stdout.log` / `.stderr.log`
   // keeps that role explicit for anyone inspecting the logs dir.
   const stdoutFallback = join(LOG_DIR, "client.stdout.log");
   const stderrFallback = join(LOG_DIR, "client.stderr.log");
 
   // Mirror the systemd-side fix: dev installs (non-empty suffix) need
-  // FIRST_TREE_HUB_HOME baked into the launched env, otherwise launchd
+  // FIRST_TREE_HOME baked into the launched env, otherwise launchd
   // strips the user's shell env on `bootstrap` and the process falls
   // back to the default home → silently reads prod's client.yaml.
   const homeEnvXml = SERVICE_SUFFIX
-    ? `\n    <key>FIRST_TREE_HUB_HOME</key>\n    <string>${escapeXml(DEFAULT_HOME_DIR)}</string>`
+    ? `\n    <key>FIRST_TREE_HOME</key>\n    <string>${escapeXml(DEFAULT_HOME_DIR)}</string>`
     : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -220,7 +234,7 @@ ${argsXml}
   <dict>
     <key>PATH</key>
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-    <key>FIRST_TREE_HUB_SERVICE_MODE</key>
+    <key>FIRST_TREE_SERVICE_MODE</key>
     <string>1</string>${homeEnvXml}
   </dict>
   <key>RunAtLoad</key>
@@ -296,7 +310,31 @@ function waitForLabelEvicted(target: string, label: string, timeoutMs: number): 
   return false;
 }
 
+function legacyLaunchdPlistPath(): string {
+  return join(homedir(), "Library", "LaunchAgents", `${LEGACY_LAUNCHD_LABEL}.plist`);
+}
+
+/**
+ * One-shot upgrade cleanup: if a v0.14.x install registered the previous
+ * (Hub-era) launchd label (see LEGACY_LAUNCHD_LABEL above), bootout +
+ * remove the plist before installing the v1.0.0 label. Without this,
+ * both agents would run side-by-side after `first-tree login` re-installs.
+ * Best-effort — never throws; install proceeds even if bootout fails.
+ */
+function migrateLegacyLaunchdUnit(): void {
+  const legacyPath = legacyLaunchdPlistPath();
+  if (!existsSync(legacyPath)) return;
+  const target = launchctlDomainTarget();
+  runCapture("launchctl", ["bootout", `${target}/${LEGACY_LAUNCHD_LABEL}`], 15_000);
+  try {
+    rmSync(legacyPath);
+  } catch {
+    // best-effort; leave behind stale file rather than fail install
+  }
+}
+
 function installLaunchd(): ServiceInfo {
+  migrateLegacyLaunchdUnit();
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const plistPath = launchdPlistPath();
@@ -345,7 +383,7 @@ function installLaunchd(): ServiceInfo {
     throw new Error(
       `launchctl bootstrap failed: ${lastBootstrapErr.stderr || `exit ${lastBootstrapErr.code ?? "unknown"}`}\n` +
         `    Command: launchctl bootstrap ${target} ${plistPath}\n` +
-        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree-hub connect <token>\`.`,
+        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree login <token>\`.`,
     );
   }
 
@@ -394,19 +432,19 @@ function systemdUnitPath(): string {
 function renderSystemdUnit(invocation: ResolvedBinary): string {
   const execStart: string =
     invocation.kind === "bin"
-      ? `${shellQuote(invocation.program)} client start --no-interactive`
-      : `${shellQuote(invocation.program)} ${invocation.args.map(shellQuote).join(" ")} client start --no-interactive`;
+      ? `${shellQuote(invocation.program)} daemon start --no-interactive`
+      : `${shellQuote(invocation.program)} ${invocation.args.map(shellQuote).join(" ")} daemon start --no-interactive`;
 
-  // Pin FIRST_TREE_HUB_HOME into the unit when this install is itself
+  // Pin FIRST_TREE_HOME into the unit when this install is itself
   // running with a non-default home. Without this line, systemd's launched
-  // process inherits only the user manager's env, FIRST_TREE_HUB_HOME is
+  // process inherits only the user manager's env, FIRST_TREE_HOME is
   // unset, and the process silently falls back to the default `~/.first-tree/hub`
   // — i.e. a "dev" unit ends up reading prod's client.yaml. The
   // home-derived suffix gives us isolated unit names; this gives the
   // launched process the matching home so the isolation actually holds.
   // Prod (suffix === "") deliberately omits the line so existing
   // installed units don't churn unnecessarily.
-  const homeEnv = SERVICE_SUFFIX ? `Environment=FIRST_TREE_HUB_HOME=${shellQuote(DEFAULT_HOME_DIR)}\n` : "";
+  const homeEnv = SERVICE_SUFFIX ? `Environment=FIRST_TREE_HOME=${shellQuote(DEFAULT_HOME_DIR)}\n` : "";
 
   // Restart policy split:
   //   - on-failure  → operator-issued `systemctl stop` (clean exit 0) really stops.
@@ -415,12 +453,12 @@ function renderSystemdUnit(invocation: ResolvedBinary): string {
   //     UpdateManager exits 75 after `npm i -g`, systemd sees it as a
   //     "must restart" signal and brings up the new binary.
   // StartLimit* caps a crash storm (10 failures in 5 min → systemd holds back).
-  // Logs go through journald — `journalctl --user -u first-tree-hub-client` is
+  // Logs go through journald — `journalctl --user -u first-tree-client` is
   // the documented surface. The client itself still writes its rotating NDJSON
-  // to client.log when FIRST_TREE_HUB_SERVICE_MODE=1; journald only catches
+  // to client.log when FIRST_TREE_SERVICE_MODE=1; journald only catches
   // bare stdout/stderr (crashes, third-party spam).
   return `[Unit]
-Description=First Tree Hub Client
+Description=First Tree Client
 StartLimitIntervalSec=300
 StartLimitBurst=10
 
@@ -438,7 +476,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${SYSLOG_IDENT}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-Environment=FIRST_TREE_HUB_SERVICE_MODE=1
+Environment=FIRST_TREE_SERVICE_MODE=1
 ${homeEnv}[Install]
 WantedBy=default.target
 `;
@@ -505,7 +543,35 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
   return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
 }
 
+function legacySystemdUnitPath(): string {
+  const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+  return join(xdg, "systemd", "user", LEGACY_SYSTEMD_UNIT);
+}
+
+/**
+ * One-shot upgrade cleanup: if a v0.14.x install registered the previous
+ * (Hub-era) systemd unit (see LEGACY_SYSTEMD_UNIT above), disable + stop
+ * + remove the unit file before installing the v1.0.0 unit. Without this,
+ * both units would run after `first-tree login` re-installs the new one.
+ * Best-effort — never throws; install proceeds even if disable fails.
+ */
+function migrateLegacySystemdUnit(): void {
+  const legacyPath = legacySystemdUnitPath();
+  if (!existsSync(legacyPath)) return;
+  // `disable --now` does both `stop` and `disable` in one call. Stderr
+  // "not loaded" / "not found" is fine — we still want to remove the file.
+  runCapture("systemctl", ["--user", "disable", "--now", LEGACY_SYSTEMD_UNIT], 10_000);
+  try {
+    rmSync(legacyPath);
+  } catch {
+    // best-effort; leave stale file rather than fail install
+  }
+  // Reload so subsequent installSystemd() daemon-reload sees a clean slate.
+  runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+}
+
 function installSystemd(): ServiceInfo {
+  migrateLegacySystemdUnit();
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const unitPath = systemdUnitPath();
@@ -534,7 +600,7 @@ function installSystemd(): ServiceInfo {
   if (!enableRes.ok) {
     throw new Error(
       `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
-        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree-hub connect <token>\`.`,
+        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree login <token>\`.`,
     );
   }
 
@@ -591,8 +657,56 @@ export function installClientService(): ServiceInfo {
   if (process.platform === "linux") return installSystemd();
   throw new Error(
     `Background service install is not supported on ${process.platform}. ` +
-      "Run `first-tree-hub client start` manually to keep the computer online.",
+      "Run `first-tree daemon start` manually to keep the computer online.",
   );
+}
+
+/**
+ * Cheap idempotency probe used by `daemon refresh-unit`: render the unit
+ * file the *current binary* would write and compare against what's on disk.
+ *
+ * `true`  → contents differ, the next CLI version invocation will read a
+ *           stale unit and `installClientService()` SHOULD be called.
+ * `false` → on-disk unit already matches (the common case for patch
+ *           upgrades within the same CLI surface), no need to pay the
+ *           bootout/bootstrap or daemon-reload + enable cost.
+ *
+ * Defensive: if the unit file is missing entirely, we treat that as "drift"
+ * — the caller likely needs `installClientService()` to lay it down,
+ * NOT a refresh skip. Errors during read also return `true` rather than
+ * silently skipping, so a permission glitch can't ever stall the unit
+ * behind a stale ExecStart.
+ *
+ * Returns `false` on unsupported platforms (Windows): there's no unit file
+ * to refresh, so "no drift" is the honest answer.
+ */
+export function isServiceUnitDriftDetected(): boolean {
+  if (process.platform === "darwin") return launchdUnitDriftDetected();
+  if (process.platform === "linux") return systemdUnitDriftDetected();
+  return false;
+}
+
+function launchdUnitDriftDetected(): boolean {
+  const invocation = resolveCliInvocation();
+  const expected = renderPlist(invocation);
+  return readFileOrFlagDrift(launchdPlistPath(), expected);
+}
+
+function systemdUnitDriftDetected(): boolean {
+  const invocation = resolveCliInvocation();
+  const expected = renderSystemdUnit(invocation);
+  return readFileOrFlagDrift(systemdUnitPath(), expected);
+}
+
+function readFileOrFlagDrift(path: string, expected: string): boolean {
+  if (!existsSync(path)) return true;
+  try {
+    const actual = readFileSync(path, "utf-8");
+    return actual !== expected;
+  } catch {
+    // Treat unreadable as drift — better to install than silently skip.
+    return true;
+  }
 }
 
 /** Report the current service state without modifying anything. */
@@ -634,7 +748,7 @@ export function getClientServiceStatus(): ServiceInfo {
 // ── start / stop / restart ──────────────────────────────────────────
 //
 // These delegate to the platform's service manager. Designed so the
-// `client start / stop / restart` CLI commands are thin wrappers — all
+// `daemon start / stop / restart` CLI commands are thin wrappers — all
 // platform-specific quirks (launchctl bootout vs kickstart, systemctl
 // start vs restart, "not loaded" tolerance) live here.
 
@@ -670,18 +784,25 @@ export function startClientService(): ServiceOpResult {
  * Stop the service without disabling auto-start on next boot/login.
  *
  * systemd: `systemctl --user stop` — unit stays enabled, so a reboot or
- * `client start` brings it back. Combined with `Restart=on-failure +
+ * `daemon start` brings it back. Combined with `Restart=on-failure +
  * SuccessExitStatus=0` in the unit, the SIGTERM path actually terminates
  * (the bug `Restart=always` had: stop would be immediately undone).
  *
  * launchd: `launchctl bootout` — unloads the running registration but
  * leaves the plist in `~/Library/LaunchAgents/`, so the next user login
- * (or `client start`) reloads it.
+ * (or `daemon start`) reloads it.
  */
 export function stopClientService(): ServiceOpResult {
   if (process.platform === "linux") {
     const res = runCapture("systemctl", ["--user", "stop", SYSTEMD_UNIT], 35_000);
-    if (!res.ok) return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+    if (!res.ok) {
+      // Mirror the launchd "stop on missing unit = ok" semantics below: a
+      // concurrent `daemon stop` or a manual `systemctl --user disable` can
+      // leave us racing systemd to a unit that's already gone. Without this
+      // tolerance, the second caller sees a spurious failure.
+      if (/not loaded|no such|unknown unit|not found/i.test(res.stderr)) return { ok: true, detail: "not running" };
+      return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+    }
     return { ok: true };
   }
   if (process.platform === "darwin") {

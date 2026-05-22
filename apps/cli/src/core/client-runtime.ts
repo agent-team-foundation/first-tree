@@ -72,7 +72,7 @@ export class ClientRuntime {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Directory we write auto-registered agent configs into (same path that
-   * `first-tree-hub agent add` uses). Set by `watchAgentsDir` so the
+   * `first-tree agent add` uses). Set by `watchAgentsDir` so the
    * `agent:pinned` handler knows where to materialise new configs.
    */
   private agentsDir: string | null = null;
@@ -109,7 +109,7 @@ export class ClientRuntime {
     // instructions and exit 75 (TEMPFAIL) so systemd/launchd applies its
     // restart backoff instead of letting us thrash. The operator gets a
     // fresh token from the Web Computers page → New Connection and re-runs
-    // `first-tree-hub connect <token>`.
+    // `first-tree login <token>`.
     this.connection.on("auth:fatal", (err) => {
       print.blank();
       print.status("✗", "auth expired — service is shutting down to break the reconnect loop.");
@@ -129,7 +129,7 @@ export class ClientRuntime {
     });
 
     // Server tells us an agent has just been pinned to this client — mirror
-    // what `first-tree-hub agent add` does (write local config) and let the
+    // what `first-tree agent add` does (write local config) and let the
     // scanForNewAgents helper start the slot. The fs watcher, when active,
     // is also a fallback path for the same flow.
     this.connection.on("agent:pinned", (message) => {
@@ -201,7 +201,7 @@ export class ClientRuntime {
     if (this.agents.length === 0) {
       print.blank();
       print.status("", "no agents configured yet.");
-      print.status("", "add one with: first-tree-hub agent create <name> --type claude-code --client-id <id>");
+      print.status("", "add one with: first-tree agent create <name> --type claude-code --client-id <id>");
       print.blank();
       return;
     }
@@ -288,7 +288,7 @@ export class ClientRuntime {
 
   /**
    * React to an `agent:pinned` server push by writing the local config file
-   * (same shape `first-tree-hub agent add` produces) and scheduling the new
+   * (same shape `first-tree agent add` produces) and scheduling the new
    * slot — so the operator doesn't have to run `agent add` manually after
    * creating an agent from the admin UI or API.
    */

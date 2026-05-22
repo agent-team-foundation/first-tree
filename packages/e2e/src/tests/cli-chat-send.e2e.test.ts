@@ -8,7 +8,7 @@ import { type CurrentRunHandle, readCredentialsOrThrow, readCurrentHandle } from
 import { authedJson } from "../framework/server-driver/http.js";
 
 /**
- * CLI chat-send e2e — covers the user-facing `first-tree-hub chat send`
+ * CLI chat-send e2e — covers the user-facing `first-tree chat send`
  * surface end-to-end against a real spawned dist CLI process, not just an
  * HTTP test against the underlying route.
  *
@@ -25,9 +25,9 @@ import { authedJson } from "../framework/server-driver/http.js";
  *      the CLI's `resolveLocalAgent` knows the fixture human agent as the
  *      sender. (`credentials.ts` only plants credentials.json + client.yaml;
  *      `agents/` is the per-agent registration the operator would normally
- *      add via `first-tree-hub agent add` after `connect`.)
+ *      add via `first-tree agent add` after `connect`.)
  *   3. Create a 2-party chat with [human, recipient] via the public API
- *      and pass its id as `FIRST_TREE_HUB_CHAT_ID` — the CLI's new
+ *      and pass its id as `FIRST_TREE_CHAT_ID` — the CLI's new
  *      group-chat-only model (PR #465) requires the sender's "current
  *      chat" to be set + the recipient to already be a participant.
  *   4. Spawn the dist CLI: `chat send <recipientName> "..."` with
@@ -67,7 +67,7 @@ beforeAll(async () => {
 
   // Pre-create the chat with both participants. With the v1 group-chat-only
   // model the CLI no longer has a `--direct` flag to open a DM on the fly
-  // — the sender's current chat (via FIRST_TREE_HUB_CHAT_ID) must already
+  // — the sender's current chat (via FIRST_TREE_CHAT_ID) must already
   // contain the recipient. A 2-member chat is exempt from
   // `enforceGroupMention`, so plain content body still works.
   const chat = await authedJson<{ chatId: string }>(
@@ -81,7 +81,7 @@ beforeAll(async () => {
   chatId = chat.chatId;
 
   // Plant the local agent.yaml for the fixture human agent. The CLI scans
-  // `${FIRST_TREE_HUB_HOME}/config/agents/*/agent.yaml`; entry name = agent
+  // `${FIRST_TREE_HOME}/config/agents/*/agent.yaml`; entry name = agent
   // name; `agentId` field = server-side `agents.uuid`. Two lines is enough
   // — `runtime`/`concurrency`/`session.*` all have defaults on the schema.
   const senderAgentDir = resolve(handle.clientHome, "config", "agents", creds.humanAgentName);
@@ -101,14 +101,14 @@ describe("CLI `chat send` happy path against spawned dist CLI", () => {
     const creds = readCredentialsOrThrow(handle);
     const messageBody = `cli-send ${randomBytes(3).toString("hex")}`;
 
-    // FIRST_TREE_HUB_CHAT_ID feeds the CLI's "current chat" resolver — the
+    // FIRST_TREE_CHAT_ID feeds the CLI's "current chat" resolver — the
     // pre-created 2-party chat already lists recipientName as a member, so
     // `chat send` lands without needing `chat add-participant` first.
     const result = await execCli({
       home: handle.clientHome,
       serverBaseUrl: handle.serverBaseUrl,
       args: ["chat", "send", recipientName, messageBody, "--agent", creds.humanAgentName],
-      extraEnv: { FIRST_TREE_HUB_CHAT_ID: chatId },
+      extraEnv: { FIRST_TREE_CHAT_ID: chatId },
       timeoutMs: 15_000,
     });
     if (result.exitCode !== 0) {
@@ -147,7 +147,7 @@ describe("CLI `chat send` happy path against spawned dist CLI", () => {
       home: handle.clientHome,
       serverBaseUrl: handle.serverBaseUrl,
       args: ["chat", "send", recipientName, messageBody, "--agent", creds.humanAgentName],
-      extraEnv: { FIRST_TREE_HUB_CHAT_ID: chatId },
+      extraEnv: { FIRST_TREE_CHAT_ID: chatId },
       timeoutMs: 15_000,
     });
     if (result.exitCode !== 0) {

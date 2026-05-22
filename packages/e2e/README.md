@@ -39,7 +39,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
    visual-guard form of proposal §三.4; the cross-package `!packages/e2e/**`
    glob the proposal mentions is package-local in turbo 2 semantics and a
    no-op, but the per-package default already gives the same isolation).
-   The published CLI tarball (`@agent-team-foundation/first-tree-hub`) never
+   The published CLI tarball (`first-tree`) never
    references this package.
 2. **Independently deletable.** `scripts/verify-e2e-removable.sh` proves this:
    it stashes `packages/e2e` aside, confirms `pnpm install / typecheck / test
@@ -61,7 +61,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
 
   ```bash
   pnpm --filter @first-tree/server build
-  pnpm --filter @agent-team-foundation/first-tree-hub build
+  pnpm --filter first-tree build
   ```
 
 ## Commands
@@ -123,7 +123,7 @@ packages/e2e/
     │   │   ├── ws.ts            # M3: agent:ws client (auth → register → bind) + frame waiter + raw send
     │   │   └── dev-callback.ts  # M3: mint extra user JWTs via the dev-callback bypass
     │   ├── cli-driver/
-    │   │   ├── exec.ts          # M3: execCli (one-shot) + spawnCli (long-running) + ambient FIRST_TREE_HUB_* sanitization
+    │   │   ├── exec.ts          # M3: execCli (one-shot) + spawnCli (long-running) + ambient FIRST_TREE_* sanitization
     │   │   └── client-foreground.ts # M3: thin spawnCli wrapper for `client start --foreground`
     │   ├── credentials.ts       # M5 fixture: single-user PG seed for tests (paired with setup-devuser.ts; one is the fixture, the other is the live-seed)
     │   ├── setup-devuser.ts     # M5 dev-user seed: dev-callback → connect-token → CLI client start → agent/chat/message (driven from up.ts, not tests)

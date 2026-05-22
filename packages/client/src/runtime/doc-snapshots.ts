@@ -18,20 +18,26 @@ import {
  * safely-resolvable target into a snapshot of the file's contents at send
  * time.
  *
- * Resolution is constrained to `root`. A path resolves when its real target
- * is a regular `.md` file physically inside the worktree with no hidden
- * segment. Two written forms resolve:
- *   - workspace-relative (`docs/foo.md`, `./docs/foo.md`); and
- *   - **absolute paths that land inside `root`** (`<root>/docs/foo.md`).
- *     Web cannot map an absolute path back to a snapshot key (it does not
- *     know `root`), so for every resolved token whose written form is not
- *     already the canonical relative path, we **rewrite that span in the
- *     outbound text** to the canonical relative path (preserving any
- *     `:line[:col]` suffix). The caller sends `rewrittenText`, and web's
- *     unchanged re-scan then sees a relative token, matches the snapshot,
- *     and renders the preview link. This keeps web/server/schema untouched
- *     and is immune to server-side body rewrites (e.g. `@mention` prepend)
- *     because web re-scans rather than trusting byte offsets.
+ * Resolution is constrained to `root` (+ the optional cross-agent fence). A
+ * path resolves when its real target is a regular `.md` file physically inside
+ * an allowed root with no hidden segment. Relative (`docs/foo.md`,
+ * `./docs/foo.md`) and absolute-inside-root (`<root>/docs/foo.md`) forms both
+ * resolve.
+ *
+ * For every resolved+snapshotted reference we **rewrite its span in the
+ * outbound text into an EXPLICIT markdown link** whose href is the canonical
+ * snapshot key — a bare mention becomes `[display](key)`, an inline
+ * `[label](target)` keeps its label and points the target at the key. The
+ * caller sends `rewrittenText`. Web then renders a native markdown link and
+ * resolves a click by a direct href→snapshot lookup: it does NOT re-scan free
+ * text, re-derive keys, or expand cross short-forms. That removes the whole
+ * "the runtime scanner and the web scanner must agree" failure class (and the
+ * cross-agent web-version skew it caused), and is immune to server-side body
+ * rewrites (e.g. `@mention` prepend) since a `[..](..)` link survives wherever
+ * it lands. Only snapshotted refs are rewritten, so "rewritten ⇔ has a
+ * snapshot ⇔ web can render it" holds. (Web keeps a legacy bare-token re-scan
+ * for messages authored before this — it is simply inert here because the
+ * scanner skips inline links.)
  *
  * Anything that escapes the worktree (absolute path resolving OUTSIDE root,
  * `..` traversal, symlink pointing to a hidden segment inside or outside
@@ -169,36 +175,32 @@ export async function buildMessageDocumentSnapshots(
     }
   }
 
-  // Self snapshot keys are bare base-relative paths; a cross short form
-  // `<ownerSlug>/<rel>` can therefore collide with one (e.g. the sender also
-  // snapshotted a real file at `assistant/design.md`). Web gives a direct
-  // self-key match priority, so a colliding short form would link to the WRONG
-  // (self) snapshot. Detect the collision here and fall back to the FULL global
-  // key for that cross mention so web direct-matches the right snapshot
-  // (review P2-b).
-  const selfKeys = new Set<string>();
-  for (const occ of resolved) {
-    if (occ.kind === "self" && occ.key && snapshotted.has(occ.key)) selfKeys.add(occ.key);
-  }
-
-  // Pass 3 — rewrite text spans to the form web re-scans into the snapshot key.
-  // Web can't map an absolute path (it doesn't know `root`), nor a cross global
-  // key from a bare absolute path, so:
-  //   self + absolute-in-root → canonical bare relative path (unchanged #480)
-  //   cross                   → short `<ownerSlug>/<rel>` (web re-expands with
-  //                             chatId), OR the full global key when the short
-  //                             form would collide with a self snapshot key.
-  // Self RELATIVE mentions (`./docs/foo.md`) are left verbatim because web
-  // already canonicalises them on re-scan. Only tokens that actually produced a
-  // snapshot are rewritten, so "rewritten ⇔ previewable" holds.
+  // Pass 3 — rewrite every resolved+snapshotted reference into an EXPLICIT
+  // markdown link whose href is the canonical snapshot key. Web then renders a
+  // native link and resolves a click by a direct href→snapshot lookup; it no
+  // longer re-scans free text or re-derives/expands keys. That removes the
+  // "two scanners must agree" fragility — and, because the href carries the
+  // FULL key (relative for self, global `<slug>/<chatId>/<rel>` for cross),
+  // the cross-agent web-version skew is gone too (no chatId re-expansion on
+  // the web side). The href being explicit also makes short-form/self-key
+  // collisions impossible, so no collision handling is needed.
+  //   - bare mention   → `[display](key)` (display = canonical relative for
+  //                       self, short `<slug>/<rel>` for cross; `:line` kept on
+  //                       the display, stripped from the key href).
+  //   - inline `[label](target)` → target replaced with the key; the agent's
+  //                       label is preserved.
+  // Only tokens that actually produced a snapshot are rewritten, so the
+  // invariant "rewritten ⇔ has a snapshot ⇔ web can render it" holds.
   const rewrites: Array<{ start: number; end: number; replacement: string }> = [];
   for (const occ of resolved) {
     if (!occ.key || !snapshotted.has(occ.key)) continue;
-    if (occ.kind === "self" && isAbsolute(occ.writtenPath)) {
-      rewrites.push({ start: occ.start, end: occ.end, replacement: `${occ.key}${occ.lineSuffix}` });
-    } else if (occ.kind === "cross") {
-      const replacement = selfKeys.has(occ.shortForm) ? occ.key : occ.shortForm;
-      rewrites.push({ start: occ.start, end: occ.end, replacement: `${replacement}${occ.lineSuffix}` });
+    if (occ.source === "inline") {
+      // Point the agent's existing link at the canonical key (no-op when it
+      // already is); the label between `[` and `]` is left untouched.
+      rewrites.push({ start: occ.start, end: occ.end, replacement: occ.key });
+    } else {
+      const display = occ.kind === "cross" ? occ.shortForm : occ.key;
+      rewrites.push({ start: occ.start, end: occ.end, replacement: `[${display}${occ.lineSuffix}](${occ.key})` });
     }
   }
 
@@ -220,16 +222,23 @@ type DocPathOccurrence = {
   lineSuffix: string;
   start: number;
   end: number;
+  /**
+   * `bare` — a plain `path.md` mention; rewritten into an explicit
+   * `[display](key)` markdown link so web renders a native link (no re-scan).
+   * `inline` — the `(target)` of an agent-authored `[label](target.md)`; only
+   * the target is rewritten to the canonical key (the agent's label is kept).
+   */
+  source: "bare" | "inline";
 };
 
 function collectDocPathOccurrences(text: string): DocPathOccurrence[] {
   const out: DocPathOccurrence[] = [];
   for (const link of scanInlineMarkdownLinks(text)) {
-    out.push({ writtenPath: link.target, lineSuffix: "", start: link.start, end: link.end });
+    out.push({ writtenPath: link.target, lineSuffix: "", start: link.start, end: link.end, source: "inline" });
   }
   for (const m of scanBareDocPathTokens(text)) {
     const writtenPath = stripDocPathLineSuffix(m.raw);
-    out.push({ writtenPath, lineSuffix: m.raw.slice(writtenPath.length), start: m.start, end: m.end });
+    out.push({ writtenPath, lineSuffix: m.raw.slice(writtenPath.length), start: m.start, end: m.end, source: "bare" });
   }
   return out;
 }

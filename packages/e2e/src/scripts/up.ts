@@ -8,7 +8,7 @@ async function main(): Promise<void> {
     withClient,
     // Enable the web dev-login bypass so a human can sign in via the
     // "Continue as Dev User" button on /login while the env is parked.
-    serverExtraEnv: { FIRST_TREE_HUB_DEV_CALLBACK_ENABLED: "1" },
+    serverExtraEnv: { FIRST_TREE_DEV_CALLBACK_ENABLED: "1" },
   });
 
   // Drive the real "log in as Dev User → generate connect-token → CLI connect"

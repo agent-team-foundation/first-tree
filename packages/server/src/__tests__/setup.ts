@@ -18,8 +18,8 @@ export const DEFAULT_ORG_ID = "01961234-0000-7000-8000-000000000000";
 // own `process.env`; if the runner ever switches to a thread-pool model
 // (or `pool: "vmThreads"` with shared env), those mutations would leak
 // across tests. Re-evaluate then.
-if (!process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED) {
-  process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED = "1";
+if (!process.env.FIRST_TREE_DEV_CALLBACK_ENABLED) {
+  process.env.FIRST_TREE_DEV_CALLBACK_ENABLED = "1";
 }
 
 // Switch this worker process to its dedicated pre-created DB. Done eagerly

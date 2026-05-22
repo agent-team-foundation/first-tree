@@ -8,7 +8,7 @@ export type AgentIdentity = {
   /**
    * Agent's inbox ID. Carried alongside the agent identity so the runtime
    * can identify the agent's row in `inbox_entries` (poll / push paths) and
-   * so child processes can read `FIRST_TREE_HUB_INBOX_ID` when they need a
+   * so child processes can read `FIRST_TREE_INBOX_ID` when they need a
    * stable identity handle. There is no `replyToInbox` envelope any more —
    * cross-chat reply routing was removed in first-tree-context PR #281.
    */
@@ -56,7 +56,7 @@ export type SessionContext = HandlerContext & {
   forwardResult: (text: string) => Promise<void>;
 
   /**
-   * Build env for CLI sub-processes that shell out to the `first-tree-hub`
+   * Build env for CLI sub-processes that shell out to the `first-tree`
    * CLI. Layers Agent-Hub envelope vars (server/agent/inbox/chat IDs) on
    * top of the parent env. Handlers pass their own cleaned `process.env`.
    */

@@ -235,7 +235,7 @@ export type ContextTreeInfo = z.infer<typeof contextTreeInfoSchema>;
  * Server → client WebSocket frame announcing that an agent has just been
  * pinned to the connected client (either created with `clientId` or bound via
  * PATCH NULL → ID). The client can auto-register a local config from this so
- * the operator doesn't have to run `first-tree-hub agent add` manually.
+ * the operator doesn't have to run `first-tree agent add` manually.
  */
 export const agentPinnedMessageSchema = z.object({
   type: z.literal("agent:pinned"),

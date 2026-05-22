@@ -23,12 +23,12 @@ describe("documentBasePathFromRuntimeConfig", () => {
 
   it("returns an ABSOLUTE repo worktree path (perChatRoot + derived localPath) for a single repo", () => {
     // Regression: the old code returned a bare relative localPath
-    // ("first-tree-hub"), which the runtime resolved against its own
+    // ("first-tree"), which the runtime resolved against its own
     // process.cwd() (the launch dir, not the per-chat workspace) and failed to
     // find any doc — leaving single-repo cloud preview dead.
-    expect(
-      documentBasePathFromRuntimeConfig(payload([{ url: "https://github.com/a/first-tree-hub.git" }]), PER_CHAT),
-    ).toBe(`${PER_CHAT}/first-tree-hub`);
+    expect(documentBasePathFromRuntimeConfig(payload([{ url: "https://github.com/a/first-tree.git" }]), PER_CHAT)).toBe(
+      `${PER_CHAT}/first-tree`,
+    );
   });
 
   it("honours an explicit localPath for a single repo", () => {

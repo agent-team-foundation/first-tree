@@ -17,7 +17,7 @@
  *   5. Hit `POST /api/v1/admin/agents` with the seeded client as `clientId`.
  *   6. Assert that:
  *        - The runtime's local `agents/<name>/agent.yaml` was written — same
- *          file `first-tree-hub agent add` would produce.
+ *          file `first-tree agent add` would produce.
  *        - A bound AgentSlot is running for that agentId (i.e. we did not
  *          just drop the event on the floor).
  *
@@ -39,7 +39,7 @@ import postgres from "postgres";
 
 const TEST_HOME = join(tmpdir(), `ft-hub-e2e-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`);
 mkdirSync(join(TEST_HOME, "config"), { recursive: true });
-process.env.FIRST_TREE_HUB_HOME = TEST_HOME;
+process.env.FIRST_TREE_HOME = TEST_HOME;
 
 const jwtSecret = "e2e-jwt-secret-key-for-auto-agent-add";
 
@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     stdio: "pipe",
   });
 
-  // Dynamic imports so DATABASE_URL / FIRST_TREE_HUB_HOME are set before
+  // Dynamic imports so DATABASE_URL / FIRST_TREE_HOME are set before
   // modules first read them.
   const { buildApp } = await import("../../server/src/app.js");
   const { createAgent } = await import("../../server/src/services/agent.js");

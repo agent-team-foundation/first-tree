@@ -132,7 +132,7 @@ describe("createCommandVersionPoller", () => {
     const poller = createCommandVersionPoller({
       logger: silentLogger,
       registryUrl: "https://example.test/",
-      packageName: "@agent-team-foundation/first-tree-hub",
+      packageName: "first-tree",
       channel: "latest",
       intervalMs: 60_000,
       initialVersion: "0.0.0",
@@ -143,7 +143,7 @@ describe("createCommandVersionPoller", () => {
     expect(calls).toHaveLength(1);
     // Trailing slash on registryUrl must be stripped; `@scope/name` must
     // survive encoding so npm registry can resolve the packument.
-    expect(calls[0]).toBe("https://example.test/@agent-team-foundation/first-tree-hub");
+    expect(calls[0]).toBe("https://example.test/first-tree");
   });
 
   it("stop() prevents further refreshes from mutating state", async () => {

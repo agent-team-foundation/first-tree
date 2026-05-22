@@ -45,7 +45,7 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
  *     at first insert sticks for the row's lifetime.
  *   - Existing row with a different user_id → raises
  *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `first-tree-hub client claim --confirm` to take
+ *     operator through `first-tree login <token> --override` to take
  *     ownership, which unpins the previous owner's agents from the machine.
  */
 export async function registerClient(
@@ -79,7 +79,7 @@ export async function registerClient(
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        "Run `first-tree-hub client claim --confirm` to transfer ownership.",
+        "Run `first-tree login <token> --override` to transfer ownership.",
     );
   }
 
@@ -237,7 +237,7 @@ export function extractLastUpdateAttempt(metadata: unknown): UpdateAttempt | nul
  * List the active agents currently pinned to a client. Used by the WS
  * registration handshake to backfill `agent:pinned` notifications missed while
  * the client was offline — without it, an admin who pinned an agent during a
- * client outage would still need a manual `first-tree-hub agent add`.
+ * client outage would still need a manual `first-tree agent add`.
  *
  * Excludes soft-deleted agents (status = "deleted"). Human agents are
  * naturally excluded by the `clientId` filter — they never carry a clientId.
