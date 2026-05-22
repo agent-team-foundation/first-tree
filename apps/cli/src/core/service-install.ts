@@ -681,7 +681,14 @@ export function startClientService(): ServiceOpResult {
 export function stopClientService(): ServiceOpResult {
   if (process.platform === "linux") {
     const res = runCapture("systemctl", ["--user", "stop", SYSTEMD_UNIT], 35_000);
-    if (!res.ok) return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+    if (!res.ok) {
+      // Mirror the launchd "stop on missing unit = ok" semantics below: a
+      // concurrent `daemon stop` or a manual `systemctl --user disable` can
+      // leave us racing systemd to a unit that's already gone. Without this
+      // tolerance, the second caller sees a spurious failure.
+      if (/not loaded|no such|unknown unit|not found/i.test(res.stderr)) return { ok: true, detail: "not running" };
+      return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
+    }
     return { ok: true };
   }
   if (process.platform === "darwin") {
