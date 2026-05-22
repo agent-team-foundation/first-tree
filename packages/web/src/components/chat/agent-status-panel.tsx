@@ -5,6 +5,7 @@ import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent
 import { suspendSession } from "../../api/sessions.js";
 import { viewOf } from "../../lib/agent-status-view.js";
 import { toneOf } from "../../lib/tones.js";
+import { anchorKey, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { Avatar } from "../avatar.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
@@ -43,6 +44,7 @@ export function AgentStatusPanel({
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000, // safety net; the WS invalidation is the live path
   });
+  const mounted = useMountedAnchors();
 
   const byAgent = new Map<string, AgentChatStatus>((statuses ?? []).map((s) => [s.agentId, s]));
 
@@ -64,6 +66,7 @@ export function AgentStatusPanel({
           agent={agent}
           status={byAgent.get(agent.agentId) ?? null}
           canManage={canManage(agent.agentId)}
+          mounted={mounted}
         />
       ))}
     </div>
@@ -86,11 +89,13 @@ function AgentStatusRow({
   agent,
   status,
   canManage,
+  mounted,
 }: {
   chatId: string;
   agent: ChatParticipantDetail;
   status: AgentChatStatus | null;
   canManage: boolean;
+  mounted: ReadonlySet<string>;
 }) {
   const queryClient = useQueryClient();
   const suspendMut = useMutation({
@@ -140,7 +145,7 @@ function AgentStatusRow({
 
       <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 2 }}>
         <div className="truncate text-subtitle">{agent.displayName}</div>
-        <SecondLine status={status} />
+        <SecondLine status={status} mounted={mounted} />
       </div>
 
       {showPause ? <PauseButton onClick={() => suspendMut.mutate()} isPending={suspendMut.isPending} /> : null}
@@ -158,7 +163,7 @@ function AgentStatusRow({
  *   failed             → "Failed" pill (red)
  *   idle/paused/offline → the state word in its own colour (sans)
  */
-function SecondLine({ status }: { status: AgentChatStatus | null }) {
+function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mounted: ReadonlySet<string> }) {
   if (!status) {
     return (
       <div className="text-caption" style={{ color: "var(--fg-4)" }}>
@@ -174,6 +179,7 @@ function SecondLine({ status }: { status: AgentChatStatus | null }) {
       <TimelineJumpButton
         agentId={status.agentId}
         main="working"
+        anchored={mounted.has(anchorKey("working", status.agentId))}
         ariaLabel="Jump to this agent's activity in the timeline"
         className="text-caption"
         style={{ color: "var(--state-working)" }}
@@ -191,6 +197,7 @@ function SecondLine({ status }: { status: AgentChatStatus | null }) {
         <TimelineJumpButton
           agentId={status.agentId}
           main="needs_you"
+          anchored={mounted.has(anchorKey("needs_you", status.agentId))}
           ariaLabel="Jump to this agent's question in the timeline"
         >
           <StatePill tone="blocked" label="Needs reply" />
@@ -205,6 +212,7 @@ function SecondLine({ status }: { status: AgentChatStatus | null }) {
         <TimelineJumpButton
           agentId={status.agentId}
           main="failed"
+          anchored={mounted.has(anchorKey("failed", status.agentId))}
           ariaLabel="Jump to this agent's error in the timeline"
         >
           <StatePill tone="error" label="Failed" />

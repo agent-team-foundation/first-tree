@@ -819,6 +819,12 @@ export function ChatView({
     focusPrimedRef.current = false;
   }, [chatId]);
 
+  // FOLLOW-UP: this loads only the latest 50 messages (no pagination) and the
+  // events query below only the primary agent's events. The status surfaces'
+  // "jump to timeline" gates clickability on what's actually mounted
+  // (useMountedAnchors), so older / non-primary-agent anchors simply aren't
+  // clickable yet. Full jump coverage needs message pagination + multi-agent
+  // event loading — tracked as a separate effort, not in this status-UI PR.
   const { data: messagesData } = useQuery({
     queryKey: ["chat-messages", chatId],
     queryFn: () => listChatMessages(chatId, { limit: 50 }),

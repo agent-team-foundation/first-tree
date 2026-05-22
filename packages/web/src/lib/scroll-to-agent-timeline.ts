@@ -23,9 +23,3 @@ export function scrollToAgentTimeline(agentId: string, main: AgentMainStatus): v
   const els = document.querySelectorAll<HTMLElement>(`[${attr}="${agentId}"]`);
   els[els.length - 1]?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
-
-/** Whether a status has a timeline anchor to jump to (so callers can gate
- *  clickability — only working / needs-you / failed do). */
-export function hasTimelineAnchor(main: AgentMainStatus): boolean {
-  return main === "working" || main === "needs_you" || main === "failed";
-}

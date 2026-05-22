@@ -5,11 +5,16 @@ import { scrollToAgentTimeline } from "../../lib/scroll-to-agent-timeline.js";
 import { cn } from "../../lib/utils.js";
 
 /**
- * A clickable status element that jumps to the agent's place in the timeline,
- * with a hover-revealed `→` so the affordance is discoverable (the bare
+ * A status element that jumps to the agent's place in the timeline, with a
+ * hover-revealed `→` so the affordance is discoverable (the bare
  * `cursor:pointer` alone read as plain text). Shared by the compose rail rows
  * and the AgentRow second-line status (pills / working chip) so the
  * "click a status → jump to its context" interaction is identical in both.
+ *
+ * `anchored` gates the affordance: only when the agent's timeline anchor is
+ * actually mounted (see `useMountedAnchors`) is the element clickable and the
+ * `→` shown. When it isn't, the children render as a plain static span — no
+ * pointer, no arrow, no silent no-op click.
  *
  * Chrome-free (no bg/border): it inherits the surrounding colour and only adds
  * the fading arrow, keeping the light rail / row visuals intact.
@@ -17,6 +22,7 @@ import { cn } from "../../lib/utils.js";
 export function TimelineJumpButton({
   agentId,
   main,
+  anchored,
   ariaLabel,
   className,
   style,
@@ -24,11 +30,23 @@ export function TimelineJumpButton({
 }: {
   agentId: string;
   main: AgentMainStatus;
+  /** Whether this agent's timeline anchor is currently mounted. */
+  anchored: boolean;
   ariaLabel: string;
   className?: string;
   style?: CSSProperties;
   children: ReactNode;
 }) {
+  if (!anchored) {
+    // Anchor not mounted (e.g. a non-primary agent's events, or an old message
+    // outside the 50-message window) → show the status, but don't pretend it's
+    // a working jump.
+    return (
+      <span className={cn("inline-flex min-w-0 items-center", className)} style={{ gap: 4, ...style }}>
+        {children}
+      </span>
+    );
+  }
   return (
     <button
       type="button"

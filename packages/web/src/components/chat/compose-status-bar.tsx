@@ -9,6 +9,7 @@ import { ChevronDown, CornerDownLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
+import { anchorKey, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
 import { formatElapsed } from "./working-chip.js";
@@ -92,10 +93,14 @@ function scrollToQuestionAnswer(agentId: string): void {
   const card = els[els.length - 1];
   if (!card) return;
   card.scrollIntoView({ behavior: "smooth", block: "center" });
-  // preventScroll so focusing doesn't fight the smooth scroll above.
-  card.querySelector<HTMLElement>('textarea, input, button, [tabindex]:not([tabindex="-1"])')?.focus({
-    preventScroll: true,
-  });
+  // Prefer the free-text answer field; only fall back to the first option /
+  // focusable when there's no textarea (option buttons render before it in DOM
+  // order, so a plain "first focusable" would skip the textarea). preventScroll
+  // so focusing doesn't fight the smooth scroll above.
+  const target =
+    card.querySelector<HTMLElement>("textarea, input") ??
+    card.querySelector<HTMLElement>('button, [tabindex]:not([tabindex="-1"])');
+  target?.focus({ preventScroll: true });
 }
 
 /** Live wall-clock elapsed since `startedAt`, re-rendering each second. */
@@ -125,6 +130,7 @@ export function ComposeStatusBar({
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000,
   });
+  const mounted = useMountedAnchors();
 
   // Re-pick the lead on every data update, and once more after the hold could
   // expire (so a steadily most-recent agent can take over even with no new
@@ -160,7 +166,7 @@ export function ComposeStatusBar({
       }}
     >
       <div className="flex items-center" style={{ gap: "var(--sp-1_5)" }}>
-        <RailRow status={leadRow} nameOf={nameFor(agents)} />
+        <RailRow status={leadRow} nameOf={nameFor(agents)} mounted={mounted} />
         {others.length > 0 ? (
           <button
             type="button"
@@ -192,7 +198,7 @@ export function ComposeStatusBar({
           style={{ gap: "var(--sp-1)", maxHeight: EXPANDED_MAX_HEIGHT, overflowY: "auto" }}
         >
           {attention.map((s) => (
-            <RailRow key={s.agentId} status={s} nameOf={nameFor(agents)} />
+            <RailRow key={s.agentId} status={s} nameOf={nameFor(agents)} mounted={mounted} />
           ))}
         </div>
       ) : null}
@@ -207,13 +213,22 @@ function nameFor(agents: ChatParticipantDetail[]) {
 /** One rail line: a clickable text region (→ jump to timeline) plus, for
  *  needs-you, a [Reply] action. The two are separate targets so a jump click
  *  never lands on Reply. */
-function RailRow({ status, nameOf }: { status: AgentChatStatus; nameOf: (id: string) => string }) {
+function RailRow({
+  status,
+  nameOf,
+  mounted,
+}: {
+  status: AgentChatStatus;
+  nameOf: (id: string) => string;
+  mounted: ReadonlySet<string>;
+}) {
   const view = viewOf(status.main);
   return (
     <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
       <TimelineJumpButton
         agentId={status.agentId}
         main={status.main}
+        anchored={mounted.has(anchorKey(status.main, status.agentId))}
         ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
         className="flex-1 text-caption"
         style={{ color: view.colorVar }}
