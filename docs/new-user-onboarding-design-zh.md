@@ -374,7 +374,7 @@ const personal = await createPersonalTeam(app.db, {
 ### 6.6 Create 动作
 
 点 `[Create]` 时：
-1. POST `/admin/agents`，body `{type: "personal_assistant", displayName, name (slug), clientId, runtimeProvider, gitRepos: [{url: <选的 repo>}], organizationId}`
+1. POST `/admin/agents`，body `{type: "agent", displayName, name (slug), clientId, runtimeProvider, gitRepos: [{url: <选的 repo>}], organizationId}`
 2. Poll `/admin/agents/<uuid>/client-status` 直到 online（30 秒超时，重试 UI 沿用现有 OnboardingView 的模式）
 3. online 之后：PATCH `onboardingStep = step3`，navigate 到 `/`（Step 3 intro）
 

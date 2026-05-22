@@ -362,7 +362,7 @@ describe("conversation-list source tags", () => {
     const { createAgent } = await import("../services/agent.js");
     const managed = await createAgent(app.db, {
       name: `mgr-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Managed Agent",
       managerId: admin.memberId,
       organizationId: admin.organizationId,

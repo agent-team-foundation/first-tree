@@ -54,7 +54,7 @@ describe("Client ownership transfer (claim)", () => {
 
     const agentA = await createAgent(app.db, {
       name: `claim-bot-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice's Bot",
       managerId: alice.memberId,
       clientId,
@@ -122,7 +122,7 @@ describe("Client ownership transfer (claim)", () => {
     const orgId = s.orgId;
     const bobAgent = await createAgent(app.db, {
       name: `bobbot-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bob's Bot",
       managerId: s.bob.memberId,
       clientId: s.clientId,

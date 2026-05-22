@@ -33,7 +33,7 @@ describe("issue #394 — watcher mark-read", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -71,7 +71,7 @@ describe("issue #394 — watcher mark-read", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-stale-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-Stale",
       managerId: admin.memberId,
       organizationId: admin.organizationId,

@@ -791,8 +791,8 @@ export async function addMeChatParticipants(
   // `managerId` (rather than accepting it as a parameter) prevents an
   // internal caller from mismatching the two and bypassing the check.
   // Works regardless of caller agent type: a human agent's managerId
-  // is its own member; an autonomous/personal_assistant agent's
-  // managerId is the member that owns it.
+  // is its own member; an `agent` row's managerId is the member that
+  // owns it.
   const [callerRow] = await db
     .select({ ownerMemberId: agents.managerId })
     .from(chatMembership)

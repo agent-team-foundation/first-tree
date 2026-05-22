@@ -4,10 +4,8 @@ export function humanizeAgentType(type: AgentType): string {
   switch (type) {
     case "human":
       return "Human";
-    case "personal_assistant":
-      return "Personal Assistant";
-    case "autonomous_agent":
-      return "Autonomous Agent";
+    case "agent":
+      return "Agent";
   }
 }
 

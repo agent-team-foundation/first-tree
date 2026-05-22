@@ -102,26 +102,26 @@ describe("Agent Visibility", () => {
       expect(agent.visibility).toBe("organization");
     });
 
-    it("autonomous_agent defaults to organization visibility", async () => {
+    // Post-type-merge: pre-merge `personal_assistant` + `autonomous_agent`
+    // collapsed into a single `agent` type. The server defaults to
+    // "organization" (the autonomous-bot framing that was the most common
+    // pre-merge case); callers that want the private framing (new-agent
+    // dialog, CLI assistant onboarding) pass `visibility: "private"`
+    // explicitly.
+    it("agent rows default to organization visibility", async () => {
       const app = getApp();
-      const agent = await seedAgent(app, { name: "vis-auto", type: "autonomous_agent" });
+      const agent = await seedAgent(app, { name: "vis-agent", type: "agent" });
       expect(agent.visibility).toBe("organization");
     });
 
-    it("personal_assistant defaults to private visibility", async () => {
-      const app = getApp();
-      const agent = await seedAgent(app, { name: "vis-pa", type: "personal_assistant" });
-      expect(agent.visibility).toBe("private");
-    });
-
-    it("explicit visibility overrides default", async () => {
+    it("explicit private visibility overrides default", async () => {
       const app = getApp();
       const agent = await seedAgent(app, {
         name: "vis-override",
-        type: "personal_assistant",
-        visibility: "organization",
+        type: "agent",
+        visibility: "private",
       });
-      expect(agent.visibility).toBe("organization");
+      expect(agent.visibility).toBe("private");
     });
   });
 
@@ -134,10 +134,18 @@ describe("Agent Visibility", () => {
       const meRes = await adminReq("GET", "/api/v1/me");
       const adminMemberId = meRes.json<{ memberships: Array<{ id: string }> }>().memberships[0]?.id ?? admin.memberId;
 
-      // Create agents: org-visible, admin's private, unowned private
-      await seedAgent(app, { name: "admin-see-org", type: "autonomous_agent" });
-      await seedAgent(app, { name: "admin-see-own-priv", type: "personal_assistant", managerId: adminMemberId });
-      await seedAgent(app, { name: "admin-hidden-priv", type: "personal_assistant" });
+      // Create agents: org-visible, admin's private, unowned private. Post-
+      // type-merge `agent` defaults to organization visibility — pass
+      // `visibility: "private"` explicitly when a test wants the assistant
+      // framing.
+      await seedAgent(app, { name: "admin-see-org", type: "agent" });
+      await seedAgent(app, {
+        name: "admin-see-own-priv",
+        type: "agent",
+        visibility: "private",
+        managerId: adminMemberId,
+      });
+      await seedAgent(app, { name: "admin-hidden-priv", type: "agent", visibility: "private" });
 
       const res = await adminReq("GET", `/api/v1/orgs/${admin.organizationId}/agents?limit=100`);
       expect(res.statusCode).toBe(200);
@@ -154,15 +162,17 @@ describe("Agent Visibility", () => {
       const member = await createMemberAndLogin(app, adminBundle);
 
       // Create agents: one org-visible, one private managed by this member, one private managed by admin
-      await seedAgent(app, { name: "member-see-org", type: "autonomous_agent" });
+      await seedAgent(app, { name: "member-see-org", type: "agent" });
       await seedAgent(app, {
         name: "member-see-my",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
         managerId: member.memberId,
       });
       await seedAgent(app, {
         name: "member-hidden",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
       });
 
       const res = await member.req("GET", `/api/v1/orgs/${adminBundle.admin.organizationId}/agents?limit=100`);
@@ -184,7 +194,8 @@ describe("Agent Visibility", () => {
 
       const privateAgent = await seedAgent(app, {
         name: "no-access-priv",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
       });
 
       const res = await member.req("GET", `/api/v1/agents/${privateAgent.uuid}`);
@@ -196,7 +207,7 @@ describe("Agent Visibility", () => {
       const adminBundle = await authedRequest(app);
       const member = await createMemberAndLogin(app, adminBundle);
 
-      const orgAgent = await seedAgent(app, { name: "access-org", type: "autonomous_agent" });
+      const orgAgent = await seedAgent(app, { name: "access-org", type: "agent" });
 
       const res = await member.req("GET", `/api/v1/agents/${orgAgent.uuid}`);
       expect(res.statusCode).toBe(200);
@@ -209,7 +220,8 @@ describe("Agent Visibility", () => {
 
       const myAgent = await seedAgent(app, {
         name: "access-my-priv",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
         managerId: member.memberId,
       });
 
@@ -225,7 +237,8 @@ describe("Agent Visibility", () => {
 
       const privateAgent = await seedAgent(app, {
         name: "admin-cross-priv",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
         managerId: otherMember.memberId,
       });
 
@@ -242,7 +255,8 @@ describe("Agent Visibility", () => {
 
       const privateAgent = await seedAgent(app, {
         name: "admin-cross-priv-sessions",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
         managerId: otherMember.memberId,
       });
 
@@ -258,7 +272,8 @@ describe("Agent Visibility", () => {
 
       const privateAgent = await seedAgent(app, {
         name: "admin-cross-priv-status",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
         managerId: otherMember.memberId,
       });
 
@@ -275,7 +290,7 @@ describe("Agent Visibility", () => {
 
       const myAgent = await seedAgent(app, {
         name: "patch-my",
-        type: "personal_assistant",
+        type: "agent",
         managerId: member.memberId,
       });
 
@@ -293,7 +308,7 @@ describe("Agent Visibility", () => {
 
       const otherAgent = await seedAgent(app, {
         name: "patch-other",
-        type: "autonomous_agent",
+        type: "agent",
       });
 
       const res = await member.req("PATCH", `/api/v1/agents/${otherAgent.uuid}`, {
@@ -308,7 +323,7 @@ describe("Agent Visibility", () => {
 
       const agent = await seedAgent(app, {
         name: "patch-admin",
-        type: "autonomous_agent",
+        type: "agent",
       });
 
       const res = await adminReq("PATCH", `/api/v1/agents/${agent.uuid}`, {
@@ -333,7 +348,8 @@ describe("Agent Visibility", () => {
 
       const privateAgent = await seedAgent(app, {
         name: "admin-cross-priv-chat",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
         managerId: otherMember.memberId,
       });
 
@@ -351,7 +367,8 @@ describe("Agent Visibility", () => {
 
       const privateAgent = await seedAgent(app, {
         name: "non-admin-cross-priv-chat",
-        type: "personal_assistant",
+        type: "agent",
+        visibility: "private",
         managerId: memberA.memberId,
       });
 
@@ -367,7 +384,7 @@ describe("Agent Visibility", () => {
       const app = getApp();
       const { req: adminReq } = await authedRequest(app);
 
-      const agent = await seedAgent(app, { name: "vis-change", type: "personal_assistant" });
+      const agent = await seedAgent(app, { name: "vis-change", type: "agent", visibility: "private" });
       expect(agent.visibility).toBe("private");
 
       const res = await adminReq("PATCH", `/api/v1/agents/${agent.uuid}`, {
@@ -397,7 +414,7 @@ describe("Chat Access Control", () => {
       // Create a personal assistant managed by member
       const assistant = await seedAgent(app, {
         name: "chat-pa",
-        type: "personal_assistant",
+        type: "agent",
         managerId: member.memberId,
       });
 
@@ -427,12 +444,12 @@ describe("Chat Access Control", () => {
       // Create agents for A and B
       const assistantA = await seedAgent(app, {
         name: "chat-a-pa",
-        type: "personal_assistant",
+        type: "agent",
         managerId: memberA.memberId,
       });
       const assistantB = await seedAgent(app, {
         name: "chat-b-pa",
-        type: "personal_assistant",
+        type: "agent",
         managerId: memberB.memberId,
       });
 
@@ -466,12 +483,12 @@ describe("Chat Access Control", () => {
       // Create two agents managed by member
       const agentA = await seedAgent(app, {
         name: "join-a",
-        type: "personal_assistant",
+        type: "agent",
         managerId: member.memberId,
       });
       const agentB = await seedAgent(app, {
         name: "join-b",
-        type: "personal_assistant",
+        type: "agent",
         managerId: member.memberId,
       });
 
@@ -498,12 +515,12 @@ describe("Chat Access Control", () => {
       // Create agents managed by member A
       const agentA = await seedAgent(app, {
         name: "nojoin-a",
-        type: "personal_assistant",
+        type: "agent",
         managerId: memberA.memberId,
       });
       const agentA2 = await seedAgent(app, {
         name: "nojoin-a2",
-        type: "personal_assistant",
+        type: "agent",
         managerId: memberA.memberId,
       });
 
@@ -529,7 +546,7 @@ describe("Chat Access Control", () => {
 
       const assistant = await seedAgent(app, {
         name: "leave-pa",
-        type: "personal_assistant",
+        type: "agent",
         managerId: member.memberId,
       });
 
@@ -555,7 +572,7 @@ describe("Chat Access Control", () => {
 
       const assistant = await seedAgent(app, {
         name: "leave-other-pa",
-        type: "personal_assistant",
+        type: "agent",
         managerId: memberA.memberId,
       });
 
@@ -579,7 +596,7 @@ describe("Chat Access Control", () => {
 
       const assistant = await seedAgent(app, {
         name: "detail-pa",
-        type: "personal_assistant",
+        type: "agent",
         managerId: memberA.memberId,
       });
 
@@ -602,7 +619,7 @@ describe("Chat Access Control", () => {
 
       const assistant = await seedAgent(app, {
         name: "msg-pa",
-        type: "personal_assistant",
+        type: "agent",
         managerId: memberA.memberId,
       });
 
@@ -625,7 +642,7 @@ describe("Chat Access Control", () => {
 
       const assistant = await seedAgent(app, {
         name: "send-pa",
-        type: "personal_assistant",
+        type: "agent",
         managerId: memberA.memberId,
       });
 
@@ -650,7 +667,7 @@ describe("Chat Access Control", () => {
 
       const agent = await seedAgent(app, {
         name: "del-other",
-        type: "autonomous_agent",
+        type: "agent",
       });
 
       // Suspend first (required before delete)

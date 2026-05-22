@@ -97,7 +97,7 @@ beforeAll(async () => {
       `/api/v1/orgs/${encodeURIComponent(creds.organizationId)}/agents`,
       {
         name: `e2e-prsec-delegate-${randomBytes(2).toString("hex")}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "E2E PR Secondary Delegate",
         clientId: creds.clientId,
       },

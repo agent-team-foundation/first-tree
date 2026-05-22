@@ -29,7 +29,8 @@ function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
     agentId: "test-agent",
     inboxId: "inbox-test-agent",
     displayName: "Test Agent",
-    type: "autonomous_agent",
+    type: "agent",
+    visibility: "organization",
     delegateMention: null,
     metadata: {},
     ...overrides,
@@ -57,7 +58,7 @@ describe("bootstrapWorkspace", () => {
 
     bootstrapWorkspace({
       workspacePath: workspace,
-      identity: makeIdentity({ agentId: "my-agent", type: "personal_assistant", delegateMention: "owner" }),
+      identity: makeIdentity({ agentId: "my-agent", type: "agent", delegateMention: "owner" }),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
       chatId: "chat-123",
@@ -68,7 +69,7 @@ describe("bootstrapWorkspace", () => {
 
     const data = JSON.parse(readFileSync(identityPath, "utf-8"));
     expect(data.agentId).toBe("my-agent");
-    expect(data.type).toBe("personal_assistant");
+    expect(data.type).toBe("agent");
     expect(data.delegateMention).toBe("owner");
     expect(data.chatId).toBe("chat-123");
     expect(data.serverUrl).toBe("http://localhost:8000");
@@ -284,7 +285,7 @@ describe("bootstrapWorkspace", () => {
 
     bootstrapWorkspace({
       workspacePath: workspace,
-      identity: makeIdentity({ agentId: "a", type: "autonomous_agent" }),
+      identity: makeIdentity({ agentId: "a", type: "agent" }),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
       chatId: "chat-cc",

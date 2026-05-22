@@ -298,6 +298,7 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
     agentId: identity.agentId,
     displayName: identity.displayName,
     type: identity.type,
+    visibility: identity.visibility,
     delegateMention: identity.delegateMention,
     metadata: identity.metadata,
     chatId,

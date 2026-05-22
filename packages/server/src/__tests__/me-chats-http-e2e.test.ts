@@ -46,7 +46,7 @@ describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape",
     const alice = await createTestAdmin(app);
     const peer = await createAgent(app.db, {
       name: `e2e-peer-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "E2E Peer",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -91,7 +91,7 @@ describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape",
     const alice = await createTestAdmin(app);
     const peer = await createAgent(app.db, {
       name: `e2e-idle-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Idle Peer",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -117,7 +117,7 @@ describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape",
     const alice = await createTestAdmin(app);
     const peer = await createAgent(app.db, {
       name: `e2e-end-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Ended Peer",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -195,7 +195,7 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
     // Kael — single shared agent.
     const kael = await createAgent(app.db, {
       name: `kael-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Kael",
       managerId: alice.memberId,
       organizationId: orgId,

@@ -53,7 +53,7 @@ Everything that is "about one or more agent records". Subcommands split into sev
 
 **Hub-side creation / ownership**
 
-- `agent create <name> --type <human|personal_assistant|autonomous_agent> --client-id <id> [--runtime <r>] [--display-name <n>] [--server <url>]` — calls `POST /api/v1/admin/agents` then saves the local alias. Requires the target `client-id` to be a machine you own (run `connect <token>` on that machine first).
+- `agent create <name> --type <human|agent> --client-id <id> [--runtime <r>] [--display-name <n>] [--server <url>]` — calls `POST /api/v1/admin/agents` then saves the local alias. Requires the target `client-id` to be a machine you own (run `connect <token>` on that machine first).
 - `agent claim <agentName>` — sets `managerId` to the signed-in member via `PATCH /api/v1/admin/agents/:id`. Admins can claim any agent; non-admins can only self-claim unmanaged ones.
 
 **Runtime configuration** (server-side — see also `agent-config.ts`)

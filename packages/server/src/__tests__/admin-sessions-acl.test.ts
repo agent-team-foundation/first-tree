@@ -62,7 +62,7 @@ describe("Admin sessions — chat-level access control", () => {
     // Org-visible autonomous agent the chat is "with"
     const targetAgent = await createAgent(app.db, {
       name: `acl-target-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "ACL target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -120,7 +120,7 @@ describe("Admin sessions — chat-level access control", () => {
     // Agent managed by the supervisor; supervisor's own human is NOT in the chat.
     const supervisedAgent = await createAgent(app.db, {
       name: `acl-supervised-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Supervised",
       managerId: supervisor.memberId,
       clientId: supervisor.clientId,

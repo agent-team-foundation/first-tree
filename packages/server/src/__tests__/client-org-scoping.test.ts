@@ -120,7 +120,7 @@ describe("clients: user-only ownership", () => {
     await expect(
       createAgent(app.db, {
         name: `cross-user-agent-${crypto.randomUUID().slice(0, 8)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Cross-user Agent",
         managerId: bob.memberId,
         clientId: aliceClient,

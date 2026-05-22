@@ -176,6 +176,7 @@ export class AgentSlot {
         inboxId: agent.inboxId,
         displayName: agent.displayName,
         type: agent.type,
+        visibility: agent.visibility,
         delegateMention: agent.delegateMention,
         metadata: agent.metadata,
       },

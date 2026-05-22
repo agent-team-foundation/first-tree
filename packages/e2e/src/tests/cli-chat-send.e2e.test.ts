@@ -58,7 +58,7 @@ beforeAll(async () => {
     `/api/v1/orgs/${encodeURIComponent(creds.organizationId)}/agents`,
     {
       name: recipientName,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "CLI chat-send recipient",
       clientId: creds.clientId,
     },

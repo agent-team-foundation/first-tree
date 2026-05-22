@@ -50,7 +50,7 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
       headers: { authorization: `Bearer ${alice.accessToken}` },
       payload: {
         name: `rt-bot-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Member Caller",
         // try to set someone else's manager — only an admin can do this
         managerId: orgB.memberId,
@@ -124,7 +124,7 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
     // Pin an autonomous agent under Alice's member row in org B.
     const bot = await createAgent(app.db, {
       name: `rt-bot-b-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bot in Org B",
       managerId: orgB.memberId,
       organizationId: orgB.orgId,
@@ -152,7 +152,7 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
 
     const bot = await createAgent(app.db, {
       name: `rt-mgr-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bot in Org B",
       managerId: orgB.memberId,
       organizationId: orgB.orgId,
@@ -182,7 +182,7 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
     const bobForeign = await attachMember(app, bobBase.userId, "admin");
     const bot = await createAgent(app.db, {
       name: `rt-foreign-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bot Owned By Bob",
       managerId: bobForeign.memberId,
       organizationId: bobForeign.orgId,

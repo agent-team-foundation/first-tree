@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@first-tree/shared";
+import type { AgentVisibility, SessionEvent } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 
@@ -21,6 +21,16 @@ export type AgentIdentity = {
    */
   displayName: string;
   type: string;
+  /**
+   * Post-type-merge (migration 0048) `type` only distinguishes
+   * `human` vs `agent`; the "personal vs. shared" axis lives here in
+   * `visibility`. Renderers that need to know whether a non-human row is a
+   * personal assistant (private) or an autonomous bot (organization) MUST
+   * gate on this field rather than inferring from `delegateMention` — the
+   * latter is null on every non-human row (only `human` can carry a
+   * delegate; see `services/agent.ts:assertDelegateMentionAllowed`).
+   */
+  visibility: AgentVisibility;
   delegateMention: string | null;
   metadata: Record<string, unknown>;
 };

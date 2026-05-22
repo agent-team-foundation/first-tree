@@ -23,9 +23,7 @@ describe("Admin Agents API", () => {
 
   it("rejects creating an agent with a reserved `__` name prefix", async () => {
     const app = getApp();
-    await expect(createAgent(app.db, { name: "__hub_system_tasks", type: "autonomous_agent" })).rejects.toThrow(
-      /reserved/i,
-    );
+    await expect(createAgent(app.db, { name: "__hub_system_tasks", type: "agent" })).rejects.toThrow(/reserved/i);
   });
 
   it("retrieves an agent created via service", async () => {
@@ -34,7 +32,7 @@ describe("Admin Agents API", () => {
 
     const agent = await createAgent(app.db, {
       name: "agent-1",
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bot One",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
@@ -64,7 +62,7 @@ describe("Admin Agents API", () => {
     const { req, ctx } = await authedRequest(app);
     const created = await createAgent(app.db, {
       name: "presence-test",
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -84,7 +82,7 @@ describe("Admin Agents API", () => {
 
     const res = await req("POST", `/api/v1/orgs/${ctx.organizationId}/agents`, {
       name: "api-created",
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "API Bot",
       metadata: { role: "testing" },
       clientId: ctx.clientId,
@@ -113,7 +111,7 @@ describe("Admin Agents API", () => {
     const { req, ctx } = await authedRequest(app);
     const agent = await createAgent(app.db, {
       name: "lifecycle-agent",
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -134,7 +132,7 @@ describe("Admin Agents API", () => {
     const { req, ctx } = await authedRequest(app);
     const agent = await createAgent(app.db, {
       name: "delete-test",
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -202,7 +200,7 @@ describe("Admin Agents API", () => {
         headers: { authorization: `Bearer ${alice.accessToken}` },
         payload: {
           name: `url-wins-${crypto.randomUUID().slice(0, 6)}`,
-          type: "autonomous_agent",
+          type: "agent",
           displayName: "URL Wins",
         },
       });
@@ -222,7 +220,7 @@ describe("Admin Agents API", () => {
         headers: { authorization: `Bearer ${alice.accessToken}` },
         payload: {
           name: `cross-org-no-${crypto.randomUUID().slice(0, 6)}`,
-          type: "autonomous_agent",
+          type: "agent",
           displayName: "Cross-Org Forbidden",
         },
       });
@@ -273,7 +271,7 @@ describe("Admin Agents API", () => {
       // Agent in non-default org B; managed by Alice's org-B member.
       const target = await createAgent(app.db, {
         name: `chat-target-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Chat Target",
         managerId: orgB.memberId,
         clientId: alice.clientId,
@@ -332,7 +330,7 @@ describe("Admin Agents API", () => {
         // Bob's autonomous agent in his own org — Alice has no membership here.
         const bobAgent = await createAgent(tx as unknown as typeof app.db, {
           name: `bob-target-${crypto.randomUUID().slice(0, 6)}`,
-          type: "autonomous_agent",
+          type: "agent",
           displayName: "Bob's Target",
           managerId: bobMemberId,
           organizationId: bobOrgId,

@@ -38,7 +38,7 @@ function agent(input: {
 describe("Team page grouping", () => {
   it("fetches every agent page before building delegate state", async () => {
     const first = agent({ uuid: "human-1", type: "human", displayName: "Ada", delegateMention: "assistant-1" });
-    const second = agent({ uuid: "assistant-1", type: "personal_assistant", displayName: "Ada Assistant" });
+    const second = agent({ uuid: "assistant-1", type: "agent", displayName: "Ada Assistant" });
     const result = await fetchAllAgents(async ({ cursor }) =>
       cursor ? { items: [second], nextCursor: null } : { items: [first], nextCursor: "next-page" },
     );
@@ -56,7 +56,7 @@ describe("Team page grouping", () => {
     const human = agent({ uuid: "human-1", type: "human", displayName: "Ada", delegateMention: "assistant-1" });
     const assistant = agent({
       uuid: "assistant-1",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Ada Assistant",
       name: "ada-helper",
     });
@@ -100,21 +100,21 @@ describe("Team page grouping", () => {
   it("places Your agents section first and partitions agents by manager", () => {
     const myShared = agent({
       uuid: "my-shared",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "My Shared Bot",
       visibility: "organization",
       managerId: "member-1",
     });
     const myPrivate = agent({
       uuid: "my-private",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "My Private Bot",
       visibility: "private",
       managerId: "member-1",
     });
     const theirShared = agent({
       uuid: "their-shared",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Their Shared Bot",
       visibility: "organization",
       managerId: "member-2",
@@ -161,28 +161,28 @@ describe("Team page grouping", () => {
     // and break ties alphabetically (case-insensitive).
     const sharedZeta = agent({
       uuid: "shared-z",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Zeta",
       visibility: "organization",
       managerId: "member-1",
     });
     const sharedAlpha = agent({
       uuid: "shared-a",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "alpha",
       visibility: "organization",
       managerId: "member-1",
     });
     const privateBeta = agent({
       uuid: "private-b",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Beta",
       visibility: "private",
       managerId: "member-1",
     });
     const privateGamma = agent({
       uuid: "private-g",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "gamma",
       visibility: "private",
       managerId: "member-1",
@@ -213,7 +213,7 @@ describe("Team page grouping", () => {
   it("shows Other members' private agents collapsibly for admins only", () => {
     const theirPrivate = agent({
       uuid: "their-private",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Their Private Bot",
       visibility: "private",
       managerId: "member-2",
@@ -256,13 +256,13 @@ describe("Team page grouping", () => {
   it("respects the yours / team / humans filter pills", () => {
     const myAgent = agent({
       uuid: "my-agent",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Mine",
       managerId: "member-1",
     });
     const theirAgent = agent({
       uuid: "their-agent",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Theirs",
       visibility: "organization",
       managerId: "member-2",
@@ -297,21 +297,21 @@ describe("Team page grouping", () => {
   it("keeps private active assistants selectable for admin delegate edits", () => {
     const privateAssistant = agent({
       uuid: "private-assistant",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Private Assistant",
       visibility: "private",
       managerId: "member-2",
     });
     const suspendedAssistant = agent({
       uuid: "suspended-assistant",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Suspended Assistant",
       status: "suspended",
     });
     const humanAgent = agent({ uuid: "human-1", type: "human", displayName: "Ada" });
     const autonomousAgent = agent({
       uuid: "auto-1",
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Cron Bot",
     });
 

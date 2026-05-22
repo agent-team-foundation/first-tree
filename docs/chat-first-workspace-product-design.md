@@ -513,7 +513,7 @@ type MeChatRow = {
   participants: Array<{
     agentId: string;
     displayName: string;
-    type: 'human' | 'personal_assistant' | 'autonomous_agent';
+    type: 'human' | 'agent';
   }>;
   participantCount: number;
   lastMessageAt: string | null;
@@ -722,7 +722,7 @@ To minimise regression risk in the message + inbox path:
   agent? Recommendation: future "person view" off the participant chip;
   acknowledge as a v2 follow-up. Add a "search" hint to the conversation
   list so the same-name pile is at least findable.
-- **Authoritative source for "primary assistant"**: `personal_assistant`
+- **Authoritative source for "primary assistant"**: `agent`
   agent owned by the user, fallback to most-recent agent. (To be confirmed
   with product before the picker default ships.)
 - **Mark-read trigger**: after the message-list has loaded for the

@@ -88,13 +88,13 @@ describe("inbox WS data-plane claim helpers", () => {
     });
     const observer = await createAgent(app.db, {
       name: `wsp-si-obs-${uid}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const peer = await createAgent(app.db, {
       name: `wsp-si-peer-${uid}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });

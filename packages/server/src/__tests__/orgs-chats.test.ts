@@ -58,7 +58,7 @@ describe("POST /orgs/:orgId/chats — multi-org chat creation (regression #238)"
     const orgB = await attachOrg(app, alice.userId, "member");
     const target = await createAgent(app.db, {
       name: `oc-target-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Orgs Chats Target",
       managerId: orgB.memberId,
       organizationId: orgB.orgId,
@@ -83,7 +83,7 @@ describe("POST /orgs/:orgId/chats — multi-org chat creation (regression #238)"
     // Target lives in Alice's default org A — invalid participant for an orgB chat.
     const targetInA = await createAgent(app.db, {
       name: `oc-stray-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Stray Agent",
       managerId: alice.memberId,
       organizationId: alice.organizationId,

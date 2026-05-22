@@ -1233,8 +1233,15 @@ function generateClaudeMd(
   const contextDir = join(workspacePath, ".agent", "context");
 
   // --- Identity ---
+  // Post-type-merge (migration 0048): pre-merge `personal_assistant` and
+  // `autonomous_agent` collapsed into a single `agent` row. The "personal
+  // assistant" vs. "autonomous bot" framing is now carried by
+  // `agents.visibility` (private → personal assistant, organization →
+  // autonomous bot). Do NOT infer from `delegateMention` — only `human`
+  // rows can hold a delegate, so every `agent` row's `delegateMention`
+  // is null and that signal is useless for this distinction.
   const name = identity.displayName ?? identity.agentId;
-  if (identity.type === "personal_assistant") {
+  if (identity.visibility === "private") {
     sections.push(`# Agent Identity\n\nYou are ${name}, a personal assistant agent.\n`);
   } else {
     sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);

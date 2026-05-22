@@ -51,7 +51,7 @@ First Tree Hub 的 `/team` 从原本的 master-detail(Members / Agents / Setting
 ```text
 users        — 全局账号(GitHub-derived)
 members      — 用户在某个 org 的成员资格(role: admin/member)
-agents       — agent 系统的 actor,type ∈ {human, personal_assistant, autonomous_agent}
+agents       — agent 系统的 actor,type ∈ {human, agent, agent}
 ```
 
 `/team` 页面是这两份数据的视图聚合:
@@ -129,10 +129,10 @@ admin:
 
 延用 first-tree 已经写在 `agent-hub/product-direction.md` 和 `roadmap/infrastructure.md:117` 的 canonical term:
 
-| schema | UI label |
+| schema (type, visibility) | UI label |
 |---|---|
-| `personal_assistant` | `Personal assistant` |
-| `autonomous_agent` | `Autonomous agent` |
+| `agent`, `private` | `Personal assistant` |
+| `agent`, `organization` | `Autonomous agent` |
 
 不缩写为单词版(`Assistant` / `Autonomous`),因为:
 

@@ -20,7 +20,7 @@ describe("agent_configs schema + initial seed", () => {
     const seed = await seedAgentFactory(app);
     const agent = await seed({
       name: `cfg-seed-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const [row] = await app.db.select().from(agentConfigs).where(eq(agentConfigs.agentId, agent.uuid)).limit(1);
     expect(row).toBeDefined();
@@ -33,7 +33,7 @@ describe("agent_configs schema + initial seed", () => {
     const seed = await seedAgentFactory(app);
     const agent = await seed({
       name: `cfg-oplock-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     // First UPDATE: expectedVersion=1 → succeeds, version becomes 2

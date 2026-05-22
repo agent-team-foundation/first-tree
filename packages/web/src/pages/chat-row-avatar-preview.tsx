@@ -44,7 +44,7 @@ function participant(name: string, agentId?: string): MeChatRow["participants"][
   return {
     agentId: agentId ?? `agent-${name.toLowerCase()}`,
     displayName: name,
-    type: "autonomous_agent",
+    type: "agent",
     avatarColorToken: null,
     avatarImageUrl: null,
   };

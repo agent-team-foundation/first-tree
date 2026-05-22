@@ -199,7 +199,7 @@ describe("/me onboarding step inference", () => {
     const clientId = await seedClient(app, alice.userId, orgB.orgId);
     await createAgent(app.db, {
       name: `regression-239-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Regression #239",
       managerId: orgB.memberId,
       organizationId: orgB.orgId,

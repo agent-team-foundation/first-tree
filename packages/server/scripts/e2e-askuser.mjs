@@ -181,7 +181,7 @@ console.log("\n[e2e-askuser] case 1: happy-path roundtrip");
     app.db,
     {
       name: `e2e-peer-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Peer Agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
@@ -274,7 +274,7 @@ console.log("\n[e2e-askuser] case 2: codex runtime defense");
     app.db,
     {
       name: `e2e-codex-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Codex Peer",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
@@ -334,7 +334,7 @@ console.log("\n[e2e-askuser] case 3: archiveSession marks pending question super
     app.db,
     {
       name: `e2e-arc-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Archive Peer",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
@@ -401,7 +401,7 @@ console.log("\n[e2e-askuser] case 4: claimClient marks pending superseded for un
     app.db,
     {
       name: `e2e-claim-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Claim Peer",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
@@ -505,7 +505,7 @@ console.log("\n[e2e-askuser] case 6: agent inbox.pull surfaces question_answer e
     app.db,
     {
       name: `e2e-poll-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Poll Peer",
       managerId: ctx.memberId,
       clientId: ctx.clientId,

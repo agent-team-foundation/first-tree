@@ -373,7 +373,7 @@ Rationale: new users don't know the distinction between Claude Code and Codex; s
 ### 6.6 Create action
 
 On `[Create]`:
-1. POST `/admin/agents` with `{type: "personal_assistant", displayName, name (slug), clientId, runtimeProvider, gitRepos: [{url: <selected repo>}], organizationId}`
+1. POST `/admin/agents` with `{type: "agent", displayName, name (slug), clientId, runtimeProvider, gitRepos: [{url: <selected repo>}], organizationId}`
 2. Poll `/admin/agents/<uuid>/client-status` until online (30s timeout, retry UI per current OnboardingView)
 3. On online: PATCH `onboardingStep = step3`, navigate to `/` (Step 3 intro)
 

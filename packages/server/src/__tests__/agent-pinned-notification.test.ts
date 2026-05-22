@@ -154,7 +154,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
         headers: { authorization: `Bearer ${seed.token}` },
         payload: {
           name,
-          type: "autonomous_agent",
+          type: "agent",
           displayName: "Pin Created",
           clientId: seed.clientId,
         },
@@ -168,7 +168,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       expect(pinned.agentId).toBe(body.uuid);
       expect(pinned.name).toBe(name);
       expect(pinned.displayName).toBe("Pin Created");
-      expect(pinned.agentType).toBe("autonomous_agent");
+      expect(pinned.agentType).toBe("agent");
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
@@ -184,7 +184,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       // the exact "unbound → pinned" transition that the fix must cover.
       const unbound = await createAgent(app.db, {
         name: `pin-bind-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Pin Bound",
         source: "admin-api",
         managerId: seed.memberId,
@@ -205,7 +205,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       const pinned = await pinnedPromise;
       expect(pinned.agentId).toBe(unbound.uuid);
       expect(pinned.name).toBe(unbound.name);
-      expect(pinned.agentType).toBe("autonomous_agent");
+      expect(pinned.agentType).toBe("agent");
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
@@ -244,7 +244,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
         headers: { authorization: `Bearer ${seed.token}` },
         payload: {
           name: `pin-noise-${crypto.randomUUID().slice(0, 6)}`,
-          type: "autonomous_agent",
+          type: "agent",
           clientId: otherClientId,
         },
       });
@@ -269,7 +269,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
     // realtime push has nothing to deliver to.
     const offlineCreated = await createAgent(app.db, {
       name: `pin-offline-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Offline Pinned",
       source: "admin-api",
       managerId: seed.memberId,
@@ -278,7 +278,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
     });
     const offlineCreated2 = await createAgent(app.db, {
       name: `pin-offline-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       source: "admin-api",
       managerId: seed.memberId,
       clientId: seed.clientId,
@@ -324,7 +324,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       const a = seenPinned.get(offlineCreated.uuid);
       expect(a).toBeDefined();
       expect(a?.name).toBe(offlineCreated.name);
-      expect(a?.agentType).toBe("autonomous_agent");
+      expect(a?.agentType).toBe("agent");
       const b = seenPinned.get(offlineCreated2.uuid);
       expect(b).toBeDefined();
       expect(b?.name).toBe(offlineCreated2.name);
@@ -341,7 +341,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
     try {
       const existing = await createAgent(app.db, {
         name: `pin-existing-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Existing",
         source: "admin-api",
         managerId: seed.memberId,

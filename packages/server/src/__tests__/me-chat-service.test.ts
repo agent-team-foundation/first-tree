@@ -77,7 +77,7 @@ describe("chat-first workspace service layer", () => {
     const { agents } = await import("../db/schema/agents.js");
     const managed = await (await import("../services/agent.js")).createAgent(app.db, {
       name: `managed-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Managed Agent",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -111,7 +111,7 @@ describe("chat-first workspace service layer", () => {
     const { createAgent } = await import("../services/agent.js");
     const managed = await createAgent(app.db, {
       name: `managed-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Managed",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -141,7 +141,7 @@ describe("chat-first workspace service layer", () => {
     const { createAgent } = await import("../services/agent.js");
     const managed = await createAgent(app.db, {
       name: `mng-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -190,7 +190,7 @@ describe("chat-first workspace service layer", () => {
     const { createAgent } = await import("../services/agent.js");
     const managed = await createAgent(app.db, {
       name: `mng2-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng2",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -346,7 +346,7 @@ describe("chat-first workspace service layer", () => {
     const { createAgent } = await import("../services/agent.js");
     const managed = await createAgent(app.db, {
       name: `mng3-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng3",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -392,7 +392,7 @@ describe("chat-first workspace service layer", () => {
     const { createAgent } = await import("../services/agent.js");
     const managed = await createAgent(app.db, {
       name: `mng4-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng4",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -446,7 +446,7 @@ describe("chat-first workspace service layer", () => {
     const { createAgent } = await import("../services/agent.js");
     const managed = await createAgent(app.db, {
       name: `mng-sc-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-SC",
       managerId: admin.memberId,
       organizationId: admin.organizationId,

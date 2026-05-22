@@ -115,7 +115,7 @@ const peer = await createAgent(
   app.db,
   {
     name: "demo-claude-bot",
-    type: "autonomous_agent",
+    type: "agent",
     displayName: "Claude Demo Bot",
     managerId: memberId,
     clientId,

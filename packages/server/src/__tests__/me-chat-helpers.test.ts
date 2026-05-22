@@ -46,7 +46,7 @@ describe("me-chat resolveChatTitle", () => {
         {
           agentId: "a",
           displayName: "Code Agent",
-          type: "personal_assistant",
+          type: "agent",
           avatarColorToken: null,
           avatarImageUrl: null,
         },
@@ -64,7 +64,7 @@ describe("me-chat resolveChatTitle", () => {
         {
           agentId: "a",
           displayName: "Code Agent",
-          type: "personal_assistant",
+          type: "agent",
           avatarColorToken: null,
           avatarImageUrl: null,
         },
@@ -83,14 +83,14 @@ describe("me-chat resolveChatTitle", () => {
         {
           agentId: "a",
           displayName: "Code Agent",
-          type: "personal_assistant",
+          type: "agent",
           avatarColorToken: null,
           avatarImageUrl: null,
         },
         {
           agentId: "b",
           displayName: "Design Agent",
-          type: "personal_assistant",
+          type: "agent",
           avatarColorToken: null,
           avatarImageUrl: null,
         },
@@ -135,7 +135,7 @@ describe("me-chat resolveChatTitle", () => {
         {
           agentId: "a",
           displayName: "Code Agent",
-          type: "personal_assistant",
+          type: "agent",
           avatarColorToken: null,
           avatarImageUrl: null,
         },

@@ -113,7 +113,7 @@ async function main() {
       {
         uuid: agentXUuid,
         name: "agent-x",
-        type: "autonomous_agent",
+        type: "agent",
         status: "active",
         visibility: "organization",
         organizationId: acmeId,
@@ -126,7 +126,7 @@ async function main() {
       {
         uuid: agentYUuid,
         name: "agent-y",
-        type: "autonomous_agent",
+        type: "agent",
         status: "active",
         visibility: "organization",
         organizationId: acmeId,
@@ -139,7 +139,7 @@ async function main() {
       {
         uuid: agentZUuid,
         name: "agent-z",
-        type: "autonomous_agent",
+        type: "agent",
         status: "active",
         visibility: "organization",
         organizationId: acmeId,
@@ -152,7 +152,7 @@ async function main() {
       {
         uuid: agentPUuid,
         name: "agent-p",
-        type: "autonomous_agent",
+        type: "agent",
         status: "active",
         visibility: "organization",
         organizationId: betaId,

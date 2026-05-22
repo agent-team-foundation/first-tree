@@ -14,7 +14,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
     const admin = await createAdminContext(app, { username: `up-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `up-target-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Upsert target",
       managerId: admin.memberId,
       clientId: admin.clientId,

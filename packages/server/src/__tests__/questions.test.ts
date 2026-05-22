@@ -51,7 +51,7 @@ async function setupQuestionScenario(app: FastifyInstance, runtimeProvider: "cla
     app.db,
     {
       name: `q-peer-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Peer agent",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -387,7 +387,7 @@ describe("submitAnswer — group chat with mention_only asker (#404)", () => {
       app.db,
       {
         name: `q-asker-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Asker",
         managerId: admin.memberId,
         clientId: admin.clientId,
@@ -399,7 +399,7 @@ describe("submitAnswer — group chat with mention_only asker (#404)", () => {
       app.db,
       {
         name: `q-bystander-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Bystander",
         managerId: admin.memberId,
         clientId: admin.clientId,
@@ -570,7 +570,7 @@ describe("sendMessage — addressedToAgentIds option", () => {
       app.db,
       {
         name: `q-outsider-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Outsider",
         managerId: admin.memberId,
         clientId: admin.clientId,

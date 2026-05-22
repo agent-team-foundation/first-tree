@@ -38,7 +38,7 @@ describe("Admin DELETE Agent API", () => {
 
     const agent = await createAgent(app.db, {
       name: "active-no-del",
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -53,7 +53,7 @@ describe("Admin DELETE Agent API", () => {
 
     const agent = await createAgent(app.db, {
       name: "recreate-agent",
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Original",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
@@ -64,12 +64,12 @@ describe("Admin DELETE Agent API", () => {
 
     const recreated = await createAgent(app.db, {
       name: "recreate-agent",
-      type: "personal_assistant",
+      type: "agent",
       displayName: "Recreated",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
-    expect(recreated.type).toBe("personal_assistant");
+    expect(recreated.type).toBe("agent");
     expect(recreated.displayName).toBe("Recreated");
     expect(recreated.status).toBe("active");
   });

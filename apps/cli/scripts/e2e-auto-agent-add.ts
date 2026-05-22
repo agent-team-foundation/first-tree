@@ -228,7 +228,7 @@ async function main(): Promise<void> {
     headers: { authorization: `Bearer ${accessToken}` },
     payload: {
       name: agentName,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "E2E Auto Agent",
       clientId,
     },
@@ -291,7 +291,7 @@ async function main(): Promise<void> {
 
   const unboundAgent = await createAgent(app.db, {
     name: `e2e-bind-${crypto.randomUUID().slice(0, 6)}`,
-    type: "autonomous_agent",
+    type: "agent",
     displayName: "E2E Bind Agent",
     source: "admin-api",
     managerId: memberId,

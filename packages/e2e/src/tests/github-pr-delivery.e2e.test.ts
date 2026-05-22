@@ -113,7 +113,7 @@ beforeAll(async () => {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.accessToken}` },
     body: JSON.stringify({
       name: DELEGATE_NAME,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "E2E PR Delegate",
       clientId: creds.clientId,
     }),

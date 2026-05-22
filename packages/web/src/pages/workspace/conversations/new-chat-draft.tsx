@@ -680,8 +680,10 @@ function ParticipantChips({
  *    1. Most-recently-active (by `runtimeUpdatedAt`) — runtime presence
  *       signal, not a true "last conversation" timestamp, but the only
  *       MRU signal currently exposed by `/activity`.
- *    2. Any `personal_assistant` — covers the case where my agents have
- *       no runtime activity yet (fresh-install / cold-start).
+ *    2. Any `visibility=private` agent (post-type-merge equivalent of the
+ *       pre-merge `type === "personal_assistant"` preference) — covers the
+ *       case where my agents have no runtime activity yet (fresh-install /
+ *       cold-start).
  *    3. First my-managed agent in the candidates list — final fallback
  *       so we always seed something if I do manage at least one. */
 function pickDefault(candidates: MentionCandidate[], activity: RuntimeAgent[]): string | null {
@@ -694,7 +696,7 @@ function pickDefault(candidates: MentionCandidate[], activity: RuntimeAgent[]): 
     .sort((a, b) => (b.runtimeUpdatedAt ?? "").localeCompare(a.runtimeUpdatedAt ?? ""))[0];
   if (mru) return mru.agentId;
 
-  const pa = mine.find((a) => a.type === "personal_assistant");
+  const pa = mine.find((a) => a.visibility === "private");
   if (pa) return pa.agentId;
 
   // Any my-managed agent — `mine` is already candidates ∩ managedByMe,

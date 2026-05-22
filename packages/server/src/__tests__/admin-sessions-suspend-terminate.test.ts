@@ -37,7 +37,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `suspend-a-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `susp-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Susp target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -62,7 +62,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `suspend-b-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `susp-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Susp target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -84,7 +84,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `term-a-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `term-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Term target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -122,7 +122,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `term-b-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `term-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Term target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -145,7 +145,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `term-c-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `term-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Term target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -167,7 +167,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `term-d-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `term-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Term target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -186,7 +186,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `resume-x-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `resume-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Resume target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -214,7 +214,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `revive-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `revive-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Revive target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -236,7 +236,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `susp-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `susp-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Suspend target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -254,7 +254,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `list-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `list-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "List target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -292,7 +292,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const admin = await createAdminContext(app, { username: `race-${crypto.randomUUID().slice(0, 6)}` });
     const sender = await createAgent(app.db, {
       name: `race-snd-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Race sender",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -300,7 +300,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const targetName = `race-tgt-${crypto.randomUUID().slice(0, 6)}`;
     const target = await createAgent(app.db, {
       name: targetName,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Race target",
       managerId: admin.memberId,
       clientId: admin.clientId,

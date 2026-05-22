@@ -648,7 +648,10 @@ export function buildGroups(args: {
 }
 
 export function selectDelegateCandidates(agents: Agent[]): Agent[] {
-  return agents.filter((a) => a.type === "personal_assistant" && a.status === "active");
+  // Post-type-merge: "personal assistant" is now `type=agent +
+  // visibility=private` (the new-agent dialog's default). Autonomous
+  // org-visible agents stay out of the delegate target list.
+  return agents.filter((a) => a.type === "agent" && a.visibility === "private" && a.status === "active");
 }
 
 const roleValues = Object.values(MEMBER_ROLES);
@@ -774,9 +777,10 @@ function EditMemberDialog({
  * mirror agent's detail page.
  *
  * The candidate list mirrors what the identity-section editor uses:
- * active `personal_assistant` agents from the Team page's fully-paginated
- * agent query. Admins receive the all-agent source so private assistants
- * owned by other members remain selectable when editing another human.
+ * active `agent` rows with visibility=private from the Team page's
+ * fully-paginated agent query. Admins receive the all-agent source so
+ * private assistants owned by other members remain selectable when
+ * editing another human.
  */
 function SetDelegateDialog({
   target,

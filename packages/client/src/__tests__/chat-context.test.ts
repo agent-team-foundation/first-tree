@@ -11,7 +11,7 @@ function mkParticipant(extras: Partial<ChatParticipantDetail>): ChatParticipantD
     joinedAt: extras.joinedAt ?? new Date().toISOString(),
     name: extras.name ?? "default-name",
     displayName: extras.displayName ?? "Default Name",
-    type: extras.type ?? "autonomous_agent",
+    type: extras.type ?? "agent",
     avatarColorToken: extras.avatarColorToken ?? null,
     avatarImageUrl: extras.avatarImageUrl ?? null,
   };
@@ -44,11 +44,11 @@ describe("fetchChatContext", () => {
         .fn()
         .mockResolvedValue([
           mkParticipant({ agentId: "u1", name: "alice", displayName: "Alice", type: "human" }),
-          mkParticipant({ agentId: "u2", name: "bob-bot", displayName: "Bob Bot", type: "autonomous_agent" }),
+          mkParticipant({ agentId: "u2", name: "bob-bot", displayName: "Bob Bot", type: "agent" }),
         ]),
     };
 
-    const result = await fetchChatContext(sdk, "chat-1", { type: "autonomous_agent", delegateMention: null });
+    const result = await fetchChatContext(sdk, "chat-1", { type: "agent", delegateMention: null });
 
     expect(result).toEqual({
       chatId: "chat-1",
@@ -90,7 +90,7 @@ describe("fetchChatContext", () => {
         .mockResolvedValue([mkParticipant({ name: "alice", displayName: "Alice", type: "human" })]),
     };
 
-    const result = await fetchChatContext(sdk, "chat-1", { type: "autonomous_agent", delegateMention: null });
+    const result = await fetchChatContext(sdk, "chat-1", { type: "agent", delegateMention: null });
     expect(result.title).toBe("alice, bob-bot");
     expect(result.topic).toBeNull();
   });
@@ -109,55 +109,56 @@ describe("fetchChatContext", () => {
         .fn()
         .mockResolvedValue([
           { ...mkParticipant({ name: "alice", displayName: "Alice", type: "human" }) },
-          { ...mkParticipant({ displayName: "Mystery Bot", type: "autonomous_agent" }), name: null },
-          { ...mkParticipant({ displayName: "Empty Name", type: "autonomous_agent" }), name: "" },
+          { ...mkParticipant({ displayName: "Mystery Bot", type: "agent" }), name: null },
+          { ...mkParticipant({ displayName: "Empty Name", type: "agent" }), name: "" },
         ]),
     };
 
-    const result = await fetchChatContext(sdk, "chat-1", { type: "autonomous_agent", delegateMention: null });
+    const result = await fetchChatContext(sdk, "chat-1", { type: "agent", delegateMention: null });
     expect(result.participants).toEqual([{ name: "alice", displayName: "Alice", type: "human" }]);
   });
 
   it("collapses any non-human participant type to 'agent' in the output", async () => {
-    // Hub seeds agent.type with values like `autonomous_agent` /
-    // `personal_assistant` — at the LLM-facing contract level we only need
-    // the human/agent split.
+    // Hub seeds non-human participants as type='agent' (post-merge of
+    // pre-existing `personal_assistant` / `autonomous_agent` types); the
+    // LLM-facing chat-context contract still narrows any non-human to
+    // 'agent' so the chat prompt only ever has the human/agent split.
     const sdk = {
       getChatDetail: vi.fn().mockResolvedValue(mkChatDetail()),
       listChatParticipants: vi
         .fn()
         .mockResolvedValue([
           mkParticipant({ name: "h", displayName: "Human", type: "human" }),
-          mkParticipant({ name: "a1", displayName: "Auto", type: "autonomous_agent" }),
-          mkParticipant({ name: "a2", displayName: "Assistant", type: "personal_assistant" }),
+          mkParticipant({ name: "a1", displayName: "Auto", type: "agent" }),
+          mkParticipant({ name: "a2", displayName: "Assistant", type: "agent" }),
         ]),
     };
 
-    const result = await fetchChatContext(sdk, "chat-1", { type: "autonomous_agent", delegateMention: null });
+    const result = await fetchChatContext(sdk, "chat-1", { type: "agent", delegateMention: null });
 
     expect(result.participants.map((p) => p.type)).toEqual(["human", "agent", "agent"]);
   });
 
-  it("populates selfOwner from delegateMention only when self is a personal_assistant", async () => {
+  it("populates selfOwner from delegateMention only when self has a delegate", async () => {
     const sdk = {
       getChatDetail: vi.fn().mockResolvedValue(mkChatDetail()),
       listChatParticipants: vi
         .fn()
         .mockResolvedValue([
           mkParticipant({ agentId: "u1", name: "owner", displayName: "Owner Human", type: "human" }),
-          mkParticipant({ agentId: "u2", name: "me", displayName: "Me PA", type: "personal_assistant" }),
+          mkParticipant({ agentId: "u2", name: "me", displayName: "Me PA", type: "agent" }),
         ]),
     };
 
     const result = await fetchChatContext(sdk, "chat-1", {
-      type: "personal_assistant",
+      type: "agent",
       delegateMention: "owner",
     });
 
     expect(result.selfOwner).toEqual({ name: "owner", displayName: "Owner Human" });
   });
 
-  it("does NOT populate selfOwner for non-delegate (autonomous) agents", async () => {
+  it("does NOT populate selfOwner for autonomous agents (no delegateMention)", async () => {
     const sdk = {
       getChatDetail: vi.fn().mockResolvedValue(mkChatDetail()),
       listChatParticipants: vi
@@ -166,8 +167,8 @@ describe("fetchChatContext", () => {
     };
 
     const result = await fetchChatContext(sdk, "chat-1", {
-      type: "autonomous_agent",
-      delegateMention: "anyone",
+      type: "agent",
+      delegateMention: null,
     });
 
     expect(result.selfOwner).toBeUndefined();
@@ -182,7 +183,7 @@ describe("fetchChatContext", () => {
     };
 
     const result = await fetchChatContext(sdk, "chat-1", {
-      type: "personal_assistant",
+      type: "agent",
       delegateMention: "absent-owner",
     });
 
@@ -195,9 +196,7 @@ describe("fetchChatContext", () => {
       listChatParticipants: vi.fn().mockResolvedValue([]),
     };
 
-    await expect(fetchChatContext(sdk, "chat-1", { type: "autonomous_agent", delegateMention: null })).rejects.toThrow(
-      /hub 500/,
-    );
+    await expect(fetchChatContext(sdk, "chat-1", { type: "agent", delegateMention: null })).rejects.toThrow(/hub 500/);
   });
 });
 

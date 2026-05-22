@@ -21,7 +21,7 @@ async function seedAgent(app: ReturnType<ReturnType<typeof useTestApp>>, opts: {
     uuid,
     name: `agent-${uuid.slice(0, 8)}`,
     organizationId: opts.orgId,
-    type: "autonomous_agent",
+    type: "agent",
     displayName: "x",
     inboxId: `inbox_${uuid}`,
     managerId: opts.memberId,

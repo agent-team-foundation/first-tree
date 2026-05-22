@@ -40,9 +40,12 @@ function generateClaudeMd(
   const sections: string[] = [];
   const contextDir = join(workspacePath, ".agent", "context");
 
-  // Identity
+  // Identity — post-type-merge (migration 0048): the "personal assistant"
+  // vs "autonomous bot" framing is carried by `visibility` (private →
+  // personal assistant, organization → autonomous bot). MUST mirror the
+  // real `generateClaudeMd` branching in `handlers/claude-code.ts`.
   const name = identity.displayName ?? identity.agentId;
-  if (identity.type === "personal_assistant") {
+  if (identity.visibility === "private") {
     sections.push(`# Agent Identity\n\nYou are ${name}, a personal assistant agent.\n`);
   } else {
     sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
@@ -90,7 +93,10 @@ function generateClaudeMd(
 }
 
 describe("CLAUDE.md generation", () => {
-  it("generates personal_assistant identity based on type alone", () => {
+  // Post-type-merge (migration 0048): the "personal assistant" framing is
+  // now carried by `visibility=private`; an `agent` row with
+  // `visibility=organization` renders as an autonomous bot instead.
+  it("generates personal-assistant template when visibility is private", () => {
     const workspace = join(tmpBase, "ws-pa");
     mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
 
@@ -98,8 +104,9 @@ describe("CLAUDE.md generation", () => {
       agentId: "yuezengwu-assistant",
       inboxId: "inbox-yuezengwu-assistant",
       displayName: "yuezengwu-assistant",
-      type: "personal_assistant",
-      delegateMention: null, // null — should still detect as personal_assistant
+      type: "agent",
+      visibility: "private",
+      delegateMention: null,
       metadata: {},
     };
 
@@ -108,7 +115,7 @@ describe("CLAUDE.md generation", () => {
     expect(md).not.toContain("autonomous agent");
   });
 
-  it("generates autonomous_agent template", () => {
+  it("generates agent template", () => {
     const workspace = join(tmpBase, "ws-auto");
     mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
 
@@ -116,7 +123,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "code-reviewer",
       inboxId: "inbox-code-reviewer",
       displayName: "Code Reviewer",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -136,7 +144,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -158,7 +167,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -177,7 +187,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -198,7 +209,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -216,7 +228,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -235,7 +248,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -253,7 +267,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -266,7 +281,7 @@ describe("CLAUDE.md generation", () => {
   // The pre-Phase-2 "uses agentId when displayName is null" case is now
   // unreachable (server enforces NOT NULL + a default), and the coverage
   // it pinned — that the identity banner renders `displayName` verbatim —
-  // is already covered by the "generates autonomous_agent template" test
+  // is already covered by the "generates agent template" test
   // above. Intentionally no test here.
 
   it("emits a Current Chat Context section after Agent Identity when chatContext is provided", () => {
@@ -277,7 +292,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -309,7 +325,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };
@@ -326,7 +343,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test PA",
-      type: "personal_assistant",
+      type: "agent",
+      visibility: "organization",
       delegateMention: "owner",
       metadata: {},
     };
@@ -349,7 +367,8 @@ describe("CLAUDE.md generation", () => {
       agentId: "test",
       inboxId: "inbox-test",
       displayName: "Test",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };

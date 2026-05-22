@@ -116,7 +116,12 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
     queryKey: ["agents-for-delegate"],
     queryFn: async () => {
       const res = await listAgents({ limit: 100 });
-      return res.items.filter((a) => a.type === "personal_assistant" && a.status === "active");
+      // Post-type-merge: pre-merge `personal_assistant` and
+      // `autonomous_agent` collapsed into a single `agent` type. The
+      // "personal" framing is now carried by visibility=private, which is
+      // the default the new-agent dialog already picks for the assistant
+      // creation flow.
+      return res.items.filter((a) => a.type === "agent" && a.visibility === "private" && a.status === "active");
     },
     enabled: open && isHuman,
   });

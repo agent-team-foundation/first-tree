@@ -138,14 +138,18 @@ function clientSupportsRuntimeProvider(metadata: unknown, provider: RuntimeProvi
   return available === true;
 }
 
-/** Default visibility per agent type. */
+/**
+ * Default visibility per agent type. Both `human` and `agent` default to
+ * "organization" — the bot-style default that pre-merge `autonomous_agent`
+ * carried. The "personal assistant" framing (private to the manager) is now
+ * explicit: callers that want the private default (new-agent dialog, CLI
+ * assistant onboarding) pass `visibility: "private"` directly.
+ */
 function defaultVisibility(type: AgentType): AgentVisibility {
   switch (type) {
     case "human":
-    case "autonomous_agent":
+    case "agent":
       return AGENT_VISIBILITY.ORGANIZATION;
-    case "personal_assistant":
-      return AGENT_VISIBILITY.PRIVATE;
     default:
       return AGENT_VISIBILITY.PRIVATE;
   }
@@ -743,11 +747,11 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
   if (data.type !== undefined) {
     // Closes the type-flip leak: without this guard a PATCH like
-    // `{type: "autonomous_agent"}` on a human row with a non-null
-    // delegateMention would leave behind `type=autonomous_agent +
-    // delegateMention=<uuid>`, violating the invariant that only humans
-    // carry a delegate. The caller must either clear delegateMention in
-    // the same patch or flip type to human (no-op for the invariant).
+    // `{type: "agent"}` on a human row with a non-null delegateMention
+    // would leave behind `type=agent + delegateMention=<uuid>`, violating
+    // the invariant that only humans carry a delegate. The caller must
+    // either clear delegateMention in the same patch or flip type to human
+    // (no-op for the invariant).
     if (data.type !== AGENT_TYPES.HUMAN && agent.delegateMention !== null && data.delegateMention !== null) {
       throw new BadRequestError(
         "Cannot change type away from `human` while delegateMention is set — clear delegateMention in the same patch.",

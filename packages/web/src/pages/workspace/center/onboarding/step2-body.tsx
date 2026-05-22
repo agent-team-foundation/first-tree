@@ -299,16 +299,17 @@ export function Step2Body({
       // this state for general (non-code) chat; code-context binding is
       // a Step 3 concern. See docs/new-user-onboarding-design.md §6/§7.
       const res = await api.post<{ uuid: string }>(withOrg("/agents"), {
-        type: "personal_assistant",
+        type: "agent",
         displayName: trimmedName,
         ...(slug ? { name: slug } : {}),
         clientId: connectedClient.id,
         runtimeProvider: selectedRuntime,
-        // Explicit pass — the server's `defaultVisibility(personal_assistant)`
-        // returns "private" (kept that way intentionally), but onboarding
-        // defaults to "organization" (the agent-team framing). Sending the
-        // chosen value avoids any reliance on server defaults that would
-        // diverge from the radio's visible selection.
+        // Explicit pass — the server's `defaultVisibility("agent")` returns
+        // "organization" (the autonomous-bot default), but onboarding
+        // surfaces a visibility radio that may select "private" for the
+        // personal-assistant framing. Sending the chosen value avoids any
+        // reliance on server defaults that would diverge from the radio's
+        // visible selection.
         visibility,
         ...(organizationId ? { organizationId } : {}),
       });

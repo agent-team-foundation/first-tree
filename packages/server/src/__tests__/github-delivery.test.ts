@@ -26,7 +26,7 @@ async function seedAgent(
     uuid,
     name: opts.name,
     organizationId: opts.orgId,
-    type: "autonomous_agent",
+    type: "agent",
     displayName: opts.name,
     inboxId: `inbox_${uuid}`,
     managerId: opts.memberId,

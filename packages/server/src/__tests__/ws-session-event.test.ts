@@ -90,7 +90,7 @@ describe("Agent WS — session event protocol (S10)", () => {
 
       return createAgent(tx as unknown as typeof app.db, {
         name: `evt-agent-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: `Evt Agent ${suffix}`,
         source: "admin-api",
         managerId: memberId,

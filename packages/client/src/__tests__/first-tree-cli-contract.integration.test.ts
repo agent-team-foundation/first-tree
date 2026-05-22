@@ -170,7 +170,8 @@ describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI integrate contract", () => 
       agentId: "agent-uuid-xyz",
       inboxId: "inbox-xyz",
       displayName: "Test Agent",
-      type: "personal_assistant",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     };

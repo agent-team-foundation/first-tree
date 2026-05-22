@@ -29,14 +29,14 @@ describe("Agent Identity (UUID + Name)", () => {
 
       const recycled = await createAgent(app.db, {
         name: "recycle-me",
-        type: "autonomous_agent",
+        type: "agent",
         managerId: ctx.memberId,
         clientId: ctx.clientId,
       });
 
       expect(recycled.uuid).not.toBe(original.uuid);
       expect(recycled.name).toBe("recycle-me");
-      expect(recycled.type).toBe("autonomous_agent");
+      expect(recycled.type).toBe("agent");
       expect(recycled.status).toBe("active");
     });
 
@@ -254,7 +254,7 @@ describe("Agent Identity (UUID + Name)", () => {
 
       const agent = await createAgent(app.db, {
         name: "get-by-uuid",
-        type: "autonomous_agent",
+        type: "agent",
         managerId: admin.memberId,
         clientId: admin.clientId,
       });

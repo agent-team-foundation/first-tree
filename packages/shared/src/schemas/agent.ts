@@ -5,11 +5,10 @@ import { runtimeProviderSchema } from "./runtime-provider.js";
 
 export const AGENT_TYPES = {
   HUMAN: "human",
-  PERSONAL_ASSISTANT: "personal_assistant",
-  AUTONOMOUS_AGENT: "autonomous_agent",
+  AGENT: "agent",
 } as const;
 
-export const agentTypeSchema = z.enum(["human", "personal_assistant", "autonomous_agent"]);
+export const agentTypeSchema = z.enum(["human", "agent"]);
 export type AgentType = z.infer<typeof agentTypeSchema>;
 
 export const AGENT_VISIBILITY = {

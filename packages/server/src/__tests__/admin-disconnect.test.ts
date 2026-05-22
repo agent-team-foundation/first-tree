@@ -25,7 +25,7 @@ describe("Admin Agent Disconnect API", () => {
 
     const agent = await createAgent(app.db, {
       name: `disc-a1-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Disc Agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
@@ -50,7 +50,7 @@ describe("Admin Agent Disconnect API", () => {
 
     const agent = await createAgent(app.db, {
       name: `disc-a2-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
