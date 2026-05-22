@@ -16,7 +16,7 @@ export const promptUpdate: UpdatePromptFn = async ({ currentVersion, targetVersi
   // at. "Server recommends" (rather than "bundled with") because the version
   // now comes from the server's npm-registry poll for the configured
   // channel, not from the server image build.
-  const message = `A newer First Tree Hub client is available.\n  You: ${currentVersion}\n  Server recommends: ${targetVersion}\n  Will install: ${targetVersion}\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
+  const message = `A newer First Tree client is available.\n  You: ${currentVersion}\n  Server recommends: ${targetVersion}\n  Will install: ${targetVersion}\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);

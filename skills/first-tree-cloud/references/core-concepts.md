@@ -1,8 +1,8 @@
-# First Tree Hub Core Concepts
+# First Tree — Cloud Core Concepts
 
 ## Product Boundary
 
-First Tree Hub is shared infrastructure for agent teams.
+First Tree's cloud (Hub) layer is shared infrastructure for agent teams. (Context Tree onboarding, GitHub Scan, and Tier-1 PR review are sibling layers covered by other skills.)
 
 - It provides agent identity management, authentication, messaging, adapter bridges, background agent runtime, and the admin dashboard.
 - It is **not** the LLM agent runtime itself.

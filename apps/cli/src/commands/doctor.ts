@@ -14,7 +14,7 @@ export function registerDoctorCommand(program: Command): void {
     .command("doctor")
     .description("Cross-subsystem readiness check (daemon, server, WS, agents)")
     .action(async () => {
-      print.line("\n  First Tree Hub Doctor\n\n");
+      print.line("\n  First Tree Doctor\n\n");
       const results = await runDaemonChecks();
       // Phase 3 hook: tree / git / claude-code binary checks land here as
       // additional `CheckResult` entries before `printResults`.

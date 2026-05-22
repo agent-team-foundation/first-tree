@@ -5,8 +5,9 @@ const PARENT_URL = "https://first-tree.ai";
  * Minimal footer.
  *
  * Left: parent-brand attribution `@ first-tree` linking to first-tree.ai —
- * First Tree Hub is a sub-product of first-tree, so the marketing entry
- * point credits the parent rather than itself.
+ * the cloud / collaboration layer (formerly first-tree-hub) is part of
+ * First Tree, so the marketing entry point credits the parent rather than
+ * itself.
  *
  * Right: GitHub repo link. Resisted the urge to add npm / docs links per
  * spec ("only GitHub, keep it minimal"); the parent brand link doubles as

@@ -204,3 +204,30 @@ jobs:
             echo "$hits"
             exit 1
           fi
+      - name: grep — forbid the literal three-word product name "First Tree Hub"
+        run: |
+          # Second-pass sweep added after PR-1 review-round-2 found that the
+          # hyphenated `first-tree-hub` check above misses the three-word
+          # form "First Tree Hub" (prose / titles / UI strings). N-3=a
+          # ("Hub brand fully retired") covers both forms.
+          #
+          # The `[F]` self-immunity trick keeps this file's own comments
+          # (which must spell out the forbidden literal) from tripping the
+          # check. Same allow-list as the broad sweep above; docs/ is also
+          # currently allow-listed until the N-4 design-docs sweep lands —
+          # see PR-1 description "First Tree Hub product-name residues".
+          hits=$(grep -rEn \
+            --exclude-dir=migration \
+            --exclude-dir=node_modules \
+            --exclude-dir=dist \
+            --exclude-dir=docs \
+            --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
+            --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
+            "[F]irst Tree Hub" packages apps scripts docs skills .github \
+            | grep -v -E '^docs/development/git-history\.md:|^\.github/workflows/ci\.yml:' \
+            || true)
+          if [ -n "$hits" ]; then
+            echo "::error::found a 'First Tree Hub' three-word product-name literal outside the allow-list — N-3 brand retirement"
+            echo "$hits"
+            exit 1
+          fi

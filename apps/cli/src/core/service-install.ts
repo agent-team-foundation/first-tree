@@ -418,7 +418,7 @@ function renderSystemdUnit(invocation: ResolvedBinary): string {
   // to client.log when FIRST_TREE_SERVICE_MODE=1; journald only catches
   // bare stdout/stderr (crashes, third-party spam).
   return `[Unit]
-Description=First Tree Hub Client
+Description=First Tree Client
 StartLimitIntervalSec=300
 StartLimitBurst=10
 

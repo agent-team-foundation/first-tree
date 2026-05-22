@@ -1,15 +1,15 @@
 ---
 name: first-tree-cloud
-description: Install, operate, and modify First Tree Hub with emphasis on the unified `first-tree` CLI, its `login`/`daemon`/`agent`/`chat`/`config` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to the SaaS Hub, installing or running the daemon as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `apps/cli`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
+description: Install, operate, and modify First Tree's cloud / collaboration layer (the former first-tree-hub surface) with emphasis on the unified `first-tree` CLI, its `login`/`daemon`/`agent`/`chat`/`config` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions connecting a machine to the First Tree SaaS, installing or running the daemon as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `apps/cli`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
 ---
 
-# First Tree Hub CLI
+# First Tree CLI — Cloud (Hub) Layer
 
 ## Overview
 
-Use this skill to map user intent onto the right First Tree Hub command or code path without re-discovering the repo each time.
+Use this skill to map a user's hub / collaboration intent onto the right `first-tree` command or code path without re-discovering the repo each time. (For Context Tree onboarding and validation, the right skill is `first-tree`; for the GitHub notification daemon, it's `first-tree-github-scan`.)
 
-Keep the mental model straight: First Tree Hub is the communication and identity backbone for agent teams. It is **not** the agent framework, not the orchestration engine, and not the Context Tree. The Hub has three principals:
+Keep the mental model straight: First Tree's cloud (Hub) layer is the communication and identity backbone for agent teams. It is **not** the agent framework, not the orchestration engine, and not the Context Tree. The Hub has three principals:
 
 - **Server** — operated centrally as a SaaS by the First Tree team. Owns identity, persistence, admin surface, and the inbox. End users do not run their own server; the CLI has no `server` command group.
 - **Client** — one per computer. A machine signs in with a Hub member's credentials once, then runs every agent pinned to it.

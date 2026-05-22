@@ -3,7 +3,7 @@
  *
  * - `joinPath` (sessionStorage): set by the OAuth-complete page and the
  *   invite-accept handler. Drives the OnboardingView greeting copy
- *   ("Welcome — you've joined {team}." vs "Welcome to First Tree Hub.").
+ *   ("Welcome — you've joined {team}." vs "Welcome to First Tree.").
  *   Cleared by AuthContext once the user's onboardingStep reaches `completed`.
  * - `draft` (sessionStorage): keeps the inline onboarding form stable while
  *   the user navigates between app tabs before creating their first agent.

@@ -1,4 +1,4 @@
-# First Tree Hub Developer Map
+# First Tree Developer Map
 
 ## Repo Entry Points
 

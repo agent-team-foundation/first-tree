@@ -1,6 +1,6 @@
-# First Tree Hub Scenario Playbooks
+# First Tree Scenario Playbooks
 
-Use this file when the user describes a goal in natural language and you need to translate it into a First Tree Hub CLI sequence.
+Use this file when the user describes a goal in natural language and you need to translate it into a First Tree CLI sequence.
 
 ## 0. "I do not have `first-tree` installed yet"
 
@@ -22,7 +22,7 @@ gh auth status
 
 ### What to remember
 
-- First Tree Hub requires Node.js `>= 22.16`.
+- First Tree requires Node.js `>= 22.16`.
 - Do not jump to `daemon start`, `login <token>`, or `agent create` on a machine where installation state is unknown.
 - If the user installed locally (`npm i`, not `npm i -g`), prefer `npx first-tree ...` so they do not have to fight PATH.
 

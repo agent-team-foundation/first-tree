@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.2.3",
   "type": "module",
-  "description": "First Tree Hub shared schemas, types, and configuration (internal to the monorepo)",
+  "description": "First Tree shared schemas, types, and configuration (internal to the monorepo)",
   "license": "MIT",
   "repository": {
     "type": "git",

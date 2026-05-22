@@ -1,8 +1,8 @@
-# First Tree Hub Onboarding Operator Playbook
+# First Tree Onboarding Operator Playbook
 
 Use this file when an external agent receives an onboarding task such as:
 
-> "Install First Tree Hub CLI, read the onboarding guide with `gh`, and add a member. Server URL is `https://hub.example.com`."
+> "Install First Tree CLI, read the onboarding guide with `gh`, and add a member. Server URL is `https://hub.example.com`."
 
 The single-shot `onboard` command was retired in Phase 1A of the
 repo-merge refactor. Onboarding is now a sequence of explicit verbs:
