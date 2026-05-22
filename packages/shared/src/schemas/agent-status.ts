@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { type LiveActivity, liveActivitySchema } from "./me-chat.js";
 
 /**
  * Composite "main" status — the single value a compact surface (a status
@@ -122,6 +123,13 @@ export const agentChatStatusSchema = z
     working: z.boolean(),
     needsYou: z.boolean(),
     errored: z.boolean(),
+    /**
+     * The live activity driving `working` (tool name / "Thinking" / "Writing"
+     * + startedAt), or null when not working. Carried so per-agent surfaces
+     * (AgentRow / compose) can render the "Using <tool> · 12s" detail without
+     * a second round-trip. Not an input to `main` — purely descriptive.
+     */
+    activity: liveActivitySchema.nullable(),
   })
   .superRefine((val, ctx) => {
     const expected = deriveMainStatus(val);
@@ -135,8 +143,9 @@ export const agentChatStatusSchema = z
   });
 export type AgentChatStatus = z.infer<typeof agentChatStatusSchema>;
 
-/** Inputs to `buildAgentChatStatus` — the axis fields plus the agent id. */
-export type AgentChatStatusInput = DeriveMainStatusInput & { agentId: string };
+/** Inputs to `buildAgentChatStatus` — the axis fields plus the agent id and
+ * the optional descriptive live activity. */
+export type AgentChatStatusInput = DeriveMainStatusInput & { agentId: string; activity?: LiveActivity | null };
 
 /**
  * Construct an `AgentChatStatus` with `main` always derived from the axes
@@ -152,5 +161,6 @@ export function buildAgentChatStatus(input: AgentChatStatusInput): AgentChatStat
     needsYou: input.needsYou,
     errored: input.errored,
     main: deriveMainStatus(input),
+    activity: input.activity ?? null,
   };
 }

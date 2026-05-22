@@ -94,6 +94,12 @@ const meChatsInvalidator = createThrottledInvalidator(["me", "chats"], INVALIDAT
 // 1s window as `me/chats` so all three keys stay roughly in lock-step.
 const activityInvalidator = createThrottledInvalidator(["activity"], INVALIDATE_THROTTLE_MS);
 const sessionsInvalidator = createThrottledInvalidator(["sessions"], INVALIDATE_THROTTLE_MS);
+// `["chat-agent-status", chatId]` powers the right-sidebar AgentStatusPanel
+// (and step 7's compose bar). Its composite per-agent status moves with
+// session:state (engagement / suspend), session:event (live activity →
+// working), and chat:message (needs-you supersede). Prefix-invalidate so
+// every open chat's panel refreshes; throttled like the rest.
+const chatAgentStatusInvalidator = createThrottledInvalidator(["chat-agent-status"], INVALIDATE_THROTTLE_MS);
 
 function broadcast(msg: WsMessage) {
   for (const sub of subscribers) {
@@ -114,6 +120,7 @@ function broadcast(msg: WsMessage) {
       // on / off in real time without waiting for the 15s `refetchInterval`.
       // Throttled because the upstream frames can burst tool-call-fast.
       meChatsInvalidator.invalidate(latestQc);
+      chatAgentStatusInvalidator.invalidate(latestQc);
     } else if (msg.type === "session:event") {
       // `MeChatRow.liveActivity` is derived from the most recent
       // `session_events` row for each chat. The same wire frame produced
@@ -123,6 +130,7 @@ function broadcast(msg: WsMessage) {
       // Re-uses the same leading + trailing throttle helper as
       // `session:state` (window defined by `INVALIDATE_THROTTLE_MS`).
       meChatsInvalidator.invalidate(latestQc);
+      chatAgentStatusInvalidator.invalidate(latestQc);
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
       // carries `{ type, chatId }` (see shared/me-chat.ts:chatMessageFrameSchema);
@@ -134,6 +142,7 @@ function broadcast(msg: WsMessage) {
       // already wired into ChatView.
       const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
       meChatsInvalidator.invalidate(latestQc);
+      chatAgentStatusInvalidator.invalidate(latestQc);
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: ["chat-messages", chatId] });
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
@@ -190,6 +199,7 @@ function connect() {
       latestQc.invalidateQueries({ queryKey: ["activity"] });
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
       latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
+      latestQc.invalidateQueries({ queryKey: ["chat-agent-status"] });
       // The chat-first workspace reads `viewerMembershipKind` (and other
       // viewer-scoped fields) off `["chat-detail", chatId]`. Without this,
       // a frame that fired while the WS was down (e.g. the caller was
@@ -260,6 +270,7 @@ function teardown() {
   meChatsInvalidator.dispose();
   activityInvalidator.dispose();
   sessionsInvalidator.dispose();
+  chatAgentStatusInvalidator.dispose();
   if (ws) {
     ws.close(1000, "unmount");
     ws = null;

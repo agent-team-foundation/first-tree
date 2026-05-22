@@ -98,6 +98,7 @@ describe("agentChatStatusSchema", () => {
       working: true,
       needsYou: false,
       errored: false,
+      activity: null,
     });
     expect(parsed.main).toBe("working");
   });
@@ -117,6 +118,7 @@ describe("agentChatStatusSchema", () => {
       working: true,
       needsYou: false,
       errored: false,
+      activity: null,
     };
     expect(agentChatStatusSchema.safeParse(contradictory).success).toBe(false);
   });

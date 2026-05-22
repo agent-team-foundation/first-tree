@@ -94,6 +94,22 @@ describe("getChatAgentStatuses", () => {
     expect(s?.errored).toBe(true);
     expect(s?.main).toBe("failed");
   });
+
+  it("a recent tool_call surfaces as working with the live activity label", async () => {
+    const { app, peer, chatId } = await newChatWithAgent();
+    await bindPresence(peer.agent.uuid, peer.clientId);
+    await setSession(peer.agent.uuid, chatId, "active");
+    await app.db.execute(sql`
+      INSERT INTO session_events (id, agent_id, chat_id, seq, kind, payload, created_at)
+      VALUES (${randomUUID()}, ${peer.agent.uuid}, ${chatId}, 1, 'tool_call',
+              ${JSON.stringify({ toolUseId: "t1", name: "Bash", args: null, status: "pending" })}::jsonb, NOW())
+    `);
+
+    const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+    expect(s?.working).toBe(true);
+    expect(s?.main).toBe("working");
+    expect(s?.activity?.label).toBe("Bash");
+  });
 });
 
 describe("GET /chats/:chatId/agent-status — route auth + shape", () => {

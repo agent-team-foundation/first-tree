@@ -3,6 +3,7 @@ import {
   type AgentEngagement,
   buildAgentChatStatus,
   LIVE_ACTIVITY_STALE_MS,
+  type LiveActivity,
 } from "@first-tree/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -10,10 +11,7 @@ import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
-import { derivePendingQuestions } from "./me-chat.js";
-
-/** session_event kinds that mean "producing output right now" (axis D). */
-const WORKING_KINDS = new Set(["tool_call", "thinking", "assistant_text"]);
+import { derivePendingQuestions, toLiveActivity } from "./me-chat.js";
 
 /**
  * Composite per-(agent,chat) status for every non-human speaker in a chat —
@@ -64,36 +62,41 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
   const pendingByChat = await derivePendingQuestions(db, [chatId]);
   const pendingAgents = new Set(pendingByChat.get(chatId) ?? []);
 
-  // Activity (D): agents whose latest event is fresh and non-terminal.
-  const workingAgents = await deriveWorkingAgents(db, chatId);
+  // Activity (D): per-agent live activity (fresh, non-terminal latest event).
+  // `working` is derived from its presence; the activity itself rides along so
+  // AgentRow / compose can render the "Using <tool> · 12s" detail.
+  const activityByAgent = await deriveAgentActivity(db, chatId);
 
   return agentIds.map((agentId) => {
     const state = sessionState.get(agentId);
     const p = presenceById.get(agentId);
+    const activity = activityByAgent.get(agentId) ?? null;
     const engagement: AgentEngagement = state === "active" ? "active" : state === "suspended" ? "suspended" : "none";
     return buildAgentChatStatus({
       agentId,
       reachable: p?.clientId != null,
       errored: state === "errored" || p?.runtimeState === "error",
       needsYou: pendingAgents.has(agentId),
-      working: workingAgents.has(agentId),
+      working: activity != null,
       engagement,
+      activity,
     });
   });
 }
 
 /**
- * Agents in `chatId` whose latest `session_events` row is a fresh
- * (< stale threshold) working kind. Per-pair LATERAL seek on the unique
- * `(agent_id, chat_id, seq)` index — same shape as `deriveLiveActivity`, but
- * resolved per agent rather than collapsed to one per chat.
+ * Per-agent live activity in `chatId`: the latest `session_events` row per
+ * pair, mapped through `toLiveActivity` (so terminal kinds → absent) and
+ * dropped when older than the stale threshold. Per-pair LATERAL seek on the
+ * unique `(agent_id, chat_id, seq)` index — the same shape as
+ * `deriveLiveActivity`, resolved per agent rather than collapsed per chat.
  */
-async function deriveWorkingAgents(db: Database, chatId: string): Promise<Set<string>> {
+async function deriveAgentActivity(db: Database, chatId: string): Promise<Map<string, LiveActivity>> {
   const rows = (await db.execute(sql`
-    SELECT acs.agent_id AS agent_id, e.kind AS kind, e.created_at AS created_at
+    SELECT acs.agent_id AS agent_id, e.kind AS kind, e.payload AS payload, e.created_at AS created_at
       FROM agent_chat_sessions acs
       CROSS JOIN LATERAL (
-        SELECT kind, created_at, seq
+        SELECT kind, payload, created_at, seq
           FROM session_events se
          WHERE se.agent_id = acs.agent_id
            AND se.chat_id  = acs.chat_id
@@ -102,13 +105,19 @@ async function deriveWorkingAgents(db: Database, chatId: string): Promise<Set<st
       ) e
      WHERE acs.chat_id = ${chatId}
        AND acs.state <> 'evicted'
-  `)) as unknown as Array<{ agent_id: string; kind: string; created_at: Date | string }>;
+  `)) as unknown as Array<{ agent_id: string; kind: string; payload: unknown; created_at: Date | string }>;
   const now = Date.now();
-  const out = new Set<string>();
+  const out = new Map<string, LiveActivity>();
   for (const r of rows) {
-    if (!WORKING_KINDS.has(r.kind)) continue;
     if (now - new Date(r.created_at).getTime() > LIVE_ACTIVITY_STALE_MS) continue;
-    out.add(r.agent_id);
+    const activity = toLiveActivity({
+      agent_id: r.agent_id,
+      chat_id: chatId,
+      kind: r.kind,
+      payload: r.payload,
+      created_at: r.created_at,
+    });
+    if (activity) out.set(r.agent_id, activity);
   }
   return out;
 }
