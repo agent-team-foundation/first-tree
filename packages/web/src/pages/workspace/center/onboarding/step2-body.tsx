@@ -7,6 +7,7 @@ import { api, withOrg } from "../../../../api/client.js";
 import { reportOnboardingEvent } from "../../../../api/onboarding-events.js";
 import { useAuth } from "../../../../auth/auth-context.js";
 import { Button } from "../../../../components/ui/button.js";
+import { runVisibilityAwareInterval } from "../../../../lib/visibility-interval.js";
 import { slugify } from "../../../../utils/agent-naming.js";
 import {
   clearOnboardingDraft,
@@ -19,7 +20,7 @@ import { StepFrame, StepRailLine } from "./step-frame.js";
 
 const RUNTIME_READY_TIMEOUT_MS = 30_000;
 const RUNTIME_READY_POLL_MS = 1_000;
-const CLIENT_DETECT_POLL_MS = 3_000;
+const CLIENT_DETECT_POLL_MS = 5_000;
 
 type Phase = "form" | "creating" | "timeout";
 
@@ -157,11 +158,10 @@ export function Step2Body({
         // best-effort
       }
     };
-    void detect();
-    const handle = setInterval(detect, CLIENT_DETECT_POLL_MS);
+    const dispose = runVisibilityAwareInterval(detect, CLIENT_DETECT_POLL_MS);
     return () => {
       cancelled = true;
-      clearInterval(handle);
+      dispose();
     };
   }, [phase]);
 

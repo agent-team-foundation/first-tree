@@ -13,6 +13,7 @@ import { getClientCapabilities, type HubClient, listClients } from "../api/activ
 import { type AgentNameAvailability, checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
+import { runVisibilityAwareInterval } from "../lib/visibility-interval.js";
 import { slugify } from "../utils/agent-naming.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
@@ -257,9 +258,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   }, [name, open]);
 
   // Poll `listClients` to keep the connected-computer list fresh while the
-  // dialog is open. 3s cadence matches onboarding step 2 so a computer
-  // coming online (or going offline) reflects without the user closing
-  // and reopening the dialog.
+  // dialog is open. 5s cadence so a computer coming online (or going
+  // offline) reflects without the user closing and reopening the dialog.
+  // `runVisibilityAwareInterval` truly pauses the timer while the tab is
+  // hidden (clearInterval, not a tick-time skip) and fires a catch-up
+  // tick when the user returns.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -279,11 +282,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         if (!cancelled) setClientsLoaded(true);
       }
     };
-    void tick();
-    const handle = window.setInterval(tick, 3_000);
+    const dispose = runVisibilityAwareInterval(tick, 5_000);
     return () => {
       cancelled = true;
-      window.clearInterval(handle);
+      dispose();
     };
   }, [open]);
 
@@ -300,11 +302,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     });
   }, [connectedClients]);
 
-  // Capability fetch — polls every 3s while a client is picked. Same
+  // Capability fetch — polls every 5s while a client is picked. Same
   // cadence as the listClients poll above so a transient API failure
   // self-heals on the next tick rather than freezing the UI in
   // "Detecting installed runtimes…" until the user reopens the dialog.
-  // Mirrors onboarding step 2's `detect` loop.
+  // Visibility-aware (see `runVisibilityAwareInterval`).
   useEffect(() => {
     if (!pickedClientId) {
       setCapabilities(null);
@@ -323,11 +325,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         // prior success keeps the chips). The next tick will retry.
       }
     };
-    void fetchCaps();
-    const handle = window.setInterval(fetchCaps, 3_000);
+    const dispose = runVisibilityAwareInterval(fetchCaps, 5_000);
     return () => {
       cancelled = true;
-      window.clearInterval(handle);
+      dispose();
     };
   }, [pickedClientId]);
 

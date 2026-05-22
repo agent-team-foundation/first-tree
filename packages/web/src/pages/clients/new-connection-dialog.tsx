@@ -5,6 +5,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { ConnectCommandPanel, type ConnectPhase } from "../../components/connect-command-panel.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
+import { runVisibilityAwareInterval } from "../../lib/visibility-interval.js";
 
 /**
  * Pure detector for the "+ New Connection" wait loop. Exported so the unit
@@ -32,7 +33,7 @@ export function selectArrivedClient(clients: HubClient[], openedAt: number, user
   );
 }
 
-const POLL_MS = 3_000;
+const POLL_MS = 5_000;
 const SUCCESS_HOLD_MS = 1_200;
 // Tolerance subtracted from the modal-open timestamp so a tiny clock skew
 // between the browser and the server (or a connect handshake that races a
@@ -97,7 +98,10 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
 
   // 2. While waiting: poll for a client whose handshake landed AFTER the modal
   //    opened. Timestamp comparison (not id-set diff) is what lets us catch a
-  //    reconnect of a machine whose client_id row already existed.
+  //    reconnect of a machine whose client_id row already existed. Polling is
+  //    paused while the tab is hidden via `runVisibilityAwareInterval` — a new
+  //    computer can't connect via this dialog without a foreground CLI run
+  //    elsewhere, and the helper fires an immediate catch-up tick on return.
   useEffect(() => {
     if (!open || phase !== "waiting" || !user) return;
     const tick = async () => {
@@ -112,8 +116,7 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
         // transient; next tick will retry
       }
     };
-    const handle = setInterval(tick, POLL_MS);
-    return () => clearInterval(handle);
+    return runVisibilityAwareInterval(tick, POLL_MS);
   }, [open, phase, queryClient, user]);
 
   // 3. On success: brief hold so the user sees the green confirmation, then close.

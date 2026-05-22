@@ -8,7 +8,6 @@ export function SessionContext({ agentId, chatId }: { agentId: string; chatId: s
   const { data: session } = useQuery({
     queryKey: ["session", agentId, chatId],
     queryFn: () => listAgentSessions(agentId).then((sessions) => sessions.find((s) => s.chatId === chatId) ?? null),
-    refetchInterval: 5_000,
   });
 
   return (

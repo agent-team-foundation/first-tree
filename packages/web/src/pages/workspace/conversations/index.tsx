@@ -172,7 +172,6 @@ export function ConversationList({
         origin: originParam,
         with: withParam,
       }),
-    refetchInterval: 15_000,
   });
 
   const resetExtras = (): void => {
