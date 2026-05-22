@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import type { ExecuteUpdateFn, UpdatePromptFn } from "@first-tree/client";
 import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
@@ -164,6 +165,20 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       at: new Date().toISOString(),
     });
     if (managed) {
+      // Refresh the launchd plist / systemd unit using the NEW binary's
+      // templates BEFORE we exit 75. We're still running the OLD binary in
+      // memory, so calling `installClientService()` here writes the unit
+      // with the old templates — which is the bug that traps users in an
+      // "unknown command" restart loop when the CLI surface changes (e.g.
+      // `client start` → `daemon start`). Spawning the new binary in a
+      // one-shot hidden mode (`daemon refresh-unit`) lets the new code
+      // rewrite the unit before the supervisor restart picks it up.
+      //
+      // Best-effort: failure logs and falls through to exit-75 anyway
+      // (matches `commands/upgrade.ts`'s "warn and continue" stance — the
+      // operator can recover with `first-tree-hub logout && login` if the
+      // unit ends up stale).
+      refreshServiceUnit();
       print.line(`  [update] Installed ${installedLabel}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
       process.exit(SELF_RESTART_EXIT_CODE);
     }
@@ -172,4 +187,51 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
     );
     return { installed: true };
   };
+}
+
+/**
+ * Spawn the newly-installed `first-tree-hub` binary (now on PATH at
+ * `/usr/local/bin/first-tree-hub` or the equivalent global location) to
+ * rewrite the service unit using its OWN templates.
+ *
+ * Why a subprocess: this whole function runs inside the OLD daemon process,
+ * which has the OLD `installClientService()` code loaded in memory.
+ * Calling `installClientService()` directly here would write the OLD unit
+ * shape, defeating the entire point of the refresh.
+ *
+ * Why best-effort: the worst outcome on failure is "supervisor restart
+ * crashes on stale unit", which is exactly what the operator-facing
+ * `MIGRATION.md` walkthrough (`logout && login`) recovers from. We never
+ * want a transient spawn failure to *block* the binary install — the new
+ * binary on disk is the load-bearing fix.
+ *
+ * Timeout is generous (45s) because `installClientService()` on systemd
+ * runs `daemon-reload` + `enable --now` and on launchd runs `bootout` +
+ * `bootstrap`, both of which routinely take 10-30s under load.
+ */
+function refreshServiceUnit(): void {
+  try {
+    const res = spawnSync("first-tree-hub", ["daemon", "refresh-unit"], {
+      stdio: ["ignore", "inherit", "inherit"],
+      timeout: 45_000,
+      // Sanitize FIRST_TREE_SERVICE_MODE so the child doesn't think it's
+      // being invoked by the supervisor and recursively delegate to
+      // systemctl. Everything else (PATH, HOME, FIRST_TREE_HOME) passes
+      // through so the child resolves the same home / config as we do.
+      env: { ...process.env, FIRST_TREE_SERVICE_MODE: "" },
+    });
+    if (res.status !== 0) {
+      print.line(
+        `  [update] warning: 'daemon refresh-unit' exited with status ${res.status ?? "unknown"} ` +
+          `(signal=${res.signal ?? "none"}). If the supervisor restart fails after exit ${SELF_RESTART_EXIT_CODE}, ` +
+          "recover with `first-tree-hub logout && first-tree-hub login <token>`.\n",
+      );
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    print.line(
+      `  [update] warning: could not spawn 'daemon refresh-unit': ${msg}. If the supervisor restart fails, ` +
+        "recover with `first-tree-hub logout && first-tree-hub login <token>`.\n",
+    );
+  }
 }
