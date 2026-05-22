@@ -3,8 +3,10 @@ import type { NormalizedEvent } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import type { AudienceTarget } from "../services/github-audience.js";
 import { deliverNormalizedEvent } from "../services/github-delivery.js";
@@ -237,5 +239,86 @@ describe("deliverNormalizedEvent", () => {
     expect(stats.delivered).toBe(1);
     const sent = await app.db.select().from(messages).where(eq(messages.chatId, goodChatId));
     expect(sent).toHaveLength(1);
+  });
+
+  // Regression: a GitHub-bound chat that has been expanded to >=3 speakers
+  // (e.g. a teammate invited in) must still wake the delegate agent that
+  // owns the entity. Before the fix, github-delivery passed neither
+  // `addressedToAgentIds` nor `metadata.mentions`, so for card-format
+  // messages in a multi-speaker chat the fan-out collapsed to
+  // `notify=false` for everyone and the agent never woke.
+  it("wakes the delegate even in a multi-speaker bound chat (no mention required)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const watcher = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `watcher-${randomUUID().slice(0, 6)}`,
+    });
+
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values([
+      { chatId, agentId: human, role: "owner", accessMode: "speaker" },
+      { chatId, agentId: delegate, role: "member", accessMode: "speaker" },
+      { chatId, agentId: watcher, role: "member", accessMode: "speaker" },
+    ]);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#900",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const target: AudienceTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+    };
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#900",
+    });
+    const stats = await deliverNormalizedEvent(app, event, [target]);
+    expect(stats).toEqual({ delivered: 1, newChats: 0 });
+
+    const [delegateAgent] = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, delegate))
+      .limit(1);
+    const [watcherAgent] = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, watcher))
+      .limit(1);
+
+    const rows = await app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, chatId));
+    const delegateRow = rows.find((r) => r.inboxId === delegateAgent?.inboxId);
+    const watcherRow = rows.find((r) => r.inboxId === watcherAgent?.inboxId);
+
+    // The delegate is the structural target of the audience row — must wake.
+    expect(delegateRow?.notify).toBe(true);
+    // Other group speakers stay silent (history-only) — exactly the
+    // mention-only behaviour for unaddressed participants.
+    expect(watcherRow?.notify).toBe(false);
   });
 });
