@@ -93,6 +93,8 @@ export const COPY = {
     notConfigured:
       "Code connection isn't set up on this server yet. You can continue now and connect a project later from Settings.",
     notAdmin: "Only a team admin can connect code. Ask an admin to finish this, or continue for now.",
+    alreadyInstalledHint:
+      "Already added First Tree on GitHub? Connecting again just links it to this team — nothing is reinstalled.",
     continueWithout: "Continue without connecting code",
     continueNoProject: "Continue without a project",
     pickHint: "Pick the project your AI teammate should help with — or continue without one for now.",

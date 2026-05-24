@@ -99,6 +99,9 @@ export function StepConnectCode() {
             </div>
             {installError === "generic" && <FlowNote>{COPY.errors.generic}</FlowNote>}
             <StatusRow state="waiting" label={COPY.connectCode.waiting} />
+            <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+              {COPY.connectCode.alreadyInstalledHint}
+            </p>
             <ShowMeHow>
               <InstallGuide />
             </ShowMeHow>
