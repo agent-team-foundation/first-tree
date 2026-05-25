@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG_DIR, DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultConfigDir, defaultDataDir } from "@first-tree/shared/config";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
@@ -62,7 +62,7 @@ export async function findStaleAliases(opts: {
   /** Override for tests; defaults to `$FIRST_TREE_HOME/config/agents`. */
   agentsDir?: string;
 }): Promise<StaleAlias[]> {
-  const agentsDir = opts.agentsDir ?? join(DEFAULT_CONFIG_DIR, "agents");
+  const agentsDir = opts.agentsDir ?? join(defaultConfigDir(), "agents");
   if (!existsSync(agentsDir)) return [];
 
   const remote = await opts.listPinnedAgents();
@@ -139,7 +139,7 @@ export function formatStaleReason(reason: StaleAliasReason): string {
  * separately so prune and claim can share it.
  */
 export function removeLocalAgent(name: string): void {
-  rmSync(join(DEFAULT_CONFIG_DIR, "agents", name), { recursive: true, force: true });
-  rmSync(join(DEFAULT_DATA_DIR, "workspaces", name), { recursive: true, force: true });
-  rmSync(join(DEFAULT_DATA_DIR, "sessions", `${name}.json`), { force: true });
+  rmSync(join(defaultConfigDir(), "agents", name), { recursive: true, force: true });
+  rmSync(join(defaultDataDir(), "workspaces", name), { recursive: true, force: true });
+  rmSync(join(defaultDataDir(), "sessions", `${name}.json`), { force: true });
 }

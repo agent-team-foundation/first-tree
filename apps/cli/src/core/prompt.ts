@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { PromptDef } from "@first-tree/shared/config";
-import { collectMissingPrompts, DEFAULT_CONFIG_DIR, DEFAULT_HOME_DIR, setConfigValue } from "@first-tree/shared/config";
+import { collectMissingPrompts, defaultConfigDir, defaultHome, setConfigValue } from "@first-tree/shared/config";
 import { input, password, select } from "@inquirer/prompts";
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl } from "./bootstrap.js";
 import { cliFetch } from "./cli-fetch.js";
@@ -46,13 +46,13 @@ export async function promptMissingFields(options: {
     });
     throw new Error(
       `Missing required configuration:\n${lines.join("\n")}\n\n` +
-        `Provide values via environment variables, config file (${DEFAULT_HOME_DIR}/server.yaml),\n` +
+        `Provide values via environment variables, config file (${defaultHome()}/server.yaml),\n` +
         "or run without --no-interactive to use the interactive setup wizard.",
     );
   }
 
   // Interactive: prompt for each missing field
-  const configDir = options.configDir ?? DEFAULT_CONFIG_DIR;
+  const configDir = options.configDir ?? defaultConfigDir();
   const configPath = join(configDir, `${options.role}.yaml`);
   const results: Record<string, unknown> = {};
 

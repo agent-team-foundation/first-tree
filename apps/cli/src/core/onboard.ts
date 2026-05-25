@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG_DIR, DEFAULT_HOME_DIR, setConfigValue } from "@first-tree/shared/config";
+import { defaultConfigDir, defaultHome, setConfigValue } from "@first-tree/shared/config";
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl, saveAgentConfig } from "./bootstrap.js";
 import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
@@ -29,18 +29,24 @@ type CheckItem = {
   hint?: string;
 };
 
-export const STATE_FILE = join(DEFAULT_HOME_DIR, ".onboard-state.json");
+// Function rather than top-level const: a `const = join(defaultHome(), …)`
+// would lock at module load — same bundle hoist foot-gun that
+// motivated function-izing the resolver. See `channel-env.ts` history
+// note and `__tests__/no-toplevel-default-home-const.test.ts`.
+function stateFile(): string {
+  return join(defaultHome(), ".onboard-state.json");
+}
 
 /** Save current onboard args to state file for resume. */
 export function saveOnboardState(args: Record<string, unknown>): void {
-  mkdirSync(DEFAULT_HOME_DIR, { recursive: true });
-  writeFileSync(STATE_FILE, JSON.stringify({ args }, null, 2));
+  mkdirSync(defaultHome(), { recursive: true });
+  writeFileSync(stateFile(), JSON.stringify({ args }, null, 2));
 }
 
 /** Load saved onboard args from state file. */
 export function loadOnboardState(): Record<string, unknown> | null {
   try {
-    const data = JSON.parse(readFileSync(STATE_FILE, "utf-8")) as { args: Record<string, unknown> };
+    const data = JSON.parse(readFileSync(stateFile(), "utf-8")) as { args: Record<string, unknown> };
     return data.args;
   } catch {
     return null;
@@ -252,12 +258,12 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     }
   }
 
-  const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
+  const clientConfigPath = join(defaultConfigDir(), "client.yaml");
   setConfigValue(clientConfigPath, "server.url", serverUrl);
 
   try {
     const { unlinkSync } = await import("node:fs");
-    unlinkSync(STATE_FILE);
+    unlinkSync(stateFile());
   } catch {
     // Ignore
   }
@@ -269,7 +275,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     print.line(`  Assistant: ${args.assistant}\n`);
   }
   if (runtimeAgent) {
-    print.line(`  Config:    ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
+    print.line(`  Config:    ${defaultHome()}/config/agents/${runtimeAgent}/agent.yaml\n`);
   }
   if (args.feishuBotAppId) {
     print.line(`  Feishu:    bot bound (${args.feishuBotAppId})\n`);

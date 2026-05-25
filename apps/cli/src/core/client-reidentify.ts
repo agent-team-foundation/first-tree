@@ -68,7 +68,7 @@ export async function handleClientOrgMismatch(
   opts: {
     /** launchd/systemd mode: skip prompt, log for audit. */
     managed: boolean;
-    /** Directory holding `client.yaml` (usually `DEFAULT_CONFIG_DIR`). */
+    /** Directory holding `client.yaml` (usually `defaultConfigDir()`). */
     configDir: string;
     /** Exact shell command to show the user for the follow-up run. */
     rerunCommand: string;

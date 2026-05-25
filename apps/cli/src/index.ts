@@ -40,7 +40,6 @@ export {
   resolveServerUrl,
   restartClientService,
   rotateClientIdWithBackup,
-  runHomeMigration,
   startClientService,
   status,
   stopClientService,

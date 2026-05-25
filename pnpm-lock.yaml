@@ -154,7 +154,7 @@ importers:
       fastify:
         specifier: ^5.2.0
         version: 5.8.2
-      first-tree:
+      first-tree-dev:
         specifier: workspace:*
         version: link:../../apps/cli
       get-port:

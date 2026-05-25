@@ -148,6 +148,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-turbo-test-
       - run: pnpm install --frozen-lockfile
+      # `post-bundle-channel-home.test.ts` spawns the built CLI dist
+      # binary to verify channel-home resolution. Without an explicit
+      # build step ahead of `pnpm test`, the test's `ensureDistBuilt`
+      # fallback runs `pnpm build` inside vitest's `beforeAll` — that
+      # took ~125s on a cold CI runner and tripped vitest's
+      # worker→controller RPC heartbeat timeout (`Unhandled Error:
+      # Timeout calling "onTaskUpdate"`), failing the job even though
+      # all 233 tests passed. Building before vitest starts keeps the
+      # heavy work outside the worker IPC window.
+      - run: pnpm build
       - run: pnpm test
 
   check-migrations:

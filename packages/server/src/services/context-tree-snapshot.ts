@@ -15,7 +15,7 @@ import type {
   ContextTreeUpdate,
   ContextTreeUsageSummary,
 } from "@first-tree/shared";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultDataDir } from "@first-tree/shared/config";
 import matter from "gray-matter";
 
 const execFileAsync = promisify(execFile);
@@ -305,7 +305,7 @@ export function isGithubRemoteBinding(binding: { repo?: string; localPath?: stri
 }
 
 function managedContextTreeCacheRoot(): string {
-  return join(DEFAULT_DATA_DIR, "context-tree-repos");
+  return join(defaultDataDir(), "context-tree-repos");
 }
 
 function managedContextTreePath(repoUrl: string, branch: string, cacheRoot = managedContextTreeCacheRoot()): string {

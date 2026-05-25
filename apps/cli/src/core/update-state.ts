@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type UpdateAttempt, updateAttemptSchema } from "@first-tree/shared";
-import { DEFAULT_HOME_DIR } from "@first-tree/shared/config";
+import { defaultHome } from "@first-tree/shared/config";
 
 /**
  * Outcome of the last self-update attempt this client ran. Persisted to disk
@@ -26,7 +26,7 @@ import { DEFAULT_HOME_DIR } from "@first-tree/shared/config";
  *      into the machine.
  *
  * The on-the-wire shape is owned by `updateAttemptSchema` in shared. The
- * file lives at `${DEFAULT_HOME_DIR}/state/update-state.json`. The
+ * file lives at `${defaultHome()}/state/update-state.json`. The
  * `state/` subdirectory is created on first write — it's separate from
  * `config/` (user-edited) and `logs/` (high-volume) so future
  * machine-managed state has a home that's intentional, not "wherever a
@@ -43,7 +43,7 @@ export type UpdateState = {
  * `~/.first-tree/hub/state/update-state.json`.
  */
 export function defaultUpdateStatePath(): string {
-  return join(DEFAULT_HOME_DIR, "state", "update-state.json");
+  return join(defaultHome(), "state", "update-state.json");
 }
 
 /** Read the most recent attempt, or `null` if no attempt has ever been recorded. */

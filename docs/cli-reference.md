@@ -146,10 +146,10 @@ previous owner's machine because the verb must be requested by name. See
 journalctl --user -u first-tree-client -f
 
 # Or read the rotating NDJSON file the client itself writes:
-tail -f ~/.first-tree/hub/logs/client.log
+tail -f ~/.first-tree/logs/client.log
 
 # Rotated files: .log + .log.1 ... .log.7, max 10 MB each
-ls -lt ~/.first-tree/hub/logs/
+ls -lt ~/.first-tree/logs/
 ```
 
 Logs are NDJSON; pipe through `jq` for filtering by level/time.
@@ -167,7 +167,7 @@ rm -f ~/.config/systemd/user/first-tree-client.service
 systemctl --user daemon-reload
 
 # Both: clear local credentials and config
-rm -rf ~/.first-tree/hub
+rm -rf ~/.first-tree
 ```
 
 To force-disconnect a client from the server side, use the Hub web admin UI (Computers tab → "Disconnect"). The CLI no longer ships an admin verb for this — it's a destructive cross-machine operation that lives in the admin surface.
@@ -271,7 +271,7 @@ No CLI command is required to use the feature — it shows up automatically when
 ## client config
 
 Read / write the local `client.yaml` for this machine. Scope is implicit
-(this client's YAML at `~/.first-tree/hub/config/client.yaml`).
+(this client's YAML at `~/.first-tree/config/client.yaml`).
 
 ```bash
 first-tree config show                    # print every key/value
@@ -323,7 +323,7 @@ Most environment variables use the `FIRST_TREE_` prefix. `onboard` also accepts 
 
 | Variable | Purpose | Default |
 |---------|------|--------|
-| `FIRST_TREE_HOME` | Override the CLI home directory for config, data, cloned Context Tree, and onboard resume state | `~/.first-tree/hub` |
+| `FIRST_TREE_HOME` | Override the CLI home directory for config, data, cloned Context Tree, and onboard resume state | channel-dependent: `~/.first-tree` (prod), `~/.first-tree-staging` (staging), `~/.first-tree-dev` (dev) |
 
 ### Server (SaaS internal)
 
@@ -390,7 +390,7 @@ See [observability.md](observability.md) for the full config reference, backend 
 ## Directory Structure
 
 ```
-~/.first-tree/hub/
+~/.first-tree/
 ├── .onboard-state.json           # Saved args for onboard resume
 ├── config/                      # Configuration (human-edited)
 │   ├── client.yaml
@@ -405,7 +405,7 @@ See [observability.md](observability.md) for the full config reference, backend 
             └── <chatId>/
 ```
 
-If `FIRST_TREE_HOME` is set, replace `~/.first-tree/hub/` with that location.
+If `FIRST_TREE_HOME` is set, replace `~/.first-tree/` with that location.
 
 ## Config Resolution Order
 
@@ -413,5 +413,5 @@ Priority from high to low:
 
 1. CLI arguments
 2. Environment variables (`FIRST_TREE_*`)
-3. Config files (`~/.first-tree/hub/config/client.yaml`)
+3. Config files (`~/.first-tree/config/client.yaml`)
 4. Built-in defaults

@@ -1,16 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 
 /**
- * npm name of the consumer-facing CLI tarball. Kept here (rather than
- * imported from `apps/cli`) because the server Docker image
- * deliberately does NOT copy the Command package — see the May 2026
- * "decouple Docker entry from CLI" refactor — so a runtime import would
- * fail. The string is part of npm's public API; renaming it would break
- * every installed client anyway.
- */
-export const COMMAND_PACKAGE_NAME = "first-tree";
-
-/**
  * Tracks the Command-package version the server should advertise to every
  * connected Client via `server:welcome.serverCommandVersion`.
  *
@@ -19,13 +9,16 @@ export const COMMAND_PACKAGE_NAME = "first-tree";
  * build time) couples auto-update to the server's deploy cadence — clients
  * never see a fresh CLI release until the server image is also rebuilt and
  * rolled. The poller instead asks the npm registry for the configured
- * channel's current `dist-tag` value, so:
+ * package's `latest` dist-tag value, so server build cadence and Command
+ * publish cadence decouple cleanly.
  *
- *   - Staging deployments running `channel=alpha` follow CI's preview
- *     publishes within `pollIntervalMinutes` of upload.
- *   - Prod deployments running `channel=latest` follow stable releases the
- *     same way.
- *   - Server build cadence and Command publish cadence decouple cleanly.
+ * Multi-env: each channel (prod / staging) is its own npm package with
+ * its own `latest` dist-tag — the per-channel selection happens at the
+ * server config level (`channel` field), which decides which package
+ * name to pass here. `packageName === null` (dev channel) puts the
+ * poller into no-op mode: it never hits the registry and always returns
+ * `initialVersion`. That's correct for local dev where the CLI binary
+ * is symlinked from source.
  *
  * Fault tolerance: a failing fetch never tears down the in-memory value —
  * the previously-seen version (or the bootstrap fallback if no poll has
@@ -47,8 +40,12 @@ export type CommandVersionPoller = {
 export type CommandVersionPollerOptions = {
   logger: FastifyBaseLogger;
   registryUrl: string;
-  packageName: string;
-  channel: string;
+  /**
+   * npm package name to poll. `null` puts the poller into no-op mode —
+   * used for dev-channel servers where the CLI binary is symlinked from
+   * source and there's no published package to follow.
+   */
+  packageName: string | null;
   intervalMs: number;
   /** Bootstrap value used until the first successful poll lands. */
   initialVersion: string;
@@ -69,6 +66,29 @@ export function createCommandVersionPoller(opts: CommandVersionPollerOptions): C
   let timer: ReturnType<typeof setInterval> | null = null;
   let stopped = false;
 
+  // Multi-env: dev channel has no published package — the CLI binary
+  // is symlinked from source. Returning a no-op poller keeps the rest
+  // of the server bootstrap path uniform.
+  if (opts.packageName === null) {
+    opts.logger.info("command-version-poller: dev channel — no published package; advertising initialVersion only");
+    return {
+      get: () => current,
+      start: () => {
+        /* no-op */
+      },
+      stop: () => {
+        /* no-op */
+      },
+      refresh: async () => {
+        /* no-op */
+      },
+    };
+  }
+
+  // Capture packageName as a non-null local so closures don't have to
+  // re-narrow per call.
+  const packageName: string = opts.packageName;
+
   async function fetchOnce(): Promise<string | null> {
     // npm registry packument URL. We append the package name *unencoded*
     // because the npm registry expects literal `@` and `/` for scoped
@@ -76,7 +96,7 @@ export function createCommandVersionPoller(opts: CommandVersionPollerOptions): C
     // sub-delims that registries treat as path segments. The package name
     // never comes from user input on this code path (it's hard-coded by
     // the server build), so there's no injection vector to encode away.
-    const url = `${opts.registryUrl.replace(/\/$/, "")}/${opts.packageName}`;
+    const url = `${opts.registryUrl.replace(/\/$/, "")}/${packageName}`;
     try {
       const res = await fetchFn(url, {
         headers: {
@@ -88,18 +108,18 @@ export function createCommandVersionPoller(opts: CommandVersionPollerOptions): C
         signal: AbortSignal.timeout(10_000),
       });
       if (!res.ok) {
-        opts.logger.warn(
-          { status: res.status, url, channel: opts.channel },
-          "command-version-poller: npm registry returned non-OK",
-        );
+        opts.logger.warn({ status: res.status, url }, "command-version-poller: npm registry returned non-OK");
         return null;
       }
       const body = (await res.json()) as Packument;
-      const tag = body["dist-tags"]?.[opts.channel];
+      // Multi-env: every package has exactly one dist-tag (`latest`).
+      // Pre-multi-env had `alpha` here too; the per-channel split
+      // collapsed that into separate packages.
+      const tag = body["dist-tags"]?.latest;
       if (typeof tag !== "string" || tag.length === 0) {
         opts.logger.warn(
-          { channel: opts.channel, tags: Object.keys(body["dist-tags"] ?? {}) },
-          "command-version-poller: dist-tag missing from packument",
+          { tags: Object.keys(body["dist-tags"] ?? {}) },
+          "command-version-poller: 'latest' dist-tag missing from packument",
         );
         return null;
       }
@@ -115,10 +135,7 @@ export function createCommandVersionPoller(opts: CommandVersionPollerOptions): C
     const next = await fetchOnce();
     if (stopped || next === null) return;
     if (next !== current) {
-      opts.logger.info(
-        { from: current, to: next, channel: opts.channel },
-        "command-version-poller: advertised version changed",
-      );
+      opts.logger.info({ from: current, to: next }, "command-version-poller: advertised version changed");
       current = next;
     }
   }

@@ -35,7 +35,6 @@ describe("createCommandVersionPoller", () => {
       logger: silentLogger,
       registryUrl: "https://example.test",
       packageName: "@scope/pkg",
-      channel: "latest",
       intervalMs: 60_000,
       initialVersion: "0.14.6",
       fetchImpl: stubFetchWithBody({ "dist-tags": {} }),
@@ -44,34 +43,18 @@ describe("createCommandVersionPoller", () => {
     expect(poller.get()).toBe("0.14.6");
   });
 
-  it("updates the cached version when refresh finds a different dist-tag", async () => {
+  it("updates the cached version when refresh finds a different latest", async () => {
     const poller = createCommandVersionPoller({
       logger: silentLogger,
       registryUrl: "https://example.test",
       packageName: "@scope/pkg",
-      channel: "latest",
       intervalMs: 60_000,
       initialVersion: "0.14.6",
-      fetchImpl: stubFetchWithBody({ "dist-tags": { latest: "0.14.8", alpha: "0.14.9-alpha.1.1" } }),
+      fetchImpl: stubFetchWithBody({ "dist-tags": { latest: "0.14.8" } }),
     });
 
     await poller.refresh();
     expect(poller.get()).toBe("0.14.8");
-  });
-
-  it("reads the alpha tag when channel=alpha", async () => {
-    const poller = createCommandVersionPoller({
-      logger: silentLogger,
-      registryUrl: "https://example.test",
-      packageName: "@scope/pkg",
-      channel: "alpha",
-      intervalMs: 60_000,
-      initialVersion: "0.14.7",
-      fetchImpl: stubFetchWithBody({ "dist-tags": { latest: "0.14.7", alpha: "0.14.8-alpha.286.1" } }),
-    });
-
-    await poller.refresh();
-    expect(poller.get()).toBe("0.14.8-alpha.286.1");
   });
 
   it("keeps the previous version when the registry returns a non-OK response", async () => {
@@ -80,7 +63,6 @@ describe("createCommandVersionPoller", () => {
       logger: silentLogger,
       registryUrl: "https://example.test",
       packageName: "@scope/pkg",
-      channel: "latest",
       intervalMs: 60_000,
       initialVersion: "0.14.6",
       fetchImpl: failingFetch,
@@ -90,15 +72,14 @@ describe("createCommandVersionPoller", () => {
     expect(poller.get()).toBe("0.14.6");
   });
 
-  it("keeps the previous version when the requested dist-tag is missing", async () => {
+  it("keeps the previous version when the 'latest' dist-tag is missing", async () => {
     const poller = createCommandVersionPoller({
       logger: silentLogger,
       registryUrl: "https://example.test",
       packageName: "@scope/pkg",
-      channel: "alpha",
       intervalMs: 60_000,
       initialVersion: "0.14.7",
-      fetchImpl: stubFetchWithBody({ "dist-tags": { latest: "0.14.7" } }),
+      fetchImpl: stubFetchWithBody({ "dist-tags": { beta: "0.15.0-beta.1" } }),
     });
 
     await poller.refresh();
@@ -113,7 +94,6 @@ describe("createCommandVersionPoller", () => {
       logger: silentLogger,
       registryUrl: "https://example.test",
       packageName: "@scope/pkg",
-      channel: "latest",
       intervalMs: 60_000,
       initialVersion: "0.14.6",
       fetchImpl: throwingFetch,
@@ -123,7 +103,7 @@ describe("createCommandVersionPoller", () => {
     expect(poller.get()).toBe("0.14.6");
   });
 
-  it("builds the registry URL with the scope's slash preserved", async () => {
+  it("builds the registry URL with the package name appended unencoded", async () => {
     const calls: string[] = [];
     const recordingFetch: typeof fetch = async (input) => {
       calls.push(typeof input === "string" ? input : (input as URL).toString());
@@ -132,8 +112,7 @@ describe("createCommandVersionPoller", () => {
     const poller = createCommandVersionPoller({
       logger: silentLogger,
       registryUrl: "https://example.test/",
-      packageName: "first-tree",
-      channel: "latest",
+      packageName: "first-tree-staging",
       intervalMs: 60_000,
       initialVersion: "0.0.0",
       fetchImpl: recordingFetch,
@@ -143,7 +122,7 @@ describe("createCommandVersionPoller", () => {
     expect(calls).toHaveLength(1);
     // Trailing slash on registryUrl must be stripped; `@scope/name` must
     // survive encoding so npm registry can resolve the packument.
-    expect(calls[0]).toBe("https://example.test/first-tree");
+    expect(calls[0]).toBe("https://example.test/first-tree-staging");
   });
 
   it("stop() prevents further refreshes from mutating state", async () => {
@@ -153,7 +132,6 @@ describe("createCommandVersionPoller", () => {
       logger: silentLogger,
       registryUrl: "https://example.test",
       packageName: "@scope/pkg",
-      channel: "latest",
       intervalMs: 60_000,
       initialVersion: "0.14.5",
       fetchImpl: dynamicFetch,
@@ -166,5 +144,28 @@ describe("createCommandVersionPoller", () => {
     body = { "dist-tags": { latest: "9.9.9" } };
     await poller.refresh();
     expect(poller.get()).toBe("0.14.6");
+  });
+
+  it("packageName=null returns a no-op poller that never fetches", async () => {
+    let fetched = false;
+    const dummyFetch: typeof fetch = async () => {
+      fetched = true;
+      return new Response("{}", { status: 200 });
+    };
+    const poller = createCommandVersionPoller({
+      logger: silentLogger,
+      registryUrl: "https://example.test",
+      packageName: null,
+      intervalMs: 60_000,
+      initialVersion: "0.0.0-dev",
+      fetchImpl: dummyFetch,
+    });
+
+    expect(poller.get()).toBe("0.0.0-dev");
+    poller.start();
+    await poller.refresh();
+    expect(fetched).toBe(false);
+    expect(poller.get()).toBe("0.0.0-dev");
+    poller.stop();
   });
 });
