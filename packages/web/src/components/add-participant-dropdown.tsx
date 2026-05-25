@@ -158,6 +158,15 @@ export function AddParticipantDropdown({
     addMut.mutate(agentId);
   };
 
+  // The displayed candidate list trails the input by `useDebouncedValue` +
+  // the in-flight server fetch. If the user types a new term and slams
+  // Enter inside that gap, `selectable` still reflects the previous query
+  // and the highlighted row may not be what they think they're picking —
+  // a wrong-recipient hazard in production chats (Codex P2 review of
+  // PR 556). We block the commit until the displayed list matches the
+  // typed term AND no fetch is in flight.
+  const searchStale = searchInput.trim() !== debouncedSearch.trim() || searchFetching;
+
   const onInputKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -167,6 +176,7 @@ export function AddParticipantDropdown({
       setHighlight((i) => (selectable.length === 0 ? 0 : (i - 1 + selectable.length) % selectable.length));
     } else if (e.key === "Enter") {
       e.preventDefault();
+      if (searchStale) return;
       const picked = selectable[highlight] ?? selectable[0];
       if (picked) commit(picked.agentId);
     }
@@ -185,7 +195,10 @@ export function AddParticipantDropdown({
    */
   const emptyHint = (() => {
     if (selectable.length > 0) return null;
-    if (searchFetching) return "Searching…";
+    // `searchStale` covers both the in-flight fetch and the
+    // debounce-pending window where no fetch has fired yet but the
+    // displayed list is already known to be out of date.
+    if (searchStale) return "Searching…";
     if (debouncedSearch.length > 0) return `No agents match “${debouncedSearch}”`;
     return "No agents to add";
   })();

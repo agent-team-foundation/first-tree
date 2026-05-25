@@ -111,15 +111,35 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
         const next = new Map(prev);
         for (const a of rows) {
           if (myAgentId && a.uuid === myAgentId) continue;
-          if (!a.name) continue;
-          if (a.status === "suspended") continue;
-          if (next.has(a.uuid)) continue;
-          next.set(a.uuid, {
+          // Suspended / nameless rows must be evicted, not just skipped.
+          // The pre-fix code skipped insertion but kept stale active
+          // entries around, so an agent that was active when first cached
+          // and later suspended would keep surfacing in autocomplete and
+          // could be promoted into the draft via mention parsing — a
+          // wrong-recipient hazard (Codex P2 review of PR 556).
+          if (a.status === "suspended" || !a.name) {
+            if (next.delete(a.uuid)) changed = true;
+            continue;
+          }
+          const entry: MentionCandidate = {
             agentId: a.uuid,
             name: a.name,
             displayName: a.displayName,
             managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
-          });
+          };
+          const existing = next.get(a.uuid);
+          // Skip writes when nothing the cache exposes has changed — bouncing
+          // the Map reference would re-render every chip + popover row for no
+          // semantic gain.
+          if (
+            existing &&
+            existing.name === entry.name &&
+            existing.displayName === entry.displayName &&
+            existing.managedByMe === entry.managedByMe
+          ) {
+            continue;
+          }
+          next.set(a.uuid, entry);
           changed = true;
         }
         return changed ? next : prev;
@@ -138,10 +158,18 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
    *  (rather than rely on `useMentionAutocomplete`'s internal trigger)
    *  because we need the query string for the search hook before the
    *  hook itself runs. The hook re-detects below; both calls are cheap
-   *  pure functions. */
+   *  pure functions.
+   *
+   *  The trigger string is debounced (100ms — lighter than the chip
+   *  picker's 200ms so popover feels responsive while typing) before
+   *  hitting the server. Without it, typing `@bob` would fan out into
+   *  three GETs (`b` / `bo` / `bob`), each a fresh React Query key with
+   *  no dedup. `useOrgAgentsSearch`'s docstring puts debouncing on the
+   *  caller; matches what the chip picker already does. */
   const trigger = useMemo(() => detectMentionTrigger(draft, cursor), [draft, cursor]);
   const triggerQuery = trigger?.query ?? "";
-  const { data: triggerSearchPage } = useOrgAgentsSearch(triggerQuery);
+  const debouncedTriggerQuery = useDebouncedValue(triggerQuery, 100);
+  const { data: triggerSearchPage } = useOrgAgentsSearch(debouncedTriggerQuery);
   useEffect(() => {
     if (!triggerSearchPage?.items) return;
     mergeKnown(triggerSearchPage.items);
@@ -159,6 +187,12 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     if (!pickerSearchPage?.items) return;
     mergeKnown(pickerSearchPage.items);
   }, [pickerSearchPage?.items, mergeKnown]);
+  // True while the visible result set still trails the typed term —
+  // either the 200ms debounce hasn't fired yet or the post-debounce
+  // fetch is still in flight. Used by the picker to suppress Enter /
+  // click commits against a stale highlight, avoiding the
+  // wrong-recipient hazard Codex flagged on PR 556.
+  const pickerStale = pickerSearch.trim() !== debouncedPickerSearch.trim() || pickerFetching;
 
   /** Rows fed to the `[+]` chip-picker dropdown — server-search hits,
    *  minus chips already on the row and minus self / suspended / no-slug. */
@@ -405,7 +439,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
               pickerCandidates={pickerCandidates}
               pickerSearch={pickerSearch}
               setPickerSearch={setPickerSearch}
-              pickerFetching={pickerFetching}
+              pickerStale={pickerStale}
               pickerOpen={pickerOpen}
               setPickerOpen={setPickerOpen}
               pickerContainerRef={pickerContainerRef}
@@ -629,7 +663,7 @@ function ParticipantChips({
   pickerCandidates,
   pickerSearch,
   setPickerSearch,
-  pickerFetching,
+  pickerStale,
   pickerOpen,
   setPickerOpen,
   pickerContainerRef,
@@ -641,7 +675,11 @@ function ParticipantChips({
   pickerCandidates: MentionCandidate[];
   pickerSearch: string;
   setPickerSearch: (value: string) => void;
-  pickerFetching: boolean;
+  /** True while the displayed result set still trails the typed term
+   *  (debounce hasn't fired or a fetch is in flight). Suppresses Enter
+   *  commits so the user can't accidentally invite an agent from the
+   *  previous query — see Codex P2 review of PR 556. */
+  pickerStale: boolean;
   pickerOpen: boolean;
   setPickerOpen: (open: boolean) => void;
   pickerContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -681,6 +719,7 @@ function ParticipantChips({
       setHighlight((i) => (selectable.length === 0 ? 0 : (i - 1 + selectable.length) % selectable.length));
     } else if (e.key === "Enter") {
       e.preventDefault();
+      if (pickerStale) return;
       const picked = selectable[highlight] ?? selectable[0];
       if (picked) onAdd(picked.agentId);
     } else if (e.key === "Escape") {
@@ -691,7 +730,10 @@ function ParticipantChips({
 
   const emptyHint = (() => {
     if (selectable.length > 0) return null;
-    if (pickerFetching) return "Searching…";
+    // `pickerStale` covers both the in-flight fetch and the
+    // debounce-pending window where no fetch has fired yet but the
+    // displayed list is already known to be out of date.
+    if (pickerStale) return "Searching…";
     if (pickerSearch.trim().length > 0) return `No agents match “${pickerSearch.trim()}”`;
     return "No agents to add";
   })();
