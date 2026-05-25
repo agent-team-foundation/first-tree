@@ -41,6 +41,11 @@ const ATTENTION: ReadonlySet<string> = new Set(["needs_you", "failed", "working"
 const TICK_INTERVAL_MS = 1000;
 const LEAD_HOLD_MS = 4000;
 const EXPANDED_MAX_HEIGHT = 180;
+/** Visual cap (in pixels) for the assistant-text reply preview, so it reads as a
+ *  glance (one clause) on the rail instead of sprawling across the wide composer;
+ *  CSS `truncate` adds the ellipsis. Roughly 30 CJK / 55 latin chars at the
+ *  caption font size. */
+const ASSISTANT_PREVIEW_MAX_WIDTH = 300;
 
 function isAlert(s: AgentChatStatus): boolean {
   return s.main === "needs_you" || s.main === "failed";
@@ -290,11 +295,18 @@ function WorkingDetail({ activity }: { activity: LiveActivity | null }) {
   );
 }
 
-/** "Thinking" / "Writing" (sans) or "Using <tool> · <arg>" (sans word + mono
- *  tool/arg). arg preview is already truncated server-side. */
+/** "Thinking" (sans), the assistant reply preview ("…what the agent is saying",
+ *  falling back to "Writing" when the block is empty), or "Using <tool> · <arg>"
+ *  (sans word + mono tool/arg). Both previews are already truncated server-side;
+ *  the reply preview is additionally width-capped so it reads as a glance. */
 function ActivityText({ activity }: { activity: LiveActivity }) {
   if (activity.kind === "thinking") return <span className="truncate">Thinking</span>;
-  if (activity.kind === "assistant_text") return <span className="truncate">Writing</span>;
+  if (activity.kind === "assistant_text")
+    return (
+      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
+        {activity.detail ?? "Writing"}
+      </span>
+    );
   return (
     <span className="inline-flex min-w-0 items-center" style={{ gap: 4 }}>
       <span className="shrink-0">Using</span>
