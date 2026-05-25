@@ -151,7 +151,7 @@ This repo is a workspace member. Keep all Context Tree files only in the shared 
 - **Entrypoint:** `/workspaces/first-tree-all/repos/first-tree`
 - **Workspace ID:** `first-tree-all`
 - **Tree repo URL:** <https://github.com/agent-team-foundation/first-tree-context>
-- **Source state:** `.first-tree/local-tree.json`
+- **Source state:** `.first-tree/source.json`
 
 <!--
 FIRST-TREE-SOURCE-INTEGRATION: workspace member bound to shared tree repo `first-tree-context`
@@ -161,12 +161,12 @@ FIRST-TREE-BINDING-MODE: `workspace-member`
 FIRST-TREE-TREE-REPO-URL: `https://github.com/agent-team-foundation/first-tree-context`
 FIRST-TREE-ENTRYPOINT: `/workspaces/first-tree-all/repos/first-tree`
 FIRST-TREE-WORKSPACE-ID: `first-tree-all`
-FIRST-TREE-SOURCE-STATE: `.first-tree/local-tree.json`
+FIRST-TREE-SOURCE-STATE: `.first-tree/source.json`
 -->
 
 ### Before every task
 
-- Read `.first-tree/local-tree.json` first. If it exists, resolve its `tree.localPath` value from this repo root and treat that checkout as the canonical local tree repo.
+- Read `.first-tree/source.json` first. If it exists, resolve its `tree.localPath` value from this repo root and treat that checkout as the canonical local tree repo.
 - If that configured checkout exists locally, update it before you read anything else.
 - If the configured checkout is missing, clone a temporary working copy from `https://github.com/agent-team-foundation/first-tree-context` into `.first-tree/tmp/first-tree-context/`, use it for the current task, and delete it before you finish.
 - Never commit anything under `.first-tree/tmp/` to this repo. It is local-only workspace state.

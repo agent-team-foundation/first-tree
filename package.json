@@ -11,6 +11,7 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "check": "biome check .",
+    "check:no-old-names": "bash scripts/check-no-old-names.sh",
     "format": "biome check --write .",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
