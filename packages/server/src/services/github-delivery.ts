@@ -93,6 +93,14 @@ export async function deliverNormalizedEvent(
             entityType: event.entity.type,
             entityKey: event.entity.key,
             reason: card.reason,
+            // Tells the web UI to render this card with a synthetic
+            // "GitHub" sender (icon + name) in place of the human-agent
+            // row whose id we still store as `senderId`. Keeping the DB
+            // senderId as the human agent preserves multi-speaker
+            // fan-out / read-receipts / mention-resolution; only the
+            // visual attribution shifts. Scoped to GitHub cards so an
+            // arbitrary client cannot impersonate other sources.
+            systemSender: "github",
             ...(mentionedUser ? { mentionedUser } : {}),
           },
         },

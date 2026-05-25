@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isGithubEventCardContent } from "../github-event-card.js";
+import { isGithubEventCardContent, isGithubSystemSenderMetadata } from "../github-event-card.js";
 
 /**
  * Pin the type guard so the chat-view dispatch logic at chat-view.tsx can
@@ -77,5 +77,34 @@ describe("isGithubEventCardContent", () => {
   it("rejects question / question_answer payloads (no cross-format aliasing)", () => {
     expect(isGithubEventCardContent({ correlationId: "tu_1", questions: [], allowFreeText: true })).toBe(false);
     expect(isGithubEventCardContent({ correlationId: "tu_1", answers: {} })).toBe(false);
+  });
+});
+
+/**
+ * Pins the metadata gate that controls when the chat view re-attributes a
+ * row to the synthetic "GitHub" sender. A regression here either fails to
+ * override the human-agent attribution for legitimate dispatcher cards
+ * (UX regression — recipient sees their own avatar on the card) or
+ * accepts a stray `systemSender` from non-GitHub paths (impersonation
+ * risk). The check is intentionally strict on both shape and value.
+ */
+describe("isGithubSystemSenderMetadata", () => {
+  it("accepts metadata with systemSender === 'github'", () => {
+    expect(isGithubSystemSenderMetadata({ systemSender: "github" })).toBe(true);
+    expect(isGithubSystemSenderMetadata({ systemSender: "github", reason: "mentioned" })).toBe(true);
+  });
+
+  it("rejects other systemSender values and bare metadata", () => {
+    expect(isGithubSystemSenderMetadata({ systemSender: "feishu" })).toBe(false);
+    expect(isGithubSystemSenderMetadata({ systemSender: "" })).toBe(false);
+    expect(isGithubSystemSenderMetadata({ source: "github" })).toBe(false);
+    expect(isGithubSystemSenderMetadata({})).toBe(false);
+  });
+
+  it("rejects non-object inputs without throwing", () => {
+    expect(isGithubSystemSenderMetadata(null)).toBe(false);
+    expect(isGithubSystemSenderMetadata(undefined)).toBe(false);
+    expect(isGithubSystemSenderMetadata("github")).toBe(false);
+    expect(isGithubSystemSenderMetadata(42)).toBe(false);
   });
 });
