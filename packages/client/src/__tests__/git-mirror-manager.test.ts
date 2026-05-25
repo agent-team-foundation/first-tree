@@ -707,6 +707,10 @@ describe("GitMirrorManager — transient network error heuristic (isLikelyTransi
     "GnuTLS recv error (-110): The TLS connection was non-properly terminated.",
     "transfer closed with outstanding read data remaining",
     "ssh: connect to host github.com port 22: Network is unreachable",
+    // Raw OpenSSL form for a TLS connection the peer closed mid-stream —
+    // distinct from `SSL_ERROR_SYSCALL` and distinct from the cert-verify
+    // failures (negative case below). Narrow pattern by design.
+    "fatal: unable to access 'https://github.com/x/y/': error:0A000126:SSL routines::unexpected eof while reading",
   ])("matches transient network error: %s", (msg) => {
     expect(isLikelyTransientNetworkError(msg)).toBe(true);
   });
@@ -729,9 +733,17 @@ describe("GitMirrorManager — transient network error heuristic (isLikelyTransi
     // Deterministic content errors — retrying won't help.
     "fatal: repository 'https://example.com/none.git/' not found",
     "fatal: couldn't find remote ref refs/heads/missing",
-    // TLS trust failures — retrying would mask the real misconfiguration.
+    // TLS trust failures — retrying would mask the real misconfiguration and
+    // burn the full retry budget on a deterministic error. Covers the
+    // user-friendly form, the raw OpenSSL form (the regression Codex flagged
+    // on PR #548 — earlier `/SSL routines/i` pattern swept this up as
+    // transient), and the common variants (expired cert, missing CA bundle).
     "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: self signed certificate",
     "fatal: unable to access 'https://example.com/x.git/': server certificate verification failed.",
+    "fatal: unable to access 'https://example.com/x.git/': error:0A000086:SSL routines::certificate verify failed",
+    "fatal: unable to access 'https://example.com/x.git/': error:0A000412:SSL routines::sslv3 alert bad certificate",
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: unable to get local issuer certificate",
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: certificate has expired",
     // Our own per-call timeout — retrying with a fresh full budget is the
     // wrong policy; the op was either making progress or wasn't.
     "git fetch --prune origin timed out after 300000ms",

@@ -1070,9 +1070,30 @@ export function isLikelyTransientNetworkError(message: string): boolean {
   // Don't shadow a credential failure: switching to SSH is the right move
   // for those, retrying the same protocol is not.
   if (isLikelyHttpsAuthFailure(message) || isLikelySshAuthFailure(message)) return false;
+  // Don't shadow a TLS trust failure: those are deterministic misconfigurations
+  // (custom intercepting cert chain, expired cert, missing CA bundle, …) that
+  // a 5s retry budget won't fix. Burning the budget AND emitting transient-
+  // warning log lines for a deterministic failure would also mislead operators
+  // diagnosing a real cert problem. Matches both the user-friendly form
+  // (`SSL certificate problem: …`) and the raw OpenSSL form
+  // (`error:…:SSL routines::certificate verify failed`).
+  if (
+    /SSL certificate problem/i.test(message) ||
+    /server certificate verification failed/i.test(message) ||
+    /certificate verify failed/i.test(message) ||
+    /self.signed certificate/i.test(message) ||
+    /unable to get local issuer certificate/i.test(message) ||
+    /certificate has expired/i.test(message)
+  )
+    return false;
   return (
     /SSL_ERROR_SYSCALL/i.test(message) ||
-    /SSL\w+ error|SSL routines/i.test(message) ||
+    // OpenSSL's transient "the peer closed mid-stream" signal. Matches the
+    // raw form (`error:…:SSL routines::unexpected eof while reading`) emitted
+    // when github.com's edge resets the TLS connection mid-fetch. Narrowly
+    // scoped to the exact phrase to avoid re-introducing the broad
+    // `SSL routines` match that swept up cert verify failures.
+    /unexpected eof while reading/i.test(message) ||
     /TLS handshake|gnutls_handshake|gnutls\s+recv\s+error/i.test(message) ||
     /\bConnection reset(?:\s+by\s+peer)?\b/i.test(message) ||
     /\bConnection refused\b/i.test(message) ||
