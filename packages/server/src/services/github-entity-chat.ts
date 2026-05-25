@@ -1,6 +1,6 @@
 import type { ToolCallEventPayload } from "@first-tree/shared";
 import { chatMetadataSchema } from "@first-tree/shared";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { formatEntityTitle } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
@@ -104,6 +104,26 @@ export async function resolveTargetChat(
     return { chatId: direct.chatId, created: false, boundVia: direct.boundVia };
   }
 
+  // (a.5) Human-scoped fallback. The mapping primary key still includes
+  // `delegate_agent_id`, but routing treats `(org, human, entity)` as the
+  // logical cluster: an entity that is already bound to a chat under this
+  // human should never trigger a fresh chat just because a *different*
+  // delegate happened to drive this event. Pick the existing chat (open
+  // entities first, then earliest `bound_at`) and write a sibling mapping
+  // row so the next event hits (a) directly.
+  const humanScoped = await lookupMappingByHuman(db, organizationId, humanAgentId, entity);
+  if (humanScoped) {
+    const inserted = await insertMappingIfAbsent(db, {
+      organizationId,
+      humanAgentId,
+      delegateAgentId,
+      entity,
+      chatId: humanScoped.chatId,
+      boundVia: "direct",
+    });
+    return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
+  }
+
   // (b) Fixes-link reuse.
   for (const ref of relatedEntities) {
     const linked = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, ref);
@@ -172,6 +192,38 @@ async function lookupMapping(
     .limit(1);
   if (!row) return null;
   return { chatId: row.chatId, boundVia: asBoundVia(row.boundVia) };
+}
+
+/**
+ * Find any chat already bound to `(org, human, entity)` regardless of delegate.
+ *
+ * Multiple rows can legitimately exist when the same human created the entity
+ * via one delegate and later got fanned out via another delegate's
+ * `delegateMention` configuration. Pick deterministically:
+ *   1. `entity_state = 'open'` rows first (active conversation).
+ *   2. Then earliest `bound_at` — the original chat is the canonical thread.
+ */
+async function lookupMappingByHuman(
+  db: Database,
+  organizationId: string,
+  humanAgentId: string,
+  entity: GithubEntity,
+): Promise<{ chatId: string } | null> {
+  const [row] = await db
+    .select({ chatId: githubEntityChatMappings.chatId })
+    .from(githubEntityChatMappings)
+    .where(
+      and(
+        eq(githubEntityChatMappings.organizationId, organizationId),
+        eq(githubEntityChatMappings.humanAgentId, humanAgentId),
+        eq(githubEntityChatMappings.entityType, entity.type),
+        eq(githubEntityChatMappings.entityKey, entity.key),
+      ),
+    )
+    .orderBy(desc(sql`${githubEntityChatMappings.entityState} = 'open'`), asc(githubEntityChatMappings.boundAt))
+    .limit(1);
+  if (!row) return null;
+  return { chatId: row.chatId };
 }
 
 async function insertMappingIfAbsent(

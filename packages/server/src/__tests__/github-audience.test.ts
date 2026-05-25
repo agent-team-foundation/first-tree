@@ -304,6 +304,61 @@ describe("resolveAudience", () => {
     expect(audience[0]?.chatId).toBe(chatId);
   });
 
+  it("dedups involves by human even when the existing mapping uses a different delegate", async () => {
+    // Regression for the assignee-creates-new-chat bug. The chat-binding was
+    // written under (human, delegateA) when the agent first created the
+    // entity. A later assign webhook arrives with involves=[human]; the human
+    // is configured with delegateMention=delegateB. Audience must dedup by
+    // human alone so the involves path does NOT add a sibling `kind: "new"`
+    // row — the entity is already routed to the existing chat.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+    });
+    const delegateB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-b-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `dave-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegateB,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegateA,
+      entityType: "issue",
+      entityKey: "owner/repo#202",
+      chatId,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#202",
+        actorLogin: "outsider",
+        involves: [{ githubLogin: humanName, reason: "assigned" }],
+        kind: "assigned",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.delegateAgentId).toBe(delegateA);
+    expect(audience[0]?.chatId).toBe(chatId);
+  });
+
   it("keeps subscribed targets when actor is our-app-bot (route Hub's own writes back to existing chats)", async () => {
     // Background: when an agent creates a PR via Hub's GitHub App token, the
     // resulting `pull_request.opened` webhook arrives with `sender = <app>[bot]`.
