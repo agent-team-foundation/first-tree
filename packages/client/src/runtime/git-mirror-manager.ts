@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { pino } from "../observability/logger.js";
+import { isUnderManagedRoot, killProcessesHoldingPath } from "./worktree-cleanup.js";
 
 const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -43,6 +44,21 @@ export type GitMirrorManagerOptions = {
   dataDir: string;
   cloneTimeoutMs?: number;
   log?: pino.Logger;
+  /**
+   * Paths under which Hub owns the directory tree end-to-end (typically
+   * `<dataDir>/workspaces`). When a worktree target sits inside one of these
+   * roots and a stale non-managed leftover is found at session start, the
+   * manager auto-recovers — kill any process still holding the path, `rm -rf`
+   * the leftover, then proceed with the normal `git worktree add` flow.
+   *
+   * Targets OUTSIDE every managed root still fail loud with D13: those are
+   * operator-supplied paths and we refuse to silently delete user data.
+   *
+   * Omit to disable self-healing (current D13-always-throws behaviour). The
+   * production runtimes always pass the workspaces root; tests opt in
+   * explicitly to exercise the recovery path.
+   */
+  hubManagedRoots?: readonly string[];
 };
 
 export interface GitMirrorManager {
@@ -215,6 +231,24 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   const cloneTimeoutMs =
     opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
   const log = opts.log;
+  const resolvedDataDir = resolve(opts.dataDir);
+  const hubManagedRoots = (opts.hubManagedRoots ?? []).map((p) => resolve(p));
+  // Fail loud at construction if any managed root would let the self-heal
+  // branch escape `<dataDir>`. Without this guard a misconfigured caller
+  // (`hubManagedRoots: ["/"]`, `[os.homedir()]`, etc.) would weaponise the
+  // `createWorktree` rm -rf path against arbitrary host paths. Strict subdir:
+  // the root itself MUST sit inside `dataDir` and MUST NOT equal `dataDir`
+  // (so we never grant "the whole hub data dir is fair game").
+  //
+  // Aggregate every bad root into one error so an operator who misconfigured
+  // multiple entries sees the whole picture on their first startup attempt
+  // instead of grinding through one-fix-then-restart cycles.
+  const badRoots = hubManagedRoots.filter((root) => !isUnderManagedRoot(root, [resolvedDataDir]));
+  if (badRoots.length > 0) {
+    throw new GitMirrorError(
+      `hubManagedRoots contains ${badRoots.length} entr${badRoots.length === 1 ? "y" : "ies"} not strictly inside dataDir "${resolvedDataDir}" — refusing to construct manager (would let self-heal rm -rf escape the hub data dir): ${badRoots.map((p) => `"${p}"`).join(", ")}`,
+    );
+  }
 
   // Per-URL serial queue. Prevents concurrent ensureMirror / fetchMirror /
   // gcMirrors for the same URL from racing on the same directory.
@@ -584,18 +618,52 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         const branchName = deriveSessionBranchName(sessionKey, agentName, url);
 
         // D13: target path must be free OR a Hub-managed worktree we can reuse.
+        // Self-heal exception: when the path sits inside a hub-managed root the
+        // leftover is almost always an orphaned dev-server cache (vite/.vite,
+        // node_modules/.cache, etc) re-written by a daemonised child that
+        // outlived the previous session — see worktree-cleanup.ts header for
+        // the full incident. Kill any process still holding it, rm -rf, and
+        // fall through to the normal `git worktree add` path.
         if (existsSync(absTarget) && !isHubManagedWorktree(absTarget)) {
-          log?.warn(
-            {
-              gitUrl: url,
-              targetPath: absTarget,
-              occupantKind: classifyOccupant(absTarget),
-            },
-            "worktree create conflict",
-          );
-          throw new GitMirrorWorktreeConflictError(
-            `Worktree target "${absTarget}" is already occupied by ${classifyOccupant(absTarget)} — aborting (D13)`,
-          );
+          const occupantKind = classifyOccupant(absTarget);
+          if (hubManagedRoots.length > 0 && isUnderManagedRoot(absTarget, hubManagedRoots)) {
+            log?.warn(
+              {
+                gitUrl: url,
+                targetPath: absTarget,
+                occupantKind,
+                hubManagedRoots,
+              },
+              "worktree target occupied inside hub-managed root — auto-recovering (kill holders + rm -rf)",
+            );
+            await killProcessesHoldingPath(absTarget, log);
+            try {
+              rmSync(absTarget, { recursive: true, force: true });
+            } catch (err) {
+              throw new GitMirrorWorktreeConflictError(
+                `Worktree target "${absTarget}" cleanup failed after killing holders: ${
+                  err instanceof Error ? err.message : String(err)
+                } (D13)`,
+              );
+            }
+            if (existsSync(absTarget)) {
+              throw new GitMirrorWorktreeConflictError(
+                `Worktree target "${absTarget}" still occupied after auto-recovery — aborting (D13)`,
+              );
+            }
+          } else {
+            log?.warn(
+              {
+                gitUrl: url,
+                targetPath: absTarget,
+                occupantKind,
+              },
+              "worktree create conflict",
+            );
+            throw new GitMirrorWorktreeConflictError(
+              `Worktree target "${absTarget}" is already occupied by ${occupantKind} — aborting (D13)`,
+            );
+          }
         }
 
         // Crash-recovery matrix + cross-process race recovery, wrapped in a
@@ -673,6 +741,16 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
       return withUrlLock(url, async () => {
         const absTarget = resolve(path);
         const mirror = mirrorDir(url);
+        // Kill any daemonised child the previous session left behind (vite,
+        // esbuild, test watcher, ...) BEFORE we try to rmdir. Without this the
+        // child keeps writing under `absTarget`, which both makes
+        // `git worktree remove` flaky AND repopulates the directory between
+        // the rm and the next session's `worktree add` — exactly the D13
+        // failure mode this commit fixes. Gated by `hubManagedRoots` so we
+        // never signal processes whose cwd happens to be an operator path.
+        if (hubManagedRoots.length > 0 && isUnderManagedRoot(absTarget, hubManagedRoots) && existsSync(absTarget)) {
+          await killProcessesHoldingPath(absTarget, log);
+        }
         if (!isBareRepo(mirror)) {
           // Mirror was already GC'd; just rm the orphan dir if it exists.
           if (existsSync(absTarget)) rmSync(absTarget, { recursive: true, force: true });

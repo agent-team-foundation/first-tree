@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   CanUseTool,
@@ -1088,6 +1088,41 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
+   * Probe whether the Claude Code SDK can resume the given session at the
+   * current cwd. The SDK stores per-project transcripts at
+   * `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, where
+   * `encoded-cwd` is the absolute cwd with every non-alphanumeric char
+   * replaced by `-`. If the file is missing, `query({ resume })` throws
+   * `No conversation found with session ID: <id>` asynchronously inside
+   * the consume loop, surfacing as an SDK error in the chat timeline.
+   *
+   * This shows up after the agent-session-cwd-redesign upgrade: per-chat
+   * cwd transcripts live under a chatId-suffixed encoded path that no
+   * longer matches the new per-agent-home encoding, so legacy sessionIds
+   * can't be resumed in place. See proposal §⓪.3 R2.
+   *
+   * 🔍 Encoding rule sourcing: the `[^a-zA-Z0-9-]` → `-` substitution
+   * matches Claude Agent SDK 0.2.x's on-disk behavior, verified empirically
+   * by listing `~/.claude/projects/` against known cwds — an absolute path
+   * like `/Users/alice/project` becomes the directory `-Users-alice-project`,
+   * and `/foo/.bar` becomes `-foo--bar` (the `.` is non-alphanumeric).
+   * The SDK does not export a public helper for the encoding, so an
+   * upstream change here would silently invalidate this probe → fallback
+   * either fails to trigger (loud SDK error returns) or triggers
+   * unnecessarily (cold-start an existing session). When bumping
+   * `@anthropic-ai/claude-agent-sdk`, re-verify the encoding rule.
+   *
+   * Returning `false` lets the caller pick either:
+   *   - run the resume against a different cwd that DOES have the
+   *     transcript (legacy chat dir, see `resume()` body); or
+   *   - mint a fresh sessionId and fall through to start() semantics.
+   */
+  function claudeSessionFileExists(workspaceCwd: string, sessionId: string): boolean {
+    const encoded = workspaceCwd.replace(/[^a-zA-Z0-9-]/g, "-");
+    return existsSync(join(homedir(), ".claude", "projects", encoded, `${sessionId}.jsonl`));
+  }
+
+  /**
    * Hash-check the existing identity.json against the current agent metadata
    * and rewrite it (plus the rest of the .agent/ stable section) only when
    * something changed. Cheap to run on every session start — the typical
@@ -1228,6 +1263,41 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       ctx = sessionCtx;
       claudeSessionId = sessionId;
       retryCount = 0;
+
+      // R2 backward-compat: a session created BEFORE this PR ran with cwd =
+      // `<workspaceRoot>/<chatId>/`, so its Claude SDK transcript is keyed
+      // off that path's encoding under `~/.claude/projects/`. The new
+      // per-agent-home cwd would NOT find it and would error with `No
+      // conversation found ...`. To preserve the agent's SDK turn history
+      // across upgrade, probe the legacy chat dir first — if the transcript
+      // is there, run the resume against the legacy cwd verbatim and skip
+      // every piece of agent-home setup (the legacy dir already has its
+      // own `.agent/`, CLAUDE.md, and gitRepos checkout at top-level).
+      const legacyCwd = join(workspaceRoot, sessionCtx.chatId);
+      const isLegacy = existsSync(legacyCwd) && claudeSessionFileExists(legacyCwd, sessionId);
+
+      if (isLegacy) {
+        cwd = legacyCwd;
+        sessionCtx.log(
+          `Resume: detected pre-redesign SDK transcript at legacy cwd ${legacyCwd}; ` +
+            "running this session under the legacy per-chat layout to preserve agent memory",
+        );
+        const chatContext = await fetchChatContextOrLog(sessionCtx);
+        // Intentionally NOT calling ensureAgentBootstrap / prepareSourceRepos /
+        // markWorkspaceInitComplete here — those write the new agent-home
+        // layout, which would pollute the legacy chat dir. The dir already
+        // carries the v1.x bootstrap output (CLAUDE.md, AGENTS.md, .agent/,
+        // <localPath>/ source repos), and the agent reads it via the SDK's
+        // `settingSources: ["project"]` option.
+        spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
+        if (message) {
+          inputController?.push(await toSDKUserMessage(message, sessionCtx, sessionId));
+        }
+        sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
+        return sessionId;
+      }
+
+      // Normal new-design resume path: cwd is the agent home.
       cwd = acquireAgentHome(workspaceRoot);
 
       // Identical control flow to start(): bootstrap is idempotent and the
@@ -1241,6 +1311,25 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       await prepareSourceRepos(cwd, payload, sessionCtx);
 
       markWorkspaceInitComplete(cwd);
+
+      // Defensive fallback: sessionId isn't recognised at EITHER cwd (likely
+      // a stale registry entry from machine swap / fs cleanup / tampering).
+      // Mint a fresh id and start cold — Hub message history survives.
+      if (!claudeSessionFileExists(cwd, sessionId)) {
+        const freshSessionId = randomUUID();
+        sessionCtx.log(
+          `Resume: SDK transcript for ${sessionId} not found at legacy (${legacyCwd}) ` +
+            `or agent home (${cwd}); starting fresh session ${freshSessionId} — ` +
+            "Hub message history is preserved.",
+        );
+        claudeSessionId = freshSessionId;
+        spawnQuery(freshSessionId, sessionCtx, undefined, chatContext);
+        if (message) {
+          inputController?.push(await toSDKUserMessage(message, sessionCtx, freshSessionId));
+        }
+        sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
+        return freshSessionId;
+      }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
