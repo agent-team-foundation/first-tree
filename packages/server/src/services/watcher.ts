@@ -132,7 +132,7 @@ export async function joinAsParticipant(db: Database, chatId: string, humanAgent
     // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
     // `chat_membership.mode` is decision-inert. Just upsert the speaker row.
     //
-    // `/me/chats/:id/join` admits only the manager's human agent.
+    // `/chats/:chatId/workspace-join` admits only the manager's human agent.
     // `assertHuman: true` makes a non-human caller surface as a 400 rather
     // than silently inserting.
     // `upgradeWatcherToSpeaker` promotes a pre-existing watcher row in
@@ -230,7 +230,7 @@ export async function leaveAsParticipant(db: Database, chatId: string, humanAgen
  * Returns one of: 'participant' (speaker), 'watching' (watcher),
  * or null (no row).
  *
- * Used by `/me/chats/:chatId/join` to refuse a join when the user
+ * Used by `/chats/:chatId/workspace-join` to refuse a join when the user
  * has neither a watcher row nor a participant row, and isn't
  * otherwise authorised (admin in the chat's org).
  */
@@ -249,7 +249,7 @@ export async function resolveChatMembership(
 }
 
 /**
- * Used by `/me/chats/:chatId/join`. Throw 409 if already a speaker
+ * Used by `/chats/:chatId/workspace-join`. Throw 409 if already a speaker
  * (no work to do) and 403 if no row at all (admin override is
  * resolved at the route layer; this helper only reports the membership
  * state).
