@@ -10,13 +10,14 @@
  *
  * Two distinct kinds of operation live here:
  *
- *   1. Set rebuilds (`recompute*`). Idempotent set-based
- *      recomputations driven by lifecycle events (chat created,
- *      participant added/removed, member status flipped, agent
- *      rebind, etc.). Strict invariant: ONLY INSERT or DELETE rows
- *      where access_mode = 'watcher'. NEVER UPDATE any row with
- *      access_mode = 'speaker' — the user's own join/leave decision
- *      must not be overwritten by ops paths.
+ *   1. Per-agent / per-member recompute fan-out
+ *      (`recomputeWatchersForAgent`, `recomputeWatchersForMember`).
+ *      These translate an agent-rebind or member-status flip into a
+ *      set of chat-scoped recomputes. The underlying chat-scoped
+ *      operation `recomputeChatWatchers` itself lives in
+ *      `participant-mode.ts` next to the speaker writer that owns
+ *      the derivation invariant; we re-export it from here so
+ *      historical callers keep working.
  *
  *   2. Speaker ↔ watcher transitions (`joinAsParticipant`,
  *      `leaveAsParticipant`). Single-table UPDATE on
@@ -24,12 +25,6 @@
  *      the (chat, agent) pair are not touched. Per §11.4 default,
  *      a fully-detached user keeps their `chat_user_state` row
  *      (read state remembered for re-add).
- *
- * File name preserved across the refactor for diff readability; may
- * be renamed in a follow-up. Public function names preserved too —
- * `recomputeChatWatchers` still describes what it does (recomputes
- * the watcher rows), so the rename to `recomputeChatMembership`
- * would obscure rather than clarify.
  */
 
 import { and, eq, ne, sql } from "drizzle-orm";
@@ -38,7 +33,13 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
-import { addChatParticipants } from "./participant-mode.js";
+import { addChatParticipants, recomputeChatWatchers } from "./participant-mode.js";
+
+// Re-export so historical callers that reach for
+// `watcher.ts::recomputeChatWatchers` keep compiling. The canonical home
+// for this function is now `participant-mode.ts` — anchored next to the
+// speaker writer whose write triggers the derivation.
+export { recomputeChatWatchers };
 
 /**
  * Structural DB type that accepts both the top-level `Database` and a
@@ -48,72 +49,10 @@ import { addChatParticipants } from "./participant-mode.js";
 type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
 
 // ---------------------------------------------------------------------------
-// Recompute helpers — set rebuilds. Idempotent. Touch ONLY watcher rows.
+// Per-agent / per-member recompute fan-out. Translate an event that touches
+// one agent (rebind) or one member (status flip) into the right set of
+// chat-scoped recomputes.
 // ---------------------------------------------------------------------------
-
-/**
- * Recompute watcher rows for ONE chat. For every active member who:
- *   - manages a non-human agent that speaks in the chat, AND
- *   - whose own human agent is NOT a speaker in the chat
- * a `(chat_id, member.agent_id)` watcher row is upserted.
- *
- * Strict invariant: only writes rows with access_mode = 'watcher';
- * never updates or deletes any access_mode = 'speaker' row. The
- * ON CONFLICT DO NOTHING clause guarantees that if a (chat, agent)
- * row already exists as a speaker (the manager joined as a real
- * participant themselves), we leave it alone.
- *
- * Watchers whose anchoring condition no longer holds (manager left,
- * the managed agent was removed from the chat, the manager joined as
- * a speaker themselves) are deleted — also gated on access_mode =
- * 'watcher'.
- *
- * Idempotent: safe to call multiple times for the same chat.
- */
-export async function recomputeChatWatchers(db: DbLike, chatId: string): Promise<void> {
-  // Insert the desired set of watcher rows; speaker rows are
-  // preserved by the ON CONFLICT clause + the NOT EXISTS guard in
-  // the SELECT.
-  await db.execute(sql`
-    INSERT INTO chat_membership
-      (chat_id, agent_id, role, access_mode, mode, source, joined_at)
-    SELECT DISTINCT cm.chat_id, m.agent_id, 'member', 'watcher', 'full', 'auto_manager', now()
-      FROM chat_membership cm
-      JOIN agents  a ON a.uuid = cm.agent_id
-      JOIN members m ON m.id   = a.manager_id
-     WHERE cm.chat_id = ${chatId}
-       AND cm.access_mode = 'speaker'
-       AND m.status = 'active'
-       AND a.type   <> 'human'
-       AND NOT EXISTS (
-         SELECT 1 FROM chat_membership cm2
-          WHERE cm2.chat_id  = cm.chat_id
-            AND cm2.agent_id = m.agent_id
-       )
-    ON CONFLICT (chat_id, agent_id) DO NOTHING
-  `);
-
-  // Drop watcher rows whose anchoring condition no longer holds.
-  // Speaker rows are protected by the access_mode = 'watcher'
-  // clause — they will never be touched here regardless of join
-  // shape.
-  await db.execute(sql`
-    DELETE FROM chat_membership cm
-     WHERE cm.chat_id = ${chatId}
-       AND cm.access_mode = 'watcher'
-       AND NOT EXISTS (
-         SELECT 1
-           FROM chat_membership speakers
-           JOIN agents  a ON a.uuid = speakers.agent_id
-           JOIN members m ON m.id   = a.manager_id
-          WHERE speakers.chat_id     = cm.chat_id
-            AND speakers.access_mode = 'speaker'
-            AND m.agent_id           = cm.agent_id
-            AND m.status             = 'active'
-            AND a.type              <> 'human'
-       )
-  `);
-}
 
 /**
  * Recompute watcher rows touching ONE agent across all chats it

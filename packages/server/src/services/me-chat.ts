@@ -5,9 +5,9 @@
  * Responsibilities:
  *   - Cursor-paginated conversation list (single-stream JOIN over the
  *     unified `chat_membership` + `chat_user_state` tables).
- *   - Create a new chat (no dedupe, runs `recomputeChatWatchers` after).
- *   - Add participants (idempotent, UPSERT into `chat_membership`,
- *     runs `recomputeChatWatchers` after).
+ *   - Create a new chat (delegates participant writes — and the derived
+ *     watcher recompute — to `addChatParticipants`).
+ *   - Add participants (delegates to `inviteParticipantsToChat`).
  *   - Mark-read (UPSERT into `chat_user_state`).
  *   - Join → watcher to speaker (delegates to `watcher.ts`).
  *   - Leave → speaker to watcher or detach (delegates to `watcher.ts`).
@@ -48,15 +48,10 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { resolveAgentChatStatuses } from "./agent-chat-status.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { assertChatVisibleInOrgOrNotFound, inviteParticipantsToChat } from "./participant-invite.js";
 import { addChatParticipants } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
-import {
-  ensureCanJoin,
-  joinAsParticipant,
-  leaveAsParticipant,
-  recomputeChatWatchers,
-  resolveChatMembership,
-} from "./watcher.js";
+import { ensureCanJoin, joinAsParticipant, leaveAsParticipant, resolveChatMembership } from "./watcher.js";
 
 // ---------------------------------------------------------------------------
 // Cursor encoding
@@ -624,11 +619,12 @@ export async function createMeChat(
       topic,
     });
 
-    // v2: mode is decision-inert; `addChatParticipants` writes the
-    // constant `'mention_only'` for every speaker row. The single-writer
-    // entrypoint is retained so a future per-receiver wake policy lands
-    // in one place. See
-    // proposals/hub-chat-message-v2-simplify-mode.20260520.md.
+    // v2: mode is decision-inert; `addChatParticipants` writes the constant
+    // `'mention_only'` for every speaker row. The helper also encloses the
+    // derived watcher recompute (so managers of any non-human participant
+    // land as watchers) and the silent-context backfill (no-op here — the
+    // chat has no messages yet). Don't call `recomputeChatWatchers` again.
+    // See proposals/hub-chat-message-v2-simplify-mode.20260520.md.
     await addChatParticipants(
       tx,
       chatId,
@@ -637,10 +633,6 @@ export async function createMeChat(
         role: agentId === humanAgentId ? ("owner" as const) : ("member" as const),
       })),
     );
-
-    // Add watcher rows for managers of any non-human participant.
-    // Idempotent.
-    await recomputeChatWatchers(tx, chatId);
   });
 
   // Fresh chat — no cache entry exists yet, but populate consistency
@@ -653,6 +645,21 @@ export async function createMeChat(
 // Add participants
 // ---------------------------------------------------------------------------
 
+/**
+ * Web entrypoint: `POST /chats/:id/participants` (user JWT).
+ *
+ * Thin shell over `inviteParticipantsToChat`. Two responsibilities specific
+ * to the web wire shape:
+ *   1. Probing-protection 404: if the chat doesn't exist OR lives in a
+ *      different org from the caller, the wire surface is the same 404 so
+ *      a non-member cannot probe chat existence by uuid.
+ *   2. Empty-body 400 (the Layer-2 service rejects this too, but the web
+ *      route prefers the early signal).
+ *
+ * Everything else — caller-is-speaker, cross-org targets, private
+ * owner-exclusive, the actual write — is delegated. `errorOnAlreadySpeaker:
+ * false` because the batch UI treats re-adding someone as a no-op.
+ */
 export async function addMeChatParticipants(
   db: Database,
   chatId: string,
@@ -660,123 +667,36 @@ export async function addMeChatParticipants(
   callerOrganizationId: string,
   body: AddMeChatParticipants,
 ): Promise<void> {
-  const distinct = [...new Set(body.participantIds)];
-  if (distinct.length === 0) throw new BadRequestError("At least one participant required");
-
-  const [chat] = await db
-    .select({ id: chats.id, organizationId: chats.organizationId, type: chats.type })
-    .from(chats)
-    .where(eq(chats.id, chatId))
-    .limit(1);
-  if (!chat) throw new NotFoundError(`Chat "${chatId}" not found`);
-
-  // Caller-side authorisation. 404 (not 403) for "cannot see this
-  // chat" so non-participants cannot probe chat existence by uuid.
-  // Two gates: (1) chat lives in caller's active org; (2) caller is a
-  // speaking participant (watchers cannot invite speakers).
-  if (chat.organizationId !== callerOrganizationId) {
-    throw new NotFoundError(`Chat "${chatId}" not found`);
+  if (body.participantIds.length === 0) {
+    throw new BadRequestError("At least one participant required");
   }
-  // Resolve caller's chat-membership AND owner member-id in one query.
-  // The owner member-id is the authoritative input to the
-  // owner-exclusive check below — deriving it from the caller agent's
-  // `managerId` (rather than accepting it as a parameter) prevents an
-  // internal caller from mismatching the two and bypassing the check.
-  // Works regardless of caller agent type: a human agent's managerId
-  // is its own member; an autonomous/personal_assistant agent's
-  // managerId is the member that owns it.
-  const [callerRow] = await db
-    .select({ ownerMemberId: agents.managerId })
-    .from(chatMembership)
-    .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
-    .where(
-      and(
-        eq(chatMembership.chatId, chatId),
-        eq(chatMembership.agentId, callerHumanAgentId),
-        eq(chatMembership.accessMode, "speaker"),
-      ),
-    )
-    .limit(1);
-  if (!callerRow) {
-    throw new NotFoundError(`Chat "${chatId}" not found`);
-  }
-  const callerMemberId = callerRow.ownerMemberId;
+  // Probing-protection 404: chat-in-caller-org. The invite service raises
+  // `ForbiddenError` when the caller isn't a speaker; the web wire wants
+  // both that failure mode AND chat-not-in-our-org to surface as NotFound,
+  // so we pre-check the org boundary here. `assertChatVisibleInOrgOrNotFound`
+  // lives next to the invite service so the assertion travels with the
+  // service whose error semantics it adjusts.
+  await assertChatVisibleInOrgOrNotFound(db, chatId, callerOrganizationId);
 
-  const found = await db
-    .select({
-      uuid: agents.uuid,
-      organizationId: agents.organizationId,
-      type: agents.type,
-      visibility: agents.visibility,
-      managerId: agents.managerId,
-    })
-    .from(agents)
-    .where(inArray(agents.uuid, distinct));
-
-  if (found.length !== distinct.length) {
-    const foundSet = new Set(found.map((a) => a.uuid));
-    const missing = distinct.filter((id) => !foundSet.has(id));
-    throw new BadRequestError(`Agents not found: ${missing.join(", ")}`);
-  }
-  const crossOrg = found.filter((a) => a.organizationId !== chat.organizationId);
-  if (crossOrg.length > 0) {
-    throw new BadRequestError(`Cross-organization participant rejected: ${crossOrg.map((a) => a.uuid).join(", ")}`);
-  }
-
-  // Owner-exclusive rule for private agents. Only the agent's manager
-  // (the owner) can pull a private agent into a chat — inviting it into
-  // the chat is the owner's own scoped "consent" to expose it to other
-  // members. Mirrors the "邀请即同意 / Owner-exclusive" property in
-  // `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.4.2 /
-  // §4.5, and prevents anyone with an agent's UUID from bypassing the
-  // discovery filter to drop someone else's private agent into a chat.
-  // Living at the service layer (not just the API caller-side
-  // `assertAllAgentsVisibleInOrg` gate) so the invariant holds for any
-  // future entrypoint that builds on this service.
-  const privateNotOwned = found.filter(
-    (a) => a.visibility === AGENT_VISIBILITY.PRIVATE && a.managerId !== callerMemberId,
-  );
-  if (privateNotOwned.length > 0) {
-    throw new ForbiddenError(
-      `Only the owner can add a private agent to a chat: ${privateNotOwned.map((a) => a.uuid).join(", ")}`,
-    );
-  }
-
-  await db.transaction(async (tx) => {
-    // Existing speakers (for the direct → group upgrade rule and
-    // for filtering out already-speaking agents from the insert
-    // batch).
-    const existingSpeakers = await tx
-      .select({ agentId: chatMembership.agentId })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-    const existingSpeakerSet = new Set(existingSpeakers.map((e) => e.agentId));
-    const toUpsert = distinct.filter((id) => !existingSpeakerSet.has(id));
-    if (toUpsert.length === 0) {
-      // Idempotent — nothing to do, but still recompute watchers in
-      // case the caller is fixing a stale watcher set.
-      await recomputeChatWatchers(tx, chatId);
-      return;
-    }
-
-    // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
-    // `chat_membership.mode` is decision-inert. `upgradeWatcherToSpeaker:
-    // true` promotes any pre-existing watcher row in place — chat_user_state
-    // lives in a separate table so the user's read state survives the
-    // promotion untouched (no state-carry transaction needed).
-    await addChatParticipants(
-      tx,
+  try {
+    await inviteParticipantsToChat(db, {
       chatId,
-      toUpsert.map((agentId) => ({ agentId, role: "member" as const })),
-      { upgradeWatcherToSpeaker: true },
-    );
-
-    await recomputeChatWatchers(tx, chatId);
-  });
-
-  // Bust the WS audience cache so the next `chat:message` dispatch
-  // resolves the fresh speaker set.
-  invalidateChatAudience(chatId);
+      callerAgentId: callerHumanAgentId,
+      targetAgentIds: body.participantIds,
+      // Web batch path is partial-idempotent: re-adding someone already in
+      // the chat is a no-op (the UI doesn't model 409 per-target).
+      errorOnAlreadySpeaker: false,
+    });
+  } catch (err) {
+    // The invite service surfaces "caller is not a speaker" as
+    // `ForbiddenError`. The web wire prefers `NotFoundError` to avoid
+    // leaking chat existence to non-members — collapse the two failure
+    // modes (chat-in-other-org, caller-not-speaker) into a single 404.
+    if (err instanceof ForbiddenError && /not a speaker/i.test(err.message)) {
+      throw new NotFoundError(`Chat "${chatId}" not found`);
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------

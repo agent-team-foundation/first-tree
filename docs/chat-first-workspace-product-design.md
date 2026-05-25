@@ -483,11 +483,17 @@ UI concept and does not appear in the API path.
 ```text
 GET    /me/chats                          — paginated list
 POST   /me/chats                          — create
-POST   /me/chats/:chatId/read             — mark-read
-POST   /me/chats/:chatId/participants     — add member
-POST   /me/chats/:chatId/join             — watcher → speaker
-POST   /me/chats/:chatId/leave            — speaker → watcher (or detach)
+POST   /chats/:chatId/read                — mark-read
+POST   /chats/:chatId/participants        — add member
+POST   /chats/:chatId/workspace-join      — watcher → speaker
+POST   /chats/:chatId/workspace-leave     — speaker → watcher (or detach)
 ```
+
+Note: an earlier draft listed these under `/me/chats/...`; the actual
+shipping routes live under `/chats/...` (see `packages/server/src/api/chats.ts`
++ `me-chats.ts`). The v1 supervision-check `POST /chats/:chatId/join` route
+was removed alongside its `chat.ts::joinChat` service — the v2 watcher-based
+`/workspace-join` is the only "manager joins chat" path today.
 
 ### `GET /me/chats`
 
@@ -605,18 +611,26 @@ Both UPDATEs run; whichever row exists takes effect. Idempotent.
 
 Returns `{ chatId, lastReadAt, unreadMentionCount: 0 }`.
 
-### `POST /me/chats/:chatId/join`
+### `POST /chats/:chatId/workspace-join`
 
-Watcher → speaking participant. State-carry transaction (§State
-Transitions). If the user has no watcher row but has visibility, inserts
-a fresh `chat_participants` row.
+Watcher → speaking participant. Single-table UPDATE on
+`chat_membership.access_mode` ('watcher' → 'speaker'); `chat_user_state`
+rows for the (chat, agent) pair are not touched (read state survives the
+flip — see §State Transitions).
 
-Returns updated participants list.
+Refuses with 403 if the caller has no watcher row in the chat (admins
+without a managed participant must not be able to drop into arbitrary
+chats); refuses with 409 if the caller is already a speaker. See
+`packages/server/src/services/watcher.ts::ensureCanJoin`.
 
-### `POST /me/chats/:chatId/leave`
+Returns 204.
 
-Speaking participant → watcher (if `stillVisible`) or fully detach. State-
-carry transaction (§State Transitions).
+### `POST /chats/:chatId/workspace-leave`
+
+Speaking participant → watcher (if `stillVisible`) or fully detach.
+Single-table UPDATE on `chat_membership.access_mode`; `chat_user_state`
+row (if any) is preserved per §11.4 default — read state is remembered
+for re-add.
 
 Returns `{ chatId, membershipKind: 'watching' | null }`.
 
