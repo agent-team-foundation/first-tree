@@ -2,7 +2,6 @@ import { safeRedirectPath } from "@first-tree/shared";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
-import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
  * Consumes the `#access=…&refresh=…&next=…` fragment that the server
@@ -25,19 +24,10 @@ export function OAuthCompletePage() {
     const accessToken = params.get("access");
     const refreshToken = params.get("refresh");
     const next = safeRedirectPath(params.get("next"));
-    const joinPath = params.get("joinPath");
 
     if (!accessToken || !refreshToken) {
       setError("Sign-in did not complete. Please try again.");
       return;
-    }
-
-    // Stash the join path so the onboarding modal can pick context-aware copy
-    // ("solo" vs "invite") on its first render. sessionStorage scope is
-    // intentional — onboarding is a one-shot, and the flag is consumed and
-    // cleared by the provider once it has used it.
-    if (joinPath === "solo" || joinPath === "invite") {
-      markOnboardingResume(joinPath);
     }
 
     // Wipe the fragment immediately — token sits in localStorage from here on.

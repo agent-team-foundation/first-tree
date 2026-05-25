@@ -6,7 +6,6 @@ import { api } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
-import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
  * Public landing for `/invite/:token`. Two cases:
@@ -78,7 +77,6 @@ export function InviteAcceptPage() {
         tokens: { accessToken: string; refreshToken: string };
       }>("/me/organizations/join", { token });
       await adoptTokens(res.tokens);
-      markOnboardingResume("invite");
       navigate("/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to join team");

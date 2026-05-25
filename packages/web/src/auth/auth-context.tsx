@@ -10,7 +10,7 @@ import {
   setStoredTokens,
 } from "../api/client.js";
 import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
-import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
+import { clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
   id: string;
@@ -200,10 +200,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setOnboardingStep(nextStep);
       setOnboardingDismissedAt(data.onboarding?.dismissedAt ?? null);
       setOnboardingCompletedAt(data.onboarding?.completedAt ?? null);
-      // Drop the join-path flag once onboarding is complete so a later
-      // incomplete state (e.g. user deletes their client) doesn't reuse a
-      // stale "you've joined {team}" headline that no longer fits.
-      if (nextStep === "completed") clearOnboardingJoinPath();
 
       // Reconcile selectedOrgId: stored value wins if still valid, else
       // /me's `defaultOrganizationId`, else the first active membership.

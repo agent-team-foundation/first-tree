@@ -12,7 +12,7 @@ import {
   putSourceReposSetting,
 } from "../../../api/org-settings.js";
 import { Button } from "../../../components/ui/button.js";
-import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
+import { buildBindBootstrap, buildCreateBootstrap } from "../bootstrap-prose.js";
 import { COPY } from "../copy.js";
 import { FlowNote, RepoPicker, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
