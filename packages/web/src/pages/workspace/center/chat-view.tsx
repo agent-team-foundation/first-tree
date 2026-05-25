@@ -14,7 +14,6 @@ import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, us
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
-import { listAgents } from "../../../api/agents.js";
 import {
   type FileMessageContent,
   getChat,
@@ -60,6 +59,7 @@ import { viewOf } from "../../../lib/agent-status-view.js";
 import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
+import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
 import { computeRequiresMention } from "../../../utils/requires-mention.js";
@@ -855,17 +855,10 @@ export function ChatView({
    *  button explicitly, not through `@<outsider>`. Also feeds
    *  `managedByMeMap` for picker grouping.
    *
-   *  Backed by `GET /orgs/:orgId/agents` (`listAgents`) rather than
-   *  `/activity`: the activity feed filters on `runtimeState IS NOT NULL`
-   *  to mean "AI agents with a live runtime", which drops human members
-   *  entirely (humans never bind a runtime). See issue 343. `limit: 100`
-   *  is the server's enforced cap in `paginationQuerySchema`; orgs above
-   *  that threshold need pagination here. */
-  const { data: orgAgentsPage } = useQuery({
-    queryKey: ["org-agents"],
-    queryFn: () => listAgents({ limit: 100 }),
-    refetchInterval: 30_000,
-  });
+   *  Shared with the identity-map hooks (`useAgentIdentityMap` etc.) via
+   *  `useOrgAgents` — single React Query cache, one HTTP fetch per
+   *  refetch tick. See issue 495. */
+  const { data: orgAgentsPage } = useOrgAgents();
 
   /**
    * Optimistic-update helpers for the messages cache. Wrap setQueryData so
