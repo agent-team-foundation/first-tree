@@ -150,6 +150,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
 
+  check-migrations:
+    name: Migrations
+    runs-on: ubuntu-latest
+    # Always runs — even on PRs that touch no server code. Branch protection
+    # no longer requires PRs to be up to date with main, so this job is the
+    # single guard against two PRs landing colliding migration idxs.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Fetch main for cross-branch comparison
+        # Only PR runs need to compare HEAD against main. On push-to-main
+        # the local contiguity check is sufficient (a duplicate idx that
+        # snuck through two racing PRs surfaces as a broken sequence in
+        # _journal.json) and fetching main risks a TOCTOU "missing from
+        # HEAD" false positive if another push lands between this push
+        # and the fetch.
+        if: github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin main:refs/remotes/origin/main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node scripts/check-migrations.mjs
+
   grep-legacy-names:
     name: Forbid legacy CLI / env names
     needs: changes
