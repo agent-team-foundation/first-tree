@@ -203,9 +203,12 @@ function AssistantTextRow({
   );
 }
 
-function ErrorRow({ event }: { event: SessionEventRow }) {
+function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?: (id: string) => string }) {
   const payload = asErrorPayload(event.payload);
   const ts = formatClockTime(event.createdAt);
+  // Resolve the emitting agent so the header reads "error · <agent> · runtime · …".
+  // Falls back gracefully if the lookup function isn't provided (legacy callers).
+  const agentName = agentNameFn ? agentNameFn(event.agentId) : null;
   return (
     <div
       // Anchor for the compose rail's jump-to-timeline (failed → this agent's error).
@@ -218,7 +221,7 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
       }}
     >
       <div className="mono uppercase text-caption" style={{ color: "var(--state-error)" }}>
-        error · {payload?.source ?? "unknown"} · {ts}
+        error{agentName ? ` · ${agentName}` : ""} · {payload?.source ?? "unknown"} · {ts}
       </div>
       <div
         className="text-label"
@@ -2414,7 +2417,7 @@ export function ChatView({
                           );
                           break;
                         case "error":
-                          node = <ErrorRow key={item.key} event={ev} />;
+                          node = <ErrorRow key={item.key} event={ev} agentNameFn={chatScopedAgentName} />;
                           break;
                         default:
                           // tool_call / thinking are folded into the workgroup
