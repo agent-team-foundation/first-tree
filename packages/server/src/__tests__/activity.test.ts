@@ -1,5 +1,7 @@
+import { RUNTIME_STALE_MS } from "@first-tree/shared";
+import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
-import { upsertSessionState } from "../services/activity.js";
+import { setSessionRuntime, upsertSessionState } from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import type { Notifier } from "../services/notifier.js";
@@ -116,10 +118,12 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       notifyRuntimeStateChange: vi.fn(async () => {}),
       notifyChatMessage: vi.fn(async () => {}),
       notifySessionEvent: vi.fn(async () => {}),
+      notifySessionRuntime: vi.fn(async () => {}),
       pushFrameToInbox: vi.fn(async () => 0),
       onConfigChange: vi.fn(),
       onSessionStateChange: vi.fn(),
       onSessionEvent: vi.fn(),
+      onSessionRuntime: vi.fn(),
       onRuntimeStateChange: vi.fn(),
       onChatMessage: vi.fn(),
       start: vi.fn(async () => {}),
@@ -152,10 +156,12 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       notifyRuntimeStateChange: vi.fn(async () => {}),
       notifyChatMessage: vi.fn(async () => {}),
       notifySessionEvent: vi.fn(async () => {}),
+      notifySessionRuntime: vi.fn(async () => {}),
       pushFrameToInbox: vi.fn(async () => 0),
       onConfigChange: vi.fn(),
       onSessionStateChange: vi.fn(),
       onSessionEvent: vi.fn(),
+      onSessionRuntime: vi.fn(),
       onRuntimeStateChange: vi.fn(),
       onChatMessage: vi.fn(),
       start: vi.fn(async () => {}),
@@ -171,5 +177,99 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       "suspended",
       admin.organizationId,
     );
+  });
+});
+
+describe("setSessionRuntime — notify conditions (D-axis freshness)", () => {
+  const getApp = useTestApp();
+
+  function makeNotifier(): Notifier {
+    return {
+      subscribe: vi.fn(),
+      unsubscribe: vi.fn(),
+      notify: vi.fn(async () => {}),
+      notifyConfigChange: vi.fn(async () => {}),
+      notifySessionStateChange: vi.fn(async () => {}),
+      notifyRuntimeStateChange: vi.fn(async () => {}),
+      notifyChatMessage: vi.fn(async () => {}),
+      notifySessionEvent: vi.fn(async () => {}),
+      notifySessionRuntime: vi.fn(async () => {}),
+      pushFrameToInbox: vi.fn(async () => 0),
+      onConfigChange: vi.fn(),
+      onSessionStateChange: vi.fn(),
+      onSessionEvent: vi.fn(),
+      onSessionRuntime: vi.fn(),
+      onRuntimeStateChange: vi.fn(),
+      onChatMessage: vi.fn(),
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    } satisfies Notifier;
+  }
+
+  async function setupActive() {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `sr-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `sr-target-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "SR target",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
+    // Create the (agent,chat) session row as active. runtime_state defaults to
+    // 'idle', runtime_state_at defaults to NULL (an old-client-shaped row).
+    await upsertSessionState(app.db, agent.uuid, chat.id, "active", admin.organizationId);
+    return { app, admin, agent, chat };
+  }
+
+  /** Stamp runtime_state + runtime_state_at. `ageMs === null` → NULL stamp. */
+  async function setRuntimeAt(
+    app: Awaited<ReturnType<typeof setupActive>>["app"],
+    agentId: string,
+    chatId: string,
+    runtimeState: string,
+    ageMs: number | null,
+  ) {
+    const stamp = ageMs === null ? sql`NULL` : sql`NOW() - make_interval(secs => ${ageMs} / 1000.0)`;
+    await app.db.execute(sql`
+      UPDATE agent_chat_sessions SET runtime_state = ${runtimeState}, runtime_state_at = ${stamp}
+       WHERE agent_id = ${agentId} AND chat_id = ${chatId}
+    `);
+  }
+
+  it("notifies when the runtime value changes", async () => {
+    const { app, admin, agent, chat } = await setupActive();
+    await setRuntimeAt(app, agent.uuid, chat.id, "idle", 0); // fresh idle
+    const notifier = makeNotifier();
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier);
+    expect(notifier.notifySessionRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT notify on a fresh same-value re-affirm (no spam)", async () => {
+    const { app, admin, agent, chat } = await setupActive();
+    await setRuntimeAt(app, agent.uuid, chat.id, "working", 0); // fresh working
+    const notifier = makeNotifier();
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier);
+    expect(notifier.notifySessionRuntime).not.toHaveBeenCalled();
+  });
+
+  it("notifies on the first authoritative report (runtime_state_at was NULL) even at the same value", async () => {
+    const { app, admin, agent, chat } = await setupActive();
+    await setRuntimeAt(app, agent.uuid, chat.id, "idle", null); // old-client NULL stamp
+    const notifier = makeNotifier();
+    // Same value 'idle', but NULL→non-null flips the composite from the legacy
+    // event-proxy path to the authoritative path — must invalidate.
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "idle", admin.organizationId, notifier);
+    expect(notifier.notifySessionRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies when a same-value report refreshes a stale stamp (Idle→Working flip)", async () => {
+    const { app, admin, agent, chat } = await setupActive();
+    await setRuntimeAt(app, agent.uuid, chat.id, "working", RUNTIME_STALE_MS + 5_000); // stale working
+    const notifier = makeNotifier();
+    // Same value 'working', but stale→fresh flips the composite Idle→Working.
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier);
+    expect(notifier.notifySessionRuntime).toHaveBeenCalledTimes(1);
   });
 });

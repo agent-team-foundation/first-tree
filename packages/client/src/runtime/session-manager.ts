@@ -153,6 +153,15 @@ type SessionManagerConfig = {
   onRuntimeStateChange?: (state: RuntimeState) => void;
   /** Callback when a session emits a structured event (tool_call / error). */
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
+  /**
+   * Callback when a session's per-(agent,chat) runtime state changes (the
+   * D-axis: idle/working/blocked/error). Distinct from `onRuntimeStateChange`,
+   * which reports the lossy agent-global aggregate; this carries the chatId so
+   * the server can persist the D-axis at per-chat granularity. Also fired on a
+   * periodic re-affirm for working/blocked sessions so a long turn keeps the
+   * server-side freshness stamp current.
+   */
+  onSessionRuntimeChange?: (chatId: string, state: RuntimeState) => void;
 };
 
 /**
@@ -167,6 +176,14 @@ type SessionManagerConfig = {
  */
 /** Maximum number of evicted session mappings to retain for resume recovery. */
 const MAX_EVICTED_MAPPINGS = 500;
+
+/**
+ * How often to re-affirm working/blocked sessions' per-chat runtime to the
+ * server (refreshing `runtime_state_at`). Kept well under the server's
+ * `RUNTIME_STALE_MS` (60s) so a single dropped frame doesn't let a live turn
+ * flap to idle.
+ */
+const RUNTIME_REAFFIRM_INTERVAL_MS = 20_000;
 
 export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
@@ -187,12 +204,17 @@ export class SessionManager {
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
   private lastReportedRuntimeState: RuntimeState | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
+  private runtimeReaffirmTimer: ReturnType<typeof setInterval> | null = null;
   private _activeCount = 0;
 
   constructor(config: SessionManagerConfig) {
     this.config = config;
     this.registry = config.registryPath ? new SessionRegistry(config.registryPath) : null;
     this.idleTimer = setInterval(() => this.evictIdle(), 10_000);
+    // Independent of `evictIdle` (which early-continues on freshly-active
+    // sessions): re-affirm working/blocked sessions so the server-side
+    // `runtime_state_at` stays inside the freshness window during a long turn.
+    this.runtimeReaffirmTimer = setInterval(() => this.reaffirmRuntimeStates(), RUNTIME_REAFFIRM_INTERVAL_MS);
 
     // Load persisted sessions (all start as suspended)
     this.loadPersistedSessions();
@@ -357,6 +379,10 @@ export class SessionManager {
       clearInterval(this.idleTimer);
       this.idleTimer = null;
     }
+    if (this.runtimeReaffirmTimer) {
+      clearInterval(this.runtimeReaffirmTimer);
+      this.runtimeReaffirmTimer = null;
+    }
 
     const shutdowns = [...this.sessions.values()].map((s) =>
       s.status === "active" ? s.handler.shutdown() : Promise.resolve(),
@@ -415,6 +441,23 @@ export class SessionManager {
       chatId,
       state: entry.status,
     }));
+  }
+
+  /**
+   * Per-chat runtime (D-axis) of all active sessions, for full-state-sync after
+   * reconnect. Lets the agent-slot re-report the *real* per-chat runtime on a
+   * network reconnect (a session still mid-turn reports `working`), rather than
+   * blanket-idling everything — only a process restart (empty `sessions`)
+   * legitimately has nothing to report. Sessions with no recorded runtime
+   * default to `idle`.
+   */
+  getSessionRuntimeStates(): Array<{ chatId: string; runtimeState: RuntimeState }> {
+    const out: Array<{ chatId: string; runtimeState: RuntimeState }> = [];
+    for (const [chatId, entry] of this.sessions) {
+      if (entry.status !== "active") continue;
+      out.push({ chatId, runtimeState: this.sessionRuntimeStates.get(chatId) ?? "idle" });
+    }
+    return out;
   }
 
   /**
@@ -978,7 +1021,28 @@ export class SessionManager {
     const session = this.sessions.get(chatId);
     if (!session || session.status !== "active") return;
     this.sessionRuntimeStates.set(chatId, state);
+    // Report the per-chat D-axis (the authority the server persists), then the
+    // agent-global aggregate (legacy; retained for admin overview / fault
+    // notifications until the global path is retired).
+    this.config.onSessionRuntimeChange?.(chatId, state);
     this.recomputeRuntimeState();
+  }
+
+  /**
+   * Re-affirm working/blocked sessions' per-chat runtime so the server-side
+   * freshness stamp doesn't lapse mid-turn. Reports only — does NOT touch
+   * `lastActivity` (that governs idle eviction and must not be reset by a
+   * liveness ping). Runs on its own timer, outside `evictIdle`'s early-continue.
+   */
+  private reaffirmRuntimeStates(): void {
+    if (!this.config.onSessionRuntimeChange) return;
+    for (const [chatId, session] of this.sessions) {
+      if (session.status !== "active") continue;
+      const runtimeState = this.sessionRuntimeStates.get(chatId);
+      if (runtimeState === "working" || runtimeState === "blocked") {
+        this.config.onSessionRuntimeChange(chatId, runtimeState);
+      }
+    }
   }
 
   /** Aggregate per-session runtime states: error > blocked > working > idle. */

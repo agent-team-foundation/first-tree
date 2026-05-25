@@ -59,6 +59,7 @@ function createSessionManager(opts: {
   concurrency?: number;
   log?: pino.Logger;
   onRuntimeStateChange?: (state: "idle" | "working" | "blocked" | "error") => void;
+  onSessionRuntimeChange?: (chatId: string, state: "idle" | "working" | "blocked" | "error") => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -86,8 +87,83 @@ function createSessionManager(opts: {
     log: opts.log ?? silentLogger(),
     ackEntry: opts.ackEntry ?? mockAckEntry(),
     onRuntimeStateChange: opts.onRuntimeStateChange,
+    onSessionRuntimeChange: opts.onSessionRuntimeChange,
   });
 }
+
+describe("SessionManager — per-chat runtime reporting (D-axis)", () => {
+  it("reports per-chat runtime to onSessionRuntimeChange when a handler sets it", async () => {
+    const reports: Array<{ chatId: string; state: string }> = [];
+    let ctx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_m, c) {
+        ctx = c;
+        return "s-rt-1";
+      },
+    });
+    const sm = createSessionManager({
+      handler,
+      onSessionRuntimeChange: (chatId, state) => reports.push({ chatId, state }),
+    });
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-x" }));
+    defined(ctx, "ctx").setRuntimeState("working");
+
+    expect(reports).toContainEqual({ chatId: "chat-x", state: "working" });
+    await sm.shutdown();
+  });
+
+  it("getSessionRuntimeStates returns the per-chat runtime of active sessions", async () => {
+    let ctx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_m, c) {
+        ctx = c;
+        return "s-rt-2";
+      },
+    });
+    const sm = createSessionManager({ handler });
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-y" }));
+    defined(ctx, "ctx").setRuntimeState("working");
+
+    expect(sm.getSessionRuntimeStates()).toContainEqual({ chatId: "chat-y", runtimeState: "working" });
+    await sm.shutdown();
+  });
+
+  it("re-affirms working sessions on an interval (server freshness) but not idle ones", async () => {
+    vi.useFakeTimers();
+    try {
+      const reports: Array<{ chatId: string; state: string }> = [];
+      let ctx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_m, c) {
+          ctx = c;
+          return "s-rt-3";
+        },
+      });
+      const sm = createSessionManager({
+        handler,
+        // Large idle_timeout so evictIdle's suspend path doesn't interfere.
+        session: { idle_timeout: 3600, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+        onSessionRuntimeChange: (chatId, state) => reports.push({ chatId, state }),
+      });
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-z" }));
+      defined(ctx, "ctx").setRuntimeState("working");
+      reports.length = 0; // drop the transition report; we now want the re-affirm
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(reports.some((r) => r.chatId === "chat-z" && r.state === "working")).toBe(true);
+
+      // Going idle stops the re-affirm: an idle session needs no freshness.
+      defined(ctx, "ctx").setRuntimeState("idle");
+      reports.length = 0;
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(reports.some((r) => r.chatId === "chat-z")).toBe(false);
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("SessionManager: runtime state aggregation", () => {
   it("fires onRuntimeStateChange when a session sets working state", async () => {

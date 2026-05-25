@@ -82,6 +82,13 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
     broadcastOrgScoped({ type: "session:event", ...payload });
   });
 
+  notifier.onSessionRuntime((payload) => {
+    // The D-axis authority changed for one (agent, chat). Admin WS consumers
+    // invalidate `chat-agent-status` + `me/chats` off this (NOT `session-events`,
+    // since no event was appended). Routing-only payload, same as session:event.
+    broadcastOrgScoped({ type: "session:runtime", ...payload });
+  });
+
   notifier.onChatMessage(({ chatId }) => {
     void dispatchChatMessage(chatId);
   });

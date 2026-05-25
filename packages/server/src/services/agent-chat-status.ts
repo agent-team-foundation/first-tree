@@ -4,6 +4,7 @@ import {
   buildAgentChatStatus,
   LIVE_ACTIVITY_STALE_MS,
   type LiveActivity,
+  RUNTIME_STALE_MS,
 } from "@first-tree/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -35,12 +36,21 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
   const agentIds = speakers.map((s) => s.agentId);
   if (agentIds.length === 0) return [];
 
-  // Per-(agent,chat) session lifecycle (C).
+  // Per-(agent,chat) session lifecycle (C) + the per-chat D-axis runtime state.
+  // `runtimeStateAt` is the authority/fallback discriminator: non-null means a
+  // client has reported per-chat runtime, so `working` reads it directly; null
+  // means an old client that only reports agent-global runtime, so `working`
+  // falls back to the legacy `session_events` proxy (one release cycle).
   const sessions = await db
-    .select({ agentId: agentChatSessions.agentId, state: agentChatSessions.state })
+    .select({
+      agentId: agentChatSessions.agentId,
+      state: agentChatSessions.state,
+      runtimeState: agentChatSessions.runtimeState,
+      runtimeStateAt: agentChatSessions.runtimeStateAt,
+    })
     .from(agentChatSessions)
     .where(and(eq(agentChatSessions.chatId, chatId), inArray(agentChatSessions.agentId, agentIds)));
-  const sessionState = new Map(sessions.map((s) => [s.agentId, s.state]));
+  const sessionByAgent = new Map(sessions.map((s) => [s.agentId, s]));
 
   // Reachability (A): a non-null bound client (mirrors the web
   // `resolveAgentState` rule — no client ⇒ offline). Also carries the
@@ -62,16 +72,35 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
   const pendingByChat = await derivePendingQuestions(db, [chatId]);
   const pendingAgents = new Set(pendingByChat.get(chatId) ?? []);
 
-  // Activity (D): per-agent live activity (fresh, non-terminal latest event).
-  // `working` is derived from its presence; the activity itself rides along so
-  // AgentRow / compose can render the "Using <tool> · 12s" detail.
+  // Activity (D), DESCRIPTION layer: per-agent live activity (fresh, non-terminal
+  // latest event). This no longer *decides* `working` — it only supplies the
+  // "Using <tool> · 12s" detail when the agent is working. The boolean comes
+  // from the per-chat runtime state below (with a legacy fallback).
   const activityByAgent = await deriveAgentActivity(db, chatId);
 
+  const now = Date.now();
   return agentIds.map((agentId) => {
-    const state = sessionState.get(agentId);
+    const sess = sessionByAgent.get(agentId);
+    const state = sess?.state;
     const p = presenceById.get(agentId);
     const activity = activityByAgent.get(agentId) ?? null;
     const engagement: AgentEngagement = state === "active" ? "active" : state === "suspended" ? "suspended" : "none";
+
+    // D-axis `working`: authoritative per-chat runtime when the client reports
+    // it (`runtime_state_at` non-null), else the legacy event proxy. Gated on an
+    // active session so a stale `runtime_state` left on a suspended row (the
+    // suspend path doesn't reset it) cannot read as working.
+    const working =
+      sess?.runtimeStateAt != null
+        ? engagement === "active" &&
+          sess.runtimeState === "working" &&
+          now - sess.runtimeStateAt.getTime() <= RUNTIME_STALE_MS
+        : // Legacy event-proxy fallback (old client, never reported per-chat
+          // runtime). Gate on `active` too — lockstep with the authoritative
+          // path and with `deriveWorkingAgents` — so a suspended session with a
+          // still-fresh event reads as Paused, not Working.
+          engagement === "active" && activity != null;
+
     return buildAgentChatStatus({
       agentId,
       reachable: p?.clientId != null,
@@ -85,9 +114,11 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
       // indirection costs more than it saves, so we keep the duplicated literal.
       errored: state === "errored" || p?.runtimeState === "error",
       needsYou: pendingAgents.has(agentId),
-      working: activity != null,
+      working,
       engagement,
-      activity,
+      // The activity is a descriptor of in-flight work — carry it only while
+      // working, matching the schema's "null when not working" contract.
+      activity: working ? activity : null,
     });
   });
 }

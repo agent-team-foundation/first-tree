@@ -208,6 +208,15 @@ function broadcast(msg: WsMessage) {
       if (agentId && chatId) {
         latestQc.invalidateQueries({ queryKey: ["session-events", agentId, chatId] });
       }
+    } else if (msg.type === "session:runtime") {
+      // The per-(agent,chat) D-axis authority changed (api/orgs/ws.ts spreads
+      // the notifier payload). It drives composite `working` on the right
+      // sidebar (`chat-agent-status`) and the chat-list `busyAgentIds`
+      // (`me/chats`). Re-uses the same throttle as session:state/event.
+      // Deliberately NOT invalidating `session-events`: no event was appended,
+      // and the runtime change carries no timeline content.
+      meChatsInvalidator.invalidate(latestQc);
+      chatAgentStatusInvalidator.invalidate(latestQc);
     } else if (msg.type === "chat:message") {
       // Best-effort realtime nudge for the chat-first workspace. The frame
       // carries `{ type, chatId }` (see shared/me-chat.ts:chatMessageFrameSchema);

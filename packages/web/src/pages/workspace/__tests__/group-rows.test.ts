@@ -28,6 +28,7 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     liveActivity: overrides.liveActivity ?? null,
     pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
+    busyAgentIds: overrides.busyAgentIds ?? [],
   };
 }
 

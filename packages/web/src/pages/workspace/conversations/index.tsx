@@ -639,13 +639,20 @@ export function ConversationList({
                               {row.title}
                             </span>
                             {(() => {
-                              const slot = row.liveActivity ? (
-                                <ActivityDots />
-                              ) : row.lastMessageAt ? (
-                                <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-                                  {formatRowTime(row.lastMessageAt)}
-                                </span>
-                              ) : null;
+                              // `busyAgentIds` is the authoritative D-axis
+                              // "is anyone working in this chat" signal — it
+                              // lights the activity dots even when the runtime
+                              // emits no intermediate `session_events` (codex
+                              // tools that only report on completion), which
+                              // `liveActivity` alone would miss.
+                              const slot =
+                                row.busyAgentIds.length > 0 ? (
+                                  <ActivityDots />
+                                ) : row.lastMessageAt ? (
+                                  <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                                    {formatRowTime(row.lastMessageAt)}
+                                  </span>
+                                ) : null;
                               return slot ? (
                                 <span className="shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0">
                                   {slot}

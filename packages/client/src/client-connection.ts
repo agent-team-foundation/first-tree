@@ -466,6 +466,14 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState }));
   }
 
+  /** Report the per-(agent,chat) runtime (D-axis) — the authority the server
+   *  persists for the composite status. Distinct from the agent-global
+   *  `runtime:state` frame above. */
+  reportSessionRuntime(agentId: string, chatId: string, runtimeState: RuntimeState): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "session:runtime", agentId, chatId, runtimeState }));
+  }
+
   reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const sanitized = sanitizeSessionEventForTransport(event);

@@ -187,6 +187,7 @@ export class AgentSlot {
       onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
       onRuntimeStateChange: (state) => this.reportRuntimeState(state),
       onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
+      onSessionRuntimeChange: (chatId, state) => this.reportSessionRuntime(chatId, state),
     });
 
     const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
@@ -232,10 +233,23 @@ export class AgentSlot {
     this.clientConnection.reportSessionEvent(this.config.agentId, chatId, event);
   }
 
+  private reportSessionRuntime(chatId: string, state: RuntimeState): void {
+    this.clientConnection.reportSessionRuntime(this.config.agentId, chatId, state);
+  }
+
   private fullStateSync(): void {
     if (!this.sessionManager) return;
     for (const { chatId, state } of this.sessionManager.getSessionStates()) {
       this.clientConnection.reportSessionState(this.config.agentId, chatId, state);
+    }
+    // Re-report the *real* per-chat runtime of every still-live session. On a
+    // network reconnect (process intact) a session mid-turn is still `working`
+    // and must stay so — this is what distinguishes a reconnect from a process
+    // restart (where `sessions` is empty, so nothing here reports `working` and
+    // the evicted loop below + the agent-global reset settle everything to
+    // idle/suspended).
+    for (const { chatId, runtimeState } of this.sessionManager.getSessionRuntimeStates()) {
+      this.clientConnection.reportSessionRuntime(this.config.agentId, chatId, runtimeState);
     }
     // After a process restart `sessions` is empty but SessionRegistry just
     // hydrated every persisted (chatId → claudeSessionId) row into

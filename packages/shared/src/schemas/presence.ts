@@ -57,6 +57,20 @@ export const runtimeStateMessageSchema = z.object({
 });
 export type RuntimeStateMessage = z.infer<typeof runtimeStateMessageSchema>;
 
+/**
+ * Client-reported runtime state at **per-(agent, chat)** granularity
+ * (client → server). The agent-global `runtimeStateMessageSchema` (no chatId)
+ * is a lossy aggregate that the per-chat composite cannot consume safely
+ * (an agent working in chat A would light chat B — #366). This frame carries
+ * the chatId so the server can persist the D-axis (`agent_chat_sessions.
+ * runtime_state`) at the granularity the status surfaces actually need.
+ */
+export const sessionRuntimeMessageSchema = z.object({
+  chatId: z.string().min(1),
+  runtimeState: runtimeStateSchema,
+});
+export type SessionRuntimeMessage = z.infer<typeof sessionRuntimeMessageSchema>;
+
 // -- Agent Bind Payload (client → server) --
 // v2: token removed; authorization derives from the WS-level JWT and the
 // client_id pinned to the agent (Rule R-RUN).

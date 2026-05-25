@@ -37,6 +37,7 @@ import {
   type MeChatRow,
   type MeChatSourceCounts,
   type MeChatUnreadResponse,
+  RUNTIME_STALE_MS,
   type ToolCallEventPayload,
 } from "@first-tree/shared";
 import { and, eq, inArray, isNotNull, ne, or, type SQL, sql } from "drizzle-orm";
@@ -474,6 +475,13 @@ export async function listMeChats(
   // needs-you signal so the list can pin failed chats above needs-you.
   const failedByChat = await deriveFailedAgents(db, chatIds);
 
+  // working — per-chat set of agents whose composite status is `working` (the
+  // D-axis), derived in lockstep with `getChatAgentStatuses`. Drives the list
+  // activity indicator directly so it lights even when a runtime emits no
+  // intermediate `session_events` (codex). `liveActivity` (below) stays as the
+  // description; this set is the authority for "working".
+  const workingByChat = await deriveWorkingAgents(db, chatIds);
+
   // First-message lookup for auto-title fallback. Mirrors
   // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
   // logic is the same as before the schema refactor — first-message
@@ -526,6 +534,7 @@ export async function listMeChats(
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
       pendingQuestionAgentIds: pendingByChat.get(r.chat_id) ?? [],
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
+      busyAgentIds: workingByChat.get(r.chat_id) ?? [],
     };
   });
 
@@ -595,6 +604,67 @@ export async function deriveFailedAgents(db: Database, chatIds: string[]): Promi
     const set = sets.get(row.chatId);
     if (set) set.add(row.agentId);
     else sets.set(row.chatId, new Set([row.agentId]));
+  }
+  const out = new Map<string, string[]>();
+  for (const [chatId, set] of sets) out.set(chatId, [...set]);
+  return out;
+}
+
+/**
+ * Per-chat set of non-human speaker agents whose composite status is `working`
+ * — the D-axis "a turn is in flight in THIS chat right now" boolean. Derived in
+ * lockstep with `getChatAgentStatuses` (agent-chat-status.ts): when the client
+ * has reported per-chat runtime (`runtime_state_at` non-null) it is the
+ * authority — `state='active' AND runtime_state='working' AND fresh within
+ * RUNTIME_STALE_MS`; otherwise (old client) it falls back to the legacy proxy —
+ * the latest non-terminal `session_events` row within LIVE_ACTIVITY_STALE_MS.
+ * The `state='active'` gate matters: the suspend path doesn't reset
+ * `runtime_state`, so a stale `working` on a suspended row must not light up.
+ * Chats with no working agent are absent from the map (caller treats absence as
+ * []). LATERAL seek mirrors `deriveLiveActivity`'s index usage.
+ */
+export async function deriveWorkingAgents(db: Database, chatIds: string[]): Promise<Map<string, string[]>> {
+  if (chatIds.length === 0) return new Map();
+  const chatIdInClause = sql.join(
+    chatIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const rows = (await db.execute(sql`
+    SELECT acs.agent_id AS agent_id, acs.chat_id AS chat_id
+      FROM agent_chat_sessions acs
+      JOIN agents a
+        ON a.uuid = acs.agent_id AND a.type <> 'human'
+      JOIN chat_membership cm
+        ON cm.chat_id = acs.chat_id AND cm.agent_id = acs.agent_id AND cm.access_mode = 'speaker'
+      LEFT JOIN LATERAL (
+        SELECT kind, created_at
+          FROM session_events se
+         WHERE se.agent_id = acs.agent_id
+           AND se.chat_id  = acs.chat_id
+         ORDER BY se.seq DESC
+         LIMIT 1
+      ) e ON true
+     WHERE acs.chat_id IN (${chatIdInClause})
+       AND acs.state <> 'evicted'
+       AND CASE
+         WHEN acs.runtime_state_at IS NOT NULL THEN
+           acs.state = 'active'
+           AND acs.runtime_state = 'working'
+           AND acs.runtime_state_at > NOW() - make_interval(secs => ${RUNTIME_STALE_MS} / 1000.0)
+         ELSE
+           -- Legacy event-proxy fallback (old client). Gate on active too, in
+           -- lockstep with the authoritative path and getChatAgentStatuses, so
+           -- a suspended session with a fresh event is not counted as working.
+           acs.state = 'active'
+           AND e.kind IN ('tool_call', 'thinking', 'assistant_text')
+           AND e.created_at > NOW() - make_interval(secs => ${LIVE_ACTIVITY_STALE_MS} / 1000.0)
+       END
+  `)) as unknown as Array<{ agent_id: string; chat_id: string }>;
+  const sets = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const set = sets.get(row.chat_id);
+    if (set) set.add(row.agent_id);
+    else sets.set(row.chat_id, new Set([row.agent_id]));
   }
   const out = new Map<string, string[]>();
   for (const [chatId, set] of sets) out.set(chatId, [...set]);

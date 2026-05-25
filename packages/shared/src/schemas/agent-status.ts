@@ -65,6 +65,16 @@ export const AGENT_ENGAGEMENTS = {
 export const agentEngagementSchema = z.enum(["active", "suspended", "none"]);
 export type AgentEngagement = z.infer<typeof agentEngagementSchema>;
 
+/**
+ * Freshness window (ms) for the per-(agent,chat) D-axis runtime state. The
+ * client re-affirms `working`/`blocked` sessions on an interval (~20s) so a
+ * long turn keeps `runtime_state_at` fresh; if no re-affirm lands within this
+ * window the server stops treating the session as `working` (self-heals after
+ * a silent client death where the `idle` transition was never received).
+ * Kept >= 2x the re-affirm interval so a single dropped frame doesn't flap.
+ */
+export const RUNTIME_STALE_MS = 60_000;
+
 /** Inputs to the projection — one field per status axis. */
 export type DeriveMainStatusInput = {
   /** Reachability (A): is the agent's runtime/client reachable at all? */

@@ -243,6 +243,24 @@ export const meChatRowSchema = z.object({
    * for version skew, same rationale as `pendingQuestionAgentIds`.
    */
   failedAgentIds: z.array(z.string()).default([]),
+  /**
+   * Speakers in this chat whose composite status is `working` — the D-axis
+   * "is a turn in flight right now in THIS chat" signal. Drives the chat-list
+   * activity indicator (the scrolling `•••`) directly, so it lights up even
+   * when a runtime emits no intermediate `session_events` (e.g. codex tools
+   * that only emit on completion) — the case `liveActivity` alone cannot
+   * cover. `liveActivity` stays as the *description* ("Using Bash · 12s");
+   * this set is the authority for "working". Derived at query time from
+   * `agent_chat_sessions.runtime_state` (per-chat), in lockstep with
+   * `getChatAgentStatuses`. `.default([])` for version skew, same rationale as
+   * `pendingQuestionAgentIds`.
+   *
+   * NAME: deliberately NOT `workingAgentIds` — that name was a retired
+   * agent-global misnomer (the #366 cross-chat false-positive) since renamed
+   * to `engagedAgentIds`; a regression test pins its absence. `busyAgentIds`
+   * is the per-chat D-axis set and avoids resurrecting the poisoned name.
+   */
+  busyAgentIds: z.array(z.string()).default([]),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 
