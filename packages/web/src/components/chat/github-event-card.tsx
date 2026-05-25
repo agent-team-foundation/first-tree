@@ -235,7 +235,7 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
 
   return (
     <div className="text-body">
-      {/* L1 — entity row: clickable chip + title + faded repo */}
+      {/* L1 — entity row: syntax-highlight chip + clickable title + faded repo */}
       <div
         style={{
           display: "flex",
@@ -245,23 +245,23 @@ export function GithubEventCardMessage({ content }: { content: GithubEventCard }
           rowGap: "var(--sp-px)",
         }}
       >
-        {link ? (
-          <a
-            href={link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="no-underline hover:opacity-80"
-            style={{ textDecoration: "none" }}
-          >
-            {entityChip}
-          </a>
-        ) : (
-          entityChip
-        )}
+        {entityChip}
         {content.title ? (
-          <span className="font-medium" style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto" }}>
-            {content.title}
-          </span>
+          link ? (
+            <a
+              href={link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium no-underline hover:underline"
+              style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto", textDecoration: "none" }}
+            >
+              {content.title}
+            </a>
+          ) : (
+            <span className="font-medium" style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto" }}>
+              {content.title}
+            </span>
+          )
         ) : null}
         <span className="mono text-caption" style={{ color: "var(--fg-4)", marginLeft: "auto", flexShrink: 0 }}>
           {repoShort}
