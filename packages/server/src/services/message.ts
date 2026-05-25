@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { extractMentions, type SendMessage, scanMentionTokens } from "@first-tree/shared";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -9,6 +8,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
+import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext } from "./doc-snapshots.js";
@@ -442,7 +442,13 @@ async function sendMessageInner(
     const projectionMentions: string[] = isSilentSend ? [] : dmAutoProjection;
 
     // 3. Store the message (with merged metadata + normalised content).
-    const messageId = randomUUID();
+    // UUID v7 per the "UUID v7 as Message ID" architecture rule in
+    // CLAUDE.md — time-ordered so message id lex order matches creation
+    // order. randomUUID() (v4) was the pre-existing implementation; the
+    // mismatch was caught when the web client's "new messages" divider
+    // relied on lex ordering to find newer-than-anchor messages and
+    // silently dropped some (PR #286, rev 8).
+    const messageId = uuidv7();
     const [msg] = await tx
       .insert(messages)
       .values({
