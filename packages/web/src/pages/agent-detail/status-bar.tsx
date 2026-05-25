@@ -1,4 +1,4 @@
-import type { Agent, AgentRuntimeConfig } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent, AgentRuntimeConfig } from "@first-tree/shared";
 import { cn, formatDate } from "../../lib/utils.js";
 
 /**
@@ -94,7 +94,6 @@ export function StatusBar(inputs: StatusBarInputs) {
   if (!isHuman && typeof activeSessions === "number") {
     line1Tail.push(`${activeSessions} session${activeSessions === 1 ? "" : "s"}`);
   }
-  if (cfg) line1Tail.push(`config v${cfg.version}`);
 
   const offlineSince = clientStatus?.offlineSince;
   const showOfflineHint = !isHuman && clientStatus && !clientStatus.online;

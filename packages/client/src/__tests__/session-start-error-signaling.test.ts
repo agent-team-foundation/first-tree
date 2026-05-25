@@ -1,4 +1,4 @@
-import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionState } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
@@ -34,9 +34,6 @@ function mockSdk(): {
   return {
     sdk: {
       register: vi.fn(),
-      pull: vi.fn(),
-      ack: vi.fn().mockResolvedValue(undefined),
-      renew: vi.fn().mockResolvedValue(undefined),
       sendMessage,
       sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
       listChatParticipants,
@@ -56,7 +53,7 @@ function makeSessionManager(opts: {
     return next;
   };
   return new SessionManager({
-    session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+    session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     concurrency: 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -70,6 +67,7 @@ function makeSessionManager(opts: {
     },
     sdk: opts.sdk ?? mockSdk().sdk,
     log: silentLogger(),
+    ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     onStateChange: opts.onStateChange,
   });
 }
@@ -185,7 +183,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
   }) {
     const queue = [...opts.handlerQueue];
     return new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
       concurrency: 1,
       handlerFactory: () => queue.shift() ?? workingHandler(),
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -199,6 +197,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       },
       sdk: opts.sdk ?? mockSdk().sdk,
       log: silentLogger(),
+      ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
       onStateChange: opts.onStateChange,
     });
   }

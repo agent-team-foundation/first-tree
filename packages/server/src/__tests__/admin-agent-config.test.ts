@@ -1,4 +1,4 @@
-import { ENV_REDACTED_PLACEHOLDER } from "@agent-team-foundation/first-tree-hub-shared";
+import { ENV_REDACTED_PLACEHOLDER } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";

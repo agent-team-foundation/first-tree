@@ -1,9 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
-import { listNotifications, markNotificationRead } from "../../../api/notifications.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
-import { NotificationItem } from "../../../components/notification-item.js";
 import { StateChip } from "../../../components/ui/state-chip.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
@@ -39,52 +36,6 @@ function Tile({ label, value, accent }: { label: string; value: string | number;
   );
 }
 
-function NotificationList({
-  notifications,
-  agentId,
-}: {
-  notifications: Array<{
-    id: string;
-    type: string;
-    severity: string;
-    message: string;
-    read: boolean;
-    chatId: string | null;
-    createdAt: string;
-  }>;
-  agentId: string;
-}) {
-  const [, setSearchParams] = useSearchParams();
-  const queryClient = useQueryClient();
-  const markReadMut = useMutation({
-    mutationFn: (id: string) => markNotificationRead(id),
-    // Broad-invalidate so the topbar bell's unread count, bell list, and any
-    // other per-agent panel refresh in lockstep — otherwise the bell badge
-    // lingers for up to 10s after a workspace-side click.
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    },
-  });
-
-  return (
-    <div className="flex flex-col" style={{ gap: 4 }}>
-      {notifications.map((n) => (
-        <NotificationItem
-          key={n.id}
-          notification={n}
-          clickable={!!n.chatId}
-          onClick={() => {
-            if (!n.read) markReadMut.mutate(n.id);
-            if (n.chatId) {
-              setSearchParams({ a: agentId, c: n.chatId });
-            }
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
 export function AgentContext({ agentId }: { agentId: string }) {
   const agentName = useAgentNameMap();
   const { resolve: resolveClient } = useClientMap();
@@ -92,17 +43,10 @@ export function AgentContext({ agentId }: { agentId: string }) {
   const { data: activity } = useQuery({
     queryKey: ["activity"],
     queryFn: getActivityOverview,
-    refetchInterval: 10_000,
   });
 
   const agent: RuntimeAgent | undefined = activity?.agents?.find((a) => a.agentId === agentId);
   const client = resolveClient(agent?.clientId);
-
-  const { data: notifications } = useQuery({
-    queryKey: ["notifications", "agent", agentId],
-    queryFn: () => listNotifications({ agentId, limit: 3 }),
-    refetchInterval: 30_000,
-  });
 
   const displayName = agentName(agentId);
   const runtimeLabel = agent?.runtimeState ?? "offline";
@@ -192,7 +136,6 @@ export function AgentContext({ agentId }: { agentId: string }) {
       <div
         style={{
           padding: "var(--sp-2_5) var(--sp-3_5)",
-          borderBottom: "var(--hairline) solid var(--border-faint)",
         }}
         className="flex flex-col"
       >
@@ -202,18 +145,6 @@ export function AgentContext({ agentId }: { agentId: string }) {
         <a href="/clients" style={{ color: "var(--accent)", marginTop: 4 }} className="hover:underline text-label">
           Computers →
         </a>
-      </div>
-
-      {/* Notifications */}
-      <div style={{ padding: "var(--sp-3) var(--sp-3_5)" }}>
-        <SectionLabel>Notifications</SectionLabel>
-        {!notifications?.items || notifications.items.length === 0 ? (
-          <div className="text-center text-label" style={{ color: "var(--fg-3)", padding: "var(--sp-3) 0" }}>
-            No notifications for this agent
-          </div>
-        ) : (
-          <NotificationList notifications={notifications.items} agentId={agentId} />
-        )}
       </div>
     </div>
   );

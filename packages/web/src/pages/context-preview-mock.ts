@@ -1,9 +1,5 @@
 // TEMPORARY: mock snapshot for /preview/context. Delete with the route.
-import type {
-  ContextTreeNode,
-  ContextTreeSnapshot,
-  ContextTreeUpdate,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { ContextTreeNode, ContextTreeSnapshot, ContextTreeUpdate } from "@first-tree/shared";
 
 const node = (
   id: string,
@@ -64,6 +60,74 @@ export const MOCK_CONTEXT_SNAPSHOT: ContextTreeSnapshot = {
     severity: "ok",
   },
   summary: { addedCount: 1, editedCount: 4, removedCount: 1, changedNodeCount: 6 },
+  usage: {
+    windowDays: 7,
+    agentCount: 4,
+    usageCount: 18,
+    recentEvents: [
+      {
+        id: "evt-1",
+        agentId: "agent-coder",
+        agentName: "gandy-coder",
+        agentAvatarColorToken: "hue-1",
+        chatId: "chat-design-spike",
+        chatTitle: "design-spike",
+        nodePath: "members/Gandy2025/designs/context-tree-usage-signal.md",
+        viewerCanAccess: true,
+        createdAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+      },
+      {
+        id: "evt-2",
+        agentId: "agent-reviewer",
+        agentName: "reviewer",
+        agentAvatarColorToken: "hue-4",
+        chatId: "chat-onboarding-q3",
+        chatTitle: "onboarding-q3",
+        nodePath: "domains/onboarding/NODE.md",
+        viewerCanAccess: true,
+        createdAt: new Date(Date.now() - 12 * 60_000).toISOString(),
+      },
+      {
+        id: "evt-3",
+        agentId: "agent-qa",
+        agentName: "qa-bot",
+        agentAvatarColorToken: "hue-2",
+        chatId: "chat-qa-run-42",
+        chatTitle: "qa-run-42",
+        nodePath: "domains/quality/NODE.md",
+        viewerCanAccess: true,
+        createdAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      },
+      {
+        id: "evt-4",
+        agentId: "agent-coder",
+        agentName: "gandy-coder",
+        agentAvatarColorToken: "hue-1",
+        chatId: "chat-weekly-retro",
+        chatTitle: "weekly-retro",
+        nodePath: "NODE.md",
+        viewerCanAccess: true,
+        createdAt: new Date(Date.now() - 4 * 60 * 60_000).toISOString(),
+      },
+      {
+        id: "evt-5",
+        agentId: "agent-internal",
+        agentName: "internal-agent",
+        // No manager-set color → web falls back to a deterministic hash
+        // of agentId via resolveAvatarHue.
+        agentAvatarColorToken: null,
+        chatId: "chat-internal-review",
+        chatTitle: "internal-review",
+        // Pre-P0 event — no node path recorded; the feed falls back to
+        // "read the context tree".
+        nodePath: null,
+        // Caller is not a member of this chat — the label shows but renders as
+        // inert text (no deep link), exercising the non-clickable preview path.
+        viewerCanAccess: false,
+        createdAt: new Date(Date.now() - 6 * 60 * 60_000).toISOString(),
+      },
+    ],
+  },
   nodes: [
     node("root", null, "/", "Context Tree", "root", null),
 

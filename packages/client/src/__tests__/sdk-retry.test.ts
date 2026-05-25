@@ -113,7 +113,7 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const sdk = makeSdk();
-    const result = await flush(sdk.sendMessage(CHAT_ID, { format: "text", content: "hi" }));
+    const result = await flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" }));
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result).toMatchObject({ id: "m-1", chatId: CHAT_ID });
@@ -124,7 +124,9 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const sdk = makeSdk();
-    await expect(flush(sdk.sendMessage(CHAT_ID, { format: "text", content: "hi" }))).rejects.toThrow(/fetch failed/);
+    await expect(flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" }))).rejects.toThrow(
+      /fetch failed/,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -133,7 +135,9 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const sdk = makeSdk();
-    await expect(flush(sdk.sendMessage(CHAT_ID, { format: "text", content: "hi" }))).rejects.toBeInstanceOf(SdkError);
+    await expect(
+      flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" })),
+    ).rejects.toBeInstanceOf(SdkError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -142,7 +146,7 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const sdk = makeSdk();
-    const result = await flush(sdk.sendMessage(CHAT_ID, { format: "text", content: "hi" }));
+    const result = await flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" }));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ id: "m-1" });
@@ -153,10 +157,9 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const sdk = makeSdk();
-    await expect(flush(sdk.sendMessage(CHAT_ID, { format: "text", content: "hi" }))).rejects.toHaveProperty(
-      "name",
-      "AbortError",
-    );
+    await expect(
+      flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" })),
+    ).rejects.toHaveProperty("name", "AbortError");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

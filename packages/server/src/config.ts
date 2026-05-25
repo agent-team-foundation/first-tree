@@ -1,21 +1,16 @@
-import type { ServerConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
+import type { ServerConfig } from "@first-tree/shared/config";
 
 /**
  * Server runtime config extends the shared ServerConfig with
  * fields that are generated per-process (not persisted to YAML).
+ *
+ * `commandVersion` and the rest of the version-advertisement knobs now live
+ * under `serverConfig.update.*` (see `shared/src/config/server-config.ts`),
+ * so the runtime extension stays focused on per-process generated fields.
  */
 export type Config = ServerConfig & {
   /** Unique ID for this server instance — generated at startup */
   instanceId: string;
   /** Web static files dist path — resolved by CLI startup */
   webDistPath?: string;
-  /**
-   * Command package version this server was bundled with. Injected by the
-   * Command CLI at startup (which reads its own `package.json`). Advertised
-   * to every connecting client via the `server:welcome` WS frame so clients
-   * can detect version drift and self-update. Optional because the server
-   * can also be launched standalone via `pnpm --filter … dev`, in which case
-   * the bootstrap falls back to the server workspace's own package.json.
-   */
-  commandVersion?: string;
 };

@@ -1,11 +1,13 @@
-import type { ClientCapabilities, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentVisibility, ClientCapabilities, OrgBrief } from "@first-tree/shared";
 import { ArrowRight, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getClientCapabilities, type HubClient, listClients } from "../../../../api/activity.js";
 import { api, withOrg } from "../../../../api/client.js";
 import { reportOnboardingEvent } from "../../../../api/onboarding-events.js";
+import { useAuth } from "../../../../auth/auth-context.js";
 import { Button } from "../../../../components/ui/button.js";
+import { runVisibilityAwareInterval } from "../../../../lib/visibility-interval.js";
 import { slugify } from "../../../../utils/agent-naming.js";
 import {
   clearOnboardingDraft,
@@ -18,7 +20,7 @@ import { StepFrame, StepRailLine } from "./step-frame.js";
 
 const RUNTIME_READY_TIMEOUT_MS = 30_000;
 const RUNTIME_READY_POLL_MS = 1_000;
-const CLIENT_DETECT_POLL_MS = 3_000;
+const CLIENT_DETECT_POLL_MS = 5_000;
 
 type Phase = "form" | "creating" | "timeout";
 
@@ -31,15 +33,23 @@ function prettyRuntimeLabel(provider: string): string {
 export function Step2Body({
   organizationId,
   memberId,
-  joinPath,
+  orgHasOtherMembers,
   refreshMe,
 }: {
   organizationId: string | null;
   memberId: string | null;
-  joinPath: "solo" | "invite" | null;
+  /**
+   * `true` when the caller's org has at least one ACTIVE member besides
+   * themselves. Drives the "You've joined {team}…" team-aware headline
+   * copy. Sourced from `/me` (per-membership count) so it stays accurate
+   * across tabs/devices — the prior `joinPath === "invite"` proxy could
+   * desync from server reality when sessionStorage was cleared.
+   */
+  orgHasOtherMembers: boolean;
   refreshMe: () => Promise<void>;
 }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const draftScope = onboardingDraftScope(organizationId, memberId);
   const initialDraft = readOnboardingDraft(draftScope);
   const initialConnectToken =
@@ -48,18 +58,33 @@ export function Step2Body({
       : null;
   const initialConnectTokenExpiresAt = initialConnectToken ? (initialDraft?.connectTokenExpiresAt ?? null) : null;
 
-  // Default agent name: "Assistant" — neutral on capability domain, since
-  // Step 2 just brings a personal agent online (Step 3 is where the team's
-  // context-tree gets built). User can rename in the input or via agent
-  // settings later. The draft override wins so we don't clobber a name
-  // a returning user already typed.
-  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "Assistant");
+  // Default agent name: `${login}'s assistant` — mirrors the `${login}'s team`
+  // idiom already used at OAuth bootstrap (see auth/github.ts). Personalizing
+  // by login avoids "Assistant" colliding across teammates and keeps the
+  // first agent's name visibly tied to its owner. Falls back to "Assistant"
+  // for the edge case where /me hasn't loaded yet. The draft override wins
+  // so we don't clobber a name a returning user already typed.
+  const [displayName, setDisplayName] = useState(
+    () => initialDraft?.displayName ?? (user?.username ? `${user.username}'s assistant` : "Assistant"),
+  );
+  // Default visibility: "organization" (Shared with team). Aligns with the
+  // product's agent-team collaboration framing — a teammate's onboarding
+  // agent should be reachable by the rest of the org by default. The
+  // standalone NewAgentDialog keeps its own "private" default (different
+  // product decision: dialog is also used by power users creating personal
+  // throwaways), so we do NOT touch that surface.
+  const [visibility, setVisibility] = useState<AgentVisibility>(() => initialDraft?.visibility ?? "organization");
   const [selectedRuntime, setSelectedRuntime] = useState<string | null>(() => initialDraft?.selectedRuntime ?? null);
   const [connectedClient, setConnectedClient] = useState<HubClient | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
   const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
   const [connectToken, setConnectToken] = useState<string | null>(() => initialConnectToken);
   const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(() => initialConnectTokenExpiresAt);
+  // Server-built bootstrap command (npm install + login) with channel-aware
+  // npm spec. Replaces the client-side hardcoded `@latest` so staging users
+  // (channel=alpha) install the right package on first run instead of
+  // landing on stable and watching auto-update yank them forward.
+  const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null);
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [phase, setPhase] = useState<Phase>("form");
   const [error, setError] = useState<string | null>(null);
@@ -81,8 +106,9 @@ export function Step2Body({
       selectedRuntime,
       connectToken,
       connectTokenExpiresAt,
+      visibility,
     });
-  }, [draftScope, displayName, selectedRuntime, connectToken, connectTokenExpiresAt]);
+  }, [draftScope, displayName, selectedRuntime, connectToken, connectTokenExpiresAt, visibility]);
 
   useEffect(() => {
     void (async () => {
@@ -132,11 +158,10 @@ export function Step2Body({
         // best-effort
       }
     };
-    void detect();
-    const handle = setInterval(detect, CLIENT_DETECT_POLL_MS);
+    const dispose = runVisibilityAwareInterval(detect, CLIENT_DETECT_POLL_MS);
     return () => {
       cancelled = true;
-      clearInterval(handle);
+      dispose();
     };
   }, [phase]);
 
@@ -157,10 +182,14 @@ export function Step2Body({
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.post<{ token: string; expiresIn: number }>("/me/connect-tokens", {});
+        const r = await api.post<{ token: string; expiresIn: number; bootstrapCommand: string }>(
+          "/me/connect-tokens",
+          {},
+        );
         if (!cancelled) {
           setConnectToken(r.token);
           setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
+          setBootstrapCommand(r.bootstrapCommand);
         }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to generate connect token");
@@ -196,9 +225,12 @@ export function Step2Body({
   const trimmedName = displayName.trim();
   const nameOrFallback = trimmedName || "your agent";
 
-  const cliCommand = connectToken
-    ? `npm install -g @agent-team-foundation/first-tree-hub\nfirst-tree-hub connect ${connectToken}`
-    : null;
+  // Prefer the server-built command (channel-aware npm spec); fall back to
+  // a client-side construction only if the bootstrap field is missing —
+  // e.g. an old server, or a transient race where `connectToken` arrives
+  // but `bootstrapCommand` hasn't landed in state yet.
+  const cliCommand =
+    bootstrapCommand ?? (connectToken ? `npm install -g first-tree\nfirst-tree login ${connectToken}` : null);
 
   const pollUntilReady = useCallback(
     async (agentUuid: string): Promise<void> => {
@@ -269,6 +301,12 @@ export function Step2Body({
         ...(slug ? { name: slug } : {}),
         clientId: connectedClient.id,
         runtimeProvider: selectedRuntime,
+        // Explicit pass — the server's `defaultVisibility(personal_assistant)`
+        // returns "private" (kept that way intentionally), but onboarding
+        // defaults to "organization" (the agent-team framing). Sending the
+        // chosen value avoids any reliance on server defaults that would
+        // diverge from the radio's visible selection.
+        visibility,
         ...(organizationId ? { organizationId } : {}),
       });
       agentUuid = res.uuid;
@@ -287,7 +325,7 @@ export function Step2Body({
     }
 
     await pollUntilReady(agentUuid);
-  }, [trimmedName, connectedClient, selectedRuntime, pollUntilReady, organizationId]);
+  }, [trimmedName, connectedClient, selectedRuntime, visibility, pollUntilReady, organizationId]);
 
   const handleRetry = useCallback(async () => {
     const agentUuid = createdAgentRef.current;
@@ -313,7 +351,7 @@ export function Step2Body({
 
   return (
     <Step2FormBody
-      joinPath={joinPath}
+      orgHasOtherMembers={orgHasOtherMembers}
       teamName={teamName}
       displayName={displayName}
       setDisplayName={setDisplayName}
@@ -324,6 +362,8 @@ export function Step2Body({
       okRuntimes={okRuntimes}
       selectedRuntime={selectedRuntime}
       setSelectedRuntime={setSelectedRuntime}
+      visibility={visibility}
+      setVisibility={setVisibility}
       error={error}
       canCreate={canCreate}
       onCreate={handleCreate}
@@ -340,7 +380,7 @@ function pickPreferredRuntime(caps: ClientCapabilities): string | null {
 }
 
 function Step2FormBody({
-  joinPath,
+  orgHasOtherMembers,
   teamName,
   displayName,
   setDisplayName,
@@ -351,11 +391,13 @@ function Step2FormBody({
   okRuntimes,
   selectedRuntime,
   setSelectedRuntime,
+  visibility,
+  setVisibility,
   error,
   canCreate,
   onCreate,
 }: {
-  joinPath: "solo" | "invite" | null;
+  orgHasOtherMembers: boolean;
   teamName: string;
   displayName: string;
   setDisplayName: (next: string) => void;
@@ -366,12 +408,24 @@ function Step2FormBody({
   okRuntimes: string[];
   selectedRuntime: string | null;
   setSelectedRuntime: (next: string | null) => void;
+  visibility: AgentVisibility;
+  setVisibility: (next: AgentVisibility) => void;
   error: string | null;
   canCreate: boolean;
   onCreate: () => void;
 }) {
   const nameInputRef = useRef<HTMLInputElement | null>(null);
-  const inviteHasTeam = joinPath === "invite" && teamName;
+  // Team-aware headline fires when there's at least one other active
+  // member in the org — i.e. the user is joining a populated team (the
+  // common invitee case) rather than spinning up a solo space. Falls back
+  // to the neutral copy for solo signups, where the "You've joined X" line
+  // would read awkwardly. Replaces the prior
+  // `joinPath === "invite" && teamName` check, which read from
+  // sessionStorage and could desync from server reality on cross-tab /
+  // cross-device resumes.
+  const hasTeammates = orgHasOtherMembers && !!teamName;
+  const computerReady =
+    !!connectedClient && !!selectedRuntime && capabilitiesLoaded && okRuntimes.includes(selectedRuntime);
 
   const noRuntime = capabilitiesLoaded && okRuntimes.length === 0 && !!connectedClient;
   const nextStepText = !trimmedName
@@ -392,16 +446,16 @@ function Step2FormBody({
   return (
     <>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
-        {inviteHasTeam ? (
+        {hasTeammates ? (
           <>
             You&apos;ve joined{" "}
             <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
               {teamName}
             </span>
-            . Set up your first agent — it&apos;ll run on a computer you connect.
+            . Let&apos;s set up your first agent.
           </>
         ) : (
-          <>Set up your first agent — it&apos;ll run on a computer you connect.</>
+          <>Let&apos;s set up your first agent.</>
         )}
       </p>
 
@@ -451,7 +505,7 @@ function Step2FormBody({
           </div>
         </StepFrame>
 
-        <StepFrame number="02" state={canCreate ? "complete" : trimmedName ? "active" : "idle"}>
+        <StepFrame number="02" state={computerReady ? "complete" : trimmedName ? "active" : "idle"}>
           <div style={{ animation: trimmedName ? "subtle-fade 200ms ease-out" : undefined }}>
             <h2
               className="text-subtitle font-semibold"
@@ -494,6 +548,22 @@ function Step2FormBody({
                 )}
               </>
             ) : null}
+          </div>
+        </StepFrame>
+
+        <StepFrame number="03" state={computerReady ? "active" : "idle"}>
+          <div style={{ animation: computerReady ? "subtle-fade 200ms ease-out" : undefined }}>
+            <h2
+              className="text-subtitle font-semibold"
+              style={{
+                color: computerReady ? "var(--fg)" : "var(--fg-4)",
+                fontWeight: computerReady ? 600 : 500,
+              }}
+            >
+              Pick who can use it
+            </h2>
+
+            {computerReady ? <VisibilityPicker value={visibility} onChange={setVisibility} /> : null}
           </div>
         </StepFrame>
       </div>
@@ -572,8 +642,8 @@ function CommandBox({ command }: { command: string | null }) {
   const [copied, setCopied] = useState(false);
 
   const lines = command ? command.split("\n") : [];
-  const connectLine = lines.find((l) => l.startsWith("first-tree-hub")) ?? "";
-  const connectPrefix = "first-tree-hub connect ";
+  const connectLine = lines.find((l) => l.startsWith("first-tree")) ?? "";
+  const connectPrefix = "first-tree login ";
   const commandPreview = connectLine.startsWith(connectPrefix)
     ? `${connectPrefix}${connectLine.slice(connectPrefix.length, connectPrefix.length + 22)}…`
     : connectLine.length > 52
@@ -738,6 +808,113 @@ function RuntimeChips({
         })}
       </fieldset>
     </div>
+  );
+}
+
+/**
+ * Visibility radio for Step 2 — "Shared with team" vs "Private to you".
+ * Copy is intentionally identical to NewAgentDialog (`new-agent-dialog.tsx`)
+ * so the two surfaces describe the same product semantics with the same
+ * words; only the default differs (onboarding defaults to "organization"
+ * to lean into the agent-team framing; the dialog defaults to "private").
+ *
+ * Visual: card-style labels with an accent border + tinted background on
+ * the active option — matches the multi-repo checkbox cards in
+ * InviteeConfirmBody so the onboarding flow stays stylistically coherent.
+ * Intentionally NOT a shared component (per spec) — the dialog uses
+ * Tailwind utility classes while onboarding uses inline CSS-variable
+ * styles, and forcing them through one component would muddy both.
+ *
+ * No "(default)" label on either option: radio selected-state already
+ * conveys which one is picked, so the suffix is redundant noise.
+ */
+function VisibilityPicker({ value, onChange }: { value: AgentVisibility; onChange: (next: AgentVisibility) => void }) {
+  const options: ReadonlyArray<{
+    value: AgentVisibility;
+    title: string;
+    description: string;
+  }> = [
+    {
+      value: "organization",
+      title: "Shared with team",
+      description: "Anyone in your org can @mention and chat with this agent.",
+    },
+    {
+      value: "private",
+      title: "Private to you",
+      description: "Only you can see this agent and chat with it. Others on the team won't see it listed.",
+    },
+  ];
+  return (
+    <fieldset
+      className="flex flex-col"
+      style={{ gap: "var(--sp-2)", margin: "var(--sp-2) 0 0", padding: 0, border: 0 }}
+    >
+      <legend className="sr-only">Agent visibility</legend>
+      {options.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <label
+            key={opt.value}
+            className="text-body"
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: "var(--sp-2)",
+              padding: "var(--sp-2) var(--sp-3)",
+              background: active ? "color-mix(in oklch, var(--accent) 8%, var(--bg))" : "var(--bg)",
+              border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-faint)",
+              borderRadius: "var(--radius-input)",
+              cursor: "pointer",
+              color: active ? "var(--fg)" : "var(--fg-2)",
+              transition: "background 120ms ease, border-color 120ms ease",
+            }}
+          >
+            <input
+              type="radio"
+              name="onboarding-visibility"
+              value={opt.value}
+              checked={active}
+              onChange={() => onChange(opt.value)}
+              className="sr-only"
+            />
+            <span
+              aria-hidden="true"
+              className="inline-flex items-center justify-center"
+              style={{
+                width: "var(--sp-3_5)",
+                height: "var(--sp-3_5)",
+                marginTop: "var(--sp-0_5)",
+                borderRadius: "50%",
+                border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
+                background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
+                flexShrink: 0,
+                transition: "border-color 160ms ease, background 160ms ease",
+              }}
+            >
+              {active && (
+                <span
+                  style={{
+                    width: "var(--sp-1_5)",
+                    height: "var(--sp-1_5)",
+                    borderRadius: "50%",
+                    background: "var(--accent)",
+                  }}
+                />
+              )}
+            </span>
+            <span className="flex flex-col" style={{ gap: "var(--sp-0_5)", minWidth: 0 }}>
+              <span className="font-medium" style={{ color: active ? "var(--fg)" : "var(--fg-2)" }}>
+                {opt.title}
+              </span>
+              <span className="text-label" style={{ color: "var(--fg-3)" }}>
+                {opt.description}
+              </span>
+            </span>
+          </label>
+        );
+      })}
+    </fieldset>
   );
 }
 

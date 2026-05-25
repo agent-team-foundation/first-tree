@@ -8,7 +8,7 @@ import {
   isRedactedEnvValue,
   type RuntimeProvider,
   type UpdateAgentRuntimeConfig,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";

@@ -1,4 +1,4 @@
-import { AGENT_STATUSES, AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_STATUSES, AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, ne, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
@@ -56,9 +56,6 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
     if (typeof orgId !== "string" || orgId.length === 0) return;
 
     const isPulseTick = payload.type === "pulse:tick" && typeof payload.agents === "object" && payload.agents !== null;
-    const isNotification = payload.type === "notification";
-    const notificationAgentId =
-      isNotification && typeof payload.agentId === "string" && payload.agentId.length > 0 ? payload.agentId : null;
     const sharedData = isPulseTick ? null : JSON.stringify(payload);
 
     for (const [ws, meta] of adminSockets) {
@@ -67,9 +64,6 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
         const filtered = filterPulseAgents(payload.agents as Record<string, unknown>, meta.visibleAgentIds);
         ws.send(JSON.stringify({ ...payload, agents: filtered }));
       } else {
-        if (isNotification && notificationAgentId && !meta.visibleAgentIds.has(notificationAgentId)) {
-          continue;
-        }
         ws.send(sharedData as string);
       }
     }
@@ -79,6 +73,13 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
 
   notifier.onSessionStateChange((payload) => {
     broadcastOrgScoped({ type: "session:state", ...payload });
+  });
+
+  notifier.onSessionEvent((payload) => {
+    // Frame intentionally minimal — admin WS consumers (web's
+    // `use-admin-ws.ts`) refetch `me/chats` rather than reconstructing the
+    // session_event locally, so we only carry the routing dimensions.
+    broadcastOrgScoped({ type: "session:event", ...payload });
   });
 
   notifier.onChatMessage(({ chatId }) => {

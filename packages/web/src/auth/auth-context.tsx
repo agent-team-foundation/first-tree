@@ -1,4 +1,4 @@
-import type { MeMembership } from "@agent-team-foundation/first-tree-hub-shared";
+import type { MeMembership } from "@first-tree/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { login as loginApi } from "../api/auth.js";
@@ -9,6 +9,7 @@ import {
   setApiSelectedOrganizationId,
   setStoredTokens,
 } from "../api/client.js";
+import { markOnboardingCompleted as postOnboardingCompleted } from "../api/onboarding-events.js";
 import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
@@ -26,6 +27,12 @@ type MeResponse = {
     step: "connect" | "create_agent" | "completed";
     /** ISO timestamp when the user dismissed the onboarding stepper, else null. */
     dismissedAt?: string | null;
+    /**
+     * ISO timestamp when the user walked Step 3 to success. Distinct from
+     * `dismissedAt` (which only hides the stepper UI). Once set, the
+     * Settings → Onboarding entry point disappears permanently.
+     */
+    completedAt?: string | null;
   };
 };
 
@@ -52,6 +59,20 @@ type AuthContextValue = {
   memberId: string | null;
   role: string | null;
   agentId: string | null;
+  /**
+   * Display name of the current org (e.g. `${login}'s team` for a fresh
+   * solo signup, or the renamed value once the user has gone through
+   * Step 1). Drives the onboarding gate's "is this still the auto-named
+   * default" check without re-fetching `/me/organizations`.
+   */
+  teamDisplayName: string | null;
+  /**
+   * `true` when the current org has at least one ACTIVE member besides
+   * the caller (`COUNT(members) > 1`). Sourced from `/me`'s per-membership
+   * count, so it stays accurate cross-tab / cross-device — the prior
+   * `sessionStorage.joinPath` flag could not.
+   */
+  orgHasOtherMembers: boolean;
   onboardingStep: "connect" | "create_agent" | "completed" | null;
   /**
    * ISO timestamp when the user clicked `✕` on the onboarding stepper.
@@ -59,6 +80,15 @@ type AuthContextValue = {
    * §8) — `null` means the stepper should render.
    */
   onboardingDismissedAt: string | null;
+  /**
+   * ISO timestamp when the user walked Step 3 to terminal success. Once
+   * non-null, the Settings → Onboarding sidebar entry and Resume button
+   * disappear permanently — subsequent config edits go through Settings →
+   * Team and the per-agent settings pages. `null` while setup is still
+   * incomplete OR while the user has only dismissed (not completed) the
+   * wizard.
+   */
+  onboardingCompletedAt: string | null;
   /**
    * PATCH `/me/onboarding { dismissed: true }`. Optimistically flips
    * `onboardingDismissedAt` so the stepper unmounts immediately.
@@ -70,6 +100,14 @@ type AuthContextValue = {
    * Settings → Setup "Resume setup" toggle.
    */
   restoreOnboarding: () => Promise<void>;
+  /**
+   * POST `/me/onboarding-completed`. Optimistically stamps
+   * `onboardingCompletedAt` so the Settings → Onboarding sidebar entry
+   * unmounts immediately and `/settings/onboarding` redirects on the next
+   * render. Idempotent server-side. Called at Step 3 terminal-success
+   * points (admin Continue, invitee Confirm / Continue).
+   */
+  markOnboardingCompleted: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   /**
    * Adopt a token pair handed in from a non-login surface (OAuth fragment
@@ -91,7 +129,7 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const SELECTED_ORG_KEY = "first-tree-hub:selectedOrganizationId";
+const SELECTED_ORG_KEY = "first-tree:selectedOrganizationId";
 
 function readSelectedOrgId(): string | null {
   try {
@@ -125,6 +163,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const [onboardingStep, setOnboardingStep] = useState<"connect" | "create_agent" | "completed" | null>(null);
   const [onboardingDismissedAt, setOnboardingDismissedAt] = useState<string | null>(null);
+  const [onboardingCompletedAt, setOnboardingCompletedAt] = useState<string | null>(null);
   // Stays false until the first fetchMe settles. Unauthenticated visitors
   // never need /me, so the gate also flips for them via the unauth branch
   // below — RequireAuth only blocks the loading frame when the user IS
@@ -147,6 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSelectedOrgId(null);
     setOnboardingStep(null);
     setOnboardingDismissedAt(null);
+    setOnboardingCompletedAt(null);
     setMeLoaded(false);
   }, [queryClient]);
 
@@ -159,6 +199,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const nextStep = data.onboarding?.step ?? null;
       setOnboardingStep(nextStep);
       setOnboardingDismissedAt(data.onboarding?.dismissedAt ?? null);
+      setOnboardingCompletedAt(data.onboarding?.completedAt ?? null);
       // Drop the join-path flag once onboarding is complete so a later
       // incomplete state (e.g. user deletes their client) doesn't reuse a
       // stale "you've joined {team}" headline that no longer fits.
@@ -257,6 +298,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const markOnboardingCompleted = useCallback(async () => {
+    // Optimistic: stamp immediately so the Settings sidebar gate and the
+    // /settings/onboarding redirect read the new state on the very next
+    // render. Server stamp is canonical but it's not echoed back — the next
+    // /me fetch will reconcile if the value somehow drifts (e.g. /me was
+    // refetched mid-flight before the optimistic write landed). We don't
+    // roll back on error: the user has already finished Step 3 and is
+    // navigating away, so a network blip here just means the sidebar entry
+    // lingers until the next /me — strictly less wrong than briefly
+    // un-completing the user.
+    setOnboardingCompletedAt((prev) => prev ?? new Date().toISOString());
+    await postOnboardingCompleted();
+  }, []);
+
   // Fetch member info on initial load if already authenticated
   useEffect(() => {
     if (isAuthenticated && !user) {
@@ -289,10 +344,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         memberId: currentMembership?.id ?? null,
         role: currentMembership?.role ?? null,
         agentId: currentMembership?.agentId ?? null,
+        teamDisplayName: currentMembership?.organizationName ?? null,
+        orgHasOtherMembers: currentMembership?.orgHasOtherMembers ?? false,
         onboardingStep,
         onboardingDismissedAt,
+        onboardingCompletedAt,
         dismissOnboarding,
         restoreOnboarding,
+        markOnboardingCompleted,
         login,
         adoptTokens,
         selectOrganization,

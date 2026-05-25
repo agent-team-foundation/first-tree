@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionEvent } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 
@@ -6,8 +6,11 @@ import type { GitMirrorManager } from "./git-mirror-manager.js";
 export type AgentIdentity = {
   agentId: string;
   /**
-   * Agent's inbox ID. Threaded into the handler so child processes can build
-   * cross-chat `replyTo` envelopes without a per-call server round-trip.
+   * Agent's inbox ID. Carried alongside the agent identity so the runtime
+   * can identify the agent's row in `inbox_entries` (poll / push paths) and
+   * so child processes can read `FIRST_TREE_INBOX_ID` when they need a
+   * stable identity handle. There is no `replyToInbox` envelope any more —
+   * cross-chat reply routing was removed in first-tree-context PR #281.
    */
   inboxId: string;
   /**
@@ -44,11 +47,6 @@ export type SessionContext = HandlerContext & {
    * Assistant text does NOT go through here — it flows via `forwardResult`.
    */
   emitEvent: (event: SessionEvent) => void;
-  /**
-   * Signal that a query completed end-to-end — fires the per-chat
-   * `session_completed` notification on the server (5-min cooldown).
-   */
-  reportSessionCompletion: () => void;
 
   /**
    * Forward the handler's final text to the chat. Runtime handles mention
@@ -58,7 +56,7 @@ export type SessionContext = HandlerContext & {
   forwardResult: (text: string) => Promise<void>;
 
   /**
-   * Build env for CLI sub-processes that shell out to the `first-tree-hub`
+   * Build env for CLI sub-processes that shell out to the `first-tree`
    * CLI. Layers Agent-Hub envelope vars (server/agent/inbox/chat IDs) on
    * top of the parent env. Handlers pass their own cleaned `process.env`.
    */

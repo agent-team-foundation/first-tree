@@ -1,4 +1,4 @@
-import type { CapabilityEntry, RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
+import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { clients } from "../db/schema/clients.js";

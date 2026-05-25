@@ -42,7 +42,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
     await seedSession(app, agent.uuid, chat.id, "active");
 
     const res = await app.inject({
@@ -67,7 +67,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
     await seedSession(app, agent.uuid, chat.id, "suspended");
 
     const res = await app.inject({
@@ -89,7 +89,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
     await seedSession(app, agent.uuid, chat.id, "suspended");
     await sessionEventService.appendEvent(app.db, agent.uuid, chat.id, {
       kind: "error",
@@ -127,7 +127,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
     await seedSession(app, agent.uuid, chat.id, "active");
 
     const res = await app.inject({
@@ -150,7 +150,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
     await seedSession(app, agent.uuid, chat.id, "evicted");
 
     const res = await app.inject({
@@ -191,7 +191,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
 
     const res = await app.inject({
       method: "POST",
@@ -204,8 +204,8 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
   it("allows an evicted row to be overwritten when the client starts a fresh runtime session", async () => {
     // `agent_chat_sessions.(agent_id, chat_id)` is a single-row "current
     // session state" cache, NOT a session history log. After terminate the
-    // chat keeps its stable chat_id (see findOrCreateDirectChat); the next
-    // inbound message legitimately produces a new runtime session whose
+    // chat keeps its stable chat_id; the next inbound message legitimately
+    // produces a new runtime session whose
     // `active` state MUST overwrite the terminal `evicted` row, otherwise
     // the chat becomes invisible in web listings forever even though it is
     // still functional. Pinning this behaviour so the pre-refactor
@@ -219,7 +219,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
     await seedSession(app, agent.uuid, chat.id, "evicted");
 
     // Client reports `active` because a new runtime session just started.
@@ -241,7 +241,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
     await seedSession(app, agent.uuid, chat.id, "suspended");
 
     await activityService.upsertSessionState(app.db, agent.uuid, chat.id, "active", "org-test");
@@ -259,9 +259,9 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
-    const chatActive = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    const chatActive = await createChat(app.db, admin.humanAgentUuid, { type: "group", participantIds: [agent.uuid] });
     const chatEvicted = await createChat(app.db, admin.humanAgentUuid, {
-      type: "direct",
+      type: "group",
       participantIds: [agent.uuid],
     });
     await seedSession(app, agent.uuid, chatActive.id, "active");
@@ -331,7 +331,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     // target to keep the race semantics intact.
     await Promise.all([
       sessionService.archiveSession(app.db, target.uuid, chat.id, admin.organizationId, app.notifier),
-      sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: `race @${targetName}` }),
+      sendMessage(app.db, chat.id, sender.uuid, { source: "api", format: "text", content: `race @${targetName}` }),
     ]);
 
     expect(await readState(app, target.uuid, chat.id)).toBe("active");

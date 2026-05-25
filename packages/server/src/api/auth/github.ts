@@ -3,7 +3,7 @@ import {
   githubDevCallbackQuerySchema,
   githubStartQuerySchema,
   safeRedirectPath,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { signTokensForUser } from "../../services/auth.js";
 import {
@@ -17,7 +17,7 @@ import {
   createAppJwt,
   exchangeCodeForAppUserProfile,
   fetchInstallation,
-  listUserAccessibleInstallationIds,
+  verifyUserCanAdministerInstallation,
 } from "../../services/github-app.js";
 import {
   bindInstallationToOrg,
@@ -60,7 +60,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
   const appCfg = app.config.oauth?.githubApp;
   if (!appCfg) {
     app.log.info(
-      "GitHub App not configured — /auth/github/start will return 503. Set FIRST_TREE_HUB_GITHUB_APP_* to enable.",
+      "GitHub App not configured — /auth/github/start will return 503. Set FIRST_TREE_GITHUB_APP_* to enable.",
     );
   }
 
@@ -152,74 +152,52 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: msg });
     }
 
-    // SECURITY (codex P0-2): the `installation_id` query parameter
-    // arrives over the user's browser address bar — it is NOT a secret
-    // and NOT signed. Without authorization, any signed-in user could
-    // append `?installation_id=<some-other-org's-id>` and bind that
-    // installation to their own Hub team (the App JWT has read access
-    // to every installation, so `fetchInstallation` would succeed).
+    // SECURITY: `installation_id` rides the browser address bar — not a
+    // secret, not signed. Any signed-in user could append
+    // `?installation_id=<other-team's-id>` and bind that installation to
+    // their own Hub team if we don't authorize first (the App JWT can
+    // read every installation, so `fetchInstallation` would succeed).
     //
-    // Verify the authenticated user actually has access to this
-    // installation via GitHub's `/user/installations` endpoint, which
-    // lists installations the user-access-token holder can administer
-    // (User-type they own + Organization-type they admin). If the
-    // claim doesn't check out, drop the installation_id and continue
-    // sign-in — the user is still authenticated, but no install row
-    // gets fetched or bound to their team.
-    if (installationId !== null) {
+    // Require GitHub-side **admin** on the install's account: User-type
+    // owner-match, Org-type admin via `/user/memberships/orgs/{login}`.
+    // Plain read access via org membership isn't enough — that's what
+    // made the original `/user/installations` primitive forgeable.
+    //
+    // We fetch the installation first to get its account metadata, then
+    // verify, then upsert. On any failure — verify / fetch / upsert —
+    // we drop `installationId` so sign-in still succeeds but no row is
+    // bound; the user can re-trigger install from Settings.
+    if (installationId !== null && appCfg) {
       try {
-        const allowedIds = await listUserAccessibleInstallationIds(plaintextUserAccessToken);
-        if (!allowedIds.has(installationId)) {
+        const appJwt = await createAppJwt({ appId: appCfg.appId, privateKeyPem: appCfg.privateKeyPem });
+        const installation = await fetchInstallation(appJwt, installationId);
+        const canAdminister = await verifyUserCanAdministerInstallation(
+          plaintextUserAccessToken,
+          Number(profile.githubId),
+          installation,
+        );
+        if (!canAdminister) {
           app.log.warn(
             {
               event: "github_app.installation_id_unauthorized",
               installationId,
               githubId: profile.githubId,
-              allowedCount: allowedIds.size,
+              accountType: installation.accountType,
+              accountLogin: installation.accountLogin,
             },
-            "callback installation_id is not in /user/installations — refusing to bind (attempted hijack?)",
+            "callback installation_id admin proof failed — refusing to bind",
           );
           installationId = null;
+        } else {
+          await upsertInstallationFromMetadata(app.db, { installation });
         }
       } catch (err) {
-        // Failing closed: if we can't verify access, don't bind. User
-        // still signs in; install can be re-attempted on next visit.
+        // Failing closed: fetch / membership API / upsert all roll up
+        // here so we never half-bind. User still signs in; the Settings
+        // panel surfaces a clean "Install" CTA for retry.
         app.log.warn(
           { err, installationId, githubId: profile.githubId },
-          "github app /user/installations check failed — refusing to bind to be safe",
-        );
-        installationId = null;
-      }
-    }
-
-    // Fetch + UPSERT the installation row when the user just installed
-    // the App. We pull the metadata from GitHub's API (rather than wait
-    // for the `installation: created` webhook) so the callback doesn't
-    // depend on webhook delivery order — and so the Settings panel can
-    // render the connected-account block on the very next page load.
-    //
-    // Bind-to-org happens after `completeOauthFlow` has resolved which
-    // Hub team the user lands on (existing primary, invite redemption,
-    // or a freshly-minted personal team).
-    if (installationId !== null && appCfg) {
-      try {
-        const appJwt = await createAppJwt({ appId: appCfg.appId, privateKeyPem: appCfg.privateKeyPem });
-        const installation = await fetchInstallation(appJwt, installationId);
-        await upsertInstallationFromMetadata(app.db, { installation });
-      } catch (err) {
-        // Codex P2 follow-up: the previous "log and continue" path left
-        // `installationId` intact, so the later `bindInstallationToOrg`
-        // would run against a missing row and silently log a warning,
-        // leaving the user with a successful sign-in but a 404 in
-        // Settings → Integrations. The webhook can't reconcile either
-        // — it has no Hub-org context for the install. Drop the id so
-        // the bind step is skipped entirely; sign-in still succeeds,
-        // and the Settings panel surfaces a clean "Install" CTA the
-        // user can re-trigger. The orphan-reclaim sweep below also
-        // bails (it only runs when the row exists).
-        app.log.warn(
-          { err, installationId, githubId: profile.githubId },
-          "github app install fetch/upsert failed — clearing installation_id, user can retry from Settings",
+          "github app install verify/upsert failed — clearing installation_id, user can retry from Settings",
         );
         installationId = null;
       }
@@ -237,7 +215,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     //
     //   Gate 1: NODE_ENV must not be 'production'. Same as before —
     //           defense-in-depth, blocks the dumbest mistake.
-    //   Gate 2: FIRST_TREE_HUB_DEV_CALLBACK_ENABLED must be explicitly
+    //   Gate 2: FIRST_TREE_DEV_CALLBACK_ENABLED must be explicitly
     //           "1" or "true". An unset env var defaults to disabled —
     //           operators MUST opt in. Vitest's setup script
     //           (`vitest.setup.ts`) sets this to "1" so the existing
@@ -249,12 +227,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     if (process.env.NODE_ENV === "production") {
       return reply.status(404).send({ error: "Not found" });
     }
-    const devCallbackOptIn = process.env.FIRST_TREE_HUB_DEV_CALLBACK_ENABLED;
+    const devCallbackOptIn = process.env.FIRST_TREE_DEV_CALLBACK_ENABLED;
     if (devCallbackOptIn !== "1" && devCallbackOptIn !== "true") {
-      app.log.info(
-        { url: request.url },
-        "dev-callback request refused — FIRST_TREE_HUB_DEV_CALLBACK_ENABLED is not set",
-      );
+      app.log.info({ url: request.url }, "dev-callback request refused — FIRST_TREE_DEV_CALLBACK_ENABLED is not set");
       return reply.status(404).send({ error: "Not found" });
     }
     const params = githubDevCallbackQuerySchema.parse(request.query);
@@ -479,7 +454,7 @@ async function completeOauthFlow(
   // `/user/installations` check enforced when the row was first written),
   // and auto-claim if there's exactly one. Multiple → leave them for the
   // manual `POST /claim` endpoint to disambiguate (the Settings "Claim install"
-  // UI that drives that endpoint is tracked in #318 and not in PR 2/3 yet).
+  // UI that drives that endpoint is tracked in #318).
   if (resolvedOrganizationId) {
     try {
       const orphans = await findUnboundInstallationsByAccount(app.db, Number(profile.githubId));

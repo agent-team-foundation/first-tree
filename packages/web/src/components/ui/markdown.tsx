@@ -1,4 +1,4 @@
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/utils.js";
@@ -6,6 +6,7 @@ import { cn } from "../../lib/utils.js";
 export type MarkdownProps = {
   children: string;
   className?: string;
+  components?: Components;
 };
 
 /**
@@ -17,7 +18,7 @@ export type MarkdownProps = {
  * same component fits both the dark workspace chat and the light agent
  * detail page without a theme switch.
  */
-export function Markdown({ children, className }: MarkdownProps) {
+export function Markdown({ children, className, components }: MarkdownProps) {
   return (
     <div
       className={cn(
@@ -33,7 +34,18 @@ export function Markdown({ children, className }: MarkdownProps) {
         className,
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{children}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={{
+          a: ({ node, ...props }) => {
+            void node;
+            return <a {...props} target="_blank" rel="noopener noreferrer" />;
+          },
+          ...components,
+        }}
+      >
+        {children}
+      </ReactMarkdown>
     </div>
   );
 }

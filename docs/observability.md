@@ -17,13 +17,13 @@ Configure an OTLP/HTTP endpoint and matching headers — any backend that
 speaks OTLP works (Logfire, Honeycomb, Jaeger, Tempo, SigNoz, Axiom, …).
 
 ```yaml
-# ~/.first-tree/hub/config/server.yaml
+# server.yaml (SaaS internal — typically injected as env vars in production)
 observability:
   tracing:
     endpoint: https://<your-otlp-endpoint>/v1/traces
     headers:
       Authorization: "Bearer <write-token>"
-    serviceName: first-tree-hub
+    serviceName: first-tree
     environment: production
     sampleRate: 1.0
 ```
@@ -31,8 +31,8 @@ observability:
 Or via environment variables (preferred for secret tokens):
 
 ```bash
-FIRST_TREE_HUB_OTEL_ENDPOINT=https://<your-otlp-endpoint>/v1/traces
-FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer <write-token>"
+FIRST_TREE_OTEL_ENDPOINT=https://<your-otlp-endpoint>/v1/traces
+FIRST_TREE_OTEL_HEADERS="Authorization=Bearer <write-token>"
 ```
 
 Restart the server. You should see `tracing enabled: exporter=otlp-http ...`
@@ -42,13 +42,13 @@ in the startup log.
 
 | Path | Env var | Default | Notes |
 |---|---|---|---|
-| `observability.logging.level` | `FIRST_TREE_HUB_LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
+| `observability.logging.level` | `FIRST_TREE_LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `observability.logging.format` | — | `pretty` (dev), `json` (prod) | Pretty for humans, JSON for log collectors |
 | `observability.logging.bridgeToSpanLevel` | — | `error` | Minimum pino level whose records are attached to the active span. `warn` / `error` / `off` |
-| `observability.tracing.endpoint` | `FIRST_TREE_HUB_OTEL_ENDPOINT` | `""` (disabled) | OTLP/HTTP traces URL |
-| `observability.tracing.headers` | `FIRST_TREE_HUB_OTEL_HEADERS` | `""` | `key1=val1,key2=val2` format |
+| `observability.tracing.endpoint` | `FIRST_TREE_OTEL_ENDPOINT` | `""` (disabled) | OTLP/HTTP traces URL |
+| `observability.tracing.headers` | `FIRST_TREE_OTEL_HEADERS` | `""` | `key1=val1,key2=val2` format |
 | `observability.tracing.exporter` | — | `otlp-http` | `otlp-http` or `otlp-grpc` |
-| `observability.tracing.serviceName` | — | `first-tree-hub` | Shown in trace backends |
+| `observability.tracing.serviceName` | — | `first-tree` | Shown in trace backends |
 | `observability.tracing.environment` | — | `development` | `deployment.environment.name` OTel attr |
 | `observability.tracing.sampleRate` | — | `1.0` | `0.0–1.0`, ratio applied at root |
 
@@ -66,25 +66,26 @@ backends treat as first-class:
 
 | Attribute | Value | Configured by |
 |---|---|---|
-| `service.name` | `first-tree-hub` (customizable) | `observability.tracing.serviceName` |
-| `deployment.environment.name` | `development` / `staging` / `production` / … | `observability.tracing.environment` or `FIRST_TREE_HUB_OTEL_ENVIRONMENT` |
+| `service.name` | `first-tree` (customizable) | `observability.tracing.serviceName` |
+| `deployment.environment.name` | `development` / `staging` / `production` / … | `observability.tracing.environment` or `FIRST_TREE_OTEL_ENVIRONMENT` |
 | `service.instance.id` | `srv_<8-char-hex>` — unique per process | auto-generated at startup |
 
 ### Typical deployment
 
-```bash
-# Production instance
-FIRST_TREE_HUB_OTEL_ENDPOINT=https://logfire-us.pydantic.dev/v1/traces \
-FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer <token>" \
-FIRST_TREE_HUB_OTEL_ENVIRONMENT=production \
-  first-tree-hub server start
+The SaaS Docker image runs `node packages/server/dist/index.mjs`; pass the
+OTLP env vars to the container (e.g. via the platform's secrets store):
 
-# Staging instance (same token, different env label)
-FIRST_TREE_HUB_OTEL_ENDPOINT=https://logfire-us.pydantic.dev/v1/traces \
-FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer <token>" \
-FIRST_TREE_HUB_OTEL_ENVIRONMENT=staging \
-  first-tree-hub server start
+```bash
+docker run \
+  -e FIRST_TREE_OTEL_ENDPOINT=https://logfire-us.pydantic.dev/v1/traces \
+  -e FIRST_TREE_OTEL_HEADERS="Authorization=Bearer <token>" \
+  -e FIRST_TREE_OTEL_ENVIRONMENT=production \
+  -e FIRST_TREE_DATABASE_URL=... \
+  ghcr.io/agent-team-foundation/first-tree:latest
 ```
+
+Swap `production` → `staging` for the staging instance; same token, different
+env label.
 
 ### Filtering in the UI
 
@@ -188,9 +189,10 @@ log.info({ entryId }, "inbox: entry expired");
 
 ### What these rules do NOT cover
 
-- **CLI status output** (`first-tree-hub server start` banner, `status(...)`
-  helpers) is a different channel — it's interactive, user-facing, and can
-  use formatting / localized strings. It does *not* go through pino.
+- **CLI status output** (`first-tree` connect / client banners,
+  `status(...)` helpers) is a different channel — it's interactive,
+  user-facing, and can use formatting / localized strings. It does *not*
+  go through pino.
 - **Existing log lines that predate these rules**. Follow the style when
   you touch a file; don't do bulk rewrites purely for style.
 - **Natural exceptions**: acronyms stay capitalized (`"failed to parse JWT"`),
@@ -232,12 +234,6 @@ headers:
   Authorization: "Basic <base64(user:token)>"
 ```
 
-### SigNoz self-hosted
-
-```
-endpoint: http://<signoz-host>:4318/v1/traces
-```
-
 ### Axiom
 
 ```
@@ -272,11 +268,14 @@ body. Copy it into your trace backend to jump straight to the full tree.
 
 ### "Turn on temporarily"
 
+Inject the env vars when launching the SaaS server container:
+
 ```
-FIRST_TREE_HUB_LOG_LEVEL=debug \
-FIRST_TREE_HUB_OTEL_ENDPOINT=https://... \
-FIRST_TREE_HUB_OTEL_HEADERS="Authorization=Bearer ..." \
-  first-tree-hub server start
+docker run \
+  -e FIRST_TREE_LOG_LEVEL=debug \
+  -e FIRST_TREE_OTEL_ENDPOINT=https://... \
+  -e FIRST_TREE_OTEL_HEADERS="Authorization=Bearer ..." \
+  ghcr.io/agent-team-foundation/first-tree:latest
 ```
 
 ## Sampling guidance
@@ -307,7 +306,7 @@ Sampling is `ParentBased(TraceIdRatioBased(sampleRate))` — inbound
   request. Use attribute-based search (see "Find the full story" above).
   Fixing this requires persisting W3C `traceparent` on inbox rows and is
   tracked as tech debt until multi-replica deployment makes it necessary.
-- **No client-side tracing.** Client (`@first-tree-hub/client`) emits logs
+- **No client-side tracing.** Client (`@first-tree/client`) emits logs
   only. Agent-side work is observed indirectly via Hub-side spans
   (`ws.connection`, `ws.message`, inbox attrs).
 - **No PG span.** PostgreSQL queries are not wrapped in spans — for query

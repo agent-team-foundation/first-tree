@@ -1,11 +1,11 @@
-import { deriveRepoLocalPath, type GitRepo } from "@agent-team-foundation/first-tree-hub-shared";
+import { deriveRepoLocalPath, type GitRepo } from "@first-tree/shared";
 import { Plus } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { Section } from "../../components/ui/section.js";
 import { ListRow } from "./list-row.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
@@ -28,19 +28,19 @@ export function GitSection(props: GitSectionProps) {
   const [dialog, setDialog] = useState<{ mode: "add" } | { mode: "edit"; key: string; initial: GitRepo } | null>(null);
   const activeCount = props.items.filter((i) => i.status !== "deleted").length;
 
+  const action = !props.disabled ? (
+    <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
+      <Plus className="h-3 w-3" /> Add
+    </Button>
+  ) : null;
+
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>Git repositories ({activeCount})</PanelTitle>
-        {!props.disabled && (
-          <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-3 w-3" /> Add
-          </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="space-y-2">
+    <Section title="Git repositories" count={activeCount} action={action}>
+      <div>
         {props.items.length === 0 ? (
-          <p className="text-body text-muted-foreground">No Git repositories.</p>
+          <p className="text-body text-muted-foreground" style={{ padding: "var(--sp-3) 0" }}>
+            No Git repositories.
+          </p>
         ) : (
           props.items.map((item) => {
             const path = item.value.localPath ?? deriveRepoLocalPath(item.value.url);
@@ -53,14 +53,26 @@ export function GitSection(props: GitSectionProps) {
                 onUndo={() => props.onUndoDelete(item.key)}
                 disabled={props.disabled}
               >
-                <span className="font-mono text-caption">{item.value.url}</span>
-                {item.value.ref && <span className="text-caption text-muted-foreground">@ {item.value.ref}</span>}
-                <span className="text-caption text-muted-foreground">→ {path || "./"}</span>
+                {/* URL is the primary long token (GitHub URLs run 60-120
+                    chars); flex-1 + min-w-0 + truncate keeps it contained
+                    inside the row instead of pushing past the page canvas. */}
+                <span className="font-mono text-caption truncate min-w-0 flex-1" title={item.value.url}>
+                  {item.value.url}
+                </span>
+                {item.value.ref && (
+                  <span className="text-caption text-muted-foreground shrink-0">@ {item.value.ref}</span>
+                )}
+                <span
+                  className="text-caption text-muted-foreground truncate min-w-0 max-w-xs"
+                  title={`→ ${path || "./"}`}
+                >
+                  → {path || "./"}
+                </span>
               </ListRow>
             );
           })
         )}
-      </PanelBody>
+      </div>
       {dialog && (
         <GitDialog
           open={!!dialog}
@@ -74,7 +86,7 @@ export function GitSection(props: GitSectionProps) {
           }}
         />
       )}
-    </Panel>
+    </Section>
   );
 }
 

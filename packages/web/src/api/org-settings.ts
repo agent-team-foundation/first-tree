@@ -3,7 +3,7 @@ import type {
   OrgContextTreeOutput,
   OrgSourceReposInput,
   OrgSourceReposOutput,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { api } from "./client.js";
 
 function path(orgId: string, namespace: string): string {

@@ -1,9 +1,11 @@
+import { sql } from "drizzle-orm";
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 /**
  * Session events — structured event stream per (agent, chat) session.
- * `kind` is 'tool_call' | 'error'; the payload shape is enforced by the
- * service layer via Zod (no FK / CHECK on this table per project rule).
+ * `kind` is one of `'tool_call' | 'error' | 'assistant_text' | 'thinking'
+ * | 'turn_end'`; payload shape per kind is enforced by the service layer
+ * via Zod (no FK / CHECK on this table per project rule).
  *
  * `seq` is monotonic per (agent_id, chat_id). The single-writer invariant
  * in the client-side session-manager guarantees ordering; the service wraps
@@ -27,5 +29,8 @@ export const sessionEvents = pgTable(
   (table) => [
     uniqueIndex("uq_session_events_chat_seq").on(table.agentId, table.chatId, table.seq),
     index("idx_session_events_chat_created").on(table.agentId, table.chatId, table.createdAt.desc()),
+    index("idx_session_events_context_tree_usage_recent")
+      .on(table.createdAt.desc())
+      .where(sql`${table.kind} = 'context_tree_usage'`),
   ],
 );

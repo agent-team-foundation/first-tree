@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { getSourceReposSetting, putSourceReposSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
-import { SettingsSection } from "../components/ui/settings-section.js";
+import { Section } from "../components/ui/section.js";
 
 /**
  * Team Settings section showing the team-level list of source
@@ -20,7 +20,7 @@ import { SettingsSection } from "../components/ui/settings-section.js";
  * GitHub picker and that lives in the onboarding flow today. A second
  * pass will extract the picker into a reusable component.
  */
-export function SourceReposSettingsPanel({ isFirst = false }: { isFirst?: boolean }) {
+export function SourceReposSettingsPanel() {
   const { organizationId, role } = useAuth();
   const isAdmin = role === "admin";
   const queryClient = useQueryClient();
@@ -53,15 +53,14 @@ export function SourceReposSettingsPanel({ isFirst = false }: { isFirst?: boolea
     ) : null;
 
   return (
-    <SettingsSection
+    <Section
       title="Source repos"
       description={
         isAdmin
           ? "Repos your team's agents are bound to. New repos are added during agent onboarding."
           : "Repos your team's agents are bound to. Read-only — only admins can edit."
       }
-      right={countBadge}
-      isFirst={isFirst}
+      action={countBadge}
     >
       {settingQuery.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
@@ -102,7 +101,7 @@ export function SourceReposSettingsPanel({ isFirst = false }: { isFirst?: boolea
           {removeMutation.error.message}
         </div>
       )}
-    </SettingsSection>
+    </Section>
   );
 }
 

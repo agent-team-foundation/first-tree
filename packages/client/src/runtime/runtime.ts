@@ -1,9 +1,12 @@
+import { join } from "node:path";
+import type { UpdateAttempt } from "@first-tree/shared";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
 import { ClientConnection } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { AccessTokenProvider } from "../sdk.js";
 import { AgentSlot } from "./agent-slot.js";
-import { syncContextTree } from "./bootstrap.js";
 import type { RuntimeConfig } from "./config.js";
+import { createGitMirrorManager, type GitMirrorManager } from "./git-mirror-manager.js";
 import { getHandlerFactory } from "./handler.js";
 import { type UpdateHooks, UpdateManager } from "./update-manager.js";
 
@@ -25,12 +28,7 @@ export type AgentRuntimeOptions = {
    * The UpdateManager only engages when both this and `update` are set.
    */
   currentVersion?: string;
-  /**
-   * Optional `User-Agent` forwarded to every per-agent SDK and to the
-   * Context-Tree config fetch in `start()`. Issue #246: without this trace
-   * backends only see Node's default `User-Agent: node` and can't distinguish
-   * installs / CLI versions when investigating refresh storms or auth failures.
-   */
+  /** Optional `User-Agent` forwarded to every per-agent SDK. */
   userAgent?: string;
   /**
    * Self-update config + command-layer callbacks. Grouped so half-wired
@@ -38,6 +36,13 @@ export type AgentRuntimeOptions = {
    * manager.
    */
   update?: UpdateHooks;
+  /**
+   * Optional accessor for the most recent self-update outcome — see
+   * `ClientConnectionConfig.getLastUpdateAttempt`. Wired by the command
+   * package so the server can surface failed-to-self-update clients in
+   * the admin dashboard.
+   */
+  getLastUpdateAttempt?: () => UpdateAttempt | null;
 };
 
 const DEFAULT_SHUTDOWN_TIMEOUT = 30_000;
@@ -47,9 +52,9 @@ export class AgentRuntime {
   private readonly config: RuntimeConfig;
   private readonly shutdownTimeout: number;
   private readonly clientConnection: ClientConnection;
+  private readonly gitMirrorManager: GitMirrorManager;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly currentVersion: string | undefined;
-  private readonly userAgent: string | undefined;
   private readonly updateHooks: UpdateHooks | undefined;
   private updateManager: UpdateManager | null = null;
   private stopping = false;
@@ -60,7 +65,6 @@ export class AgentRuntime {
     this.shutdownTimeout = options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT;
     this.getAccessToken = options.getAccessToken;
     this.currentVersion = options.currentVersion;
-    this.userAgent = options.userAgent;
     this.updateHooks = options.update;
     this.logger = createLogger("runtime");
 
@@ -70,12 +74,27 @@ export class AgentRuntime {
       sdkVersion: options.currentVersion,
       userAgent: options.userAgent,
       getAccessToken: this.getAccessToken,
+      getLastUpdateAttempt: options.getLastUpdateAttempt,
     });
 
     // Surface transport-level errors (TLS resets, DNS hiccups, WS handshake
     // failures) to operators. ClientConnection's own reconnect loop handles
     // recovery; a process-wide crash guard lives in ClientConnection itself.
     this.clientConnection.on("error", (err) => this.logger.error({ err }, "client connection error"));
+
+    // Single GitMirrorManager per runtime. Its per-URL serial queue is the
+    // only thing preventing concurrent `git worktree add` on the shared bare
+    // mirror's `config` from racing on `config.lock`; one manager per slot
+    // would defeat the lock the moment two agents in the same chat boot
+    // simultaneously.
+    this.gitMirrorManager = createGitMirrorManager({
+      dataDir: DEFAULT_DATA_DIR,
+      log: createLogger("git-mirror"),
+      // Authorise auto-recovery of orphaned worktree leftovers (kill holders +
+      // rm -rf) for any target under the per-agent workspaces tree. Operator
+      // paths outside this root still fail loud — see GitMirrorManagerOptions.
+      hubManagedRoots: [join(DEFAULT_DATA_DIR, "workspaces")],
+    });
 
     for (const [name, agentConfig] of Object.entries(this.config.agents)) {
       const handlerFactory = getHandlerFactory(agentConfig.type);
@@ -89,6 +108,7 @@ export class AgentRuntime {
           session: agentConfig.session,
           concurrency: agentConfig.concurrency,
           clientConnection: this.clientConnection,
+          gitMirrorManager: this.gitMirrorManager,
           runtimeType: agentConfig.type,
         }),
       );
@@ -107,17 +127,19 @@ export class AgentRuntime {
   }
 
   async start(): Promise<void> {
-    const contextTreeLogger = createLogger("context-tree");
-    const contextTreeBinding = await syncContextTree(
-      this.config.server,
-      this.getAccessToken,
-      (msg) => contextTreeLogger.info(msg),
-      this.userAgent,
-    );
-    if (!contextTreeBinding) {
-      this.logger.info(
-        "context tree not configured or sync skipped — agents will start without organizational context",
-      );
+    // Sweep orphan `hub-session-*` branches left over from previous runs
+    // before any slot can race a `git worktree add`. The session-branch
+    // config segments would otherwise accumulate forever — Hub sessions
+    // suspend on idle rather than terminate, so `removeWorktree` (which
+    // deletes branches) only fires on explicit terminate/eviction.
+    // Failures are advisory: log and continue startup.
+    try {
+      const sweep = await this.gitMirrorManager.gcOrphanSessionBranches();
+      if (sweep.scanned > 0) {
+        this.logger.info(sweep, "swept orphan session branches");
+      }
+    } catch (err) {
+      this.logger.warn({ err }, "gcOrphanSessionBranches threw — continuing startup");
     }
 
     // Attach before connecting so the first welcome frame on a stale Client
@@ -145,7 +167,7 @@ export class AgentRuntime {
 
     this.logger.info({ count: this.slots.length }, "starting agents");
 
-    const results = await Promise.allSettled(this.slots.map((slot) => slot.start(contextTreeBinding)));
+    const results = await Promise.allSettled(this.slots.map((slot) => slot.start()));
 
     let failed = 0;
     const failures: Array<{ agentName: string; agentId: string; reason: string }> = [];

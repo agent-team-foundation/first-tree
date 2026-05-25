@@ -1,3 +1,12 @@
+// MIGRATION NOTE (2026-05-18): one-off smoke kept for now. Long-term home
+// is the cross-process E2E framework under `packages/e2e/` — once M2 lands
+// its chat-send + question/answer surface, this script collapses into a
+// `packages/e2e/src/tests/askuser.e2e.test.ts`. Until then it stays as the
+// AskUserQuestion regression net. Do not extend it; add new scenarios to
+// `packages/server/src/__tests__/` (component) or `packages/e2e/src/tests/`
+// (cross-process) instead. Source proposal:
+// `proposals/hub-local-e2e-framework.20260518.md`.
+//
 // End-to-end smoke for the AskUserQuestion roundtrip — runs the real Hub
 // server (with the migrated DB) in-process, drives a real `format=question`
 // message from an "agent" identity, drives a real answer POST from the
@@ -206,6 +215,7 @@ console.log("\n[e2e-askuser] case 1: happy-path roundtrip");
   const result = await sendMessage(app.db, chat.id, peer.uuid, {
     format: "question",
     content: questionContent,
+    source: "api",
   });
   expect(result.message.format === "question", "agent send produced format=question");
 
@@ -298,6 +308,7 @@ console.log("\n[e2e-askuser] case 2: codex runtime defense");
         previewFormat: null,
         allowFreeText: false,
       },
+      source: "api",
     });
   } catch (err) {
     threw = true;
@@ -354,6 +365,7 @@ console.log("\n[e2e-askuser] case 3: archiveSession marks pending question super
       previewFormat: null,
       allowFreeText: false,
     },
+    source: "api",
   });
 
   await app.db
@@ -420,6 +432,7 @@ console.log("\n[e2e-askuser] case 4: claimClient marks pending superseded for un
       previewFormat: null,
       allowFreeText: false,
     },
+    source: "api",
   });
 
   // New owner takes over the client.
@@ -523,6 +536,7 @@ console.log("\n[e2e-askuser] case 6: agent inbox.pull surfaces question_answer e
       previewFormat: null,
       allowFreeText: false,
     },
+    source: "api",
   });
 
   await inject("POST", `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`, ctx.accessToken, {
@@ -530,7 +544,8 @@ console.log("\n[e2e-askuser] case 6: agent inbox.pull surfaces question_answer e
   });
 
   // The peer agent's inbox should now hold the answer message — exactly
-  // what SessionManager.dispatch would receive via WS push or HTTP poll.
+  // what SessionManager.dispatch would receive via the `inbox:deliver` WS
+  // push frame.
   const polled = await pollInbox(app.db, peer.inboxId, 10);
   const answerEntry = polled.find((e) => e.message?.format === "question_answer");
   expect(answerEntry !== undefined, "agent inbox poll returns the question_answer entry");

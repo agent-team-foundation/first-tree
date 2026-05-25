@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Scan"
+  short_description: "Operate the GitHub scan daemon"
+  default_prompt: "Use $github-scan to operate the first-tree GitHub scan daemon, inspect runtime health, and debug polling or statusline issues."

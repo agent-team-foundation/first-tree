@@ -1,22 +1,28 @@
-/** Service-layer seam for pushing payloads to admin WebSocket sockets. */
+/**
+ * Service-layer seam for pushing payloads to admin WebSocket sockets.
+ *
+ * `registerAdminBroadcaster` wires the per-instance fanout to admin sockets
+ * attached to THIS server process (called by orgWsRoutes once the admin route
+ * is up). Producers call `broadcastToAdmins`.
+ */
 
 export type AdminBroadcastPayload = Record<string, unknown>;
 export type AdminBroadcaster = (payload: AdminBroadcastPayload) => void;
 
-let registered: AdminBroadcaster | null = null;
+let localBroadcaster: AdminBroadcaster | null = null;
 
 export function registerAdminBroadcaster(fn: AdminBroadcaster): void {
-  registered = fn;
+  localBroadcaster = fn;
 }
 
 export function resetAdminBroadcaster(): void {
-  registered = null;
+  localBroadcaster = null;
 }
 
 export function broadcastToAdmins(payload: AdminBroadcastPayload): void {
-  if (!registered) return;
+  if (!localBroadcaster) return;
   try {
-    registered(payload);
+    localBroadcaster(payload);
   } catch {
     // fire-and-forget
   }

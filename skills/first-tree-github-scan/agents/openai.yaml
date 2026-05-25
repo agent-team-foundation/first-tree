@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree GitHub Scan"
+  short_description: "Handle GitHub scan notifications"
+  default_prompt: "Use $first-tree-github-scan to decide how this GitHub notification should be tagged, commented, escalated, or handed off."

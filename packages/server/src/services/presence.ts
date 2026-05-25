@@ -1,4 +1,4 @@
-import type { RuntimeState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { RuntimeState } from "@first-tree/shared";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";

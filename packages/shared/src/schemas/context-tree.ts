@@ -121,6 +121,54 @@ export const contextTreeSummarySchema = z.object({
 });
 export type ContextTreeSummary = z.infer<typeof contextTreeSummarySchema>;
 
+export const contextTreeUsageEventSchema = z.object({
+  id: z.string(),
+  agentId: z.string(),
+  agentName: z.string(),
+  // Manager-selected avatar color token ("hue-0".."hue-7"). NULL means
+  // "auto" — the web client falls back to a deterministic hash of agentId.
+  // Mirrors the agents.avatar_color_token column so the feed can render
+  // the same avatar disc the rest of the UI uses.
+  agentAvatarColorToken: z.string().nullable(),
+  // chatId and chatTitle are exposed for every event whose chat lives in
+  // the same organization as the caller — Context Tab is an org-wide
+  // transparency surface where members see how the tree is being used,
+  // including the chat each session belongs to. Chat *content* remains
+  // private (requireChatAccess still gates the chat-detail route);
+  // only the topic label is shared.
+  //
+  // Both fields mask to null together when the chat does not belong to
+  // this organization (a defensive guard against stale / forged
+  // cross-org session_events.chat_id values — chatId itself is
+  // identifying info, so it is masked alongside chatTitle).
+  chatId: z.string().nullable(),
+  chatTitle: z.string().nullable(),
+  // Tree-root-relative path of the node the agent read (e.g.
+  // `members/Gandy2025/NODE.md`), surfaced from the session event payload so
+  // the web feed can show *which* node was consulted. Null for pre-P0 events
+  // (recorded before per-read node tracking) or reads that could not be
+  // resolved to a node path.
+  nodePath: z.string().nullable(),
+  // Whether the caller may actually open this chat — true iff they satisfy
+  // the same membership rule as `requireChatAccess` (their human agent has a
+  // chat_membership row, i.e. speaker OR watcher, OR they manage a speaker in
+  // the chat). The feed shares chatId/chatTitle org-wide for transparency, but
+  // only a viewer who can access the chat should get a clickable deep link;
+  // others render it as inert text. Always false for cross-org events (where
+  // chatId is masked to null) and computed fresh per request (never stored).
+  viewerCanAccess: z.boolean(),
+  createdAt: z.string(),
+});
+export type ContextTreeUsageEvent = z.infer<typeof contextTreeUsageEventSchema>;
+
+export const contextTreeUsageSummarySchema = z.object({
+  windowDays: z.number().int().positive(),
+  agentCount: z.number().int().nonnegative(),
+  usageCount: z.number().int().nonnegative(),
+  recentEvents: z.array(contextTreeUsageEventSchema),
+});
+export type ContextTreeUsageSummary = z.infer<typeof contextTreeUsageSummarySchema>;
+
 export const contextTreeSnapshotSchema = z.object({
   repo: z.string().nullable(),
   branch: z.string().nullable(),
@@ -129,6 +177,7 @@ export const contextTreeSnapshotSchema = z.object({
   snapshotStatus: contextTreeSnapshotStatusSchema,
   contextStatus: contextTreeStatusSchema,
   summary: contextTreeSummarySchema,
+  usage: contextTreeUsageSummarySchema,
   updates: z.array(contextTreeUpdateSchema),
   nodes: z.array(contextTreeNodeSchema),
   edges: z.array(contextTreeEdgeSchema),

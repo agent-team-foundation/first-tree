@@ -281,6 +281,69 @@
       "when": 1779148800000,
       "tag": "0039_drop_chat_participants_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1779235200000,
+      "tag": "0040_chat_user_state_engagement",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1779321600000,
+      "tag": "0041_notifications_dedup_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1779408000000,
+      "tag": "0042_notifications_drop_legacy_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1779494400000,
+      "tag": "0043_onboarding_completed_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1779580800000,
+      "tag": "0044_agent_avatar_color",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1779667200000,
+      "tag": "0045_agent_avatar_image",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1779753600000,
+      "tag": "0046_session_events_context_tree_usage_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1779840000000,
+      "tag": "0047_v2_messages_source_required",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1779926400000,
+      "tag": "0048_github_entity_state",
+      "breakpoints": true
     }
   ]
 }

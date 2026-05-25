@@ -4,9 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { ContextTreeChange, ContextTreeNode } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ContextTreeChange, ContextTreeNode } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { contextTreeGithubTokenForRepo } from "../api/context-tree-snapshot.js";
 import { contextTreeSnapshotTestInternals, getContextTreeSnapshot } from "../services/context-tree-snapshot.js";
 
 const execFileAsync = promisify(execFile);
@@ -54,20 +53,6 @@ async function commitAllAt(cwd: string, message: string): Promise<string> {
 }
 
 describe("Context Tree snapshot service", () => {
-  it("only applies the deployment GitHub token to allowlisted repos", () => {
-    const syncConfig = {
-      githubToken: "ghp_secret",
-      githubTokenRepos: "agent-team-foundation/first-tree-context, Example/Other.git",
-    };
-
-    expect(
-      contextTreeGithubTokenForRepo("https://github.com/agent-team-foundation/first-tree-context.git", syncConfig),
-    ).toBe("ghp_secret");
-    expect(contextTreeGithubTokenForRepo("https://github.com/example/other", syncConfig)).toBe("ghp_secret");
-    expect(contextTreeGithubTokenForRepo("https://github.com/example/not-allowed", syncConfig)).toBeUndefined();
-    expect(contextTreeGithubTokenForRepo("https://user:secret@github.com/example/other", syncConfig)).toBeUndefined();
-  });
-
   it("parses fallback frontmatter lists", () => {
     const parsed = contextTreeSnapshotTestInternals.parseMarkdownFallback(`---
 title: "Client Runtime"
@@ -338,9 +323,11 @@ Body`);
         "fatal: could not read from https://user:secret@github.com/example/private.git",
       ),
     ).toBe("fatal: could not read from https://[redacted]@github.com/example/private.git");
-    expect(contextTreeSnapshotTestInternals.redactSecret("fatal: token ghp_secret123 failed")).toBe(
-      "fatal: token [redacted] failed",
-    );
+    for (const prefix of ["ghp", "ghs", "ghu", "gho", "ghr"] as const) {
+      expect(contextTreeSnapshotTestInternals.redactSecret(`fatal: token ${prefix}_secret123 failed`)).toBe(
+        "fatal: token [redacted] failed",
+      );
+    }
     expect(contextTreeSnapshotTestInternals.redactSecret("fatal: token github_pat_secret123 failed")).toBe(
       "fatal: token [redacted] failed",
     );

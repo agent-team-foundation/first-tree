@@ -6,10 +6,19 @@ import { addParticipant, createChat, ensureParticipant, joinChat } from "../serv
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * Covers the direct → group upgrade rule introduced by the proposal: when a
- * direct chat gains a third participant, its type flips to "group" and all
- * non-human agent participants become `mention_only`. Humans stay `full`
- * (they're still in supervise-all mode).
+ * Validates `addChatParticipants` invariants under v2:
+ *
+ *   - `chat_membership.mode` is decision-inert; every speaker row written
+ *     through `createChat` / `addParticipant` / `ensureParticipant` /
+ *     `joinChat` lands as the constant `'mention_only'`. There is no
+ *     longer a chat-type re-grade pass — `chats.type` is locked to
+ *     `'group'` (first-tree-context PR #465) and the v1 size=2→3
+ *     `regradeNonHumansToMentionOnly` helper has been retired.
+ *
+ * The `describe` label "chat upgrade — direct to group" is kept to
+ * preserve git history and downstream test-output greppability, but the
+ * tests assert v2 semantics (mention_only across the board, no
+ * re-grade). See proposals/hub-chat-message-v2-simplify-mode.20260520.md.
  */
 describe("chat upgrade — direct to group", () => {
   const getApp = useTestApp();
@@ -37,7 +46,7 @@ describe("chat upgrade — direct to group", () => {
     const { agent: a3 } = await createTestAgent(app, { name: `up-a3-${uid}` });
 
     const chat = await createChat(app.db, a1.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
     });
 
@@ -85,16 +94,18 @@ describe("chat upgrade — direct to group", () => {
     await app.db.update(agentsTable).set({ managerId: a1.memberId }).where(eq(agentsTable.uuid, a2.uuid));
 
     const chat = await createChat(app.db, a1.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
     });
 
     await joinChat(app.db, chat.id, a1.memberId, human.uuid);
 
     expect(await loadChatType(chat.id)).toBe("group");
+    // v2: `chat_membership.mode` is decision-inert; every speaker row is
+    // written as the constant `'mention_only'`.
     expect((await loadParticipant(chat.id, a1.agent.uuid))?.mode).toBe("mention_only");
     expect((await loadParticipant(chat.id, a2.uuid))?.mode).toBe("mention_only");
-    expect((await loadParticipant(chat.id, human.uuid))?.mode).toBe("full");
+    expect((await loadParticipant(chat.id, human.uuid))?.mode).toBe("mention_only");
   });
 
   it("is a no-op on a chat that is already a group (doesn't re-flip existing participant modes)", async () => {
@@ -144,16 +155,17 @@ describe("chat upgrade — direct to group", () => {
     const { agent: human } = await createTestAgent(app, { name: `ensure-h-${uid}`, type: "human" });
 
     const chat = await createChat(app.db, a1.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [a2.uuid],
     });
 
     await ensureParticipant(app.db, chat.id, human.uuid);
 
     expect(await loadChatType(chat.id)).toBe("group");
+    // v2: all speakers written as the constant `'mention_only'`.
     expect((await loadParticipant(chat.id, a1.agent.uuid))?.mode).toBe("mention_only");
     expect((await loadParticipant(chat.id, a2.uuid))?.mode).toBe("mention_only");
-    expect((await loadParticipant(chat.id, human.uuid))?.mode).toBe("full");
+    expect((await loadParticipant(chat.id, human.uuid))?.mode).toBe("mention_only");
   });
 
   it("is idempotent — ensureParticipant for an existing participant does not re-flip modes", async () => {

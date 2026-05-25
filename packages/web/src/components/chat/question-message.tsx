@@ -5,10 +5,11 @@ import {
   type QuestionPreviewFormat,
   questionAnswerMessageContentSchema,
   questionMessageContentSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { submitQuestionAnswer } from "../../api/questions.js";
+import { useAutoResizeTextarea } from "../../lib/use-autoresize-textarea.js";
 import { cn } from "../../lib/utils.js";
 import { Button } from "../ui/button.js";
 import { OptionCard } from "./option-card.js";
@@ -29,12 +30,10 @@ import { OptionCard } from "./option-card.js";
  */
 export type QuestionStatus = "pending" | "answered" | "superseded";
 
-const FREE_TEXT_SENTINEL = "__free_text__";
-
 type AnswerSelection = {
-  /** For multiSelect: ordered set of selected labels. For single-select: at most one entry. */
+  /** Selected option labels. Never contains a free-text marker — the textarea is the source of truth for free text. */
   picked: string[];
-  /** When the "Other..." sentinel is selected, this is the user's typed answer. */
+  /** User's typed answer. Non-empty means free-text overrides any picked options. */
   freeText: string;
 };
 
@@ -43,11 +42,10 @@ function emptySelection(): AnswerSelection {
 }
 
 function selectionToAnswer(question: QuestionItem, sel: AnswerSelection): string | null {
-  // "Other..." takes precedence — typed text is the literal answer.
-  if (sel.picked.includes(FREE_TEXT_SENTINEL)) {
-    const trimmed = sel.freeText.trim();
-    return trimmed.length === 0 ? null : trimmed;
-  }
+  // Typing into the free-text field is the user's implicit "use my own
+  // answer" signal — it always overrides picked options.
+  const trimmed = sel.freeText.trim();
+  if (trimmed.length > 0) return trimmed;
   if (sel.picked.length === 0) return null;
   if (!question.multiSelect) return sel.picked[0] ?? null;
   return sel.picked.join(", ");
@@ -106,8 +104,7 @@ export function QuestionMessage({
       if (matched.length === tokens.length && matched.length > 0) {
         next[q.question] = { picked: matched, freeText: "" };
       } else {
-        // Free-text path — no matching option label.
-        next[q.question] = { picked: [FREE_TEXT_SENTINEL], freeText: recorded };
+        next[q.question] = { picked: [], freeText: recorded };
       }
     }
     setSelections(next);
@@ -130,6 +127,11 @@ export function QuestionMessage({
   });
 
   const onSubmit = useCallback(() => {
+    // Guard against duplicate submissions from any trigger path — the submit
+    // button is `disabled` while pending, but the Cmd/Ctrl+Enter shortcut
+    // inside the free-text field reaches us directly and would otherwise fire
+    // concurrent POSTs before the answered refetch lands.
+    if (mutation.isPending) return;
     setSubmitError(null);
     const answers: Record<string, string> = {};
     for (const q of content.questions) {
@@ -196,6 +198,7 @@ export function QuestionMessage({
                 [q.question]: next,
               }))
             }
+            onSubmit={onSubmit}
           />
         ))}
       </div>
@@ -203,7 +206,7 @@ export function QuestionMessage({
       {isPending ? (
         <div className="flex items-center justify-end" style={{ gap: "var(--sp-2)" }}>
           {submitError ? (
-            <span className="text-caption" style={{ color: "var(--state-danger)" }}>
+            <span className="text-caption" style={{ color: "var(--state-error)" }}>
               {submitError}
             </span>
           ) : null}
@@ -224,6 +227,7 @@ function QuestionBlock({
   disabled,
   showAnsweredCheck,
   onChange,
+  onSubmit,
 }: {
   question: QuestionItem;
   previewFormat: QuestionPreviewFormat;
@@ -232,27 +236,36 @@ function QuestionBlock({
   disabled: boolean;
   showAnsweredCheck: boolean;
   onChange: (next: AnswerSelection) => void;
+  onSubmit: () => void;
 }) {
-  // Programmatic focus is user-initiated (revealed only after they click
-  // "Other…"), so it's accessible — biome's `noAutofocus` rule blocks the
-  // declarative `autoFocus` attribute, this useEffect+ref achieves the
-  // same intent without tripping it.
-  const freeTextRef = useRef<HTMLTextAreaElement>(null);
-  const isFreeTextPicked = selection.picked.includes(FREE_TEXT_SENTINEL);
-  useEffect(() => {
-    if (isFreeTextPicked && !disabled) freeTextRef.current?.focus();
-  }, [isFreeTextPicked, disabled]);
-
   const togglePick = useCallback(
     (label: string) => {
       const isPicked = selection.picked.includes(label);
-      let nextPicked: string[];
       if (question.multiSelect) {
-        nextPicked = isPicked ? selection.picked.filter((l) => l !== label) : [...selection.picked, label];
+        // Toggle just this label. Any free-text draft is preserved — in
+        // multi-select mode, free-text and picked options coexist (free-text
+        // wins at submit time).
+        const nextPicked = isPicked ? selection.picked.filter((l) => l !== label) : [...selection.picked, label];
+        onChange({ ...selection, picked: nextPicked });
       } else {
-        nextPicked = isPicked ? [] : [label];
+        // Picking an option is the user's explicit "use this answer" — discard
+        // any free-text draft so the picked option becomes the real submission.
+        const nextPicked = isPicked ? [] : [label];
+        onChange({ picked: nextPicked, freeText: "" });
       }
-      onChange({ ...selection, picked: nextPicked });
+    },
+    [question.multiSelect, selection, onChange],
+  );
+
+  const onFreeTextChange = useCallback(
+    (value: string) => {
+      if (question.multiSelect) {
+        onChange({ ...selection, freeText: value });
+      } else {
+        // Typing custom text means "I want a custom answer instead" — drop
+        // any previously picked option so the UI matches what we'll submit.
+        onChange({ picked: [], freeText: value });
+      }
     },
     [question.multiSelect, selection, onChange],
   );
@@ -285,75 +298,100 @@ function QuestionBlock({
           />
         ))}
         {allowFreeText ? (
-          <button
-            type="button"
+          <FreeTextField
+            value={selection.freeText}
             disabled={disabled}
-            onClick={
-              disabled
-                ? undefined
-                : () =>
-                    onChange({
-                      picked: question.multiSelect
-                        ? isFreeTextPicked
-                          ? selection.picked.filter((l) => l !== FREE_TEXT_SENTINEL)
-                          : [...selection.picked, FREE_TEXT_SENTINEL]
-                        : isFreeTextPicked
-                          ? []
-                          : [FREE_TEXT_SENTINEL],
-                      freeText: selection.freeText,
-                    })
-            }
-            className={cn(
-              "w-full text-left rounded-[var(--radius-input)] border transition-colors",
-              "flex flex-col",
-              disabled ? "cursor-default opacity-70" : "cursor-pointer hover:bg-[color:var(--bg-hover)]",
-            )}
-            style={{
-              padding: "var(--sp-2_5) var(--sp-3)",
-              gap: "var(--sp-1_5)",
-              borderColor: isFreeTextPicked ? "var(--accent)" : "var(--border)",
-              background: isFreeTextPicked ? "var(--bg-active)" : "var(--bg-raised)",
-            }}
-          >
-            <span
-              className="mono text-body font-semibold"
-              style={{ color: isFreeTextPicked ? "var(--accent)" : "var(--fg-3)" }}
-            >
-              Other…
-            </span>
-            <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-              Type a free-text answer.
-            </span>
-            {isFreeTextPicked ? (
-              <textarea
-                ref={freeTextRef}
-                value={selection.freeText}
-                disabled={disabled}
-                onChange={(e) => onChange({ ...selection, freeText: e.target.value })}
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  // Enter inserts a newline; Cmd/Ctrl-Enter is reserved for the
-                  // submit button so the user can't accidentally submit a
-                  // half-typed answer by pressing Enter once.
-                  if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
-                    // Default behaviour (newline) — but stop click bubbling.
-                    e.stopPropagation();
-                  }
-                }}
-                rows={2}
-                className="rounded-[var(--radius-input)] border text-body"
-                style={{
-                  padding: "var(--sp-2)",
-                  borderColor: "var(--border)",
-                  background: "var(--bg-sunken)",
-                  color: "var(--fg)",
-                  resize: "vertical",
-                }}
-              />
-            ) : null}
-          </button>
+            isMultiSelect={question.multiSelect}
+            hasPickedOptions={selection.picked.length > 0}
+            questionText={question.question}
+            onChange={onFreeTextChange}
+            onSubmit={onSubmit}
+            showAnsweredCheck={showAnsweredCheck}
+          />
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function FreeTextField({
+  value,
+  disabled,
+  isMultiSelect,
+  hasPickedOptions,
+  questionText,
+  onChange,
+  onSubmit,
+  showAnsweredCheck,
+}: {
+  value: string;
+  disabled: boolean;
+  isMultiSelect: boolean;
+  hasPickedOptions: boolean;
+  /** The question this textarea answers — used for the accessible name so screen readers can tell which question a free-text field belongs to. */
+  questionText: string;
+  onChange: (next: string) => void;
+  onSubmit: () => void;
+  showAnsweredCheck: boolean;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useAutoResizeTextarea(textareaRef, value);
+
+  const isActive = value.trim().length > 0;
+
+  return (
+    <div
+      className="rounded-[var(--radius-input)] border flex flex-col"
+      style={{
+        padding: "var(--sp-2_5) var(--sp-3)",
+        gap: "var(--sp-1_5)",
+        borderColor: isActive ? "var(--accent)" : "var(--border)",
+        background: isActive ? "var(--bg-active)" : "var(--bg-raised)",
+        opacity: disabled ? 0.7 : 1,
+      }}
+    >
+      <div className="flex items-baseline" style={{ gap: "var(--sp-2)" }}>
+        <span className="mono text-body font-semibold" style={{ color: isActive ? "var(--accent)" : "var(--fg-3)" }}>
+          Write your own
+        </span>
+        {showAnsweredCheck && isActive ? (
+          <span className="mono text-caption" style={{ color: "var(--accent)" }} title="Selected">
+            ✓
+          </span>
+        ) : null}
+        {isMultiSelect && isActive && hasPickedOptions ? (
+          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+            (overrides picked options)
+          </span>
+        ) : null}
+      </div>
+      <textarea
+        ref={textareaRef}
+        value={value}
+        disabled={disabled}
+        placeholder="Type your own answer…"
+        aria-label={`Write your own answer for: ${questionText}`}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          // Cmd/Ctrl+Enter submits — plain Enter inserts a newline so users
+          // can write multi-line answers without accidentally firing the form.
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
+        rows={2}
+        className="rounded-[var(--radius-input)] border text-body w-full"
+        style={{
+          padding: "var(--sp-2)",
+          borderColor: "var(--border)",
+          background: "var(--bg-sunken)",
+          color: "var(--fg)",
+          resize: "none",
+          maxHeight: "15rem",
+          overflowY: "auto",
+        }}
+      />
     </div>
   );
 }

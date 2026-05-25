@@ -13,8 +13,9 @@ import type {
   ContextTreeSnapshot,
   ContextTreeSummary,
   ContextTreeUpdate,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
+  ContextTreeUsageSummary,
+} from "@first-tree/shared";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
 import matter from "gray-matter";
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +46,10 @@ const WINDOW_DAYS: Record<ContextTreeSnapshotWindow, number> = {
   "7d": 7,
   "30d": 30,
 };
+
+export function contextTreeSnapshotWindowDays(window: ContextTreeSnapshotWindow): number {
+  return WINDOW_DAYS[window];
+}
 
 type ParsedMarkdown = {
   content: string;
@@ -179,6 +184,7 @@ export async function getContextTreeSnapshot(
       snapshotStatus: statusWarning?.stale ? "stale" : "active",
       contextStatus: contextStatus(statusWarning),
       summary,
+      usage: emptyUsageSummary(window),
       updates,
       nodes: nodesWithGhosts,
       edges: tree.edges,
@@ -275,6 +281,27 @@ function normalizeRemoteRepoUrl(value: string): string {
     return `https://github.com/${value}`;
   }
   return value;
+}
+
+/**
+ * Whether this binding actually drives a GitHub-hosted remote fetch — the
+ * only case where minting a GitHub App installation token is meaningful.
+ *
+ * Returns false when:
+ *  - `localPath` is set (sync code short-circuits to the local checkout
+ *    before ever looking at `repo`)
+ *  - `repo` is missing
+ *  - `repo` is a file:// URL, a non-GitHub HTTPS URL, or otherwise
+ *    unparseable
+ *
+ * Used by the snapshot routes to gate the "install the GitHub App"
+ * guidance — without this gate, every unavailable snapshot (missing repo,
+ * bad branch, …) gets a misleading App-install hint appended.
+ */
+export function isGithubRemoteBinding(binding: { repo?: string; localPath?: string }): boolean {
+  if (binding.localPath && binding.localPath.trim().length > 0) return false;
+  if (!binding.repo) return false;
+  return isGithubHttpsRepo(normalizeRemoteRepoUrl(binding.repo));
 }
 
 function managedContextTreeCacheRoot(): string {
@@ -454,6 +481,10 @@ function withSnapshotStatus(
   };
 }
 
+function emptyUsageSummary(window: ContextTreeSnapshotWindow): ContextTreeUsageSummary {
+  return { windowDays: WINDOW_DAYS[window], agentCount: 0, usageCount: 0, recentEvents: [] };
+}
+
 function isSafeBranchName(branch: string): boolean {
   if (branch.startsWith("-")) return false;
   if (branch.includes("..") || branch.includes("@{") || branch.includes("\\")) return false;
@@ -468,7 +499,7 @@ function errorMessage(error: unknown): string {
 function redactSecret(message: string): string {
   return message
     .replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@")
-    .replace(/\bghp_[A-Za-z0-9_]+/g, "[redacted]")
+    .replace(/\b(?:ghp|ghs|ghu|gho|ghr)_[A-Za-z0-9_]+/g, "[redacted]")
     .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "[redacted]");
 }
 
@@ -485,6 +516,7 @@ function unavailableSnapshot(repo: string | null, branch: string | null, detail:
       severity: "error",
     },
     summary: { addedCount: 0, editedCount: 0, removedCount: 0, changedNodeCount: 0 },
+    usage: emptyUsageSummary(CONTEXT_TREE_SNAPSHOT_WINDOWS.SEVEN_DAYS),
     updates: [],
     nodes: [],
     edges: [],

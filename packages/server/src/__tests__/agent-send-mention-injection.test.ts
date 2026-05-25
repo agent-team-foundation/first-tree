@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { messages } from "../db/schema/messages.js";
 import { createChat } from "../services/chat.js";
-import { sendMessage, sendToAgent } from "../services/message.js";
+import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -53,7 +53,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
     const sender = await createTestAgent(app, { name: `dt-s-${uid}` });
     const { agent: peer } = await createTestAgent(app, { name: `dt-p-${uid}` });
     const chat = await createChat(app.db, sender.agent.uuid, {
-      type: "direct",
+      type: "group",
       participantIds: [peer.uuid],
     });
     return { sender, peer, chat };
@@ -70,7 +70,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           app.db,
           chat.id,
           sender.agent.uuid,
-          { format: "text", content: "broadcast" },
+          { source: "api", format: "text", content: "broadcast" },
           { enforceGroupMention: true },
         ),
       ).rejects.toThrow(/explicit @mention/i);
@@ -84,7 +84,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           app.db,
           chat.id,
           sender.agent.uuid,
-          { format: "text", content: "talking to myself", metadata: { mentions: [sender.agent.uuid] } },
+          { source: "api", format: "text", content: "talking to myself", metadata: { mentions: [sender.agent.uuid] } },
           { enforceGroupMention: true },
         ),
       ).rejects.toThrow(/explicit @mention/i);
@@ -98,7 +98,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           app.db,
           chat.id,
           sender.agent.uuid,
-          { format: "text", content: "@nobody-by-this-name hi" },
+          { source: "api", format: "text", content: "@nobody-by-this-name hi" },
           { enforceGroupMention: true },
         ),
       ).rejects.toThrow(/explicit @mention/i);
@@ -115,7 +115,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           app.db,
           chat.id,
           sender.agent.uuid,
-          { format: "text", content: `look:\n\`\`\`\n@${peerA.name} in code\n\`\`\`` },
+          { source: "api", format: "text", content: `look:\n\`\`\`\n@${peerA.name} in code\n\`\`\`` },
           { enforceGroupMention: true },
         ),
       ).rejects.toThrow(/explicit @mention/i);
@@ -129,7 +129,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: `@${peerA.name} status?` },
+        { source: "api", format: "text", content: `@${peerA.name} status?` },
         { enforceGroupMention: true },
       );
       expect(result.message).toBeDefined();
@@ -143,13 +143,18 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "ping", metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "text", content: "ping", metadata: { mentions: [peerA.uuid] } },
         { enforceGroupMention: true },
       );
       expect(result.message).toBeDefined();
     });
 
-    it("accepts when both content and metadata have mentions (additive merge)", async () => {
+    it("explicit metadata.mentions overrides content-extracted mentions (explicit-wins)", async () => {
+      // When the caller declares `metadata.mentions`, the server trusts
+      // that list and skips content `@<name>` extraction so a narrative
+      // `@<peer>` in the body can never silently widen the recipient set.
+      // To wake both peers, the caller must list both uuids in
+      // `metadata.mentions` (or declare via `receiverNames`).
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, peerB, chat } = await setupGroup(uid);
@@ -157,11 +162,11 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: `@${peerA.name} ping`, metadata: { mentions: [peerB.uuid] } },
+        { source: "api", format: "text", content: `@${peerA.name} ping`, metadata: { mentions: [peerB.uuid] } },
         { enforceGroupMention: true },
       );
       const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
-      expect(meta.mentions).toEqual(expect.arrayContaining([peerA.uuid, peerB.uuid]));
+      expect(meta.mentions).toEqual([peerB.uuid]);
     });
 
     it("does NOT enforce on direct chats even when the flag is on", async () => {
@@ -173,7 +178,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "hi" },
+        { source: "api", format: "text", content: "hi" },
         { enforceGroupMention: true },
       );
       expect(result.message).toBeDefined();
@@ -183,6 +188,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
       const app = getApp();
       const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
       const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+        source: "api",
         format: "text",
         content: "system broadcast",
       });
@@ -201,7 +207,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "今天是 2026-04-27。", metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "text", content: "今天是 2026-04-27。", metadata: { mentions: [peerA.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} 今天是 2026-04-27。`);
@@ -215,7 +221,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: `@${peerA.name} got it`, metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "text", content: `@${peerA.name} got it`, metadata: { mentions: [peerA.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} got it`);
@@ -233,7 +239,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: `@${upper} got it`, metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "text", content: `@${upper} got it`, metadata: { mentions: [peerA.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${upper} got it`);
@@ -247,7 +253,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "done", metadata: { mentions: [peerA.uuid, peerB.uuid] } },
+        { source: "api", format: "text", content: "done", metadata: { mentions: [peerA.uuid, peerB.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} @${peerB.name} done`);
@@ -262,6 +268,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         chat.id,
         sender.agent.uuid,
         {
+          source: "api",
           format: "text",
           content: `@${peerA.name} done`,
           metadata: { mentions: [peerA.uuid, peerB.uuid] },
@@ -279,7 +286,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "ok", metadata: { mentions: [sender.agent.uuid, peerA.uuid] } },
+        { source: "api", format: "text", content: "ok", metadata: { mentions: [sender.agent.uuid, peerA.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} ok`);
@@ -298,7 +305,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "hi", metadata: { mentions: [peerA.uuid, peerB.uuid] } },
+        { source: "api", format: "text", content: "hi", metadata: { mentions: [peerA.uuid, peerB.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerB.name} hi`);
@@ -313,7 +320,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "report", metadata: { mentions: [ghostUuid, peerA.uuid] } },
+        { source: "api", format: "text", content: "report", metadata: { mentions: [ghostUuid, peerA.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} report`);
@@ -329,7 +336,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "", metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "text", content: "", metadata: { mentions: [peerA.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name}`);
@@ -344,7 +351,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "card", content: card, metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "card", content: card, metadata: { mentions: [peerA.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toEqual(card);
@@ -355,6 +362,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
       const result = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+        source: "api",
         format: "text",
         content: "verbatim please",
         metadata: { mentions: [peerA.uuid] },
@@ -374,7 +382,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: codeBody, metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "text", content: codeBody, metadata: { mentions: [peerA.uuid] } },
         { normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} ${codeBody}`);
@@ -392,7 +400,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           app.db,
           chat.id,
           sender.agent.uuid,
-          { format: "text", content: "hi" },
+          { source: "api", format: "text", content: "hi" },
           { enforceGroupMention: true, normalizeMentionsInContent: true },
         ),
       ).rejects.toThrow(/explicit @mention/i);
@@ -408,7 +416,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "今天是 2026-04-27。", metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "text", content: "今天是 2026-04-27。", metadata: { mentions: [peerA.uuid] } },
         { enforceGroupMention: true, normalizeMentionsInContent: true },
       );
       expect(result.message.content).toBe(`@${peerA.name} 今天是 2026-04-27。`);
@@ -524,75 +532,11 @@ describe("group-chat mention enforcement + content normalisation", () => {
     });
   });
 
-  // ─── Integration: sendToAgent (CLI `agent send <name>`) ────────────────
-
-  describe("integration — sendToAgent unified through step 2c", () => {
-    it("prepends @<name> via the unified normalisation path", async () => {
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `dm-s-${uid}` });
-      const target = await createTestAgent(app, { name: `dm-t-${uid}` });
-      if (!target.agent.name) throw new Error("target name missing");
-
-      const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
-        format: "text",
-        content: "ping",
-      });
-      expect(result.message.content).toBe(`@${target.agent.name} ping`);
-      const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
-      expect(meta.mentions).toEqual([target.agent.uuid]);
-    });
-
-    it("does not double-prepend when the caller already wrote @<name>", async () => {
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `dm2-s-${uid}` });
-      const target = await createTestAgent(app, { name: `dm2-t-${uid}` });
-      if (!target.agent.name) throw new Error("target name missing");
-
-      const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
-        format: "text",
-        content: `@${target.agent.name} please review`,
-      });
-      expect(result.message.content).toBe(`@${target.agent.name} please review`);
-    });
-
-    it("leaves non-string content unchanged but still records the target uuid in mentions", async () => {
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `dm3-s-${uid}` });
-      const target = await createTestAgent(app, { name: `dm3-t-${uid}` });
-      if (!target.agent.name) throw new Error("target name missing");
-
-      const card = { kind: "card", title: "approval" };
-      const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
-        format: "card",
-        content: card,
-      });
-      expect(result.message.content).toEqual(card);
-      const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
-      expect(meta.mentions).toEqual([target.agent.uuid]);
-    });
-
-    it("merges with caller-provided metadata.mentions (additive, not replacing)", async () => {
-      // If a future agent runtime feeds an extra mention through `agent send`,
-      // we must not overwrite it with just the target.
-      const app = getApp();
-      const uid = crypto.randomUUID().slice(0, 6);
-      const sender = await createTestAgent(app, { name: `dm4-s-${uid}` });
-      const target = await createTestAgent(app, { name: `dm4-t-${uid}` });
-      if (!target.agent.name) throw new Error("target name missing");
-      const ghost = "00000000-0000-0000-0000-deadbeefcafe";
-
-      const result = await sendToAgent(app.db, sender.agent.uuid, target.agent.name, {
-        format: "text",
-        content: "ping",
-        metadata: { mentions: [ghost] },
-      });
-      const meta = (result.message.metadata ?? {}) as { mentions?: unknown };
-      expect(meta.mentions).toEqual(expect.arrayContaining([ghost, target.agent.uuid]));
-    });
-  });
+  // sendToAgent is gone — the by-name routing primitive has been retired
+  // (see first-tree-context PR #281). CLI `chat send <name>` now goes
+  // through `POST /api/v1/agent/chats/:chatId/messages` with the
+  // recipient name declared in `receiverNames`. Mention injection on the
+  // sendMessage path is exercised by the group/direct-chat suites above.
 
   // ─── Cross-cutting: persisted state matches API response ───────────────
 
@@ -605,7 +549,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         app.db,
         chat.id,
         sender.agent.uuid,
-        { format: "text", content: "ok", metadata: { mentions: [peerA.uuid] } },
+        { source: "api", format: "text", content: "ok", metadata: { mentions: [peerA.uuid] } },
         { enforceGroupMention: true, normalizeMentionsInContent: true },
       );
       const [row] = await app.db.select().from(messages).where(eq(messages.id, result.message.id)).limit(1);
@@ -626,7 +570,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           app.db,
           chat.id,
           sender.agent.uuid,
-          { format: "text", content: "broadcast" },
+          { source: "api", format: "text", content: "broadcast" },
           { enforceGroupMention: true },
         ),
       ).rejects.toThrow();

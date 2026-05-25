@@ -2,19 +2,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { getContextTreeSetting, putContextTreeSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
+import { Section } from "../components/ui/section.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
-import { SettingsSection } from "../components/ui/settings-section.js";
 
 /**
  * Admin-only section for the per-org Context Tree binding (repo / branch).
- * Replaces the legacy global FIRST_TREE_HUB_CONTEXT_TREE_* env vars; each
+ * Replaces the legacy global FIRST_TREE_CONTEXT_TREE_* env vars; each
  * org now points at its own tree.
  *
  * Changes apply to *new* agent sessions: client agents fetch the latest
  * binding at startup, existing sessions keep the value they were spun up
  * with. Admins should advise members to restart agents after editing.
  */
-export function ContextTreeSettingsPanel({ isFirst = false }: { isFirst?: boolean }) {
+export function ContextTreeSettingsPanel() {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
 
@@ -55,10 +55,9 @@ export function ContextTreeSettingsPanel({ isFirst = false }: { isFirst?: boolea
   };
 
   return (
-    <SettingsSection
+    <Section
       title="Context tree"
       description="Changes apply to new agent sessions. Members should restart agents to pick up updated tree contents."
-      isFirst={isFirst}
     >
       {settingQuery.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
@@ -95,6 +94,6 @@ export function ContextTreeSettingsPanel({ isFirst = false }: { isFirst?: boolea
           )}
         </form>
       )}
-    </SettingsSection>
+    </Section>
   );
 }

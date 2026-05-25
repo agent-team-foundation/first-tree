@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { pino } from "../observability/logger.js";
+import { isUnderManagedRoot, killProcessesHoldingPath } from "./worktree-cleanup.js";
 
 const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -43,6 +44,21 @@ export type GitMirrorManagerOptions = {
   dataDir: string;
   cloneTimeoutMs?: number;
   log?: pino.Logger;
+  /**
+   * Paths under which Hub owns the directory tree end-to-end (typically
+   * `<dataDir>/workspaces`). When a worktree target sits inside one of these
+   * roots and a stale non-managed leftover is found at session start, the
+   * manager auto-recovers — kill any process still holding the path, `rm -rf`
+   * the leftover, then proceed with the normal `git worktree add` flow.
+   *
+   * Targets OUTSIDE every managed root still fail loud with D13: those are
+   * operator-supplied paths and we refuse to silently delete user data.
+   *
+   * Omit to disable self-healing (current D13-always-throws behaviour). The
+   * production runtimes always pass the workspaces root; tests opt in
+   * explicitly to exercise the recovery path.
+   */
+  hubManagedRoots?: readonly string[];
 };
 
 export interface GitMirrorManager {
@@ -62,6 +78,25 @@ export interface GitMirrorManager {
   }): Promise<{ worktreePath: string; headCommit: string; branchName: string }>;
   removeWorktree(args: { url: string; path: string; branchName: string }): Promise<void>;
   gcMirrors(stillReferencedUrls: Set<string>): Promise<{ removed: string[] }>;
+  /**
+   * Sweep `hub-session-*` branch refs (and their `[branch "..."]` config
+   * segments) that no live worktree holds across every mirror.
+   *
+   * Intra-process safety: callers must invoke this when no slot is mid-way
+   * through `createWorktree` on the same runtime — i.e. at runtime boot,
+   * before any slot starts. No `withUrlLock` is taken; the caller's timing
+   * is the guarantee.
+   *
+   * Cross-process caveat: a peer hub client (rare — happens during in-place
+   * upgrades or when an old install still runs in parallel) creating a
+   * worktree in its own `add` sequence has a microsecond window where the
+   * branch ref exists but its worktree admin record doesn't yet. If our
+   * scan lands in that window, we may delete a branch the peer is about to
+   * attach. The peer's next step then fails with "no such ref" (visible in
+   * their stderr), so the operator notices — but the failure is theirs, not
+   * data loss on our side. Not worth a cross-process lock for that window.
+   */
+  gcOrphanSessionBranches(): Promise<{ scanned: number; deleted: number; failed: number }>;
   readonly mirrorsRoot: string;
 }
 
@@ -178,11 +213,42 @@ function looksLikeCommitSha(ref: string): boolean {
   return /^[0-9a-f]{7,40}$/i.test(ref);
 }
 
+/**
+ * Identifies the cross-process `<gitdir>/config.lock` contention that
+ * `git worktree add -b` surfaces as exit code 255 with stderr containing
+ * `error: could not lock config file …`. Triggered when a peer git process
+ * (e.g. a second hub client running an old install in parallel) is mid-way
+ * through writing the same shared bare mirror's `config`. Safe to retry —
+ * see the createWorktree retry loop for the recovery argument.
+ */
+export function isConfigLockError(err: unknown): boolean {
+  if (!(err instanceof GitMirrorError)) return false;
+  return /could not lock config file/i.test(err.message);
+}
+
 export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirrorManager {
   const mirrorsRoot = join(opts.dataDir, "git-mirrors");
   const cloneTimeoutMs =
-    opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_HUB_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
+    opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
   const log = opts.log;
+  const resolvedDataDir = resolve(opts.dataDir);
+  const hubManagedRoots = (opts.hubManagedRoots ?? []).map((p) => resolve(p));
+  // Fail loud at construction if any managed root would let the self-heal
+  // branch escape `<dataDir>`. Without this guard a misconfigured caller
+  // (`hubManagedRoots: ["/"]`, `[os.homedir()]`, etc.) would weaponise the
+  // `createWorktree` rm -rf path against arbitrary host paths. Strict subdir:
+  // the root itself MUST sit inside `dataDir` and MUST NOT equal `dataDir`
+  // (so we never grant "the whole hub data dir is fair game").
+  //
+  // Aggregate every bad root into one error so an operator who misconfigured
+  // multiple entries sees the whole picture on their first startup attempt
+  // instead of grinding through one-fix-then-restart cycles.
+  const badRoots = hubManagedRoots.filter((root) => !isUnderManagedRoot(root, [resolvedDataDir]));
+  if (badRoots.length > 0) {
+    throw new GitMirrorError(
+      `hubManagedRoots contains ${badRoots.length} entr${badRoots.length === 1 ? "y" : "ies"} not strictly inside dataDir "${resolvedDataDir}" — refusing to construct manager (would let self-heal rm -rf escape the hub data dir): ${badRoots.map((p) => `"${p}"`).join(", ")}`,
+    );
+  }
 
   // Per-URL serial queue. Prevents concurrent ensureMirror / fetchMirror /
   // gcMirrors for the same URL from racing on the same directory.
@@ -552,42 +618,118 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         const branchName = deriveSessionBranchName(sessionKey, agentName, url);
 
         // D13: target path must be free OR a Hub-managed worktree we can reuse.
+        // Self-heal exception: when the path sits inside a hub-managed root the
+        // leftover is almost always an orphaned dev-server cache (vite/.vite,
+        // node_modules/.cache, etc) re-written by a daemonised child that
+        // outlived the previous session — see worktree-cleanup.ts header for
+        // the full incident. Kill any process still holding it, rm -rf, and
+        // fall through to the normal `git worktree add` path.
         if (existsSync(absTarget) && !isHubManagedWorktree(absTarget)) {
-          log?.warn(
-            {
-              gitUrl: url,
-              targetPath: absTarget,
-              occupantKind: classifyOccupant(absTarget),
-            },
-            "worktree create conflict",
-          );
-          throw new GitMirrorWorktreeConflictError(
-            `Worktree target "${absTarget}" is already occupied by ${classifyOccupant(absTarget)} — aborting (D13)`,
-          );
+          const occupantKind = classifyOccupant(absTarget);
+          if (hubManagedRoots.length > 0 && isUnderManagedRoot(absTarget, hubManagedRoots)) {
+            log?.warn(
+              {
+                gitUrl: url,
+                targetPath: absTarget,
+                occupantKind,
+                hubManagedRoots,
+              },
+              "worktree target occupied inside hub-managed root — auto-recovering (kill holders + rm -rf)",
+            );
+            await killProcessesHoldingPath(absTarget, log);
+            try {
+              rmSync(absTarget, { recursive: true, force: true });
+            } catch (err) {
+              throw new GitMirrorWorktreeConflictError(
+                `Worktree target "${absTarget}" cleanup failed after killing holders: ${
+                  err instanceof Error ? err.message : String(err)
+                } (D13)`,
+              );
+            }
+            if (existsSync(absTarget)) {
+              throw new GitMirrorWorktreeConflictError(
+                `Worktree target "${absTarget}" still occupied after auto-recovery — aborting (D13)`,
+              );
+            }
+          } else {
+            log?.warn(
+              {
+                gitUrl: url,
+                targetPath: absTarget,
+                occupantKind,
+              },
+              "worktree create conflict",
+            );
+            throw new GitMirrorWorktreeConflictError(
+              `Worktree target "${absTarget}" is already occupied by ${occupantKind} — aborting (D13)`,
+            );
+          }
         }
 
-        const pathExists = existsSync(absTarget);
-        const hasBranch = await branchExists(mirror, branchName);
+        // Crash-recovery matrix + cross-process race recovery, wrapped in a
+        // retry loop. `withUrlLock` already serialises everything in *this*
+        // process, but the shared bare mirror has no inter-process lock —
+        // a second hub client (rare, but happens during in-place upgrades or
+        // when an old install hasn't been uninstalled) can still race on
+        // `<gitdir>/config.lock` while writing upstream tracking, which makes
+        // `worktree add -b` exit 255 with `could not lock config file`.
+        //
+        // A config-lock failure happens in git's `setup_tracking` step, which
+        // runs AFTER the branch ref + worktree admin record + path dir are
+        // created. So the failure leaves the repo in either `path + hasBranch`
+        // or `!path + hasBranch` depending on exactly which sub-step lost the
+        // race — but the matrix below handles both: reuse (short-circuit) or
+        // attach-existing (`worktree add <path> <branch>`, no `-b`), neither
+        // of which writes upstream config, so retry cannot re-collide.
+        const maxAttempts = 3;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          // Pre-add cleanup: when a previous owner of `absTarget` crashed or
+          // the directory was wiped externally, the bare mirror retains a
+          // "prunable" worktree admin record. A subsequent `git worktree add`
+          // against the same path then fails with
+          //   `fatal: '<path>' is a missing but already registered worktree`.
+          // `prune` is idempotent and safe — it only removes records whose
+          // backing directory no longer exists. Live worktrees that we own
+          // (e.g. the same agent's other chats) are untouched.
+          await gitOk(["worktree", "prune"], mirror, 10_000);
 
-        mkdirSync(dirname(absTarget), { recursive: true });
+          const pathExists = existsSync(absTarget);
+          const hasBranch = await branchExists(mirror, branchName);
 
-        // Crash-recovery matrix (see refactor plan §5.3):
-        //   path + branch    → reuse (short-circuit here even though callers also
-        //                       short-circuit; defensive, cheap)
-        //   !path + !branch  → `worktree add -b <branch> <path> <base>`
-        //   !path + branch   → `worktree add <path> <branch>` (attach existing)
-        //   path + !branch   → corruption; refuse rather than guess
-        if (pathExists && hasBranch) {
-          // Already wired up — treat as successful reuse.
-        } else if (pathExists && !hasBranch) {
-          throw new GitMirrorError(
-            `Worktree directory "${absTarget}" exists as a Hub worktree but the expected session branch "${branchName}" is missing in the mirror — manual cleanup required`,
-          );
-        } else if (!pathExists && hasBranch) {
-          await git(["worktree", "add", absTarget, branchName], mirror, cloneTimeoutMs);
-        } else {
-          const base = await resolveBase(mirror, ref);
-          await git(["worktree", "add", "-b", branchName, absTarget, base], mirror, cloneTimeoutMs);
+          mkdirSync(dirname(absTarget), { recursive: true });
+
+          // Crash-recovery matrix (see refactor plan §5.3):
+          //   path + branch    → reuse (short-circuit here even though callers also
+          //                       short-circuit; defensive, cheap)
+          //   !path + !branch  → `worktree add -b <branch> <path> <base>`
+          //   !path + branch   → `worktree add <path> <branch>` (attach existing)
+          //   path + !branch   → corruption; refuse rather than guess
+          try {
+            if (pathExists && hasBranch) {
+              // Already wired up — treat as successful reuse.
+            } else if (pathExists && !hasBranch) {
+              throw new GitMirrorError(
+                `Worktree directory "${absTarget}" exists as a Hub worktree but the expected session branch "${branchName}" is missing in the mirror — manual cleanup required`,
+              );
+            } else if (!pathExists && hasBranch) {
+              await git(["worktree", "add", absTarget, branchName], mirror, cloneTimeoutMs);
+            } else {
+              const base = await resolveBase(mirror, ref);
+              await git(["worktree", "add", "-b", branchName, absTarget, base], mirror, cloneTimeoutMs);
+            }
+            break;
+          } catch (err) {
+            if (attempt < maxAttempts && isConfigLockError(err)) {
+              const delayMs = 50 * 2 ** (attempt - 1) + Math.floor(Math.random() * 50);
+              log?.warn(
+                { gitUrl: url, branchName, attempt, delayMs },
+                "worktree add hit config lock contention — retrying",
+              );
+              await new Promise((r) => setTimeout(r, delayMs));
+              continue;
+            }
+            throw err;
+          }
         }
 
         const head = await git(["rev-parse", "HEAD"], absTarget, 30_000);
@@ -599,6 +741,16 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
       return withUrlLock(url, async () => {
         const absTarget = resolve(path);
         const mirror = mirrorDir(url);
+        // Kill any daemonised child the previous session left behind (vite,
+        // esbuild, test watcher, ...) BEFORE we try to rmdir. Without this the
+        // child keeps writing under `absTarget`, which both makes
+        // `git worktree remove` flaky AND repopulates the directory between
+        // the rm and the next session's `worktree add` — exactly the D13
+        // failure mode this commit fixes. Gated by `hubManagedRoots` so we
+        // never signal processes whose cwd happens to be an operator path.
+        if (hubManagedRoots.length > 0 && isUnderManagedRoot(absTarget, hubManagedRoots) && existsSync(absTarget)) {
+          await killProcessesHoldingPath(absTarget, log);
+        }
         if (!isBareRepo(mirror)) {
           // Mirror was already GC'd; just rm the orphan dir if it exists.
           if (existsSync(absTarget)) rmSync(absTarget, { recursive: true, force: true });
@@ -616,7 +768,17 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
           rmSync(absTarget, { recursive: true, force: true });
         }
         if (await branchExists(mirror, branchName)) {
-          await gitOk(["branch", "-D", branchName], mirror, 10_000);
+          const ok = await gitOk(["branch", "-D", branchName], mirror, 10_000);
+          if (!ok) {
+            // The `[branch "..."]` segment will linger in the shared bare
+            // mirror's `config` until startup GC sweeps it. Surface it so the
+            // operator can correlate with whatever held the branch (usually a
+            // peer worktree git's still holding a lock, or a renamed branch).
+            log?.warn(
+              { gitUrl: url, branchName, mirror },
+              "branch -D failed during removeWorktree — config segment will leak until next gcOrphanSessionBranches",
+            );
+          }
         }
       });
     },
@@ -633,6 +795,60 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         removed.push(entry);
       }
       return { removed };
+    },
+
+    async gcOrphanSessionBranches() {
+      if (!existsSync(mirrorsRoot)) return { scanned: 0, deleted: 0, failed: 0 };
+      let scanned = 0;
+      let deleted = 0;
+      let failed = 0;
+      for (const entry of readdirSync(mirrorsRoot)) {
+        const mirror = join(mirrorsRoot, entry);
+        if (!isBareRepo(mirror)) continue;
+        // Branches held by a live worktree — must NOT be deleted. `branch -D`
+        // would refuse anyway, but skipping them avoids the noisy warn log.
+        const held = new Set<string>();
+        try {
+          const list = await git(["worktree", "list", "--porcelain"], mirror, 10_000);
+          for (const line of list.stdout.split("\n")) {
+            const m = line.match(/^branch refs\/heads\/(.+)$/);
+            if (m?.[1]) held.add(m[1]);
+          }
+        } catch (err) {
+          log?.warn({ mirror: entry, err }, "gcOrphanSessionBranches: worktree list failed — skipping mirror");
+          continue;
+        }
+        let sessionBranches: string[];
+        try {
+          const out = await git(
+            ["for-each-ref", "--format=%(refname:short)", `refs/heads/${SESSION_BRANCH_PREFIX}-*`],
+            mirror,
+            10_000,
+          );
+          sessionBranches = out.stdout
+            .split("\n")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        } catch (err) {
+          log?.warn({ mirror: entry, err }, "gcOrphanSessionBranches: branch listing failed — skipping mirror");
+          continue;
+        }
+        for (const branch of sessionBranches) {
+          scanned++;
+          if (held.has(branch)) continue;
+          const ok = await gitOk(["branch", "-D", branch], mirror, 10_000);
+          if (ok) {
+            deleted++;
+          } else {
+            failed++;
+            log?.warn({ mirror: entry, branch }, "gcOrphanSessionBranches: branch -D failed");
+          }
+        }
+      }
+      if (deleted > 0 || failed > 0) {
+        log?.info({ scanned, deleted, failed }, "gcOrphanSessionBranches: swept orphan session branches");
+      }
+      return { scanned, deleted, failed };
     },
   };
 }

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { ClientConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
+import type { ClientConfig } from "@first-tree/shared/config";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerWelcome } from "../client-connection.js";
 import { UpdateManager } from "../runtime/update-manager.js";

@@ -6,7 +6,7 @@ import {
   type OrgSettingNamespace,
   type OrgSettingOutput,
   type OrgSettingStorage,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
@@ -14,22 +14,18 @@ import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
-import { decryptValue, encryptValue, isEncryptedValue } from "./crypto.js";
 
 /**
  * Per-organization settings, keyed by `(organizationId, namespace)`. The
  * registry of valid namespaces and their storage / input / output schemas
- * lives in `@agent-team-foundation/first-tree-hub-shared`.
+ * lives in `@first-tree/shared`.
  *
- * Read path:  storage row → decrypt secrets → output (mask)
- * Write path: input → validate → encrypt secrets → merge with current storage → upsert (in tx)
+ * Read path:  storage row → output (mask)
+ * Write path: input → validate → merge with current storage → upsert (in tx)
  *
- * The generic getter returns the masked output. Callers needing plaintext
- * for a specific secret use a purpose-built helper (e.g.
- * `getDecryptedGithubWebhookSecret`) rather than the generic storage shape
- * — this avoids a `…Cipher` field name silently holding plaintext at
- * call-sites and limits secret exposure to one explicit code path per
- * secret. (#4)
+ * The generic getter returns the masked output. Per-namespace plaintext
+ * accessors live alongside this module when a secret needs to leave the
+ * encrypted-at-rest boundary (none today).
  */
 
 function assertNamespace(ns: string): asserts ns is OrgSettingNamespace {
@@ -59,13 +55,8 @@ function emptyStorage<K extends OrgSettingNamespace>(namespace: K): OrgSettingSt
   return schema.parse({}) as OrgSettingStorage<K>;
 }
 
-function ensureEncrypted(value: string, encryptionKey: string): string {
-  return isEncryptedValue(value) ? value : encryptValue(value, encryptionKey);
-}
-
 /**
  * Merge a validated input into the current storage row for a namespace.
- * Secret fields are encrypted here.
  *
  * Input semantics per nullish field:
  *   `undefined` → unchanged
@@ -76,7 +67,6 @@ function applyInputDelta<K extends OrgSettingNamespace>(
   namespace: K,
   current: OrgSettingStorage<K>,
   input: OrgSettingInput<K>,
-  encryptionKey: string,
 ): OrgSettingStorage<K> {
   if (namespace === "context_tree") {
     const cur = current as OrgSettingStorage<"context_tree">;
@@ -84,19 +74,6 @@ function applyInputDelta<K extends OrgSettingNamespace>(
     const next: OrgSettingStorage<"context_tree"> = {
       repo: inp.repo === undefined ? cur.repo : (inp.repo ?? undefined),
       branch: inp.branch === undefined ? cur.branch : (inp.branch ?? "main"),
-    };
-    return next as OrgSettingStorage<K>;
-  }
-  if (namespace === "github_integration") {
-    const cur = current as OrgSettingStorage<"github_integration">;
-    const inp = input as OrgSettingInput<"github_integration">;
-    const next: OrgSettingStorage<"github_integration"> = {
-      webhookSecretCipher:
-        inp.webhookSecret === undefined
-          ? cur.webhookSecretCipher
-          : inp.webhookSecret === null
-            ? undefined
-            : ensureEncrypted(inp.webhookSecret, encryptionKey),
     };
     return next as OrgSettingStorage<K>;
   }
@@ -115,9 +92,7 @@ function applyInputDelta<K extends OrgSettingNamespace>(
 
 /**
  * Project the storage row into the API output for a namespace, masking
- * any secret fields. `webhookUrl` for `github_integration` is left as an
- * empty string here — the route layer enriches it with the resolved
- * `server.publicUrl` (the service stays config-agnostic).
+ * any secret fields.
  */
 function toOutput<K extends OrgSettingNamespace>(namespace: K, storage: OrgSettingStorage<K>): OrgSettingOutput<K> {
   if (namespace === "context_tree") {
@@ -125,14 +100,6 @@ function toOutput<K extends OrgSettingNamespace>(namespace: K, storage: OrgSetti
     const out: OrgSettingOutput<"context_tree"> = {
       repo: s.repo,
       branch: s.branch,
-    };
-    return out as OrgSettingOutput<K>;
-  }
-  if (namespace === "github_integration") {
-    const s = storage as OrgSettingStorage<"github_integration">;
-    const out: OrgSettingOutput<"github_integration"> = {
-      webhookSecretConfigured: typeof s.webhookSecretCipher === "string" && s.webhookSecretCipher.length > 0,
-      webhookUrl: "",
     };
     return out as OrgSettingOutput<K>;
   }
@@ -171,23 +138,6 @@ export async function getOrgContextTree(db: Database, orgId: string): Promise<Or
 }
 
 /**
- * Decrypt and return the plaintext GitHub webhook secret for an org.
- * Returns `null` when the org has not configured one. The only intended
- * caller is the webhook route's signature verifier — the result must
- * never leak through HTTP responses or logs. (#4)
- */
-export async function getDecryptedGithubWebhookSecret(
-  db: Database,
-  orgId: string,
-  encryptionKey: string,
-): Promise<string | null> {
-  const storage = await fetchStorageRow(db, orgId, "github_integration");
-  const cipher = storage?.webhookSecretCipher;
-  if (!cipher) return null;
-  return isEncryptedValue(cipher) ? decryptValue(cipher, encryptionKey) : cipher;
-}
-
-/**
  * Upsert a setting. Returns the masked output of the resulting row.
  *
  * The fetch + merge + upsert sequence runs inside a single transaction so
@@ -201,7 +151,7 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
   orgId: string,
   namespace: K,
   rawInput: unknown,
-  options: { updatedBy: string; encryptionKey: string },
+  options: { updatedBy: string },
 ): Promise<OrgSettingOutput<K>> {
   assertNamespace(namespace);
 
@@ -220,7 +170,7 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
     }
 
     const current = (await fetchStorageRow(txDb, orgId, namespace)) ?? emptyStorage(namespace);
-    const merged = applyInputDelta(namespace, current, input, options.encryptionKey);
+    const merged = applyInputDelta(namespace, current, input);
 
     // Final shape check (defensive — should always pass after applyInputDelta).
     const storageSchema = ORG_SETTINGS_NAMESPACES[namespace].storage;

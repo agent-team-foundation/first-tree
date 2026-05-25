@@ -3,15 +3,9 @@ export { createAgentConfigCache } from "./agent-config-cache.js";
 export type { AgentSlotConfig } from "./agent-slot.js";
 export { AgentSlot } from "./agent-slot.js";
 export type { ContextTreeBinding } from "./bootstrap.js";
-export { syncContextTree } from "./bootstrap.js";
+export { contextTreeCloneDir, syncAgentContextTree, syncContextTree } from "./bootstrap.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./config.js";
 export { loadRuntimeConfig } from "./config.js";
-export {
-  CONCURRENCY,
-  IDLE_SCAN_INTERVAL_MS,
-  IDLE_TIMEOUT_MS,
-  MAX_SESSIONS,
-} from "./constants.js";
 export { Deduplicator } from "./deduplicator.js";
 export type { GitMirrorManager, GitMirrorManagerOptions } from "./git-mirror-manager.js";
 export {

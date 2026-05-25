@@ -4,7 +4,7 @@ import {
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
@@ -15,13 +15,16 @@ import { users } from "../db/schema/users.js";
 import { NotFoundError } from "../errors.js";
 import { requireUser } from "../scope/require-user.js";
 import { listAgentsManagedByUser } from "../services/access-control.js";
+import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
+import { COMMAND_PACKAGE_NAME } from "../services/command-version-poller.js";
 import { decryptValue, encryptValue } from "../services/crypto.js";
 import { GithubAppApiError, refreshAppUserToken } from "../services/github-app.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
 import {
+  countActiveMembersByOrgs,
   ensureMembership,
   leaveOrganization,
   listActiveMemberships,
@@ -50,6 +53,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         displayName: users.displayName,
         avatarUrl: users.avatarUrl,
         onboardingDismissedAt: users.onboardingDismissedAt,
+        onboardingCompletedAt: users.onboardingCompletedAt,
       })
       .from(users)
       .where(eq(users.id, userId))
@@ -62,6 +66,16 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const defaultOrgId = defaultMembership
       ? (memberships.find((m) => m.memberId === defaultMembership.id)?.organizationId ?? null)
       : null;
+
+    // One COUNT(*)/GROUP BY for every org the caller belongs to. The web
+    // onboarding gate keys off "does this team have anyone other than me"
+    // (replaces sessionStorage `joinPath`, which leaks between tabs/devices).
+    // Default to 1 on a missing row so a transient race never spuriously
+    // flips the "team-of-teammates" copy on.
+    const memberCounts = await countActiveMembersByOrgs(
+      app.db,
+      memberships.map((mb) => mb.organizationId),
+    );
 
     // Surface invite URL only for users who admin at least one org. The
     // web client picks the relevant org from `selectedOrganizationId`
@@ -86,10 +100,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         organizationName: mb.orgDisplayName,
         role: mb.role,
         agentId: mb.agentId,
+        orgHasOtherMembers: (memberCounts.get(mb.organizationId) ?? 1) > 1,
       })),
       onboarding: {
         step: onboardingStep,
         dismissedAt: user?.onboardingDismissedAt ? user.onboardingDismissedAt.toISOString() : null,
+        completedAt: user?.onboardingCompletedAt ? user.onboardingCompletedAt.toISOString() : null,
       },
       inviteUrl,
     };
@@ -130,6 +146,30 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({
       dismissedAt: u?.onboardingDismissedAt ? u.onboardingDismissedAt.toISOString() : null,
     });
+  });
+
+  /**
+   * POST /me/onboarding-completed — stamp the terminal-state column when
+   * the user walks Step 3 to success (admin Continue, invitee Confirm /
+   * Continue). Distinct from PATCH /me/onboarding { dismissed: true },
+   * which only hides the stepper UI. Once stamped, the web sidebar drops
+   * the Settings → Onboarding entry point and /settings/onboarding
+   * redirects, so the wizard cannot re-enter.
+   *
+   * Idempotent: only writes when the column is still NULL — re-calling on
+   * an already-completed user is a no-op rather than resetting the stamp.
+   */
+  app.post("/me/onboarding-completed", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const result = await app.db
+      .update(users)
+      .set({ onboardingCompletedAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.onboardingCompletedAt)))
+      .returning({ id: users.id });
+    if (result.length > 0) {
+      app.log.info({ event: "onboarding.completed", userId }, "onboarding funnel: setup completed");
+    }
+    return reply.status(200).send({ ok: true });
   });
 
   /**
@@ -294,8 +334,19 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         app.config.auth,
         issuer,
       );
-      const command = `first-tree-hub connect ${token}`;
-      return { token, expiresIn, command };
+      // Channel-aware npm spec. Web onboarding renders the returned
+      // `bootstrapCommand` directly so a fresh-machine install lands on
+      // the version this Hub actually advertises — without it, staging
+      // (channel=alpha) users `npm i -g …` land on stable, then watch
+      // auto-update yank them up to alpha 30s later (which used to be
+      // exactly the cross-edge scenario that bricked their service
+      // unit). `latest` is npm's default dist-tag so we keep the bare
+      // spec for prod; only non-latest channels get the `@<tag>` suffix.
+      const channel = app.config.update.channel;
+      const npmSpec = channel === "latest" ? COMMAND_PACKAGE_NAME : `${COMMAND_PACKAGE_NAME}@${channel}`;
+      const command = `first-tree login ${token}`;
+      const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
+      return { token, expiresIn, command, bootstrapCommand, npmSpec };
     },
   );
 
@@ -316,6 +367,17 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       visibility: r.visibility,
       runtimeProvider: r.runtimeProvider,
       clientId: r.clientId,
+      // Resolved avatar URL — uploaded image takes priority; for human
+      // agents falls back to the backing user's external (GitHub) URL.
+      // Lets the web client render cross-org human avatars in chat
+      // surfaces, since `useAgentIdentityMap` merges this list with the
+      // org-scoped `/agents` source.
+      avatarImageUrl: resolveAvatarImageUrl({
+        uuid: r.uuid,
+        type: r.type,
+        avatarImageUpdatedAt: r.avatarImageUpdatedAt,
+        userAvatarUrl: r.userAvatarUrl,
+      }),
     }));
   });
 
@@ -354,6 +416,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       agentCount: c.agentCount,
       connectedAt: serializeDate(c.connectedAt),
       lastSeenAt: c.lastSeenAt.toISOString(),
+      lastUpdateAttempt: clientService.extractLastUpdateAttempt(c.metadata),
     }));
   });
 

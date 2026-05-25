@@ -20,6 +20,15 @@ export const agentConfigSchema = defineConfig({
   session: {
     idle_timeout: field(z.number().int().positive().default(300)),
     max_sessions: field(z.number().int().positive().default(10)),
+    // Upper bound on how long a session may stay `working`/`blocked` past
+    // `idle_timeout` before the runtime force-suspends it. Protects long
+    // thinking / large message generation from idle eviction while still
+    // bounding stuck-state slot leaks. Also caps in-flight AskUserQuestion
+    // waits: at `idle_timeout + working_grace_seconds` past the last
+    // activity the session is reclaimed even if a human answer is still
+    // pending, so an over-night ask exceeding this window will lose its
+    // live bridge waiter (see evictIdle in session-manager.ts and #418).
+    working_grace_seconds: field(z.number().int().positive().default(3600)),
   },
 });
 

@@ -5,15 +5,16 @@ import type {
   RebindAgent,
   RuntimeProvider,
   UpdateAgent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import {
   AGENT_NAME_REGEX,
   AGENT_STATUSES,
+  AGENT_TYPES,
   AGENT_VISIBILITY,
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
   isReservedAgentName,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, count, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
@@ -24,6 +25,7 @@ import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
@@ -37,6 +39,67 @@ import { recomputeWatchersForAgent } from "./watcher.js";
  * internal traffic could be routed through a real account.
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
+
+/**
+ * Derive the relative URL clients should use to fetch a manager-uploaded
+ * avatar image. Returns `null` when no image is set. Embeds the upload
+ * timestamp as `?v=<epoch>` so a fresh upload busts any browser cache
+ * that may have memoised the previous version.
+ *
+ * Auth: the image route is intentionally public read — the URL leaks no
+ * more than the agent's UUID, which is already required to address it.
+ * Keeping it unauthenticated lets `<img src>` render without bespoke
+ * fetch-and-blob plumbing.
+ */
+export function agentAvatarImageUrl(uuid: string, updatedAt: Date | null | undefined): string | null {
+  if (!updatedAt) return null;
+  return `/api/v1/agents/${uuid}/avatar?v=${updatedAt.getTime()}`;
+}
+
+/**
+ * Resolve the public avatar image URL for an agent, considering both the
+ * manager-uploaded image and — for human agents — the user's external
+ * avatar URL (e.g. GitHub `users.avatar_url` injected by OAuth). Returns
+ * `null` when neither source is available; the renderer then falls back
+ * to color + initial.
+ *
+ * Priority: uploaded image > human user's avatar > null. The "upload
+ * wins" rule gives users explicit control: once they upload a custom
+ * avatar for their human agent it always shows, regardless of any later
+ * GitHub avatar change.
+ */
+export function resolveAvatarImageUrl(args: {
+  uuid: string;
+  type: string;
+  avatarImageUpdatedAt: Date | null | undefined;
+  userAvatarUrl: string | null | undefined;
+}): string | null {
+  const uploaded = agentAvatarImageUrl(args.uuid, args.avatarImageUpdatedAt);
+  if (uploaded) return uploaded;
+  if (args.type === AGENT_TYPES.HUMAN && args.userAvatarUrl) return args.userAvatarUrl;
+  return null;
+}
+
+/**
+ * Look up the external user-avatar URL backing a human agent via the
+ * `members.agent_id → members.user_id → users.avatar_url` path. Returns
+ * `null` for non-human agents or when the user has no avatar URL
+ * captured (e.g. signed in without GitHub OAuth). Used by single-agent
+ * API responses; list endpoints inline the join in their SELECT.
+ */
+export async function fetchUserAvatarForHumanAgent(
+  db: Database,
+  agent: { uuid: string; type: string },
+): Promise<string | null> {
+  if (agent.type !== AGENT_TYPES.HUMAN) return null;
+  const [row] = await db
+    .select({ avatarUrl: users.avatarUrl })
+    .from(members)
+    .innerJoin(users, eq(members.userId, users.id))
+    .where(eq(members.agentId, agent.uuid))
+    .limit(1);
+  return row?.avatarUrl ?? null;
+}
 
 /**
  * True iff `clients.metadata.capabilities` is a non-empty object — i.e. the
@@ -182,7 +245,7 @@ async function resolveAgentClient(
   if (!client.userId) {
     throw new BadRequestError(
       `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
-        "`first-tree-hub client connect` on that machine before pinning an agent to it.",
+        "`first-tree login <token>` on that machine before pinning an agent to it.",
     );
   }
   if (client.userId !== manager.userId) {
@@ -223,6 +286,28 @@ async function validateDelegateMentionTarget(db: Database, targetUuid: string, s
 }
 
 /**
+ * Service-layer guard: `delegateMention` is only available for `human` agents.
+ * Mirrors the Web UI in `identity-section.tsx`, which only renders the
+ * delegate-mention selector when `agent.type === "human"`. Without this
+ * server-side check, CLI / Admin API / internal scripts could write
+ * delegateMention onto non-human rows, silently re-enabling the
+ * autonomous-agent-self-mention path that resolveAudience would then fan
+ * out. Called from `createAgent` / `updateAgent` before
+ * `validateDelegateMentionTarget` so a wrong source type fails fast without
+ * the target lookup round-trip.
+ */
+function assertDelegateMentionAllowed(sourceType: string): void {
+  // Accepts `string` (not `AgentType`) because callers may forward the
+  // value from an `agents` row, whose `type` column is declared as `text`
+  // and therefore narrows to `string` after Drizzle inference. The guard
+  // only checks one bit — is it `human` — so widening the parameter is
+  // safe and avoids forcing an unsound `as AgentType` cast at the caller.
+  if (sourceType !== AGENT_TYPES.HUMAN) {
+    throw new BadRequestError("delegateMention can only be set on human agents");
+  }
+}
+
+/**
  * Pick the first admin member in the org for internal system agents. Throws
  * if the org has no admin — the caller should surface the error so an admin
  * is created before the system tries to register more agents.
@@ -237,7 +322,7 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
   if (!row) {
     throw new BadRequestError(
       `Cannot create agent in organization "${orgId}" — no admin member exists. ` +
-        "Create an admin member first (see `first-tree-hub onboard`).",
+        "Create an admin member first (see `first-tree agent create`).",
     );
   }
   return row.id;
@@ -316,6 +401,7 @@ export async function createAgent(
   await ensureClientSupportsRuntimeProvider(db, clientId, runtimeProvider, { force: options.force });
 
   if (data.delegateMention) {
+    assertDelegateMentionAllowed(data.type);
     await validateDelegateMentionTarget(db, data.delegateMention, orgId);
   }
 
@@ -490,6 +576,13 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      // Backing user's external avatar URL (e.g. GitHub) — populated only for
+      // human agents through the 1:1 members.agent_id link; null otherwise.
+      // Used by `resolveAvatarImageUrl` as the fallback when no avatar has
+      // been uploaded for this human agent.
+      userAvatarUrl: users.avatarUrl,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -501,6 +594,8 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(where)
     .orderBy(desc(agents.createdAt))
     .limit(limit + 1);
@@ -541,6 +636,9 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -550,6 +648,8 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(where)
     .orderBy(desc(agents.createdAt))
     .limit(limit + 1);
@@ -595,6 +695,9 @@ export async function listAgentsForMember(
       managerId: agents.managerId,
       clientId: agents.clientId,
       runtimeProvider: agents.runtimeProvider,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -604,6 +707,8 @@ export async function listAgentsForMember(
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(where)
     .orderBy(desc(agents.createdAt))
     .limit(limit + 1);
@@ -636,16 +741,36 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   }
 
   const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
-  if (data.type !== undefined) updates.type = data.type;
+  if (data.type !== undefined) {
+    // Closes the type-flip leak: without this guard a PATCH like
+    // `{type: "autonomous_agent"}` on a human row with a non-null
+    // delegateMention would leave behind `type=autonomous_agent +
+    // delegateMention=<uuid>`, violating the invariant that only humans
+    // carry a delegate. The caller must either clear delegateMention in
+    // the same patch or flip type to human (no-op for the invariant).
+    if (data.type !== AGENT_TYPES.HUMAN && agent.delegateMention !== null && data.delegateMention !== null) {
+      throw new BadRequestError(
+        "Cannot change type away from `human` while delegateMention is set — clear delegateMention in the same patch.",
+      );
+    }
+    updates.type = data.type;
+  }
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.delegateMention !== undefined) {
     if (data.delegateMention !== null) {
+      // Effective type honors a same-patch `type` update; without this the
+      // guard would read the stale pre-update value when the caller flips
+      // type → "human" and sets delegateMention in one PATCH.
+      assertDelegateMentionAllowed(data.type ?? agent.type);
       await validateDelegateMentionTarget(db, data.delegateMention, agent.organizationId);
     }
     updates.delegateMention = data.delegateMention;
   }
   if (data.visibility !== undefined) updates.visibility = data.visibility;
   if (data.metadata !== undefined) updates.metadata = data.metadata;
+  // Explicit null clears the override (renderer falls back to djb2 hash).
+  // Omitting the field leaves the column untouched.
+  if (data.avatarColorToken !== undefined) updates.avatarColorToken = data.avatarColorToken;
 
   if (data.managerId !== undefined) {
     if (data.managerId === null) {
@@ -811,4 +936,87 @@ export async function deleteAgent(db: Database, uuid: string) {
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return agent;
+}
+
+/**
+ * Supported avatar-image MIME types. The web client always uploads WEBP after
+ * its own resize step; we accept PNG/JPEG too so a caller using the raw HTTP
+ * API (curl, scripts) doesn't have to re-encode. Anything else is rejected at
+ * the boundary — we never store an unknown content type.
+ */
+export const SUPPORTED_AVATAR_IMAGE_MIMES = ["image/webp", "image/png", "image/jpeg"] as const;
+export type SupportedAvatarImageMime = (typeof SUPPORTED_AVATAR_IMAGE_MIMES)[number];
+
+/** Hard server-side ceiling for the stored bytea blob. Client pre-resizes to ~50KB. */
+export const MAX_AVATAR_IMAGE_BYTES = 512 * 1024;
+
+function isSupportedAvatarMime(mime: string): mime is SupportedAvatarImageMime {
+  return SUPPORTED_AVATAR_IMAGE_MIMES.find((m) => m === mime) !== undefined;
+}
+
+/**
+ * Fetch the avatar image blob for an agent. Returns `null` when no image
+ * is set (the column is NULL). The data + mime pair is always coherent
+ * (set/cleared together by the service writes below).
+ */
+export async function getAgentAvatarImage(
+  db: Database,
+  uuid: string,
+): Promise<{ data: Buffer; mime: string; updatedAt: Date } | null> {
+  const [row] = await db
+    .select({
+      data: agents.avatarImageData,
+      mime: agents.avatarImageMime,
+      updatedAt: agents.avatarImageUpdatedAt,
+    })
+    .from(agents)
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .limit(1);
+  if (!row || !row.data || !row.mime || !row.updatedAt) return null;
+  return { data: row.data, mime: row.mime, updatedAt: row.updatedAt };
+}
+
+/** Replace (or set) an agent's avatar image. Validates mime + size. */
+export async function setAgentAvatarImage(db: Database, uuid: string, data: Buffer, mime: string): Promise<Date> {
+  if (!isSupportedAvatarMime(mime)) {
+    throw new BadRequestError(`Unsupported avatar image type "${mime}". Use PNG, JPEG, or WEBP.`);
+  }
+  if (data.length === 0) {
+    throw new BadRequestError("Avatar image payload is empty.");
+  }
+  if (data.length > MAX_AVATAR_IMAGE_BYTES) {
+    throw new BadRequestError(`Avatar image is too large (${data.length} bytes; max ${MAX_AVATAR_IMAGE_BYTES}).`);
+  }
+  const now = new Date();
+  const result = await db
+    .update(agents)
+    .set({
+      avatarImageData: data,
+      avatarImageMime: mime,
+      avatarImageUpdatedAt: now,
+      updatedAt: now,
+    })
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .returning({ uuid: agents.uuid });
+  if (result.length === 0) {
+    throw new NotFoundError(`Agent "${uuid}" not found`);
+  }
+  return now;
+}
+
+/** Clear an agent's avatar image (falls back to color + initial). */
+export async function clearAgentAvatarImage(db: Database, uuid: string): Promise<void> {
+  const result = await db
+    .update(agents)
+    .set({
+      avatarImageData: null,
+      avatarImageMime: null,
+      avatarImageUpdatedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .returning({ uuid: agents.uuid });
+  if (result.length === 0) {
+    throw new NotFoundError(`Agent "${uuid}" not found`);
+  }
 }

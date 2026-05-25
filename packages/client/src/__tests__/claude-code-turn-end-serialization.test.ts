@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
@@ -124,7 +124,6 @@ describe("claude-code handler — turn_end serialization (race guard)", () => {
       emitEvent: (e: SessionEvent) => {
         emitted.push({ kind: e.kind, at: Date.now() - start });
       },
-      reportSessionCompletion: () => {},
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
     };
 

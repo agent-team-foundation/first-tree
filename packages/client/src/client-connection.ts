@@ -13,7 +13,8 @@ import {
   type SessionEvent,
   type SessionState,
   serverWelcomeFrameSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+  type UpdateAttempt,
+} from "@first-tree/shared";
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
 import { writeImage } from "./runtime/image-store.js";
@@ -38,6 +39,33 @@ export type ClientConnectionConfig = {
    * HTTP traffic so trace backends can identify the install. See SdkConfig.userAgent.
    */
   userAgent?: string;
+  /**
+   * Optional accessor for the most recent self-update outcome — the
+   * command layer reads `~/.first-tree/hub/state/update-state.json` and
+   * returns the parsed record. The connection forwards it on every
+   * `client:register` so the server can persist into
+   * `clients.metadata.lastUpdateAttempt`, giving the admin dashboard
+   * visibility into clients that are failing to auto-update without
+   * needing SSH access. Sync (the underlying read is a single small JSON
+   * file) so the register frame can be built inline. The runtime
+   * gracefully tolerates omission — clients without the update-state
+   * wiring don't supply this, and the server's `clientRegisterSchema`
+   * keeps the field optional.
+   */
+  getLastUpdateAttempt?: () => UpdateAttempt | null;
+  /**
+   * Override the heartbeat tick interval (default 30s). Lower values are
+   * primarily useful in tests that need to exercise the silence watchdog or
+   * proactive-refresh paths in sub-second budgets.
+   */
+  heartbeatIntervalMs?: number;
+  /**
+   * Override the silence watchdog timeout (default 90s — ~3 heartbeat ticks).
+   * Surfaces wedged sockets (OS-suspend resume, silent network drops) that
+   * leave readyState=OPEN but no bytes flowing. Test-friendly hook; the
+   * production default already handles real-world drops fine.
+   */
+  heartbeatTimeoutMs?: number;
 };
 
 export type BoundAgent = {
@@ -81,13 +109,10 @@ type ClientConnectionEvents = {
   error: [error: Error];
   "agent:bound": [agent: BoundAgent];
   "agent:unbound": [agentId: string];
-  "agent:message": [agentId: string, data: unknown];
   /**
    * Server pushed a fully-assembled inbox entry over the WS data plane.
    * Listeners must call `connection.sendInboxAck(frame.entryId)` once the
-   * entry has been durably handed to the session manager. Replaces the
-   * legacy `agent:message` → HTTP-poll round-trip when the server
-   * advertises `wsInboxDeliver`. Falls back silently on legacy paths.
+   * entry has been durably handed to the session manager.
    */
   "inbox:deliver": [agentId: string, frame: InboxDeliverFrame];
   "agent:bind:rejected": [reason: AgentBindRejectReason, agentId: string];
@@ -95,7 +120,7 @@ type ClientConnectionEvents = {
    * Server announced that an agent has been pinned to this client (either
    * created with `clientId` or bound via PATCH NULL → ID). Consumers can use
    * this to auto-register the agent locally without a manual
-   * `first-tree-hub agent add`.
+   * `first-tree agent add`.
    */
   "agent:pinned": [message: AgentPinnedMessage];
   "session:command": [command: SessionCommand];
@@ -105,7 +130,7 @@ type ClientConnectionEvents = {
    * Unrecoverable auth failure — the credential provider rejected with an
    * `AuthRefreshFailedError` (refresh token expired/revoked). The connection
    * has stopped trying to reconnect; the consumer should surface a recovery
-   * prompt to the operator (re-run `first-tree-hub connect <token>`) and
+   * prompt to the operator (re-run `first-tree login <token>`) and
    * usually exit so a supervisor can back off instead of looping at 1 Hz.
    */
   "auth:fatal": [error: Error];
@@ -130,7 +155,7 @@ export class ClientOrgMismatchError extends Error {
  * Thrown when the server refuses `client:register` because the local
  * client.yaml is owned by a different user. The CLI detects this via
  * `instanceof` and guides the operator to run
- * `first-tree-hub client claim --confirm` to take ownership (which unpins
+ * `first-tree login <token> --override` to take ownership (which unpins
  * the previous owner's agents from this machine). See decouple-client-from-
  * identity §4.4.
  */
@@ -147,16 +172,14 @@ const RECONNECT_MAX_MS = 30_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 /**
- * Client-side opt-in for the WS inbox data plane. Gates BOTH the
- * `wireCapabilities.wsInboxDeliver` flag we declare on `client:register`
- * AND how we interpret the server's welcome capability — without this AND,
- * a future client kill-switch could land in a half-state where we tell the
- * server "no thanks" but still treat welcome's `wsInboxDeliver:true` as
- * authoritative and stop the 5s HTTP poll, leaving messages stuck if a
- * NOTIFY ever drops. Hard-coded `true` for now; flip to a config knob if
- * you need a runtime kill-switch.
+ * Silence watchdog: if no server frame (data message OR control-frame pong)
+ * arrives within this many ms, the socket is presumed dead and terminated so
+ * the close handler can drive a reconnect. Sized to ~3 heartbeat ticks so a
+ * single missed pong is tolerated, but a wedged socket (e.g. after the OS
+ * resumes from suspend with a half-open TCP connection) is broken within one
+ * minute of the next heartbeat tick.
  */
-const WS_INBOX_DELIVER_OPT_IN = true;
+const HEARTBEAT_TIMEOUT_MS = 90_000;
 /**
  * Unified-user-token C5: reconnect PROACTIVELY this many ms before the JWT's
  * `exp` claim so the client rotates to a fresh JWT without ever hitting the
@@ -165,6 +188,29 @@ const WS_INBOX_DELIVER_OPT_IN = true;
  * `credentials.json` and the web app uses its refresh-on-401 loop.
  */
 const AUTH_REFRESH_LEAD_MS = 60_000;
+
+/**
+ * Sleep for `ms`, resolving early if the abort signal fires. Used by
+ * {@link ClientConnection.connect} so a `disconnect()` during the initial-
+ * connect backoff doesn't block for the full retry interval.
+ */
+function waitWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /** Decode a JWT payload without verifying. Returns null if malformed. */
 function decodeJwtExp(token: string): number | null {
@@ -184,6 +230,35 @@ function decodeJwtExp(token: string): number | null {
 }
 
 /**
+ * Bash stdout reaches handlers as `string` via Buffer.toString('utf8'), so a
+ * tool whose output is binary (e.g. `gh api .../actions/runs/<id>/logs`
+ * returns a ZIP archive) lands in `resultPreview` peppered with U+FFFD
+ * replacements and embedded NULs. PostgreSQL JSONB rejects NUL outright, which
+ * used to drop the entire session event server-side; a forest of `(replacement chars)` would
+ * also be useless to the UI. Replace such previews with a placeholder so the
+ * event still persists and the timeline shows the call happened.
+ */
+const REPLACEMENT_CHAR_BINARY_THRESHOLD = 8;
+
+function looksBinary(s: string): boolean {
+  if (s.includes("\u0000")) return true;
+  return (s.match(/\uFFFD/g)?.length ?? 0) > REPLACEMENT_CHAR_BINARY_THRESHOLD;
+}
+
+export function sanitizeSessionEventForTransport(event: SessionEvent): SessionEvent {
+  if (event.kind !== "tool_call") return event;
+  const preview = event.payload.resultPreview;
+  if (preview === undefined || !looksBinary(preview)) return event;
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      resultPreview: `[binary content, ${preview.length} chars elided]`,
+    },
+  };
+}
+
+/**
  * Client WS — one socket per client, many agents multiplexed.
  *
  * Handshake sequence (unified-user-token):
@@ -200,6 +275,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private readonly sdkVersion: string | undefined;
   private readonly userAgent: string | undefined;
   private readonly getAccessToken: AccessTokenProvider;
+  private readonly getLastUpdateAttempt: (() => UpdateAttempt | null) | undefined;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
 
   private ws: WebSocket | null = null;
   private wsConnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -208,6 +286,22 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   /** Fires ~60s before JWT exp so we reconnect with a fresh token first. */
   private authRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  /**
+   * Monotonic timestamp of the last frame received from the server (data
+   * message OR pong control frame). Consulted by the heartbeat tick to
+   * detect a half-open socket (no FIN/RST yet, readyState still OPEN) so we
+   * can `terminate()` it and let the close handler reconnect. Required
+   * because nothing else surfaces "socket alive but peer gone" in time —
+   * Linux's default TCP keep-alive only probes after ~2h of idle.
+   */
+  private lastServerMessageAt = 0;
+  /**
+   * AbortController consumed by {@link connect}'s backoff sleep so a caller
+   * that runs {@link disconnect} while the initial-connect loop is between
+   * attempts isn't blocked for up to RECONNECT_MAX_MS waiting for the next
+   * tick to notice `closing`.
+   */
+  private connectAbort: AbortController | null = null;
   /**
    * If the most recent refresh attempt was rate-limited (HTTP 429), the
    * server-suggested wait in ms — consumed by the next `scheduleReconnect`
@@ -219,15 +313,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private registered = false;
   /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
   private welcomeFramesReceived = 0;
-  /**
-   * Whether the most recent `server:welcome` frame advertised
-   * `capabilities.wsInboxDeliver`. The runtime (AgentSlot) reads this
-   * (via {@link supportsWsInboxDeliver}) to decide whether to keep the
-   * legacy 5s HTTP poll or rely entirely on `inbox:deliver` push frames.
-   * Re-evaluated on every reconnect — the welcome frame is the source of
-   * truth, never assumed sticky across connections.
-   */
-  private wsInboxDeliverActive = false;
   /**
    * Last handshake error, stashed for the `close` handler to surface a typed
    * reason (e.g. {@link ClientOrgMismatchError}) instead of a generic
@@ -258,21 +343,24 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   >();
 
   /**
-   * In-flight image writes from recent `image_payload` frames. The server
-   * pushes `image_payload` immediately before firing the `new_message`
-   * notification, but WS message handlers run through EventEmitter (sync
-   * dispatch, no await), so the disk write can still race the HTTP poll
-   * that follows. Defer `new_message` emission until these settle.
+   * In-flight image writes from recent `image_payload` frames. `image_payload`
+   * arrives on the WS just before `inbox:deliver` for the same message, but
+   * the EventEmitter dispatch is sync — so without gating, the deliver
+   * handler can fire before the image bytes hit disk. Block `inbox:deliver`
+   * emission until these settle.
    */
   private readonly pendingImageWrites = new Set<Promise<void>>();
 
   constructor(config: ClientConnectionConfig) {
     super();
-    this.clientId = config.clientId ?? process.env.FIRST_TREE_HUB_CLIENT_ID ?? `client_${randomUUID().slice(0, 8)}`;
+    this.clientId = config.clientId ?? process.env.FIRST_TREE_CLIENT_ID ?? `client_${randomUUID().slice(0, 8)}`;
     this.serverUrl = config.serverUrl.replace(/\/+$/, "");
     this.sdkVersion = config.sdkVersion;
     this.userAgent = config.userAgent;
     this.getAccessToken = config.getAccessToken;
+    this.getLastUpdateAttempt = config.getLastUpdateAttempt;
+    this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+    this.heartbeatTimeoutMs = config.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
     this.wsLogger = createLogger("ws").child({ clientId: this.clientId });
     this.authLogger = createLogger("auth").child({ clientId: this.clientId });
 
@@ -292,31 +380,59 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   }
 
   /**
-   * True when the current connection's `server:welcome` advertised
-   * `capabilities.wsInboxDeliver` — meaning the server will push
-   * `inbox:deliver` frames and accept `inbox:ack` frames over this WS.
-   * Resets to false on every reconnect until the new welcome arrives.
-   */
-  get supportsWsInboxDeliver(): boolean {
-    return this.wsInboxDeliverActive;
-  }
-
-  /**
-   * Ack a delivered inbox entry over the WS data plane. Replaces the legacy
-   * `sdk.ack()` HTTP call when the connection has negotiated
-   * `wsInboxDeliver`. Safe to call when the WS is closed — the frame is
-   * dropped silently and the entry will time out and re-deliver on
-   * reconnect, mirroring how the legacy timeout reaper handles HTTP
-   * ack-loss.
+   * Ack a delivered inbox entry over the WS data plane. Safe to call when the
+   * WS is closed — the frame is dropped (logged) and the entry will time out
+   * server-side and re-deliver on reconnect. The handler has by then already
+   * started processing, so reaper-driven redelivery surfaces as a duplicate
+   * dispatch on the next connect; SessionManager's dedupe key
+   * `(chatId, messageId)` collapses it.
    */
   sendInboxAck(entryId: number): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      // Visibility for the "ack lost on closed socket → server reaper resets
+      // entry to pending → duplicate dispatch on reconnect" path. Warn-level
+      // so staging can correlate spikes against reconnect-storm windows.
+      this.wsLogger.warn({ entryId, readyState: this.ws?.readyState }, "inbox:ack dropped — socket not OPEN");
+      return;
+    }
     this.ws.send(JSON.stringify({ type: "inbox:ack", entryId }));
   }
 
+  /**
+   * Bring up the socket, retrying transient handshake failures with the same
+   * exponential schedule as {@link scheduleReconnect}. Resolves once the
+   * server has acknowledged `client:register`; rejects only when something
+   * unrecoverable has flipped `closing` (auth:fatal, register:rejected for
+   * user/org mismatch). Without this loop, a temporary DNS hiccup at startup
+   * propagated up to `client-runtime.start` and exited the process — which
+   * leaned on systemd's restart to recover instead of the in-process backoff
+   * the live reconnect path already uses.
+   */
   async connect(): Promise<void> {
     this.closing = false;
-    await this.openWebSocket();
+    this.connectAbort = new AbortController();
+    let attempt = 0;
+    try {
+      while (true) {
+        try {
+          await this.openWebSocket();
+          return;
+        } catch (err) {
+          if (this.closing) throw err;
+          attempt++;
+          const delayMs = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
+          this.wsLogger.warn(
+            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+            "initial connect failed, will retry",
+          );
+          this.emit("error", err instanceof Error ? err : new Error(String(err)));
+          await waitWithAbort(delayMs, this.connectAbort.signal);
+          if (this.closing) throw err;
+        }
+      }
+    } finally {
+      this.connectAbort = null;
+    }
   }
 
   /**
@@ -352,12 +468,8 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event }));
-  }
-
-  reportSessionCompletion(agentId: string, chatId: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "session:completion", agentId, chatId }));
+    const sanitized = sanitizeSessionEventForTransport(event);
+    this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event: sanitized }));
   }
 
   /** Ask the server which of the supplied chatIds the client should drop. */
@@ -368,12 +480,21 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   async disconnect(): Promise<void> {
     this.closing = true;
+    this.connectAbort?.abort();
     this.clearTimers();
     this.rejectAllPendingBinds("Client disconnected");
     if (this.ws) {
       this.ws.removeAllListeners();
       if (this.ws.readyState === WebSocket.OPEN) {
         this.ws.close(1000, "Client disconnect");
+      } else if (this.ws.readyState === WebSocket.CONNECTING) {
+        // CONNECTING socket would otherwise sit on the kernel TCP timeout
+        // (~1–2 min) before resolving. With the new connect() retry loop the
+        // odds of disconnect racing an in-flight handshake go from "rare"
+        // (old behaviour: connect failure threw immediately) to "every shut-
+        // down during backoff is one tick away from this case", so reach for
+        // terminate to abort the handshake right now.
+        this.ws.terminate();
       }
       this.ws = null;
     }
@@ -463,7 +584,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           this.authLogger.error({ err }, "failed to obtain access token");
           // Refresh token expired / revoked is unrecoverable from inside the
           // process — no amount of retrying will succeed without the
-          // operator running `first-tree-hub connect <new-token>`. Mark the
+          // operator running `first-tree login <new-token>`. Mark the
           // connection closed so `ws.on("close")` doesn't reschedule, and
           // surface an `auth:fatal` event so the consumer (typically the
           // CLI) can print a recovery prompt and exit, letting systemd /
@@ -493,6 +614,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       });
 
       ws.on("message", (data) => {
+        // Any inbound frame proves the peer is alive — refresh the silence
+        // watchdog before parsing so malformed frames still count.
+        this.lastServerMessageAt = Date.now();
         try {
           const msg = JSON.parse(data.toString()) as Record<string, unknown>;
           this.handleMessage(msg, () => settle(resolve));
@@ -501,14 +625,18 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         }
       });
 
+      // RFC 6455 pong: the ws library auto-replies to peer pings, but we also
+      // send our own pings from the heartbeat tick — those round-trips are
+      // what surface a wedged socket within HEARTBEAT_TIMEOUT_MS.
+      ws.on("pong", () => {
+        this.lastServerMessageAt = Date.now();
+      });
+
       ws.on("close", (code) => {
         this.stopHeartbeat();
         this.clearAuthRefreshTimer();
         const wasRegistered = this.registered;
         this.registered = false;
-        // Capability is per-connection — never assume it survives a reconnect.
-        // The next `server:welcome` will re-derive it from the server's flag.
-        this.wsInboxDeliverActive = false;
         this.rejectAllPendingBinds("WebSocket closed");
 
         if (!settled) {
@@ -545,11 +673,18 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
     if (type === "auth:ok") {
       this.authLogger.info("auth accepted, registering client");
-      // Advertise wire-capability opt-in so a `wsDataPlane`-enabled server
-      // routes NOTIFY traffic through `inbox:deliver` frames instead of
-      // legacy `new_message` doorbells. Gated by WS_INBOX_DELIVER_OPT_IN —
-      // see its definition for why both the wire flag and the welcome-cap
-      // gate below need to share a single source of truth.
+      // Pull the last update attempt synchronously off disk so the
+      // register frame carries up-to-date status. Throwing here would
+      // kill registration, so we swallow any unexpected error (the
+      // accessor reads a small JSON file — disk errors are the only
+      // realistic failure mode, and the worst-case outcome is just
+      // omitting the field, which the server schema already tolerates).
+      let lastUpdateAttempt: UpdateAttempt | null = null;
+      try {
+        lastUpdateAttempt = this.getLastUpdateAttempt?.() ?? null;
+      } catch (err) {
+        this.authLogger.warn({ err }, "getLastUpdateAttempt threw; omitting from register frame");
+      }
       this.ws?.send(
         JSON.stringify({
           type: "client:register",
@@ -557,7 +692,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           hostname: getHostname(),
           os: platform(),
           sdkVersion: this.sdkVersion,
-          wireCapabilities: { wsInboxDeliver: WS_INBOX_DELIVER_OPT_IN },
+          ...(lastUpdateAttempt ? { lastUpdateAttempt } : {}),
         }),
       );
       return;
@@ -575,18 +710,6 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         );
         return;
       }
-      // Cache the negotiated push capability for this connection. Reset on
-      // every welcome — if a reconnect lands on an older server with the
-      // flag off, we transparently fall back to the HTTP poll path.
-      // ANDed with WS_INBOX_DELIVER_OPT_IN so a future client kill-switch
-      // (flip the const to false) takes effect symmetrically: we tell the
-      // server "no thanks" via wireCapabilities AND keep the 5s HTTP poll
-      // running. Without the AND, an opt-out client would see welcome's
-      // `wsInboxDeliver:true` and stop polling, but the server — having
-      // received `wireCapabilities.wsInboxDeliver:false` — would keep
-      // sending doorbells and never push deliver frames, leaving messages
-      // stuck if any NOTIFY were ever lost.
-      this.wsInboxDeliverActive = parsed.data.capabilities?.wsInboxDeliver === true && WS_INBOX_DELIVER_OPT_IN;
       const isReconnect = this.welcomeFramesReceived > 0;
       this.welcomeFramesReceived++;
       this.emit("server:welcome", { frame: parsed.data, isReconnect });
@@ -601,7 +724,18 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.authLogger.info("token expired, reconnecting with fresh token");
         this.emit("auth:expired");
       } else {
+        // auth:rejected means the token itself was refused — retrying with
+        // the same token would just thrash. Mark closing so neither the
+        // close-handler reconnect path nor the initial-connect retry loop
+        // tries again, and reuse the auth:fatal channel so the consumer
+        // surfaces the same recovery prompt (re-run `connect <token>`) +
+        // `process.exit(75)` it already runs for AuthRefreshFailedError.
+        // Without the emit, both runtime and initial-handshake paths would
+        // die silently — process stays up, no recovery message, agents
+        // wedged.
         this.authLogger.warn("auth rejected by server");
+        this.closing = true;
+        this.emit("auth:fatal", new Error("Server rejected access token (auth:rejected)"));
       }
       this.ws?.close(4401, type);
       return;
@@ -747,25 +881,25 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       return;
     }
 
-    if (type === "new_message") {
-      const inboxId = msg.inboxId as string | undefined;
-      if (!inboxId) return;
-      if (this.pendingImageWrites.size > 0) {
-        // Defer until recent image writes flush — the HTTP poll for this
-        // message would otherwise race the disk write and surface the
-        // "not available on this device" placeholder.
-        Promise.all([...this.pendingImageWrites]).finally(() => {
-          this.emit("agent:message", inboxId, msg);
-        });
-      } else {
-        this.emit("agent:message", inboxId, msg);
-      }
-      return;
-    }
-
     if (type === "inbox:deliver") {
       const parsed = inboxDeliverFrameSchema.safeParse(msg);
       if (!parsed.success) {
+        // Best-effort ack: without it the server's reaper rolls the entry
+        // back to `pending` 300s later and re-pushes the same frame, which
+        // this build is guaranteed to drop again. The retry loop runs up
+        // to maxRetries before the entry is abandoned — pure spam in both
+        // directions. `entryId` is a top-level field and usually survives
+        // when inner `message` validation is what failed (see frameKeys).
+        // Logged separately as `entryIdAcked` so operators can correlate.
+        const rawEntryId = msg.entryId;
+        // Match `inboxAckFrameSchema`: non-negative integer. A `typeof "number"`
+        // check alone would let NaN / Infinity / floats slip through and ack
+        // would silently no-op on the server side (rejected by its own schema).
+        const entryIdAcked =
+          typeof rawEntryId === "number" && Number.isInteger(rawEntryId) && rawEntryId >= 0 ? rawEntryId : null;
+        if (entryIdAcked !== null) {
+          this.sendInboxAck(entryIdAcked);
+        }
         // Per-issue path/message + the receiving frame keys so we can pinpoint
         // shape drift between server build and client schema during gradual
         // rollouts. Frame body intentionally not logged in full — message
@@ -780,14 +914,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
             })),
             frameKeys: Object.keys(msg),
             messageKeys: msg.message && typeof msg.message === "object" ? Object.keys(msg.message) : null,
+            entryIdAcked,
           },
           "malformed inbox:deliver frame — dropping",
         );
         return;
       }
-      // Same image-write race guard as `new_message`: server pushes
-      // `image_payload` immediately before `inbox:deliver`, so make sure
-      // disk writes flush before the runtime tries to render the message.
+      // Image-write race guard: server pushes `image_payload` immediately
+      // before `inbox:deliver`, so make sure disk writes flush before the
+      // runtime tries to render the message.
       const emit = () => this.emit("inbox:deliver", parsed.data.inboxId, parsed.data);
       if (this.pendingImageWrites.size > 0) {
         Promise.all([...this.pendingImageWrites]).finally(emit);
@@ -868,11 +1003,47 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
+    // Seed the watchdog so the first tick doesn't immediately trip on a fresh
+    // socket that has only seen the welcome frame.
+    this.lastServerMessageAt = Date.now();
     this.heartbeatTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: "heartbeat" }));
+      const ws = this.ws;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+      // Silence watchdog: if neither a data frame nor a pong has come back
+      // within HEARTBEAT_TIMEOUT_MS, the TCP half is presumably dead (this
+      // is exactly the OS-suspend / NAT-rebind / silent-router-drop shape
+      // where readyState stays OPEN but bytes never arrive). Force a close
+      // so the existing handler reschedules a reconnect — sending another
+      // heartbeat on a wedged socket would just queue bytes nobody reads.
+      const silenceMs = Date.now() - this.lastServerMessageAt;
+      if (silenceMs > this.heartbeatTimeoutMs) {
+        this.wsLogger.warn(
+          { silenceMs, timeoutMs: this.heartbeatTimeoutMs },
+          "no server activity within heartbeat timeout — terminating socket to force reconnect",
+        );
+        ws.terminate();
+        return;
       }
-    }, HEARTBEAT_INTERVAL_MS);
+
+      // Application-level heartbeat keeps server-side presence /
+      // last-seen counters fresh (clientService.heartbeatClient,
+      // presenceService.touchAgent). RFC 6455 ping is what the watchdog
+      // actually relies on — the ws library on the server side
+      // auto-replies with a pong, giving us a transport-level liveness
+      // check independent of any application handler. Both are wrapped:
+      // a send() race against readyState (e.g. the socket transitioned to
+      // CLOSING between the guard and the call) would otherwise propagate
+      // out of the interval callback as an unhandled exception. The
+      // silence watchdog above is the source of truth — losing a single
+      // send is fine.
+      try {
+        ws.send(JSON.stringify({ type: "heartbeat" }));
+        ws.ping();
+      } catch {
+        // ignore — the silence watchdog above is the source of truth
+      }
+    }, this.heartbeatIntervalMs);
   }
 
   private stopHeartbeat(): void {

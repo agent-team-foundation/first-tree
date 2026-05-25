@@ -19,7 +19,7 @@ import { LandingNav } from "./nav.js";
 export function LandingPage() {
   useEffect(() => {
     const previous = document.title;
-    document.title = "First Tree Hub — Communication infrastructure for AI-native teams";
+    document.title = "First Tree — Agent teams run here";
     return () => {
       document.title = previous;
     };

@@ -18,8 +18,13 @@ declare module "fastify" {
     adapterManager: AdapterManager;
     notifier: Notifier;
     configService: ConfigService;
-    /** Command-package version advertised via the `server:welcome` WS frame. */
-    commandVersion: string;
+    /**
+     * Command-package version advertised via the `server:welcome` WS frame.
+     * Exposed as a getter so the npm-registry poller can refresh the value
+     * without re-decorating the Fastify instance. Call it on the hot WS path
+     * — it's a synchronous in-memory read.
+     */
+    commandVersion: () => string;
   }
   interface FastifyRequest {
     agent?: AgentIdentity;

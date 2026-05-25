@@ -2,7 +2,7 @@ import { Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { Section } from "../../components/ui/section.js";
 
 /**
  * System Prompt Append — inline editor, no dialog. `Done` collapses the editor
@@ -24,42 +24,50 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
   const dirty = value !== baseline;
 
   useEffect(() => {
-    if (editing) taRef.current?.focus();
+    if (!editing) return;
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.focus();
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
   }, [editing]);
 
+  const action =
+    !editing && !disabled ? (
+      <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
+        <Pencil className="h-3 w-3" /> Edit
+      </Button>
+    ) : null;
+
   return (
-    <Panel
-      style={{
-        borderColor: dirty ? "color-mix(in oklch, var(--state-blocked) 70%, transparent)" : undefined,
-      }}
-    >
-      <PanelHeader>
-        <PanelTitle>
+    <Section
+      title={
+        <span className="inline-flex items-center gap-2">
           System prompt append
           {dirty && <ChangedChip />}
-        </PanelTitle>
-        {!editing && !disabled && (
-          <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
-            <Pencil className="h-3 w-3" /> Edit
-          </Button>
-        )}
-      </PanelHeader>
-
-      <PanelBody>
+        </span>
+      }
+      action={action}
+    >
+      <div style={{ padding: "var(--sp-3) 0" }}>
         {editing ? (
           <div className="space-y-2">
             <textarea
               ref={taRef}
               value={value}
-              onChange={(e) => onChange(e.target.value)}
+              onChange={(e) => {
+                onChange(e.target.value);
+                e.currentTarget.style.height = "auto";
+                e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
                   setEditing(false);
                 }
               }}
-              rows={10}
-              className="w-full rounded border bg-transparent p-2 font-mono text-body shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              className="w-full resize-none overflow-hidden rounded border bg-transparent p-2 font-mono text-body shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              style={{ minHeight: "10rem" }}
               placeholder="Appended to Claude Code's default system prompt."
               maxLength={32_000}
               spellCheck={false}
@@ -80,13 +88,10 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
                 Done
               </Button>
             </div>
-            <p className="text-caption text-muted-foreground">
-              `Done` collapses this editor. The change is saved only when you click Save in the bar at the bottom of the
-              page.
-            </p>
+            <p className="text-caption text-muted-foreground">Use Save below to apply this prompt change.</p>
           </div>
         ) : (
-          <div className="rounded bg-muted p-3 text-body max-h-64 overflow-auto min-h-8">
+          <div className="text-body min-h-8">
             {value ? (
               <Markdown>{value}</Markdown>
             ) : (
@@ -94,8 +99,8 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
             )}
           </div>
         )}
-      </PanelBody>
-    </Panel>
+      </div>
+    </Section>
   );
 }
 

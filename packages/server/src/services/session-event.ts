@@ -1,9 +1,21 @@
-import type { SessionEvent, SessionEventKind } from "@agent-team-foundation/first-tree-hub-shared";
-import { sessionEventSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm";
+import type {
+  ContextTreeUsageEvent,
+  ContextTreeUsageSummary,
+  SessionEvent,
+  SessionEventKind,
+} from "@first-tree/shared";
+import { sessionEventSchema } from "@first-tree/shared";
+import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { sessionEvents } from "../db/schema/session-events.js";
+import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
+import { maybeBindGithubEntityFromToolCall } from "./github-entity-chat.js";
+
+const log = createLogger("SessionEvent");
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
@@ -50,7 +62,14 @@ export async function appendEvent(
 
   for (let attempt = 0; attempt < MAX_SEQ_RETRIES; attempt++) {
     const id = uuidv7();
-    const payloadJson = JSON.stringify(validated.payload);
+    // PG JSONB rejects U+0000 outright. Strip the escaped sequence from the
+    // serialized JSON so a binary preview (e.g. ZIP bytes from
+    // `gh api .../actions/runs/<id>/logs` reaching us through a tool stdout)
+    // does not nuke the whole event. The client already replaces obvious
+    // binary previews with a placeholder; this is the last-mile gate for any
+    // path the client sanitizer does not cover (future handlers, other
+    // free-form string fields).
+    const payloadJson = JSON.stringify(validated.payload).replaceAll("\\u0000", "");
     const result = await db.execute<{
       id: string;
       agent_id: string;
@@ -71,7 +90,7 @@ export async function appendEvent(
 
     const row = result[0];
     if (row) {
-      return rowToEvent({
+      const persisted = rowToEvent({
         id: row.id,
         agentId: row.agent_id,
         chatId: row.chat_id,
@@ -80,6 +99,21 @@ export async function appendEvent(
         payload: row.payload,
         createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
       });
+
+      // Side-effect: when a tool_call event reports the agent just created a
+      // GitHub PR/Issue, write the chat ↔ entity mapping eagerly so the
+      // incoming `*.opened` webhook routes back to this chat instead of
+      // forking a fresh one. Fire-and-forget — the main session-event write
+      // has already succeeded and must not be unwound on bookkeeping
+      // failures. Status filter avoids spurious DB queries: only `ok` events
+      // carry a stdout preview worth extracting from.
+      if (validated.kind === "tool_call" && validated.payload.status === "ok") {
+        maybeBindGithubEntityFromToolCall(db, agentId, chatId, validated.payload).catch((err) => {
+          log.warn({ err, agentId, chatId }, "agent_binding side-effect failed");
+        });
+      }
+
+      return persisted;
     }
   }
 
@@ -138,4 +172,181 @@ export async function listEvents(
 /** Delete all events for a session — called on eviction / termination. */
 export async function clearEvents(db: Database, agentId: string, chatId: string): Promise<void> {
   await db.delete(sessionEvents).where(and(eq(sessionEvents.agentId, agentId), eq(sessionEvents.chatId, chatId)));
+}
+
+const CONTEXT_TREE_USAGE_FEED_LIMIT = 50;
+
+/**
+ * Read the tree-root-relative `nodePath` out of a stored context_tree_usage
+ * payload (jsonb). Pre-P0 events predate the field and resolve to null; the
+ * payload is `unknown` from the DB driver so we narrow defensively.
+ */
+function nodePathFromPayload(payload: unknown): string | null {
+  if (payload && typeof payload === "object" && "nodePath" in payload) {
+    const value = (payload as { nodePath?: unknown }).nodePath;
+    if (typeof value === "string") return value;
+  }
+  return null;
+}
+
+/**
+ * The caller's identity within the org whose usage feed is being read.
+ * Used to decide, per event, whether the caller may actually open the chat
+ * (`viewerCanAccess`). Both fields are scoped to the same org as the feed,
+ * so they mirror the values `requireChatAccess` would resolve for the chat.
+ */
+export type ContextTreeUsageViewer = {
+  /** The caller's HUMAN agent in this org (the chat_membership anchor). */
+  humanAgentId: string;
+  /** The caller's `members.id` in this org (the manage-a-speaker anchor). */
+  memberId: string;
+};
+
+/**
+ * Of `chatIds` (all in the viewer's org), the subset the viewer may open.
+ * Mirrors `requireChatAccess` exactly: a chat is accessible if the caller's
+ * human agent has any `chat_membership` row (speaker OR watcher), or the
+ * caller manages an agent that is a `speaker` in the chat. Two batched
+ * queries bounded by `chatIds` — no per-event N+1.
+ */
+async function accessibleChatIdSet(
+  db: Database,
+  viewer: ContextTreeUsageViewer,
+  chatIds: string[],
+): Promise<Set<string>> {
+  const accessible = new Set<string>();
+  if (chatIds.length === 0) return accessible;
+
+  // Direct membership — caller's human agent is a speaker or watcher.
+  const directRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.agentId, viewer.humanAgentId)));
+  for (const row of directRows) accessible.add(row.chatId);
+
+  // Supervised speaker — caller manages an agent that speaks in the chat.
+  const supervisedRows = await db
+    .select({ chatId: chatMembership.chatId })
+    .from(chatMembership)
+    .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
+    .where(
+      and(
+        inArray(chatMembership.chatId, chatIds),
+        eq(chatMembership.accessMode, "speaker"),
+        eq(agents.managerId, viewer.memberId),
+      ),
+    );
+  for (const row of supervisedRows) accessible.add(row.chatId);
+
+  return accessible;
+}
+
+/**
+ * Org-wide aggregate counts + the most recent context-tree usage events
+ * for the org. The Context Tab is an org-wide transparency surface — any
+ * member can see who has been using the tree, including the chat topic
+ * each session belongs to. Chat *content* stays gated by
+ * `requireChatAccess` on the chat-detail route; this feed only exposes
+ * the topic label (and id, for routing).
+ *
+ * The only chat-related gate here is **cross-org**: an event whose
+ * `chat_id` points at a chat outside this org has both `chatId` and
+ * `chatTitle` masked to null. `chats` is left-joined under an explicit
+ * `organization_id = $org` predicate so the planner cannot accidentally
+ * surface a foreign org's topic; the resulting `joinedChatId` is the
+ * authoritative signal for "this chat lives in this org".
+ *
+ * `viewerCanAccess` is layered on top: the topic/id stay org-wide visible,
+ * but only a `viewer` who passes `requireChatAccess`'s membership rule for a
+ * given chat gets `viewerCanAccess: true` (the web feed turns that into a
+ * clickable deep link; everyone else sees inert text). Fail-closed: when no
+ * `viewer` is supplied every event is `viewerCanAccess: false`.
+ */
+export async function summarizeContextTreeUsage(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+  viewer?: ContextTreeUsageViewer,
+): Promise<ContextTreeUsageSummary> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const [aggregate] = await db
+    .select({
+      agentCount: sql<number>`count(distinct ${sessionEvents.agentId})::int`,
+      usageCount: sql<number>`count(*)::int`,
+    })
+    .from(sessionEvents)
+    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+    .where(
+      and(
+        eq(agents.organizationId, organizationId),
+        eq(sessionEvents.kind, "context_tree_usage"),
+        gte(sessionEvents.createdAt, since),
+      ),
+    );
+
+  const recentRows = await db
+    .select({
+      id: sessionEvents.id,
+      agentId: sessionEvents.agentId,
+      agentName: agents.displayName,
+      agentAvatarColorToken: agents.avatarColorToken,
+      rawChatId: sessionEvents.chatId,
+      // chats.id from a left join is null iff the join did not match —
+      // distinct from chats.topic being null (chat exists but the manager
+      // has not set a topic). We branch on this to decide whether the chat
+      // lives in the same org as the caller's snapshot.
+      joinedChatId: chats.id,
+      chatTopic: chats.topic,
+      payload: sessionEvents.payload,
+      createdAt: sessionEvents.createdAt,
+    })
+    .from(sessionEvents)
+    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+    .leftJoin(chats, and(eq(chats.id, sessionEvents.chatId), eq(chats.organizationId, organizationId)))
+    .where(
+      and(
+        eq(agents.organizationId, organizationId),
+        eq(sessionEvents.kind, "context_tree_usage"),
+        gte(sessionEvents.createdAt, since),
+      ),
+    )
+    .orderBy(desc(sessionEvents.createdAt))
+    .limit(CONTEXT_TREE_USAGE_FEED_LIMIT);
+
+  // Resolve which in-org chats the caller may actually open, in one batch up
+  // front so the per-event map stays O(1). Cross-org events are excluded here
+  // because their chatId is masked away anyway.
+  const inOrgChatIds = [...new Set(recentRows.filter((row) => row.joinedChatId !== null).map((row) => row.rawChatId))];
+  const accessibleChatIds = viewer ? await accessibleChatIdSet(db, viewer, inOrgChatIds) : new Set<string>();
+
+  const recentEvents: ContextTreeUsageEvent[] = recentRows.map((row) => {
+    const sameOrgChat = row.joinedChatId !== null;
+    return {
+      id: row.id,
+      agentId: row.agentId,
+      agentName: row.agentName,
+      agentAvatarColorToken: row.agentAvatarColorToken,
+      // Mask both together when the chat is not in this org — chatId is
+      // identifying info on its own. Topic being null for an in-org chat
+      // is a legitimate "no topic set" signal and stays as `chatTitle: null`
+      // with a non-null `chatId`.
+      chatId: sameOrgChat ? row.rawChatId : null,
+      chatTitle: sameOrgChat ? row.chatTopic : null,
+      // Surface which node the agent read straight from the stored payload.
+      // No node-frequency aggregation here — that's P1.
+      nodePath: nodePathFromPayload(row.payload),
+      // Org-wide we expose the chat label, but only a viewer who passes the
+      // chat's membership rule gets a clickable link. Cross-org rows have no
+      // chatId, so they can never be accessible.
+      viewerCanAccess: sameOrgChat && accessibleChatIds.has(row.rawChatId),
+      createdAt: row.createdAt.toISOString(),
+    };
+  });
+
+  return {
+    windowDays,
+    agentCount: aggregate?.agentCount ?? 0,
+    usageCount: aggregate?.usageCount ?? 0,
+    recentEvents,
+  };
 }

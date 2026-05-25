@@ -2,15 +2,37 @@ import { z } from "zod";
 
 // -- Message Source (which entry point created this message) --
 
+/**
+ * Entry point that produced this message. Required (NOT NULL) after v2 —
+ * every write path must declare its caller-stack origin so observability /
+ * loop / egress diagnostics can join on it.
+ *
+ *   - "web"     — Hub web UI (POST /chats/:id/messages from a browser
+ *                 session; includes AskUserQuestion answers submitted via
+ *                 the web UI).
+ *   - "cli"     — Agent's `first-tree` CLI (`chat send` / `chat invite`
+ *                 / etc.).
+ *   - "api"     — Agent SDK direct API call (incl. result-sink auto-forward,
+ *                 in-process tool integrations, AskUserQuestion publish);
+ *                 the catch-all for client runtime-initiated writes that
+ *                 aren't typed via the CLI.
+ *   - "feishu"  — Inbound message bridged from a Feishu adapter.
+ *   - "github"  — Inbound message bridged from a GitHub webhook.
+ *
+ * NOT a behaviour discriminator — use `purpose` for that (e.g. distinguishing
+ * a CLI-typed agent send from a result-sink auto-forward, both of which may
+ * carry source='api'/'cli'). `source` is the caller-stack origin, intended
+ * for observability and loop / egress diagnostics.
+ */
 export const MESSAGE_SOURCES = {
-  HUB_UI: "hub_ui",
+  WEB: "web",
   CLI: "cli",
   FEISHU: "feishu",
   GITHUB: "github",
   API: "api",
 } as const;
 
-export const messageSourceSchema = z.enum(["hub_ui", "cli", "feishu", "github", "api"]);
+export const messageSourceSchema = z.enum(["web", "cli", "feishu", "github", "api"]);
 export type MessageSource = z.infer<typeof messageSourceSchema>;
 
 export const MESSAGE_FORMATS = {
@@ -36,26 +58,55 @@ export const messageFormatSchema = z.enum([
 ]);
 export type MessageFormat = z.infer<typeof messageFormatSchema>;
 
+/**
+ * Optional intent tag set by the client when posting through
+ * `POST /agent/chats/:id/messages`. Tells the server *why* this write is
+ * happening so it can pick the right enforcement profile.
+ *
+ *   - `"agent-final-text"`: handler-initiated forward of an agent's final
+ *     reply text (today: `runtime/result-sink.ts`) OR an `AskUserQuestion`
+ *     payload posted via the canUseTool bridge. Both should land in chat
+ *     history so human observers in the web UI can see what the agent is
+ *     doing, but neither should wake other agents and neither should be
+ *     subject to the group-chat `@mention required` guard — they are not
+ *     a user-typed group broadcast. v1 §四 改造 4 (b) bypass channel.
+ *
+ * Default-`undefined` means a regular agent-initiated send (CLI `chat send`,
+ * adapter, etc.) and goes through the normal enforcement profile.
+ */
+export const messagePurposeSchema = z.enum(["agent-final-text"]);
+export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
+
 export const sendMessageSchema = z.object({
   format: messageFormatSchema.default("text"),
   content: z.unknown(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   inReplyTo: z.string().optional(),
-  replyToInbox: z.string().optional(),
-  replyToChat: z.string().optional(),
-  source: messageSourceSchema.optional(),
+  /**
+   * Required output (NOT NULL in `messages.source`). The Zod `.default("api")`
+   * lets HTTP request bodies omit the field — Hub's pre-v2 HTTP clients still
+   * send messages without `source`, and a deploy that suddenly 422'd those
+   * requests would be a needless coupling break. The default fills in for
+   * those callers; in-process TS callers go through `z.infer<>` (= the
+   * `SendMessage` type), where `source` is structurally required and must be
+   * passed explicitly so a forgotten value surfaces as a compile error
+   * rather than silently labelling everything `'api'`.
+   */
+  source: messageSourceSchema.default("api"),
+  purpose: messagePurposeSchema.optional(),
+  /**
+   * Recipient agent names that the server should resolve to uuids against
+   * the chat's participant list and add to the message's `mentions`. Lets
+   * a caller who knows the recipient by name (CLI `chat send <name>`,
+   * tool integrations, etc.) declare routing intent without having to
+   * pre-resolve uuids client-side. Server cross-validates each name
+   * against the chat's speakers — an unknown name fails the write with
+   * a hint pointing at `chat invite`. Agent-typed clients should always
+   * prefer this over relying on `@<name>` extraction from `content`.
+   */
+  receiverNames: z.array(z.string().min(1)).optional(),
 });
 export type SendMessage = z.infer<typeof sendMessageSchema>;
-
-export const sendToAgentSchema = z.object({
-  format: messageFormatSchema.default("text"),
-  content: z.unknown(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  replyToInbox: z.string().optional(),
-  replyToChat: z.string().optional(),
-  source: messageSourceSchema.optional(),
-});
-export type SendToAgent = z.infer<typeof sendToAgentSchema>;
 
 export const messageSchema = z.object({
   id: z.string(),
@@ -64,32 +115,11 @@ export const messageSchema = z.object({
   format: z.string(),
   content: z.unknown(),
   metadata: z.record(z.string(), z.unknown()),
-  replyToInbox: z.string().nullable(),
-  replyToChat: z.string().nullable(),
   inReplyTo: z.string().nullable(),
   source: messageSourceSchema.nullable(),
   createdAt: z.string(),
 });
 export type Message = z.infer<typeof messageSchema>;
-
-/**
- * Snapshot of the `in_reply_to` target that the server materialises at
- * dispatch time so the receiving runtime can decide whether this is an
- * echo it should suppress (see proposal hub-agent-messaging-reply-and-mentions).
- *
- * `chatId` is the original message's `chat_id`; `replyToChat` is the chat
- * its sender expected replies to flow back to (often a different chat).
- * `null` when the message is not a reply, or the original could not be
- * resolved (e.g. deleted).
- */
-export const inReplyToSnapshotSchema = z
-  .object({
-    senderId: z.string(),
-    chatId: z.string(),
-    replyToChat: z.string().nullable(),
-  })
-  .nullable();
-export type InReplyToSnapshot = z.infer<typeof inReplyToSnapshotSchema>;
 
 /** Per-chat participation mode exposed to the recipient runtime. */
 export const participantModeSchema = z.enum(["full", "mention_only"]);
@@ -128,9 +158,6 @@ export type PrecedingMessage = z.infer<typeof precedingMessageSchema>;
  * `mention_only` participants must only start a session when they appear in
  * `metadata.mentions` (see session-manager.ts).
  *
- * `inReplyToSnapshot` is populated when `inReplyTo` resolves to an existing
- * message; runtime uses it to suppress self-reply echo on direct chats.
- *
  * `precedingMessages` is a (possibly empty) list of older messages in the
  * same chat that this recipient did not previously receive (silent inbox
  * context). The runtime renders them as "earlier in chat" before the
@@ -138,8 +165,24 @@ export type PrecedingMessage = z.infer<typeof precedingMessageSchema>;
  */
 export const clientMessageSchema = messageSchema.extend({
   configVersion: z.number().int().positive(),
+  // Forward-roll defence: the server may push new source values before the
+  // client ships the matching enum update (e.g. a new adapter is added).
+  // Without `.catch`, the strict enum rejects the whole inbox frame, which
+  // forces a 300s reaper round-trip before re-delivery — and that retry
+  // hits the same schema mismatch, so the entry exhausts retryCount and
+  // is effectively lost. Degrading unknown values to `null` keeps the
+  // frame parseable so the handler still receives the message body; only
+  // the audit-trail `source` label is lost. Mirrors the
+  // inboxDeliverFrameSchema `.passthrough()` policy for top-level fields.
+  //
+  // Scope: `.catch` is field-scoped — it fires for ANY shape mismatch on
+  // `source` (unknown enum value, wrong type like `12345`, missing /
+  // undefined), not just enum drift. Acceptable because `source` is a
+  // pure audit label that handlers never branch on. Other fields' parse
+  // errors still bubble up to the parent `safeParse`, so required-shape
+  // drift on id / chatId / format is NOT silently swallowed.
+  source: messageSourceSchema.nullable().catch(null),
   recipientMode: participantModeSchema.default("full"),
-  inReplyToSnapshot: inReplyToSnapshotSchema.default(null),
   precedingMessages: z.array(precedingMessageSchema).default([]),
 });
 export type ClientMessage = z.infer<typeof clientMessageSchema>;

@@ -4,22 +4,17 @@ import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
 /**
- * Boot-time gate: a typo in `FIRST_TREE_HUB_AUTH_*_EXPIRY` must fail the
+ * Boot-time gate: a typo in `FIRST_TREE_AUTH_*_EXPIRY` must fail the
  * server boot, not the first `/connect-tokens` call hours later.
  *
- * Why this lives next to buildApp rather than next to expiryToSeconds:
- * the parser itself is already covered by `auth-expiry-parse.test.ts`.
- * What we're guarding here is that the validation *call site* still
- * exists in the boot path. An earlier draft put the same check in
- * `server/src/index.ts:main`, which the standalone bin uses but the
- * CLI's `server start` (the path 99% of users run) bypasses entirely
- * — so the gate was effectively dead despite passing every unit test.
- * Asserting via buildApp covers BOTH entry points, since both flow
- * through it.
+ * The parser itself is covered by `auth-expiry-parse.test.ts`; this test
+ * guards that the validation *call site* still lives in the buildApp boot
+ * path so a config typo trips the assertion before listen() returns.
  */
 const baseConfig: Config = {
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
+  workspace: { root: "/tmp/first-tree-test-workspaces" },
   secrets: {
     jwtSecret: "test-jwt-secret-key-for-vitest",
     encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -32,7 +27,16 @@ const baseConfig: Config = {
     maxRetryCount: 3,
     pollingIntervalSeconds: 5,
     presenceCleanupSeconds: 60,
+    archiveSweepIntervalSeconds: 0,
+    archiveMappedIdleSeconds: 60 * 60,
+    archiveUnmappedIdleSeconds: 12 * 60 * 60,
     notificationWebhookUrl: undefined,
+  },
+  update: {
+    channel: "latest",
+    commandVersion: "test.version",
+    pollIntervalMinutes: 1440,
+    registryUrl: "https://localhost.invalid",
   },
   instanceId: "test-instance",
 };

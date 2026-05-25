@@ -1,4 +1,4 @@
-import { MENTION_REGEX, type SessionState, stripCode } from "@agent-team-foundation/first-tree-hub-shared";
+import { MENTION_REGEX, type SessionState, stripCode } from "@first-tree/shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
@@ -52,6 +52,14 @@ export type SessionListItem = {
   agentId: string;
   chatId: string;
   state: string;
+  /**
+   * Agent-global `agent_presence.runtime_state` copied onto every session
+   * row for the same agent. NOT a per-session axis. Retained because admin
+   * / roster views consume the aggregate; for per-(agent, chat) signals
+   * read `state` (lifecycle) or `MeChatRow.liveActivity` (live working).
+   *
+   * @deprecated for per-session UI.
+   */
   runtimeState: string | null;
   startedAt: string;
   lastActivityAt: string;
@@ -379,6 +387,12 @@ async function transitionSessionState(
     // also revert the question state — preserves atomicity with the chat
     // session state flip itself.
     if (target === "evicted") {
+      // No explicit needs-you push needed here: this transition emits a
+      // post-commit `notifySessionStateChange` below, which the web admin WS
+      // already maps to a `me/chats` refetch — so the cleared (superseded)
+      // pending question drops out of `pendingQuestionAgentIds` on the next
+      // list load. The client-claim path (client.ts) has no such session:state
+      // change, which is why only that path fires `notifyChatMessage`.
       await markSupersededByChat(tx, chatId, "chat_archived");
     }
 

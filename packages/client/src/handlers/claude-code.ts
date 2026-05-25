@@ -1,20 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  AgentRuntimeConfigPayload,
-  SessionEvent,
-  SupportedImageMime,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import {
-  deriveRepoLocalPath,
-  type QuestionItem,
-  type QuestionMessageContent,
-  questionItemSchema,
-  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
-} from "@agent-team-foundation/first-tree-hub-shared";
 import type {
   CanUseTool,
   McpServerConfig,
@@ -24,9 +12,29 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
+import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  type QuestionItem,
+  type QuestionMessageContent,
+  questionItemSchema,
+  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
+} from "@first-tree/shared";
 import { z } from "zod";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { bootstrapWorkspace, installFirstTreeIntegration } from "../runtime/bootstrap.js";
+import {
+  bootstrapWorkspace,
+  buildChatSystemPrompt,
+  deepEqualIdentity,
+  installFirstTreeIntegration,
+  isHubWorktreeMarker,
+  type PredeclaredSourceRepo,
+  readCachedContextTreeHead,
+  readContextTreeHead,
+  writeContextTreeHead,
+} from "../runtime/bootstrap.js";
+import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
   AgentHandler,
@@ -37,8 +45,9 @@ import type {
 } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
-import { acquireWorkspace, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
-import { clearPendingForAgent, registerPendingQuestion, rejectPendingForAgent } from "./ask-user-bridge.js";
+import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
+import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
+import { clearPendingForChat, registerPendingQuestion, rejectPendingForChat } from "./ask-user-bridge.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
@@ -116,7 +125,7 @@ function sanitizeChatId(chatId: string): string {
  * image_payload WS push which pre-writes to the data dir before delivery.
  */
 async function writeLegacyImageToTempFile(content: LegacyImageFileContent, chatId: string): Promise<string> {
-  const dir = join(tmpdir(), "first-tree-hub", "images", sanitizeChatId(chatId));
+  const dir = join(tmpdir(), "first-tree", "images", sanitizeChatId(chatId));
   await mkdir(dir, { recursive: true });
   const ext = MIME_TO_EXT[content.mimeType];
   const path = join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`);
@@ -186,15 +195,72 @@ function extractToolResultText(content: unknown): string {
 }
 
 /**
+ * View tools whose `file_path` argument names a single file the model is
+ * reading. A read of a file under the Context Tree root is the honest
+ * "agent consulted the tree" signal (see `treeNodePathOf`). Search tools
+ * (Grep/Glob) are excluded — they scan, they don't read a specific node.
+ */
+const TREE_READ_TOOL_NAMES: ReadonlySet<string> = new Set(["Read", "NotebookRead"]);
+
+/** Extract a string `file_path` argument from a tool_use input, if present. */
+function readFilePathArg(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const fp = (input as { file_path?: unknown }).file_path;
+  return typeof fp === "string" ? fp : null;
+}
+
+/**
+ * If `filePath` lives under `contextTreePath`, return its tree-root-relative
+ * path (e.g. `members/Gandy2025/NODE.md`); otherwise null. The agent reads
+ * tree files by absolute path (CLAUDE.md points it at the full tree at
+ * `contextTreePath`), so a prefix match on the normalised root is the filter.
+ * The trailing-slash trim keeps `/a/tree` from matching `/a/tree-other/x`.
+ *
+ * Invariant: both `filePath` and `contextTreePath` are expected to be
+ * absolute. A relative `filePath` will not match the absolute root and returns
+ * null — i.e. it silently under-counts (fails safe) rather than mis-attributing.
+ */
+export function treeNodePathOf(filePath: string, contextTreePath: string): string | null {
+  if (!filePath || !contextTreePath) return null;
+  const root = contextTreePath.endsWith("/") ? contextTreePath.slice(0, -1) : contextTreePath;
+  if (!filePath.startsWith(`${root}/`)) return null;
+  const rel = filePath.slice(root.length + 1);
+  return rel.length > 0 ? rel : null;
+}
+
+/**
+ * If a tool with this name + input is a tree-file read, return the node path
+ * it read; else null.
+ */
+function treeReadNodePath(toolName: string, input: unknown, contextTreePath: string): string | null {
+  if (!TREE_READ_TOOL_NAMES.has(toolName)) return null;
+  const filePath = readFilePathArg(input);
+  if (filePath === null) return null;
+  return treeNodePathOf(filePath, contextTreePath);
+}
+
+/** Context Tree binding the tool-call processor needs to emit usage signals. */
+export type ContextTreeBinding = { path: string | null; repoUrl: string | null };
+
+/**
  * Pair `tool_use` (assistant) with `tool_result` (user) blocks and emit a
  * `tool_call` event per pair. Unpaired entries are flushed as `status: "pending"`.
+ *
+ * When a `contextTree` binding is supplied, a view tool whose read of a file
+ * under the tree root SUCCEEDS ALSO emits a `context_tree_usage` event carrying
+ * the node path — the honest replacement for the old per-inbound-message emit.
+ * Emitting on the successful tool_result (not the tool_use request) means
+ * failed/aborted reads never inflate the signal.
  */
 export type ToolCallProcessor = {
   onMessage(message: unknown): void;
   flush(): void;
 };
 
-export function createToolCallProcessor(emit: (event: SessionEvent) => void): ToolCallProcessor {
+export function createToolCallProcessor(
+  emit: (event: SessionEvent) => void,
+  contextTree?: ContextTreeBinding,
+): ToolCallProcessor {
   type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
   const pending = new Map<string, Pending>();
 
@@ -216,6 +282,23 @@ export function createToolCallProcessor(emit: (event: SessionEvent) => void): To
         ...(resultPreview !== undefined ? { resultPreview } : {}),
       },
     });
+
+    // Honest Context Tree usage: a view tool that successfully read a file
+    // under the tree root means the agent actually consulted that node. Emit
+    // here (on the successful tool_result), not on the tool_use request, so
+    // failed reads (is_error) and aborted/unanswered reads never count.
+    // Carries the node path so the web feed can show which node was read.
+    // Replaces the old unconditional per-inbound-message emit (the vanity metric).
+    if (status === "ok" && contextTree?.path) {
+      const nodePath = treeReadNodePath(entry.name, entry.args, contextTree.path);
+      if (nodePath !== null) {
+        emit({
+          kind: "context_tree_usage",
+          payload: { purpose: "design_decision", treeRepoUrl: contextTree.repoUrl, nodePath },
+        });
+      }
+    }
+
     pending.delete(block.tool_use_id);
   }
 
@@ -342,6 +425,25 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let appliedPayload: AgentRuntimeConfigPayload | null = null;
   /** Worktrees materialised for this session — each entry removed on shutdown. */
   const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
+  /**
+   * Latest chat-context snapshot for the active session. Used to build the
+   * per-turn system-prompt block injected via `systemPrompt.append`. Cleared
+   * when the session ends or `start()` runs for a fresh session.
+   */
+  let chatContextForPrompt: ChatContext | undefined;
+  /**
+   * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced in
+   * the per-turn prompt block so the LLM knows the absolute paths without
+   * having to discover them.
+   */
+  /**
+   * Predeclared source repos materialised at `<agentHome>/<localPath>/` by
+   * `prepareSourceRepos`. Surfaced in the per-chat system-prompt block so
+   * the LLM knows their absolute paths. NOT to be confused with on-demand
+   * worktrees the agent itself creates under `<agentHome>/worktrees/<name>/`
+   * — those are runtime-opaque (created by the agent, not by Hub).
+   */
+  let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
 
   async function toSDKUserMessage(
     message: SessionMessage,
@@ -452,7 +554,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       for (const e of payload.env) env[e.key] = e.value;
     }
 
-    // Child processes receive the member access JWT as FIRST_TREE_HUB_ACCESS_TOKEN
+    // Child processes receive the member access JWT as FIRST_TREE_ACCESS_TOKEN
     // and pair it with X-Agent-Id (sent by the SDK automatically) to act as
     // the current agent. Obtaining the token at buildEnv-time means the child
     // sees the JWT valid at its spawn moment; long-lived runtimes should
@@ -461,7 +563,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /** Create query and input controller, then start consumer loop. */
-  function spawnQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
+  function spawnQuery(sessionId: string, sessionCtx: SessionContext, resume?: string, chatContext?: ChatContext): void {
+    // Stash the chat-context so respawn (config hot-switch retry) keeps it
+    // available without the caller having to thread it through again.
+    if (chatContext !== undefined) {
+      chatContextForPrompt = chatContext;
+    }
     buildQuery(sessionId, sessionCtx, resume);
     recordAppliedPayload(sessionCtx);
     consumerDone = consumeOutput(sessionCtx);
@@ -527,6 +634,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
           format: "question",
           content: questionContent,
+          source: "api",
+          // Same bypass channel result-sink uses: an AskUserQuestion is a
+          // handler-initiated post, not a user-typed group broadcast — it
+          // must not be rejected by the group-chat `@mention required`
+          // guard and must not wake other agents in the chat. v1 §四 改造 4
+          // (b) bypass channel.
+          purpose: "agent-final-text",
         });
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -552,7 +666,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (options.signal.aborted) {
         // The query was aborted while we were waiting (eviction, restart,
         // hot-switch). The bridge entry has already been removed by
-        // `rejectPendingForAgent`; just return a deny so the SDK unwinds.
+        // `rejectPendingForChat`; just return a deny so the SDK unwinds.
         return {
           behavior: "deny",
           message: "AskUserQuestion aborted before an answer arrived.",
@@ -600,6 +714,23 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
 
+    // Compose `systemPrompt.append`: agent-config-managed append (Hub) +
+    // per-chat block (built from the latest chatContext + predeclared
+    // worktrees). The SDK only accepts a single string here, so we
+    // concatenate with a blank-line separator. Either piece may be empty;
+    // the systemPrompt option is omitted entirely if the combined string
+    // is empty so we don't change SDK behavior for callers that never had
+    // a Hub-managed append.
+    const agentConfigAppend = payload?.prompt.append?.trim() ?? "";
+    const perChatAppend = cwd
+      ? buildChatSystemPrompt({
+          agentHome: cwd,
+          chatContext: chatContextForPrompt,
+          sourceRepos: sourceReposForPrompt,
+        }).trim()
+      : "";
+    const combinedAppend = [agentConfigAppend, perChatAppend].filter((s) => s.length > 0).join("\n\n");
+
     currentQuery = claudeQuery({
       prompt: inputController.iterable,
       options: {
@@ -634,8 +765,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         toolConfig: { askUserQuestion: { previewFormat: "html" } },
         ...(claudeCodeExecutable ? { pathToClaudeCodeExecutable: claudeCodeExecutable } : {}),
         ...(payload?.model ? { model: payload.model } : {}),
-        ...(payload?.prompt.append
-          ? { systemPrompt: { type: "preset", preset: "claude_code", append: payload.prompt.append } }
+        ...(combinedAppend.length > 0
+          ? { systemPrompt: { type: "preset", preset: "claude_code", append: combinedAppend } }
           : {}),
         ...(payload?.mcpServers.length ? { mcpServers: mapMcpServers(payload) } : {}),
       },
@@ -692,7 +823,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   async function consumeOutput(sessionCtx: SessionContext): Promise<void> {
-    const toolCallProcessor = createToolCallProcessor((event) => sessionCtx.emitEvent(event));
+    const toolCallProcessor = createToolCallProcessor((event) => sessionCtx.emitEvent(event), {
+      path: contextTreePath,
+      repoUrl: contextTreeRepoUrl,
+    });
     try {
       while (true) {
         if (!currentQuery) return;
@@ -729,7 +863,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // handler shares one code path — see runtime/result-sink.ts.
                     await sessionCtx.forwardResult(resultText);
                     sessionCtx.log("Result forwarded to chat");
-                    sessionCtx.reportSessionCompletion();
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                   } catch (err) {
                     const reason = err instanceof Error ? err.message : String(err);
@@ -791,6 +924,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             respawnQuery(claudeSessionId, sessionCtx);
           } catch (resumeErr) {
             sessionCtx.log(`Auto-resume failed: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
+            // Mirror the MAX_RETRIES branch above: leaving runtimeState at
+            // `working` would block the SessionManager's idle-suspend grace
+            // window from ever firing on this session, so the slot would
+            // never be reclaimed.
+            sessionCtx.setRuntimeState("error");
             return;
           }
         }
@@ -811,24 +949,47 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const agentName = (config.agentName as string | undefined) ?? null;
 
   /**
-   * Materialise the runtime config's `gitRepos` into worktrees under `cwd`.
-   * Idempotent across resumes: reuses an existing Hub-managed worktree if
-   * present, otherwise clones/fetches the bare mirror and creates a new
-   * `--detach`'d worktree at `<cwd>/<localPath>` (PRD §5.1.5).
+   * Materialise the runtime config's `gitRepos` as **predeclared source
+   * repos** at the **top level** of the agent home (`<cwd>/<localPath>/`),
+   * NOT under `<cwd>/worktrees/`. Per the 2026-05-22 redesign, the
+   * `worktrees/` subdirectory is reserved entirely for agent-on-demand
+   * worktrees the LLM creates per task — the runtime never pre-creates any.
+   *
+   * Idempotent across sessions: with the per-agent-home model the checkout
+   * is **shared** across every chat for this agent. First call clones the
+   * bare mirror + creates the working tree; subsequent calls fetch (so the
+   * bare mirror picks up upstream changes) and reuse the existing checkout
+   * in place — no reset, so any pending state the LLM left behind survives.
+   *
+   * Concurrency: per-process per-path mutex (`withWorktreePathLock`) so two
+   * sessions starting at the same time don't race `git worktree add` for the
+   * same path. See proposals/agent-session-cwd-redesign.20260519.md §⑧ R1.
+   *
+   * Side effect: refreshes `sourceReposForPrompt` so the per-turn system-
+   * prompt block (`buildChatSystemPrompt`) can list absolute paths +
+   * upstream coordinates for the LLM.
    *
    * Fail-fast semantics per PRD D10/D13/D14: any failure aborts the session
    * and the error bubbles up to the caller (SessionManager).
    */
-  async function prepareGitWorktrees(
+  async function prepareSourceRepos(
     workspace: string,
     payload: AgentRuntimeConfigPayload | undefined,
     sessionCtx: SessionContext,
   ): Promise<void> {
+    // Reset the prompt-facing list. If `gitRepos` is empty (or the manager
+    // isn't wired up), the agent simply gets no source-repos section.
+    sourceReposForPrompt = [];
+
     if (!gitMirrorManager || !payload?.gitRepos?.length) return;
+
     for (const repo of payload.gitRepos) {
       const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
-      const targetPath = join(workspace, localPath);
-      sessionCtx.log(`Git: preparing ${repo.url} → ${localPath}${repo.ref ? ` @ ${repo.ref}` : ""}`);
+      // Source repos live at the TOP LEVEL of the agent home — no
+      // `worktrees/` prefix. The `worktrees/` subdir is reserved for the
+      // agent's on-demand worktrees.
+      const targetPath = resolveGitRepoTargetPath(workspace, localPath);
+      sessionCtx.log(`Git: preparing source repo ${repo.url} → ${localPath}${repo.ref ? ` @ ${repo.ref}` : ""}`);
 
       // D14: ensureMirror is idempotent — clone once, fast return thereafter.
       const mirror = await gitMirrorManager.ensureMirror(repo.url);
@@ -839,36 +1000,58 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // D10: fresh fetch on every new dialog. Failure aborts session creation.
       await gitMirrorManager.fetchMirror(repo.url);
 
-      // Group-chat agents share a `chatId`, so the branch name must fold in
-      // the agent dimension or peers collide on `git worktree add`. Prefer
-      // the operator-stable `agentName` (factory-closure value); fall back
-      // to the agent UUID, which is globally unique. See
-      // docs/workspace-session-branch-collision-fix-design.md §3.2.
       const branchAgentKey = agentName ?? sessionCtx.agent.agentId;
 
-      // If a prior session left a worktree behind at the same path, reuse it
-      // rather than fighting the `git worktree add` lock. The matching session
-      // branch is re-derived deterministically from (chatId, agentName, url)
-      // so cleanup later can still drop it.
-      if (existsSync(targetPath) && isHubWorktreeMarker(targetPath)) {
-        sessionCtx.log(`Git: reusing existing worktree at ${localPath}`);
-        ownedWorktrees.push({
+      // Serialise per absolute path so two concurrent sessions for the same
+      // agent can't both try to create the same checkout.
+      const { branchName } = await withWorktreePathLock(targetPath, async () => {
+        if (existsSync(targetPath)) {
+          if (isHubWorktreeMarker(targetPath)) {
+            sessionCtx.log(`Git: reusing existing source repo at ${localPath}`);
+            // Reuse path: branchName is deterministic for cleanup. With the
+            // per-agent shared-checkout model, sessionKey is the agentName
+            // (not chatId) so a checkout created by chat A is reused by
+            // chat B without forking branches.
+            return {
+              branchName: deriveSessionBranchName(branchAgentKey, branchAgentKey, repo.url),
+              headCommit: null as string | null,
+            };
+          }
+          // Path occupied by a non-Hub directory (operator placed it, leftover
+          // from an old layout, etc). Log it explicitly — `createWorktree`
+          // below will likely fail with a generic "path exists" error, and
+          // without this line the operator has no way to know why. PR #506
+          // review S1.
+          sessionCtx.log(
+            `Git: source-repo target ${localPath} occupied by a non-Hub directory; ` +
+              "createWorktree will likely fail — move or remove the directory and re-run",
+          );
+        }
+        const created = await gitMirrorManager.createWorktree({
           url: repo.url,
-          path: targetPath,
-          branchName: deriveSessionBranchName(sessionCtx.chatId, branchAgentKey, repo.url),
+          ref: repo.ref,
+          targetPath,
+          // sessionKey identifies the branch *owner*. In the per-agent-home
+          // model the owner is the agent, not the chat.
+          sessionKey: branchAgentKey,
+          agentName: branchAgentKey,
         });
-        continue;
-      }
-
-      const { headCommit, branchName } = await gitMirrorManager.createWorktree({
-        url: repo.url,
-        ref: repo.ref,
-        targetPath,
-        sessionKey: sessionCtx.chatId,
-        agentName: branchAgentKey,
+        return { branchName: created.branchName, headCommit: created.headCommit as string | null };
       });
-      ownedWorktrees.push({ url: repo.url, path: targetPath, branchName });
-      sessionCtx.log(`Git: worktree at ${localPath} @ ${headCommit.slice(0, 7)} on ${branchName}`);
+
+      // Per agent-session-cwd-redesign: predeclared source repos are agent-
+      // scoped persistent resources. They survive shutdown so the next chat
+      // finds them ready. We therefore do NOT track them in `ownedWorktrees`
+      // (the legacy shutdown-cleanup list).
+
+      sourceReposForPrompt.push({
+        absolutePath: targetPath,
+        url: repo.url,
+        ...(repo.ref ? { ref: repo.ref } : {}),
+        branch: branchName,
+      });
+
+      sessionCtx.log(`Git: source repo at ${localPath} on ${branchName}`);
     }
   }
 
@@ -888,56 +1071,187 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
   }
 
-  /** Bootstrap workspace and generate CLAUDE.md. */
-  function runBootstrap(workspace: string, sessionCtx: SessionContext): void {
+  /**
+   * Best-effort chat-context fetch for the identity-injection path. Failures
+   * are logged but never bubble — bootstrap continues with `undefined` and
+   * the agent simply loses the "Current Chat Context" block (graceful
+   * degradation; the Communication Rules in tools.md still tell it to fall
+   * back to conservative mode).
+   */
+  async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
+    try {
+      return await fetchChatContext(sessionCtx.sdk, sessionCtx.chatId, sessionCtx.agent);
+    } catch (err) {
+      sessionCtx.log(`fetchChatContext failed: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Probe whether the Claude Code SDK can resume the given session at the
+   * current cwd. The SDK stores per-project transcripts at
+   * `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`, where
+   * `encoded-cwd` is the absolute cwd with every non-alphanumeric char
+   * replaced by `-`. If the file is missing, `query({ resume })` throws
+   * `No conversation found with session ID: <id>` asynchronously inside
+   * the consume loop, surfacing as an SDK error in the chat timeline.
+   *
+   * This shows up after the agent-session-cwd-redesign upgrade: per-chat
+   * cwd transcripts live under a chatId-suffixed encoded path that no
+   * longer matches the new per-agent-home encoding, so legacy sessionIds
+   * can't be resumed in place. See proposal §⓪.3 R2.
+   *
+   * 🔍 Encoding rule sourcing: the `[^a-zA-Z0-9-]` → `-` substitution
+   * matches Claude Agent SDK 0.2.x's on-disk behavior, verified empirically
+   * by listing `~/.claude/projects/` against known cwds — an absolute path
+   * like `/Users/alice/project` becomes the directory `-Users-alice-project`,
+   * and `/foo/.bar` becomes `-foo--bar` (the `.` is non-alphanumeric).
+   * The SDK does not export a public helper for the encoding, so an
+   * upstream change here would silently invalidate this probe → fallback
+   * either fails to trigger (loud SDK error returns) or triggers
+   * unnecessarily (cold-start an existing session). When bumping
+   * `@anthropic-ai/claude-agent-sdk`, re-verify the encoding rule.
+   *
+   * Returning `false` lets the caller pick either:
+   *   - run the resume against a different cwd that DOES have the
+   *     transcript (legacy chat dir, see `resume()` body); or
+   *   - mint a fresh sessionId and fall through to start() semantics.
+   */
+  function claudeSessionFileExists(workspaceCwd: string, sessionId: string): boolean {
+    const encoded = workspaceCwd.replace(/[^a-zA-Z0-9-]/g, "-");
+    return existsSync(join(homedir(), ".claude", "projects", encoded, `${sessionId}.jsonl`));
+  }
+
+  /**
+   * Hash-check the existing identity.json against the current agent metadata
+   * and rewrite it (plus the rest of the .agent/ stable section) only when
+   * something changed. Cheap to run on every session start — the typical
+   * path is a single readFileSync + JSON.parse + memcmp.
+   *
+   * R5 in the proposal: agent rename / inboxId change / metadata edits must
+   * still propagate even after the sentinel is set, so this runs OUT of the
+   * sentinel gate.
+   */
+  function ensureStableIdentity(workspace: string, sessionCtx: SessionContext): void {
+    const identityPath = join(workspace, ".agent", "identity.json");
+    const desired = {
+      agentId: sessionCtx.agent.agentId,
+      displayName: sessionCtx.agent.displayName,
+      type: sessionCtx.agent.type,
+      delegateMention: sessionCtx.agent.delegateMention,
+      metadata: sessionCtx.agent.metadata,
+      serverUrl: sessionCtx.sdk.serverUrl,
+      contextTreePath,
+    };
+    if (existsSync(identityPath)) {
+      try {
+        const current = JSON.parse(readFileSync(identityPath, "utf-8"));
+        if (deepEqualIdentity(current, desired)) return;
+      } catch {
+        // Corrupt JSON — fall through to rewrite via bootstrapWorkspace.
+      }
+    }
+    // Mismatch (or missing / corrupt) — re-run the full stable bootstrap so
+    // context/, tools.md, the boundary marker, and identity.json all line up
+    // with the current agent metadata. Cheap relative to integrate / git.
     bootstrapWorkspace({
       workspacePath: workspace,
       identity: sessionCtx.agent,
       contextTreePath,
       serverUrl: sessionCtx.sdk.serverUrl,
-      chatId: sessionCtx.chatId,
     });
-    generateClaudeMd(workspace, sessionCtx.agent, contextTreePath);
+    generateStableClaudeMd(workspace, sessionCtx.agent, contextTreePath);
+  }
 
-    // Install the first-tree skill + FIRST-TREE-SOURCE-INTEGRATION block into
-    // the workspace by shelling out to `first-tree tree integrate`. Best-effort:
-    // integrate failures do not abort session start.
+  /**
+   * Run the expensive first-time bootstrap (full stable layout + `first-tree
+   * tree integrate` shell-out). Gated by the stage-2 sentinel + Context-Tree
+   * HEAD drift detection (proposals/agent-session-cwd-redesign §⑤.3):
+   *
+   *   - Sentinel absent → full bootstrap.
+   *   - Sentinel present + Tree HEAD unchanged → cheap identity refresh only.
+   *   - Sentinel present + Tree HEAD drifted → full bootstrap re-runs so the
+   *     stable CLAUDE.md and first-tree skill pick up the new tree state.
+   *
+   * `workspaceId` for the integrate shell-out is the agent name — the home
+   * directory is per-agent, so the skill identity stays stable across chats.
+   */
+  function ensureAgentBootstrap(workspace: string, sessionCtx: SessionContext): void {
+    const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
+    const currentTreeHead = readContextTreeHead(contextTreePath);
+    const cachedTreeHead = readCachedContextTreeHead(workspace);
+    // Only treat as drift when we know both values AND they differ — `null`
+    // on either side means "we don't know", in which case we fall back to
+    // the sentinel-only decision (fail open). Warn when the asymmetry shows
+    // up so a transient `git rev-parse` failure doesn't silently disable
+    // drift detection (PR #506 review Q1).
+    if (cachedTreeHead !== null && currentTreeHead === null) {
+      sessionCtx.log(
+        `Context Tree HEAD probe returned null while cached value is ` +
+          `${cachedTreeHead.slice(0, 7)}; drift detection bypassed for this start`,
+      );
+    }
+    const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
+
+    if (sentinelPresent && !treeDrifted) {
+      ensureStableIdentity(workspace, sessionCtx);
+      return;
+    }
+
+    if (sentinelPresent && treeDrifted) {
+      sessionCtx.log(
+        `Context Tree HEAD changed (${cachedTreeHead?.slice(0, 7)} → ${currentTreeHead?.slice(0, 7)}); re-running bootstrap`,
+      );
+    }
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: sessionCtx.agent,
+      contextTreePath,
+      serverUrl: sessionCtx.sdk.serverUrl,
+    });
+    generateStableClaudeMd(workspace, sessionCtx.agent, contextTreePath);
+
     if (contextTreePath) {
       installFirstTreeIntegration({
         workspacePath: workspace,
         contextTreePath,
-        // Prefer the operator-stable agent name; fall back to chatId for
-        // pre-refactor handler configs that don't yet thread `agentName`.
-        workspaceId: agentName ?? sessionCtx.chatId,
+        workspaceId: agentName ?? sessionCtx.agent.agentId,
         treeRepoUrl: contextTreeRepoUrl ?? undefined,
         log: (msg) => sessionCtx.log(msg),
       });
     }
+
+    // Pin the current HEAD so the next start can detect drift.
+    writeContextTreeHead(workspace, currentTreeHead);
   }
 
   const handler: AgentHandler = {
     async start(message, sessionCtx) {
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
-      cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
+      // Per agent-session-cwd-redesign: cwd is per-agent, shared by every
+      // chat session. acquireAgentHome creates the directory and writes the
+      // boundary marker on first call; afterwards it is a no-op.
+      cwd = acquireAgentHome(workspaceRoot);
 
-      // Always bootstrap on start
-      runBootstrap(cwd, sessionCtx);
+      // Fetch chat-context for per-turn prompt injection (Step 4 wires it).
+      const chatContext = await fetchChatContextOrLog(sessionCtx);
+      ensureAgentBootstrap(cwd, sessionCtx);
 
-      // Materialise gitRepos into `<cwd>/<localPath>` worktrees before the
-      // child process starts — failures here abort session creation (D10/D13).
+      // Materialise gitRepos under `<cwd>/worktrees/<name>` before the
+      // child process starts. Failures here abort session creation (D10/D13).
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
-      await prepareGitWorktrees(cwd, payload, sessionCtx);
+      await prepareSourceRepos(cwd, payload, sessionCtx);
 
-      // Stage-2 sentinel: only written after all setup succeeded. A future
-      // `acquireWorkspace` that sees the boundary marker but not this file
-      // treats the directory as half-baked and wipes it. See workspace.ts.
+      // Stage-2 sentinel: written once per agent home. Future starts short-
+      // circuit the expensive integrate path on its presence.
       markWorkspaceInitComplete(cwd);
 
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
       );
-      spawnQuery(claudeSessionId, sessionCtx);
+      spawnQuery(claudeSessionId, sessionCtx, undefined, chatContext);
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, claudeSessionId);
       inputController?.push(sdkMsg);
 
@@ -949,29 +1263,76 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       ctx = sessionCtx;
       claudeSessionId = sessionId;
       retryCount = 0;
-      cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
 
-      // Bootstrap on resume only if the stage-2 sentinel is missing. Pre-F3
-      // this check looked at `.agent/identity.json`; now `.agent/init-complete`
-      // is the authoritative "stage 2 finished" signal, written by
-      // `markWorkspaceInitComplete` after worktrees materialise.
-      if (!existsSync(join(cwd, INIT_COMPLETE_SENTINEL_REL))) {
-        runBootstrap(cwd, sessionCtx);
+      // R2 backward-compat: a session created BEFORE this PR ran with cwd =
+      // `<workspaceRoot>/<chatId>/`, so its Claude SDK transcript is keyed
+      // off that path's encoding under `~/.claude/projects/`. The new
+      // per-agent-home cwd would NOT find it and would error with `No
+      // conversation found ...`. To preserve the agent's SDK turn history
+      // across upgrade, probe the legacy chat dir first — if the transcript
+      // is there, run the resume against the legacy cwd verbatim and skip
+      // every piece of agent-home setup (the legacy dir already has its
+      // own `.agent/`, CLAUDE.md, and gitRepos checkout at top-level).
+      const legacyCwd = join(workspaceRoot, sessionCtx.chatId);
+      const isLegacy = existsSync(legacyCwd) && claudeSessionFileExists(legacyCwd, sessionId);
+
+      if (isLegacy) {
+        cwd = legacyCwd;
+        sessionCtx.log(
+          `Resume: detected pre-redesign SDK transcript at legacy cwd ${legacyCwd}; ` +
+            "running this session under the legacy per-chat layout to preserve agent memory",
+        );
+        const chatContext = await fetchChatContextOrLog(sessionCtx);
+        // Intentionally NOT calling ensureAgentBootstrap / prepareSourceRepos /
+        // markWorkspaceInitComplete here — those write the new agent-home
+        // layout, which would pollute the legacy chat dir. The dir already
+        // carries the v1.x bootstrap output (CLAUDE.md, AGENTS.md, .agent/,
+        // <localPath>/ source repos), and the agent reads it via the SDK's
+        // `settingSources: ["project"]` option.
+        spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
+        if (message) {
+          inputController?.push(await toSDKUserMessage(message, sessionCtx, sessionId));
+        }
+        sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
+        return sessionId;
       }
 
-      // Re-run git preparation: ensureMirror short-circuits if already cloned;
-      // fetch picks up upstream changes since the session was suspended; the
-      // worktree is reused if still present (handled inside prepareGitWorktrees).
-      const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
-      await prepareGitWorktrees(cwd, payload, sessionCtx);
+      // Normal new-design resume path: cwd is the agent home.
+      cwd = acquireAgentHome(workspaceRoot);
 
-      // Ensure the sentinel is present after resume too. Idempotent — only
-      // matters when the bootstrap branch above ran (e.g. resume of a
-      // half-baked workspace that `acquireWorkspace` just wiped).
+      // Identical control flow to start(): bootstrap is idempotent and the
+      // sentinel gates the expensive integrate. The cheap stable-identity
+      // hash check runs every time so agent rename / inboxId changes
+      // propagate even after the sentinel is set (R5 in the proposal).
+      const chatContext = await fetchChatContextOrLog(sessionCtx);
+      ensureAgentBootstrap(cwd, sessionCtx);
+
+      const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
+      await prepareSourceRepos(cwd, payload, sessionCtx);
+
       markWorkspaceInitComplete(cwd);
 
+      // Defensive fallback: sessionId isn't recognised at EITHER cwd (likely
+      // a stale registry entry from machine swap / fs cleanup / tampering).
+      // Mint a fresh id and start cold — Hub message history survives.
+      if (!claudeSessionFileExists(cwd, sessionId)) {
+        const freshSessionId = randomUUID();
+        sessionCtx.log(
+          `Resume: SDK transcript for ${sessionId} not found at legacy (${legacyCwd}) ` +
+            `or agent home (${cwd}); starting fresh session ${freshSessionId} — ` +
+            "Hub message history is preserved.",
+        );
+        claudeSessionId = freshSessionId;
+        spawnQuery(freshSessionId, sessionCtx, undefined, chatContext);
+        if (message) {
+          inputController?.push(await toSDKUserMessage(message, sessionCtx, freshSessionId));
+        }
+        sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
+        return freshSessionId;
+      }
+
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
-      spawnQuery(sessionId, sessionCtx, sessionId);
+      spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
       if (message) {
         inputController?.push(await toSDKUserMessage(message, sessionCtx, sessionId));
       }
@@ -1020,7 +1381,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // (the answer becomes regular input on the next turn).
       const sessionCtx = ctx;
       if (sessionCtx) {
-        const dropped = clearPendingForAgent(sessionCtx.agent.agentId);
+        const dropped = clearPendingForChat(sessionCtx.agent.agentId, sessionCtx.chatId);
         if (dropped > 0) sessionCtx.log(`Cleared ${dropped} pending AskUserQuestion entries on suspend`);
       }
 
@@ -1051,38 +1412,27 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // resolve. The supersede happens server-side via archiveSession /
       // claimClient (commit 2); this is the local-process counterpart.
       if (sessionCtx) {
-        const dropped = rejectPendingForAgent(sessionCtx.agent.agentId, "Session shutting down.");
+        const dropped = rejectPendingForChat(sessionCtx.agent.agentId, sessionCtx.chatId, "Session shutting down.");
         if (dropped > 0) sessionCtx.log(`Rejected ${dropped} pending AskUserQuestion entries during shutdown`);
       }
-      // PRD §7.5: shutdown is session termination (explicit terminate,
-      // eviction, or client restart). Release worktrees + workspace dir so
-      // the next invocation gets a clean slate. `suspend()` alone preserves
-      // state on purpose — idle timeout keeps the option to resume.
+      // Per agent-session-cwd-redesign: cwd is the per-agent home — shared
+      // by every chat. shutdown() of ONE chat must NOT remove it (would
+      // wipe persistent state and worktrees other chats are using). The
+      // legacy `rmSync(cwd)` is therefore deleted.
+      //
+      // Source repos materialised by `prepareSourceRepos` are agent-scoped
+      // shared resources, so we also no longer call cleanupGitWorktrees on
+      // shutdown — those checkouts are explicit operator-managed state (see
+      // proposals/agent-session-cwd-redesign §⑤). On-demand worktrees the
+      // agent itself created under `<cwd>/worktrees/<name>/` are also
+      // intentionally left alone — the agent owns their lifecycle.
       if (sessionCtx) await cleanupGitWorktrees(sessionCtx);
-      if (cwd) {
-        try {
-          rmSync(cwd, { recursive: true, force: true });
-        } catch (err) {
-          sessionCtx?.log(`Workspace cleanup (${cwd}) failed — ${err instanceof Error ? err.message : String(err)}`);
-        }
-        cwd = null;
-      }
+      cwd = null;
     },
   };
 
   return handler;
 };
-
-/** A Hub-managed worktree has a `.git` FILE (not dir) pointing back at the bare mirror. */
-function isHubWorktreeMarker(path: string): boolean {
-  const gitMarker = join(path, ".git");
-  if (!existsSync(gitMarker)) return false;
-  try {
-    return statSync(gitMarker).isFile();
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Generate a CLAUDE.md file from .agent/ bootstrap data.
@@ -1095,7 +1445,20 @@ function isHubWorktreeMarker(path: string): boolean {
  * `agent_configs.payload.prompt.append` and are passed to the Claude SDK via
  * `systemPrompt.append` — not through this file.
  */
-function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): void {
+/**
+ * Generate the **stable** CLAUDE.md materialised at the agent home root.
+ *
+ * Per agent-session-cwd-redesign: this file contains only agent-level
+ * content (identity, org domain map, Context Tree pointer, SDK tools). Per-
+ * chat content — Current Chat Context, participants — is injected per turn
+ * via the SDK's `appendSystemPrompt` so two concurrent chats sharing this
+ * cwd never see each other's data on disk.
+ *
+ * Per PRD D7 the agent's behavior instructions live in Hub-managed
+ * `agent_configs.payload.prompt.append` and are passed to the Claude SDK via
+ * `systemPrompt.append` — not through this file.
+ */
+function generateStableClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): void {
   const sections: string[] = [];
   const contextDir = join(workspacePath, ".agent", "context");
 

@@ -1,13 +1,19 @@
 import { randomUUID } from "node:crypto";
-import type { AddParticipant, CreateChat } from "@agent-team-foundation/first-tree-hub-shared";
+import { type AddParticipant, AGENT_VISIBILITY, type CreateChat } from "@first-tree/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
-import { addChatParticipants, changeChatType, wouldUpgradeToGroup } from "./participant-mode.js";
+import { backfillSilentContextForNewParticipants } from "./inbox.js";
+import { resolveChatTitle } from "./me-chat.js";
+import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
+import { addChatParticipants } from "./participant-mode.js";
+import { extractSummary } from "./session.js";
 import { leaveAsParticipant, recomputeChatWatchers } from "./watcher.js";
 
 export async function createChat(db: Database, creatorId: string, data: CreateChat) {
@@ -18,7 +24,13 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
 
   // Verify all participants exist and belong to the same organization
   const existingAgents = await db
-    .select({ id: agents.uuid, organizationId: agents.organizationId, type: agents.type })
+    .select({
+      id: agents.uuid,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      visibility: agents.visibility,
+      managerId: agents.managerId,
+    })
     .from(agents)
     .where(inArray(agents.uuid, [...allParticipantIds]));
 
@@ -35,6 +47,22 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
   const crossOrg = existingAgents.filter((a) => a.organizationId !== orgId);
   if (crossOrg.length > 0) {
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
+  }
+
+  // Owner-exclusive rule: a private agent can only be brought into a
+  // chat by another agent owned by the same member (i.e. the creator
+  // and the target share `managerId`). `creator.managerId` is the
+  // caller's effective owner identity — for a human agent this is the
+  // member's own id; for an autonomous agent this is whichever member
+  // owns it. RFC §4.4.2 / §4.5 — keeping the gate at the service layer
+  // closes the agent-SDK bypass path, not only the user-facing /me API.
+  const privateNotOwned = existingAgents.filter(
+    (a) => a.id !== creatorId && a.visibility === AGENT_VISIBILITY.PRIVATE && a.managerId !== creator.managerId,
+  );
+  if (privateNotOwned.length > 0) {
+    throw new ForbiddenError(
+      `Only the owner can add a private agent to a chat: ${privateNotOwned.map((a) => a.id).join(", ")}`,
+    );
   }
 
   return db.transaction(async (tx) => {
@@ -88,14 +116,103 @@ export async function getChat(db: Database, chatId: string) {
   return chat;
 }
 
-export async function getChatDetail(db: Database, chatId: string) {
+/**
+ * Read a chat row + speaker participants + server-resolved display
+ * metadata (`title`, `firstMessagePreview`) so the agent route can return
+ * a payload that matches the wire `chatDetailSchema` contract.
+ *
+ * `selfAgentId` only affects the participant-join fallback in
+ * `resolveChatTitle` (e.g. `"alice, bob"` excluding self when topic + first
+ * message are both empty). Callers that don't have a self agent (admin
+ * paths) can pass `null` — the fallback degrades to "all displayNames".
+ */
+export async function getChatDetail(db: Database, chatId: string, selfAgentId: string | null = null) {
   const chat = await getChat(db, chatId);
-  const participants = await db
-    .select()
+  // Participants JOIN `agents` so each row carries `name / displayName /
+  // type` — needed by the wire chatDetailSchema (PR #402 identity-
+  // rendering fix) and by `resolveChatTitle`'s participant-join fallback
+  // (PR #393 v1.7 server-resolved title). Identity rendering inside a
+  // chat is membership-derived; we do NOT apply `agentVisibilityCondition`
+  // here — see `docs/agent-space-and-mention-visibility-design.zh-CN.md`
+  // §4.3.3.
+  // v2: chat_membership.mode is decision-inert; the wire `mode` field is
+  // populated below from the WIRE_RECIPIENT_MODE constant (mirrors the
+  // strategy in services/message-dispatcher.ts), so we no longer SELECT
+  // the column. Drop together with the wire field in v3 — see
+  // proposals/hub-chat-message-v2-simplify-mode.20260520.md §七.
+  const participantRows = await db
+    .select({
+      agentId: chatMembership.agentId,
+      role: chatMembership.role,
+      joinedAt: chatMembership.joinedAt,
+      name: agents.name,
+      displayName: agents.displayName,
+      type: agents.type,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+    })
     .from(chatMembership)
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
-  return { ...chat, participants };
+  // Compute server-resolved `title` + `firstMessagePreview` so the agent
+  // route returns a payload that matches the wire contract. Without this,
+  // the client's chat-context injection cannot render a chat label when
+  // the creator never set an explicit topic — see PR #393 dogfood report.
+  const [firstMessageRow] = await db
+    .select({ content: messages.content })
+    .from(messages)
+    .where(eq(messages.chatId, chatId))
+    .orderBy(messages.createdAt, messages.id)
+    .limit(1);
+  const firstMessagePreview = firstMessageRow ? extractSummary(firstMessageRow.content) : null;
+  const title = resolveChatTitle(chat.topic, firstMessagePreview, participantRows, selfAgentId ?? "");
+
+  // Preserve the resolved name / displayName / type / avatar fields on
+  // the wire (PR #402 identity-rendering contract; avatar fields added
+  // so the chat-detail surface renders manager-configured hue + image
+  // — see `meChatParticipantSchema` for the matching field on the rail).
+  const participants = participantRows.map((p) => ({
+    chatId,
+    agentId: p.agentId,
+    role: p.role,
+    // v2: wire `mode` is reserved for v3 cleanup; write the constant
+    // `WIRE_RECIPIENT_MODE` so existing clients that still parse the field
+    // see a stable value. No consumer reads this today.
+    mode: WIRE_RECIPIENT_MODE,
+    joinedAt: p.joinedAt,
+    name: p.name,
+    displayName: p.displayName,
+    type: p.type,
+    avatarColorToken: p.avatarColorToken ?? null,
+    avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
+  }));
+
+  // Match the chatDetailSchema wire contract — the chat-first workspace
+  // reads this field instead of round-tripping `/orgs/:orgId/chats` just to
+  // distinguish speaker vs watcher view. Agent-SDK callers always reach
+  // this code with their own uuid as `selfAgentId`, and the SDK only sees
+  // chats it is a speaker in, so the lookup is cheap and almost always
+  // resolves to `"participant"`; the admin / supervisor `null` shape still
+  // matters for the alternate route (`api/chats.ts`).
+  const viewerMembershipKind = await resolveViewerMembershipKind(db, chatId, selfAgentId);
+
+  return { ...chat, participants, title, firstMessagePreview, viewerMembershipKind };
+}
+
+async function resolveViewerMembershipKind(
+  db: Database,
+  chatId: string,
+  viewerAgentId: string | null,
+): Promise<"participant" | "watching" | null> {
+  if (!viewerAgentId) return null;
+  const [row] = await db
+    .select({ accessMode: chatMembership.accessMode })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, viewerAgentId)))
+    .limit(1);
+  if (!row) return null;
+  return row.accessMode === "speaker" ? "participant" : "watching";
 }
 
 export async function listChats(db: Database, agentId: string, limit: number, cursor?: string) {
@@ -138,15 +255,20 @@ export async function listChats(db: Database, agentId: string, limit: number, cu
  * set (see proposals/hub-agent-messaging-reply-and-mentions §4).
  */
 export async function listChatParticipantsWithNames(db: Database, chatId: string) {
+  // v2: chat_membership.mode is decision-inert; we no longer SELECT it. The
+  // route layer projects the wire `mode` field from the WIRE_RECIPIENT_MODE
+  // constant — see api/agent/chats.ts. Drop together with the wire field
+  // in v3 (proposals/hub-chat-message-v2-simplify-mode.20260520.md §七).
   const rows = await db
     .select({
       agentId: chatMembership.agentId,
       role: chatMembership.role,
-      mode: chatMembership.mode,
       joinedAt: chatMembership.joinedAt,
       name: agents.name,
       displayName: agents.displayName,
       type: agents.type,
+      avatarColorToken: agents.avatarColorToken,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
@@ -173,9 +295,8 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
 }
 
 /**
- * Non-throwing membership check. Used by routing logic that needs to fall
- * back to a different chat when the candidate target isn't a member of the
- * caller's current chat (see `sendToAgent`'s current-chat routing branch).
+ * Non-throwing membership check. Used by callers that need a boolean
+ * "is this agent a speaker of this chat?" answer without raising.
  */
 export async function isParticipant(db: Database, chatId: string, agentId: string): Promise<boolean> {
   const [row] = await db
@@ -217,16 +338,10 @@ export async function ensureParticipant(db: Database, chatId: string, agentId: s
   // is structurally separate so the user's read state survives the
   // promotion untouched — no state-carry needed (proposal §8.4).
   await db.transaction(async (tx) => {
-    const current = await tx
-      .select({ agentId: chatMembership.agentId })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-    if (wouldUpgradeToGroup(current.length, 1)) {
-      await changeChatType(tx, chatId, "group");
-    }
-    // Mode derived server-side via `addChatParticipants`. `upgradeWatcherToSpeaker`
-    // promotes a pre-existing watcher row in place so chat_user_state is preserved
-    // automatically (the chat_user_state row, if any, lives in a separate table
+    // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
+    // `chat_membership.mode` is decision-inert. `upgradeWatcherToSpeaker`
+    // promotes a pre-existing watcher row in place so chat_user_state is
+    // preserved automatically (the row, if any, lives in a separate table
     // and survives the access_mode flip untouched — proposal §8.4).
     await addChatParticipants(tx, chatId, [{ agentId }], { upgradeWatcherToSpeaker: true });
     // Reconcile watcher rows for managers of any non-human in chat.
@@ -242,19 +357,56 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
   // Verify requester is a participant
   await assertParticipant(db, chatId, requesterId);
 
-  // Verify target agent exists and is in the same org
+  // Resolve the target by uuid or by name. Name lookup is scoped to the
+  // chat's organization so an agent in another org can never be pulled in
+  // by name collision. `inboxId` is needed for the v1.7 silent-context
+  // backfill; `visibility` and `managerId` are needed for PR #402's
+  // owner-exclusive check.
+  const targetSelector = data.agentId
+    ? eq(agents.uuid, data.agentId)
+    : and(eq(agents.organizationId, chat.organizationId), eq(agents.name, data.agentName ?? ""));
   const [targetAgent] = await db
-    .select({ id: agents.uuid, organizationId: agents.organizationId })
+    .select({
+      id: agents.uuid,
+      organizationId: agents.organizationId,
+      inboxId: agents.inboxId,
+      visibility: agents.visibility,
+      managerId: agents.managerId,
+    })
     .from(agents)
-    .where(eq(agents.uuid, data.agentId))
+    .where(targetSelector)
     .limit(1);
 
   if (!targetAgent) {
-    throw new NotFoundError(`Agent "${data.agentId}" not found`);
+    const ref = data.agentId ?? data.agentName ?? "(unknown)";
+    throw new NotFoundError(`Agent "${ref}" not found`);
   }
 
   if (targetAgent.organizationId !== chat.organizationId) {
     throw new BadRequestError("Cannot add agent from different organization");
+  }
+
+  // Owner-exclusive rule for private targets. The requester is an
+  // agent on the SDK side; resolve its owner via `agents.managerId`
+  // and compare with the target's owner — only the same member may
+  // bring a private agent into a chat. Closes the agent-SDK bypass of
+  // the discovery filter (RFC §4.4.2 / §4.5). `targetAgent.id !==
+  // requesterId` skips the self-add case so an agent rejoining its own
+  // chat via `joinChat` semantics isn't incidentally blocked.
+  if (targetAgent.visibility === AGENT_VISIBILITY.PRIVATE && targetAgent.id !== requesterId) {
+    const [requester] = await db
+      .select({ managerId: agents.managerId })
+      .from(agents)
+      .where(eq(agents.uuid, requesterId))
+      .limit(1);
+    if (!requester) {
+      // Should be unreachable — `assertParticipant` above proved the
+      // requester is in chat_membership, which FK-references agents.
+      throw new NotFoundError(`Agent "${requesterId}" not found`);
+    }
+    if (requester.managerId !== targetAgent.managerId) {
+      throw new ForbiddenError(`Only the owner can add a private agent to a chat: ${targetAgent.id}`);
+    }
   }
 
   // Check not already a speaker. A watcher row is allowed — it's the
@@ -263,37 +415,27 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
   const [existing] = await db
     .select({ accessMode: chatMembership.accessMode })
     .from(chatMembership)
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, data.agentId)))
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, targetAgent.id)))
     .limit(1);
 
   if (existing?.accessMode === "speaker") {
-    throw new ConflictError(`Agent "${data.agentId}" is already a participant`);
+    throw new ConflictError(`Agent "${data.agentName ?? targetAgent.id}" is already a participant`);
   }
 
-  // Direct chats become groups on the third speaker. Flip existing
-  // non-human speakers to mention_only so the group doesn't devolve into
-  // noise. Atomic: upgrade + UPSERT must not interleave with sendMessage's
-  // participant read, or a concurrent send would see chats.type='group'
-  // with mode='full'.
-  //
-  // Watcher → speaker UPSERT preserves chat_user_state (read state) by
-  // construction — they live in a different table (proposal §8.4).
+  // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
+  // `chat_membership.mode` is decision-inert. `upgradeWatcherToSpeaker`
+  // promotes any pre-existing watcher row in place — chat_user_state is
+  // structurally separate so read state is preserved without a state-carry
+  // transaction.
   await db.transaction(async (tx) => {
-    const currentSpeakers = await tx
-      .select({ agentId: chatMembership.agentId })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-    if (wouldUpgradeToGroup(currentSpeakers.length, 1)) {
-      await changeChatType(tx, chatId, "group");
-    }
-    // Mode derived server-side from `(chats.type, agents.type)`. Callers no
-    // longer pass `mode` (HTTP schema dropped that field; see Phase 1 design
-    // §3.2 — `data.mode` is therefore ignored even if a stale TS caller is
-    // still constructing it). `upgradeWatcherToSpeaker` promotes any
-    // pre-existing watcher row in place — chat_user_state is structurally
-    // separate so read state is preserved without a state-carry transaction.
-    await addChatParticipants(tx, chatId, [{ agentId: data.agentId }], { upgradeWatcherToSpeaker: true });
+    await addChatParticipants(tx, chatId, [{ agentId: targetAgent.id }], { upgradeWatcherToSpeaker: true });
     await recomputeChatWatchers(tx, chatId);
+    // v1 §四 改造 2: backfill the most recent N messages as silent
+    // (notify=false) inbox rows for the new participant so a future trigger
+    // (mention / chat send / replyTo) can replay them as preceding
+    // context. Hook lives in the service layer — caller-agnostic, so
+    // human web / dispatcher / future agent-CLI all benefit.
+    await backfillSilentContextForNewParticipants(tx, chatId, [{ inboxId: targetAgent.inboxId }]);
   });
   invalidateChatAudience(chatId);
 
@@ -384,7 +526,6 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
       chatId: chatMembership.chatId,
       agentId: chatMembership.agentId,
       role: chatMembership.role,
-      mode: chatMembership.mode,
     })
     .from(chatMembership)
     .where(and(inArray(chatMembership.agentId, agentIds), eq(chatMembership.accessMode, "speaker")));
@@ -525,16 +666,15 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
   // the manager's read state survives the promotion automatically —
   // no state-carry transaction needed.
   await db.transaction(async (tx) => {
-    if (wouldUpgradeToGroup(participantAgentIds.length, 1)) {
-      await changeChatType(tx, chatId, "group");
-    }
+    // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
+    // `chat_membership.mode` is decision-inert.
+    //
     // The join contract admits only the manager's human agent —
     // `assertHuman: true` makes a non-human caller surface as a 400 rather
-    // than silently inserting with an inappropriate `mode`.
-    // `upgradeWatcherToSpeaker` promotes the manager's pre-existing watcher
-    // row in place (common case — migration 0030 or prior recompute pass).
-    // chat_user_state is structurally separate so read state survives the
-    // promotion automatically.
+    // than silently inserting. `upgradeWatcherToSpeaker` promotes the
+    // manager's pre-existing watcher row in place (common case — migration
+    // 0030 or prior recompute pass). chat_user_state is structurally
+    // separate so read state survives the promotion automatically.
     await addChatParticipants(tx, chatId, [{ agentId: humanAgentId, role: "member" }], {
       assertHuman: true,
       upgradeWatcherToSpeaker: true,
@@ -567,92 +707,4 @@ export async function leaveChat(db: Database, chatId: string, humanAgentId: stri
     .select()
     .from(chatMembership)
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-}
-
-export async function findOrCreateDirectChat(db: Database, agentAId: string, agentBId: string) {
-  // Resolve both endpoints up front. Two reasons:
-  //   1. Reject cross-org pairs. A direct chat whose `chats.organization_id`
-  //      disagrees with one of its participants is unreachable by the chat
-  //      owner (org membership fails `requireChatAccess` → 404) yet still
-  //      leaks into the other side's chat list — exactly the breakage
-  //      observed when a caller (e.g. agent connection test, follow-up to
-  //      #288) handed us a cross-org pair.
-  //   2. Carry `organizationId` into the existing-chat lookup below so we
-  //      cannot reuse a historical dirty row whose participants happen to
-  //      include both ends but whose chat lives in another org.
-  const ends = await db
-    .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
-    .from(agents)
-    .where(inArray(agents.uuid, [agentAId, agentBId]));
-
-  const agentA = ends.find((a) => a.uuid === agentAId);
-  if (!agentA) throw new NotFoundError(`Agent "${agentAId}" not found`);
-  const agentB = ends.find((a) => a.uuid === agentBId);
-  if (!agentB) throw new NotFoundError(`Agent "${agentBId}" not found`);
-  if (agentA.organizationId !== agentB.organizationId) {
-    throw new BadRequestError(
-      `Cannot create direct chat across organizations: agent "${agentAId}" (org "${agentA.organizationId}") vs agent "${agentBId}" (org "${agentB.organizationId}")`,
-    );
-  }
-  const orgId = agentA.organizationId;
-
-  // Find chats where BOTH agents are speakers. Single grouped query —
-  // `HAVING COUNT(DISTINCT agent_id) = 2` keeps us from matching chats that
-  // happen to have one of the two agents twice somehow (defensive; the
-  // (chat_id, agent_id) PK prevents that, but the DISTINCT costs nothing).
-  const commonRows = await db
-    .select({ chatId: chatMembership.chatId })
-    .from(chatMembership)
-    .where(and(inArray(chatMembership.agentId, [agentAId, agentBId]), eq(chatMembership.accessMode, "speaker")))
-    .groupBy(chatMembership.chatId)
-    .having(sql`COUNT(DISTINCT ${chatMembership.agentId}) = 2`);
-  const commonChatIds = commonRows.map((r) => r.chatId);
-
-  if (commonChatIds.length > 0) {
-    // Order by `created_at` for determinism across webhook re-deliveries
-    // and any other caller re-entering for the same pair (see #283).
-    // The `organizationId` predicate is what prevents reuse of historical
-    // cross-org dirty rows — without it, two new-org agents could resolve
-    // to an old-org chat just because both names sit in its participants.
-    const directChats = await db
-      .select()
-      .from(chats)
-      .where(and(inArray(chats.id, commonChatIds), eq(chats.type, "direct"), eq(chats.organizationId, orgId)))
-      .orderBy(chats.createdAt, chats.id)
-      .limit(1);
-
-    if (directChats.length > 0 && directChats[0]) {
-      return directChats[0];
-    }
-  }
-
-  // Create new direct chat. Mode is derived server-side from
-  // `(chats.type, agents.type)` via `addChatParticipants` — the "agent-only
-  // direct → mention_only" anti-echo rule from migration 0029 is encoded
-  // there, not redone here.
-  const chatId = randomUUID();
-  return db.transaction(async (tx) => {
-    const [chat] = await tx
-      .insert(chats)
-      .values({
-        id: chatId,
-        organizationId: orgId,
-        type: "direct",
-      })
-      .returning();
-
-    await addChatParticipants(tx, chatId, [
-      { agentId: agentAId, role: "member" },
-      { agentId: agentBId, role: "member" },
-    ]);
-
-    // Watcher rows: managers of either non-human end should immediately
-    // see this fresh chat under "Watching". Without this, agent-to-agent
-    // direct chats created via `sendToAgent` / webhooks never surfaced for
-    // the manager — design AC #8 silently broke.
-    await recomputeChatWatchers(tx, chatId);
-
-    if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
-    return chat;
-  });
 }

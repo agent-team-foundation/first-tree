@@ -145,6 +145,50 @@ describe("sessionEventSchema", () => {
     });
   });
 
+  describe("context_tree_usage", () => {
+    it("parses a full payload with a node path", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "context_tree_usage",
+        payload: {
+          purpose: "design_decision",
+          treeRepoUrl: "https://github.com/example/tree",
+          nodePath: "members/Gandy2025/NODE.md",
+        },
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it("accepts a null nodePath", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "context_tree_usage",
+        payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: null },
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it("defaults a MISSING nodePath to null (pre-P0 client deploy-skew tolerance)", () => {
+      // A ≤0.14.8 client still emits the old `{ purpose, treeRepoUrl }` shape.
+      // Without `.default(null)` the server's strict appendEvent parse would
+      // reject and drop the event; the default normalises absence to null.
+      const r = sessionEventSchema.safeParse({
+        kind: "context_tree_usage",
+        payload: { purpose: "design_decision", treeRepoUrl: null },
+      });
+      expect(r.success).toBe(true);
+      if (r.success && r.data.kind === "context_tree_usage") {
+        expect(r.data.payload.nodePath).toBeNull();
+      }
+    });
+
+    it("rejects a non-design_decision purpose", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "context_tree_usage",
+        payload: { purpose: "file_read", treeRepoUrl: null, nodePath: null },
+      });
+      expect(r.success).toBe(false);
+    });
+  });
+
   describe("turn_end", () => {
     it("parses success and error status", () => {
       for (const status of ["success", "error"] as const) {

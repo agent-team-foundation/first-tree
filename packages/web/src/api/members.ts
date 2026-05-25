@@ -1,4 +1,4 @@
-import type { UpdateMember } from "@agent-team-foundation/first-tree-hub-shared";
+import type { UpdateMember } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 type MemberListItem = {

@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-export const sessionEventKind = z.enum(["tool_call", "error", "assistant_text", "thinking", "turn_end"]);
+export const sessionEventKind = z.enum([
+  "tool_call",
+  "error",
+  "assistant_text",
+  "thinking",
+  "turn_end",
+  "context_tree_usage",
+]);
 export type SessionEventKind = z.infer<typeof sessionEventKind>;
 
 export const toolCallEventPayload = z.object({
@@ -49,12 +56,34 @@ export const turnEndEventPayload = z.object({
 });
 export type TurnEndEventPayload = z.infer<typeof turnEndEventPayload>;
 
+export const contextTreeUsageEventPayload = z.object({
+  purpose: z.literal("design_decision"),
+  treeRepoUrl: z.string().nullable(),
+  // Tree-root-relative path of the file the agent actually Read (e.g.
+  // `members/Gandy2025/NODE.md`). Null when the read target could not be
+  // resolved to a node path. Emitted only when a view tool reads a file under
+  // the configured Context Tree root — see the client handler's tool-call
+  // processor.
+  //
+  // `.default(null)`: tolerate a pre-P0 client (≤0.14.8) that still emits the
+  // old `{ purpose, treeRepoUrl }` payload during a server-ahead-of-client
+  // deploy window. There is no client min-version gate, and the server's
+  // `appendEvent` strict-parses every inbound event (ws-client.ts) — without
+  // the default, a missing `nodePath` would reject the event with an error
+  // frame and drop it. The default normalises absence to null instead. New
+  // clients always send the field explicitly; the inferred (output) type stays
+  // `string | null`, so consumers are unaffected.
+  nodePath: z.string().nullable().default(null),
+});
+export type ContextTreeUsageEventPayload = z.infer<typeof contextTreeUsageEventPayload>;
+
 export const sessionEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tool_call"), payload: toolCallEventPayload }),
   z.object({ kind: z.literal("error"), payload: errorEventPayload }),
   z.object({ kind: z.literal("assistant_text"), payload: assistantTextEventPayload }),
   z.object({ kind: z.literal("thinking"), payload: thinkingEventPayload }),
   z.object({ kind: z.literal("turn_end"), payload: turnEndEventPayload }),
+  z.object({ kind: z.literal("context_tree_usage"), payload: contextTreeUsageEventPayload }),
 ]);
 export type SessionEvent = z.infer<typeof sessionEventSchema>;
 
@@ -71,6 +100,7 @@ export const sessionEventRowSchema = z.object({
     assistantTextEventPayload,
     thinkingEventPayload,
     turnEndEventPayload,
+    contextTreeUsageEventPayload,
   ]),
   createdAt: z.string(),
 });
@@ -83,14 +113,3 @@ export const sessionEventMessageSchema = z.object({
   event: sessionEventSchema,
 });
 export type SessionEventMessage = z.infer<typeof sessionEventMessageSchema>;
-
-/**
- * WS control message: client signals that a query completed end-to-end.
- * Decoupled from `session:event` so the `session_completed` notification
- * fires on actual result forwarding, not on incidental tool activity.
- */
-export const sessionCompletionMessageSchema = z.object({
-  agentId: z.string(),
-  chatId: z.string(),
-});
-export type SessionCompletionMessage = z.infer<typeof sessionCompletionMessageSchema>;

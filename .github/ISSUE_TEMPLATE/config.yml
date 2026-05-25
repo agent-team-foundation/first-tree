@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Support Guide
+    url: https://github.com/agent-team-foundation/first-tree/blob/main/SUPPORT.md
+    about: Start here for usage questions, bug reports, and security routing.

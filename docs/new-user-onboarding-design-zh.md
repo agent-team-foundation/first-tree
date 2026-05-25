@@ -3,7 +3,7 @@
 **状态：** 草稿 / 讨论中。落地前需 lock。
 **分支：** `feat/onboarding-redesign`
 **范围：** 托管版 Hub（first-tree.ai）新用户登录后的 onboarding。
-**不在范围：** 本地自建 Hub（`first-tree-hub start`）— 见 [docs/onboarding-redesign.md](onboarding-redesign.md)。NewAgentDialog 重写 — 见 PR #237。
+**不在范围：** 本地自建 Hub（`first-tree start`）— 见 [docs/onboarding-redesign.md](onboarding-redesign.md)。NewAgentDialog 重写 — 见 PR #237。
 **英文版：** [new-user-onboarding-design.md](new-user-onboarding-design.md)（同步维护）。
 
 ---
@@ -299,7 +299,7 @@ const personal = await createPersonalTeam(app.db, {
 2. 表单 3 个必填项：
    - **Agent name**（display name，自由文本）
    - **Source repository**（GitHub repo picker — 通过 OAuth 拉用户可访问的 repos 列表）
-   - **Computer**（CLI 命令框；用户在自己机器上跑 `first-tree-hub connect <token>`）
+   - **Computer**（CLI 命令框；用户在自己机器上跑 `first-tree login <token>`）
 3. Runtime 自动选第一个可用的 `ok` capability（优先 Claude Code）；Step 2 没给用户选 runtime 的 UI（高级选项推到 onboarding 后的 settings）
 4. 用户点 Create → 服务端创建 agent，带 `gitRepos: [{url: <选的 repo>}]` + clientId + runtime → 轮询直到 agent 上线 → 推进 `onboardingStep = step3`
 
@@ -321,14 +321,14 @@ const personal = await createPersonalTeam(app.db, {
 │        │                                             │              │
 │        │ 2. Repository it works on                   │              │
 │        │    ┌──────────────────────────────────┐     │              │
-│        │    │ ▾ gandyxiong/first-tree-hub      │     │              │
+│        │    │ ▾ gandyxiong/first-tree      │     │              │
 │        │    └──────────────────────────────────┘     │              │
 │        │    (picker, 通过 GitHub OAuth 列出)          │              │
 │        │                                             │              │
 │        │ 3. Computer it runs on                      │              │
 │        │    ╭─ Waiting for your computer… ──────╮    │              │
 │        │    │ Open Terminal and run:            │    │              │
-│        │    │   first-tree-hub connect 9f3a… 📋 │    │              │
+│        │    │   first-tree login 9f3a… 📋 │    │              │
 │        │    ╰───────────────────────────────────╯    │              │
 │        │    (client 上线后变成 ✓ <hostname> connected)│              │
 │        │                                             │              │
@@ -357,7 +357,7 @@ const personal = await createPersonalTeam(app.db, {
 
 跟当前 OnboardingView（[packages/web/src/pages/workspace/center/onboarding-view.tsx:144-174](../packages/web/src/pages/workspace/center/onboarding-view.tsx)）一样：
 - Step 2 mount 时 lazy-mint connect token
-- 显示 `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub connect <token>`
+- 显示 `npm install -g first-tree && first-tree login <token>`
 - 每 3 秒 poll `listClients()`；client 上线时把"Waiting"脉冲点切成"✓ <hostname> connected"
 - 接上后拉 capabilities 确认至少一个 runtime 是 `ok`
 
@@ -366,7 +366,7 @@ const personal = await createPersonalTeam(app.db, {
 **决策（P-3）：首次 onboarding 不给 runtime UI。Runtime 自动选。**
 
 - 按优先级选第一个 `ok` runtime：`claude-code` 优先，其次 `codex`
-- 如果都不 ok，按 [PR #237 的 runtime 提示文案](https://github.com/agent-team-foundation/first-tree-hub/pull/237) 显示行动建议（`先在 host 上装 Claude Code` / `运行 \`claude\` 完成登录`）
+- 如果都不 ok，按 [PR #237 的 runtime 提示文案](https://github.com/agent-team-foundation/first-tree/pull/237) 显示行动建议（`先在 host 上装 Claude Code` / `运行 \`claude\` 完成登录`）
 - 当前 `OnboardingView` 的 "Powered by" runtime chip UI 在本重设计里 **删除** — 新用户看不到 runtime 作为决策项
 
 理由：新用户不知道 Claude Code 和 Codex 的区别；把两个名字相近的引擎暴露出来等于让 ta 做无法自信判断的决定。runtime 之后在 agent settings 里改。多 runtime UI 留在 onboarding 之后的 `NewAgentDialog`（那时用户是在做"建另一个 agent"的有意识决定，可能有偏好）。
@@ -409,7 +409,7 @@ Step 3 有**三个视觉差异显著的子状态**：
 │      │                                           │                  │
 │      │  Your agent @code-reviewer is ready on    │                  │
 │      │  gandy-mac and has cloned                 │                  │
-│      │  gandyxiong/first-tree-hub.               │                  │
+│      │  gandyxiong/first-tree.               │                  │
 │      │                                           │                  │
 │      │  Set up first-tree on it now? It takes    │                  │
 │      │  ~2 minutes — agent does the scaffolding, │                  │
@@ -706,4 +706,4 @@ Step 4 重启时：
 - Agent runtime config（gitRepos）：[packages/shared/src/schemas/agent-runtime-config.ts](../packages/shared/src/schemas/agent-runtime-config.ts)
 - Git worktree materialization：[packages/client/src/handlers/claude-code.ts:682-700](../packages/client/src/handlers/claude-code.ts:682)
 - first-tree skill onboarding doc：[skills/first-tree/references/onboarding.md](https://github.com/agent-team-foundation/first-tree/blob/main/skills/first-tree/references/onboarding.md)
-- 关联 PR（NewAgentDialog 重写，独立 scope）：[#237](https://github.com/agent-team-foundation/first-tree-hub/pull/237)
+- 关联 PR（NewAgentDialog 重写，独立 scope）：[#237](https://github.com/agent-team-foundation/first-tree/pull/237)

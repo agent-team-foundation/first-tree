@@ -1,4 +1,4 @@
-import type { ClientCapabilities } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ClientCapabilities } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 export type AgentType = "human" | "personal_assistant" | "autonomous_agent";
@@ -56,6 +56,17 @@ export function getActivityOverview(): Promise<ActivityOverview> {
 
 export function listClients(): Promise<HubClient[]> {
   return api.get<HubClient[]>("/me/clients");
+}
+
+/**
+ * Admin-only listing of every client registered in the current organization.
+ * Used by the Computers page when the viewer is an admin so they can see
+ * teammates' computers alongside their own. The server endpoint already
+ * returns `userId` + `lastSeenAt`, which is what powers the client-side
+ * "Your computers" / "Team computers" split.
+ */
+export function listOrgClients(): Promise<HubClient[]> {
+  return api.get<HubClient[]>(withOrg("/clients"));
 }
 
 export function getClient(clientId: string): Promise<HubClient> {

@@ -1,8 +1,9 @@
-import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import { trace } from "@opentelemetry/api";
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
+import { withTimeout } from "../bootstrap-utils.js";
 import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agents } from "../db/schema/agents.js";
@@ -17,26 +18,40 @@ import { type Notifier, notifyRecipients } from "./notifier.js";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"];
 
+const FEISHU_WS_START_TIMEOUT_MS = 8_000;
+
 /**
- * Temporarily clear proxy env vars while running a callback.
- * The Lark SDK's internal HTTP client (axios) reads proxy env vars
- * but does not respect NO_PROXY, causing connection failures behind proxies.
- * Other code that needs the proxy is unaffected — vars are restored immediately.
+ * Reentrant proxy-env bypass for the Lark SDK (axios reads proxy env but
+ * ignores NO_PROXY). Concurrent reloads share a single bypass window — the
+ * first caller snapshots and unsets env, last caller restores. Without the
+ * counter, parallel callers would race and either leak a deleted state or
+ * corrupt the saved snapshot. See server-bootstrap-resilience-design.md §5.
  */
+let proxyBypassDepth = 0;
+let proxyBypassSaved: Record<string, string> | null = null;
+
 async function withoutProxy<T>(fn: () => Promise<T>): Promise<T> {
-  const saved: Record<string, string> = {};
-  for (const key of PROXY_ENV_KEYS) {
-    const val = process.env[key];
-    if (val !== undefined) {
-      saved[key] = val;
-      delete process.env[key];
+  if (proxyBypassDepth === 0) {
+    const saved: Record<string, string> = {};
+    for (const key of PROXY_ENV_KEYS) {
+      const val = process.env[key];
+      if (val !== undefined) {
+        saved[key] = val;
+        delete process.env[key];
+      }
     }
+    proxyBypassSaved = saved;
   }
+  proxyBypassDepth++;
   try {
     return await fn();
   } finally {
-    for (const [key, val] of Object.entries(saved)) {
-      process.env[key] = val;
+    proxyBypassDepth--;
+    if (proxyBypassDepth === 0 && proxyBypassSaved) {
+      for (const [key, val] of Object.entries(proxyBypassSaved)) {
+        process.env[key] = val;
+      }
+      proxyBypassSaved = null;
     }
   }
 }
@@ -52,14 +67,37 @@ type ManagedBot = {
   agentId: string;
   /** Whether to clear proxy env vars for SDK API calls (Lark SDK ignores NO_PROXY). */
   bypassProxy: boolean;
-  client: InstanceType<typeof Client>;
-  wsClient: WSClient;
+  /**
+   * Whether the WS handshake completed during the last reload attempt.
+   * `false` rows are kept in the map so /readyz can report them as
+   * disconnected; their `client`/`wsClient` are undefined. The SDK's
+   * `autoReconnect` does NOT resurrect a failed start — we only retry on
+   * the next `reload()` (PG NOTIFY or admin-triggered).
+   */
+  connected: boolean;
+  /** Last error message if the start handshake failed. */
+  lastError: string | null;
+  /** Undefined for bots whose start handshake failed. */
+  client: InstanceType<typeof Client> | undefined;
+  /** Undefined for bots whose start handshake failed. */
+  wsClient: WSClient | undefined;
   /** Timestamp of the last successful inbound or outbound activity. */
   lastActiveAt: Date | null;
 };
 
+/** A `ManagedBot` narrowed to the connected state, so SDK calls are type-safe. */
+type ConnectedBot = ManagedBot & {
+  connected: true;
+  client: InstanceType<typeof Client>;
+  wsClient: WSClient;
+};
+
+function isConnected(bot: ManagedBot): bot is ConnectedBot {
+  return bot.connected && bot.client !== undefined && bot.wsClient !== undefined;
+}
+
 /** Wrap an SDK API call with proxy bypass if needed. */
-function botApiCall<T>(bot: ManagedBot, fn: () => Promise<T>): Promise<T> {
+function botApiCall<T>(bot: ConnectedBot, fn: () => Promise<T>): Promise<T> {
   return bot.bypassProxy ? withoutProxy(fn) : fn();
 }
 
@@ -69,6 +107,7 @@ export type BotStatus = {
   agentId: string;
   appId: string;
   connected: boolean;
+  lastError: string | null;
   lastActiveAt: string | null;
 };
 
@@ -100,10 +139,13 @@ export function createAdapterManager(
 ): AdapterManager {
   const bots = new Map<string, ManagedBot>();
 
-  /** Find a managed bot by its bound agentId. */
-  function findBotByAgentId(agentId: string): ManagedBot | undefined {
+  /**
+   * Find a managed bot by its bound agentId. Only returns connected bots —
+   * callers (outbound send, edit) need a live `client`/`wsClient`.
+   */
+  function findBotByAgentId(agentId: string): ConnectedBot | undefined {
     for (const bot of bots.values()) {
-      if (bot.agentId === agentId) return bot;
+      if (bot.agentId === agentId && isConnected(bot)) return bot;
     }
     return undefined;
   }
@@ -122,7 +164,7 @@ export function createAdapterManager(
       if (event.senderType === "bot") return;
 
       const bot = bots.get(appId);
-      if (!bot) return;
+      if (!bot || !isConnected(bot)) return;
 
       try {
         await withSpan(
@@ -155,15 +197,15 @@ export function createAdapterManager(
       const configs = await db.select().from(adapterConfigs).where(eq(adapterConfigs.status, "active"));
       const seen = new Set<string>();
 
-      for (const config of configs) {
-        if (config.platform !== "feishu" || !config.credentials) continue;
+      const startTasks = configs.map(async (config) => {
+        if (config.platform !== "feishu" || !config.credentials) return;
 
         let creds: FeishuBotCredentials;
         try {
           creds = decryptCredentials(config.credentials as string, encryptionKey) as FeishuBotCredentials;
         } catch (err) {
           log.error({ configId: config.id, err }, "Failed to decrypt adapter credentials");
-          continue;
+          return;
         }
 
         const appId = creds.app_id;
@@ -172,11 +214,11 @@ export function createAdapterManager(
         // Skip if already running with same config version (detect credential changes)
         const configVersion = config.updatedAt.toISOString();
         const existing = bots.get(appId);
-        if (existing && existing.configId === config.id && existing.configUpdatedAt === configVersion) continue;
+        if (existing && existing.configId === config.id && existing.configUpdatedAt === configVersion) return;
 
         // Stop old connection if config changed
         if (existing) {
-          existing.wsClient.close({ force: true });
+          existing.wsClient?.close({ force: true });
           log.info({ appId }, "Stopped old Feishu WS connection (config changed)");
         }
 
@@ -184,45 +226,90 @@ export function createAdapterManager(
         const bypassProxy = creds.bypass_proxy !== false;
         const wrap = bypassProxy ? withoutProxy : <T>(fn: () => Promise<T>) => fn();
 
-        // Create SDK client for outbound API calls
-        const client = await wrap(() => Promise.resolve(new Client({ appId, appSecret: creds.app_secret })));
+        // `ws` is hoisted so the catch block can force-close it on timeout —
+        // otherwise the SDK's `autoReconnect: true` keeps a background timer
+        // alive against a dangling reference. The construction itself doesn't
+        // touch the network; only `ws.start()` does.
+        let ws: WSClient | undefined;
+        try {
+          // Create SDK client for outbound API calls
+          const client = await wrap(() => Promise.resolve(new Client({ appId, appSecret: creds.app_secret })));
 
-        // Create WSClient for inbound events
-        const eventDispatcher = new EventDispatcher({}).register({
-          "im.message.receive_v1": async (data: Record<string, unknown>) => {
-            await handleInboundEvent(appId, data);
-          },
-        });
-
-        const wsClient = await wrap(async () => {
-          const ws = new WSClient({
-            appId,
-            appSecret: creds.app_secret,
-            loggerLevel: LoggerLevel.warn,
-            autoReconnect: true,
+          // Create WSClient for inbound events
+          const eventDispatcher = new EventDispatcher({}).register({
+            "im.message.receive_v1": async (data: Record<string, unknown>) => {
+              await handleInboundEvent(appId, data);
+            },
           });
-          await ws.start({ eventDispatcher });
-          return ws;
-        });
 
-        bots.set(appId, {
-          configId: config.id,
-          configUpdatedAt: configVersion,
-          appId,
-          agentId: config.agentId,
-          bypassProxy,
-          client,
-          wsClient,
-          lastActiveAt: null,
-        });
+          await wrap(async () => {
+            ws = new WSClient({
+              appId,
+              appSecret: creds.app_secret,
+              loggerLevel: LoggerLevel.warn,
+              autoReconnect: true,
+            });
+            // Per-bot timeout: a single slow remote handshake must not stall
+            // server startup. A timed-out bot is recorded as disconnected
+            // (see catch); the next reload() retries.
+            await withTimeout(ws.start({ eventDispatcher }), FEISHU_WS_START_TIMEOUT_MS, `feishu.ws.start:${appId}`);
+          });
 
-        log.info({ appId, configId: config.id, agentId: config.agentId }, "Started Feishu adapter bot (WebSocket)");
-      }
+          bots.set(appId, {
+            configId: config.id,
+            configUpdatedAt: configVersion,
+            appId,
+            agentId: config.agentId,
+            bypassProxy,
+            connected: true,
+            lastError: null,
+            client,
+            // Non-null here: ws is assigned by the wrap() callback before
+            // start() resolves; if start() rejected we would be in catch.
+            wsClient: ws,
+            lastActiveAt: null,
+          });
+
+          log.info({ appId, configId: config.id, agentId: config.agentId }, "Started Feishu adapter bot (WebSocket)");
+        } catch (err) {
+          // S1: tear down the half-started WSClient so the SDK's autoReconnect
+          // timer doesn't keep firing in the background against a dropped ref.
+          if (ws) {
+            try {
+              ws.close({ force: true });
+            } catch (closeErr) {
+              log.warn({ appId, err: closeErr }, "ws.close after failed start raised");
+            }
+          }
+
+          // B1: keep a disconnected stub in the map so /readyz can report
+          // "bot exists, not connected" instead of silently hiding it.
+          bots.set(appId, {
+            configId: config.id,
+            configUpdatedAt: configVersion,
+            appId,
+            agentId: config.agentId,
+            bypassProxy,
+            connected: false,
+            lastError: err instanceof Error ? err.message : String(err),
+            client: undefined,
+            wsClient: undefined,
+            lastActiveAt: null,
+          });
+
+          log.error(
+            { appId, configId: config.id, err },
+            "Failed to start Feishu adapter bot — recorded as disconnected (other bots unaffected)",
+          );
+        }
+      });
+
+      await Promise.allSettled(startTasks);
 
       // Stop bots that are no longer active
       for (const [appId, bot] of bots) {
         if (!seen.has(appId)) {
-          bot.wsClient.close({ force: true });
+          bot.wsClient?.close({ force: true });
           bots.delete(appId);
           log.info({ appId }, "Stopped inactive Feishu adapter bot");
         }
@@ -282,7 +369,8 @@ export function createAdapterManager(
           platform: "feishu",
           agentId: bot.agentId,
           appId: bot.appId,
-          connected: bots.has(bot.appId),
+          connected: bot.connected,
+          lastError: bot.lastError,
           lastActiveAt: bot.lastActiveAt?.toISOString() ?? null,
         });
       }
@@ -291,8 +379,10 @@ export function createAdapterManager(
 
     shutdown() {
       for (const [appId, bot] of bots) {
-        bot.wsClient.close({ force: true });
-        log.info({ appId }, "Shut down Feishu WS connection");
+        if (bot.wsClient) {
+          bot.wsClient.close({ force: true });
+          log.info({ appId }, "Shut down Feishu WS connection");
+        }
       }
       bots.clear();
     },
@@ -355,7 +445,7 @@ function parseEventData(appId: string, data: Record<string, unknown>): InboundEv
 async function processInboundMessage(
   db: Database,
   event: InboundEvent,
-  bot: ManagedBot,
+  bot: ConnectedBot,
   log: FastifyBaseLogger,
   inboxNotifier?: Notifier,
 ): Promise<void> {
@@ -398,6 +488,7 @@ async function processInboundMessage(
   const { message: msg, recipients } = await sendMessage(db, chatId, senderAgentId, {
     format: event.messageType === "text" ? "text" : "card",
     content: event.messageType === "text" ? content : event.content,
+    source: "feishu",
     metadata: {
       source: "feishu",
       externalMessageId: event.messageId,
@@ -422,9 +513,9 @@ async function processInboundMessage(
 }
 
 /** Reply to unknown (unbound) user with binding instructions. */
-async function replyUnknownUser(bot: ManagedBot, event: InboundEvent, log: FastifyBaseLogger): Promise<void> {
+async function replyUnknownUser(bot: ConnectedBot, event: InboundEvent, log: FastifyBaseLogger): Promise<void> {
   const text = [
-    "Your account is not linked to First Tree Hub yet.",
+    "Your account is not linked to First Tree yet.",
     "To bind, send:  /bind <your-agent-id>",
     "",
     "Example:  /bind alice",
@@ -460,7 +551,7 @@ function extractTextContent(event: InboundEvent): string {
  */
 async function handleBindCommand(
   db: Database,
-  bot: ManagedBot,
+  bot: ConnectedBot,
   event: InboundEvent,
   agentName: string,
   log: FastifyBaseLogger,
@@ -553,7 +644,7 @@ async function handleBindCommand(
  */
 async function processFeishuOutbound(
   db: Database,
-  findBotByAgentId: (agentId: string) => ManagedBot | undefined,
+  findBotByAgentId: (agentId: string) => ConnectedBot | undefined,
   log: FastifyBaseLogger,
 ): Promise<{ sent: number; errors: number }> {
   // Claim pending inbox entries for feishu-bound human agents
@@ -586,8 +677,8 @@ async function processFeishuOutbound(
     "adapter.outbound feishu",
     {
       ...adapterAttrs({ platform: "feishu" }),
-      [FIRST_TREE_HUB_ATTR.BG_TASK_NAME]: "adapter.outbound.feishu",
-      [FIRST_TREE_HUB_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
+      [FIRST_TREE_ATTR.BG_TASK_NAME]: "adapter.outbound.feishu",
+      [FIRST_TREE_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
     },
     () => processFeishuOutboundClaimed(db, findBotByAgentId, log, claimed),
   );
@@ -595,7 +686,7 @@ async function processFeishuOutbound(
 
 async function processFeishuOutboundClaimed(
   db: Database,
-  findBotByAgentId: (agentId: string) => ManagedBot | undefined,
+  findBotByAgentId: (agentId: string) => ConnectedBot | undefined,
   log: FastifyBaseLogger,
   claimed: ReadonlyArray<{ id: number; inbox_id: string; message_id: string; chat_id: string | null }>,
 ): Promise<{ sent: number; errors: number }> {
@@ -685,8 +776,8 @@ async function processFeishuOutboundClaimed(
   // of the claimed entries actually shipped vs. errored without a join.
   const span = trace.getActiveSpan();
   if (span) {
-    span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_SENT_COUNT, sent);
-    span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_ERROR_COUNT, errorCount);
+    span.setAttribute(FIRST_TREE_ATTR.BG_TASK_SENT_COUNT, sent);
+    span.setAttribute(FIRST_TREE_ATTR.BG_TASK_ERROR_COUNT, errorCount);
   }
 
   return { sent, errors: errorCount };

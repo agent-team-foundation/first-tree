@@ -4,14 +4,45 @@ import { optionalChatMetadataSchema } from "./chat-metadata.js";
 export const CHAT_TYPES = {
   DIRECT: "direct",
   GROUP: "group",
-  THREAD: "thread",
 } as const;
 
-export const chatTypeSchema = z.enum(["direct", "group", "thread"]);
+export const chatTypeSchema = z.enum(["direct", "group"]);
 export type ChatType = z.infer<typeof chatTypeSchema>;
 
+/**
+ * Per-(chat, user) engagement state. Stored on `chat_user_state` so each
+ * user manages their own view independently of structural membership.
+ *
+ *   active   — default; chat is in the user's active conversation list.
+ *   archived — user-snoozed; auto-revives to `active` when a new message
+ *              lands in the chat (see `services/chat-projection.ts`).
+ *   deleted  — user-removed; never auto-revives. Restorable only by the
+ *              user from the chat detail page.
+ */
+export const CHAT_ENGAGEMENT_STATUSES = {
+  ACTIVE: "active",
+  ARCHIVED: "archived",
+  DELETED: "deleted",
+} as const;
+
+export const chatEngagementStatusSchema = z.enum(["active", "archived", "deleted"]);
+export type ChatEngagementStatus = z.infer<typeof chatEngagementStatusSchema>;
+
+export const patchChatEngagementSchema = z.object({
+  status: chatEngagementStatusSchema,
+});
+export type PatchChatEngagement = z.infer<typeof patchChatEngagementSchema>;
+
+/**
+ * Hub keeps a single group-chat model (see first-tree-context PR #281),
+ * so every newly created chat MUST be a `group`. `chatTypeSchema` survives
+ * for the read path (legacy `direct` rows still exist on disk and must
+ * deserialise), but the write path is locked down to `"group"` — a caller
+ * that explicitly sends `type: "direct"` gets a 400 instead of silently
+ * minting a new `direct` row.
+ */
 export const createChatSchema = z.object({
-  type: chatTypeSchema,
+  type: z.literal("group"),
   topic: z.string().max(500).optional(),
   participantIds: z.array(z.string()).min(1),
   metadata: optionalChatMetadataSchema.optional(),
@@ -40,6 +71,21 @@ export const chatParticipantDetailSchema = chatParticipantSchema.extend({
    */
   displayName: z.string(),
   type: z.string(),
+  /**
+   * Manager-selected avatar color token (one of `AVATAR_COLOR_TOKENS`).
+   * NULL = auto — renderer falls back to the deterministic djb2 hash of
+   * `agentId`. Kept as a loose string here (matching `type`) so DB rows
+   * with legacy / unrecognised values flow through harmlessly. Mirrors
+   * `meChatParticipantSchema` so the chat detail surface (header chips,
+   * right-sidebar agent rows) renders the same color the left rail does.
+   */
+  avatarColorToken: z.string().nullable(),
+  /**
+   * Synthesized URL for the manager-uploaded avatar image, or NULL when
+   * the agent has no image and the renderer should fall back to
+   * color + initial.
+   */
+  avatarImageUrl: z.string().nullable(),
 });
 export type ChatParticipantDetail = z.infer<typeof chatParticipantDetailSchema>;
 
@@ -56,7 +102,18 @@ export const chatSchema = z.object({
 export type Chat = z.infer<typeof chatSchema>;
 
 export const chatDetailSchema = chatSchema.extend({
-  participants: z.array(chatParticipantSchema),
+  /**
+   * Participants with `name / displayName / type` resolved via JOIN
+   * `agents`, intentionally **not** filtered by agent visibility. The
+   * authoritative trust boundary in a chat-scoped query is
+   * `chat_membership`, not org-level discovery — see
+   * `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
+   * The client renders chat-internal identity (mention autocomplete,
+   * participant chips, message sender name) off this field so a private
+   * agent that is a member of the chat shows its real name to every
+   * other member, not a UUID prefix.
+   */
+  participants: z.array(chatParticipantDetailSchema),
   /** Server-resolved display title. Priority: `topic` > first message
    *  preview > participant join. Clients should render this directly
    *  rather than re-implementing the fallback chain. */
@@ -66,6 +123,17 @@ export const chatDetailSchema = chatSchema.extend({
    *  with no `text` field). Exposed alongside the resolved `title` so
    *  callers can use it for tooltips / hover descriptions. */
   firstMessagePreview: z.string().nullable(),
+  /** Caller's engagement state for this chat. Server-side COALESCE bridges
+   *  the lazy-materialised `chat_user_state` row so the value is always
+   *  defined (defaults to `active`); the schema is non-nullable on purpose. */
+  engagementStatus: chatEngagementStatusSchema,
+  /** Caller's chat-membership view: `"participant"` (speaker), `"watching"`
+   *  (watcher), or `null` for supervisor / admin views where the caller has
+   *  no direct row in `chat_membership` (access granted via managed agents).
+   *  Mirrors the value `services/me-chat.ts` puts on `MeChatRow.membershipKind`
+   *  so the chat-detail page can decide between speaker UI and watcher UI
+   *  without round-tripping through the conversation-list query. */
+  viewerMembershipKind: z.enum(["participant", "watching"]).nullable(),
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
 
@@ -84,9 +152,19 @@ export type UpdateChat = z.infer<typeof updateChatSchema>;
  * telemetry counter increments — see `chat-participant-mode-fix-design.md`
  * §3.2 / §6.
  */
-export const addParticipantSchema = z.object({
-  agentId: z.string().min(1),
-});
+/**
+ * Identify the target by uuid (`agentId`) or by name (`agentName`). Names are
+ * resolved server-side within the chat's organization. Exactly one field
+ * must be supplied — both or neither is a 400.
+ */
+export const addParticipantSchema = z
+  .object({
+    agentId: z.string().min(1).optional(),
+    agentName: z.string().min(1).optional(),
+  })
+  .refine((v) => (v.agentId === undefined) !== (v.agentName === undefined), {
+    message: "addParticipant requires exactly one of `agentId` or `agentName`",
+  });
 export type AddParticipant = z.infer<typeof addParticipantSchema>;
 
 export const removeParticipantSchema = z.object({

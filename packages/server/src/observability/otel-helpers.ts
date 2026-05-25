@@ -17,7 +17,7 @@
  * `fn()` unwrapped — business code pays no cost.
  */
 
-import { TRACING_SENSITIVE_KEY_PATTERNS } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { TRACING_SENSITIVE_KEY_PATTERNS } from "@first-tree/shared/observability";
 import {
   type Attributes,
   type Context,
@@ -30,11 +30,11 @@ import {
 } from "@opentelemetry/api";
 import { setErrorSink } from "./logger.js";
 
-const TRACER_NAME = "@first-tree-hub/server";
+const TRACER_NAME = "@first-tree/server";
 const TRACER_VERSION = "0.1.0";
 
 /**
- * Resolve the shared `@first-tree-hub/server` tracer with a stable
+ * Resolve the shared `@first-tree/server` tracer with a stable
  * `instrumentation_scope.version` attached. Exported so other modules in
  * this package (e.g. `ws-tracing.ts`) emit spans under the same
  * `(name, version)` cache slot — otherwise trace backends see two distinct

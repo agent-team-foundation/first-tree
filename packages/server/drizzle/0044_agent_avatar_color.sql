@@ -1,0 +1,11 @@
+-- Add avatar_color_token to agents.
+--
+-- Manager-selected avatar fill color override for the web client. One of
+-- "hue-0".."hue-7", matching the `--avatar-hue-*` CSS tokens in
+-- `packages/web/src/index.css`. NULL means "auto" — the renderer falls
+-- back to the deterministic djb2 hash of `uuid` (the previous default).
+--
+-- Nullable, no default, no backfill: existing rows continue to render the
+-- hashed color until their manager picks something explicit. This is a
+-- pure additive change; no NOT NULL constraint, no enum, no FK.
+ALTER TABLE "agents" ADD COLUMN "avatar_color_token" text;

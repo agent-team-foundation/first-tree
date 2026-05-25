@@ -8,7 +8,7 @@
  *
  * Keys follow OTel convention: lowercase dot-separated namespaces.
  */
-export const FIRST_TREE_HUB_ATTR = {
+export const FIRST_TREE_ATTR = {
   // Multi-tenancy
   ORGANIZATION_ID: "organization.id",
   MEMBER_ID: "member.id",
@@ -61,8 +61,8 @@ export const FIRST_TREE_HUB_ATTR = {
   ERROR_CODE: "error.code",
 } as const;
 
-export type FirstTreeHubAttrKey = keyof typeof FIRST_TREE_HUB_ATTR;
-export type FirstTreeHubAttrName = (typeof FIRST_TREE_HUB_ATTR)[FirstTreeHubAttrKey];
+export type FirstTreeAttrKey = keyof typeof FIRST_TREE_ATTR;
+export type FirstTreeAttrName = (typeof FIRST_TREE_ATTR)[FirstTreeAttrKey];
 
 /**
  * Attribute key patterns considered sensitive — automatically redacted by

@@ -20,6 +20,16 @@ export const AGENT_VISIBILITY = {
 export const agentVisibilitySchema = z.enum(["private", "organization"]);
 export type AgentVisibility = z.infer<typeof agentVisibilitySchema>;
 
+/**
+ * Manager-selected avatar color. Each token references the matching
+ * `--avatar-hue-*` CSS variable in the web client. `null` (the default
+ * row state and the sentinel for "clear") means "auto" — the renderer
+ * falls back to the deterministic djb2 hash of the agent's uuid.
+ */
+export const AVATAR_COLOR_TOKENS = ["hue-0", "hue-1", "hue-2", "hue-3", "hue-4", "hue-5", "hue-6", "hue-7"] as const;
+export const avatarColorTokenSchema = z.enum(AVATAR_COLOR_TOKENS);
+export type AvatarColorToken = z.infer<typeof avatarColorTokenSchema>;
+
 export const AGENT_STATUSES = {
   ACTIVE: "active",
   SUSPENDED: "suspended",
@@ -147,6 +157,11 @@ export const updateAgentSchema = z.object({
    * owner / org / capability checks atomically.
    */
   clientId: z.string().min(1).max(100).nullable().optional(),
+  /**
+   * Avatar color override. Explicit `null` clears the override (falls back
+   * to the deterministic hash). Omitting the field leaves the row untouched.
+   */
+  avatarColorToken: avatarColorTokenSchema.nullable().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 
@@ -189,6 +204,21 @@ export const agentSchema = z.object({
   clientId: z.string().nullable(),
   /** Which runtime provider drives this agent. NOT NULL post-0026. */
   runtimeProvider: runtimeProviderSchema,
+  /**
+   * Manager-selected avatar color token (one of `AVATAR_COLOR_TOKENS`).
+   * NULL means "auto" — the web renderer falls back to the deterministic
+   * djb2 hash of `uuid`. Kept loose (`string`) on the read side so legacy
+   * or unrecognised values flow through harmlessly; the renderer guards
+   * on the known set.
+   */
+  avatarColorToken: z.string().nullable(),
+  /**
+   * Synthesized URL for the manager-uploaded avatar image. NULL when no
+   * image is set. Carries a cache-busting suffix derived from the image's
+   * last-upload timestamp so browsers refetch after a change. The image
+   * itself is served by `GET /api/v1/agents/:uuid/avatar`.
+   */
+  avatarImageUrl: z.string().nullable(),
   presenceStatus: presenceStatusSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -205,7 +235,7 @@ export type ContextTreeInfo = z.infer<typeof contextTreeInfoSchema>;
  * Server → client WebSocket frame announcing that an agent has just been
  * pinned to the connected client (either created with `clientId` or bound via
  * PATCH NULL → ID). The client can auto-register a local config from this so
- * the operator doesn't have to run `first-tree-hub agent add` manually.
+ * the operator doesn't have to run `first-tree agent add` manually.
  */
 export const agentPinnedMessageSchema = z.object({
   type: z.literal("agent:pinned"),

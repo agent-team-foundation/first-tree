@@ -13,6 +13,13 @@
  *   3. `chat_membership` and `chat_user_state` are structurally independent:
  *      `markMeChatRead` writes to `chat_user_state` without touching
  *      `chat_membership.access_mode`.
+ *
+ *   4. Engagement state on `chat_user_state` survives every membership
+ *      mutation. These three cases are the structural regression tests for
+ *      the pain points (#2 state-carry across migration, #3 silent-overwrite
+ *      from recompute) that closed PR #316 — the new data model is supposed
+ *      to make them physically impossible. If one of these tests fails, the
+ *      invariant has regressed.
  */
 
 import { and, eq, sql } from "drizzle-orm";
@@ -20,7 +27,7 @@ import { describe, expect, it } from "vitest";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { createAgent } from "../services/agent.js";
-import { createMeChat, joinMeChat, leaveMeChat, markMeChatRead } from "../services/me-chat.js";
+import { createMeChat, joinMeChat, leaveMeChat, markMeChatRead, setChatEngagement } from "../services/me-chat.js";
 import { sendMessage } from "../services/message.js";
 import { addChatParticipants } from "../services/participant-mode.js";
 import { recomputeChatWatchers } from "../services/watcher.js";
@@ -111,6 +118,7 @@ describe("chat membership invariants", () => {
 
     // peer sends a message so admin has an unread counter to remember.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
       format: "text",
       content: "ping",
       metadata: { mentions: [admin.humanAgentUuid] },
@@ -378,5 +386,106 @@ describe("chat membership invariants", () => {
       sql`SELECT count(*)::int AS count FROM chat_membership WHERE chat_id = ${chatId} AND agent_id = ${peer.agent.uuid} AND access_mode = 'speaker'`,
     );
     expect(peerRow[0]?.count).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Engagement-status survival across membership mutations.
+  //
+  // Closed PR #316 was rejected because the old `chat_participants` +
+  // `chat_subscriptions` split forced engagement_status to be carried
+  // explicitly across every speaker ↔ watcher transition (and was silently
+  // overwritten by `recomputeChatWatchers`). The new data model puts
+  // engagement on `chat_user_state` — a different table from
+  // `chat_membership` — so every structural mutation leaves it alone by
+  // construction. These tests pin that invariant.
+  // ---------------------------------------------------------------------------
+
+  it("speaker → watcher transition preserves engagement_status (no state-carry needed)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const managed = await createAgent(app.db, {
+      name: `mng-eng1-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Mng-Eng1",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId: undefined,
+    });
+    const peer = await createTestAgent(app, { name: "peer-eng1" });
+
+    // Admin's human agent starts as a speaker by creating the chat. Archive it.
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid, managed.uuid],
+    });
+    await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "archived");
+
+    // Leave → admin becomes a watcher (still anchored on `managed`).
+    const leaveResult = await leaveMeChat(app.db, chatId, admin.humanAgentUuid);
+    expect(leaveResult.membershipKind).toBe("watching");
+
+    // Engagement still archived — the access_mode flip on chat_membership
+    // never touched chat_user_state.
+    const [row] = await app.db.execute<{ engagement_status: string }>(
+      sql`SELECT engagement_status FROM chat_user_state
+           WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(row?.engagement_status).toBe("archived");
+  });
+
+  it("recomputeChatWatchers does NOT modify engagement_status (silent-overwrite regression)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const managed = await createAgent(app.db, {
+      name: `mng-eng2-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Mng-Eng2",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId: undefined,
+    });
+    const peer = await createTestAgent(app, { name: "peer-eng2" });
+
+    // peer creates a chat with `managed`; admin becomes a watcher via
+    // recompute (anchored on `managed`).
+    const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
+      participantIds: [managed.uuid],
+    });
+    await recomputeChatWatchers(app.db, chatId);
+
+    // Archive as watcher.
+    await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "archived");
+
+    // Force several recompute passes (idempotent ops paths).
+    await recomputeChatWatchers(app.db, chatId);
+    await recomputeChatWatchers(app.db, chatId);
+    await recomputeChatWatchers(app.db, chatId);
+
+    // engagement_status survives every pass.
+    const [row] = await app.db.execute<{ engagement_status: string }>(
+      sql`SELECT engagement_status FROM chat_user_state
+           WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(row?.engagement_status).toBe("archived");
+  });
+
+  it("markMeChatRead is orthogonal to engagement_status (per-user state lanes are independent)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "peer-eng3" });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await setChatEngagement(app.db, chatId, admin.humanAgentUuid, "archived");
+
+    // markRead writes to chat_user_state but only updates the read-state
+    // columns — engagement_status must not be reset to its INSERT default.
+    await markMeChatRead(app.db, chatId, admin.humanAgentUuid);
+
+    const [row] = await app.db.execute<{ engagement_status: string }>(
+      sql`SELECT engagement_status FROM chat_user_state
+           WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}`,
+    );
+    expect(row?.engagement_status).toBe("archived");
   });
 });

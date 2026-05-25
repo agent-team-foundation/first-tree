@@ -29,6 +29,7 @@ export function filterEventsForTimeline(events: SessionEventRow[]): SessionEvent
 
   const turnFiltered = events.filter((e) => {
     if (e.kind === "turn_end") return false;
+    if (e.kind === "context_tree_usage") return false;
     if (e.kind === "error") return true;
     return e.seq > lastTurnEndSeq;
   });

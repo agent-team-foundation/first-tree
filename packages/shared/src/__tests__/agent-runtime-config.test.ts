@@ -4,6 +4,9 @@ import {
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   defaultRuntimeConfigPayload,
+  deriveRepoLocalPath,
+  gitRepoSchema,
+  isSafeRepoLocalPath,
 } from "../schemas/agent-runtime-config.js";
 
 /**
@@ -80,5 +83,36 @@ describe("agent runtime config — codex defaults", () => {
     });
     expect(parsed.kind).toBe("codex");
     expect(parsed.model).toBe("gpt-5.5");
+  });
+});
+
+describe("agent runtime config — git repo localPath safety", () => {
+  it("accepts safe relative local paths", () => {
+    expect(gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath: "repos/repo-1" })).toEqual({
+      url: "https://github.com/acme/repo.git",
+      localPath: "repos/repo-1",
+    });
+  });
+
+  it.each([
+    ["/tmp/repo"],
+    ["../repo"],
+    ["repos/../repo"],
+    ["repos//repo"],
+    ["repos/./repo"],
+    ["repos/repo/"],
+    [" repos/repo"],
+    ["repos\\repo"],
+    ["C:/repo"],
+    ["repo\u0000x"],
+  ])("rejects unsafe localPath %j", (localPath) => {
+    expect(isSafeRepoLocalPath(localPath)).toBe(false);
+    expect(() => gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath })).toThrow();
+  });
+
+  it("preserves derived repo local path behavior for repo URLs", () => {
+    expect(deriveRepoLocalPath("https://github.com/acme/repo.git")).toBe("repo");
+    expect(deriveRepoLocalPath("git@github.com:acme/repo.git")).toBe("repo");
+    expect(deriveRepoLocalPath("https://github.com/acme/repo.git?ref=main")).toBe("repo");
   });
 });

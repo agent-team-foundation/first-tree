@@ -24,7 +24,7 @@ describe("inbox WS data-plane claim helpers", () => {
     const a1 = await createTestAgent(app, { name: `wsp-a1-${uid}` });
     const a2 = await createTestAgent(app, { name: `wsp-a2-${uid}` });
     const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;
@@ -49,7 +49,7 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(entry.messageId).toBe(messageId);
     expect(entry.status).toBe("delivered");
     expect(entry.message.id).toBe(messageId);
-    // Same wire shape as the legacy poll path → client-side dispatch is
+    // Same wire shape as the `pollInbox` path → client-side dispatch is
     // identical (single SessionManager.dispatch call site).
     expect(typeof entry.message.configVersion).toBe("number");
     expect(entry.message.recipientMode).toBeTruthy();
@@ -60,7 +60,7 @@ describe("inbox WS data-plane claim helpers", () => {
     expect(typeof entry.id).toBe("number");
   });
 
-  it("returns an empty array on a second claim of the same (inbox, message) — race-safe with HTTP poll", async () => {
+  it("returns an empty array on a second claim of the same (inbox, message) — race-safe with the debug GET /inbox path", async () => {
     const app = getApp();
     const { a2, messageId } = await seedDeliverable(app);
 
@@ -71,80 +71,6 @@ describe("inbox WS data-plane claim helpers", () => {
     // `[]`, NOT throw, otherwise a NOTIFY storm crashes the LISTEN loop.
     const second = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
     expect(second).toEqual([]);
-  });
-
-  it("claimAndBuildForPush returns BOTH rows when replyTo cross-chat fan-out wrote two entries", async () => {
-    // Regression for review issue #2: a single (inbox, messageId) pair can map
-    // to two inbox_entries rows differing only by chat_id when:
-    //   1. agent A is a chat participant (row 1, chatId = current chat)
-    //   2. agent A is also the replyToInbox of an earlier message
-    //      (row 2, chatId = original.replyToChat)
-    // Old `LIMIT 1` claim shape only pushed row 1; row 2 sat `pending` until
-    // reconnect. Aligning with poll's `LIMIT N` shape closes the gap.
-    const app = getApp();
-    const uid = crypto.randomUUID().slice(0, 6);
-    const ctx = await createAdminContext(app, { username: `wsp-rt-${uid}` });
-    const sender = await createAgent(app.db, {
-      name: `wsp-rt-s-${uid}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-    const peer = await createAgent(app.db, {
-      name: `wsp-rt-p-${uid}`,
-      type: "autonomous_agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-    });
-
-    // chatA: sender + peer (where the conversation lives).
-    // chatB: sender alone — the replyTo target.
-    const chatA = await createChat(app.db, sender.uuid, { type: "direct", participantIds: [peer.uuid] });
-    const chatB = await createChat(app.db, sender.uuid, { type: "group", participantIds: [] });
-
-    // chatA is mention_only on both ends (migration 0029), so explicit
-    // mentions on each leg keep the fan-out + replyTo rows both notify=true
-    // — this test is about the WS claim shape, not mode semantics.
-    const original = await sendMessage(app.db, chatA.id, sender.uuid, {
-      format: "text",
-      content: "any progress?",
-      replyToInbox: sender.inboxId,
-      replyToChat: chatB.id,
-      metadata: { mentions: [peer.uuid] },
-    });
-    // Drain peer's inbox so it doesn't muddy the assertions below.
-    await inboxService.pollInbox(app.db, peer.inboxId, 10);
-
-    // peer replies — fan-out writes one row to sender's inbox (chatId=A) AND
-    // replyTo routing writes a second row (chatId=B). Same messageId on both.
-    const reply = await sendMessage(app.db, chatA.id, peer.uuid, {
-      format: "text",
-      content: "yes, almost done",
-      inReplyTo: original.message.id,
-      metadata: { mentions: [sender.uuid] },
-    });
-
-    // Sanity check the seed: two pending rows exist before we claim.
-    const seeded = await app.db
-      .select({ chatId: inboxEntries.chatId, status: inboxEntries.status })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.inboxId, sender.inboxId), eq(inboxEntries.messageId, reply.message.id)));
-    expect(seeded).toHaveLength(2);
-
-    // The push path must claim BOTH rows in one call — proposal §3.2's
-    // "single NOTIFY → all matching pending rows".
-    const claimed = await inboxService.claimAndBuildForPush(app.db, sender.inboxId, reply.message.id);
-    expect(claimed).toHaveLength(2);
-    const claimedChatIds = claimed.map((e) => e.chatId).sort();
-    expect(claimedChatIds).toEqual([chatA.id, chatB.id].sort());
-    for (const e of claimed) expect(e.status).toBe("delivered");
-
-    // No pending row should be left behind.
-    const remaining = await app.db
-      .select({ status: inboxEntries.status })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.inboxId, sender.inboxId), eq(inboxEntries.messageId, reply.message.id)));
-    expect(remaining.every((r) => r.status === "delivered")).toBe(true);
   });
 
   it("claimAndBuildForPush bundles silent context for a mention_only trigger", async () => {
@@ -182,10 +108,11 @@ describe("inbox WS data-plane claim helpers", () => {
       .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, observer.uuid)));
 
     // Three silent messages, then a trigger that @mentions observer.
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "first silent" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "second silent" });
-    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "third silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "first silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "second silent" });
+    await sendMessage(app.db, chat.id, human.uuid, { source: "api", format: "text", content: "third silent" });
     const trigger = await sendMessage(app.db, chat.id, human.uuid, {
+      source: "api",
       format: "text",
       content: `@wsp-si-obs-${uid} please weigh in`,
     });
@@ -223,7 +150,7 @@ describe("inbox WS data-plane claim helpers", () => {
     const a1 = await createTestAgent(app, { name: `wspb-a1-${uid}` });
     const a2 = await createTestAgent(app, { name: `wspb-a2-${uid}` });
     const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
-      type: "direct",
+      type: "group",
       participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;
@@ -307,33 +234,5 @@ describe("inbox WS data-plane claim helpers", () => {
     const app = getApp();
     const res = await inboxService.ackEntryByIdForBoundAgents(app.db, 1, []);
     expect(res).toBeNull();
-  });
-
-  it("ackEntryByIdForBoundAgents returns null when an HTTP ack already flipped the row", async () => {
-    // Pins the bug class behind the WS-push double-ack incident: if the
-    // legacy HTTP ack runs first (`delivered → acked`), a follow-up WS ack
-    // matches 0 rows and returns null. The SessionManager.ackEntry callback
-    // must therefore ROUTE to exactly one channel — never both — otherwise
-    // the server's per-agent in-flight counter (which only decrements on a
-    // successful WS ack) leaks until push silently dies.
-    //
-    // This test exists to stop a future refactor from "helpfully" sending a
-    // WS ack on top of HTTP (or vice-versa) without first reading why the
-    // ackEntry callback exists.
-    const app = getApp();
-    const { a2, messageId } = await seedDeliverable(app);
-
-    const claimed = await inboxService.claimAndBuildForPush(app.db, a2.agent.inboxId, messageId);
-    const entry = claimed[0];
-    if (!entry) throw new Error("seed claim failed");
-
-    // Simulate the legacy HTTP ack path running first.
-    await inboxService.ackEntry(app.db, entry.id, a2.agent.inboxId);
-
-    // Now the WS-path ack arrives — must be a no-op (no double transition,
-    // no error, just `null` so the caller can decline to decrement its
-    // in-flight counter for a row it never moved).
-    const wsAckResult = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
-    expect(wsAckResult).toBeNull();
   });
 });

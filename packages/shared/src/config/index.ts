@@ -6,7 +6,7 @@ export type { ClientConfig } from "./client-config.js";
 export { clientConfigSchema, getClientConfig, updatePolicySchema } from "./client-config.js";
 // Agent loader
 export { loadAgents } from "./loader.js";
-// Legacy home auto-migration (pre-v0.9 `~/.first-tree-hub` → `~/.first-tree/hub`)
+// Legacy home auto-migration (pre-v0.9 `~/.first-tree` → `~/.first-tree/hub`)
 export type { HomeMigrationResult } from "./migrate-home.js";
 export { LEGACY_HOME_DIR, migrateLegacyHome } from "./migrate-home.js";
 export type { UpdatePolicy } from "./phase.js";

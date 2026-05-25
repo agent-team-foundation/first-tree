@@ -42,8 +42,14 @@ describe("me-chat resolveChatTitle", () => {
       null,
       "请帮我重构这个文件",
       [
-        { agentId: me, displayName: "Me", type: "human" },
-        { agentId: "a", displayName: "Code Agent", type: "personal_assistant" },
+        { agentId: me, displayName: "Me", type: "human", avatarColorToken: null, avatarImageUrl: null },
+        {
+          agentId: "a",
+          displayName: "Code Agent",
+          type: "personal_assistant",
+          avatarColorToken: null,
+          avatarImageUrl: null,
+        },
       ],
       me,
     );
@@ -54,7 +60,15 @@ describe("me-chat resolveChatTitle", () => {
     const title = resolveChatTitle(
       "Manual Title",
       "请帮我重构这个文件",
-      [{ agentId: "a", displayName: "Code Agent", type: "personal_assistant" }],
+      [
+        {
+          agentId: "a",
+          displayName: "Code Agent",
+          type: "personal_assistant",
+          avatarColorToken: null,
+          avatarImageUrl: null,
+        },
+      ],
       me,
     );
     expect(title).toBe("Manual Title");
@@ -65,9 +79,21 @@ describe("me-chat resolveChatTitle", () => {
       null,
       null,
       [
-        { agentId: me, displayName: "Me", type: "human" },
-        { agentId: "a", displayName: "Code Agent", type: "personal_assistant" },
-        { agentId: "b", displayName: "Design Agent", type: "personal_assistant" },
+        { agentId: me, displayName: "Me", type: "human", avatarColorToken: null, avatarImageUrl: null },
+        {
+          agentId: "a",
+          displayName: "Code Agent",
+          type: "personal_assistant",
+          avatarColorToken: null,
+          avatarImageUrl: null,
+        },
+        {
+          agentId: "b",
+          displayName: "Design Agent",
+          type: "personal_assistant",
+          avatarColorToken: null,
+          avatarImageUrl: null,
+        },
       ],
       me,
     );
@@ -79,11 +105,11 @@ describe("me-chat resolveChatTitle", () => {
       null,
       null,
       [
-        { agentId: me, displayName: "Me", type: "human" },
-        { agentId: "a", displayName: "Alice", type: "human" },
-        { agentId: "b", displayName: "Bob", type: "human" },
-        { agentId: "c", displayName: "Carol", type: "human" },
-        { agentId: "d", displayName: "Dave", type: "human" },
+        { agentId: me, displayName: "Me", type: "human", avatarColorToken: null, avatarImageUrl: null },
+        { agentId: "a", displayName: "Alice", type: "human", avatarColorToken: null, avatarImageUrl: null },
+        { agentId: "b", displayName: "Bob", type: "human", avatarColorToken: null, avatarImageUrl: null },
+        { agentId: "c", displayName: "Carol", type: "human", avatarColorToken: null, avatarImageUrl: null },
+        { agentId: "d", displayName: "Dave", type: "human", avatarColorToken: null, avatarImageUrl: null },
       ],
       me,
     );
@@ -91,7 +117,12 @@ describe("me-chat resolveChatTitle", () => {
   });
 
   it("returns a sentinel when no other participants exist", () => {
-    const title = resolveChatTitle(null, null, [{ agentId: me, displayName: "Me", type: "human" }], me);
+    const title = resolveChatTitle(
+      null,
+      null,
+      [{ agentId: me, displayName: "Me", type: "human", avatarColorToken: null, avatarImageUrl: null }],
+      me,
+    );
     expect(title).toBe("Empty chat");
   });
 
@@ -100,8 +131,14 @@ describe("me-chat resolveChatTitle", () => {
       "",
       null,
       [
-        { agentId: me, displayName: "Me", type: "human" },
-        { agentId: "a", displayName: "Code Agent", type: "personal_assistant" },
+        { agentId: me, displayName: "Me", type: "human", avatarColorToken: null, avatarImageUrl: null },
+        {
+          agentId: "a",
+          displayName: "Code Agent",
+          type: "personal_assistant",
+          avatarColorToken: null,
+          avatarImageUrl: null,
+        },
       ],
       me,
     );

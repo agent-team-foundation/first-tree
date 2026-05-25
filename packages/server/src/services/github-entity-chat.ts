@@ -1,10 +1,46 @@
-import { chatMetadataSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq } from "drizzle-orm";
+import type { ToolCallEventPayload } from "@first-tree/shared";
+import { chatMetadataSchema } from "@first-tree/shared";
+import { and, asc, eq } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { formatEntityTitle } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
+import { createLogger } from "../observability/index.js";
 import { createChat } from "./chat.js";
+import { extractGithubEntity } from "./github-entity-extractor.js";
+
+const log = createLogger("GithubEntityChat");
+
+/**
+ * `bound_via` audit values:
+ *   - "direct"        — first-touch row created in `resolveTargetChat` step (c)
+ *   - "fixes_link"    — secondary row written by the `Fixes #N` linker
+ *   - "agent_created" — proactively written when an agent's tool_call creates
+ *                       a PR/Issue, before the corresponding `*.opened` webhook
+ *                       arrives. See `maybeBindGithubEntityFromToolCall`.
+ *
+ * Routing logic ignores the distinction; this column is purely for audit /
+ * future strategy tweaks.
+ */
+export type BoundVia = "direct" | "fixes_link" | "agent_created";
+
+function asBoundVia(value: string): BoundVia {
+  if (value === "fixes_link") return "fixes_link";
+  if (value === "agent_created") return "agent_created";
+  return "direct";
+}
+
+/**
+ * `(eventType, action)` pairs that represent the creation of a brand-new
+ * GitHub entity. Reserved for the "creation webhooks must not invent new
+ * chats" guard — see `resolveTargetChat`.
+ */
+export function isCreationEvent(eventType: string, action: string): boolean {
+  return (eventType === "pull_request" && action === "opened") || (eventType === "issues" && action === "opened");
+}
 
 /**
  * Resolve which chat a GitHub event for (human, delegate, entity) belongs to.
@@ -36,9 +72,31 @@ export async function resolveTargetChat(
     eventType: string;
     /** GitHub action on `eventType`. Same scope as `eventType`. */
     action: string;
+    /**
+     * Whether the calling audience target came from an explicit mention /
+     * involve in the event payload (vs. a pre-existing subscription). Only
+     * mention-driven targets are allowed to create a fresh chat from a
+     * creation webhook (`pull_request.opened` / `issues.opened`); subscription
+     * fall-through is rejected so opened events can't proliferate chats.
+     *
+     * Required, not optional: the guard is fail-closed by design so any
+     * future caller that forgets to plumb the signal lands in the safer
+     * "drop, don't invent" branch instead of silently re-enabling the old
+     * chat-proliferation behaviour.
+     */
+    isMentionMatched: boolean;
   },
-): Promise<{ chatId: string; created: boolean; boundVia: "direct" | "fixes_link" }> {
-  const { organizationId, humanAgentId, delegateAgentId, entity, relatedEntities, eventType, action } = params;
+): Promise<{ chatId: string; created: boolean; boundVia: BoundVia } | null> {
+  const {
+    organizationId,
+    humanAgentId,
+    delegateAgentId,
+    entity,
+    relatedEntities,
+    eventType,
+    action,
+    isMentionMatched,
+  } = params;
 
   // (a) Direct hit.
   const direct = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, entity);
@@ -60,6 +118,18 @@ export async function resolveTargetChat(
     });
     // If the insert lost a race, our re-read returns the winner's row.
     return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
+  }
+
+  // (b.5) Creation-event guard. `pull_request.opened` / `issues.opened` must
+  // never invent a chat for a target that didn't explicitly @-mention an
+  // agent. By the time we get here, (a) miss + (b) miss already proves the
+  // entity is brand-new from the mapping's perspective; the only legitimate
+  // reason to enter (c) is an explicit mention/involve. Subscription
+  // fall-through (or any future caller that forgets to set the flag) gets
+  // rejected with `null` so the delivery loop drops the event instead of
+  // proliferating chats. See proposals discussion: opened-webhook intercept.
+  if (isCreationEvent(eventType, action) && !isMentionMatched) {
+    return null;
   }
 
   // (c) Miss — create a fresh chat. Two concurrent (c)-path callers for the
@@ -86,7 +156,7 @@ async function lookupMapping(
   humanAgentId: string,
   delegateAgentId: string,
   entity: GithubEntity,
-): Promise<{ chatId: string; boundVia: "direct" | "fixes_link" } | null> {
+): Promise<{ chatId: string; boundVia: BoundVia } | null> {
   const [row] = await db
     .select({ chatId: githubEntityChatMappings.chatId, boundVia: githubEntityChatMappings.boundVia })
     .from(githubEntityChatMappings)
@@ -101,7 +171,7 @@ async function lookupMapping(
     )
     .limit(1);
   if (!row) return null;
-  return { chatId: row.chatId, boundVia: row.boundVia === "fixes_link" ? "fixes_link" : "direct" };
+  return { chatId: row.chatId, boundVia: asBoundVia(row.boundVia) };
 }
 
 async function insertMappingIfAbsent(
@@ -112,9 +182,9 @@ async function insertMappingIfAbsent(
     delegateAgentId: string;
     entity: GithubEntity;
     chatId: string;
-    boundVia: "direct" | "fixes_link";
+    boundVia: BoundVia;
   },
-): Promise<{ chatId: string; boundVia: "direct" | "fixes_link" }> {
+): Promise<{ chatId: string; boundVia: BoundVia }> {
   const [inserted] = await db
     .insert(githubEntityChatMappings)
     .values({
@@ -140,7 +210,7 @@ async function insertMappingIfAbsent(
       boundVia: githubEntityChatMappings.boundVia,
     });
   if (inserted) {
-    return { chatId: inserted.chatId, boundVia: inserted.boundVia === "fixes_link" ? "fixes_link" : "direct" };
+    return { chatId: inserted.chatId, boundVia: asBoundVia(inserted.boundVia) };
   }
   // Lost the race — read the winning row.
   const winner = await lookupMapping(
@@ -160,10 +230,11 @@ async function insertMappingIfAbsent(
  * Create a fresh chat for a (human, delegate, entity) tuple. Goes through the
  * canonical `createChat` so:
  *   - cross-org participants are rejected (BadRequestError)
- *   - direct agent-only chats automatically get `mode=mention_only`
+ *   - the new chat is written as `type='group'` (first-tree-context PR #281
+ *     locked the single-group-chat model in; v2 made `chat_membership.mode`
+ *     decision-inert — every speaker row is written as the constant
+ *     `'mention_only'` regardless of peer shape).
  *   - watcher rows are recomputed
- *   - a future addParticipant call would upgrade the chat to `group` via
- *     the server's `changeChatType` service instead of raw INSERT shortcuts
  */
 async function createEntityChat(
   db: Database,
@@ -187,10 +258,146 @@ async function createEntityChat(
     ...(entity.url ? { entityUrl: entity.url } : {}),
   });
   const chat = await createChat(db, humanAgentId, {
-    type: "direct",
+    type: "group",
     participantIds: [delegateAgentId],
     topic: formatEntityTitle(entity, eventType, action),
     metadata,
   });
   return { id: chat.id };
+}
+
+/**
+ * Pick the (org, human, delegate) tuple to bind a tool_call-driven entity to.
+ *
+ * The reporting agent is the delegate side. The human side is the
+ * representative human member of the chat — exactly one row is written so
+ * group chats don't fan out into N duplicate cards on the next webhook.
+ *
+ * Selection order (deterministic across concurrent calls):
+ *   1. Active humans whose `delegateMention` already points at the reporter
+ *      —— these humans are the natural "owner" of the reporter's work; any
+ *      downstream code that reads `mapping.humanAgentId` (notification
+ *      recipient, card signatures, audit) sees a meaningful pairing.
+ *   2. Fallback: id-sorted-first among the remaining active humans.
+ *
+ * Returns null when:
+ *   - the reporter isn't a member of the chat
+ *   - the reporter is itself a human agent (humans don't emit tool_calls)
+ *   - the chat has no active human member
+ */
+async function resolveBindingPair(
+  db: Database,
+  chatId: string,
+  reporterAgentId: string,
+): Promise<{
+  organizationId: string;
+  humanAgentId: string;
+  delegateAgentId: string;
+} | null> {
+  const rows = await db
+    .select({
+      chatOrganizationId: chats.organizationId,
+      agentId: chatMembership.agentId,
+      agentOrganizationId: agents.organizationId,
+      agentType: agents.type,
+      agentStatus: agents.status,
+      delegateMention: agents.delegateMention,
+    })
+    .from(chatMembership)
+    .innerJoin(chats, eq(chatMembership.chatId, chats.id))
+    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .where(eq(chatMembership.chatId, chatId))
+    .orderBy(asc(chatMembership.agentId));
+
+  if (rows.length === 0) return null;
+
+  const reporter = rows.find((r) => r.agentId === reporterAgentId);
+  if (!reporter) return null;
+  if (reporter.agentType === "human") return null;
+
+  // Defense-in-depth: `createChat` enforces same-org participants, but
+  // grandfathered cross-org chat_membership rows or admin-override paths
+  // can sneak through. If the reporter is from org A and the chat is in
+  // org B, writing the mapping under org B would orphan it from org A's
+  // installation webhooks (audience scopes by org). Refuse the binding
+  // rather than write a row that will silently fail to route. See #508.
+  if (reporter.agentOrganizationId !== reporter.chatOrganizationId) {
+    log.warn(
+      {
+        chatId,
+        reporterAgentId,
+        reporterOrg: reporter.agentOrganizationId,
+        chatOrg: reporter.chatOrganizationId,
+      },
+      "agent_binding skipped: reporter/chat organization mismatch",
+    );
+    return null;
+  }
+
+  const humans = rows.filter((r) => r.agentType === "human" && r.agentStatus === "active");
+  if (humans.length === 0) return null;
+
+  const linkedHuman = humans.find((h) => h.delegateMention === reporterAgentId);
+  const representative = linkedHuman ?? humans[0];
+  if (!representative) return null;
+  return {
+    organizationId: representative.chatOrganizationId,
+    humanAgentId: representative.agentId,
+    delegateAgentId: reporterAgentId,
+  };
+}
+
+/**
+ * Side-effect of a `tool_call` session event: when the agent has just created
+ * a PR/Issue via a recognised tool (`gh pr create` / `gh issue create`), pin
+ * the resulting entity to the current chat so the upcoming `*.opened` webhook
+ * routes back instead of fanning out a new chat.
+ *
+ * Failures are swallowed — the caller (sessionEventService.appendEvent) must
+ * not let mapping bookkeeping break the main tool_call write.
+ */
+export async function maybeBindGithubEntityFromToolCall(
+  db: Database,
+  reporterAgentId: string,
+  chatId: string,
+  payload: ToolCallEventPayload,
+): Promise<void> {
+  const entity = extractGithubEntity(payload);
+  if (!entity) return;
+
+  const pair = await resolveBindingPair(db, chatId, reporterAgentId);
+  if (!pair) {
+    log.debug(
+      { chatId, reporterAgentId, entityKey: entity.entityKey },
+      "agent_binding skipped: no eligible (human, delegate) pair",
+    );
+    return;
+  }
+
+  const githubEntity: GithubEntity = {
+    type: entity.entityType,
+    key: entity.entityKey,
+    url: entity.entityUrl,
+  };
+
+  await insertMappingIfAbsent(db, {
+    organizationId: pair.organizationId,
+    humanAgentId: pair.humanAgentId,
+    delegateAgentId: pair.delegateAgentId,
+    entity: githubEntity,
+    chatId,
+    boundVia: "agent_created",
+  });
+
+  log.info(
+    {
+      chatId,
+      reporterAgentId,
+      humanAgentId: pair.humanAgentId,
+      entityType: entity.entityType,
+      entityKey: entity.entityKey,
+      source: entity.source,
+    },
+    "agent_binding inserted",
+  );
 }

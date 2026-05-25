@@ -1,8 +1,9 @@
-import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
-import { Link2, Lock, Play } from "lucide-react";
+import type { RuntimeProvider } from "@first-tree/shared";
+import { Link2, Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
+import { Section } from "../../components/ui/section.js";
+import { ConfigRow } from "./flat-section.js";
 
 /**
  * Setup section — "where it runs" pick (locked here, re-bindable via the
@@ -15,6 +16,8 @@ export type SetupSectionProps = {
   runtimeProvider: RuntimeProvider;
   /** Display label of the bound computer; null when no computer is bound yet. */
   computerLabel: string | null;
+  computerStatusLoading?: boolean;
+  computerStatusError?: string | null;
   /** Whether the "Bind computer" CTA should be shown (only when no client is bound and agent is active). */
   canBindComputer: boolean;
   bindComputerPending?: boolean;
@@ -29,99 +32,101 @@ export type SetupSectionProps = {
 const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> = {
   "claude-code": {
     name: "Claude Code",
-    caption: "Anthropic's Claude Code runtime. Re-bind via the agent's settings to switch computer or runtime.",
+    caption: "Anthropic's Claude Code runtime.",
   },
   codex: {
     name: "Codex",
-    caption: "OpenAI's Codex CLI runtime. Re-bind via the agent's settings to switch computer or runtime.",
+    caption: "OpenAI's Codex CLI runtime.",
   },
 };
 
 export function SetupSection(props: SetupSectionProps) {
   const copy = RUNTIME_COPY[props.runtimeProvider];
   return (
-    <div className="space-y-3">
-      <RuntimeCard name={copy.name} caption={copy.caption} locked />
-
-      <ComputerCard
+    <Section title="Runtime">
+      <ComputerRow
         computerLabel={props.computerLabel}
+        statusLoading={props.computerStatusLoading ?? false}
+        statusError={props.computerStatusError ?? null}
         canBindComputer={props.canBindComputer}
         bindPending={props.bindComputerPending ?? false}
         onBindComputer={props.onBindComputer}
         onRebind={props.onRebind}
       />
-
+      <RuntimeRow name={copy.name} caption={copy.caption} locked />
       {props.modelSlot}
-    </div>
+    </Section>
   );
 }
 
-function RuntimeCard({ name, caption, locked }: { name: string; caption: string; locked: boolean }) {
+function RuntimeRow({ name, caption, locked }: { name: string; caption: string; locked: boolean }) {
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>
-          Where it runs
-          {locked && (
-            <span
-              className="mono uppercase text-caption inline-flex items-center gap-1"
-              style={{ color: "var(--fg-4)" }}
-            >
-              <Lock className="h-3 w-3" aria-hidden /> locked
-            </span>
-          )}
-        </PanelTitle>
-      </PanelHeader>
-      <PanelBody className="space-y-1 text-body">
-        <div className="inline-flex items-center gap-2">
-          <Play className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--accent)" }} />
-          <span className="font-medium">{name}</span>
-        </div>
-        <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-          {caption}
-        </p>
-      </PanelBody>
-    </Panel>
+    <ConfigRow
+      label="Provider"
+      value={name}
+      helpText={caption}
+      meta={
+        locked ? (
+          <span
+            className="text-caption inline-flex items-center gap-1"
+            style={{ color: "var(--fg-4)" }}
+            title="Re-bind via the Re-bind dialog to switch runtime"
+          >
+            <Lock className="h-3 w-3" aria-hidden /> Read-only
+          </span>
+        ) : null
+      }
+    />
   );
 }
 
-function ComputerCard(props: {
+function ComputerRow(props: {
   computerLabel: string | null;
+  statusLoading: boolean;
+  statusError: string | null;
   canBindComputer: boolean;
   bindPending: boolean;
   onBindComputer: (() => void) | undefined;
   onRebind: (() => void) | undefined;
 }) {
   const bound = !!props.computerLabel;
-  return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>Bound computer</PanelTitle>
-        {props.canBindComputer && props.onBindComputer && !bound && (
-          <Button size="xs" variant="outline" onClick={props.onBindComputer} disabled={props.bindPending}>
-            <Link2 className="h-3 w-3" />
-            {props.bindPending ? "Binding…" : "Bind computer"}
-          </Button>
-        )}
-        {bound && props.onRebind && (
-          <Button size="xs" variant="outline" onClick={props.onRebind}>
-            <Link2 className="h-3 w-3" />
-            Re-bind
-          </Button>
-        )}
-      </PanelHeader>
-      <PanelBody className="text-body">
-        {bound ? (
-          <div className="mono" style={{ color: "var(--fg-2)" }}>
-            {props.computerLabel}
-          </div>
-        ) : (
-          <p className="text-caption" style={{ color: "var(--fg-3)" }}>
-            No computer bound. A computer claims this agent on its first WebSocket connect, or you can pick one manually
-            via the button above.
-          </p>
-        )}
-      </PanelBody>
-    </Panel>
-  );
+  const canShowActions = !props.statusLoading && !props.statusError;
+  const action =
+    canShowActions && props.canBindComputer && props.onBindComputer && !bound ? (
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={props.onBindComputer}
+        disabled={props.bindPending}
+        title={props.bindPending ? "Binding computer…" : "Pick a connected computer for this agent"}
+      >
+        <Link2 className="h-3 w-3" />
+        {props.bindPending ? "Binding…" : "Bind computer"}
+      </Button>
+    ) : canShowActions && bound && props.onRebind ? (
+      <Button size="xs" variant="outline" onClick={props.onRebind} title="Move this agent to another computer">
+        <Link2 className="h-3 w-3" />
+        Re-bind
+      </Button>
+    ) : null;
+
+  let value: ReactNode = props.computerLabel;
+  // Bound state has no inline description — the hostname speaks for itself.
+  // Unbound state keeps the inline guidance so new operators see it without
+  // having to discover the ? tooltip.
+  let description: ReactNode = null;
+  let helpText: string | undefined = "The computer environment and tool access for this agent.";
+  if (props.statusLoading) {
+    value = "Checking computer binding…";
+    helpText = undefined;
+  } else if (props.statusError) {
+    value = <span style={{ color: "var(--state-error)" }}>Could not verify computer binding: {props.statusError}</span>;
+    helpText = undefined;
+  } else if (!bound) {
+    value = "No computer bound";
+    description = "A computer claims this agent on first WebSocket connect, or you can pick one manually.";
+    helpText = undefined;
+  }
+
+  return <ConfigRow label="Computer" value={value} description={description} helpText={helpText} action={action} />;
 }

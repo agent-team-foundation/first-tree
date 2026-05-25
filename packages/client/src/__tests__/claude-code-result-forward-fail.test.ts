@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
@@ -71,7 +71,6 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
   it("emits a runtime error event with a snapshot of the dropped text", async () => {
     const sendMessage = vi.fn().mockRejectedValue(new Error("hub unreachable"));
     const emitted: SessionEvent[] = [];
-    const reportSessionCompletion = vi.fn();
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -94,7 +93,6 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
       emitEvent: (e) => {
         emitted.push(e);
       },
-      reportSessionCompletion,
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
     };
 
@@ -108,7 +106,6 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
     await new Promise((r) => setImmediate(r));
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(reportSessionCompletion).not.toHaveBeenCalled();
 
     const errors = emitted.filter((e) => e.kind === "error");
     expect(errors).toHaveLength(1);

@@ -17,7 +17,7 @@ export {
 export type { AgentSlotConfig } from "./runtime/agent-slot.js";
 export { AgentSlot } from "./runtime/agent-slot.js";
 export type { ContextTreeBinding } from "./runtime/bootstrap.js";
-export { syncContextTree } from "./runtime/bootstrap.js";
+export { contextTreeCloneDir, syncAgentContextTree, syncContextTree } from "./runtime/bootstrap.js";
 // Capabilities
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
 export { probeCodexCapability } from "./runtime/capabilities/codex.js";
@@ -25,6 +25,10 @@ export { probeCapabilities } from "./runtime/capabilities/index.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
 export { Deduplicator } from "./runtime/deduplicator.js";
+export type { WorkspaceFence } from "./runtime/doc-snapshots.js";
+export { buildMessageDocumentSnapshots } from "./runtime/doc-snapshots.js";
+export type { GitMirrorManager, GitMirrorManagerOptions } from "./runtime/git-mirror-manager.js";
+export { createGitMirrorManager, GitMirrorError } from "./runtime/git-mirror-manager.js";
 export type {
   AgentHandler,
   HandlerConfig,
@@ -50,6 +54,14 @@ export type {
   UpdatePromptFn,
 } from "./runtime/update-manager.js";
 export { UpdateManager } from "./runtime/update-manager.js";
-export { acquireWorkspace, cleanWorkspaces, DEFAULT_WORKSPACE_TTL_MS } from "./runtime/workspace.js";
-export type { AccessTokenProvider, PaginatedResult, PullResult, RegisterResult, SdkConfig } from "./sdk.js";
+export {
+  acquireAgentHome,
+  acquireWorkspace,
+  cleanWorkspaces,
+  clearWorkspaceInitComplete,
+  DEFAULT_WORKSPACE_TTL_MS,
+  INIT_COMPLETE_SENTINEL_REL,
+  markWorkspaceInitComplete,
+} from "./runtime/workspace.js";
+export type { AccessTokenProvider, PaginatedResult, RegisterResult, SdkConfig } from "./sdk.js";
 export { FirstTreeHubSDK, SdkError } from "./sdk.js";

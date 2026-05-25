@@ -3,14 +3,13 @@ import {
   type Agent,
   type AgentRuntimeConfig,
   type Chat,
+  type ChatDetail,
   type ChatParticipantDetail,
   type ClientCapabilities,
-  type InboxEntryWithMessage,
   type Message,
   type RuntimeProvider,
   type SendMessage,
-  type SendToAgent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 
 /**
  * Callback that returns the current member access JWT.
@@ -66,10 +65,6 @@ export type RegisterResult = {
 export type ContextTreeConfig = {
   repo: string | null;
   branch: string | null;
-};
-
-export type PullResult = {
-  entries: InboxEntryWithMessage[];
 };
 
 export type PaginatedResult<T> = {
@@ -236,19 +231,6 @@ export class FirstTreeHubSDK {
     }
   }
 
-  async pull(limit = 10): Promise<PullResult> {
-    const entries = await this.requestJson<InboxEntryWithMessage[]>(`/api/v1/agent/inbox?limit=${limit}`);
-    return { entries };
-  }
-
-  async ack(entryId: number): Promise<void> {
-    await this.requestVoid(`/api/v1/agent/inbox/${entryId}/ack`, { method: "POST" });
-  }
-
-  async renew(entryId: number): Promise<void> {
-    await this.requestVoid(`/api/v1/agent/inbox/${entryId}/renew`, { method: "POST" });
-  }
-
   async sendMessage(chatId: string, data: SendMessage): Promise<Message> {
     return this.requestJson<Message>(`/api/v1/agent/chats/${chatId}/messages`, {
       method: "POST",
@@ -256,15 +238,19 @@ export class FirstTreeHubSDK {
     });
   }
 
-  async sendToAgent(agentName: string, data: SendToAgent): Promise<Message> {
-    return this.requestJson<Message>(`/api/v1/agent/agents/${agentName}/messages`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
+  }
+
+  /**
+   * Fetch full chat detail (topic + participant membership rows). Used by the
+   * runtime bootstrap path to assemble a chat-level identity block injected
+   * into CLAUDE.md / AGENTS.md so the agent knows the chat's topic and who
+   * else is in the room. Participant rows here lack name/displayName/type —
+   * call `listChatParticipants` for that.
+   */
+  async getChatDetail(chatId: string): Promise<ChatDetail> {
+    return this.requestJson<ChatDetail>(`/api/v1/agent/chats/${chatId}`);
   }
 
   async listMessages(chatId: string, options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Message>> {
@@ -277,6 +263,28 @@ export class FirstTreeHubSDK {
    */
   async listChatParticipants(chatId: string): Promise<ChatParticipantDetail[]> {
     return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
+  }
+
+  /**
+   * Add a participant to a chat by uuid or by name. Names resolve within the
+   * chat's organization. Idempotent: re-adding an existing speaker returns
+   * the chat's current participant list (the server treats it as a conflict
+   * the caller can safely ignore — see `chat invite` CLI for the
+   * UX wrapper that swallows that case).
+   */
+  async addChatParticipant(
+    chatId: string,
+    target: { agentId: string } | { agentName: string },
+  ): Promise<ChatParticipantDetail[]> {
+    return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`, {
+      method: "POST",
+      body: JSON.stringify(target),
+    });
+  }
+
+  /** Fetch Context Tree configuration for this SDK's authenticated agent. */
+  async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
+    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
   }
 
   private queryString(options?: { limit?: number; cursor?: string }): string {

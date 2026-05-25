@@ -535,7 +535,8 @@ Rules:
 - Returns rows where the current user's human agent has either a
   `chat_participants` row or a `chat_subscriptions` row for the chat.
 - `participant` → `canReply = true`. `watching` → `canReply = false`.
-- v1 filters threads out: `parent_chat_id IS NULL`.
+- Nested chats (rows with `parent_chat_id IS NOT NULL`) are filtered out;
+  the column is reserved for a future nested-chat model.
 - Sort: `(chats.last_message_at DESC NULLS LAST, chats.id DESC)`. Anchored
   on `idx_chats_org_last_message`.
 - Acceptance: p95 < 200ms at 1k chats.
@@ -632,8 +633,6 @@ Notification bell
 ├─ agent_error
 ├─ agent_blocked
 ├─ agent_stale
-├─ agent_disconnected
-├─ agent_connected
 ├─ session_error
 ├─ session_completed
 └─ computer / system / organisation events
@@ -733,7 +732,8 @@ To minimise regression risk in the message + inbox path:
 ### Resolved
 
 - Direct chats are NOT deduped; same for group exact-set.
-- Threads (`parent_chat_id IS NOT NULL`) do NOT appear in v1 list.
+- Nested chats (`parent_chat_id IS NOT NULL`) do NOT appear in the list;
+  `parent_chat_id` is reserved for a future nested-chat model.
 - SDK helpers move to a separate PR (out of scope here).
 - Watcher state lives in `chat_subscriptions`, not `chat_participants`.
 - `chat.type` upgrades direct → group; never downgrades.

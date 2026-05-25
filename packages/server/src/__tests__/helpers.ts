@@ -1,4 +1,4 @@
-import type { AgentType } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentType } from "@first-tree/shared";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -93,6 +93,9 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       host: "127.0.0.1",
       publicUrl: undefined,
     },
+    workspace: {
+      root: "/tmp/first-tree-test-workspaces",
+    },
     secrets: {
       jwtSecret: process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest",
       encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -130,7 +133,25 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       maxRetryCount: 3,
       pollingIntervalSeconds: 5,
       presenceCleanupSeconds: 60,
+      // Disabled by default in tests — suites that exercise the sweeper
+      // call it explicitly via `sweepChatArchive`, so the background
+      // timer would only add nondeterminism.
+      archiveSweepIntervalSeconds: 0,
+      archiveMappedIdleSeconds: 60 * 60,
+      archiveUnmappedIdleSeconds: 12 * 60 * 60,
       notificationWebhookUrl: undefined,
+    },
+    update: {
+      // Pin a deterministic version so welcome-frame tests can assert
+      // exact equality without coupling to the in-tree package.json.
+      channel: "latest",
+      commandVersion: "test.version",
+      // Long enough that the timer never fires inside a test run — we
+      // call `refresh()` manually when a test needs a forced poll.
+      pollIntervalMinutes: 1440,
+      // Point at an unreachable host so a stray refresh during tests
+      // logs-and-skips instead of hitting the real npm registry.
+      registryUrl: "https://localhost.invalid",
     },
     instanceId: "test-instance",
   };

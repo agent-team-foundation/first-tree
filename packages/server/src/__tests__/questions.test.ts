@@ -1,11 +1,11 @@
-import type {
-  QuestionAnswerMessageContent,
-  QuestionMessageContent,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import { eq } from "drizzle-orm";
+import type { QuestionAnswerMessageContent, QuestionMessageContent } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
+import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { pendingQuestions } from "../db/schema/pending-questions.js";
 import { createAgent } from "../services/agent.js";
@@ -60,7 +60,7 @@ async function setupQuestionScenario(app: FastifyInstance, runtimeProvider: "cla
     { force: true },
   );
   const chat = await createChat(app.db, admin.humanAgentUuid, {
-    type: "direct",
+    type: "group",
     participantIds: [peerAgent.uuid],
   });
   return { admin, peerAgent, chatId: chat.id };
@@ -75,6 +75,7 @@ describe("recordPendingQuestionFromMessage — sendMessage write hook", () => {
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     const result = await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -96,6 +97,7 @@ describe("recordPendingQuestionFromMessage — sendMessage write hook", () => {
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await expect(
       sendMessage(app.db, chatId, peerAgent.uuid, {
+        source: "api",
         format: "question",
         content: buildQuestionContent(correlationId),
       }),
@@ -112,6 +114,7 @@ describe("recordPendingQuestionFromMessage — sendMessage write hook", () => {
 
     await expect(
       sendMessage(app.db, chatId, peerAgent.uuid, {
+        source: "api",
         format: "question",
         // missing `correlationId`
         content: { questions: [], previewFormat: null, allowFreeText: true },
@@ -129,6 +132,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     const questionMsg = await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -164,6 +168,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -204,6 +209,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -231,6 +237,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -276,6 +283,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -303,6 +311,7 @@ describe("supersede hooks", () => {
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -322,6 +331,7 @@ describe("supersede hooks", () => {
 
     const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
     await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
       format: "question",
       content: buildQuestionContent(correlationId),
     });
@@ -335,9 +345,268 @@ describe("supersede hooks", () => {
 
     const result = await claimClient(app.db, admin.clientId, newOwner.userId);
     expect(result.unpinnedAgentIds).toContain(peerAgent.uuid);
+    // The affected chat flows back so the route can fire a post-commit
+    // needs-you refresh (this path emits no session:state change).
+    expect(result.supersededChatIds).toContain(chatId);
 
     const [row] = await app.db.select().from(pendingQuestions).where(eq(pendingQuestions.id, correlationId)).limit(1);
     expect(row?.status).toBe("superseded");
     expect(row?.supersededReason).toBe("client_claimed");
+  });
+});
+
+/**
+ * Regression: github.com/agent-team-foundation/first-tree#404 — when a
+ * `direct → group` upgrade re-grades the asker to `mention_only` AFTER the
+ * question is posted, the `format=question_answer` fan-out used to set
+ * `notify=false` for the asker (structured content carries no @<name>
+ * tokens), leaving the SDK's `canUseTool` Promise dangling forever. The
+ * fix forces notify=true for the asker via `addressedToAgentIds`.
+ */
+describe("submitAnswer — group chat with mention_only asker (#404)", () => {
+  const getApp = useTestApp();
+
+  async function setMode(app: FastifyInstance, chatId: string, agentUuid: string, mode: "full" | "mention_only") {
+    await app.db
+      .update(chatMembership)
+      .set({ mode })
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, agentUuid)));
+  }
+
+  async function inboxIdOf(app: FastifyInstance, agentUuid: string): Promise<string> {
+    const [row] = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, agentUuid))
+      .limit(1);
+    if (!row?.inboxId) throw new Error(`No inbox for agent ${agentUuid}`);
+    return row.inboxId;
+  }
+
+  it("forces notify=true on the asker's inbox row even when their mode is mention_only", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `q-grp-${crypto.randomUUID().slice(0, 8)}` });
+    const asker = await createAgent(
+      app.db,
+      {
+        name: `q-asker-${crypto.randomUUID().slice(0, 6)}`,
+        type: "autonomous_agent",
+        displayName: "Asker",
+        managerId: admin.memberId,
+        clientId: admin.clientId,
+        runtimeProvider: "claude-code",
+      },
+      { force: true },
+    );
+    const bystander = await createAgent(
+      app.db,
+      {
+        name: `q-bystander-${crypto.randomUUID().slice(0, 6)}`,
+        type: "autonomous_agent",
+        displayName: "Bystander",
+        managerId: admin.memberId,
+        clientId: admin.clientId,
+        runtimeProvider: "claude-code",
+      },
+      { force: true },
+    );
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [asker.uuid, bystander.uuid],
+    });
+
+    // Mirror the production state that produced the bug: a `direct → group`
+    // upgrade demoted the asker to `mention_only` between question publish
+    // and answer. Force both non-human speakers to `mention_only` here.
+    await setMode(app, chat.id, asker.uuid, "mention_only");
+    await setMode(app, chat.id, bystander.uuid, "mention_only");
+
+    const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
+    await sendMessage(app.db, chat.id, asker.uuid, {
+      source: "api",
+      format: "question",
+      content: buildQuestionContent(correlationId),
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { answers: { "Should I proceed?": "Yes" } },
+    });
+    expect(res.statusCode).toBe(201);
+    const answerMessageId = res.json<{ messageId: string }>().messageId;
+
+    // Asker MUST receive notify=true so their client's WS push wakes the
+    // SDK's `canUseTool` waiter — this is the regression the fix targets.
+    const askerInboxId = await inboxIdOf(app, asker.uuid);
+    const [askerEntry] = await app.db
+      .select({ notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, askerInboxId), eq(inboxEntries.messageId, answerMessageId)))
+      .limit(1);
+    expect(askerEntry?.notify).toBe(true);
+
+    // Uninvolved mention_only bystanders must stay silent — the answer is
+    // directed at the asker, not a group broadcast. notify=true here would
+    // re-introduce the old "agent courtesy loop" wake (migration 0029).
+    const bystanderInboxId = await inboxIdOf(app, bystander.uuid);
+    const [bystanderEntry] = await app.db
+      .select({ notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, bystanderInboxId), eq(inboxEntries.messageId, answerMessageId)))
+      .limit(1);
+    expect(bystanderEntry?.notify).toBe(false);
+  });
+});
+
+/**
+ * Regression: #416 — the asker must still be a speaker of the chat at
+ * answer time. fan-out is gated on `chat_membership.accessMode = 'speaker'`;
+ * if the asker has been moved out between question publish and answer the
+ * `addressedToAgentIds` widening can't bring them back, so we short-circuit
+ * upstream in `submitAnswer` and convert to a supersede.
+ */
+describe("submitAnswer — asker left chat between publish and answer (#416)", () => {
+  const getApp = useTestApp();
+
+  it("flips the pending row to superseded(asker_left_chat) and returns ConflictError", async () => {
+    const app = getApp();
+    const { admin, peerAgent, chatId } = await setupQuestionScenario(app);
+
+    const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
+    await sendMessage(app.db, chatId, peerAgent.uuid, {
+      source: "api",
+      format: "question",
+      content: buildQuestionContent(correlationId),
+    });
+
+    // Simulate the asker (peerAgent) being moved out of the chat after the
+    // question was posted but before the human submits the answer. Use a
+    // direct DELETE on chat_membership to model any path that removes a
+    // speaker — leaveChat, role demotion, admin removal, etc.
+    await app.db
+      .delete(chatMembership)
+      .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, peerAgent.uuid)));
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${chatId}/questions/${correlationId}/answer`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { answers: { "Should I proceed?": "Yes" } },
+    });
+    expect(res.statusCode).toBe(409);
+
+    const [row] = await app.db.select().from(pendingQuestions).where(eq(pendingQuestions.id, correlationId)).limit(1);
+    expect(row?.status).toBe("superseded");
+    expect(row?.supersededReason).toBe("asker_left_chat");
+
+    // No answer message was emitted — chat history stays consistent with
+    // the supersede semantics used elsewhere.
+    const answerRows = await app.db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), eq(messages.format, "question_answer")));
+    expect(answerRows).toHaveLength(0);
+  });
+});
+
+/**
+ * Direct unit-level coverage of the `addressedToAgentIds` option on
+ * `sendMessage`. The #404 case above verifies the end-to-end path through
+ * `submitAnswer`; these tests pin the option's own contract so future
+ * refactors of `sendMessage` cannot quietly invert the short-circuit order.
+ */
+describe("sendMessage — addressedToAgentIds option", () => {
+  const getApp = useTestApp();
+
+  async function inboxIdOf(app: FastifyInstance, agentUuid: string): Promise<string> {
+    const [row] = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, agentUuid))
+      .limit(1);
+    if (!row?.inboxId) throw new Error(`No inbox for agent ${agentUuid}`);
+    return row.inboxId;
+  }
+
+  it("isSilentSend wins over addressedToAgentIds — silence contract is unconditional", async () => {
+    // The silent-send guard (`message.ts` step 2e: content empty after
+    // stripping `@<name>` tokens) is a chat-wide silence contract that must
+    // not be overridable by per-recipient routing intent. Otherwise an
+    // empty-content addressed message would wake the addressee, breaking
+    // the L4 form guard that migration 0029 was built on top of.
+    const app = getApp();
+    const { admin, peerAgent, chatId } = await setupQuestionScenario(app);
+
+    const result = await sendMessage(
+      app.db,
+      chatId,
+      admin.humanAgentUuid,
+      { source: "api", format: "text", content: "" },
+      { addressedToAgentIds: [peerAgent.uuid] },
+    );
+
+    // No notify=true recipients despite the explicit address.
+    expect(result.recipients).toEqual([]);
+
+    const inboxId = await inboxIdOf(app, peerAgent.uuid);
+    const [entry] = await app.db
+      .select({ notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.messageId, result.message.id)))
+      .limit(1);
+    // Row is still written for history replay, but notify=false.
+    expect(entry?.notify).toBe(false);
+  });
+
+  it("addressedToAgentIds containing a non-participant is a silent no-op", async () => {
+    // Defensive: forwarding a stale or wrong-chat agentId must not crash
+    // sendMessage and must not somehow promote any unrelated row to
+    // notify=true. The participants query already filters by chat
+    // membership, so a non-participant id falls out at the fan-out stage.
+    const app = getApp();
+    const { admin, peerAgent, chatId } = await setupQuestionScenario(app);
+
+    // Build an agent that is NOT a participant of this chat.
+    const outsider = await createAgent(
+      app.db,
+      {
+        name: `q-outsider-${crypto.randomUUID().slice(0, 6)}`,
+        type: "autonomous_agent",
+        displayName: "Outsider",
+        managerId: admin.memberId,
+        clientId: admin.clientId,
+        runtimeProvider: "claude-code",
+      },
+      { force: true },
+    );
+
+    const result = await sendMessage(
+      app.db,
+      chatId,
+      admin.humanAgentUuid,
+      { source: "api", format: "text", content: "hello" },
+      { addressedToAgentIds: [outsider.uuid] },
+    );
+
+    // The chat's actual peer (peerAgent, mode=full in a direct chat) still
+    // got notified — `addressedToAgentIds` only adds, never subtracts.
+    const peerInboxId = await inboxIdOf(app, peerAgent.uuid);
+    const [peerEntry] = await app.db
+      .select({ notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, peerInboxId), eq(inboxEntries.messageId, result.message.id)))
+      .limit(1);
+    expect(peerEntry?.notify).toBe(true);
+
+    // The outsider has no inbox row for this message at all — they're not
+    // a chat participant, so fan-out skips them entirely.
+    const outsiderInboxId = await inboxIdOf(app, outsider.uuid);
+    const outsiderEntries = await app.db
+      .select({ id: inboxEntries.id })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, outsiderInboxId), eq(inboxEntries.messageId, result.message.id)));
+    expect(outsiderEntries).toHaveLength(0);
   });
 });

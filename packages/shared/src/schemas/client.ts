@@ -51,17 +51,49 @@ export type Client = z.infer<typeof clientSchema>;
  * Optional opt-in flags the client carries on `client:register` to advertise
  * which negotiable wire-protocol features it implements. Distinct from
  * `clientCapabilitiesSchema` (per-runtime-provider availability — different
- * concept). Older clients omit the field; the server treats every unset flag
- * as `false` and falls back to the legacy path. See proposal
- * hub-inbox-ws-data-plane §3.6.
+ * concept).
+ *
+ * 0.10.4 ~ 0.14.2 clients still send this block (with `wsInboxDeliver: true`
+ * hard-coded). The 0.14.3+ runtime omits it. The schema is retained so that
+ * middle-version `client:register` frames still parse, even though the
+ * server no longer reads any of these fields — the WS inbox data plane is
+ * mandatory on this server build.
  */
 export const clientWireCapabilitiesSchema = z
   .object({
-    /** Client implements `inbox:deliver` / `inbox:ack` WS frames. */
+    /**
+     * Historical opt-in for the `inbox:deliver` push path. The server now
+     * ignores the value; 0.10.4 ~ 0.14.2 clients still emit it as `true`.
+     * Kept for parse-compat only; safe to remove after 0.16 once those
+     * middle-version installs are no longer in the field.
+     */
     wsInboxDeliver: z.boolean().default(false),
   })
   .partial();
 export type ClientWireCapabilities = z.infer<typeof clientWireCapabilitiesSchema>;
+
+/**
+ * Outcome of the client's last self-update attempt. Carried on
+ * `client:register` so the server can persist it into
+ * `clients.metadata.lastUpdateAttempt`, surfacing in the admin
+ * dashboard whichever clients are failing to auto-update — without
+ * needing per-machine SSH to grep `client.log`.
+ *
+ * Length caps protect the WS frame budget: even a verbose npm stderr
+ * gets truncated client-side before persisting, but `.max()` here is the
+ * server-side guard against a hostile or buggy client sending a
+ * megabyte-long reason.
+ */
+export const updateAttemptSchema = z.object({
+  result: z.enum(["ok", "failed", "blocked"]),
+  target: z.string().min(1).max(64),
+  currentBefore: z.string().min(1).max(64),
+  installedVersion: z.string().min(1).max(64).nullable(),
+  reason: z.string().max(500).nullable(),
+  /** ISO timestamp the attempt finished. */
+  at: z.string().min(1).max(40),
+});
+export type UpdateAttempt = z.infer<typeof updateAttemptSchema>;
 
 export const clientRegisterSchema = z.object({
   clientId: z.string().min(1).max(100),
@@ -69,6 +101,13 @@ export const clientRegisterSchema = z.object({
   os: z.string().max(50).optional(),
   sdkVersion: z.string().max(50).optional(),
   wireCapabilities: clientWireCapabilitiesSchema.optional(),
+  /**
+   * Most recent self-update outcome, if any. Optional — a freshly
+   * installed client (no prior attempts) and older clients (no report
+   * path wired) both omit it. Server persists into
+   * `clients.metadata.lastUpdateAttempt` on receipt.
+   */
+  lastUpdateAttempt: updateAttemptSchema.optional(),
 });
 export type ClientRegister = z.infer<typeof clientRegisterSchema>;
 

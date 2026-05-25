@@ -1,9 +1,14 @@
 // Schemas
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
+export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
+export {
+  buildWorkspaceDocKey,
+  isCanonicalDocLinkPath,
+  normalizeDocLinkPath,
+  parseWorkspaceDocKey,
+} from "./lib/doc-path.js";
 export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
-// -- Single source of truth for chat_membership.mode derivation --
-export { defaultParticipantMode } from "./participant-mode.js";
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
@@ -50,12 +55,15 @@ export {
   type AgentStatus,
   type AgentType,
   type AgentVisibility,
+  AVATAR_COLOR_TOKENS,
+  type AvatarColorToken,
   agentPinnedMessageSchema,
   agentSchema,
   agentSourceSchema,
   agentStatusSchema,
   agentTypeSchema,
   agentVisibilitySchema,
+  avatarColorTokenSchema,
   type ContextTreeInfo,
   type CreateAgent,
   contextTreeInfoSchema,
@@ -85,8 +93,10 @@ export {
   type EnvEntry,
   envEntrySchema,
   type GitRepo,
+  getRepoLocalPathSafetyError,
   gitRepoSchema,
   isRedactedEnvValue,
+  isSafeRepoLocalPath,
   type McpHttpServer,
   type McpServer,
   type McpSseServer,
@@ -97,6 +107,22 @@ export {
   type UpdateAgentRuntimeConfig,
   updateAgentRuntimeConfigSchema,
 } from "./schemas/agent-runtime-config.js";
+export {
+  AGENT_ENGAGEMENTS,
+  AGENT_MAIN_STATUSES,
+  type AgentChatStatus,
+  type AgentChatStatusInput,
+  type AgentEngagement,
+  type AgentMainStatus,
+  agentChatStatusSchema,
+  agentEngagementSchema,
+  agentMainStatusSchema,
+  buildAgentChatStatus,
+  compareMainStatus,
+  type DeriveMainStatusInput,
+  deriveMainStatus,
+  MAIN_STATUS_PRIORITY,
+} from "./schemas/agent-status.js";
 export {
   type ConnectTokenExchange,
   type ConnectTokenResponse,
@@ -112,27 +138,45 @@ export {
 export {
   type AddParticipant,
   addParticipantSchema,
+  CHAT_ENGAGEMENT_STATUSES,
   CHAT_TYPES,
   type Chat,
   type ChatDetail,
+  type ChatEngagementStatus,
   type ChatParticipant,
   type ChatParticipantDetail,
   type ChatType,
   type CreateChat,
   chatDetailSchema,
+  chatEngagementStatusSchema,
   chatParticipantDetailSchema,
   chatParticipantSchema,
   chatSchema,
   chatTypeSchema,
   createChatSchema,
+  type PatchChatEngagement,
+  patchChatEngagementSchema,
   type RemoveParticipant,
   removeParticipantSchema,
   type UpdateChat,
   updateChatSchema,
 } from "./schemas/chat.js";
 export {
+  type ChatGithubEntity,
+  type ChatGithubEntityListResponse,
+  chatGithubEntityListResponseSchema,
+  chatGithubEntitySchema,
+  type GithubEntityBoundVia,
+  type GithubEntityLiveState,
+  githubEntityBoundViaSchema,
+  githubEntityLiveStateSchema,
+} from "./schemas/chat-github-entities.js";
+export {
+  CHAT_SOURCES,
   type ChatMetadata,
+  type ChatSource,
   chatMetadataSchema,
+  chatSourceSchema,
   type FeishuChatMetadata,
   feishuChatMetadataSchema,
   GITHUB_ENTITY_TYPES,
@@ -157,6 +201,8 @@ export {
   clientSchema,
   clientStatusSchema,
   clientWireCapabilitiesSchema,
+  type UpdateAttempt,
+  updateAttemptSchema,
 } from "./schemas/client.js";
 export {
   CAPABILITY_STATES,
@@ -196,6 +242,8 @@ export {
   type ContextTreeStatusSeverity,
   type ContextTreeSummary,
   type ContextTreeUpdate,
+  type ContextTreeUsageEvent,
+  type ContextTreeUsageSummary,
   contextTreeChangeSchema,
   contextTreeChangeTypeSchema,
   contextTreeEdgeKindSchema,
@@ -209,6 +257,8 @@ export {
   contextTreeStatusSeveritySchema,
   contextTreeSummarySchema,
   contextTreeUpdateSchema,
+  contextTreeUsageEventSchema,
+  contextTreeUsageSummarySchema,
 } from "./schemas/context-tree.js";
 export {
   GITHUB_ACCOUNT_TYPES,
@@ -270,14 +320,26 @@ export {
 export {
   type AddMeChatParticipants,
   addMeChatParticipantsSchema,
+  CHAT_ENGAGEMENT_VIEWS,
+  type ChatEngagementView,
   type ChatMessageFrame,
+  type ChatSourceCount,
   type CreateMeChat,
+  chatEngagementViewSchema,
   chatMessageFrameSchema,
+  chatSourceCountSchema,
   createMeChatSchema,
+  LIVE_ACTIVITY_STALE_MS,
+  type ListMeChatSourceCountsQuery,
   type ListMeChatsQuery,
   type ListMeChatsResponse,
+  type LiveActivity,
+  type LiveActivityKind,
+  listMeChatSourceCountsQuerySchema,
   listMeChatsQuerySchema,
   listMeChatsResponseSchema,
+  liveActivityKindSchema,
+  liveActivitySchema,
   ME_CHAT_DEFAULT_LIMIT,
   ME_CHAT_FILTERS,
   ME_CHAT_MAX_LIMIT,
@@ -287,13 +349,32 @@ export {
   type MeChatParticipant,
   type MeChatReadResponse,
   type MeChatRow,
+  type MeChatSourceCounts,
+  type MeChatUnreadResponse,
   meChatFilterSchema,
   meChatLeaveResponseSchema,
   meChatMembershipKindSchema,
   meChatParticipantSchema,
   meChatReadResponseSchema,
   meChatRowSchema,
+  meChatSourceCountsSchema,
+  meChatUnreadResponseSchema,
 } from "./schemas/me-chat.js";
+export {
+  type DocumentContext,
+  documentContextSchema,
+  type GetMeDoc,
+  type GetMeDocResponse,
+  getMeDocResponseSchema,
+  getMeDocSchema,
+  MAX_DOC_SNAPSHOT_BYTES,
+  MAX_DOC_SNAPSHOTS_PER_MESSAGE,
+  MAX_TOTAL_DOC_SNAPSHOT_BYTES,
+  type SnapshotDoc,
+  snapshotDocSchema,
+  type WorkspaceDocRef,
+  workspaceDocRefSchema,
+} from "./schemas/me-doc.js";
 export {
   type CreateOrgFromMe,
   createOrgFromMeSchema,
@@ -326,14 +407,14 @@ export {
 export {
   type ClientMessage,
   clientMessageSchema,
-  type InReplyToSnapshot,
-  inReplyToSnapshotSchema,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   type Message,
   type MessageFormat,
+  type MessagePurpose,
   type MessageSource,
   messageFormatSchema,
+  messagePurposeSchema,
   messageSchema,
   messageSourceSchema,
   type ParticipantMode,
@@ -341,19 +422,28 @@ export {
   participantModeSchema,
   precedingMessageSchema,
   type SendMessage,
-  type SendToAgent,
   sendMessageSchema,
-  sendToAgentSchema,
 } from "./schemas/message.js";
+export {
+  GITHUB_EVENT_CARD_REASONS,
+  type GithubEventCard,
+  type GithubEventCardReason,
+  githubEventCardReasonSchema,
+  githubEventCardSchema,
+  INVOLVE_REASONS,
+  type InvolveReason,
+  involveReasonSchema,
+  NORMALIZED_EVENT_KINDS,
+  type NormalizedEvent,
+  type NormalizedEventKind,
+  normalizedEventKindSchema,
+  normalizedEventSchema,
+} from "./schemas/normalized-event.js";
 export {
   NOTIFICATION_SEVERITIES,
   NOTIFICATION_TYPES,
-  type Notification,
-  type NotificationQuery,
   type NotificationSeverity,
   type NotificationType,
-  notificationQuerySchema,
-  notificationSchema,
   notificationSeveritySchema,
   notificationTypeSchema,
 } from "./schemas/notification.js";
@@ -456,14 +546,14 @@ export {
 export {
   type AssistantTextEventPayload,
   assistantTextEventPayload,
+  type ContextTreeUsageEventPayload,
+  contextTreeUsageEventPayload,
   type ErrorEventPayload,
   errorEventPayload,
-  type SessionCompletionMessage,
   type SessionEvent,
   type SessionEventKind,
   type SessionEventMessage,
   type SessionEventRow,
-  sessionCompletionMessageSchema,
   sessionEventKind,
   sessionEventMessageSchema,
   sessionEventRowSchema,
@@ -498,6 +588,7 @@ export {
   userSchema,
   userStatusSchema,
 } from "./schemas/user.js";
+export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
 export type { ServerCapabilities, ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
 // -- WebSocket handshake frames --
 export {

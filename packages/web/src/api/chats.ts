@@ -1,4 +1,4 @@
-import type { Chat, ChatDetail, Message } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Chat, ChatDetail, ChatEngagementStatus, ChatGithubEntityListResponse, Message } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 type PaginatedChats = {
@@ -10,7 +10,7 @@ export type MessageWithDelivery = Message & {
   deliveryStatus?: "sent" | "pending" | "delivered" | "acked";
 };
 
-type PaginatedMessages = {
+export type PaginatedMessages = {
   items: MessageWithDelivery[];
   nextCursor: string | null;
 };
@@ -27,8 +27,29 @@ export function getChat(chatId: string): Promise<ChatDetail> {
   return api.get<ChatDetail>(`/chats/${encodeURIComponent(chatId)}`);
 }
 
+/**
+ * List the GitHub entities bound to this chat. Server fetches live state
+ * from GitHub on every request — nothing is cached server-side — so the
+ * client should rely on React Query's `staleTime` to keep this gentle.
+ */
+export function listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
+  return api.get<ChatGithubEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/github-entities`);
+}
+
 export function renameChat(chatId: string, topic: string | null): Promise<Chat> {
   return api.patch<Chat>(`/chats/${encodeURIComponent(chatId)}`, { topic });
+}
+
+/**
+ * Set the caller's engagement state for this chat. Per-user — writes the
+ * caller's `chat_user_state` row only. All transitions are legal, including
+ * `deleted → active` (Restore from the chat detail view).
+ */
+export function patchChatEngagement(
+  chatId: string,
+  status: ChatEngagementStatus,
+): Promise<{ chatId: string; engagementStatus: ChatEngagementStatus }> {
+  return api.post(`/chats/${encodeURIComponent(chatId)}/engagement`, { status });
 }
 
 export function sendChatMessage(chatId: string, content: string): Promise<Message> {
@@ -68,10 +89,29 @@ export type ImageRefContent = {
  */
 type SendFileMessageBody = FileMessageContent & { imageId?: string };
 
-export function sendFileMessage(chatId: string, content: SendFileMessageBody): Promise<Message> {
+/**
+ * Optional message metadata for a file send. Today only `mentions` is wired
+ * — it lets a multi-image send carry the @-mentions parsed from the user's
+ * accompanying text so the server's group-chat mention guard accepts each
+ * image POST. Without this, the image messages arrive with no addressees and
+ * are rejected before the text is sent (issue 387).
+ */
+export type SendFileMessageMetadata = { mentions?: string[] };
+
+export function sendFileMessage(
+  chatId: string,
+  content: SendFileMessageBody,
+  metadata?: SendFileMessageMetadata,
+): Promise<Message> {
+  // Project explicit fields rather than spreading `metadata` whole so future
+  // additions to SendFileMessageMetadata don't ride out on the `mentions`
+  // truthiness check by accident — each new field must be opted in here.
+  const mentions = metadata?.mentions;
+  const hasMentions = Array.isArray(mentions) && mentions.length > 0;
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "file",
     content,
+    ...(hasMentions ? { metadata: { mentions } } : {}),
   });
 }
 

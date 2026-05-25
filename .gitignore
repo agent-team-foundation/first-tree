@@ -26,7 +26,10 @@ Thumbs.db
 
 # Test / coverage
 coverage/
-tests/e2e/
+
+# E2E framework — per-run logs and local env override (see packages/e2e/)
+packages/e2e/.e2e-runs/
+packages/e2e/.env.e2e
 
 # Drizzle
 drizzle/meta/
@@ -38,7 +41,7 @@ drizzle/meta/
 .claude/*
 !.claude/skills/
 .claude/skills/*
-!.claude/skills/first-tree-hub-cli
+!.claude/skills/first-tree-cloud
 .gstack/
 
 # Playwright MCP

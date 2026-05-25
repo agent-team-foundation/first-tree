@@ -1,19 +1,18 @@
 import { Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
-import { NotificationBell } from "./notification-bell.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
 import { UserMenu } from "./user-menu.js";
 
 const navTabs = [
-  { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
-  { to: "/context", label: "Context", end: false, kbd: "⌘2" },
-  { to: "/team", label: "Team", end: false, kbd: "⌘3" },
-  { to: "/settings", label: "Settings", end: false, kbd: "⌘4" },
+  { to: "/", label: "Workspace", end: true },
+  { to: "/context", label: "Context", end: false },
+  { to: "/team", label: "Team", end: false },
+  { to: "/settings", label: "Settings", end: false },
 ];
 
 export function Layout() {
@@ -21,17 +20,10 @@ export function Layout() {
 
   const location = useLocation();
   const isWorkspace = location.pathname === "/" || location.search.includes("a=");
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen((o) => !o);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  // Settings owns its own two-column (sidebar + main) layout and centres a
+  // ~1160 wrapper instead of the default 960 canvas — let it manage its
+  // own width.
+  const isSettings = location.pathname.startsWith("/settings");
 
   return (
     <div className="flex flex-col overflow-hidden" style={{ height: "100vh", background: "var(--bg)" }}>
@@ -86,7 +78,6 @@ export function Layout() {
                   }}
                 >
                   {tab.label}
-                  {isActive && <span className="kbd">{tab.kbd}</span>}
                 </span>
               )}
             </NavLink>
@@ -102,7 +93,8 @@ export function Layout() {
             className="inline-flex items-center transition-colors text-body"
             style={{
               gap: 8,
-              padding: "var(--sp-1) var(--sp-2)",
+              padding: "var(--sp-1) var(--sp-3)",
+              minWidth: 200,
               color: "var(--fg-3)",
               border: "var(--hairline) solid var(--border)",
               borderRadius: "var(--radius-input)",
@@ -117,7 +109,6 @@ export function Layout() {
           >
             <Search className="h-4 w-4" />
             <span>Jump to…</span>
-            <span className="kbd">⌘K</span>
           </button>
           <span
             style={{
@@ -127,7 +118,6 @@ export function Layout() {
               margin: "0 var(--sp-1)",
             }}
           />
-          <NotificationBell />
           <ThemeToggle />
           <span
             style={{
@@ -146,9 +136,27 @@ export function Layout() {
       {/* Main content */}
       {isWorkspace ? (
         <Outlet />
+      ) : isSettings ? (
+        // Settings manages its own width: sidebar + main column (1160 total).
+        // Main column inside still respects the shared 960 content width;
+        // sidebar is an additional 200 on the left.
+        <main className="flex-1 overflow-auto">
+          <Outlet />
+        </main>
       ) : (
         <main className="flex-1 overflow-auto">
-          <div className="p-6 mx-auto" style={{ maxWidth: 1280 }}>
+          {/* Canvas width 960 is the single shared content width across
+              Context / Team / Agent Detail. Chosen as the comfortable upper
+              bound for configuration- and editing-heavy admin pages (GitHub
+              uses ~896, Vercel ~880, Linear ~960). Below the lg breakpoint
+              padding tightens so 960 + p-6 = 1008 logical units doesn't
+              force a horizontal scrollbar on smaller viewports. The Team
+              table's column widths sum to ~870 — at viewports narrower than
+              ~810 the table overflows into main's own scroll; that's the
+              standard "wide table → local horizontal scroll" pattern
+              (GitHub, Stripe both do this), and the page chrome never
+              scrolls horizontally. */}
+          <div className="p-4 lg:p-6 mx-auto" style={{ maxWidth: 960 }}>
             <Outlet />
           </div>
         </main>

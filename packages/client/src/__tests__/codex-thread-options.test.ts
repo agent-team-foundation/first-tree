@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfigPayload } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { buildCodexThreadOptions } from "../handlers/codex.js";
 
@@ -56,6 +56,20 @@ describe("buildCodexThreadOptions", () => {
       }),
       "/tmp/wsk",
     );
+    // Per the 2026-05-22 redesign: predeclared source repos materialise at
+    // the TOP LEVEL of the agent home — no `worktrees/` prefix. The
+    // `additionalDirectories` allowlist follows the same paths.
     expect(opts.additionalDirectories).toEqual(["/tmp/wsk/bar", "/tmp/wsk/custom-path"]);
+  });
+
+  it("rejects unsafe git repo localPath before adding additionalDirectories", () => {
+    expect(() =>
+      buildCodexThreadOptions(
+        basePayload({
+          gitRepos: [{ url: "https://github.com/foo/bar.git", localPath: "../outside" }],
+        }),
+        "/tmp/wsk",
+      ),
+    ).toThrow(/Unsafe git repo localPath/);
   });
 });

@@ -1,19 +1,27 @@
-import { contextTreeSnapshotSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import type { ServerConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { contextTreeSnapshotSchema } from "@first-tree/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { requireOrgMembership } from "../../scope/require-org.js";
-import { type ContextTreeBinding, getContextTreeSnapshot } from "../../services/context-tree-snapshot.js";
+import {
+  type ContextTreeBinding,
+  contextTreeSnapshotWindowDays,
+  getContextTreeSnapshot,
+  isGithubRemoteBinding,
+} from "../../services/context-tree-snapshot.js";
+import { findInstallationByOrg } from "../../services/github-app-installations.js";
+import {
+  type ContextTreeInstallationTokenResult,
+  decorateSnapshotWithMintGuidance,
+  mintContextTreeInstallationToken,
+} from "../../services/github-app-token.js";
 import { getOrgContextTree } from "../../services/org-settings.js";
-import { contextTreeGithubTokenForRepo } from "../context-tree-snapshot.js";
+import { summarizeContextTreeUsage } from "../../services/session-event.js";
 
 const querySchema = z
   .object({
     window: z.enum(["1d", "7d", "30d"]).optional(),
   })
   .strict();
-
-type ContextTreeSyncConfig = NonNullable<ServerConfig["contextTreeSync"]>;
 
 export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { orgId: string } }>(
@@ -32,12 +40,22 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
       const query = querySchema.parse(request.query);
       const scope = await requireOrgMembership(request, app.db);
       const binding: ContextTreeBinding = await getOrgContextTree(app.db, scope.organizationId);
-      const githubToken = contextTreeGithubTokenForRepo(
-        binding.repo,
-        app.config.contextTreeSync as ContextTreeSyncConfig | undefined,
+      let mintResult: ContextTreeInstallationTokenResult | null = null;
+      if (isGithubRemoteBinding(binding)) {
+        const installation = await findInstallationByOrg(app.db, scope.organizationId);
+        mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
+      }
+      const githubToken = mintResult?.ok ? mintResult.token : undefined;
+      const window = query.window ?? "7d";
+      const rawSnapshot = await getContextTreeSnapshot({ ...binding, githubToken }, window);
+      const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
+      const usage = await summarizeContextTreeUsage(
+        app.db,
+        scope.organizationId,
+        contextTreeSnapshotWindowDays(window),
+        { humanAgentId: scope.humanAgentId, memberId: scope.memberId },
       );
-      const snapshot = await getContextTreeSnapshot({ ...binding, githubToken }, query.window ?? "7d");
-      return contextTreeSnapshotSchema.parse(snapshot);
+      return contextTreeSnapshotSchema.parse({ ...snapshot, usage });
     },
   );
 }

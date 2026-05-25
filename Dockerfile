@@ -3,49 +3,64 @@ RUN apk add --no-cache python3 make g++
 RUN corepack enable
 WORKDIR /app
 
-# Copy package manifests for dependency layer caching
+# Copy package manifests for dependency layer caching. Only the packages
+# needed to build + run the SaaS server image: shared, server, web.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/server/package.json packages/server/
-COPY packages/client/package.json packages/client/
-COPY packages/command/package.json packages/command/
 COPY packages/web/package.json packages/web/
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile \
+    --filter @first-tree/shared... \
+    --filter @first-tree/server... \
+    --filter @first-tree/web...
 
 # --- Build stage ---
 FROM deps AS build
 COPY . .
-RUN pnpm build
+RUN pnpm --filter @first-tree/shared build
+RUN pnpm --filter @first-tree/server build
+RUN pnpm --filter @first-tree/web build
 
-# --- Production dependencies (no devDependencies, native modules pre-compiled) ---
+# --- Production dependencies (no devDependencies) ---
 FROM deps AS prod-deps
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --frozen-lockfile --prod \
+    --filter @first-tree/shared... \
+    --filter @first-tree/server...
 
 # --- Runtime ---
 FROM node:24-alpine
 WORKDIR /app
 
+# Bootstrap Command-package version baked into the image. CI passes this as
+# `--build-arg COMMAND_VERSION=$(node -p "require('./apps/cli/package.json').version")`,
+# so a freshly-built image always advertises the in-tree CLI version BEFORE
+# the npm-registry poller takes over at runtime. Default `0.0.0` keeps local
+# `docker build` (without the build-arg) from crashing — it's SemVer-valid so
+# the welcome frame stays well-formed, and the poller overwrites it within a
+# poll interval anyway.
+ARG COMMAND_VERSION=0.0.0
+ENV FIRST_TREE_COMMAND_VERSION=$COMMAND_VERSION
+
 # Production node_modules (includes compiled bcrypt, workspace links)
 COPY --from=prod-deps /app ./
 
-# Build artifacts
+# Build artifacts: shared (workspace dep) + server entry
 COPY --from=build /app/packages/shared/dist packages/shared/dist/
 COPY --from=build /app/packages/server/dist packages/server/dist/
-COPY --from=build /app/packages/client/dist packages/client/dist/
-COPY --from=build /app/packages/command/dist packages/command/dist/
 
-# Runtime data: database migrations + web static files
+# Runtime data: drizzle migrations (server bootstrap runs them) + web SPA
 COPY --from=build /app/packages/server/drizzle packages/server/drizzle/
-COPY --from=build /app/packages/web/dist packages/web/dist/
+COPY --from=build /app/packages/web/dist packages/server/web-dist/
 
 # git is required by the server-managed Context Tree mirror used by
 # /api/v1/context-tree/snapshot. wget is used by the container healthcheck.
 RUN apk add --no-cache git wget
 
 ENV NODE_ENV=production
+ENV FIRST_TREE_WEB_DIST_PATH=/app/packages/server/web-dist
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -qO- http://localhost:8000/healthz || exit 1
 
-CMD ["node", "packages/command/dist/cli/index.mjs", "server", "start", "--no-interactive"]
+CMD ["node", "packages/server/dist/index.mjs"]

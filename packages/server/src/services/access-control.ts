@@ -14,11 +14,12 @@
  * (`requireAgentAccess(..., "manage")`), not visibility.
  */
 
-import { AGENT_STATUSES, AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_STATUSES, AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, ne, or, type SQL } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
+import { users } from "../db/schema/users.js";
 
 /**
  * SQL WHERE conditions for agents visible to a member.
@@ -51,8 +52,24 @@ export async function listAgentsManagedByUser(
     visibility: string;
     runtimeProvider: string;
     clientId: string | null;
+    avatarImageUpdatedAt: Date | null;
+    /**
+     * For human agents only: the backing user's external avatar URL
+     * (`users.avatar_url`, typically the GitHub avatar). Resolved via a
+     * second `members.agent_id → users.id` hop separate from the
+     * `agents.managerId → members.id` join used to filter rows above.
+     * For non-human agents, the second hop yields no row and this is `null`.
+     */
+    userAvatarUrl: string | null;
   }>
 > {
+  // The existing `agents.managerId → members.id` join already lands on
+  // the row whose `user_id` we want. For human agents the manager IS the
+  // user (members.agent_id = agents.uuid is the same row), so joining
+  // `users` off that member yields the correct human-user avatar.
+  // For non-human agents we still surface the manager's avatar URL
+  // here, but `resolveAvatarImageUrl` ignores it (only honored when
+  // type=human), so this is a safe widening of the projection.
   return db
     .select({
       uuid: agents.uuid,
@@ -64,8 +81,11 @@ export async function listAgentsManagedByUser(
       visibility: agents.visibility,
       runtimeProvider: agents.runtimeProvider,
       clientId: agents.clientId,
+      avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
     })
     .from(agents)
     .innerJoin(members, eq(agents.managerId, members.id))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(members.userId, userId), eq(members.status, "active"), ne(agents.status, AGENT_STATUSES.DELETED)));
 }

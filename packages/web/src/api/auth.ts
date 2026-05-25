@@ -1,4 +1,4 @@
-import type { LoginResponse } from "@agent-team-foundation/first-tree-hub-shared";
+import type { LoginResponse } from "@first-tree/shared";
 
 const BASE_URL = "/api/v1";
 

@@ -1,8 +1,4 @@
-import type {
-  InboxEntryWithMessage,
-  InReplyToSnapshot,
-  PrecedingMessage,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage, PrecedingMessage } from "@first-tree/shared";
 import type { SessionMessage } from "../runtime/handler.js";
 
 /**
@@ -32,7 +28,7 @@ export function mockCtxPlumbing(
 } {
   return {
     forwardResult: async (text: string) => {
-      await sdk.sendMessage(chatId, { format: "text", content: text });
+      await sdk.sendMessage(chatId, { source: "api", format: "text", content: text });
     },
     buildAgentEnv: (env) => env,
     formatInboundContent: async (msg) => {
@@ -51,12 +47,10 @@ export function mockEntry(
     content?: string;
     senderId?: string;
     inReplyTo?: string | null;
-    inReplyToSnapshot?: InReplyToSnapshot;
     recipientMode?: "full" | "mention_only";
     metadata?: Record<string, unknown>;
     precedingMessages?: PrecedingMessage[];
-    /** Override the derived `message.id` — needed when two entries share a
-     * messageId but differ on chatId (the replyTo cross-chat routing shape). */
+    /** Override the derived `message.id`. */
     messageId?: string;
   } = {},
 ): InboxEntryWithMessage {
@@ -79,14 +73,11 @@ export function mockEntry(
       format: "text",
       content: opts.content ?? "hello",
       metadata: opts.metadata ?? {},
-      replyToInbox: null,
-      replyToChat: null,
       inReplyTo: opts.inReplyTo ?? null,
       source: null,
       createdAt: new Date().toISOString(),
       configVersion: 1,
       recipientMode: opts.recipientMode ?? "full",
-      inReplyToSnapshot: opts.inReplyToSnapshot ?? null,
       precedingMessages: opts.precedingMessages ?? [],
     },
   };

@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { extname, join, resolve } from "node:path";
-import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { FIRST_TREE_HUB_ATTR, redactUrl } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import fastifyOpenTelemetry from "@autotelic/fastify-opentelemetry";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
+import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { FIRST_TREE_ATTR, redactUrl } from "@first-tree/shared/observability";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
@@ -15,14 +15,15 @@ import { adapterMappingRoutes } from "./api/adapter-mappings.js";
 import { adapterRoutes } from "./api/adapters.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
+import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
 import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
-import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
+import { agentMessageRoutes } from "./api/agent/messages.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { agentActivityRoutes } from "./api/agent-activity.js";
-import { agentRoutes } from "./api/agents.js";
+import { agentRoutes, publicAgentAvatarRoutes } from "./api/agents.js";
 import { agentConfigRoutes } from "./api/agents-config.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
@@ -36,6 +37,7 @@ import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
 import { meRoutes } from "./api/me.js";
+import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
 import { orgAdapterMappingRoutes } from "./api/orgs/adapter-mappings.js";
 import { orgAdapterStatusRoutes } from "./api/orgs/adapter-status.js";
@@ -48,14 +50,14 @@ import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
 import { orgMemberRoutes } from "./api/orgs/members.js";
-import { orgNotificationRoutes } from "./api/orgs/notifications.js";
 import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
 import { orgSettingsRoutes } from "./api/orgs/settings.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
+import { readyzRoutes } from "./api/readyz.js";
 import { sessionRoutes } from "./api/sessions.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
-import { githubWebhookRoutes } from "./api/webhooks/github.js";
+import { githubAppWebhookRoutes } from "./api/webhooks/github-app.js";
 import { assertBootConfigValid } from "./boot-guards.js";
 import type { Config } from "./config.js";
 import { connectDatabase, sslOptions } from "./db/connection.js";
@@ -78,6 +80,7 @@ import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
+import { COMMAND_PACKAGE_NAME, createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
@@ -95,13 +98,24 @@ export type AppContext = {
 };
 
 /**
- * Resolve the Command-package version advertised to clients. Prefers the
- * value the Command CLI explicitly injected; otherwise falls back to the
- * server workspace's own package.json (dev mode, `pnpm --filter … dev`).
- * Returning a string (rather than undefined) keeps the welcome frame well-
- * formed — the client treats the value advisorily.
+ * Resolve the bootstrap Command-package version advertised before the first
+ * successful npm-registry poll lands. Priority order:
+ *
+ *  1. `config.update.commandVersion` — explicit injection. Set by the
+ *     Dockerfile at build time (via `COMMAND_VERSION` build-arg, which CI
+ *     reads from `apps/cli/package.json.version`), so a fresh image
+ *     boots with a sane version even when the npm registry is unreachable
+ *     at startup.
+ *  2. Server workspace's own `package.json` — kept only for `pnpm --filter
+ *     … dev` runs where no build-arg path exists. Server's package.json
+ *     never bumps (it's `private: true`), so this is intentionally a weak
+ *     fallback — at runtime the poller will overwrite it within minutes.
+ *  3. `"0.0.0"` — last-resort sentinel that keeps the welcome frame
+ *     well-formed. SemVer-valid; clients drop into the "ahead" branch and
+ *     skip update, which is the right failure mode (better than crashing
+ *     clients with an invalid version string).
  */
-function resolveCommandVersion(injected: string | undefined): string {
+function resolveBootstrapCommandVersion(injected: string | undefined): string {
   if (injected && injected.trim().length > 0) return injected;
   try {
     const req = createRequire(import.meta.url);
@@ -126,10 +140,8 @@ function namePlugin<T extends FastifyPluginAsync>(name: string, fn: T): T {
 
 export async function buildApp(config: Config) {
   // Validate token-lifetime config eagerly so a typo in
-  // `FIRST_TREE_HUB_AUTH_*_EXPIRY` fails the boot, not the first
-  // /connect-tokens call hours later. Both server entry points
-  // (the standalone bin and the CLI's `server start`) flow through
-  // buildApp, so this single check covers both.
+  // `FIRST_TREE_AUTH_*_EXPIRY` fails the boot, not the first
+  // /connect-tokens call hours later.
   try {
     expiryToSeconds(config.auth.accessTokenExpiry);
     expiryToSeconds(config.auth.refreshTokenExpiry);
@@ -137,15 +149,14 @@ export async function buildApp(config: Config) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `${msg} — check FIRST_TREE_HUB_AUTH_*_EXPIRY env vars (got access=${config.auth.accessTokenExpiry}, refresh=${config.auth.refreshTokenExpiry}, connect=${config.auth.connectTokenExpiry}).`,
+      `${msg} — check FIRST_TREE_AUTH_*_EXPIRY env vars (got access=${config.auth.accessTokenExpiry}, refresh=${config.auth.refreshTokenExpiry}, connect=${config.auth.connectTokenExpiry}).`,
     );
   }
 
   // GitHub App config sanity (PEM header / blank-secret / half-config).
   // Runs here so a misconfigured App env block fails the boot, not the
-  // first App JWT call hours later. Both server entry points (standalone
-  // bin and CLI `server start`) flow through buildApp, so this single
-  // check covers both — cheap, only fires when the App block is present.
+  // first App JWT call hours later. Cheap; only fires when the App
+  // block is present.
   assertBootConfigValid(config);
 
   applyLoggerConfig({
@@ -161,7 +172,7 @@ export async function buildApp(config: Config) {
     loggerInstance: rootLogger as unknown as FastifyBaseLogger,
     // When deployed behind Cloudflare / reverse proxy, `req.ip` must reflect
     // the real client IP rather than the proxy — otherwise every IP-keyed
-    // rate-limit key collapses. Operators set FIRST_TREE_HUB_TRUST_PROXY=true
+    // rate-limit key collapses. Operators set FIRST_TREE_TRUST_PROXY=true
     // when they control the upstream proxy chain.
     trustProxy: config.trustProxy,
   });
@@ -277,10 +288,29 @@ export async function buildApp(config: Config) {
   app.decorate("config", config);
 
   // Advisory Command-package version broadcast to every Client via the
-  // `server:welcome` WS frame — lets clients detect version drift.
-  const commandVersion = resolveCommandVersion(config.commandVersion);
-  app.decorate("commandVersion", commandVersion);
-  app.log.info({ commandVersion }, "Hub server advertising command version");
+  // `server:welcome` WS frame. The poller refreshes the advertised value
+  // from the npm registry on `config.update.pollIntervalMinutes`, so the
+  // server's deploy cadence no longer gates client auto-update. Bootstrap
+  // value is the build-arg-injected version; the poller takes over on
+  // `onReady`.
+  const bootstrapCommandVersion = resolveBootstrapCommandVersion(config.update.commandVersion);
+  const commandVersionPoller = createCommandVersionPoller({
+    logger: app.log,
+    registryUrl: config.update.registryUrl,
+    packageName: COMMAND_PACKAGE_NAME,
+    channel: config.update.channel,
+    intervalMs: config.update.pollIntervalMinutes * 60_000,
+    initialVersion: bootstrapCommandVersion,
+  });
+  app.decorate("commandVersion", () => commandVersionPoller.get());
+  app.log.info(
+    {
+      bootstrapCommandVersion,
+      channel: config.update.channel,
+      pollIntervalMinutes: config.update.pollIntervalMinutes,
+    },
+    "Hub server advertising command version (poller bootstrap)",
+  );
 
   // Notifier: dedicated PG connection for LISTEN/NOTIFY
   const listenClient = postgres(config.database.url, { max: 1, ...sslOptions(config.database.url) });
@@ -371,7 +401,7 @@ export async function buildApp(config: Config) {
       // structural fields by passing them with the same key.
       reportErrorToRoot(request, error.message, error, {
         ...(error.attrs ?? {}),
-        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error.name,
+        [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
       return reply.status(error.statusCode).send({ error: error.message, ...traceField });
@@ -379,7 +409,7 @@ export async function buildApp(config: Config) {
 
     if (error instanceof ZodError) {
       reportErrorToRoot(request, "Validation error", error, {
-        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: "ZodError",
+        [FIRST_TREE_ATTR.ERROR_TYPE]: "ZodError",
         "validation.issue_count": error.issues.length,
       });
       return reply.status(400).send({ error: "Validation error", details: error.issues, ...traceField });
@@ -398,7 +428,7 @@ export async function buildApp(config: Config) {
       error.statusCode < 500
     ) {
       reportErrorToRoot(request, error.message, error, {
-        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error.name,
+        [FIRST_TREE_ATTR.ERROR_TYPE]: error.name,
         "http.status_code": error.statusCode,
       });
       return reply.status(error.statusCode).send({ error: error.message, ...traceField });
@@ -406,25 +436,33 @@ export async function buildApp(config: Config) {
 
     request.log.error({ err: error }, "unhandled request error");
     reportErrorToRoot(request, "Internal server error", error, {
-      [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error instanceof Error ? error.name : "UnknownError",
+      [FIRST_TREE_ATTR.ERROR_TYPE]: error instanceof Error ? error.name : "UnknownError",
       "http.status_code": 500,
     });
     return reply.status(500).send({ error: "Internal server error", ...traceField });
   });
 
-  // Root-level health check for container orchestration (outside /api/v1)
+  // Root-level health checks for container orchestration (outside /api/v1).
+  // `/healthz` checks process + DB reachability (used by Docker HEALTHCHECK).
+  // `/readyz` checks full readiness — all bootstrap stages done + all adapter
+  // bots connected. See docs/server-bootstrap-resilience-design.md §3 (T6).
   await app.register(healthzRoutes);
+  await app.register(readyzRoutes);
 
   // All API routes under /api/v1 prefix
   await app.register(
     namePlugin("apiV1Scope", async (api) => {
       // ── Public routes ────────────────────────────────────────────────────
       await api.register(healthRoutes);
-      await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
+      await api.register(githubAppWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
+      // Public read for manager-uploaded agent avatars — `<img src>` cannot
+      // attach the member-JWT, so the read path lives outside the auth scope.
+      // Writes (PUT/DELETE) stay inside `agentRoutes` and are JWT-gated.
+      await api.register(publicAgentAvatarRoutes, { prefix: "/agents" });
 
       // ── Class A — `/me`, `/auth` (user-scoped) ──────────────────────────
       await api.register(
@@ -438,6 +476,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
+          await scope.register(meDocsRoutes, { workspacesRoot: config.workspace.root });
         }),
         { prefix: "" },
       );
@@ -454,7 +493,6 @@ export async function buildApp(config: Config) {
           await scope.register(orgOverviewRoutes, { prefix: "/overview" });
           await scope.register(orgActivityRoutes, { prefix: "/activity" });
           await scope.register(orgSessionRoutes, { prefix: "/sessions" });
-          await scope.register(orgNotificationRoutes, { prefix: "/notifications" });
           await scope.register(orgClientRoutes, { prefix: "/clients" });
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
           await scope.register(orgMemberRoutes, { prefix: "/members" });
@@ -489,9 +527,9 @@ export async function buildApp(config: Config) {
           await scope.register(agentMeRoutes);
           await scope.register(agentChatRoutes, { prefix: "/chats" });
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
-          await scope.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
+          await scope.register(agentContextTreeInfoRoutes);
 
           await scope.register(agentFeishuBotRoutes);
           await scope.register(agentFeishuUserRoutes, { prefix: "/delegated" });
@@ -608,19 +646,22 @@ export async function buildApp(config: Config) {
       .catch((err) => createLogger("chat-message-kick").warn({ err, chatId, messageId }, "chat:message kick failed"));
   });
 
-  // Start notifier and background tasks on server start
+  // Start notifier and background tasks on server start.
+  // Adapter / kael initial reload happens inside backgroundTasks.start() as a
+  // fire-and-forget task so app.listen() is not blocked by remote handshakes —
+  // see docs/server-bootstrap-resilience-design.md (T1/T2).
   app.addHook("onReady", async () => {
     // Ensure the default organization exists (idempotent)
     await ensureDefaultOrganization(db);
     await notifier.start();
     backgroundTasks.start();
     pulseAggregator.start();
-    await adapterManager.reload();
-    await kaelRuntime?.reload();
+    commandVersionPoller.start();
   });
 
   // Cleanup on close
   app.addHook("onClose", async () => {
+    commandVersionPoller.stop();
     pulseAggregator.stop();
     backgroundTasks.stop();
     adapterManager.shutdown();

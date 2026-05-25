@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chatMetadataSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { chatMetadataSchema } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
@@ -177,9 +177,12 @@ export async function findOrCreateChatForChannel(
     return existing.chatId;
   }
 
-  // Create new chat + mapping in transaction
+  // Create new chat + mapping in transaction. Hub keeps a single
+  // group-chat model (see first-tree-context PR #281); the p2p
+  // adapter shape is captured via membership size + the bot/sender pair,
+  // not via `chats.type`, so we always write `group` here.
   const chatId = randomUUID();
-  const internalType = data.chatType === "p2p" ? "direct" : "group";
+  const internalType = "group";
 
   return db.transaction(async (tx) => {
     // Get bot agent's org
@@ -213,13 +216,11 @@ export async function findOrCreateChatForChannel(
 
     // Add bot agent and sender as participants. External IM users
     // (Feishu/Slack) always map to a `human` agent on the sender side, so
-    // these chats are inherently human↔agent. `addChatParticipants` derives
-    // the right mode from `(chats.type, agents.type)` — for the IM adapter
-    // path: human sender stays `full`; bot agent in a `direct` chat with a
-    // human peer also resolves to `full` per `defaultParticipantMode`. Pre-
-    // fix this site hardcoded `mode: 'full'` for every row, which would
-    // silently break if an adapter ever paired two non-human agents (the
-    // anti-echo invariant from migration 0029 would not apply).
+    // these chats are inherently human↔agent. v2 made `chat_membership.mode`
+    // decision-inert — `addChatParticipants` writes the constant
+    // `'mention_only'` for every speaker row; the fan-out 1:1 implicit
+    // wake (services/message.ts) takes care of waking the bot on every
+    // inbound message without needing a mode-derived bypass.
     const specs =
       data.botAgentId === data.senderAgentId
         ? [{ agentId: data.botAgentId, role: "member" as const }]

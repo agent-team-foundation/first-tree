@@ -1,4 +1,4 @@
-import type { ClientCapabilities, RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ClientCapabilities, RuntimeProvider } from "@first-tree/shared";
 import { probeClaudeCodeCapability } from "./claude-code.js";
 import { probeCodexCapability } from "./codex.js";
 

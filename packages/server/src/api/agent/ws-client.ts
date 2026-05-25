@@ -8,13 +8,12 @@ import {
   inboxAckFrameSchema,
   inboxDeliverFrameSchema,
   runtimeStateMessageSchema,
-  sessionCompletionMessageSchema,
   sessionEventMessageSchema,
   sessionReconcileRequestSchema,
   sessionStateMessageSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
@@ -44,8 +43,7 @@ import * as sessionEventService from "../../services/session-event.js";
 /**
  * Default per-agent in-flight cap when `server.inbox.maxInFlightPerAgent` is
  * unset. Mirrors the schema default so a hub running without an explicit
- * `inbox` block still gets reasonable backpressure once `wsDataPlane` is
- * flipped on. See proposal hub-inbox-ws-data-plane §3.5.
+ * `inbox` block still gets reasonable backpressure.
  */
 const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT = 32;
 /**
@@ -78,30 +76,12 @@ const wsMessageSchema = z.object({
  *      Failure ⇒ server sends `auth:rejected` and closes (code 4401).
  *   2. `client:register` — bind the client_id to the authenticated user.
  *   3. `agent:bind` — run Rule R-RUN (no token); populate presence.
- *   4. `session:state` / `runtime:state` / `session:event` / `session:completion` / `heartbeat`.
+ *   4. `session:state` / `runtime:state` / `session:event` / `heartbeat`.
  *   5. `agent:unbind` — stop multiplexing for a specific agent.
  *
  * When the JWT is about to expire the server sends `auth:expired` so the
  * SDK can refresh and reconnect without silently half-opening the socket.
  */
-
-/** Notification cooldown: prevents duplicate notifications for same (agentId, type) within window. */
-const NOTIFICATION_COOLDOWN_MS = 300_000; // 5 minutes
-const notificationCooldowns = new Map<string, number>();
-
-function shouldNotify(agentId: string, notificationType: string): boolean {
-  const key = `${agentId}:${notificationType}`;
-  const now = Date.now();
-  const lastSent = notificationCooldowns.get(key);
-  if (lastSent && now - lastSent < NOTIFICATION_COOLDOWN_MS) return false;
-  notificationCooldowns.set(key, now);
-  if (notificationCooldowns.size > 1000) {
-    for (const [k, ts] of notificationCooldowns) {
-      if (now - ts > NOTIFICATION_COOLDOWN_MS) notificationCooldowns.delete(k);
-    }
-  }
-  return true;
-}
 
 /**
  * Authenticated WS session state.
@@ -153,25 +133,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       const boundAgents = new Map<string, { agentId: string; inboxId: string; organizationId: string }>();
 
       /**
-       * Whether the connected client opted into the WS inbox data plane via
-       * `client:register.wireCapabilities.wsInboxDeliver`. Set per-socket
-       * because client SDKs are upgraded independently — an old client
-       * connecting to a new server must keep receiving the legacy
-       * `new_message` doorbell + HTTP poll path (proposal §3.6).
-       */
-      let clientWantsWsInboxDeliver = false;
-
-      /**
        * Per-agent in-flight `inbox:deliver` counter for backpressure. Lives on
        * the socket — when the WS closes it goes with it; that's intentional,
        * because re-counting on a fresh connection would bias the cap against
-       * a healthy reconnect (proposal §3.5).
+       * a healthy reconnect.
        */
       const inboxInFlight = new Map<string, number>();
-
-      function pushUseWsDataPlane(): boolean {
-        return clientWantsWsInboxDeliver;
-      }
 
       /**
        * Returns `false` when the socket has already moved out of `OPEN` —
@@ -229,17 +196,18 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
        * The dropped row is replayed by `drainBacklogForAgent` once an ack
        * frees a slot, or by the next NOTIFY when we're back below cap (§3.5).
        *
-       * Multi-row claims: a single `(inboxId, messageId)` pair can map to
-       * more than one `inbox_entries` row (replyTo cross-chat case writes
-       * a second row with a different chatId). We push every row claimed
-       * by this NOTIFY in one go — see `claimAndBuildForPush`.
+       * Multi-row claims: a single `(inboxId, messageId)` pair maps to
+       * exactly one `inbox_entries` row now that cross-chat reply routing
+       * has been removed (see first-tree-context PR #281). The claim still
+       * returns an array — `claimAndBuildForPush` is defensive against
+       * legacy duplicates and any future fan-out variant.
        *
        * The cap is intentionally **soft**: claim happens after the gate
-       * check, so an N>1 claim can nudge in-flight slightly past
+       * check, so any N>1 future claim could nudge in-flight slightly past
        * `inboxMaxInFlightPerAgent`. N is bounded by the
-       * `(inbox_id, message_id, chat_id)` unique constraint (≤2 today),
-       * so worst-case overshoot is small and the memory headroom in §3.5's
-       * 64MB estimate covers it.
+       * `(inbox_id, message_id, chat_id)` unique constraint, so worst-case
+       * overshoot is small and the memory headroom in §3.5's 64MB estimate
+       * covers it.
        */
       function makeInboxPushHandler(agentId: string, inboxId: string): InboxPushHandler {
         return async (messageId: string) => {
@@ -260,7 +228,8 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             return;
           }
           if (entries.length === 0) {
-            // Benign race — HTTP poll or another instance claimed it first.
+            // Benign race — another instance (or the post-ack backlog drain)
+            // claimed it first.
             return;
           }
 
@@ -436,14 +405,15 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             socket.send(JSON.stringify({ type: "auth:ok" }));
             // Wire-additive: older clients drop the unknown type; newer ones
             // use it to detect version drift. `capabilities.wsInboxDeliver`
-            // is unconditionally true on this build — the data plane is
-            // always available; whether it's actually used per-connection
-            // depends on the client's own `wireCapabilities` opt-in on
-            // `client:register` (proposal hub-inbox-ws-data-plane §3.6).
+            // must stay `true` here so 0.10.4 ~ 0.14.2 clients suppress
+            // their local 5s HTTP poll on bootstrap — without this flag they
+            // would fall back to `GET /inbox` + `POST /inbox/:id/ack` and
+            // the missing ack endpoint would loop messages forever. 0.14.3+
+            // clients ignore the field entirely.
             socket.send(
               JSON.stringify({
                 type: "server:welcome",
-                serverCommandVersion: app.commandVersion,
+                serverCommandVersion: app.commandVersion(),
                 serverTimeMs: Date.now(),
                 capabilities: { wsInboxDeliver: true },
               }),
@@ -463,11 +433,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           try {
             if (type === "client:register") {
               const data = clientRegisterSchema.parse(msg);
-
-              // Record opt-in for the WS inbox data plane. Per-socket so a
-              // legacy client on a pushed-enabled server still works (proposal
-              // §3.6). Default false — only an explicit `true` activates push.
-              clientWantsWsInboxDeliver = data.wireCapabilities?.wsInboxDeliver === true;
 
               // Resolve a placeholder `organizationId` for the legacy NOT NULL
               // column on `clients`. The column is no longer read by any path
@@ -504,6 +469,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   hostname: data.hostname,
                   os: data.os,
                   sdkVersion: data.sdkVersion,
+                  lastUpdateAttempt: data.lastUpdateAttempt,
                 });
               } catch (err) {
                 const message = err instanceof Error ? err.message : "client register failed";
@@ -532,7 +498,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // Backfill `agent:pinned` for any agent already bound to this
               // client at registration time. Without this, an admin who pins an
               // agent while the client is offline would still need a manual
-              // `first-tree-hub agent add` after restart — the realtime push in
+              // `first-tree agent add` after restart — the realtime push in
               // admin/agents.ts only fires for live sockets. The client dedupes
               // on agentId, so re-firing on every reconnect is safe.
               try {
@@ -648,6 +614,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 runtimeVersion: bindRequest.runtimeVersion,
               });
 
+              // An agent that just rebound has, by definition, recovered from
+              // whatever fault (stale / error / blocked) was last reported —
+              // close any open unread fault row so the bell badge clears
+              // instead of lingering across the offline gap.
+              notificationService.markAgentFaultsResolved(app.db, agent.id).catch(() => {});
+
               connectionManager.bindAgentToClient(clientId, agent.id);
               boundAgents.set(agent.id, {
                 agentId: agent.id,
@@ -655,16 +627,9 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 organizationId: agent.organizationId,
               });
 
-              // Subscribe to NOTIFY traffic. When both server config and the
-              // client's wire-capability opt-in are true, register a push
-              // handler so NOTIFYs land as `inbox:deliver` frames. Otherwise
-              // legacy `new_message` doorbell — old clients keep working.
-              const wsPushActive = pushUseWsDataPlane();
-              if (wsPushActive) {
-                notifier.subscribe(agent.inboxId, socket, makeInboxPushHandler(agent.id, agent.inboxId));
-              } else {
-                notifier.subscribe(agent.inboxId, socket);
-              }
+              // Subscribe to NOTIFY traffic with a per-socket push handler so
+              // NOTIFYs land as `inbox:deliver` frames on this connection.
+              notifier.subscribe(agent.inboxId, socket, makeInboxPushHandler(agent.id, agent.inboxId));
 
               socket.send(
                 JSON.stringify({
@@ -676,15 +641,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 }),
               );
 
-              // Reconnect/recovery: if we're on the WS push path, drain any
-              // pending entries that piled up while this socket was offline
-              // (or while another instance held the subscription). Failures
-              // are logged inside the helper — don't crash the bind path.
-              if (wsPushActive) {
-                drainBacklogForAgent(agent.id, agent.inboxId).catch((err) => {
-                  app.log.error({ err, agentId: agent.id }, "post-bind backlog drain crashed");
-                });
-              }
+              // Reconnect/recovery: drain any pending entries that piled up
+              // while this socket was offline (or while another instance held
+              // the subscription). Failures are logged inside the helper —
+              // don't crash the bind path.
+              drainBacklogForAgent(agent.id, agent.inboxId).catch((err) => {
+                app.log.error({ err, agentId: agent.id }, "post-bind backlog drain crashed");
+              });
             } else if (type === "agent:unbind") {
               const agentId = parsed.data.agentId;
               if (!agentId || !boundAgents.has(agentId)) {
@@ -788,10 +751,17 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 notifier,
               });
 
-              if (payload.runtimeState === "error" && shouldNotify(agentId, "agent_error")) {
+              // All three fault types share one dedup key (`agent:{id}:fault`),
+              // so a noisy reconcile loop — or a runtime that flips error →
+              // blocked → error — collapses to a single unread row. Healthy
+              // states close that row so the badge doesn't linger after the
+              // agent has already recovered.
+              if (payload.runtimeState === "error") {
                 notificationService.notifyAgentEvent(app.db, agentId, "agent_error", "high").catch(() => {});
-              } else if (payload.runtimeState === "blocked" && shouldNotify(agentId, "agent_blocked")) {
+              } else if (payload.runtimeState === "blocked") {
                 notificationService.notifyAgentEvent(app.db, agentId, "agent_blocked", "medium").catch(() => {});
+              } else if (payload.runtimeState === "idle" || payload.runtimeState === "working") {
+                notificationService.markAgentFaultsResolved(app.db, agentId).catch(() => {});
               }
             } else if (type === "session:event") {
               const agentId = parsed.data.agentId;
@@ -801,9 +771,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               const payload = sessionEventMessageSchema.parse(msg);
+              const boundInfo = boundAgents.get(agentId);
               chainSessionOp(agentId, payload.chatId, async () => {
                 try {
                   await sessionEventService.appendEvent(app.db, agentId, payload.chatId, payload.event);
+                  if (boundInfo) {
+                    // Best-effort cross-instance kick so admin WS sockets in
+                    // the same org can invalidate `liveActivity` without
+                    // waiting for the 15s `me/chats` poll. Failures are
+                    // swallowed inside the notifier (fire-and-forget).
+                    notifier
+                      .notifySessionEvent(agentId, payload.chatId, payload.event.kind, boundInfo.organizationId)
+                      .catch(() => {});
+                  }
                 } catch (err) {
                   socket.send(
                     JSON.stringify({
@@ -813,23 +793,24 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   );
                 }
               });
-            } else if (type === "session:completion") {
-              const agentId = parsed.data.agentId;
-              if (!agentId || !boundAgents.has(agentId)) {
-                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
-                return;
-              }
-
-              const payload = sessionCompletionMessageSchema.parse(msg);
-
-              if (shouldNotify(agentId, `session_completed:${payload.chatId}`)) {
-                notificationService
-                  .notifyAgentEvent(app.db, agentId, "session_completed", "low", payload.chatId)
-                  .catch(() => {});
-              }
             } else if (type === "inbox:ack") {
               const payloadResult = inboxAckFrameSchema.safeParse(msg);
               if (!payloadResult.success) {
+                // Server-side log so a buggy / malicious client's malformed
+                // frames are visible in trace backends even when the client
+                // discards the error reply. Wire-shape drift between
+                // client and server schemas is the most common cause.
+                app.log.warn(
+                  {
+                    clientId,
+                    issues: payloadResult.error.issues.map((i) => ({
+                      path: i.path.join("."),
+                      code: i.code,
+                      message: i.message,
+                    })),
+                  },
+                  "malformed inbox:ack frame — replying error",
+                );
                 socket.send(JSON.stringify({ type: "error", message: "Malformed inbox:ack frame" }));
                 return;
               }
@@ -851,7 +832,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   // status, or it belongs to an inbox this socket hasn't bound.
                   // All three are non-fatal — the client may have raced a
                   // server-side reset (300s timeout reaper) or be ack'ing a
-                  // stale entry from a previous run. Drop silently.
+                  // stale entry from a previous run. Debug-level only because
+                  // the 300s reaper race is expected at low volume; promoting
+                  // to warn would flood the logs on every reconnect.
+                  app.log.debug(
+                    { clientId, entryId, boundInboxes: boundAgents.size },
+                    "inbox:ack matched no row — stale ack or reaper race",
+                  );
                   return;
                 }
                 // Find the agentId that owns this inbox to decrement the
@@ -894,9 +881,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           if (currentOwner === clientId) {
             try {
               await presenceService.unbindAgent(app.db, agentId);
-              if (shouldNotify(agentId, "agent_disconnected")) {
-                notificationService.notifyAgentEvent(app.db, agentId, "agent_disconnected", "medium").catch(() => {});
-              }
             } catch {
               // best-effort
             }

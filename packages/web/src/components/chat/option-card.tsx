@@ -1,8 +1,20 @@
-import type { QuestionOption, QuestionPreviewFormat } from "@agent-team-foundation/first-tree-hub-shared";
+import type { QuestionOption, QuestionPreviewFormat } from "@first-tree/shared";
 import DOMPurify from "dompurify";
 import { useMemo } from "react";
 import { cn } from "../../lib/utils.js";
 import { Markdown } from "../ui/markdown.js";
+
+let openLinksInNewTabHookInstalled = false;
+function installOpenLinksInNewTabHook() {
+  if (openLinksInNewTabHookInstalled) return;
+  openLinksInNewTabHookInstalled = true;
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (node.tagName === "A") {
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener noreferrer");
+    }
+  });
+}
 
 /**
  * Single option inside a `<QuestionMessage />` — renders the SDK's
@@ -38,6 +50,7 @@ export function OptionCard({
 }) {
   const sanitisedHtml = useMemo(() => {
     if (!option.preview || previewFormat !== "html") return null;
+    installOpenLinksInNewTabHook();
     return DOMPurify.sanitize(option.preview, { USE_PROFILES: { html: true } });
   }, [option.preview, previewFormat]);
 

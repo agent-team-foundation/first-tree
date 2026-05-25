@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractMentions } from "../api/webhooks/github.js";
+import { extractMentions } from "../services/github-normalize.js";
 
 describe("extractMentions", () => {
   it("extracts single mention", () => {

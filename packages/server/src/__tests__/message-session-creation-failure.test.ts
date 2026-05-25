@@ -44,7 +44,7 @@ describe("sendMessage — N4-B: predictive activation failure does not block the
     const app = getApp();
     const { agent: a1 } = await createTestAgent(app, { name: `n4-a-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: a2 } = await createTestAgent(app, { name: `n4-b-${crypto.randomUUID().slice(0, 6)}` });
-    const chat = await createChat(app.db, a1.uuid, { type: "direct", participantIds: [a2.uuid] });
+    const chat = await createChat(app.db, a1.uuid, { type: "group", participantIds: [a2.uuid] });
 
     // 1:1 chat fan-out produces exactly one upsertSessionState call.
     mockedUpsert.mockRejectedValueOnce(new Error("simulated upsert failure"));
@@ -52,6 +52,7 @@ describe("sendMessage — N4-B: predictive activation failure does not block the
     // mention_only direct (migration 0029): @ to keep notify=true so the
     // upsert call site is reached (otherwise the silent fan-out skips it).
     const result = await sendMessage(app.db, chat.id, a1.uuid, {
+      source: "api",
       format: "text",
       content: "should still arrive",
       metadata: { mentions: [a2.uuid] },

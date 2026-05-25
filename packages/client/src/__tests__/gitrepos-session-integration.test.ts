@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentRuntimeConfig } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfig } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Stub the Claude SDK — the handler's internals call `query()` to spawn a
@@ -98,13 +98,12 @@ function buildSessionCtx(chatId: string, log: (msg: string) => void): SessionCon
     touch: () => {},
     setRuntimeState: () => {},
     emitEvent: () => {},
-    reportSessionCompletion: () => {},
     ...mockCtxPlumbing({ sendMessage }, chatId),
   };
 }
 
 describe("claude-code handler gitRepos wiring (PRD §5.1.5)", () => {
-  it("materialises a worktree under cwd/<localPath> and writes a valid HEAD", async () => {
+  it("materialises a source repo at cwd/<localPath>/ (top-level) and writes a valid HEAD", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-data-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
     const gitMirrorManager: GitMirrorManager = createGitMirrorManager({
@@ -135,17 +134,26 @@ describe("claude-code handler gitRepos wiring (PRD §5.1.5)", () => {
       ctx,
     );
 
-    const worktreePath = join(workspaceRoot, "chat-1", "repos", "first-tree");
-    expect(existsSync(worktreePath)).toBe(true);
-    expect(existsSync(join(worktreePath, "README.md"))).toBe(true);
-    expect(readFileSync(join(worktreePath, "README.md"), "utf-8")).toContain("fixture repo");
-    // A worktree has a .git FILE (not directory) pointing at the bare mirror.
-    expect(existsSync(join(worktreePath, ".git"))).toBe(true);
+    // Per the 2026-05-22 redesign: cwd is the agent home (workspaceRoot),
+    // predeclared source repos land at TOP LEVEL `<agentHome>/<localPath>/`
+    // (no `worktrees/` prefix — that subdir is reserved for the agent's
+    // own on-demand worktrees).
+    const sourceRepoPath = join(workspaceRoot, "repos", "first-tree");
+    expect(existsSync(sourceRepoPath)).toBe(true);
+    expect(existsSync(join(sourceRepoPath, "README.md"))).toBe(true);
+    expect(readFileSync(join(sourceRepoPath, "README.md"), "utf-8")).toContain("fixture repo");
+    // A worktree-style checkout has a .git FILE (not directory) pointing at the bare mirror.
+    expect(existsSync(join(sourceRepoPath, ".git"))).toBe(true);
+    // The `worktrees/` subdir is NOT pre-created — it's the agent's on-demand
+    // space, populated only when the agent runs `git worktree add` itself.
+    expect(existsSync(join(workspaceRoot, "worktrees"))).toBe(false);
 
-    // shutdown should remove the worktree AND the whole session workspace
+    // Per agent-session-cwd-redesign: predeclared source repos + the agent
+    // home are persistent across session shutdowns so the next chat finds
+    // them ready. shutdown() does NOT remove either.
     await handler.shutdown();
-    expect(existsSync(worktreePath)).toBe(false);
-    expect(existsSync(join(workspaceRoot, "chat-1"))).toBe(false);
+    expect(existsSync(sourceRepoPath)).toBe(true);
+    expect(existsSync(workspaceRoot)).toBe(true);
     // Bare mirror is shared across sessions — must survive session cleanup.
     expect(existsSync(gitMirrorManager.mirrorsRoot)).toBe(true);
   });

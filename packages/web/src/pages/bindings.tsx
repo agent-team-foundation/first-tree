@@ -1,4 +1,4 @@
-import type { AdapterBotStatus, Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AdapterBotStatus, Agent } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
@@ -6,7 +6,6 @@ import { useNavigate, useSearchParams } from "react-router";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
 import { getAdapterStatuses } from "../api/adapter-status.js";
 import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
-import { listAgents } from "../api/agents.js";
 import { Button } from "../components/ui/button.js";
 import { DenseBadge } from "../components/ui/dense-badge.js";
 import {
@@ -18,10 +17,10 @@ import {
   DenseTableRow,
 } from "../components/ui/dense-table.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
-import { Panel } from "../components/ui/panel.js";
-import { SectionHeader } from "../components/ui/section-header.js";
+import { Section } from "../components/ui/section.js";
 import { StateDot } from "../components/ui/state-dot.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
+import { useOrgAgents } from "../lib/use-org-agents.js";
 import { formatDate } from "../lib/utils.js";
 import { BindingFormDialog, type BindingFormSubmit } from "./binding-form.js";
 
@@ -56,13 +55,9 @@ export function BindingsPage() {
 
   // We need the full agent list for two reasons: (1) the "+ Bot binding" /
   // "+ User binding" pickers, and (2) the filter chip at the top of the page.
-  // Cached for 30s in the same query-key shape as `useAgentNameMap` so they
-  // share the request.
-  const agentsQuery = useQuery({
-    queryKey: ["agents", "name-map"],
-    queryFn: () => listAgents({ limit: 100 }),
-    staleTime: 30_000,
-  });
+  // Shared with `useAgentNameMap` (and the chat picker) via `useOrgAgents`
+  // so all three surfaces hit one cache and one HTTP fetch per refetch tick.
+  const agentsQuery = useOrgAgents();
   const allAgents = agentsQuery.data?.items ?? [];
 
   // Status lookup: fast O(1) check whether an adapter row's bot is online.
@@ -260,26 +255,25 @@ export function BindingsPage() {
         </div>
       )}
 
-      <Panel className="mb-3.5">
-        <SectionHeader
-          right={
-            <span className="inline-flex items-center gap-2">
-              <span className="inline-flex items-center gap-3 text-caption">
-                <span className="mono inline-flex items-center gap-1" style={{ color: "var(--state-idle)" }}>
-                  <StateDot state="idle" size={6} /> {onlineBots} online
-                </span>
-                <span className="mono inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
-                  <StateDot state="offline" size={6} /> {offlineBots} offline
-                </span>
+      <Section
+        title="Bot bindings"
+        count={adapters.length}
+        action={
+          <div className="inline-flex items-center gap-3">
+            <span className="inline-flex items-center gap-3 text-caption">
+              <span className="inline-flex items-center gap-1" style={{ color: "var(--state-idle)" }}>
+                <StateDot state="idle" size={6} /> {onlineBots} online
               </span>
-              <Button size="xs" variant="outline" onClick={() => openCreate("bot")}>
-                <Plus className="h-3 w-3" /> Bot binding
-              </Button>
+              <span className="inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
+                <StateDot state="offline" size={6} /> {offlineBots} offline
+              </span>
             </span>
-          }
-        >
-          Bot bindings · {adapters.length}
-        </SectionHeader>
+            <Button size="xs" variant="outline" onClick={() => openCreate("bot")}>
+              <Plus className="h-3 w-3" /> Bot binding
+            </Button>
+          </div>
+        }
+      >
         {isLoading ? (
           <EmptyRow>Loading…</EmptyRow>
         ) : !adapters.length ? (
@@ -305,10 +299,12 @@ export function BindingsPage() {
                       <span className="mono font-medium">{resolveAgentName(a.agentId)}</span>
                     </DenseTableCell>
                     <DenseTableCell>
-                      <DenseBadge>{a.platform}</DenseBadge>
+                      <DenseBadge>{humanizePlatform(a.platform)}</DenseBadge>
                     </DenseTableCell>
                     <DenseTableCell>
-                      <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
+                      <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>
+                        {humanizeAdapterStatus(a.status)}
+                      </DenseBadge>
                     </DenseTableCell>
                     <DenseTableCell>
                       <span className="inline-flex items-center gap-1.5 text-label">
@@ -355,18 +351,17 @@ export function BindingsPage() {
             </DenseTableBody>
           </DenseTable>
         )}
-      </Panel>
+      </Section>
 
-      <Panel>
-        <SectionHeader
-          right={
-            <Button size="xs" variant="outline" onClick={() => openCreate("user")}>
-              <Plus className="h-3 w-3" /> User binding
-            </Button>
-          }
-        >
-          User bindings · {mappings.length}
-        </SectionHeader>
+      <Section
+        title="User bindings"
+        count={mappings.length}
+        action={
+          <Button size="xs" variant="outline" onClick={() => openCreate("user")}>
+            <Plus className="h-3 w-3" /> User binding
+          </Button>
+        }
+      >
         {isLoading ? (
           <EmptyRow>Loading…</EmptyRow>
         ) : !mappings.length ? (
@@ -393,7 +388,7 @@ export function BindingsPage() {
                     </span>
                   </DenseTableCell>
                   <DenseTableCell>
-                    <DenseBadge>{m.platform}</DenseBadge>
+                    <DenseBadge>{humanizePlatform(m.platform)}</DenseBadge>
                   </DenseTableCell>
                   <DenseTableCell>
                     <span className="mono text-label" style={{ color: "var(--fg-2)" }}>
@@ -402,7 +397,7 @@ export function BindingsPage() {
                   </DenseTableCell>
                   <DenseTableCell style={{ color: "var(--fg-2)" }}>{m.displayName ?? "—"}</DenseTableCell>
                   <DenseTableCell>
-                    <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
+                    <DenseBadge tone="outline">{humanizeBoundVia(m.boundVia)}</DenseBadge>
                   </DenseTableCell>
                   <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                     {formatDate(m.createdAt)}
@@ -424,7 +419,7 @@ export function BindingsPage() {
             </DenseTableBody>
           </DenseTable>
         )}
-      </Panel>
+      </Section>
 
       {/* Pick agent → then open the real form. Skipped when ?agent=is set. */}
       <AgentPickerDialog
@@ -517,6 +512,58 @@ function narrowPlatform(p: string): "feishu" | "slack" | "kael" {
 }
 function narrowStatus(s: string): "active" | "inactive" {
   return s === "inactive" ? "inactive" : "active";
+}
+
+/**
+ * Display label for the wire-level platform enum (`feishu` / `slack` /
+ * `kael`). Falls back to the raw value so any forward-compat platform the
+ * server emits still renders something, just unstyled.
+ */
+function humanizePlatform(platform: string): string {
+  switch (platform) {
+    case "feishu":
+      return "Feishu";
+    case "slack":
+      return "Slack";
+    case "kael":
+      return "Kael";
+    default:
+      return platform;
+  }
+}
+
+function humanizeAdapterStatus(status: string): string {
+  switch (status) {
+    case "active":
+      return "Active";
+    case "inactive":
+      return "Inactive";
+    default:
+      return status;
+  }
+}
+
+/**
+ * Map the wire-level adapter `bound_via` enum (`code` / `reverse_token` /
+ * `oauth` / `manual`) to a sentence-case phrase. Note: this is a DIFFERENT
+ * enum from the GitHub-entity `boundVia` used in the chat right sidebar —
+ * adapter mappings track how an IM user got bound, not how a PR/issue got
+ * linked, so we deliberately do NOT share the helper.
+ */
+function humanizeBoundVia(boundVia: string | null): string {
+  if (!boundVia) return "—";
+  switch (boundVia) {
+    case "code":
+      return "Code";
+    case "reverse_token":
+      return "Reverse token";
+    case "oauth":
+      return "OAuth";
+    case "manual":
+      return "Manual";
+    default:
+      return boundVia;
+  }
 }
 
 function EmptyRow({ children }: { children: ReactNode }) {

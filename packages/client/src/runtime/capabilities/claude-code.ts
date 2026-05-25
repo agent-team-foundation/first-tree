@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { CapabilityEntry } from "@agent-team-foundation/first-tree-hub-shared";
+import type { CapabilityEntry } from "@first-tree/shared";
 
 /**
  * Top-level marker file Claude Code writes after a successful OAuth login.

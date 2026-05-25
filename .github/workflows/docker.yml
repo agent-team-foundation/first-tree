@@ -45,12 +45,74 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
 
+      # Pass the in-tree Command-package version as a Docker build-arg.
+      # Server uses it as the bootstrap value for `serverCommandVersion`
+      # before the npm-registry poller starts — see Dockerfile's
+      # `ARG COMMAND_VERSION` block. Reading from `apps/cli/package.json`
+      # keeps the image's bootstrap version in lockstep with whichever
+      # stable CLI commit the image was built from.
+      - name: Resolve Command-package version
+        id: command-version
+        run: |
+          VERSION=$(node -p "require('./apps/cli/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved Command version: $VERSION"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            COMMAND_VERSION=${{ steps.command-version.outputs.version }}
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-production:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    environment: production
+    steps:
+      - name: Deploy to CapRover
+        uses: caprover/deploy-from-github@d76580d79952f6841c453bb3ed37ef452b19752c
+        with:
+          server: ${{ secrets.CAPROVER_HOST }}
+          app: ${{ vars.CAPROVER_APP }}
+          token: ${{ secrets.CAPROVER_APP_TOKEN }}
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Send feishu message
+        env:
+          ACTIONS_FEISHU_TAG: "v1.3.1"
+          INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
+          INPUT_MESSAGE_TYPE: "post"
+          INPUT_TITLE: Hub 测试环境更新 ✅ 成功
+          INPUT_CONTENT: |
+            部署结果: ✅ 成功
+            环境: Hub 测试环境
+            Image: ghcr.io/${{ github.repository }}:${{ github.sha }}
+            Commit: ${{ github.sha }}
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "${INPUT_WEBHOOK:-}" ]]; then
+            echo "::warning::RELEASE_BOT_URL is not configured; skipping Feishu notification."
+            exit 0
+          fi
+
+          if ! wget -q "https://github.com/xiachufang/actions-feishu/releases/download/${ACTIONS_FEISHU_TAG}/linux-amd64-actions-feishu.tar.gz"; then
+            echo "::warning::Failed to download actions-feishu."
+            exit 0
+          fi
+          if ! tar zxf linux-amd64-actions-feishu.tar.gz feishu; then
+            echo "::warning::Failed to extract actions-feishu."
+            exit 0
+          fi
+          if ! ./feishu; then
+            echo "::warning::Failed to send Feishu notification."
+          fi

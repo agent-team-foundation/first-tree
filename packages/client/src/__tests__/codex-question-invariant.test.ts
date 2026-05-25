@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionEvent } from "@first-tree/shared";
 import type { ThreadItem } from "@openai/codex-sdk";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -179,7 +179,6 @@ function buildSessionCtx(chatId: string, sent: CapturedSend[], events: CapturedE
     emitEvent: (event) => {
       events.push(event);
     },
-    reportSessionCompletion: () => {},
     ...mockCtxPlumbing({ sendMessage }, chatId),
   };
 }

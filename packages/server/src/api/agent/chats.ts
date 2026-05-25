@@ -1,12 +1,10 @@
-import {
-  addParticipantSchema,
-  createChatSchema,
-  paginationQuerySchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import { addParticipantSchema, createChatSchema, paginationQuerySchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
+import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
+import { WIRE_RECIPIENT_MODE } from "../../services/message-dispatcher.js";
 
 const log = createLogger("AgentChatsRoute");
 
@@ -45,7 +43,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    const detail = await chatService.getChatDetail(app.db, request.params.chatId);
+    const detail = await chatService.getChatDetail(app.db, request.params.chatId, identity.uuid);
     return {
       ...serializeChat(detail),
       participants: detail.participants.map((p) => ({
@@ -67,11 +65,16 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     return rows.map((r) => ({
       agentId: r.agentId,
       role: r.role,
-      mode: r.mode,
+      // v2: wire `mode` field is reserved for v3 cleanup; write the constant
+      // `WIRE_RECIPIENT_MODE` so already-deployed client runtimes that still
+      // parse the field see a stable value. No consumer reads this today.
+      mode: WIRE_RECIPIENT_MODE,
       name: r.name,
       displayName: r.displayName,
       type: r.type,
       joinedAt: r.joinedAt.toISOString(),
+      avatarColorToken: r.avatarColorToken ?? null,
+      avatarImageUrl: agentAvatarImageUrl(r.agentId, r.avatarImageUpdatedAt ?? null),
     }));
   });
 

@@ -1,63 +1,106 @@
 import {
+  CHAT_ENGAGEMENT_STATUSES,
+  type ChatParticipantDetail,
+  documentContextSchema,
   extractMentions,
   type MentionParticipant,
+  parseWorkspaceDocKey,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { getActivityOverview } from "../../../api/activity.js";
+import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, MoreHorizontal, Paperclip, X } from "lucide-react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { Components } from "react-markdown";
+import { useSearchParams } from "react-router";
+import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import {
   type FileMessageContent,
   getChat,
   type ImageRefContent,
   listChatMessages,
   type MessageWithDelivery,
+  type PaginatedMessages,
+  patchChatEngagement,
   readFileAsBase64,
   renameChat,
   sendChatMessage,
   sendFileMessage,
 } from "../../../api/chats.js";
 import { getImage, putImage } from "../../../api/image-store.js";
-import { addMeChatParticipants } from "../../../api/me-chats.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
 import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
   asErrorPayload,
-  asToolCallPayload,
   listSessionEvents,
   type SessionEventRow,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
+import { Avatar as RealAvatar } from "../../../components/avatar.js";
+import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
+import { GithubEventCardMessage, isGithubEventCardContent } from "../../../components/chat/github-event-card.js";
 import {
   isQuestionAnswerContent,
   isQuestionContent,
   QuestionMessage,
   type QuestionStatus,
 } from "../../../components/chat/question-message.js";
-import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
+import { WorkingBubble } from "../../../components/chat/working-bubble.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
-  ambiguousDisplayNames,
-  groupAndSortCandidates,
   MentionAutocompletePopover,
   type MentionCandidate,
-  MentionLabel,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
+import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
-import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+import { viewOf } from "../../../lib/agent-status-view.js";
+import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
+import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
+import { useOrgAgents } from "../../../lib/use-org-agents.js";
+import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
+import { computeRequiresMention } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
+import { ChatRightSidebar } from "../right-sidebar/index.js";
+
+const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
+
+function loadSidebarOpen(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveSidebarOpen(open: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, open ? "1" : "0");
+  } catch {
+    // localStorage may be unavailable (private mode); ignore.
+  }
+}
 
 function formatClockTime(iso: string): string {
   const d = new Date(iso);
@@ -70,21 +113,6 @@ function formatClockTime(iso: string): string {
   }).formatToParts(d);
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
-}
-
-function formatDuration(ms: number): string {
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${ms}ms`;
-}
-
-function previewArgs(args: unknown): string {
-  if (args === undefined || args === null) return "";
-  if (typeof args === "string") return args;
-  try {
-    return JSON.stringify(args);
-  } catch {
-    return "…";
-  }
 }
 
 function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: string | null }) {
@@ -112,77 +140,6 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
 }
 
 /**
- * Compact, single-line "status indicator" for a tool call. Per the chat-view
- * design, we don't show the tool's full args/result — only a "Using <name>…"
- * pulse while the turn is in progress. When the turn ends, the whole row is
- * hidden by the turn-grouping filter (see `activeSince` below).
- */
-function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
-  const payload = asToolCallPayload(event.payload);
-  if (!payload) return null;
-  const isErr = payload.status === "error";
-  const isPending = payload.status === "pending";
-  const color = isErr ? "var(--state-error)" : isPending ? "var(--state-blocked)" : "var(--fg-3)";
-  const verb = isErr ? "failed" : isPending ? "using" : "used";
-  return (
-    <div
-      className="mono flex items-center text-label"
-      style={{
-        gap: 8,
-        padding: "var(--sp-0_5) var(--sp-2)",
-        color: "var(--fg-3)",
-      }}
-    >
-      {isPending ? (
-        <span
-          aria-hidden
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            background: color,
-            animation: "heartbeat-pulse 1.2s ease-in-out infinite",
-            flexShrink: 0,
-            marginTop: 5,
-          }}
-        />
-      ) : (
-        <span aria-hidden style={{ color, flexShrink: 0 }}>
-          {isErr ? "⚠" : "↳"}
-        </span>
-      )}
-      <span
-        className="flex items-baseline"
-        style={{ color: "var(--fg-3)", minWidth: 0, flex: 1 }}
-        title={payload.args !== undefined && payload.args !== null ? previewArgs(payload.args) : undefined}
-      >
-        <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
-          {verb} <span style={{ color: "var(--fg-2)" }}>{payload.name}</span>
-        </span>
-        {payload.args !== undefined && payload.args !== null ? (
-          <span className="truncate" style={{ color: "var(--fg-4)", minWidth: 0, flex: 1 }}>
-            ({previewArgs(payload.args)})
-          </span>
-        ) : null}
-        {payload.durationMs !== undefined && !isPending ? (
-          <span
-            className="text-caption"
-            style={{
-              color: "var(--fg-4)",
-              marginLeft: 6,
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            · {formatDuration(payload.durationMs)}
-          </span>
-        ) : null}
-      </span>
-    </div>
-  );
-}
-
-/**
  * Intermediate assistant reply text surfaced while a turn is still running.
  * These rows are hidden by the turn-grouping filter once the turn ends —
  * the final result is delivered as a regular chat message.
@@ -190,10 +147,14 @@ function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
 function AssistantTextRow({
   event,
   agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
   agentId,
 }: {
   event: SessionEventRow;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
   agentId: string;
 }) {
   const payload = asAssistantTextPayload(event.payload);
@@ -209,7 +170,12 @@ function AssistantTextRow({
         opacity: 0.85,
       }}
     >
-      <Avatar name={senderName} isSelf={false} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(agentId)}
+        seed={agentId}
+        colorToken={agentColorTokenFn(agentId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
@@ -237,45 +203,13 @@ function AssistantTextRow({
   );
 }
 
-/**
- * Lightweight "Thinking…" pulse. The actual thinking content is never
- * transmitted — the backend emits a bare marker and we surface it as a
- * single-line status. Hidden once the turn ends.
- */
-function ThinkingRow({ event }: { event: SessionEventRow }) {
-  return (
-    <div
-      className="mono flex items-center text-label"
-      style={{
-        gap: 8,
-        padding: "var(--sp-0_5) var(--sp-2)",
-        color: "var(--fg-3)",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: "var(--accent)",
-          animation: "heartbeat-pulse 1.2s ease-in-out infinite",
-          flexShrink: 0,
-        }}
-      />
-      <span style={{ color: "var(--fg-3)" }}>thinking…</span>
-      <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-        {formatClockTime(event.createdAt)}
-      </span>
-    </div>
-  );
-}
-
 function ErrorRow({ event }: { event: SessionEventRow }) {
   const payload = asErrorPayload(event.payload);
   const ts = formatClockTime(event.createdAt);
   return (
     <div
+      // Anchor for the compose rail's jump-to-timeline (failed → this agent's error).
+      data-error-agent={event.agentId}
       style={{
         padding: "var(--sp-1_5) var(--sp-2_5)",
         borderLeft: "var(--hairline-bold) solid var(--state-error)",
@@ -300,26 +234,41 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
   );
 }
 
-function Avatar({ name, isSelf }: { name: string; isSelf: boolean }) {
-  const initials = name.slice(0, 2).toUpperCase();
+/**
+ * Small inline avatar used in the message timeline. Always renders via
+ * the shared `<Avatar>` component so every speaker — self, peer agents,
+ * humans — gets the same visual treatment: uploaded image when present,
+ * otherwise a hue-seeded color disc + first initial. `seed` is the
+ * sender's agent UUID, which makes the fallback color stable across
+ * reloads and identical to the left-rail `ChatRowAvatar` for the same
+ * agent.
+ *
+ * `name` is typed as required but accepts `undefined` defensively:
+ * `useAgentNameMap` should always return a string (uuid fallback), but a
+ * version-skewed backend can leak partial message rows where the wire
+ * `senderId` is missing entirely. Falling back to "?" keeps the timeline
+ * rendering instead of crashing the whole chat view.
+ */
+function Avatar({
+  name,
+  imageUrl,
+  seed,
+  colorToken,
+}: {
+  name: string;
+  imageUrl?: string | null;
+  seed?: string;
+  colorToken?: string | null;
+}) {
+  const safeName = name ?? "?";
   return (
-    <div
-      className="mono text-eyebrow font-bold"
-      style={{
-        width: 20,
-        height: 20,
-        borderRadius: "var(--radius-input)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        background: isSelf ? "linear-gradient(135deg, var(--accent), oklch(0.58 0.14 170))" : "var(--bg-active)",
-        border: isSelf ? "none" : "var(--hairline) solid var(--border-strong)",
-        color: isSelf ? "oklch(0.14 0.01 150)" : "var(--fg-2)",
-      }}
-    >
-      {isSelf ? initials : <FirstTreeLogo width={9} height={10} style={{ color: "var(--accent)" }} />}
-    </div>
+    <RealAvatar
+      src={imageUrl ?? null}
+      name={safeName}
+      seed={seed ?? safeName}
+      colorToken={colorToken ?? null}
+      size={20}
+    />
   );
 }
 
@@ -327,13 +276,112 @@ function TextRow({
   msg,
   myAgentId,
   agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
 }: {
   msg: MessageWithDelivery;
   myAgentId: string | null;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const slugToId = useAgentSlugToIdMap();
   const senderName = agentNameFn(msg.senderId);
   const isSelf = myAgentId === msg.senderId;
+  const docBasePath = documentBasePathFromMetadata(msg.metadata);
+  const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
+  // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
+  // user typed in the web composer (`source === "web"`) is left untouched
+  // so paths that humans write — code-fence walkthroughs, quoted snippets,
+  // intentional bare references — render exactly as authored. Only paths that
+  // this message actually carries a snapshot for get linkified, so a filename
+  // the agent only *mentions* in prose stays plain text instead of becoming a
+  // dead link — and every link that does render opens from cache without a
+  // server round-trip.
+  const textContent = useMemo<string | null>(() => {
+    if (msg.format !== "text" && msg.format !== "markdown") return null;
+    if (typeof msg.content !== "string") return JSON.stringify(msg.content);
+    if (msg.source === "web") return msg.content;
+    const snapshotPaths = new Set(docSnapshots?.keys() ?? []);
+    return linkifyMarkdownDocPaths(msg.content, snapshotPaths, msg.chatId);
+  }, [msg.format, msg.content, msg.source, msg.chatId, docSnapshots]);
+  const markdownComponents = useMemo<Components>(
+    () => ({
+      a({ href, children, ...props }) {
+        const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+          if (
+            !href ||
+            event.defaultPrevented ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.shiftKey
+          ) {
+            return;
+          }
+
+          const docPath = docPreviewPathFromHref(href);
+          if (!docPath) return;
+
+          event.preventDefault();
+          const next = new URLSearchParams(searchParams);
+          next.set("docChat", msg.chatId);
+          // Owner attribution for `docAgent`: a global cross-agent key
+          // `<ownerSlug>/<chatId>/…` (chatId segment === this chat) belongs to
+          // the OWNER, not the sender; self / legacy bare keys stay the sender.
+          // `docAgent` is only a hint here — the drawer authoritatively
+          // re-resolves the owner from the key's own slug for the path-based
+          // fallback (review P2-a), so an unresolved owner does NOT mis-query
+          // the sender's workspace; it just leaves this placeholder in the URL
+          // for `hasDocRef`. The inline snapshot path renders from cache
+          // regardless of `docAgent`.
+          const parsedKey = parseWorkspaceDocKey(docPath);
+          const ownerId =
+            parsedKey && parsedKey.chatId === msg.chatId
+              ? (slugToId(parsedKey.agentSlug) ?? msg.senderId)
+              : msg.senderId;
+          next.set("docAgent", ownerId);
+          next.set("docPath", docPath);
+
+          // Prefer the inline snapshot variant: hand the drawer the bytes via
+          // React Query cache (keyed by chat+message+path) and tag the URL
+          // with the source message id. Falls back to path-based legacy
+          // preview when the agent emitted only a `kind: "path"` context.
+          //
+          // Seed the ENTIRE message's docs[] in one shot — not just the
+          // clicked one — so when the drawer's internal markdown links jump
+          // between snapshots in the same message they still hit cache and
+          // avoid the legacy network round-trip.
+          const snapshot = docSnapshots?.get(docPath);
+          if (snapshot && docSnapshots) {
+            for (const entry of docSnapshots.values()) {
+              queryClient.setQueryData(docSnapshotQueryKey(msg.chatId, msg.id, entry.path), entry);
+            }
+            next.set("docMsg", msg.id);
+            next.delete("docBase");
+          } else {
+            next.delete("docMsg");
+            if (docBasePath) {
+              next.set("docBase", docBasePath);
+            } else {
+              next.delete("docBase");
+            }
+          }
+          setSearchParams(next);
+        };
+
+        return (
+          <a {...props} href={href} onClick={onClick} target="_blank" rel="noopener noreferrer">
+            {children}
+          </a>
+        );
+      },
+    }),
+    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams, slugToId],
+  );
 
   return (
     <div
@@ -345,7 +393,12 @@ function TextRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={isSelf} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
@@ -378,8 +431,10 @@ function TextRow({
             />
           ) : msg.format === "file" && isImageRefContent(msg.content) ? (
             <ImageFromRef content={msg.content} />
-          ) : msg.format === "text" ? (
-            <Markdown>{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}</Markdown>
+          ) : msg.format === "text" || msg.format === "markdown" ? (
+            <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
+          ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
+            <GithubEventCardMessage content={msg.content} />
           ) : (
             <pre
               className="mono text-label"
@@ -398,6 +453,38 @@ function TextRow({
       </div>
     </div>
   );
+}
+
+function documentBasePathFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
+  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
+  if (!parsed.success) return undefined;
+  // Only the path-based legacy variant exposes basePath; snapshot variants
+  // carry inline content rendered through a separate path.
+  return parsed.data.kind === "path" ? parsed.data.basePath : undefined;
+}
+
+export type DocSnapshotEntry = { path: string; content: string; sha256: string; size: number };
+
+/**
+ * For snapshot-variant `documentContext`, return a map from `docs[].path` to
+ * the snapshot record. Path-based or absent variants return `undefined`.
+ * The map keys match the raw href that the agent emitted, so the chat link
+ * click handler can use the clicked href directly as a lookup key.
+ */
+export function documentSnapshotMapFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Map<string, DocSnapshotEntry> | undefined {
+  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
+  if (!parsed.success || parsed.data.kind !== "snapshot") return undefined;
+  const map = new Map<string, DocSnapshotEntry>();
+  for (const doc of parsed.data.docs) {
+    map.set(doc.path, { path: doc.path, content: doc.content, sha256: doc.sha256, size: doc.size });
+  }
+  return map;
+}
+
+export function docSnapshotQueryKey(chatId: string, messageId: string, path: string): readonly unknown[] {
+  return ["chat-doc-snapshot", chatId, messageId, path] as const;
 }
 
 function isInlineImageContent(content: unknown): content is FileMessageContent {
@@ -471,6 +558,8 @@ function QuestionMessageRow({
   answer,
   status,
   agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
 }: {
   msg: MessageWithDelivery;
   chatId: string;
@@ -478,19 +567,31 @@ function QuestionMessageRow({
   answer: QuestionAnswerMessageContent | null;
   status: QuestionStatus;
   agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
 }) {
   const senderName = agentNameFn(msg.senderId);
   return (
     <div
       className="grid"
       data-message-id={msg.id}
+      // Anchors for the compose status bar's jump-to-timeline. The boolean
+      // flag drives the legacy "scroll to latest pending" path; the agent one
+      // lets the rail locate *this* agent's pending question by id.
+      data-pending-question={status === "pending" ? "true" : undefined}
+      data-pending-question-agent={status === "pending" ? msg.senderId : undefined}
       style={{
         gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf={false} />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0 flex flex-col" style={{ gap: "var(--sp-1)" }}>
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--accent)" }}>
@@ -508,7 +609,17 @@ function QuestionMessageRow({
 
 /** Compact recap row for `format=question_answer`. Mirrors the style of a
  *  user text reply but flagged so it's clear this came from the answer card. */
-function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; agentNameFn: (id: string) => string }) {
+function QuestionAnswerRow({
+  msg,
+  agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
+}: {
+  msg: MessageWithDelivery;
+  agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
+}) {
   const parsed = isQuestionAnswerContent(msg.content) ? msg.content : null;
   const senderName = agentNameFn(msg.senderId);
   const summary = parsed
@@ -526,7 +637,12 @@ function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; age
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar name={senderName} isSelf />
+      <Avatar
+        name={senderName}
+        imageUrl={agentAvatarFn(msg.senderId)}
+        seed={msg.senderId}
+        colorToken={agentColorTokenFn(msg.senderId)}
+      />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span className="mono text-body font-semibold" style={{ color: "var(--fg)" }}>
@@ -547,15 +663,10 @@ function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; age
   );
 }
 
-type PendingImage = {
-  id: string;
-  file: File;
-  previewUrl: string;
-};
-
 type TimelineItem =
   | { kind: "message"; at: string; key: string; data: MessageWithDelivery }
-  | { kind: "event"; at: string; key: string; data: SessionEventRow };
+  | { kind: "event"; at: string; key: string; data: SessionEventRow }
+  | { kind: "workgroup"; at: string; key: string; events: SessionEventRow[] };
 
 /**
  * Renders a small "↗ View on GitHub" link beside the chat title when the chat
@@ -612,14 +723,102 @@ export function ChatView({
   };
 }) {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const agentName = useAgentNameMap();
   const agentIdentity = useAgentIdentityMap();
-  const { agentId: myAgentId } = useAuth();
+  /**
+   * Avatar URL resolver derived from the identity map: returns the
+   * sender's resolved avatar (uploaded agent image, or — for human
+   * agents — the backing user's GitHub avatar). `null` when the agent
+   * is missing from the identity map or has no avatar; the timeline
+   * row's `<Avatar>` then falls back to a hue-seeded color disc +
+   * initial.
+   */
+  const agentAvatar = useCallback((id: string) => agentIdentity(id)?.avatarImageUrl ?? null, [agentIdentity]);
+  /**
+   * Manager-selected hue override (`hue-0..7`) for the sender. `null`
+   * when no override is set, in which case the fallback hue is derived
+   * from a deterministic djb2 hash on the agent UUID. Threading this
+   * through the timeline keeps a manager's color choice in sync with
+   * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
+   */
+  const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
+  const { agentId: myAgentId, memberId: myMemberId } = useAuth();
   const [draft, setDraft] = useState("");
   const [cursor, setCursor] = useState(0);
-  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
+    onError: setUploadError,
+    // Dismiss a stale upload error (e.g. "image too large") the moment the
+    // user adds or removes an image — they're already fixing it.
+    onChange: () => setUploadError(null),
+  });
+  // Right-rail visibility — defaults to hidden so the chat area gets the
+  // full reading column; user opens via the header icon and the choice
+  // persists across chats (a global preference, not per-chat).
+  const [showSidebar, setShowSidebar] = useState<boolean>(loadSidebarOpen);
+  useEffect(() => {
+    saveSidebarOpen(showSidebar);
+  }, [showSidebar]);
+  // Doc-preview opens to the right of chat-view (mounted at workspace level);
+  // we render two right rails on the same row, so when the user clicks a doc
+  // link we collapse this sidebar to give the preview the right slot it
+  // expects. Stash whether the sidebar was visible at the moment doc-preview
+  // opened so we can auto-restore it when the preview closes — the user did
+  // not ask to dismiss the sidebar, they only opened a doc.
+  const hasDocPreview = Boolean(searchParams.get("docChat") && searchParams.get("docPath"));
+  const sidebarBeforeDocPreviewRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (hasDocPreview) {
+      if (sidebarBeforeDocPreviewRef.current === null) {
+        sidebarBeforeDocPreviewRef.current = showSidebar;
+        if (showSidebar) setShowSidebar(false);
+      }
+    } else if (sidebarBeforeDocPreviewRef.current !== null) {
+      const restore = sidebarBeforeDocPreviewRef.current;
+      sidebarBeforeDocPreviewRef.current = null;
+      if (restore) setShowSidebar(true);
+    }
+  }, [hasDocPreview, showSidebar]);
+  const toggleSidebar = useCallback(() => {
+    // When doc-preview is open the sidebar icon means "swap to chat
+    // details": close the preview AND open the sidebar in one click.
+    // Without this branch the click would only flip showSidebar, which
+    // the auto-restore effect above would immediately revert because
+    // hasDocPreview is still true.
+    if (hasDocPreview) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("docChat");
+      next.delete("docAgent");
+      next.delete("docPath");
+      next.delete("docBase");
+      next.delete("docMsg");
+      setSearchParams(next, { replace: true });
+      sidebarBeforeDocPreviewRef.current = true;
+      return;
+    }
+    setShowSidebar((v) => !v);
+  }, [hasDocPreview, searchParams, setSearchParams]);
+  // Esc closes the rail when it's open AND the focus is not inside an
+  // editable element (textarea / input). Otherwise pressing Esc to
+  // dismiss an IME composition or clear a draft would unexpectedly
+  // collapse the rail too. Skip while doc-preview owns the right rail —
+  // its own component handles Esc to close itself.
+  useEffect(() => {
+    if (!showSidebar || hasDocPreview) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        const tag = active.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || active.isContentEditable) return;
+      }
+      setShowSidebar(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [hasDocPreview, showSidebar]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -675,6 +874,13 @@ export function ChatView({
   // surface as an error to the user; on IndexedDB unavailability it
   // silently no-ops.
   //
+  // FOLLOW-UP: this loads only the latest 50 messages (no pagination) and
+  // the events query below only the primary agent's events. The status
+  // surfaces' "jump to timeline" gates clickability on what's actually
+  // mounted (useMountedAnchors), so older / non-primary-agent anchors
+  // simply aren't clickable yet. Full jump coverage needs message
+  // pagination + multi-agent event loading — tracked as a separate effort.
+  //
   // TODO(perf): the write-through re-upserts all 50 messages every 5s
   // (~600 idempotent IDB puts/min/chat). Functionally correct because
   // upsert is keyed by [chatId, messageId], but most writes overwrite
@@ -698,23 +904,87 @@ export function ChatView({
   const { data: eventsData } = useQuery({
     queryKey: ["session-events", agentId, chatId],
     queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
-    refetchInterval: 5_000,
   });
 
-  const { data: chatDetail } = useQuery({
+  const { data: chatDetail, isLoading: chatDetailLoading } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
   });
 
-  /** Org-wide agent list for the `@` picker. We surface every agent the
-   *  user can address — not just current chat participants — so `@`-ing
-   *  someone outside the chat acts as both an invite and a mention. */
-  const { data: activity } = useQuery({
-    queryKey: ["activity"],
-    queryFn: getActivityOverview,
-    refetchInterval: 15_000,
-  });
+  /** Org-wide agent list, consumed only by the ParticipantsHeader `[+]`
+   *  dropdown via `addableCandidates`. The `@` autocomplete is
+   *  membership-scoped (`mentionCandidates` below) and does NOT read
+   *  from this list — inviting a new agent goes through the `[+]`
+   *  button explicitly, not through `@<outsider>`. Also feeds
+   *  `managedByMeMap` for picker grouping.
+   *
+   *  Shared with the identity-map hooks (`useAgentIdentityMap` etc.) via
+   *  `useOrgAgents` — single React Query cache, one HTTP fetch per
+   *  refetch tick. See issue 495. */
+  const { data: orgAgentsPage } = useOrgAgents();
+
+  /**
+   * Optimistic-update helpers for the messages cache. Wrap setQueryData so
+   * the POST-then-refetch round trip doesn't gate the user's own message
+   * from appearing above the composer — we render a `pending` row instantly
+   * and reconcile with the server's row once the request resolves. Shared
+   * between text-only (sendMut) and the image upload path (handleSend).
+   *
+   * The query key is memoized so the three useCallback wrappers below get a
+   * stable reference (otherwise a new `[...]` literal every render would
+   * invalidate the callbacks on every parent re-render).
+   */
+  const messagesQueryKey = useMemo(() => ["chat-messages", chatId] as const, [chatId]);
+  const insertOptimisticMessage = useCallback(
+    (msg: MessageWithDelivery) => {
+      queryClient.setQueryData<PaginatedMessages>(messagesQueryKey, (prev) => ({
+        items: [...(prev?.items ?? []), msg],
+        nextCursor: prev?.nextCursor ?? null,
+      }));
+    },
+    [queryClient, messagesQueryKey],
+  );
+  const replaceOptimisticMessage = useCallback(
+    (tempId: string, saved: MessageWithDelivery) => {
+      queryClient.setQueryData<PaginatedMessages>(messagesQueryKey, (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          items: prev.items.map((m) => (m.id === tempId ? { ...saved, deliveryStatus: "sent" as const } : m)),
+        };
+      });
+    },
+    [queryClient, messagesQueryKey],
+  );
+  const removeOptimisticMessages = useCallback(
+    (tempIds: ReadonlySet<string>) => {
+      if (tempIds.size === 0) return;
+      queryClient.setQueryData<PaginatedMessages>(messagesQueryKey, (prev) => {
+        if (!prev) return prev;
+        return { ...prev, items: prev.items.filter((m) => !tempIds.has(m.id)) };
+      });
+    },
+    [queryClient, messagesQueryKey],
+  );
+  const buildOptimisticTextMessage = useCallback(
+    (text: string): MessageWithDelivery | null => {
+      if (!myAgentId) return null;
+      return {
+        id: `optimistic-${crypto.randomUUID()}`,
+        chatId,
+        senderId: myAgentId,
+        format: "text",
+        content: text,
+        metadata: {},
+        inReplyTo: null,
+        source: "web",
+        createdAt: new Date().toISOString(),
+        deliveryStatus: "pending",
+      };
+    },
+    [chatId, myAgentId],
+  );
 
   // Pre-advance target for the session high water: the id of a
   // message the USER just sent (text-only or file path). The actual
@@ -743,9 +1013,21 @@ export function ChatView({
 
   const sendMut = useMutation({
     mutationFn: (content: string) => sendChatMessage(chatId, content),
-    onSuccess: (sentMessage) => {
+    // Optimistic insert: render the user's row above the composer immediately
+    // and clear the draft so the input feels responsive even when the POST
+    // round-trip + follow-up GET take 1–2s. The ctx returned here is threaded
+    // to onError / onSuccess so we can reconcile with the server row.
+    onMutate: async (content: string) => {
+      await queryClient.cancelQueries({ queryKey: messagesQueryKey });
+      const previousDraft = draft;
       setDraft("");
-      queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
+      const optimistic = buildOptimisticTextMessage(content);
+      if (!optimistic) return { tempId: null, previousDraft };
+      insertOptimisticMessage(optimistic);
+      return { tempId: optimistic.id, previousDraft };
+    },
+    onSuccess: (saved, _content, ctx) => {
+      if (ctx?.tempId) replaceOptimisticMessage(ctx.tempId, saved);
       // Refresh the workspace sidebar the moment the message is durable —
       // server's predictive Step 1b (in services/message.ts) just upserted an
       // `active` agent_chat_sessions row, so the new chat now satisfies the
@@ -758,23 +1040,23 @@ export function ChatView({
       // the `chatId` captured in this closure at send time. The
       // direct write makes the snapshot durable even if the user
       // switches chats before the tracker's debounce window
-      // settles. The just-sent message is, under UUID v7, also the
-      // chat tip — so `latestKnownMessageId = sentMessage.id` is
-      // both the visual anchor and the freshness marker.
+      // settles. The just-sent message is also the chat tip — so
+      // `latestKnownMessageId = saved.id` is both the visual anchor
+      // and the freshness marker.
       const ownSendReadState: ReadState = {
         chatId,
-        bottomVisibleMessageId: sentMessage.id,
-        latestKnownMessageId: sentMessage.id,
+        bottomVisibleMessageId: saved.id,
+        latestKnownMessageId: saved.id,
         updatedAt: Date.now(),
       };
       queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
-      void setReadState(chatId, sentMessage.id, sentMessage.id);
+      void setReadState(chatId, saved.id, saved.id);
       // Pre-advance the in-memory high water to the new message id
       // BEFORE initiating the smooth scroll. By the time the new
       // message commits to `mergedMessages`, `sessionHighestIdx`
       // already resolves to the new last index → `pillCount = 0` →
       // pill never flashes for the user's own send.
-      setPendingHighWaterAdvance({ chatId, messageId: sentMessage.id });
+      setPendingHighWaterAdvance({ chatId, messageId: saved.id });
       // When the user sends a message, scroll all the way to the
       // bottom so they see their own send. ResizeObserver-debounced
       // (non-immediate) variant so the scroll lands after the
@@ -783,66 +1065,81 @@ export function ChatView({
       // and the user's just-sent message would arrive off-screen.
       scrollToBottom("smooth");
     },
+    // Server-side `enforceGroupMention` + unresolved-token guard 400s
+    // (e.g. user typed `@<outsider>` who's not in the chat) surface here.
+    // Client no longer pre-flights — unresolved `@<token>` is treated as
+    // plain text locally; the round-trip is the user's notification.
+    onError: (err, _content, ctx) => {
+      setUploadError(err instanceof Error ? err.message : "Failed to send message");
+      if (ctx?.tempId) removeOptimisticMessages(new Set([ctx.tempId]));
+      // Put the rejected text back so the user can edit and retry without
+      // re-typing — but only if the user hasn't already started typing
+      // something new during the in-flight window. Setting `previousDraft`
+      // unconditionally would overwrite the new keystrokes (PR review
+      // observation #1). Functional setState reads the latest draft inside
+      // React's commit so we don't race the textarea's controlled value.
+      if (ctx?.previousDraft) setDraft((current) => (current === "" ? ctx.previousDraft : current));
+    },
+    // Resync against the server in the background so any fan-out side-effects
+    // (e.g. server-rewritten content, mention resolution) eventually overwrite
+    // our optimistic snapshot.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: messagesQueryKey });
+    },
   });
-
-  const addImages = useCallback((files: File[]) => {
-    const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // Claude API per-image limit
-    const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-    if (imageFiles.length === 0) return;
-
-    const oversized = imageFiles.find((f) => f.size > MAX_IMAGE_SIZE);
-    if (oversized) {
-      setUploadError(
-        `Image too large (${(oversized.size / 1024 / 1024).toFixed(1)}MB). Maximum ${MAX_IMAGE_SIZE / 1024 / 1024}MB per image.`,
-      );
-      return;
-    }
-
-    const newImages: PendingImage[] = imageFiles.map((file) => ({
-      id: crypto.randomUUID(),
-      file,
-      previewUrl: URL.createObjectURL(file),
-    }));
-    setPendingImages((prev) => [...prev, ...newImages]);
-    setUploadError(null);
-  }, []);
-
-  const removeImage = useCallback((id: string) => {
-    setPendingImages((prev) => {
-      const img = prev.find((i) => i.id === id);
-      if (img) URL.revokeObjectURL(img.previewUrl);
-      return prev.filter((i) => i.id !== id);
-    });
-  }, []);
 
   const handleSend = async () => {
     const text = draft.trim();
     const images = pendingImages;
     if (!text && images.length === 0) return;
     if (uploading) return;
+
+    // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
+    // doesn't resolve to a chat member is treated as plain text, matching
+    // Slack/Discord/Feishu. This avoids false positives like npm scoped
+    // package names (`@scope/pkg`) or quoted handles in the body. The
+    // `enforceGroupMention` constraint (group chat must address at least
+    // one member) is reflected via `requiresMention` + `draftMentions`
+    // gating the send button below — `extractMentions` resolves only
+    // against in-chat membership, so an `@<outsider>` simply contributes
+    // nothing and the button stays disabled, prompting the user to use
+    // the `[+]` button or the autocomplete picker.
+
     // Group-chat send guard: don't fire requests we know the server (with
     // proposal §3 enforcement) or downstream `mention_only` agents will drop.
-    if (requiresMention && draftMentions.length === 0) return;
-
-    // "Mention to invite": any `@<name>` pointing at an agent outside the
-    // current chat is treated as both an address and an invitation. We add
-    // them first so by the time the message is processed, the server's
-    // `extractMentions` resolves successfully and direct-chats auto-upgrade
-    // to groups via the server's `changeChatType` service. Idempotent on
-    // the server.
-    if (draftOutsiders.length > 0) {
-      try {
-        await addMeChatParticipants(chatId, { participantIds: draftOutsiders });
-        await queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
-      } catch (err) {
-        setUploadError(err instanceof Error ? err.message : "Failed to add participants");
-        return;
+    // Applies to image-only sends too — the server-side mention check runs
+    // per message regardless of format, so an image without an addressee
+    // would 400 just like a text without an addressee (issue 387). Surface
+    // a hint when the user has only attached images so the silent-return
+    // doesn't look like a stuck send.
+    if (requiresMention && draftMentions.length === 0) {
+      if (images.length > 0) {
+        // English matches the other uploadError strings in this file
+        // (Failed to send image / Failed to add participants / Image too large).
+        setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
       }
+      return;
     }
 
     if (images.length > 0) {
       setUploading(true);
       setUploadError(null);
+      // Carry the text-draft mentions onto each image message so the
+      // server's group-chat mention guard (services/message.ts) accepts
+      // file-format sends. Without this, every image POST is missing
+      // recipient mentions and 400s before the text message is sent
+      // (issue 387). In direct chats `draftMentions` is empty and the
+      // metadata field is omitted entirely — server check is skipped
+      // anyway, so this is a no-op for 1:1.
+      const imageMetadata = draftMentions.length > 0 ? { mentions: draftMentions } : undefined;
+      // Snapshot draft + clear inputs up front so the composer feels instant.
+      // Optimistic rows render into the cache below; rollback restores both
+      // the textarea draft and any not-yet-acked optimistic tempIds on error.
+      const previousDraft = draft;
+      setDraft("");
+      clearImages();
+      await queryClient.cancelQueries({ queryKey: messagesQueryKey });
+      const pendingTempIds = new Set<string>();
       try {
         // Track the latest server-returned message id across the
         // sequence of file POSTs (and the optional trailing text
@@ -857,26 +1154,66 @@ export function ChatView({
           // its own message via the imageRef shape immediately on refetch,
           // even if the server write races ahead of the response.
           await putImage({ imageId, base64: data, mimeType: img.file.type });
-          const fileMsg = await sendFileMessage(chatId, {
-            data,
-            mimeType: img.file.type,
-            filename: img.file.name,
-            size: img.file.size,
-            imageId,
-          });
-          lastSentMessageId = fileMsg.id;
+          let tempId: string | null = null;
+          if (myAgentId) {
+            const imageRef: ImageRefContent = {
+              imageId,
+              mimeType: img.file.type,
+              filename: img.file.name,
+              size: img.file.size,
+            };
+            const optimistic: MessageWithDelivery = {
+              id: `optimistic-${crypto.randomUUID()}`,
+              chatId,
+              senderId: myAgentId,
+              format: "file",
+              content: imageRef,
+              metadata: imageMetadata ?? {},
+              inReplyTo: null,
+              source: "web",
+              createdAt: new Date().toISOString(),
+              deliveryStatus: "pending",
+            };
+            tempId = optimistic.id;
+            pendingTempIds.add(tempId);
+            insertOptimisticMessage(optimistic);
+          }
+          const saved = await sendFileMessage(
+            chatId,
+            {
+              data,
+              mimeType: img.file.type,
+              filename: img.file.name,
+              size: img.file.size,
+              imageId,
+            },
+            imageMetadata,
+          );
+          if (tempId) {
+            replaceOptimisticMessage(tempId, saved);
+            pendingTempIds.delete(tempId);
+          }
+          lastSentMessageId = saved.id;
           URL.revokeObjectURL(img.previewUrl);
         }
-        setPendingImages([]);
         if (text) {
-          const textMsg = await sendChatMessage(chatId, text);
-          lastSentMessageId = textMsg.id;
+          const optimistic = buildOptimisticTextMessage(text);
+          const tempId = optimistic?.id ?? null;
+          if (optimistic && tempId) {
+            pendingTempIds.add(tempId);
+            insertOptimisticMessage(optimistic);
+          }
+          const saved = await sendChatMessage(chatId, text);
+          if (tempId) {
+            replaceOptimisticMessage(tempId, saved);
+            pendingTempIds.delete(tempId);
+          }
+          lastSentMessageId = saved.id;
         }
-        setDraft("");
-        queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
-        // Mirror sendMut.onSuccess: predictive session-activation only shows
+        // Mirror sendMut.onSettled: predictive session-activation only shows
         // up in the sidebar after we invalidate, otherwise the file-send path
         // for the first message in a new chat waits for 10s polling.
+        queryClient.invalidateQueries({ queryKey: messagesQueryKey });
         queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
         // Pre-advance the high water before the smooth scroll for
         // the same reason as in sendMut.onSuccess — pill never
@@ -900,6 +1237,14 @@ export function ChatView({
         scrollToBottom("smooth");
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Failed to send image");
+        // Roll back unacknowledged optimistic rows + restore the draft so the
+        // user can retry. Already-acked rows have been swapped to real ids by
+        // replaceOptimisticMessage and are no longer in pendingTempIds.
+        removeOptimisticMessages(pendingTempIds);
+        // Only restore the pre-send draft if the user hasn't already started
+        // typing something new during the upload window (PR review
+        // observation #1).
+        if (previousDraft) setDraft((current) => (current === "" ? previousDraft : current));
       } finally {
         setUploading(false);
       }
@@ -929,11 +1274,27 @@ export function ChatView({
     renameMut.mutate(trimmed.length > 0 ? trimmed : null);
   };
 
+  // Deleted chats have no row in the conversation list — this banner is the
+  // sole recovery entry point.
+  const restoreMut = useMutation({
+    mutationFn: () => patchChatEngagement(chatId, CHAT_ENGAGEMENT_STATUSES.ACTIVE),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
+      queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
+    },
+  });
+
   /**
    * Timeline composition: messages (real chat rows, including the forwarded
    * final result) are always visible; transient events go through the
    * turn-grouping filter so completed turns collapse to just their result
    * message. See `filterEventsForTimeline` for the full rules.
+   *
+   * Second pass collapses adjacent `tool_call` + `thinking` rows into a
+   * single `workgroup` entry — these become the inline WorkingBubble. Any
+   * non-bubble item (message, assistant_text, error) flushes the current
+   * bucket, so intermediate streamed text stays visible as its own row
+   * even when surrounded by tool calls.
    */
   // Merge cached + server messages, dedup by id (server wins so updated
   // delivery status / metadata overrides any older cached copy), and
@@ -977,14 +1338,56 @@ export function ChatView({
   }, [cachedMessages, messagesData]);
 
   const items: TimelineItem[] = useMemo(() => {
-    const visibleEvents = filterEventsForTimeline(eventsData?.items ?? []);
+    const rawEvents = eventsData?.items ?? [];
+    const visibleEvents = filterEventsForTimeline(rawEvents);
 
-    const out: TimelineItem[] = [
+    // Turn id = the seq of the last turn_end seen across all events, including
+    // ones filterEventsForTimeline dropped. Every visible transient event has
+    // seq > lastTurnEndSeq, so each turn gets a unique stable anchor that
+    // survives toolUseId dedupe (where individual event ids change as
+    // pending → final updates flow in). Used to build remount-safe bubble
+    // keys so the user's manual open/closed toggle isn't reset when a single
+    // tool call's pending row gets replaced by its final-status row.
+    let lastTurnEndSeq = -1;
+    for (const e of rawEvents) {
+      if (e.kind === "turn_end" && e.seq > lastTurnEndSeq) lastTurnEndSeq = e.seq;
+    }
+
+    // Feed `mergedMessages` (IDB cache ∪ server) into the timeline, not the
+    // raw server window. Otherwise cached messages outside the server's
+    // "last 50" window would silently disappear on chat re-open until the
+    // server fetch lands.
+    const flat: TimelineItem[] = [
       ...mergedMessages.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
       ...visibleEvents.map((e) => ({ kind: "event" as const, at: e.createdAt, key: `e-${e.id}`, data: e })),
     ];
-    out.sort((a, b) => a.at.localeCompare(b.at));
-    return out;
+    flat.sort((a, b) => a.at.localeCompare(b.at));
+
+    const grouped: TimelineItem[] = [];
+    let bucket: SessionEventRow[] = [];
+    let bucketIndex = 0;
+    const flushBucket = () => {
+      const first = bucket[0];
+      if (!first) return;
+      grouped.push({
+        kind: "workgroup",
+        at: first.createdAt,
+        key: `wg-${lastTurnEndSeq}-${bucketIndex}`,
+        events: bucket,
+      });
+      bucketIndex += 1;
+      bucket = [];
+    };
+    for (const item of flat) {
+      if (item.kind === "event" && (item.data.kind === "tool_call" || item.data.kind === "thinking")) {
+        bucket.push(item.data);
+        continue;
+      }
+      flushBucket();
+      grouped.push(item);
+    }
+    flushBucket();
+    return grouped;
   }, [mergedMessages, eventsData]);
 
   /**
@@ -1413,73 +1816,195 @@ export function ChatView({
     prevCountsRef.current = { chatId, itemCount, messagesCount: mergedMessages.length };
   }, [chatId, itemCount, mergedMessages.length, isAtBottom, scrollToBottom]);
 
-  const displayName = agentName(agentId);
-
-  /** Set of agentIds currently in the chat. Used to (a) detect "outsiders"
-   *  the user `@`-mentions and (b) skip the redundant addParticipants call
-   *  when everyone they mention is already in the room. */
-  const chatParticipantIds = useMemo(() => {
-    return new Set(chatDetail?.participants?.map((p) => p.agentId) ?? []);
+  /**
+   * Chat-scoped identity index. The chat detail endpoint resolves each
+   * participant's `name / displayName / type` via JOIN `agents` without
+   * applying `agentVisibilityCondition`, so private agents that are
+   * members of this chat carry their real labels here — the identity
+   * map (`useAgentNameMap` / `useAgentIdentityMap`) goes through the
+   * org-scoped `/agents` endpoint and would drop them. The chat
+   * membership is the authoritative trust boundary for in-chat identity
+   * rendering; see
+   * `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.3.3.
+   */
+  const chatParticipantById = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        name: string | null;
+        displayName: string;
+        avatarImageUrl: string | null;
+        avatarColorToken: string | null;
+      }
+    >();
+    for (const p of chatDetail?.participants ?? []) {
+      map.set(p.agentId, {
+        name: p.name,
+        displayName: p.displayName,
+        avatarImageUrl: p.avatarImageUrl ?? null,
+        avatarColorToken: p.avatarColorToken ?? null,
+      });
+    }
+    return map;
   }, [chatDetail?.participants]);
 
-  // Mention autocomplete candidates: every org agent the user might address,
-  // resolved to their `{name, displayName}` via the shared identity map.
-  // Includes BOTH chat participants and outsiders — picking an outsider
-  // implicitly invites them via `addMeChatParticipants` at send time, which
-  // turns a 1:1 into a group server-side. Self is excluded; any agent
-  // without a slug (`name`) is skipped because mentions need one — even
-  // current chat participants. This is intentional: the server's
-  // `extractMentions` matches `@<token>` against `agents.name`, so a
-  // participant with `name=null` (legacy / soft-deleted row) cannot be
-  // addressed via `@` regardless. They still show in `ParticipantsHeader`
-  // chips (which uses `agentIdentity.displayName`); the picker just won't
-  // offer them. Fixing this requires the server to backfill missing
-  // `agents.name`, not a client-side workaround.
+  /**
+   * Resolve an agentId to a display label, preferring the chat-scoped
+   * participant index over the org-visibility-filtered identity map.
+   * Falls back to the identity map for senders that are no longer in
+   * the chat (e.g. historical messages after a future remove flow lands)
+   * and to the raw UUID prefix as a last resort.
+   */
+  const chatScopedAgentName = useCallback(
+    (id: string | null | undefined): string => {
+      if (!id) return "—";
+      const p = chatParticipantById.get(id);
+      if (p) return p.displayName;
+      return agentName(id);
+    },
+    [chatParticipantById, agentName],
+  );
+
+  /**
+   * Identity-pair variant used by the participant chip row and the
+   * mention picker. Same precedence rule as `chatScopedAgentName`.
+   */
+  const chatScopedAgentIdentity = useCallback(
+    (
+      id: string | null | undefined,
+    ): {
+      name: string | null;
+      displayName: string;
+      avatarImageUrl: string | null;
+      avatarColorToken: string | null;
+    } | null => {
+      if (!id) return null;
+      const p = chatParticipantById.get(id);
+      if (p) {
+        // Labels come from the chat-membership-authoritative source. The
+        // avatar fields are now projected onto `ChatParticipantDetail`
+        // too (server JOIN on agents), so prefer the chat-scoped value
+        // and only fall back to the org-scoped identity map when the
+        // chat row is missing them (older server build, version skew).
+        const ident = agentIdentity(id);
+        return {
+          name: p.name,
+          displayName: p.displayName,
+          avatarImageUrl: p.avatarImageUrl ?? ident?.avatarImageUrl ?? null,
+          avatarColorToken: p.avatarColorToken ?? ident?.avatarColorToken ?? null,
+        };
+      }
+      return agentIdentity(id);
+    },
+    [chatParticipantById, agentIdentity],
+  );
+
+  const displayName = chatScopedAgentName(agentId);
+
+  // `managedByMe` is `managerId === myMemberId`, derived client-side
+  // from the `listAgents` response (the row carries `managerId`). Drives
+  // the picker's "mine / others" grouping. Agents that appear only via
+  // `chatDetail.participants` and not in the org-agents page default to
+  // false, so a caller's own private agent in another org could land in
+  // the "teammates" group — grouping is a visual hint, not a security
+  // boundary, so we accept that fidelity loss.
+  const managedByMeMap = useMemo(() => {
+    const m = new Map<string, boolean>();
+    if (!myMemberId) return m;
+    for (const a of orgAgentsPage?.items ?? []) m.set(a.uuid, a.managerId === myMemberId);
+    return m;
+  }, [orgAgentsPage?.items, myMemberId]);
+
+  // Mention autocomplete candidates: strictly the agents currently in
+  // THIS chat (minus self). Driving the `@` popover and `extractMentions`
+  // off membership — instead of org-wide discovery — keeps the picker
+  // focused on the people who'll actually receive the message. To pull
+  // a new agent into the conversation, use the ParticipantsHeader `[+]`
+  // button (which is fed by `addableCandidates` below). Any participant
+  // without a slug (`name`) is skipped — mentions need one. Private
+  // agents in the chat surface here because membership, not discovery,
+  // is the source of truth.
   const mentionCandidates = useMemo<MentionCandidate[]>(() => {
+    const out: MentionCandidate[] = [];
+    for (const p of chatDetail?.participants ?? []) {
+      if (p.agentId === myAgentId) continue;
+      const ident = chatScopedAgentIdentity(p.agentId);
+      if (!ident || !ident.name) continue;
+      out.push({
+        agentId: p.agentId,
+        name: ident.name,
+        displayName: ident.displayName,
+        managedByMe: managedByMeMap.get(p.agentId) ?? false,
+      });
+    }
+    return out;
+  }, [chatDetail?.participants, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
+
+  // Candidates for the ParticipantsHeader `[+]` add-member dropdown:
+  // every agent the user might invite, union of current members and
+  // org-wide discoverable agents from `/orgs/:orgId/agents`. The
+  // dropdown filters out already-joined participants internally, so we
+  // pass the union and let it compute `outsideCandidates`. Self is
+  // excluded; missing slug is skipped. Suspended rows are excluded so
+  // the picker never offers a row the server would refuse on add.
+  //
+  // Identity resolution: prefer the shared `useAgentIdentityMap`, fall
+  // back to the raw `listAgents` row when the map hasn't resolved yet.
+  // Both surfaces are fed by `listAgents` ultimately, so the window is
+  // short, but on a brand-new teammate's first paint the identity map
+  // may not have indexed them yet — without the fallback they'd briefly
+  // drop out of the picker. Mirrors the fallback pattern in
+  // `new-chat-draft.tsx`.
+  const addableCandidates = useMemo<MentionCandidate[]>(() => {
+    const orgRowById = new Map<string, { name: string | null; displayName: string }>();
+    for (const a of orgAgentsPage?.items ?? []) {
+      if (a.status === "suspended") continue;
+      orgRowById.set(a.uuid, { name: a.name, displayName: a.displayName });
+    }
     const ids = new Set<string>();
     for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
-    for (const a of activity?.agents ?? []) ids.add(a.agentId);
+    for (const id of orgRowById.keys()) ids.add(id);
     if (ids.size === 0) ids.add(agentId);
-    // Build a lookup from `/activity` so we can attach `managedByMe`
-    // per candidate. Known limitation: agents that appear only via
-    // `chatDetail.participants` (no runtime presence row, e.g. an
-    // autonomous agent that has never been bound to a client) default
-    // to false. That means a caller's own offline agent can be
-    // misclassified into the "teammates" group of the [+] picker.
-    // The picker grouping is a visual hint, not a security boundary,
-    // so we accept this fidelity loss rather than widen `/activity`'s
-    // shape (which is also consumed by roster / team / clients pages).
-    // To revisit: surface `managedByMe` independently of runtime via a
-    // dedicated `/me/managed-agents` endpoint and intersect here.
-    const managedByMeMap = new Map<string, boolean>();
-    for (const a of activity?.agents ?? []) managedByMeMap.set(a.agentId, a.managedByMe);
     const out: MentionCandidate[] = [];
     for (const id of ids) {
       if (id === myAgentId) continue;
-      const ident = agentIdentity(id);
-      if (!ident || !ident.name) continue;
+      const ident = chatScopedAgentIdentity(id);
+      const orgRow = orgRowById.get(id);
+      const name = ident?.name ?? orgRow?.name ?? null;
+      if (!name) continue;
+      const displayName = ident?.displayName ?? orgRow?.displayName ?? null;
       out.push({
         agentId: id,
-        name: ident.name,
-        displayName: ident.displayName,
+        name,
+        displayName,
         managedByMe: managedByMeMap.get(id) ?? false,
       });
     }
     return out;
-  }, [chatDetail?.participants, activity?.agents, agentId, agentIdentity, myAgentId]);
+  }, [chatDetail?.participants, orgAgentsPage?.items, agentId, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
 
   /**
-   * "Needs explicit @mention" guard: a real group, OR a direct chat where the
-   * current user isn't yet a participant (their first send promotes it to a
-   * 3-person group). In both cases an unaddressed message would be silently
-   * dropped by `mention_only` peers and the server now rejects it with 400.
-   * See proposals/group-chat-ux-improvements §2.
+   * "Needs explicit @mention" guard: a real group (3+ speakers), OR a 1-on-1
+   * where the current user isn't yet a participant (their first send promotes
+   * it to a 3-person group). In both cases an unaddressed message would be
+   * silently dropped by `mention_only` peers and the server rejects it with
+   * 400. See proposals/group-chat-ux-improvements §2.
+   *
+   * Keyed on **membership shape**, not `chats.type`. Since the group-chat
+   * convergence (first-tree PR 465 / first-tree-context PR 281) every chat
+   * is created with `type='group'`, so the old `chatDetail.type === "group"`
+   * check fired for 1-on-1 DMs too and forced an @mention there — breaking the
+   * "DM doesn't need an explicit @mention" UX. The server already keys on
+   * shape (`services/message.ts` `isOneOnOne = participants.length === 2`,
+   * speakers only); this mirrors it. `chatDetail.participants` is also
+   * speakers-only (`getChatDetail` filters `accessMode = 'speaker'`).
    */
   const requiresMention = useMemo(() => {
     if (!chatDetail) return false;
-    if (chatDetail.type === "group") return true;
-    const meIn = chatDetail.participants.some((p) => p.agentId === myAgentId);
-    return chatDetail.type === "direct" && !meIn && chatDetail.participants.length >= 2;
+    return computeRequiresMention(
+      chatDetail.participants.map((p) => p.agentId),
+      myAgentId,
+    );
   }, [chatDetail, myAgentId]);
 
   // First-message pre-fill: when the user lands on a brand-new empty chat
@@ -1530,23 +2055,20 @@ export function ChatView({
     readOnly,
   ]);
 
-  /** All agentIds the draft text addresses via `@<name>` tokens — computed
-   * unconditionally (not just for groups) so the "outsider invite" path
-   * below can detect mentions of agents not yet in the chat. The send-gate
-   * for groups still uses `requiresMention && draftMentions.length === 0`. */
+  /** AgentIds the draft text addresses via `@<name>` tokens, resolved
+   * against the in-chat membership (`mentionCandidates`). Used purely
+   * as a UX signal: drives the send-button disable + tooltip when a
+   * group chat has no valid mention yet. Unresolved `@<token>` tokens
+   * (typos, npm package names, outsiders) contribute nothing here —
+   * the button stays disabled, prompting the user to pick from
+   * autocomplete or use ParticipantsHeader's `[+]`. The server still
+   * runs its own unresolved-token guard on the agent path (the PR-393
+   * anti-hallucination fix); on the human web path it's tolerated by the
+   * `mentions.ts` regex excluding npm scoped names from token scans. */
   const draftMentions = useMemo(() => {
     const ps: MentionParticipant[] = mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name }));
     return extractMentions(draft, ps);
   }, [draft, mentionCandidates]);
-
-  /** Mentions in the draft that point at agents NOT currently in the chat.
-   * Sending a message that addresses these will first POST to
-   * `/me/chats/:id/participants` to add them, which turns a direct chat
-   * into a group via the server's `changeChatType` service. */
-  const draftOutsiders = useMemo(() => {
-    if (chatParticipantIds.size === 0) return [];
-    return draftMentions.filter((id) => !chatParticipantIds.has(id));
-  }, [draftMentions, chatParticipantIds]);
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -1569,37 +2091,49 @@ export function ChatView({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Chat header. Spans the full panel width with generous side
-          breathing (sp-10) so it reads as the panel's "context bar".
-          Title + participants column anchors to the left; the right
-          edge is intentionally empty after the SessionControls
-          (Suspend/Terminate) removal — those were dev/runtime concerns
-          that don't belong in the chat-first user surface. Future
-          chat-level actions (mute, archive, leave) will land here in
-          an overflow menu. */}
-      <div
-        className="shrink-0"
-        style={{
-          padding: "var(--sp-2_5) var(--sp-6)",
-          borderBottom: "var(--hairline) solid var(--border)",
-        }}
-      >
-        {/* Header content sits in the same centered reading column as
-            the timeline + composer below — title's left edge aligns
-            with message avatars, chips' right edge aligns with the
-            composer's right edge. The outer band still bleeds to the
-            panel edges (border-bottom + side padding) so the header
-            keeps its frame role; only the content centers. */}
-        <div
-          className="flex items-center"
-          style={{
-            maxWidth: "clamp(55rem, 75%, 70rem)",
-            margin: "0 auto",
-            width: "100%",
-            gap: 10,
-          }}
-        >
-          {/* Identity — title is the sole click-to-rename affordance
+      {/* Chat body: left column owns header + timeline + composer; right
+          rail (chat details) sits as an independent column when open.
+          Putting the header inside the left column makes its reading-
+          column centre share the same base as timeline/composer, so the
+          title's left edge naturally aligns with the message avatars
+          regardless of whether the right rail is open. */}
+      <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          {/* Chat header — content centred in a reading column that's now
+          measured against the left column rather than the full panel.
+          Title + EntityLink + ParticipantsStats live in the reading
+          column; the chat-level icon strip (UserPlus / MoreHorizontal)
+          rides along at the column's right edge so it sits flush with
+          the composer's right edge below. */}
+          <div
+            className="shrink-0 flex items-center"
+            style={{
+              height: 52,
+              padding: "0 var(--sp-6)",
+              gap: 10,
+              // Subtle raised background instead of a border-bottom: it
+              // gives the header a visual block (so it reads as a chrome
+              // bar) without the hard line. When the right rail opens,
+              // both surfaces share `--bg-raised`, so the header + rail
+              // form one continuous L-shaped chrome frame around the
+              // timeline + composer reading column.
+              background: "var(--bg-raised)",
+            }}
+          >
+            {/* Header content spans edge-to-edge: title hugs the left
+            padding, the chat-level icon strip hugs the right. The
+            reading-column centering used to live here too, but it pulled
+            both ends into the middle of the panel and left the icons
+            floating far away from the sidebar boundary. Edge-to-edge
+            keeps the icon strip flush with the right rail's left border
+            so toggle + sidebar feel like one continuous control. */}
+            <div
+              className="flex items-center w-full"
+              style={{
+                gap: 10,
+              }}
+            >
+              {/* Identity — title is the sole click-to-rename affordance
               (Slack / Linear pattern). The hover-only ✏️ pencil was
               dropped after the title itself became clickable: two
               affordances for the same action add visual noise without
@@ -1607,756 +2141,893 @@ export function ChatView({
               also dropped — in chat-first, runtime is a per-agent
               concept that belongs on each chip avatar (D-4), not on
               the chat header. */}
-          <div className="flex items-center min-w-0" style={{ gap: 8, flex: 1 }}>
-            {readOnly ? (
-              <>
-                <span className="truncate text-subtitle min-w-0" style={{ color: "var(--fg)" }}>
-                  {chatDetail?.title ?? titleFallback ?? "…"}
-                </span>
-                <span
-                  className="mono uppercase text-eyebrow shrink-0"
-                  style={{
-                    padding: "var(--hairline) var(--sp-1_25)",
-                    borderRadius: 2,
-                    color: "var(--fg-3)",
-                    background: "var(--bg-sunken)",
-                  }}
-                >
-                  watching
-                </span>
-              </>
-            ) : renaming ? (
-              <>
-                <input
-                  ref={renameInputRef}
-                  value={renameDraft}
-                  onChange={(e) => setRenameDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      commitRename();
-                    } else if (e.key === "Escape") {
-                      e.preventDefault();
-                      setRenaming(false);
-                    }
-                  }}
-                  disabled={renameMut.isPending}
-                  maxLength={500}
-                  // Placeholder echoes the rendered title (auto-generated
-                  // from the first message when no topic is set). This
-                  // signals "leave blank to keep the current name" without
-                  // pre-filling the input with the auto-title — a pre-fill
-                  // would make a no-op commit silently promote the auto-
-                  // title to a sticky `topic`, locking it against future
-                  // first-message edits.
-                  placeholder={chatDetail?.title ?? "Chat name"}
-                  className="outline-none text-subtitle"
-                  // Auto-grow with content (modern CSS `field-sizing: content`)
-                  // so the ✓/× buttons sit immediately after the last typed
-                  // character instead of floating at the panel's right edge.
-                  // `minWidth` keeps the input usable from an empty draft;
-                  // `maxWidth` prevents it from pushing chips off-screen on
-                  // very long input. Browsers without `field-sizing` support
-                  // (older Safari/Firefox) fall back to a sensible default
-                  // sized by the input element's intrinsic width.
-                  style={{
-                    fieldSizing: "content",
-                    minWidth: 200,
-                    maxWidth: 480,
-                    color: "var(--fg)",
-                    background: "var(--bg-sunken)",
-                    border: "var(--hairline) solid var(--border)",
-                    borderRadius: "var(--radius-input)",
-                    padding: "var(--sp-0_5) var(--sp-1_5)",
-                  }}
+              <div className="flex items-center min-w-0" style={{ gap: 8, flex: 1 }}>
+                {readOnly ? (
+                  <>
+                    <span className="truncate text-subtitle font-semibold min-w-0" style={{ color: "var(--fg)" }}>
+                      {chatDetail?.title ?? titleFallback ?? "…"}
+                    </span>
+                    <span
+                      className="mono uppercase text-eyebrow shrink-0"
+                      style={{
+                        padding: "var(--hairline) var(--sp-1_25)",
+                        borderRadius: 2,
+                        color: "var(--fg-3)",
+                        background: "var(--bg-sunken)",
+                      }}
+                    >
+                      watching
+                    </span>
+                  </>
+                ) : renaming ? (
+                  <>
+                    <input
+                      ref={renameInputRef}
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.nativeEvent.isComposing) return;
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitRename();
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setRenaming(false);
+                        }
+                      }}
+                      disabled={renameMut.isPending}
+                      maxLength={500}
+                      // Placeholder echoes the rendered title (auto-generated
+                      // from the first message when no topic is set). This
+                      // signals "leave blank to keep the current name" without
+                      // pre-filling the input with the auto-title — a pre-fill
+                      // would make a no-op commit silently promote the auto-
+                      // title to a sticky `topic`, locking it against future
+                      // first-message edits.
+                      placeholder={chatDetail?.title ?? "Chat name"}
+                      className="outline-none text-subtitle"
+                      // Auto-grow with content (modern CSS `field-sizing: content`)
+                      // so the ✓/× buttons sit immediately after the last typed
+                      // character instead of floating at the panel's right edge.
+                      // `minWidth` keeps the input usable from an empty draft;
+                      // `maxWidth` prevents it from pushing chips off-screen on
+                      // very long input. Browsers without `field-sizing` support
+                      // (older Safari/Firefox) fall back to a sensible default
+                      // sized by the input element's intrinsic width.
+                      style={{
+                        fieldSizing: "content",
+                        minWidth: 200,
+                        maxWidth: 480,
+                        color: "var(--fg)",
+                        background: "var(--bg-sunken)",
+                        border: "var(--hairline) solid var(--border)",
+                        borderRadius: "var(--radius-input)",
+                        padding: "var(--sp-0_5) var(--sp-1_5)",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={commitRename}
+                      disabled={renameMut.isPending}
+                      title="Save"
+                      className="inline-flex items-center"
+                      style={{ color: "var(--accent)", padding: 2 }}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRenaming(false)}
+                      disabled={renameMut.isPending}
+                      title="Cancel"
+                      className="inline-flex items-center"
+                      style={{ color: "var(--fg-3)", padding: 2 }}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Pre-fill with `topic` only (the existing manual
+                      // override). When `topic` is null, leave the input
+                      // empty so the auto-title shown as placeholder
+                      // signals "type to override, leave blank to keep
+                      // tracking the first message". A no-op commit thus
+                      // sends `null` to the server (clearing topic = stay
+                      // in auto-title mode), not the auto-title string —
+                      // which would have locked the title against future
+                      // first-message edits.
+                      setRenameDraft(chatDetail?.topic ?? "");
+                      setRenaming(true);
+                    }}
+                    title="Click to rename"
+                    className="truncate text-subtitle font-semibold text-left min-w-0"
+                    style={{
+                      color: "var(--fg)",
+                      background: "transparent",
+                      border: "none",
+                      padding: 0,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {chatDetail?.title ?? "…"}
+                  </button>
+                )}
+                <EntityLink metadata={chatDetail?.metadata} />
+              </div>
+              {/* Audience — compact stats icon + quick-add icon. Replaces
+              the previous chip-row, which one-shot the panel width once
+              chats grew past three participants. Stats icon shows count
+              + hover popover with full name list; the quick-add icon
+              opens the same dropdown the sidebar's "+ Add participant"
+              uses (shared backend mutation, single one-way-door notice). */}
+              <ParticipantsStats
+                participants={chatDetail?.participants ?? []}
+                chatId={chatId}
+                agentIdentity={chatScopedAgentIdentity}
+                onOpen={() => setShowSidebar(true)}
+              />
+              {/* Vertical divider splits "look" (avatar strip = identity +
+                  state) from "do" (add / open details). Keeps the four
+                  icons from reading as one undifferentiated cluster. */}
+              <span
+                aria-hidden="true"
+                className="shrink-0"
+                style={{
+                  width: "var(--hairline)",
+                  height: "var(--sp-4)",
+                  background: "var(--border)",
+                  marginLeft: "var(--sp-1)",
+                  marginRight: "var(--sp-1)",
+                }}
+              />
+              {readOnly ? null : (
+                <AddParticipantDropdown
+                  variant="icon"
+                  chatId={chatId}
+                  participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
+                  candidates={addableCandidates}
+                  agentIdentity={chatScopedAgentIdentity}
+                  onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
                 />
-                <button
-                  type="button"
-                  onClick={commitRename}
-                  disabled={renameMut.isPending}
-                  title="Save"
-                  className="inline-flex items-center"
-                  style={{ color: "var(--accent)", padding: 2 }}
-                >
-                  <Check className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRenaming(false)}
-                  disabled={renameMut.isPending}
-                  title="Cancel"
-                  className="inline-flex items-center"
-                  style={{ color: "var(--fg-3)", padding: 2 }}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </>
-            ) : (
+              )}
+              {/* Chat details toggle — opens the right rail (Participants /
+              GitHub / Chat actions). Sits at the panel's far right,
+              mirroring the rail's position. The "..." glyph matches the
+              Teams/Lark convention referenced in the design discussion. */}
               <button
                 type="button"
-                onClick={() => {
-                  // Pre-fill with `topic` only (the existing manual
-                  // override). When `topic` is null, leave the input
-                  // empty so the auto-title shown as placeholder
-                  // signals "type to override, leave blank to keep
-                  // tracking the first message". A no-op commit thus
-                  // sends `null` to the server (clearing topic = stay
-                  // in auto-title mode), not the auto-title string —
-                  // which would have locked the title against future
-                  // first-message edits.
-                  setRenameDraft(chatDetail?.topic ?? "");
-                  setRenaming(true);
-                }}
-                title="Click to rename"
-                className="truncate text-subtitle text-left min-w-0"
+                onClick={toggleSidebar}
+                aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
+                aria-expanded={showSidebar}
+                aria-pressed={showSidebar}
+                title={showSidebar ? "Hide chat details" : "Show chat details"}
+                className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
                 style={{
-                  color: "var(--fg)",
-                  background: "transparent",
-                  border: "none",
-                  padding: 0,
+                  width: 28,
+                  height: 28,
+                  border: 0,
+                  background: showSidebar ? "var(--bg-sunken)" : "transparent",
+                  borderRadius: "var(--radius-input)",
+                  color: showSidebar ? "var(--fg)" : "var(--fg-3)",
                   cursor: "pointer",
                 }}
               >
-                {chatDetail?.title ?? "…"}
+                <MoreHorizontal size={16} strokeWidth={2.25} />
               </button>
-            )}
-            <EntityLink metadata={chatDetail?.metadata} />
+            </div>
           </div>
-          {/* Audience — chips + add button. Right-anchored. Includes
-              the viewer's own agent: in chat-first the user is a real
-              participant and seeing themselves in the audience makes
-              the membership state explicit. Self's display name comes
-              through `agentIdentity` rather than `mentionCandidates`
-              (the latter excludes self by design — you don't @ yourself).
-              The [+] dropdown anchors to the right edge of the button
-              so it grows leftward, avoiding panel-edge overflow when
-              the chip row is long. */}
-          <ParticipantsHeader
-            chatId={chatId}
-            participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-            candidates={mentionCandidates}
-            agentIdentity={agentIdentity}
-            onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-            readOnly={readOnly}
-          />
-        </div>
-      </div>
 
-      {/* Timeline region. Outer `relative flex-col` wrapper exists
-          solely as the containing block for the floating pill —
-          putting `position: relative` on the scroll container itself
-          let the pill drift mid-list in some browsers (PR 286 manual
-          sign-off rev 8). The wrapper sizes to the same bounds as
-          the scroll viewport (single `flex-1` child + own `min-h-0`),
-          so `absolute; bottom: var(--sp-3)` lands at the visible
+          {chatDetail?.engagementStatus === CHAT_ENGAGEMENT_STATUSES.DELETED && (
+            <div
+              className="shrink-0 flex items-center"
+              style={{
+                gap: "var(--sp-2)",
+                padding: "var(--sp-1_5) var(--sp-6)",
+                background: "var(--bg-sunken)",
+                borderBottom: "var(--hairline) solid var(--border-faint)",
+                color: "var(--fg-2)",
+              }}
+            >
+              <span className="text-body" style={{ flex: 1 }}>
+                This chat is deleted and won't appear in your conversation list.
+              </span>
+              <button
+                type="button"
+                disabled={restoreMut.isPending}
+                onClick={() => restoreMut.mutate()}
+                className="text-body"
+                style={{
+                  padding: "var(--sp-0_5) var(--sp-2)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: "var(--radius-input)",
+                  background: "var(--bg-raised)",
+                  color: "var(--fg)",
+                  cursor: restoreMut.isPending ? "default" : "pointer",
+                  opacity: restoreMut.isPending ? 0.6 : 1,
+                }}
+              >
+                {restoreMut.isPending ? "Restoring…" : "Restore"}
+              </button>
+            </div>
+          )}
+
+          {/* Timeline region. Outer `relative flex-col` wrapper exists solely
+          as the containing block for the floating pill — putting `position:
+          relative` on the scroll container itself let the pill drift mid-list
+          in some browsers (PR 286 manual sign-off rev 8). The wrapper sizes to
+          the same bounds as the scroll viewport (single `flex-1` child + own
+          `min-h-0`), so `absolute; bottom: var(--sp-3)` lands at the visible
           bottom of the chat panel regardless of scroll position.
 
-          Scroll viewport stays full-width so the scrollbar hugs the
-          panel's right edge — pushing it inward would float the
-          column. Reading column inside is capped via `maxWidth` and
-          centered to align with the composer below into one vertical
-          thread. Side padding (sp-6) prevents content from kissing
-          the panel border on narrow viewports. */}
-      <div className="relative flex-1 flex flex-col min-h-0">
-        <div
-          ref={scrollContainerRef}
-          className="flex-1 overflow-y-auto"
-          style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
-        >
-          <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-            {itemCount === 0 && (
-              <div
-                className="flex flex-col items-center text-body"
-                style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
-              >
-                <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
-                {readOnly ? "No messages yet" : "Send a message to start the conversation"}
+          Scroll viewport stays full-width so the scrollbar hugs the panel's
+          right edge — pushing it inward would float the column. Reading column
+          inside is capped via `maxWidth` and centered to align with the
+          composer below into one vertical thread. Side padding (sp-6) prevents
+          content from kissing the panel border on narrow viewports. */}
+          <div className="relative flex-1 flex flex-col min-h-0">
+            <div
+              ref={scrollContainerRef}
+              className="flex-1 overflow-y-auto"
+              style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
+            >
+              <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+                {itemCount === 0 && (
+                  <div
+                    className="flex flex-col items-center text-body"
+                    style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
+                  >
+                    <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
+                    {readOnly ? "No messages yet" : "Send a message to start the conversation"}
+                  </div>
+                )}
+                <div className="flex flex-col" style={{ gap: 4 }}>
+                  {items.flatMap((item, idx) => {
+                    let node: ReactNode = null;
+                    if (item.kind === "workgroup") {
+                      // Default to folded while chatDetail is still loading —
+                      // opening a group chat's bubble for one frame and then
+                      // folding it after chatDetail resolves is worse than
+                      // under-opening direct chats by the same one-frame window.
+                      node = (
+                        <WorkingBubble
+                          key={item.key}
+                          events={item.events}
+                          defaultOpen={chatDetail?.type === "direct"}
+                        />
+                      );
+                    } else if (item.kind === "event") {
+                      const ev = item.data;
+                      switch (ev.kind) {
+                        case "assistant_text":
+                          node = (
+                            <AssistantTextRow
+                              key={item.key}
+                              event={ev}
+                              agentId={agentId}
+                              agentNameFn={chatScopedAgentName}
+                              agentAvatarFn={agentAvatar}
+                              agentColorTokenFn={agentColorToken}
+                            />
+                          );
+                          break;
+                        case "error":
+                          node = <ErrorRow key={item.key} event={ev} />;
+                          break;
+                        default:
+                          // tool_call / thinking are folded into the workgroup
+                          // above; turn_end is filtered upstream; anything else
+                          // is dropped.
+                          node = null;
+                      }
+                    } else {
+                      const msg = item.data;
+                      if (msg.format === "question" && isQuestionContent(msg.content)) {
+                        const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
+                        const status: QuestionStatus = answer ? "answered" : "pending";
+                        node = (
+                          <QuestionMessageRow
+                            key={item.key}
+                            msg={msg}
+                            chatId={chatId}
+                            content={msg.content}
+                            answer={answer}
+                            status={status}
+                            agentNameFn={chatScopedAgentName}
+                            agentAvatarFn={agentAvatar}
+                            agentColorTokenFn={agentColorToken}
+                          />
+                        );
+                      } else if (msg.format === "question_answer") {
+                        node = (
+                          <QuestionAnswerRow
+                            key={item.key}
+                            msg={msg}
+                            agentNameFn={chatScopedAgentName}
+                            agentAvatarFn={agentAvatar}
+                            agentColorTokenFn={agentColorToken}
+                          />
+                        );
+                      } else {
+                        node = (
+                          <TextRow
+                            key={item.key}
+                            msg={msg}
+                            myAgentId={myAgentId}
+                            agentNameFn={chatScopedAgentName}
+                            agentAvatarFn={agentAvatar}
+                            agentColorTokenFn={agentColorToken}
+                          />
+                        );
+                      }
+                    }
+                    // Insert the gap banner immediately after the last cached
+                    // message when there's a known break between cache and the
+                    // server window.
+                    const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
+                    // Insert the "New Messages" divider before the first item
+                    // whose message id is strictly newer than the snapshot
+                    // taken at chat-open. Dismissed once it has scrolled past
+                    // the top of the viewport (IntersectionObserver above).
+                    const showDivider = !dividerDismissed && idx === firstNewItemIdx;
+                    const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
+                    const epilogue =
+                      isGapAnchor && item.kind === "message" ? (
+                        <HistoryGapBanner key={`gap-after-${item.data.id}`} />
+                      ) : null;
+                    if (prelude || epilogue) {
+                      const out: ReactNode[] = [];
+                      if (prelude) out.push(prelude);
+                      out.push(node);
+                      if (epilogue) out.push(epilogue);
+                      return out;
+                    }
+                    return node;
+                  })}
+                </div>
+                <div ref={messagesEndRef} />
               </div>
-            )}
-            <div className="flex flex-col" style={{ gap: 4 }}>
-              {items.flatMap((item, idx) => {
-                let node: ReactNode = null;
-                if (item.kind === "event") {
-                  const ev = item.data;
-                  switch (ev.kind) {
-                    case "tool_call":
-                      node = <ToolCallStatusRow key={item.key} event={ev} />;
-                      break;
-                    case "assistant_text":
-                      node = <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
-                      break;
-                    case "thinking":
-                      node = <ThinkingRow key={item.key} event={ev} />;
-                      break;
-                    case "error":
-                      node = <ErrorRow key={item.key} event={ev} />;
-                      break;
-                    default:
-                      // turn_end is filtered upstream; any unknown kind is dropped.
-                      node = null;
-                  }
-                } else {
-                  const msg = item.data;
-                  if (msg.format === "question" && isQuestionContent(msg.content)) {
-                    const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
-                    const status: QuestionStatus = answer ? "answered" : "pending";
-                    node = (
-                      <QuestionMessageRow
-                        key={item.key}
-                        msg={msg}
-                        chatId={chatId}
-                        content={msg.content}
-                        answer={answer}
-                        status={status}
-                        agentNameFn={agentName}
-                      />
-                    );
-                  } else if (msg.format === "question_answer") {
-                    node = <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={agentName} />;
-                  } else {
-                    node = <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={agentName} />;
-                  }
-                }
-                // Insert the gap banner immediately after the last cached
-                // message when there's a known break between cache and the
-                // server window.
-                const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
-                // Insert the "New Messages" divider before the first item
-                // whose message id is strictly newer than the snapshot
-                // taken at chat-open. Dismissed once it has scrolled past
-                // the top of the viewport (IntersectionObserver above).
-                const showDivider = !dividerDismissed && idx === firstNewItemIdx;
-                const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
-                const epilogue =
-                  isGapAnchor && item.kind === "message" ? (
-                    <HistoryGapBanner key={`gap-after-${item.data.id}`} />
-                  ) : null;
-                if (prelude || epilogue) {
-                  const out: ReactNode[] = [];
-                  if (prelude) out.push(prelude);
-                  out.push(node);
-                  if (epilogue) out.push(epilogue);
-                  return out;
-                }
-                return node;
-              })}
             </div>
-            <div ref={messagesEndRef} />
+            {/* Floating "↓ N new messages" pill — surfaces whenever there are
+                messages newer than the user's session high watermark. Own
+                sends never trigger the pill because `sendMut.onSuccess` /
+                the file-send path pre-advance the watermark to the new
+                message's id before initiating the smooth scroll, so
+                `pillCount` stays 0 throughout the animation (PR 286 manual
+                sign-off rev 10). Rendered as a sibling of the scroll
+                container, not a child, so its `absolute` positioning
+                anchors to the outer wrapper's visible bounds instead of
+                being affected by the scroll container's internal
+                `overflow-auto` + `position: relative` interaction (rev 8). */}
+            {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
           </div>
-        </div>
-        {/* Floating "↓ N new messages" pill — surfaces whenever
-            there are messages newer than the user's session high
-            watermark. Own sends never trigger the pill because
-            `sendMut.onSuccess` / the file-send path pre-advance the
-            watermark to the new message's id before initiating the
-            smooth scroll, so `pillCount` stays 0 throughout the
-            animation (PR 286 manual sign-off rev 10). Rendered as
-            a sibling of the scroll container, not a child, so its
-            `absolute` positioning anchors to the outer wrapper's
-            visible bounds instead of being affected by the scroll
-            container's internal `overflow-auto` + `position: relative`
-            interaction (rev 8). */}
-        {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
-      </div>
 
-      {/* Input. Outer band keeps full-width border-top + side padding so
+          {/* Input. Outer band keeps full-width border-top + side padding so
           the composer separator continues the panel's edge-to-edge frame.
           Composer card inside is capped via `maxWidth` and centered, so it
           aligns vertically with the timeline column above — eye tracks
           from last message into textarea without a horizontal jump
           (Slack / ChatGPT / Linear DM all do this). */}
-      <div
-        className="shrink-0"
-        style={{
-          padding: "var(--sp-2_5) var(--sp-6) var(--sp-3)",
-        }}
-      >
-        <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-          {readOnly ? (
-            <div
-              className="flex items-center"
-              style={{
-                gap: "var(--sp-3)",
-                padding: "var(--sp-2) var(--sp-3)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: 6,
-                background: "var(--bg-sunken)",
-              }}
-            >
-              <Eye className="h-4 w-4 shrink-0" style={{ color: "var(--fg-3)" }} />
-              <div className="flex-1 min-w-0">
-                <div className="text-body" style={{ color: "var(--fg-2)" }}>
-                  You're watching this chat — read-only.
-                </div>
-                {joinAction?.error && (
-                  <div className="mono text-label" style={{ color: "var(--state-error)", marginTop: 2 }}>
-                    {joinAction.error}
-                  </div>
-                )}
-              </div>
-              {joinAction && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={joinAction.onJoin}
-                  disabled={joinAction.joining}
+          <div
+            className="shrink-0"
+            style={{
+              padding: "var(--sp-2_5) var(--sp-6) var(--sp-3)",
+            }}
+          >
+            <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+              {readOnly ? (
+                <div
+                  className="flex items-center"
+                  style={{
+                    gap: "var(--sp-3)",
+                    padding: "var(--sp-2) var(--sp-3)",
+                    border: "var(--hairline) solid var(--border)",
+                    borderRadius: 6,
+                    // Raised surface (`--bg-raised`) so the slot reads as a
+                    // distinct input card lifted above the timeline (`--bg`),
+                    // sharing the header chrome's surface. Mirrors the editable
+                    // composer below so the read-only state shares its footprint.
+                    background: "var(--bg-raised)",
+                  }}
                 >
-                  {joinAction.joining ? "Joining…" : "Join to reply"}
-                </Button>
-              )}
-            </div>
-          ) : (
-            <>
-              {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
-              <div
-                style={{
-                  position: "relative",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: 6,
-                  background: "var(--bg-sunken)",
-                }}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  addImages(Array.from(e.dataTransfer.files));
-                }}
-              >
-                {/* Image preview area — above textarea */}
-                {pendingImages.length > 0 && (
+                  <Eye className="h-4 w-4 shrink-0" style={{ color: "var(--fg-3)" }} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-body" style={{ color: "var(--fg-2)" }}>
+                      You're watching this chat — read-only.
+                    </div>
+                    {joinAction?.error && (
+                      <div className="mono text-label" style={{ color: "var(--state-error)", marginTop: 2 }}>
+                        {joinAction.error}
+                      </div>
+                    )}
+                  </div>
+                  {joinAction && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={joinAction.onJoin}
+                      disabled={joinAction.joining}
+                    >
+                      {joinAction.joining ? "Joining…" : "Join to reply"}
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <ComposeStatusBar
+                    chatId={chatId}
+                    agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                  />
+                  {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                   <div
-                    className="flex items-center"
-                    style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
+                    style={{
+                      position: "relative",
+                      border: "var(--hairline) solid var(--border)",
+                      borderRadius: 6,
+                      // Raised surface (`--bg-raised`) lifts the composer above
+                      // the timeline (`--bg`) so it reads as a focused input card
+                      // rather than blending into the page; the hairline border
+                      // still defines its edge.
+                      background: "var(--bg-raised)",
+                    }}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      addImages(Array.from(e.dataTransfer.files));
+                    }}
                   >
-                    {pendingImages.map((img) => (
+                    {/* Image preview area — above textarea */}
+                    {pendingImages.length > 0 && (
                       <div
-                        key={img.id}
-                        style={{
-                          position: "relative",
-                          flexShrink: 0,
-                          borderRadius: 4,
-                          border: "var(--hairline) solid var(--border)",
-                          overflow: "hidden",
-                        }}
+                        className="flex items-center"
+                        style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
                       >
-                        <img
-                          src={img.previewUrl}
-                          alt={img.file.name}
-                          style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
-                        />
+                        {pendingImages.map((img) => (
+                          <div
+                            key={img.id}
+                            style={{
+                              position: "relative",
+                              flexShrink: 0,
+                              borderRadius: 4,
+                              border: "var(--hairline) solid var(--border)",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <img
+                              src={img.previewUrl}
+                              alt={img.file.name}
+                              style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeImage(img.id)}
+                              style={{
+                                position: "absolute",
+                                top: 1,
+                                right: 1,
+                                width: 14,
+                                height: 14,
+                                borderRadius: "50%",
+                                background: "var(--color-overlay-scrim)",
+                                border: "none",
+                                color: "var(--bg-raised)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                cursor: "pointer",
+                                padding: 0,
+                              }}
+                            >
+                              <X className="h-2 w-2" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ position: "relative" }}>
+                      <MentionAutocompletePopover
+                        trigger={mention.trigger}
+                        results={mention.results}
+                        highlightIndex={mention.highlightIndex}
+                        anchorRef={textareaRef}
+                        onPick={mention.pick}
+                      />
+                      <textarea
+                        ref={textareaRef}
+                        value={draft}
+                        onChange={(e) => {
+                          setDraft(e.target.value);
+                          setCursor(e.target.selectionStart ?? e.target.value.length);
+                          // Dismiss a stale upload error (e.g. the "no @mention"
+                          // hint) the moment the user starts fixing it. Mirrors
+                          // the unconditional clears in `addImages` / `removeImage`
+                          // — React bails on identical setState so the null→null
+                          // case is free.
+                          setUploadError(null);
+                        }}
+                        onSelect={(e) => {
+                          setCursor(e.currentTarget.selectionStart ?? draft.length);
+                        }}
+                        onFocus={() => {
+                          // Group / about-to-be-group chats: prime the input with `@`
+                          // on focus so the autocomplete pops the recipient list right
+                          // away — matches the proposal §2 "must choose a receiver
+                          // before typing" UX. Once-per-chat (focusPrimedRef): we
+                          // don't want to re-stamp `@` after the user has cleared
+                          // their draft and tabbed away/back; that would constantly
+                          // fight the user when they're trying to write a fresh
+                          // empty message without addressing anyone (e.g. paste over).
+                          if (!requiresMention) return;
+                          if (focusPrimedRef.current) return;
+                          if (draft.length > 0 || mentionCandidates.length === 0) return;
+                          focusPrimedRef.current = true;
+                          setDraft("@");
+                          setCursor(1);
+                          requestAnimationFrame(() => {
+                            const el = textareaRef.current;
+                            if (!el) return;
+                            el.setSelectionRange(1, 1);
+                          });
+                        }}
+                        onPaste={(e) => {
+                          const files = Array.from(e.clipboardData.files);
+                          if (files.length > 0) {
+                            e.preventDefault();
+                            addImages(files);
+                          }
+                        }}
+                        placeholder={
+                          requiresMention
+                            ? "Type @ to pick a recipient, then your message"
+                            : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+                        }
+                        rows={2}
+                        onKeyDown={(e) => {
+                          // Skip while an IME is composing so Enter confirms the
+                          // candidate instead of sending / picking a mention.
+                          if (e.nativeEvent.isComposing) return;
+                          // Mention autocomplete gets first crack at navigation keys so
+                          // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
+                          // sending or moving the cursor.
+                          if (mention.handleKey(e)) return;
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSend();
+                          }
+                        }}
+                        disabled={sendMut.isPending || uploading}
+                        className="w-full outline-none text-subtitle font-normal"
+                        style={{
+                          padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                          background: "transparent",
+                          border: "none",
+                          // `rows={2}` alone won't survive the auto-resize hook:
+                          // useLayoutEffect immediately sets `height = scrollHeight`,
+                          // which collapses an empty textarea to ~1 line and
+                          // breaks chat-view's pre-auto-grow 2-line contract.
+                          // CSS `min-height` is a hard floor that wins over the
+                          // hook's inline `height`, so we restate the 2-line
+                          // starting size here: 2 line-heights + top + bottom
+                          // padding. Cap at 10.5rem (~8 visible lines) so long
+                          // pastes scroll inside instead of pushing the footer
+                          // toolbar off-screen.
+                          minHeight: "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
+                          maxHeight: "10.5rem",
+                          overflowY: "auto",
+                          resize: "none",
+                          color: "var(--fg)",
+                        }}
+                      />
+                    </div>
+                    <div
+                      className="flex items-center justify-between text-caption"
+                      style={{
+                        position: "absolute",
+                        bottom: 6,
+                        left: 10,
+                        right: 10,
+                        color: "var(--fg-4)",
+                      }}
+                    >
+                      <span className="mono flex items-center" style={{ gap: 10 }}>
                         <button
                           type="button"
-                          onClick={() => removeImage(img.id)}
+                          onClick={() => {
+                            // Insert `@` at the cursor (or replace the current selection)
+                            // and re-focus. The mention autocomplete will pick it up
+                            // from the resulting `value`/`cursor` state — same path as
+                            // typing `@` directly. Mirrors the Feishu / Slack
+                            // explicit-button affordance for users who don't know the
+                            // keyboard trick.
+                            const el = textareaRef.current;
+                            if (!el) return;
+                            const start = el.selectionStart ?? draft.length;
+                            const end = el.selectionEnd ?? start;
+                            const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
+                            setDraft(next);
+                            setCursor(start + 1);
+                            requestAnimationFrame(() => {
+                              el.focus();
+                              el.setSelectionRange(start + 1, start + 1);
+                            });
+                          }}
+                          title="Mention an agent (or type @)"
                           style={{
-                            position: "absolute",
-                            top: 1,
-                            right: 1,
-                            width: 14,
-                            height: 14,
-                            borderRadius: "50%",
-                            background: "var(--color-overlay-scrim)",
+                            background: "none",
                             border: "none",
-                            color: "var(--bg-raised)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
                             cursor: "pointer",
+                            color: "var(--fg-3)",
                             padding: 0,
+                            display: "inline-flex",
+                            alignItems: "center",
                           }}
                         >
-                          <X className="h-2 w-2" />
+                          <AtSign className="h-3.5 w-3.5" />
                         </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{ position: "relative" }}>
-                  <MentionAutocompletePopover
-                    trigger={mention.trigger}
-                    results={mention.results}
-                    highlightIndex={mention.highlightIndex}
-                    anchorRef={textareaRef}
-                    onPick={mention.pick}
-                  />
-                  <textarea
-                    ref={textareaRef}
-                    value={draft}
-                    onChange={(e) => {
-                      setDraft(e.target.value);
-                      setCursor(e.target.selectionStart ?? e.target.value.length);
-                    }}
-                    onSelect={(e) => {
-                      setCursor(e.currentTarget.selectionStart ?? draft.length);
-                    }}
-                    onFocus={() => {
-                      // Group / about-to-be-group chats: prime the input with `@`
-                      // on focus so the autocomplete pops the recipient list right
-                      // away — matches the proposal §2 "must choose a receiver
-                      // before typing" UX. Once-per-chat (focusPrimedRef): we
-                      // don't want to re-stamp `@` after the user has cleared
-                      // their draft and tabbed away/back; that would constantly
-                      // fight the user when they're trying to write a fresh
-                      // empty message without addressing anyone (e.g. paste over).
-                      if (!requiresMention) return;
-                      if (focusPrimedRef.current) return;
-                      if (draft.length > 0 || mentionCandidates.length === 0) return;
-                      focusPrimedRef.current = true;
-                      setDraft("@");
-                      setCursor(1);
-                      requestAnimationFrame(() => {
-                        const el = textareaRef.current;
-                        if (!el) return;
-                        el.setSelectionRange(1, 1);
-                      });
-                    }}
-                    onPaste={(e) => {
-                      const files = Array.from(e.clipboardData.files);
-                      if (files.length > 0) {
-                        e.preventDefault();
-                        addImages(files);
-                      }
-                    }}
-                    placeholder={
-                      requiresMention
-                        ? "Type @ to pick a recipient, then your message"
-                        : `Message @${displayName}  ·  / for commands  ·  @ to mention`
-                    }
-                    rows={2}
-                    onKeyDown={(e) => {
-                      // Mention autocomplete gets first crack at navigation keys so
-                      // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
-                      // sending or moving the cursor.
-                      if (mention.handleKey(e)) return;
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSend();
-                      }
-                    }}
-                    disabled={sendMut.isPending || uploading}
-                    className="w-full outline-none text-subtitle font-normal"
-                    style={{
-                      padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
-                      background: "transparent",
-                      border: "none",
-                      // `rows={2}` alone won't survive the auto-resize hook:
-                      // useLayoutEffect immediately sets `height = scrollHeight`,
-                      // which collapses an empty textarea to ~1 line and
-                      // breaks chat-view's pre-auto-grow 2-line contract.
-                      // CSS `min-height` is a hard floor that wins over the
-                      // hook's inline `height`, so we restate the 2-line
-                      // starting size here: 2 line-heights + top + bottom
-                      // padding. Cap at 10.5rem (~8 visible lines) so long
-                      // pastes scroll inside instead of pushing the footer
-                      // toolbar off-screen.
-                      minHeight: "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
-                      maxHeight: "10.5rem",
-                      overflowY: "auto",
-                      resize: "none",
-                      color: "var(--fg)",
-                    }}
-                  />
-                </div>
-                <div
-                  className="flex items-center justify-between text-caption"
-                  style={{
-                    position: "absolute",
-                    bottom: 6,
-                    left: 10,
-                    right: 10,
-                    color: "var(--fg-4)",
-                  }}
-                >
-                  <span className="mono flex items-center" style={{ gap: 10 }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Insert `@` at the cursor (or replace the current selection)
-                        // and re-focus. The mention autocomplete will pick it up
-                        // from the resulting `value`/`cursor` state — same path as
-                        // typing `@` directly. Mirrors the Feishu / Slack
-                        // explicit-button affordance for users who don't know the
-                        // keyboard trick.
-                        const el = textareaRef.current;
-                        if (!el) return;
-                        const start = el.selectionStart ?? draft.length;
-                        const end = el.selectionEnd ?? start;
-                        const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
-                        setDraft(next);
-                        setCursor(start + 1);
-                        requestAnimationFrame(() => {
-                          el.focus();
-                          el.setSelectionRange(start + 1, start + 1);
-                        });
-                      }}
-                      title="Mention an agent (or type @)"
-                      style={{
-                        background: "none",
-                        border: "none",
-                        cursor: "pointer",
-                        color: "var(--fg-3)",
-                        padding: 0,
-                        display: "inline-flex",
-                        alignItems: "center",
-                      }}
-                    >
-                      <AtSign className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      title="Attach image"
-                      style={{
-                        background: "none",
-                        border: "none",
-                        cursor: "pointer",
-                        color: "var(--fg-3)",
-                        padding: 0,
-                        display: "inline-flex",
-                        alignItems: "center",
-                      }}
-                    >
-                      <Paperclip className="h-3.5 w-3.5" />
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      style={{ display: "none" }}
-                      onChange={(e) => {
-                        if (e.target.files) {
-                          addImages(Array.from(e.target.files));
-                          e.target.value = "";
-                        }
-                      }}
-                    />
-                  </span>
-                  <span className="flex items-center" style={{ gap: 8 }}>
-                    {uploading && (
-                      <span className="mono text-caption" style={{ color: "var(--accent)" }}>
-                        uploading…
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          title="Attach image"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                            color: "var(--fg-3)",
+                            padding: 0,
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Paperclip className="h-3.5 w-3.5" />
+                        </button>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          style={{ display: "none" }}
+                          onChange={(e) => {
+                            if (e.target.files) {
+                              addImages(Array.from(e.target.files));
+                              e.target.value = "";
+                            }
+                          }}
+                        />
                       </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={handleSend}
-                      disabled={
-                        sendMut.isPending ||
-                        uploading ||
-                        (!draft.trim() && pendingImages.length === 0) ||
-                        (requiresMention && draftMentions.length === 0)
-                      }
-                      title={
-                        requiresMention && draftMentions.length === 0
-                          ? "Pick at least one recipient with @ before sending in a group chat"
-                          : "Send (Enter)"
-                      }
-                      aria-label="Send"
-                      className={cn(
-                        "inline-flex items-center justify-center transition-opacity",
-                        (sendMut.isPending ||
-                          uploading ||
-                          (!draft.trim() && pendingImages.length === 0) ||
-                          (requiresMention && draftMentions.length === 0)) &&
-                          "opacity-40 cursor-not-allowed",
-                      )}
+                      <span className="flex items-center" style={{ gap: 8 }}>
+                        {uploading && (
+                          <span className="mono text-caption" style={{ color: "var(--accent)" }}>
+                            uploading…
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleSend}
+                          disabled={
+                            sendMut.isPending ||
+                            uploading ||
+                            (!draft.trim() && pendingImages.length === 0) ||
+                            (requiresMention && draftMentions.length === 0)
+                          }
+                          title={
+                            requiresMention && draftMentions.length === 0
+                              ? "Pick at least one recipient with @ before sending in a group chat"
+                              : "Send (Enter)"
+                          }
+                          aria-label="Send"
+                          className={cn(
+                            "inline-flex items-center justify-center transition-opacity",
+                            (sendMut.isPending ||
+                              uploading ||
+                              (!draft.trim() && pendingImages.length === 0) ||
+                              (requiresMention && draftMentions.length === 0)) &&
+                              "opacity-40 cursor-not-allowed",
+                          )}
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: "var(--radius-input)",
+                            background: "var(--fg)",
+                            color: "var(--bg-raised)",
+                            border: "none",
+                          }}
+                        >
+                          <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                        </button>
+                      </span>
+                    </div>
+                  </div>
+                  {(sendMut.isError || uploadError) && (
+                    <p
+                      className="mono text-label"
                       style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: "var(--radius-input)",
-                        background: "var(--fg)",
-                        color: "var(--bg-raised)",
-                        border: "none",
+                        color: "var(--state-error)",
+                        padding: "var(--sp-1_5) var(--sp-0_5) 0",
                       }}
                     >
-                      <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
-                    </button>
-                  </span>
-                </div>
-              </div>
-              {(sendMut.isError || uploadError) && (
-                <p
-                  className="mono text-label"
-                  style={{
-                    color: "var(--state-error)",
-                    padding: "var(--sp-1_5) var(--sp-0_5) 0",
-                  }}
-                >
-                  {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}
-                </p>
+                      {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}
+                    </p>
+                  )}
+                </>
               )}
-            </>
-          )}
+            </div>
+          </div>
         </div>
+        {showSidebar ? (
+          <ChatRightSidebar
+            chatId={chatId}
+            participants={chatDetail?.participants ?? []}
+            participantsLoading={chatDetailLoading}
+            managedByMe={managedByMeMap}
+            addParticipantsCandidates={addableCandidates}
+            agentIdentity={chatScopedAgentIdentity}
+            onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+            onClose={() => setShowSidebar(false)}
+            readOnly={readOnly}
+          />
+        ) : null}
       </div>
     </div>
   );
 }
 
 /**
- * Header participant strip: renders one `@name` chip per current chat
- * member plus a `[+]` button to invite more agents (uses
- * `addMeChatParticipants`, which auto-upgrades a 1:1 chat to a group on
- * the server when the resulting count is ≥ 3).
+ * Stacked-avatar participant strip in the chat header. Renders up to
+ * `MAX_VISIBLE` participants as overlapping circular avatars; the remainder
+ * collapses into a "+N" chip. Agent avatars carry a status dot in the
+ * bottom-right corner (active / idle / suspended / errored), keying off
+ * the same per-(agent, chat) session row the sidebar's AgentRow reads.
  *
- * Removal isn't implemented yet — the server has no member-side endpoint
- * for `DELETE /me/chats/:id/participants/:agentId`. The display-only
- * `×`-less chip is intentional until that lands.
+ * Click any avatar — or the "+N" chip — opens the sidebar's Participants
+ * section. Humans render without a dot since "running state" is an
+ * agent-only concept here.
  */
-function ParticipantsHeader({
+const MAX_VISIBLE_AVATARS = 4;
+
+function ParticipantsStats({
+  participants,
   chatId,
-  participantIds,
-  candidates,
   agentIdentity,
-  onAdded,
-  readOnly = false,
+  onOpen,
 }: {
+  participants: ChatParticipantDetail[];
   chatId: string;
-  participantIds: string[];
-  candidates: MentionCandidate[];
-  /** Identity resolver covering ALL agents (incl. the viewer's own,
-   *  which `mentionCandidates` excludes). Lets the chip row label
-   *  self correctly instead of falling back to a UUID prefix. */
-  agentIdentity: (uuid: string | null | undefined) => { name: string | null; displayName: string } | null;
-  onAdded: () => void;
-  readOnly?: boolean;
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
+  onOpen: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (ev: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (containerRef.current.contains(ev.target as Node)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const addMut = useMutation({
-    mutationFn: (agentId: string) => addMeChatParticipants(chatId, { participantIds: [agentId] }),
-    onSuccess: () => {
-      setOpen(false);
-      onAdded();
-    },
-  });
-
-  const outsideCandidates = useMemo(
-    () => candidates.filter((c) => !participantIds.includes(c.agentId)),
-    [candidates, participantIds],
-  );
+  if (participants.length === 0) return null;
+  const visible = participants.slice(0, MAX_VISIBLE_AVATARS);
+  const overflow = participants.length - visible.length;
 
   return (
-    <div className="inline-flex items-center flex-wrap" style={{ gap: 4 }}>
-      {participantIds.map((id) => {
-        // Prefer `agentIdentity` (covers self) over `candidates`
-        // (excludes self by design — see useMentionAutocomplete callers).
-        // Falls back to UUID prefix only if both are empty, which
-        // shouldn't happen for in-org agents.
-        const ident = agentIdentity(id);
-        const label = ident?.displayName ?? ident?.name ?? id.slice(0, 8);
-        return (
-          <span
-            key={id}
-            className="inline-flex items-center text-label"
-            style={{
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              borderRadius: "var(--radius-chip)",
-              background: "var(--bg-sunken)",
-              color: "var(--fg-2)",
-            }}
-          >
-            {label}
-          </span>
-        );
-      })}
-      {!readOnly && (
-        <div ref={containerRef} style={{ position: "relative" }}>
-          <button
-            type="button"
-            onClick={() => setOpen(!open)}
-            disabled={outsideCandidates.length === 0 || addMut.isPending}
-            title={outsideCandidates.length === 0 ? "All available agents are already in this chat" : "Add participant"}
-            aria-label="Add participant"
-            className="inline-flex items-center transition-colors hover:bg-[var(--bg-sunken)]"
-            style={{
-              padding: "var(--sp-0_5) var(--sp-1)",
-              borderRadius: "var(--radius-chip)",
-              border: "var(--hairline) solid var(--border)",
-              background: "transparent",
-              color: outsideCandidates.length === 0 ? "var(--fg-4)" : "var(--fg-3)",
-              cursor: outsideCandidates.length === 0 ? "not-allowed" : "pointer",
-            }}
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-          {open && outsideCandidates.length > 0 && (
-            <div
-              role="listbox"
-              aria-label="Add participant"
-              className="absolute z-20 max-h-56 overflow-auto rounded-md border shadow-lg"
-              // Right-anchored so the dropdown grows leftward from the
-              // [+] button instead of rightward — chip rows tend to push
-              // [+] near the panel edge, where left-anchoring would cause
-              // the dropdown to overflow off-screen.
-              style={{
-                top: "calc(100% + var(--sp-1))",
-                right: 0,
-                minWidth: 280,
-                background: "var(--bg-raised)",
-                borderColor: "var(--border)",
-              }}
-            >
-              {(() => {
-                const ambiguous = ambiguousDisplayNames(outsideCandidates);
-                // Same grouping contract as the new-chat picker: mine
-                // first, teammates' second, --border-faint hairline
-                // between (only when both groups are non-empty).
-                return groupAndSortCandidates(outsideCandidates).map((item) => {
-                  if ("divider" in item) {
-                    return (
-                      <div
-                        key="__divider"
-                        // See new-chat-draft.tsx — same a11y reasoning.
-                        role="presentation"
-                        style={{
-                          height: "var(--hairline)",
-                          background: "var(--border-faint)",
-                          margin: "var(--sp-0_5) var(--sp-3)",
-                        }}
-                      />
-                    );
-                  }
-                  return (
-                    <button
-                      key={item.agentId}
-                      type="button"
-                      role="option"
-                      aria-selected="false"
-                      title={item.name ? `@${item.name}` : undefined}
-                      onClick={() => addMut.mutate(item.agentId)}
-                      disabled={addMut.isPending}
-                      className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                      style={{
-                        background: "transparent",
-                        color: "var(--fg)",
-                        border: "none",
-                        cursor: "pointer",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      <MentionLabel candidate={item} ambiguous={ambiguous} />
-                    </button>
-                  );
-                });
-              })()}
-            </div>
-          )}
-        </div>
-      )}
+    <div className="inline-flex items-center" style={{ paddingLeft: 0 }}>
+      {visible.map((p, idx) => (
+        <ParticipantAvatar
+          key={p.agentId}
+          participant={p}
+          chatId={chatId}
+          agentIdentity={agentIdentity}
+          stackIndex={idx}
+          onOpen={onOpen}
+        />
+      ))}
+      {overflow > 0 ? (
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label={`Show ${overflow} more participant${overflow === 1 ? "" : "s"}`}
+          className="mono text-label inline-flex items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+          style={{
+            marginLeft: -8,
+            width: 24,
+            height: 24,
+            borderRadius: 999,
+            border: "var(--hairline-bold) solid var(--bg-raised)",
+            background: "var(--bg-sunken)",
+            color: "var(--fg-3)",
+            cursor: "pointer",
+          }}
+        >
+          +{overflow}
+        </button>
+      ) : null}
     </div>
+  );
+}
+
+function ParticipantAvatar({
+  participant,
+  chatId,
+  agentIdentity,
+  stackIndex,
+  onOpen,
+}: {
+  participant: ChatParticipantDetail;
+  chatId: string;
+  agentIdentity: (uuid: string | null | undefined) => {
+    name: string | null;
+    displayName: string;
+    avatarImageUrl: string | null;
+    avatarColorToken: string | null;
+  } | null;
+  stackIndex: number;
+  onOpen: () => void;
+}) {
+  const isHuman = participant.type === "human";
+  const ident = agentIdentity(participant.agentId);
+  const label = ident?.displayName ?? ident?.name ?? participant.agentId.slice(0, 8);
+
+  // Composite per-agent status for the dot, from the chat-level /agent-status
+  // query — the same key the sidebar's AgentStatusPanel uses, so React Query
+  // dedupes it to one request and the admin WS keeps it live (no per-avatar
+  // poll). Humans have no runtime status. Rendered through the shared
+  // viewOf / StatusGlyph vocabulary so the header strip and the sidebar agree.
+  const { data: statuses } = useQuery({
+    queryKey: chatAgentStatusQueryKey(chatId),
+    queryFn: () => fetchChatAgentStatuses(chatId),
+    enabled: !isHuman,
+    refetchInterval: 30_000,
+  });
+  const status = isHuman ? undefined : statuses?.find((s) => s.agentId === participant.agentId);
+  const view = status ? viewOf(status.main) : null;
+  const stateText = view ? view.label : isHuman ? "human" : "…";
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`${label} · ${stateText}. Open chat details.`}
+      title={`${label} · ${stateText}`}
+      className="relative inline-flex items-center justify-center transition-transform hover:translate-y-px"
+      style={{
+        marginLeft: stackIndex === 0 ? 0 : -8,
+        zIndex: MAX_VISIBLE_AVATARS - stackIndex,
+        border: 0,
+        background: "transparent",
+        padding: 0,
+        cursor: "pointer",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          display: "inline-block",
+          width: 24,
+          height: 24,
+          borderRadius: 999,
+          border: "var(--hairline-bold) solid var(--bg-raised)",
+          overflow: "hidden",
+        }}
+      >
+        <RealAvatar
+          src={ident?.avatarImageUrl ?? null}
+          name={label}
+          seed={participant.agentId}
+          colorToken={ident?.avatarColorToken ?? null}
+          size={22}
+        />
+      </span>
+      {view ? (
+        <span aria-hidden="true" className="absolute" style={{ right: -1, bottom: -2 }}>
+          <StatusGlyph
+            colorVar={view.colorVar}
+            shape={view.shape}
+            pulse={view.pulse}
+            size={8}
+            ariaLabel={view.label}
+            separator
+          />
+        </span>
+      ) : null}
+    </button>
   );
 }

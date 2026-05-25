@@ -1,0 +1,75 @@
+{
+  "name": "first-tree",
+  "version": "0.5.1",
+  "type": "module",
+  "description": "First Tree — unified CLI for Context Tree onboarding, GitHub Scan automation, agent management, and Hub messaging.",
+  "keywords": [
+    "agents",
+    "cli",
+    "context-tree",
+    "first-tree",
+    "github",
+    "hub"
+  ],
+  "homepage": "https://github.com/agent-team-foundation/first-tree#readme",
+  "bugs": {
+    "url": "https://github.com/agent-team-foundation/first-tree/issues"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "bin": {
+    "first-tree": "./dist/cli/index.mjs",
+    "ft": "./dist/cli/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "tsx src/cli/index.ts",
+    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agent-team-foundation/first-tree.git",
+    "directory": "apps/cli"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.84",
+    "@inquirer/prompts": "^8.3.0",
+    "@larksuiteoapi/node-sdk": "^1.59.0",
+    "@openai/codex-sdk": "^0.125.0",
+    "commander": "^13.1.0",
+    "gray-matter": "^4.0.3",
+    "jose": "^6.0.0",
+    "semver": "^7.6.3",
+    "ws": "^8.20.0",
+    "yaml": "^2.8.3",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@first-tree/client": "workspace:*",
+    "@first-tree/github-scan": "workspace:*",
+    "@first-tree/server": "workspace:*",
+    "@first-tree/shared": "workspace:*",
+    "@first-tree/web": "workspace:*",
+    "@types/node": "^22.16.0",
+    "@types/semver": "^7.5.8",
+    "postgres": "^3.4.0",
+    "tsdown": "^0.21.4",
+    "tsx": "^4.21.0",
+    "vitest": "^3.2.0"
+  }
+}

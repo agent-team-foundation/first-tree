@@ -1,8 +1,9 @@
 import { Check } from "lucide-react";
+import { Navigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { PageHeader } from "../../components/ui/page-header.js";
-import { SettingsSection } from "../../components/ui/settings-section.js";
+import { Section } from "../../components/ui/section.js";
 
 /**
  * Settings → Onboarding. Surfaces the onboarding stepper's enable/disable
@@ -15,7 +16,15 @@ import { SettingsSection } from "../../components/ui/settings-section.js";
  * one-way action. This page is the recovery path.
  */
 export function SettingsOnboardingPage() {
-  const { onboardingStep, onboardingDismissedAt, dismissOnboarding, restoreOnboarding } = useAuth();
+  const { onboardingStep, onboardingDismissedAt, onboardingCompletedAt, dismissOnboarding, restoreOnboarding } =
+    useAuth();
+  // Terminal state — Step 3 was completed. The wizard is one-shot;
+  // subsequent config edits go through Settings → Team and /agents/:uuid.
+  // Sidebar entry is also hidden, but a direct URL would still reach this
+  // page without the guard.
+  if (onboardingCompletedAt) {
+    return <Navigate to="/settings/team" replace />;
+  }
   const isDismissed = !!onboardingDismissedAt;
 
   // Mirror the stepper `✕` gate exactly — only `completed` (i.e. has at
@@ -28,15 +37,14 @@ export function SettingsOnboardingPage() {
     <>
       <PageHeader title="Onboarding" subtitle="Guided setup controls" />
       <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
-        <SettingsSection
+        <Section
           title="Onboarding guide"
           description={
             isDismissed
               ? "The stepper is hidden. Bring it back if you want to walk through Step 3 (build your context-tree)."
               : "The stepper is shown above your workspace. You can hide it any time once your agent is set up."
           }
-          right={isDismissed ? null : <ActiveBadge />}
-          isFirst
+          action={isDismissed ? null : <ActiveBadge />}
         >
           {isDismissed ? (
             <Button type="button" size="sm" onClick={() => void restoreOnboarding()}>
@@ -54,7 +62,7 @@ export function SettingsOnboardingPage() {
               Hide onboarding guide
             </Button>
           )}
-        </SettingsSection>
+        </Section>
       </div>
     </>
   );

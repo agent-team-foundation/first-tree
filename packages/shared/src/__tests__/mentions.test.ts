@@ -24,6 +24,8 @@ function mkParticipant(
     // back to a synthetic label when the extras don't provide one.
     displayName: extras.displayName ?? `agent-${agentId}`,
     type: extras.type ?? "autonomous_agent",
+    avatarColorToken: extras.avatarColorToken ?? null,
+    avatarImageUrl: extras.avatarImageUrl ?? null,
   };
 }
 
@@ -86,6 +88,16 @@ describe("extractMentions", () => {
     expect(extractMentions("@@alice was here", participants)).toEqual([]);
   });
 
+  it("does not match npm scoped package names (`@scope/pkg`)", () => {
+    // The composer's pre-flight check uses the same regex; without the
+    // trailing `/`-rejecting lookahead, `npm i first-tree`
+    // would surface `agent-team-foundation` as an unresolved mention token
+    // and block the send. Defend the npm-scope shape for the participant
+    // names too — `@alice/foo` is not a mention of alice.
+    expect(extractMentions("npm i first-tree", participants)).toEqual([]);
+    expect(extractMentions("see @alice/foo for details", participants)).toEqual([]);
+  });
+
   it("handles hyphen-containing participant names", () => {
     expect(extractMentions("@charlie-07 check stats", participants)).toEqual(["agent-charlie"]);
   });
@@ -109,5 +121,13 @@ describe("scanMentionTokens", () => {
 
   it("still scans tokens that don't match any participant — useful for warn logs", () => {
     expect(scanMentionTokens("@ghost")).toEqual(["ghost"]);
+  });
+
+  it("ignores npm scoped package names entirely (no partial-prefix backtrack)", () => {
+    // Without the strict trailing lookahead the engine backtracked the greedy
+    // `[A-Za-z0-9_-]{0,63}` and surfaced `agent-team-` as a partial-match
+    // mention token of `@agent-team-foundation/...`. Pin both forms.
+    expect(scanMentionTokens("npm i first-tree-shared")).toEqual([]);
+    expect(scanMentionTokens("@alice/foo and @bob/bar")).toEqual([]);
   });
 });

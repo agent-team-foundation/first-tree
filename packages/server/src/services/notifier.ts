@@ -4,6 +4,7 @@ import type { WebSocket } from "ws";
 const INBOX_CHANNEL = "inbox_notifications";
 const CONFIG_CHANNEL = "config_changes";
 const SESSION_STATE_CHANNEL = "session_state_changes";
+const SESSION_EVENT_CHANNEL = "session_event_changes";
 const RUNTIME_STATE_CHANNEL = "runtime_state_changes";
 /**
  * Chat-first workspace cross-process kick. Carries `<chatId>:<messageId>`.
@@ -20,15 +21,28 @@ export type SessionStateChangeHandler = (payload: {
   state: string;
   organizationId: string;
 }) => void;
+/**
+ * Session event notification — fired whenever a new `session_events` row is
+ * appended (tool_call / thinking / assistant_text / turn_end / error). The
+ * payload intentionally carries only the routing dimensions; admin WS
+ * consumers refetch `me/chats` rather than reconstructing the event
+ * locally, so the NOTIFY stays under the 8KB PG limit even when events
+ * burst at tool-call cadence.
+ */
+export type SessionEventChangeHandler = (payload: {
+  agentId: string;
+  chatId: string;
+  kind: string;
+  organizationId: string;
+}) => void;
 export type RuntimeStateChangeHandler = (payload: { agentId: string; state: string; organizationId: string }) => void;
 export type ChatMessageChangeHandler = (payload: { chatId: string; messageId: string }) => void;
 
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
  * `inbox_notifications` for a subscribed inbox, the notifier hands the
- * `messageId` to this handler instead of sending the legacy `new_message`
- * doorbell frame. The handler owns claim-row + build-payload + send-frame
- * + in-flight bookkeeping (see proposal hub-inbox-ws-data-plane §3.2).
+ * `messageId` to this handler. The handler owns claim-row + build-payload +
+ * send-frame + in-flight bookkeeping.
  *
  * Handlers are fire-and-forget — the notifier swallows their resolution; any
  * errors are the handler's responsibility to log. Returning a Promise lets
@@ -38,14 +52,10 @@ export type InboxPushHandler = (messageId: string) => Promise<void> | void;
 
 export type Notifier = {
   /**
-   * Subscribe a WebSocket for an inbox. If `pushHandler` is provided, NOTIFY
-   * traffic for this inbox routes to the handler instead of the legacy
-   * `new_message` doorbell. Multiple sockets per inbox are supported; each
-   * one is keyed independently so a doorbell client and a push client can
-   * co-exist (think mid-rollout where one organisation upgrades before
-   * another).
+   * Subscribe a WebSocket for an inbox. NOTIFY traffic for the inbox is
+   * dispatched to `pushHandler`.
    */
-  subscribe(inboxId: string, ws: WebSocket, pushHandler?: InboxPushHandler): void;
+  subscribe(inboxId: string, ws: WebSocket, pushHandler: InboxPushHandler): void;
   /** Unsubscribe a WebSocket connection */
   unsubscribe(inboxId: string, ws: WebSocket): void;
   /** Notify that new messages are available for an inbox */
@@ -54,6 +64,8 @@ export type Notifier = {
   notifyConfigChange(configType: string): Promise<void>;
   /** Notify that a session state has changed */
   notifySessionStateChange(agentId: string, chatId: string, state: string, organizationId: string): Promise<void>;
+  /** Notify that a session event was appended (used to invalidate `liveActivity`). */
+  notifySessionEvent(agentId: string, chatId: string, kind: string, organizationId: string): Promise<void>;
   /** Notify that an agent runtime state has changed (idle/working/error/…). Payload is org-scoped so admin consumers can filter. */
   notifyRuntimeStateChange(agentId: string, state: string, organizationId: string): Promise<void>;
   /** Chat-first workspace: kick admin WS sockets to invalidate ["me","chats"] and the timeline of `chatId`. */
@@ -70,6 +82,8 @@ export type Notifier = {
   onConfigChange(handler: ConfigChangeHandler): void;
   /** Register a handler for session state change notifications */
   onSessionStateChange(handler: SessionStateChangeHandler): void;
+  /** Register a handler for session-event notifications (per-chat liveActivity). */
+  onSessionEvent(handler: SessionEventChangeHandler): void;
   /** Register a handler for runtime state change notifications */
   onRuntimeStateChange(handler: RuntimeStateChangeHandler): void;
   /** Register a handler for chat:message change notifications. */
@@ -81,17 +95,16 @@ export type Notifier = {
 };
 
 export function createNotifier(listenClient: postgres.Sql): Notifier {
-  // Each subscription stores either a push handler (WS data-plane path) or
-  // null (legacy `new_message` doorbell). A single inbox may have a mix of
-  // both during gradual rollout — the LISTEN handler dispatches per-socket.
-  const subscriptions = new Map<string, Map<WebSocket, InboxPushHandler | null>>();
+  const subscriptions = new Map<string, Map<WebSocket, InboxPushHandler>>();
   const configChangeHandlers: ConfigChangeHandler[] = [];
   const sessionStateChangeHandlers: SessionStateChangeHandler[] = [];
+  const sessionEventHandlers: SessionEventChangeHandler[] = [];
   const runtimeStateChangeHandlers: RuntimeStateChangeHandler[] = [];
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
+  let unlistenSessionEventFn: (() => Promise<void>) | null = null;
   let unlistenRuntimeStateFn: (() => Promise<void>) | null = null;
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
 
@@ -105,34 +118,27 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
     const sockets = subscriptions.get(inboxId);
     if (!sockets) return;
 
-    const doorbellFrame = JSON.stringify({ type: "new_message", inboxId, messageId });
     for (const [ws, pushHandler] of sockets) {
       if (ws.readyState !== ws.OPEN) continue;
-      if (pushHandler) {
-        // WS data-plane path: defer DB + frame work to the per-socket handler.
-        // It owns capability gating, in-flight backpressure, claim, build, and
-        // send. Resolution is intentionally not awaited — the LISTEN loop must
-        // not stall on slow consumers.
-        Promise.resolve(pushHandler(messageId)).catch(() => {
-          // Handler-side errors are logged by the handler; swallow here so a
-          // single misbehaving socket does not break notification fan-out for
-          // the rest of the subscribers.
-        });
-      } else {
-        // Legacy doorbell path: kick the client to HTTP-poll.
-        ws.send(doorbellFrame);
-      }
+      // Defer DB + frame work to the per-socket handler. It owns in-flight
+      // backpressure, claim, build, and send. Resolution is intentionally
+      // not awaited — the LISTEN loop must not stall on slow consumers.
+      Promise.resolve(pushHandler(messageId)).catch(() => {
+        // Handler-side errors are logged by the handler; swallow here so a
+        // single misbehaving socket does not break notification fan-out for
+        // the rest of the subscribers.
+      });
     }
   }
 
   return {
-    subscribe(inboxId: string, ws: WebSocket, pushHandler?: InboxPushHandler) {
+    subscribe(inboxId: string, ws: WebSocket, pushHandler: InboxPushHandler) {
       let map = subscriptions.get(inboxId);
       if (!map) {
         map = new Map();
         subscriptions.set(inboxId, map);
       }
-      map.set(ws, pushHandler ?? null);
+      map.set(ws, pushHandler);
     },
 
     unsubscribe(inboxId: string, ws: WebSocket) {
@@ -166,6 +172,18 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         await listenClient`SELECT pg_notify(${SESSION_STATE_CHANNEL}, ${`${agentId}:${chatId}:${state}:${organizationId}`})`;
       } catch {
         // fire-and-forget
+      }
+    },
+
+    async notifySessionEvent(agentId: string, chatId: string, kind: string, organizationId: string) {
+      try {
+        // Same `<a>:<b>:<c>:<d>` shape as the session-state channel so
+        // payload parsing can reuse the index-of-3 split below. agentId
+        // and chatId are UUIDs (no colons); kind is a fixed-vocabulary
+        // enum (`tool_call` etc., no colons either).
+        await listenClient`SELECT pg_notify(${SESSION_EVENT_CHANNEL}, ${`${agentId}:${chatId}:${kind}:${organizationId}`})`;
+      } catch {
+        // fire-and-forget — admin UI's 15s `me/chats` polling re-syncs.
       }
     },
 
@@ -213,6 +231,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       sessionStateChangeHandlers.push(handler);
     },
 
+    onSessionEvent(handler: SessionEventChangeHandler) {
+      sessionEventHandlers.push(handler);
+    },
+
     onRuntimeStateChange(handler: RuntimeStateChangeHandler) {
       runtimeStateChangeHandlers.push(handler);
     },
@@ -254,6 +276,30 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenSessionStateFn = sessionStateResult.unlisten;
+
+      const sessionEventResult = await listenClient.listen(SESSION_EVENT_CHANNEL, (payload) => {
+        if (payload) {
+          // payload format: "agentId:chatId:kind:organizationId" — mirrors
+          // the session-state channel split.
+          const firstSep = payload.indexOf(":");
+          const secondSep = payload.indexOf(":", firstSep + 1);
+          const thirdSep = payload.indexOf(":", secondSep + 1);
+          if (firstSep > 0 && secondSep > firstSep && thirdSep > secondSep) {
+            const agentId = payload.slice(0, firstSep);
+            const chatId = payload.slice(firstSep + 1, secondSep);
+            const kind = payload.slice(secondSep + 1, thirdSep);
+            const organizationId = payload.slice(thirdSep + 1);
+            for (const handler of sessionEventHandlers) {
+              try {
+                handler({ agentId, chatId, kind, organizationId });
+              } catch {
+                // swallow — handler errors must not poison fan-out
+              }
+            }
+          }
+        }
+      });
+      unlistenSessionEventFn = sessionEventResult.unlisten;
 
       const runtimeStateResult = await listenClient.listen(RUNTIME_STATE_CHANNEL, (payload) => {
         if (payload) {
@@ -303,6 +349,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenSessionStateFn) {
         await unlistenSessionStateFn();
         unlistenSessionStateFn = null;
+      }
+      if (unlistenSessionEventFn) {
+        await unlistenSessionEventFn();
+        unlistenSessionEventFn = null;
       }
       if (unlistenRuntimeStateFn) {
         await unlistenRuntimeStateFn();

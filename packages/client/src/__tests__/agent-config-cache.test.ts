@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfig } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfig } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { FirstTreeHubSDK } from "../sdk.js";

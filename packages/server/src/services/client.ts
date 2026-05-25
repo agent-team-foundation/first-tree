@@ -2,7 +2,9 @@ import {
   type ClientCapabilities,
   clientCapabilitiesSchema,
   type RuntimeProvider,
-} from "@agent-team-foundation/first-tree-hub-shared";
+  type UpdateAttempt,
+  updateAttemptSchema,
+} from "@first-tree/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -43,7 +45,7 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
  *     at first insert sticks for the row's lifetime.
  *   - Existing row with a different user_id → raises
  *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `first-tree-hub client claim --confirm` to take
+ *     operator through `first-tree login <token> --override` to take
  *     ownership, which unpins the previous owner's agents from the machine.
  */
 export async function registerClient(
@@ -56,6 +58,14 @@ export async function registerClient(
     hostname?: string;
     os?: string;
     sdkVersion?: string;
+    /**
+     * Most recent self-update outcome reported by the client on its
+     * `client:register` frame. Merged shallow into `clients.metadata`
+     * under the `lastUpdateAttempt` key so the admin dashboard can
+     * surface "X clients failed to self-update — last reason …".
+     * Optional — clients without the update-state wiring don't send it.
+     */
+    lastUpdateAttempt?: UpdateAttempt;
   },
 ) {
   const now = new Date();
@@ -69,9 +79,21 @@ export async function registerClient(
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        "Run `first-tree-hub client claim --confirm` to transfer ownership.",
+        "Run `first-tree login <token> --override` to transfer ownership.",
     );
   }
+
+  // Shallow-merge `lastUpdateAttempt` into the existing metadata jsonb so
+  // we don't clobber sibling keys like `capabilities` (written by
+  // `updateClientCapabilities`). Postgres `||` is a shallow merge — the
+  // top-level `lastUpdateAttempt` key is replaced wholesale, peers
+  // untouched. COALESCE handles the brand-new-row case where metadata is
+  // still NULL. We only emit the merge clause when the client actually
+  // reported an attempt — old clients without the wire field continue to
+  // not touch metadata at all.
+  const metadataMerge = data.lastUpdateAttempt
+    ? sql`COALESCE(${clients.metadata}, '{}'::jsonb) || ${JSON.stringify({ lastUpdateAttempt: data.lastUpdateAttempt })}::jsonb`
+    : undefined;
 
   await db
     .insert(clients)
@@ -86,6 +108,7 @@ export async function registerClient(
       sdkVersion: data.sdkVersion ?? null,
       connectedAt: now,
       lastSeenAt: now,
+      ...(data.lastUpdateAttempt ? { metadata: { lastUpdateAttempt: data.lastUpdateAttempt } } : {}),
     })
     .onConflictDoUpdate({
       target: clients.id,
@@ -98,6 +121,7 @@ export async function registerClient(
         sdkVersion: data.sdkVersion ?? null,
         connectedAt: now,
         lastSeenAt: now,
+        ...(metadataMerge ? { metadata: metadataMerge } : {}),
       },
     });
 }
@@ -122,7 +146,7 @@ export async function claimClient(
   db: Database,
   clientId: string,
   newUserId: string,
-): Promise<{ previousUserId: string | null; unpinnedAgentIds: string[] }> {
+): Promise<{ previousUserId: string | null; unpinnedAgentIds: string[]; supersededChatIds: string[] }> {
   return db.transaction(async (tx) => {
     const [locked] = await tx.execute<{ id: string; user_id: string | null }>(
       sql`SELECT id, user_id FROM clients WHERE id = ${clientId} FOR UPDATE`,
@@ -133,10 +157,11 @@ export async function claimClient(
     const previousUserId = locked.user_id;
 
     if (previousUserId === newUserId) {
-      return { previousUserId, unpinnedAgentIds: [] as string[] };
+      return { previousUserId, unpinnedAgentIds: [] as string[], supersededChatIds: [] as string[] };
     }
 
     let unpinnedAgentIds: string[] = [];
+    let supersededChatIds: string[] = [];
     if (previousUserId !== null) {
       const rows = await tx
         .select({ uuid: agents.uuid })
@@ -154,14 +179,16 @@ export async function claimClient(
           .where(inArray(agentPresence.agentId, unpinnedAgentIds));
         // Pending ask-user questions on the unpinned agents can no longer be
         // delivered back — their owning client is detaching. Mark superseded
-        // in the same transaction so a rollback unwinds it together.
-        await markSupersededByAgents(tx, unpinnedAgentIds, "client_claimed");
+        // in the same transaction so a rollback unwinds it together. The
+        // affected chat ids flow back to the caller for a post-commit
+        // needs-you refresh (this path emits no session:state change).
+        supersededChatIds = await markSupersededByAgents(tx, unpinnedAgentIds, "client_claimed");
       }
     }
 
     await tx.update(clients).set({ userId: newUserId }).where(eq(clients.id, clientId));
 
-    return { previousUserId, unpinnedAgentIds };
+    return { previousUserId, unpinnedAgentIds, supersededChatIds };
   });
 }
 
@@ -187,10 +214,30 @@ export async function getClient(db: Database, clientId: string) {
 }
 
 /**
+ * Pull the most-recent self-update attempt out of a client row's
+ * `metadata` jsonb, if one is recorded. Returns `null` when:
+ *   - the row has no metadata yet (client without update-state wiring,
+ *     or first connect ever for this row)
+ *   - the `lastUpdateAttempt` sub-object is missing
+ *   - the sub-object fails schema validation (corrupted on disk, or a
+ *     newer wire shape we don't recognise)
+ *
+ * Exposed so the admin / `/me/clients` routes can flatten metadata's
+ * structured field into the response without each route re-doing the
+ * narrowing.
+ */
+export function extractLastUpdateAttempt(metadata: unknown): UpdateAttempt | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const sub = (metadata as Record<string, unknown>).lastUpdateAttempt;
+  const parsed = updateAttemptSchema.safeParse(sub);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
  * List the active agents currently pinned to a client. Used by the WS
  * registration handshake to backfill `agent:pinned` notifications missed while
  * the client was offline — without it, an admin who pinned an agent during a
- * client outage would still need a manual `first-tree-hub agent add`.
+ * client outage would still need a manual `first-tree agent add`.
  *
  * Excludes soft-deleted agents (status = "deleted"). Human agents are
  * naturally excluded by the `clientId` filter — they never carry a clientId.

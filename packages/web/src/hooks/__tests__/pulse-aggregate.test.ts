@@ -1,4 +1,4 @@
-import type { PulseBucket } from "@agent-team-foundation/first-tree-hub-shared";
+import type { PulseBucket } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { aggregate, EMPTY_BUCKETS } from "../pulse-aggregate.js";
 

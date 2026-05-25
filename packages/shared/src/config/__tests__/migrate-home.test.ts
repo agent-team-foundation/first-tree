@@ -11,7 +11,7 @@ let newHome: string;
 beforeEach(() => {
   sandbox = join(tmpdir(), `ftt-migrate-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(sandbox, { recursive: true });
-  legacy = join(sandbox, "legacy", ".first-tree-hub");
+  legacy = join(sandbox, "legacy", ".first-tree");
   newHome = join(sandbox, "new", ".first-tree", "hub");
 });
 
@@ -34,7 +34,7 @@ describe("migrateLegacyHome", () => {
     expect(existsSync(newHome)).toBe(false);
   });
 
-  it("skips when FIRST_TREE_HUB_HOME is set (user-controlled home)", () => {
+  it("skips when FIRST_TREE_HOME is set (user-controlled home)", () => {
     seedLegacy();
     const res = migrateLegacyHome({
       newHome,

@@ -23,9 +23,17 @@ jobs:
       - name: Validate branch name
         run: |
           BRANCH="${{ github.head_ref }}"
-          PATTERN="^(feat|fix|refactor|test|docs|chore)/"
+          # hub-session-* branches are auto-created by the in-tree hub agent
+          # runtime when a coder session opens a PR. The agent doesn't pick
+          # the name, so the convention check skips them. Long-term fix is
+          # to teach the hub session bootstrap to prefix with feat/ etc.
+          if [[ "$BRANCH" =~ ^hub-session- ]]; then
+            echo "Branch '$BRANCH' is auto-named by the hub agent runtime; skipping convention check."
+            exit 0
+          fi
+          PATTERN="^(feat|fix|refactor|test|docs|chore|merge)/"
           if [[ ! "$BRANCH" =~ $PATTERN ]]; then
-            echo "::error::Branch name '$BRANCH' does not follow convention: feat/, fix/, refactor/, test/, docs/, chore/"
+            echo "::error::Branch name '$BRANCH' does not follow convention: feat/, fix/, refactor/, test/, docs/, chore/, merge/"
             exit 1
           fi
 
@@ -43,6 +51,7 @@ jobs:
           filters: |
             code:
               - 'packages/**'
+              - 'apps/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'tsconfig.json'
@@ -79,6 +88,20 @@ jobs:
         with:
           node-version: "22"
           cache: "pnpm"
+      # Persist Turborepo's task cache between runs. With this, an unchanged
+      # `build` / `typecheck` task hashes the same and turbo replays the
+      # cached result instead of re-running. Key is job-scoped so the lint
+      # and test jobs don't race on the same save slot (actions/cache drops
+      # the second writer with a warning, which would silently lose half
+      # the cache); `restore-keys` falls back to the most recent prefix
+      # match (any prior lint run on this OS).
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-lint-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-lint-
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build
@@ -89,6 +112,27 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    # Sidecar Postgres started by the runner in parallel with checkout / install,
+    # so the test process never pays a `docker pull postgres:17` cost on its
+    # critical path. `global-setup.ts` reads `CI_DATABASE_URL` and skips the
+    # testcontainers spin-up; locally that env is unset and the original
+    # testcontainers path stays intact.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI_DATABASE_URL: postgres://test:test@localhost:5432/test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -96,5 +140,121 @@ jobs:
         with:
           node-version: "22"
           cache: "pnpm"
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-test-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-test-
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+
+  check-migrations:
+    name: Migrations
+    runs-on: ubuntu-latest
+    # Always runs — even on PRs that touch no server code. Branch protection
+    # no longer requires PRs to be up to date with main, so this job is the
+    # single guard against two PRs landing colliding migration idxs.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Fetch main for cross-branch comparison
+        # Only PR runs need to compare HEAD against main. On push-to-main
+        # the local contiguity check is sufficient (a duplicate idx that
+        # snuck through two racing PRs surfaces as a broken sequence in
+        # _journal.json) and fetching main risks a TOCTOU "missing from
+        # HEAD" false positive if another push lands between this push
+        # and the fetch.
+        if: github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin main:refs/remotes/origin/main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node scripts/check-migrations.mjs
+
+  grep-legacy-names:
+    name: Forbid legacy CLI / env names
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: grep — forbid old hub-client subcommand syntax
+        run: |
+          # The `[f]` char-class is a self-immunity trick: the regex still
+          # matches the literal `first-tree-hub`, but `grep -r first-tree-hub`
+          # over this file does NOT self-match the regex itself.
+          # `--exclude-dir=migration` keeps the docs/migration/ guides — which
+          # legitimately show the old names side-by-side with the new — from
+          # tripping the check.
+          if grep -rEn --exclude-dir=migration "[f]irst-tree-hub (onboard|connect|disconnect|update|claim|client (start|stop|restart|status|doctor|claim|list|disconnect|config))" packages apps scripts docs skills .github; then
+            echo "::error::found legacy first-tree-hub subcommand syntax; should now be 'first-tree ...'"
+            exit 1
+          fi
+      - name: grep — forbid FIRST_TREE_HUB_ env vars
+        run: |
+          # `--exclude-dir=migration` keeps the docs/migration/ env-var rename
+          # tables (which legitimately list the old FIRST_TREE_HUB_* names
+          # alongside the new FIRST_TREE_* ones) from tripping the check.
+          if grep -rEn --exclude-dir=migration "FIRST_TREE_HUB_(AGENT_ID|LOG_LEVEL|JSON)" packages apps scripts docs skills .github; then
+            echo "::error::found legacy FIRST_TREE_HUB_* env var references; should use FIRST_TREE_* (Phase 1A T1A.5)"
+            exit 1
+          fi
+      - name: grep — forbid any literal first-tree-hub (broad sweep)
+        run: |
+          # N-1 broad sweep: forbid any first-tree-hub literal anywhere except
+          # the documented legitimate residues. The narrow subcommand regex above
+          # only catches Phase 1A's hub-client verbs; this catches future
+          # regressions where someone re-introduces `first-tree-hub <new-cmd>`,
+          # `@agent-team-foundation/first-tree-hub`, or naked `first-tree-hub`
+          # mentions in any code/config/docs.
+          #
+          # Legitimate residues (allow-listed and filtered out via the trailing
+          # `grep -v` pipeline):
+          # - docs/migration/**                          : migration tables show old↔new
+          # - docs/development/git-history.md            : merge anchor doc cites legacy repo URL
+          # - .github/workflows/ci.yml                   : this file's own regex literals (self-immunity via [f])
+          # - packages/server/drizzle/*.sql              : SQL migrations are immutable historical artifacts
+          hits=$(grep -rEn \
+            --exclude-dir=migration \
+            --exclude-dir=node_modules \
+            --exclude-dir=dist \
+            --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
+            --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
+            "[f]irst-tree-hub" packages apps scripts docs skills .github \
+            | grep -v -E '^docs/development/git-history\.md:|^\.github/workflows/ci\.yml:' \
+            || true)
+          if [ -n "$hits" ]; then
+            echo "::error::found a 'first-tree-hub' literal outside the documented allow-list — see N-1 in PR-1 description"
+            echo "$hits"
+            exit 1
+          fi
+      - name: grep — forbid the literal three-word product name "First Tree Hub"
+        run: |
+          # Second-pass sweep added after PR-1 review-round-2 found that the
+          # hyphenated `first-tree-hub` check above misses the three-word
+          # form "First Tree Hub" (prose / titles / UI strings). N-3=a
+          # ("Hub brand fully retired") covers both forms.
+          #
+          # The `[F]` self-immunity trick keeps this file's own comments
+          # (which must spell out the forbidden literal) from tripping the
+          # check. Same allow-list as the broad sweep above; docs/ is also
+          # currently allow-listed until the N-4 design-docs sweep lands —
+          # see PR-1 description "First Tree Hub product-name residues".
+          hits=$(grep -rEn \
+            --exclude-dir=migration \
+            --exclude-dir=node_modules \
+            --exclude-dir=dist \
+            --exclude-dir=docs \
+            --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
+            --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
+            "[F]irst Tree Hub" packages apps scripts docs skills .github \
+            | grep -v -E '^docs/development/git-history\.md:|^\.github/workflows/ci\.yml:' \
+            || true)
+          if [ -n "$hits" ]; then
+            echo "::error::found a 'First Tree Hub' three-word product-name literal outside the allow-list — N-3 brand retirement"
+            echo "$hits"
+            exit 1
+          fi

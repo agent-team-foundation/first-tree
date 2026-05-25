@@ -1,5 +1,5 @@
 {
-  "name": "@first-tree-hub/server",
+  "name": "@first-tree/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,13 +20,12 @@
     "build": "tsdown src/index.ts src/app.ts src/observability/index.ts --format esm --no-dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate",
+    "db:generate": "drizzle-kit generate && node ../../scripts/sync-migration-head.mjs",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio",
-    "admin:create": "tsx src/scripts/create-admin.ts"
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@agent-team-foundation/first-tree-hub-shared": "workspace:*",
+    "@first-tree/shared": "workspace:*",
     "@autotelic/fastify-opentelemetry": "^0.23.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
@@ -46,7 +45,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@first-tree-hub/client": "workspace:*",
+    "@first-tree/client": "workspace:*",
     "@opentelemetry/context-async-hooks": "^2.7.0",
     "@opentelemetry/sdk-trace-base": "^2.7.0",
     "@testcontainers/postgresql": "^11.13.0",

@@ -1,4 +1,4 @@
-import { INVITATION_DEFAULT_TTL_DAYS, type InvitationView } from "@agent-team-foundation/first-tree-hub-shared";
+import { INVITATION_DEFAULT_TTL_DAYS, type InvitationView } from "@first-tree/shared";
 import { useEffect, useState } from "react";
 import { api, withOrgAt } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";

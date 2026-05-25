@@ -72,8 +72,7 @@ export type GithubAppInstallationEvents = z.infer<typeof githubAppInstallationEv
  * and treat absence of expiry fields as "still on legacy OAuth token".
  *
  * The token strings themselves are AES-256-GCM ciphertext — same pattern as
- * `adapter_configs` / `organization_settings.github_integration`. Plaintext
- * never touches the row.
+ * `adapter_configs`. Plaintext never touches the row.
  */
 export const githubAppUserTokenMetadataSchema = z.object({
   login: z.string().optional(),

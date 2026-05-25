@@ -1,5 +1,5 @@
 {
-  "name": "first-tree-hub",
+  "name": "first-tree-monorepo",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,12 @@
     "format": "biome check --write .",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "validate:skill": "python3 ./skills/first-tree-hub-cli/scripts/quick_validate.py ./skills/first-tree-hub-cli && bash ./skills/first-tree-hub-cli/scripts/check-skill-sync.sh"
+    "e2e:doctor": "turbo run e2e:doctor --filter=@first-tree/e2e",
+    "e2e:smoke": "turbo run e2e:smoke --filter=@first-tree/e2e",
+    "e2e:full": "turbo run e2e:full --filter=@first-tree/e2e",
+    "e2e:up": "pnpm --filter @first-tree/e2e e2e:up",
+    "e2e:clean": "pnpm --filter @first-tree/e2e e2e:clean",
+    "validate:skill": "python3 ./skills/first-tree-cloud/scripts/quick_validate.py ./skills/first-tree-cloud && bash ./skills/first-tree-cloud/scripts/check-skill-sync.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",

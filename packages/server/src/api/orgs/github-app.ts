@@ -2,13 +2,23 @@ import {
   type GithubAccountType,
   type GithubAppInstallationOutput,
   githubAppInstallationClaimBodySchema,
-} from "@agent-team-foundation/first-tree-hub-shared";
+} from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { authIdentities } from "../../db/schema/auth-identities.js";
 import { ForbiddenError, NotFoundError } from "../../errors.js";
 import { requireOrgAdmin } from "../../scope/require-org.js";
 import { getStoredGithubAccessToken } from "../../services/auth-identity.js";
-import { buildAppInstallUrl, GithubAppApiError, listUserAccessibleInstallationIds } from "../../services/github-app.js";
-import { bindInstallationToOrg, findInstallationByOrg } from "../../services/github-app-installations.js";
+import {
+  buildAppInstallUrl,
+  GithubAppApiError,
+  verifyUserCanAdministerInstallation,
+} from "../../services/github-app.js";
+import {
+  bindInstallationToOrg,
+  findInstallationByGithubId,
+  findInstallationByOrg,
+} from "../../services/github-app-installations.js";
 import { OAUTH_STATE_COOKIE, OAUTH_STATE_COOKIE_MAX_AGE_S, signOAuthState } from "../../services/oauth-state.js";
 import { buildCookie } from "../auth/oauth-cookie.js";
 
@@ -36,8 +46,6 @@ const POST_INSTALL_NEXT = "/settings/github";
  *
  * Admin-only: the installation block exposes account-level metadata
  * (login, permissions, events) that a regular member doesn't need.
- * Mirrors the readPolicy="admin" choice for `github_integration` in the
- * legacy settings.
  */
 export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
@@ -102,10 +110,10 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       // The App may be configured for sign-in/webhooks but missing the
       // slug needed for the install dialog. 503 (not 404/400) — the
       // operator can fix it by setting one env var; the panel renders a
-      // "ask your operator to set FIRST_TREE_HUB_GITHUB_APP_SLUG" hint.
+      // "ask your operator to set FIRST_TREE_GITHUB_APP_SLUG" hint.
       return reply
         .status(503)
-        .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_HUB_GITHUB_APP_SLUG is not configured." });
+        .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_GITHUB_APP_SLUG is not configured." });
     }
 
     // `targetOrganizationId` rides inside the signed state so the OAuth
@@ -136,40 +144,68 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // an org account, where "the user is an org admin" isn't a strong enough
   // basis to auto-claim).
   //
-  // ⚠ This endpoint is **API-only** in PR 2/3 — there is no Settings UI
-  // that calls it yet. The orphan-list endpoint and the `Claim install`
-  // button per orphan are tracked in #318 and intentionally deferred to
-  // keep PR 2/3 focused. Until #318 ships, multi-orphan recovery requires
-  // the operator to POST to this endpoint directly.
+  // ⚠ This endpoint is **API-only** — there is no Settings UI that calls
+  // it yet. The orphan-list endpoint and the `Claim install` button per
+  // orphan are tracked in #318. Until #318 ships, multi-orphan recovery
+  // requires the operator to POST to this endpoint directly.
   //
-  // Authorization mirrors the OAuth callback's `installation_id` check
-  // (codex P0-2): being an admin of the target Hub org isn't sufficient —
-  // installation IDs aren't secrets, so we also confirm the caller can
-  // actually administer this installation on GitHub via `/user/installations`
-  // before binding it. Otherwise an admin who learned an unbound install's
-  // ID could attach someone else's GitHub account to their Hub team.
+  // Authorization mirrors the OAuth callback's `installation_id` check:
+  // being an admin of the target Hub org isn't sufficient — installation
+  // IDs aren't secrets, so we also confirm the caller can actually
+  // **administer** the install on GitHub. Per-install rules:
+  //   - User-type: caller's GitHub ID must equal the install account's
+  //     GitHub ID (only the account owner counts).
+  //   - Org-type: `GET /user/memberships/orgs/{login}` must return
+  //     `state=active, role=admin`. Plain org membership is NOT enough —
+  //     that's what made the legacy `/user/installations` primitive
+  //     forgeable (it surfaced any install the user had read access to).
+  //
+  // Account metadata comes from the existing DB row (UPSERTed by the
+  // webhook or the OAuth callback). 404 here means there's nothing to
+  // claim at all; the bind step never runs.
   app.post<{ Params: { orgId: string }; Body: unknown }>("/claim", async (request) => {
     const scope = await requireOrgAdmin(request, app.db);
     const { installationId } = githubAppInstallationClaimBodySchema.parse(request.body);
+
+    const installRow = await findInstallationByGithubId(app.db, installationId);
+    if (!installRow) {
+      throw new NotFoundError(`Installation ${installationId} not found`);
+    }
 
     const githubToken = await getStoredGithubAccessToken(app.db, scope.userId, app.config.secrets.encryptionKey);
     if (!githubToken) {
       throw new ForbiddenError("No GitHub access token on file — sign in with GitHub again before claiming an install");
     }
-    let accessible: Set<number>;
+
+    // Same row `getStoredGithubAccessToken` just verified — pull the
+    // caller's numeric GitHub ID off `auth_identities.identifier`
+    // (written by the OAuth callback as `String(profile.githubId)`) so
+    // the User-type comparison has something to match against.
+    const [identity] = await app.db
+      .select({ identifier: authIdentities.identifier })
+      .from(authIdentities)
+      .where(and(eq(authIdentities.userId, scope.userId), eq(authIdentities.provider, "github")))
+      .limit(1);
+    const userGithubId = Number(identity?.identifier);
+
+    let canAdminister: boolean;
     try {
-      accessible = await listUserAccessibleInstallationIds(githubToken);
+      canAdminister = await verifyUserCanAdministerInstallation(githubToken, userGithubId, {
+        accountType: installRow.accountType as "User" | "Organization",
+        accountLogin: installRow.accountLogin,
+        accountGithubId: installRow.accountGithubId,
+      });
     } catch (err) {
       const status = err instanceof GithubAppApiError ? err.status : 0;
       if (status === 401) {
         throw new ForbiddenError("Your GitHub session has expired — sign in with GitHub again, then retry the claim");
       }
-      // Upstream hiccup — surface as a 403 so the caller retries rather
+      // Upstream hiccup — surface as 403 so the caller retries rather
       // than treating a transient GitHub outage as a hard failure.
-      app.log.warn({ err, installationId, userId: scope.userId }, "claim: /user/installations check failed");
+      app.log.warn({ err, installationId, userId: scope.userId }, "claim: admin proof check failed");
       throw new ForbiddenError("Couldn't verify GitHub access for this installation — try again in a moment");
     }
-    if (!accessible.has(installationId)) {
+    if (!canAdminister) {
       throw new ForbiddenError("You don't administer this installation on GitHub");
     }
 

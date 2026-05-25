@@ -1,0 +1,62 @@
+import { FirstTreeHubSDK } from "@first-tree/client";
+import { clientConfigSchema, initConfig, resetConfig, resetConfigMeta } from "@first-tree/shared/config";
+import type { CheckResult } from "../../core/doctor.js";
+import {
+  CLI_USER_AGENT,
+  checkAgentConfigs,
+  checkBackgroundService,
+  checkClientConfig,
+  checkNodeVersion,
+  checkServerReachable,
+  checkWebSocket,
+  ensureFreshAccessToken,
+  reconcileAgentConfigs,
+  resolveServerUrl,
+} from "../../core/index.js";
+
+/**
+ * Daemon-side readiness checks. Shared by `daemon doctor` (which renders
+ * exactly this list) and the top-level `doctor` (which will append cross-
+ * subsystem checks once Phase 3 wires `tree` / `github` through). Keeping
+ * the check list in one place means a regression / new check only gets
+ * authored once.
+ *
+ * Returns the same shape `printResults` expects so callers can render it
+ * directly, or splice it into a larger array before rendering.
+ */
+export async function runDaemonChecks(): Promise<CheckResult[]> {
+  // The "Agents" line cross-references local aliases against the server's
+  // pinned-agent set, filtered to THIS client.id (so the verdict matches
+  // what R-RUN will accept). Without a configured server URL we can't talk
+  // to anything; fall back to the legacy local-only count.
+  let agentCheck: CheckResult;
+  try {
+    const serverUrl = resolveServerUrl();
+    const cfg = await initConfig({ schema: clientConfigSchema, role: "client" });
+    const sdk = new FirstTreeHubSDK({
+      serverUrl,
+      getAccessToken: (opts) => ensureFreshAccessToken(opts),
+      userAgent: CLI_USER_AGENT,
+    });
+    agentCheck = await reconcileAgentConfigs({
+      clientId: cfg.client.id,
+      listPinnedAgents: () => sdk.listMyAgents(),
+    });
+  } catch {
+    agentCheck = checkAgentConfigs();
+  } finally {
+    // Doctor is read-only; release the singleton so subsequent commands
+    // re-resolve config cleanly.
+    resetConfig();
+    resetConfigMeta();
+  }
+
+  return [
+    checkNodeVersion(),
+    checkClientConfig(),
+    await checkServerReachable(),
+    agentCheck,
+    await checkWebSocket(),
+    checkBackgroundService(),
+  ];
+}

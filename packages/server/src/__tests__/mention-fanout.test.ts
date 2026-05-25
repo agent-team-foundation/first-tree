@@ -86,6 +86,7 @@ describe("server mention resolution + fan-out filter", () => {
     const { sender, obsA, obsB, chat } = await setupGroup(app, uid);
 
     await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: `@mf-obsA-${uid} please review`,
     });
@@ -96,30 +97,39 @@ describe("server mention resolution + fan-out filter", () => {
     expect(obsBEntries).toHaveLength(0);
   });
 
-  it("full-mode participants receive the entry even when not mentioned", async () => {
+  it("`mode='full'` is decision-inert in v2 — fan-out still skips unmentioned peers", async () => {
+    // v2: `chat_membership.mode` is decision-inert. Even a row written as
+    // `full` (legacy or via the deprecated test helper) does not bypass the
+    // explicit-signal requirement — a 3+ speaker group without any
+    // mention / receiverNames / addressedToAgentIds wakes no one.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { sender, obsA, chat } = await setupGroup(app, uid);
-    // Flip obsA to full — they should always receive regardless of @tokens.
     await setParticipantMode(app, chat.id, obsA.uuid, "full");
 
     await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: "nothing specific, team",
     });
 
     const obsAEntries = await inboxEntriesFor(app, chat.id, obsA.uuid);
-    expect(obsAEntries).toHaveLength(1);
+    expect(obsAEntries).toHaveLength(0);
   });
 
-  it("merges explicit metadata.mentions with content-resolved mentions", async () => {
-    // Caller passes `mentions: [obsA]` explicitly AND text @obsB — both should
-    // receive. Server-side resolution is additive, not overriding.
+  it("explicit metadata.mentions overrides content-resolved mentions (explicit-wins)", async () => {
+    // Caller passes `mentions: [obsA]` explicitly AND text mentions obsB —
+    // ONLY obsA receives. Explicit declaration is treated as the routing
+    // truth; a narrative `@<peer>` in content is no longer additive
+    // (post-Phase-1 follow-up, see first-tree-context PR #281). To wake
+    // both, the caller must list both uuids in `metadata.mentions` (or
+    // declare via `receiverNames`).
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { sender, obsA, obsB, chat } = await setupGroup(app, uid);
 
     await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: `heads up @mf-obsB-${uid}`,
       metadata: { mentions: [obsA.uuid] },
@@ -128,7 +138,33 @@ describe("server mention resolution + fan-out filter", () => {
     const obsAEntries = await inboxEntriesFor(app, chat.id, obsA.uuid);
     const obsBEntries = await inboxEntriesFor(app, chat.id, obsB.uuid);
     expect(obsAEntries).toHaveLength(1);
-    expect(obsBEntries).toHaveLength(1);
+    expect(obsBEntries).toHaveLength(0);
+  });
+
+  it("`receiverNames` resolves recipient names server-side and wakes them", async () => {
+    // CLI / programmatic callers that know the recipient by name (but not
+    // uuid) pass `receiverNames`; server resolves against the chat's
+    // speaker list and adds the resolved uuids to `mentions`. Like
+    // `metadata.mentions`, explicit declaration overrides content
+    // extraction.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { sender, obsA, obsB, chat } = await setupGroup(app, uid);
+    if (!obsA.name) throw new Error("obsA name missing");
+
+    await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
+      format: "text",
+      // Narrative reference to obsB by `@<name>` in content — must NOT
+      // wake obsB because `receiverNames` was explicitly declared.
+      content: `(cc'd @mf-obsB-${uid} for context) please review`,
+      receiverNames: [obsA.name],
+    });
+
+    const obsAEntries = await inboxEntriesFor(app, chat.id, obsA.uuid);
+    const obsBEntries = await inboxEntriesFor(app, chat.id, obsB.uuid);
+    expect(obsAEntries).toHaveLength(1);
+    expect(obsBEntries).toHaveLength(0);
   });
 
   it("code-fenced `@name` does NOT trigger fan-out (three-gate algorithm)", async () => {
@@ -140,6 +176,7 @@ describe("server mention resolution + fan-out filter", () => {
     const { sender, obsA, chat } = await setupGroup(app, uid);
 
     await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: `look at this:\n\`\`\`\n@mf-obsA-${uid} bad code\n\`\`\``,
     });
@@ -154,6 +191,7 @@ describe("server mention resolution + fan-out filter", () => {
     const { sender, obsA, obsB, chat } = await setupGroup(app, uid);
 
     await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: "@nobody-by-that-name hi",
     });
@@ -171,6 +209,7 @@ describe("server mention resolution + fan-out filter", () => {
     const { sender, obsA, chat } = await setupGroup(app, uid);
 
     const { message } = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: `@mf-obsA-${uid} hi`,
     });
@@ -190,6 +229,7 @@ describe("server mention resolution + fan-out filter", () => {
     const { sender, chat } = await setupGroup(app, uid);
 
     await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: "earlier chatter",
     });
@@ -212,6 +252,7 @@ describe("server mention resolution + fan-out filter", () => {
     const uid = crypto.randomUUID().slice(0, 6);
     const { sender, chat } = await setupGroup(app, uid);
     const { message } = await sendMessage(app.db, chat.id, sender.agent.uuid, {
+      source: "api",
       format: "text",
       content: "generic chatter, no @anyone",
     });

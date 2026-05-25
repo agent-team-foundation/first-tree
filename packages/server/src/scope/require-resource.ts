@@ -1,4 +1,4 @@
-import { AGENT_STATUSES, AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_STATUSES, AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
@@ -60,6 +60,27 @@ async function resolveCallerInOrg(
 }
 
 /**
+ * Resolve the caller's active membership in `orgId` without throwing —
+ * returns `null` when the caller is not an active member. Use for surfaces
+ * that should degrade gracefully (e.g. computing per-event chat access for
+ * the org-wide Context usage feed) rather than 404, where the throwing
+ * `resolveCallerInOrg` would be wrong.
+ */
+export async function resolveOrgViewer(
+  db: Database,
+  userId: string,
+  orgId: string,
+): Promise<{ memberId: string; humanAgentId: string } | null> {
+  const [row] = await db
+    .select({ id: members.id, role: members.role, agentId: members.agentId })
+    .from(members)
+    .where(and(eq(members.userId, userId), eq(members.organizationId, orgId), eq(members.status, "active")))
+    .limit(1);
+  if (!row || (row.role !== "admin" && row.role !== "member")) return null;
+  return { memberId: row.id, humanAgentId: row.agentId };
+}
+
+/**
  * Gate access to a single agent. `kind = "visible"` checks read-style
  * visibility (org-visible OR managed by caller). `kind = "manage"` adds
  * "or caller is admin in agent's org".
@@ -87,9 +108,14 @@ export async function requireAgentAccess(
   };
 
   if (kind === "visible") {
+    // Admin in the agent's org can read any agent — symmetric with the
+    // admin-only `/orgs/:orgId/agents/all` listing that already exposes
+    // private agents for cross-member troubleshooting. Without this short
+    // circuit, admins see private agents in the list but get 404 on detail.
     const orgVisible = agent.visibility === AGENT_VISIBILITY.ORGANIZATION;
     const managed = agent.managerId === caller.memberId;
-    if (!orgVisible && !managed) {
+    const isAdmin = caller.role === "admin";
+    if (!orgVisible && !managed && !isAdmin) {
       throw new NotFoundError(`Agent "${uuid}" not found`);
     }
   } else {
@@ -121,10 +147,23 @@ type ChatRow = {
 };
 
 /**
- * Gate access to a chat. Allowed if the caller's HUMAN agent is a
- * participant, OR any agent the caller manages (via members.id) is a
- * participant. Admin role does NOT auto-grant chat access — chat content
- * remains private to participants and supervisors (their managers).
+ * Gate access to a chat. Allowed if the caller's HUMAN agent has any
+ * `chat_membership` row (speaker OR watcher), OR any agent the caller
+ * manages (via members.id) is a speaker. Admin role does NOT auto-grant
+ * chat access — chat content remains private to members and supervisors
+ * (their managers).
+ *
+ * Watchers are allowed on the direct-membership branch because they
+ * surface in `listMeChats` with their own unread badge and engagement
+ * state; chat-scoped per-user operations like read-cursor and
+ * watcher→speaker upgrade must be reachable from that surface. Write
+ * endpoints that need to refuse watchers rely on `ensureParticipant`
+ * or service-layer checks, not on this guard.
+ *
+ * The supervisor branch is a fallback for callers whose human agent
+ * has no direct row but who manage a speaker — e.g. before
+ * `recomputeChatWatchers` has materialised the watcher row, or when a
+ * member's human agent and managed agent diverge in cross-org chats.
  *
  * The Params type is generic so routes that mount on a path with extra
  * params (e.g. `/agents/:uuid/sessions/:chatId/...` for compound checks)
@@ -154,17 +193,15 @@ export async function requireChatAccess<P extends { chatId: string }>(
     humanAgentId: caller.humanAgentId,
   };
 
-  // Direct speaker?
+  // Direct membership — speaker or watcher. A watcher row grants
+  // chat-level access even if the supervisor anchor that produced it
+  // is no longer live; pruning stale watcher rows is a separate
+  // concern from gating callers who can already see the chat in their
+  // own workspace list.
   const [direct] = await db
     .select({ chatId: chatMembership.chatId })
     .from(chatMembership)
-    .where(
-      and(
-        eq(chatMembership.chatId, chatId),
-        eq(chatMembership.agentId, caller.humanAgentId),
-        eq(chatMembership.accessMode, "speaker"),
-      ),
-    )
+    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, caller.humanAgentId)))
     .limit(1);
   if (direct) {
     stampOrgScope(request, scope);
@@ -264,7 +301,11 @@ export async function assertAllAgentsVisibleInOrg(db: Database, scope: OrgScope,
     }
     const orgVisible = row.visibility === AGENT_VISIBILITY.ORGANIZATION;
     const managed = row.managerId === scope.memberId;
-    if (!orgVisible && !managed) {
+    // Mirror the requireAgentAccess(visible) admin short-circuit so
+    // chat-create that references another member's private agent stays
+    // symmetric with the detail-side admin behavior.
+    const isAdmin = scope.role === "admin";
+    if (!orgVisible && !managed && !isAdmin) {
       throw new NotFoundError(`Agent "${id}" not found`);
     }
   }

@@ -1,4 +1,4 @@
-import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearAllPendingQuestionsForTest,
@@ -24,9 +24,6 @@ import { silentLogger } from "./_logger-helpers.js";
 function mockSdk(): FirstTreeHubSDK {
   return {
     register: vi.fn(),
-    pull: vi.fn(),
-    ack: vi.fn().mockResolvedValue(undefined),
-    renew: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
     sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
   } as unknown as FirstTreeHubSDK;
@@ -42,10 +39,14 @@ function createMockHandler(): AgentHandler {
   };
 }
 
-function createSessionManager(handler: AgentHandler, sdk: FirstTreeHubSDK) {
+function createSessionManager(
+  handler: AgentHandler,
+  sdk: FirstTreeHubSDK,
+  ackEntry: (entryId: number) => Promise<void>,
+) {
   const factory: HandlerFactory = () => handler;
   return new SessionManager({
-    session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+    session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     concurrency: 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -59,6 +60,7 @@ function createSessionManager(handler: AgentHandler, sdk: FirstTreeHubSDK) {
     },
     sdk,
     log: silentLogger(),
+    ackEntry,
   });
 }
 
@@ -85,14 +87,11 @@ function makeAnswerEntry(args: {
       format: "question_answer",
       content: { correlationId: args.correlationId, answers: args.answers },
       metadata: {},
-      replyToInbox: null,
-      replyToChat: null,
       inReplyTo: null,
       source: null,
       createdAt: new Date().toISOString(),
       configVersion: 1,
       recipientMode: "full",
-      inReplyToSnapshot: null,
       precedingMessages: [],
     },
   };
@@ -102,11 +101,179 @@ afterEach(() => {
   clearAllPendingQuestionsForTest();
 });
 
+describe("SessionManager.evictIdle — askuser-in-flight guard (#418)", () => {
+  it("does NOT suspend a chat that has a pending AskUserQuestion when its idle_timeout elapses", async () => {
+    // Reproduces the #418 client-side root cause 2: idle_timeout fires
+    // while the asker is still waiting on a `canUseTool` Promise, the
+    // handler.suspend tears down the SDK transport, and the bridge entry
+    // is silently dropped — making the eventual answer arrive at a chat
+    // with no live waiter. With the `hasPendingForChat` guard in
+    // `evictIdle`, suspend is skipped for as long as the awaiter is alive.
+    vi.useFakeTimers();
+    try {
+      const handler = createMockHandler();
+      const sdk = mockSdk();
+      const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+      const factory: HandlerFactory = () => handler;
+      const sm = new SessionManager({
+        // 1-second idle timeout so a single 10s evictIdle tick is plenty.
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+        concurrency: 5,
+        handlerFactory: factory,
+        handlerConfig: { workspaceRoot: "/tmp/test" },
+        agentIdentity: {
+          agentId: "agent-1",
+          inboxId: "inbox-agent-1",
+          displayName: "Agent",
+          type: "autonomous_agent",
+          delegateMention: null,
+          metadata: {},
+        },
+        sdk,
+        log: silentLogger(),
+        ackEntry,
+      });
+
+      // Build an active session for chat-pending, then register a pending
+      // AskUserQuestion against it.
+      await sm.dispatch({
+        id: 1,
+        inboxId: "inbox-test",
+        messageId: "msg-trigger",
+        chatId: "chat-pending",
+        status: "delivered",
+        retryCount: 0,
+        createdAt: new Date().toISOString(),
+        deliveredAt: new Date().toISOString(),
+        ackedAt: null,
+        message: {
+          id: "msg-trigger",
+          chatId: "chat-pending",
+          senderId: "sender-human",
+          format: "text",
+          content: "Please ask me something",
+          metadata: {},
+          inReplyTo: null,
+          source: null,
+          createdAt: new Date().toISOString(),
+          configVersion: 1,
+          recipientMode: "full",
+          precedingMessages: [],
+        },
+      });
+      void registerPendingQuestion({
+        correlationId: "tu_idle_guard",
+        agentId: "agent-1",
+        chatId: "chat-pending",
+      });
+
+      // Advance well past idle_timeout — the 10s evictIdle interval will
+      // fire at least once. Without the guard, handler.suspend would have
+      // been invoked.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(handler.suspend).not.toHaveBeenCalled();
+
+      // Once the awaiter is gone (e.g. the answer landed), the next tick
+      // suspends as usual.
+      clearAllPendingQuestionsForTest();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(handler.suspend).toHaveBeenCalledTimes(1);
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("DOES suspend a pending-AskUser chat once inactiveMs exceeds idle_timeout + working_grace_seconds", async () => {
+    // Companion to the #418 guard above: the askuser exemption is bounded
+    // by the same hard cap that protects against stuck `working` state, so
+    // a runaway pending entry (e.g. the asker process died without ever
+    // calling clearPendingForChat) cannot pin a slot forever. The price is
+    // that an over-night human ask past `idle_timeout + grace` will lose
+    // its live bridge waiter; the answer falls back to the resume-on-next-
+    // message path in dispatch.
+    vi.useFakeTimers();
+    try {
+      const handler = createMockHandler();
+      const sdk = mockSdk();
+      const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+      const factory: HandlerFactory = () => handler;
+      const sm = new SessionManager({
+        // 1s idle + 5s grace — same shape as the working-state hard-cap
+        // test so the 30s advance well exceeds the 6s cap.
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 5, reconcile_interval_seconds: 300 },
+        concurrency: 5,
+        handlerFactory: factory,
+        handlerConfig: { workspaceRoot: "/tmp/test" },
+        agentIdentity: {
+          agentId: "agent-1",
+          inboxId: "inbox-agent-1",
+          displayName: "Agent",
+          type: "autonomous_agent",
+          delegateMention: null,
+          metadata: {},
+        },
+        sdk,
+        log: silentLogger(),
+        ackEntry,
+      });
+
+      await sm.dispatch({
+        id: 1,
+        inboxId: "inbox-test",
+        messageId: "msg-trigger",
+        chatId: "chat-stuck-pending",
+        status: "delivered",
+        retryCount: 0,
+        createdAt: new Date().toISOString(),
+        deliveredAt: new Date().toISOString(),
+        ackedAt: null,
+        message: {
+          id: "msg-trigger",
+          chatId: "chat-stuck-pending",
+          senderId: "sender-human",
+          format: "text",
+          content: "Please ask me something",
+          metadata: {},
+          inReplyTo: null,
+          source: null,
+          createdAt: new Date().toISOString(),
+          configVersion: 1,
+          recipientMode: "full",
+          precedingMessages: [],
+        },
+      });
+      void registerPendingQuestion({
+        correlationId: "tu_hard_cap",
+        agentId: "agent-1",
+        chatId: "chat-stuck-pending",
+      });
+
+      // 30s ≫ idle_timeout + grace (6s). evictIdle ticks every 10s.
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(handler.suspend).toHaveBeenCalledTimes(1);
+      // The pending entry itself is left in the bridge map — suspend
+      // tears it down via the handler's own clearPendingForChat hook
+      // (claude-code.ts), which is not exercised by the mock handler.
+      // The point of this test is the suspend-was-called assertion;
+      // bridge cleanup is covered separately.
+      expect(pendingQuestionCount()).toBe(1);
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("SessionManager.dispatch — question_answer short-circuit", () => {
   it("resolves the bridge waiter and acks the entry without invoking the handler", async () => {
     const handler = createMockHandler();
     const sdk = mockSdk();
-    const sm = createSessionManager(handler, sdk);
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = createSessionManager(handler, sdk, ackEntry);
 
     const waiter = registerPendingQuestion({
       correlationId: "tu_abc",
@@ -129,7 +296,7 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
       answers: { "Should I proceed?": "Yes" },
     });
     expect(pendingQuestionCount()).toBe(0);
-    expect(sdk.ack).toHaveBeenCalledWith(99);
+    expect(ackEntry).toHaveBeenCalledWith(99);
     expect(handler.start).not.toHaveBeenCalled();
     expect(handler.resume).not.toHaveBeenCalled();
     expect(handler.inject).not.toHaveBeenCalled();
@@ -140,7 +307,8 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
   it("falls through to normal dispatch when no waiter is registered (stale answer after suspend)", async () => {
     const handler = createMockHandler();
     const sdk = mockSdk();
-    const sm = createSessionManager(handler, sdk);
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = createSessionManager(handler, sdk, ackEntry);
 
     await sm.dispatch(
       makeAnswerEntry({
@@ -157,9 +325,8 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
     // (this chat had no prior session row, so dispatch creates one).
     expect(handler.start).toHaveBeenCalledTimes(1);
     // The handler's start ackEntry path eventually acks; we verify ack
-    // happens at least once. Exact timing depends on the ack-channel
-    // configuration but the contract is "entry must not stay pending".
-    expect(sdk.ack).toHaveBeenCalledWith(100);
+    // happens at least once.
+    expect(ackEntry).toHaveBeenCalledWith(100);
 
     await sm.shutdown();
   });

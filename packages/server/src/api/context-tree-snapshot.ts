@@ -1,10 +1,22 @@
-import { contextTreeSnapshotSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import type { ServerConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { contextTreeSnapshotSchema } from "@first-tree/shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { resolveOrgViewer } from "../scope/require-resource.js";
 import { requireUser } from "../scope/require-user.js";
-import { type ContextTreeBinding, getContextTreeSnapshot } from "../services/context-tree-snapshot.js";
+import {
+  type ContextTreeBinding,
+  contextTreeSnapshotWindowDays,
+  getContextTreeSnapshot,
+  isGithubRemoteBinding,
+} from "../services/context-tree-snapshot.js";
+import { findInstallationByOrg } from "../services/github-app-installations.js";
+import {
+  type ContextTreeInstallationTokenResult,
+  decorateSnapshotWithMintGuidance,
+  mintContextTreeInstallationToken,
+} from "../services/github-app-token.js";
 import { getOrgContextTree, resolveUserPrimaryOrgId } from "../services/org-settings.js";
+import { summarizeContextTreeUsage } from "../services/session-event.js";
 
 const querySchema = z
   .object({
@@ -29,51 +41,20 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       const { userId } = requireUser(request);
       const orgId = await resolveUserPrimaryOrgId(app.db, userId);
       const binding: ContextTreeBinding = orgId ? await getOrgContextTree(app.db, orgId) : {};
-      const githubToken = contextTreeGithubTokenForRepo(binding.repo, app.config.contextTreeSync);
-      const snapshot = await getContextTreeSnapshot({ ...binding, githubToken }, query.window ?? "7d");
-      return contextTreeSnapshotSchema.parse(snapshot);
+      let mintResult: ContextTreeInstallationTokenResult | null = null;
+      if (orgId && isGithubRemoteBinding(binding)) {
+        const installation = await findInstallationByOrg(app.db, orgId);
+        mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
+      }
+      const githubToken = mintResult?.ok ? mintResult.token : undefined;
+      const window = query.window ?? "7d";
+      const rawSnapshot = await getContextTreeSnapshot({ ...binding, githubToken }, window);
+      const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
+      const viewer = orgId ? await resolveOrgViewer(app.db, userId, orgId) : null;
+      const usage = orgId
+        ? await summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined)
+        : snapshot.usage;
+      return contextTreeSnapshotSchema.parse({ ...snapshot, usage });
     },
   );
-}
-
-type ContextTreeSyncConfig = NonNullable<ServerConfig["contextTreeSync"]>;
-
-export function contextTreeGithubTokenForRepo(
-  repo: string | null | undefined,
-  syncConfig: ContextTreeSyncConfig | undefined,
-): string | undefined {
-  if (!repo || !syncConfig?.githubToken) return undefined;
-  const repoKey = githubRepoKey(repo);
-  if (!repoKey) return undefined;
-  const allowedRepos = new Set(
-    (syncConfig.githubTokenRepos ?? "")
-      .split(",")
-      .map((entry) => normalizeGithubRepoKey(entry))
-      .filter((entry): entry is string => entry !== null),
-  );
-  return allowedRepos.has(repoKey) ? syncConfig.githubToken : undefined;
-}
-
-function githubRepoKey(value: string): string | null {
-  const shorthand = normalizeGithubRepoKey(value);
-  if (shorthand) return shorthand;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "github.com") return null;
-  if (url.username || url.password) return null;
-  return normalizeGithubRepoKey(url.pathname.replace(/^\/+/, ""));
-}
-
-function normalizeGithubRepoKey(value: string): string | null {
-  const trimmed = value
-    .trim()
-    .replace(/^\/+/, "")
-    .replace(/\.git$/i, "");
-  const match = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/.exec(trimmed);
-  if (!match) return null;
-  return `${match[1]?.toLowerCase()}/${match[2]?.toLowerCase()}`;
 }

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { listAgents, listManagedAgents } from "../api/agents.js";
+import { listManagedAgents } from "../api/agents.js";
+import { useOrgAgents } from "./use-org-agents.js";
 
 /**
  * Shared hook that builds a UUID → name lookup map from the agents list.
@@ -21,11 +22,7 @@ import { listAgents, listManagedAgents } from "../api/agents.js";
  * fetch or a dedicated lookup endpoint.
  */
 export function useAgentNameMap(): (uuid: string | null | undefined) => string {
-  const { data } = useQuery({
-    queryKey: ["agents", "name-map"],
-    queryFn: () => listAgents({ limit: 100 }),
-    staleTime: 30_000,
-  });
+  const { data } = useOrgAgents();
   const { data: managed } = useQuery({
     queryKey: ["managed-agents", "name-map"],
     queryFn: listManagedAgents,
@@ -60,14 +57,68 @@ export function useAgentNameMap(): (uuid: string | null | undefined) => string {
 }
 
 /**
+ * Reverse of {@link useAgentNameMap}: resolves an agent's `name` (the @handle
+ * slug, which is also its workspace directory name) to its UUID.
+ *
+ * Used by cross-agent doc preview: a snapshot key carries the OWNER agent's
+ * slug (`<ownerSlug>/<chatId>/<rel>`), but the path-based fallback endpoint
+ * (`GET /chats/:id/docs/preview`) is keyed by agent UUID. The inline-snapshot
+ * path renders straight from cache and needs no UUID, so an unresolved slug
+ * (owner not in the loaded roster) is non-fatal — callers fall back to the
+ * message sender.
+ */
+export function useAgentSlugToIdMap(): (slug: string | null | undefined) => string | null {
+  const { data } = useOrgAgents();
+  const { data: managed } = useQuery({
+    queryKey: ["managed-agents", "name-map"],
+    queryFn: listManagedAgents,
+    staleTime: 30_000,
+  });
+
+  return useMemo(() => {
+    const map = new Map<string, string>();
+    // Cross-org managed agents first; org-scoped roster overwrites on collision
+    // (more authoritative for the selected tenant), matching useAgentNameMap.
+    if (managed) {
+      for (const a of managed) {
+        if (a.name) map.set(a.name.toLowerCase(), a.uuid);
+      }
+    }
+    if (data?.items) {
+      for (const a of data.items) {
+        if (a.name) map.set(a.name.toLowerCase(), a.uuid);
+      }
+    }
+    return (slug: string | null | undefined) => {
+      if (!slug) return null;
+      return map.get(slug.toLowerCase()) ?? null;
+    };
+  }, [data, managed]);
+}
+
+/**
  * Minimal identity pair surfaced to components that want to render the
  * full `<AgentChip>` (display name + `@name`) instead of a single string.
  * `displayName` is non-null post-Phase 2 of the agent-naming refactor;
  * `name` stays nullable because soft-deleted rows have it cleared.
+ *
+ * `avatarImageUrl` is the resolved avatar URL (uploaded image, or — for
+ * human agents — the backing user's external avatar URL such as GitHub).
+ * `null` means the renderer should fall back to color + initial.
+ *
+ * `avatarColorToken` is the manager-selected hue override (`hue-0..7`).
+ * `null` means "auto" — the renderer falls back to a deterministic
+ * djb2 hash on the agent UUID. Carrying the token through the identity
+ * map keeps the fallback hue in sync between left-rail `ChatRowAvatar`
+ * and the message timeline (both feed `resolveAvatarHue(colorToken,
+ * seed)`); otherwise a manager override applied to one surface would
+ * silently disagree with the other.
  */
 export type AgentIdentity = {
   name: string | null;
   displayName: string;
+  avatarImageUrl: string | null;
+  avatarColorToken: string | null;
 };
 
 /**
@@ -76,13 +127,20 @@ export type AgentIdentity = {
  * the agents list. Returns `null` when the UUID is missing from both the
  * org-scoped and cross-org caches (soft-deleted, filtered out, or never
  * loaded) — callers render their own fallback.
+ *
+ * Both sources carry `avatarImageUrl`. The org-scoped `/agents` source
+ * wins on collision (it's the more authoritative view for the
+ * currently-selected tenant); the cross-org `/me/managed-agents` source
+ * fills in agents the caller manages in non-default orgs.
+ *
+ * Only the org-scoped `/agents` source carries `avatarColorToken` today
+ * (the `me/managed-agents` route doesn't project it). Cross-org-only
+ * agents therefore get `colorToken=null` and fall back to the
+ * deterministic djb2 hash on the UUID — same hue both surfaces would
+ * have rendered before this token field existed.
  */
 export function useAgentIdentityMap(): (uuid: string | null | undefined) => AgentIdentity | null {
-  const { data } = useQuery({
-    queryKey: ["agents", "name-map"],
-    queryFn: () => listAgents({ limit: 100 }),
-    staleTime: 30_000,
-  });
+  const { data } = useOrgAgents();
   const { data: managed } = useQuery({
     queryKey: ["managed-agents", "name-map"],
     queryFn: listManagedAgents,
@@ -93,12 +151,24 @@ export function useAgentIdentityMap(): (uuid: string | null | undefined) => Agen
     const map = new Map<string, AgentIdentity>();
     if (managed) {
       for (const a of managed) {
-        map.set(a.uuid, { name: a.name, displayName: a.displayName });
+        map.set(a.uuid, {
+          name: a.name,
+          displayName: a.displayName,
+          avatarImageUrl: a.avatarImageUrl ?? null,
+          // `/me/managed-agents` doesn't project `avatarColorToken`
+          // today; cross-org-only agents land on the djb2-hash fallback.
+          avatarColorToken: null,
+        });
       }
     }
     if (data?.items) {
       for (const a of data.items) {
-        map.set(a.uuid, { name: a.name, displayName: a.displayName });
+        map.set(a.uuid, {
+          name: a.name,
+          displayName: a.displayName,
+          avatarImageUrl: a.avatarImageUrl ?? null,
+          avatarColorToken: a.avatarColorToken ?? null,
+        });
       }
     }
     return (uuid: string | null | undefined) => {

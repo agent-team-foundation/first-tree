@@ -21,7 +21,7 @@ export type FieldOptions = {
   env?: string;
   /** Auto-generation strategy (e.g., 'random:base64url:32') */
   auto?: string;
-  /** Mask value in `config list` output */
+  /** Mask value in `client config show` output */
   secret?: boolean;
   /** Interactive prompt config — shown when value is missing at startup */
   prompt?: PromptDef;

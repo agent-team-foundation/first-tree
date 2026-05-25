@@ -1,8 +1,15 @@
 import { and, eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
+import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import * as sessionEventService from "../services/session-event.js";
-import { useTestApp } from "./helpers.js";
+import { uuidv7 } from "../uuid.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * S10 (NC2 backend) — session_events persistence & seq semantics.
@@ -103,6 +110,42 @@ describe("sessionEventService", () => {
         },
       }),
     ).rejects.toThrow();
+  });
+
+  // PG JSONB rejects U+0000 outright — without the NUL strip in appendEvent,
+  // any tool whose stdout was binary (e.g. `gh api .../actions/runs/<id>/logs`
+  // returns a ZIP archive that survives Buffer.toString('utf8') with embedded
+  // NULs) would drop the whole event server-side. The client sanitizer
+  // replaces obvious binary previews with a placeholder, but this last-mile
+  // gate covers any field/path the client does not.
+  it("persists tool_call events whose payload string fields contain NUL", async () => {
+    const app = getApp();
+    const a = agentId();
+    const c = chatId();
+    const NUL = String.fromCharCode(0);
+
+    const persisted = await sessionEventService.appendEvent(app.db, a, c, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-binary",
+        name: "Bash",
+        args: { command: `echo ${NUL}` },
+        status: "ok",
+        durationMs: 5,
+        resultPreview: `before${NUL}after${NUL}end`,
+      },
+    });
+
+    expect(persisted.seq).toBe(1);
+    expect(persisted.kind).toBe("tool_call");
+    const payload = persisted.payload as {
+      toolUseId: string;
+      resultPreview?: string;
+      args: { command: string };
+    };
+    expect(payload.toolUseId).toBe("tu-binary");
+    expect(payload.resultPreview).toBe("beforeafterend");
+    expect(payload.args.command).toBe("echo ");
   });
 
   it("listEvents paginates by seq asc", async () => {
@@ -224,4 +267,283 @@ describe("sessionEventService", () => {
     expect(remaining1).toHaveLength(0);
     expect(remaining2).toHaveLength(1);
   });
+
+  it("summarizes Context Tree usage with org-wide visibility — every in-org chat exposes its topic", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+    const c = chatId();
+
+    // No chat_membership row for the caller — under the new org-wide
+    // visibility model the chat is still exposed because it belongs to
+    // the same org as the caller. Chat *content* is gated separately by
+    // requireChatAccess on the chat-detail route; this feed only shares
+    // the topic label so admins can see what work used the tree.
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design-spike" });
+
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: {
+        purpose: "design_decision",
+        treeRepoUrl: "https://github.com/example/tree",
+        nodePath: "members/Gandy2025/NODE.md",
+      },
+    });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: {
+        purpose: "design_decision",
+        treeRepoUrl: "https://github.com/example/tree",
+        nodePath: "designs/context-tree-usage-signal.md",
+      },
+    });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "tool_call",
+      payload: { toolUseId: "tu", name: "Read", args: {}, status: "ok" },
+    });
+    await sessionEventService.appendEvent(app.db, "missing-agent", c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: null },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
+    expect(summary.windowDays).toBe(3);
+    expect(summary.agentCount).toBe(1);
+    expect(summary.usageCount).toBe(2);
+    expect(summary.recentEvents).toHaveLength(2);
+    for (const event of summary.recentEvents) {
+      expect(event.agentId).toBe(agent.uuid);
+      expect(event.agentName).toBe(agent.displayName);
+      expect(event.chatId).toBe(c);
+      expect(event.chatTitle).toBe("design-spike");
+      expect(typeof event.createdAt).toBe("string");
+      // Fail-closed: no viewer supplied → no clickable deep link, even though
+      // the chat label stays visible org-wide.
+      expect(event.viewerCanAccess).toBe(false);
+    }
+    expect(new Date(summary.recentEvents[0]?.createdAt ?? 0).getTime()).toBeGreaterThanOrEqual(
+      new Date(summary.recentEvents[1]?.createdAt ?? 0).getTime(),
+    );
+    // nodePath is surfaced from the stored payload, newest-first.
+    expect(summary.recentEvents[0]?.nodePath).toBe("designs/context-tree-usage-signal.md");
+    expect(summary.recentEvents[1]?.nodePath).toBe("members/Gandy2025/NODE.md");
+  });
+
+  it("exposes the agent's avatar color token in the feed so the web client renders the same disc as elsewhere", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+    // Manager-set color token on the agent — the feed must surface it
+    // unchanged so the web client can render `var(--avatar-hue-3)`.
+    await app.db.update(agents).set({ avatarColorToken: "hue-3" }).where(eq(agents.uuid, agent.uuid));
+
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design-spike" });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
+    const event = summary.recentEvents[0];
+    expect(event?.agentAvatarColorToken).toBe("hue-3");
+  });
+
+  it("returns null avatarColorToken when the agent has no manager-set color (web falls back to deterministic hash)", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+    // createTestAgent leaves avatar_color_token unset → NULL.
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design-spike" });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
+    expect(summary.recentEvents[0]?.agentAvatarColorToken).toBeNull();
+  });
+
+  it("masks chatId for a cross-org chat — events whose chat_id points outside the org never expose the topic", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+
+    // Plant a chat in another org and have an orgA agent emit a
+    // context_tree_usage event whose chat_id points at it. session_events
+    // has no FK so this kind of stale / forged row is reachable in practice.
+    // The org-wide visibility rule still must NOT expose orgB's topic to
+    // an orgA caller — the left-join on chats AND chats.organization_id = $orgA
+    // misses, joinedChatId is null, both chatId/chatTitle mask to null.
+    const orgB = uuidv7();
+    await app.db.insert(organizations).values({
+      id: orgB,
+      name: `org-b-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Org B",
+    });
+    const crossOrgChatId = chatId();
+    await app.db
+      .insert(chats)
+      .values({ id: crossOrgChatId, organizationId: orgB, type: "direct", topic: "leaked-topic" });
+
+    await sessionEventService.appendEvent(app.db, agent.uuid, crossOrgChatId, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
+    expect(summary.recentEvents).toHaveLength(1);
+    const event = summary.recentEvents[0];
+    expect(event?.chatId).toBeNull();
+    expect(event?.chatTitle).toBeNull();
+  });
+
+  it("keeps a non-null chatId when the in-org chat has no topic set (chatTitle null is the legitimate 'no topic' signal)", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+    const c = chatId();
+    // chats.topic is nullable — admin never set one. Differentiating this
+    // from a cross-org miss matters: in-org but no topic → chatId present,
+    // chatTitle null. cross-org miss → both null.
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct" });
+
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
+    const event = summary.recentEvents[0];
+    expect(event?.chatId).toBe(c);
+    expect(event?.chatTitle).toBeNull();
+  });
+
+  it("surfaces nodePath null for a pre-P0 event whose payload predates the field", async () => {
+    const app = getApp();
+    const { agent, organizationId } = await createTestAgent(app);
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "legacy" });
+
+    // Simulate a row written before the nodePath field existed — insert the
+    // legacy payload shape directly (appendEvent now requires nodePath, so it
+    // can't reproduce this). The feed must degrade to nodePath: null rather
+    // than throw at the snapshot-schema parse boundary.
+    await app.db.insert(sessionEvents).values({
+      id: uuidv7(),
+      agentId: agent.uuid,
+      chatId: c,
+      seq: 1,
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3);
+    expect(summary.recentEvents).toHaveLength(1);
+    expect(summary.recentEvents[0]?.nodePath).toBeNull();
+  });
+
+  it("marks viewerCanAccess true when the caller's human agent is a direct member (watcher) of the chat", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const humanAgentId = await humanAgentIdFor(app, memberId);
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design" });
+    // A watcher row is enough — requireChatAccess's direct branch grants
+    // access to speakers AND watchers, and the feed mirrors that.
+    await app.db.insert(chatMembership).values({ chatId: c, agentId: humanAgentId, accessMode: "watcher" });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
+    });
+    expect(summary.recentEvents[0]?.viewerCanAccess).toBe(true);
+  });
+
+  it("marks viewerCanAccess true when the caller manages an agent that speaks in the chat", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const humanAgentId = await humanAgentIdFor(app, memberId);
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "design" });
+    // No direct membership for the caller's human agent — access must come
+    // from the supervised-speaker branch: the emitter agent is a speaker and
+    // is managed by the caller (createTestAgent pins managerId = memberId).
+    await app.db.insert(chatMembership).values({ chatId: c, agentId: agent.uuid, accessMode: "speaker" });
+    await sessionEventService.appendEvent(app.db, agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
+    });
+    expect(summary.recentEvents[0]?.viewerCanAccess).toBe(true);
+  });
+
+  it("marks viewerCanAccess false when the caller is neither a member nor manages a speaker (label still shown)", async () => {
+    const app = getApp();
+    const viewerCtx = await createTestAgent(app);
+    // A second member in the same org whose agent is the chat's only speaker.
+    const otherCtx = await createTestAgent(app);
+    const humanAgentId = await humanAgentIdFor(app, viewerCtx.memberId);
+    const organizationId = viewerCtx.organizationId;
+    const c = chatId();
+    await app.db.insert(chats).values({ id: c, organizationId, type: "direct", topic: "private" });
+    // The speaker is managed by a *different* member — the supervised branch
+    // must not grant the caller access.
+    await app.db.insert(chatMembership).values({ chatId: c, agentId: otherCtx.agent.uuid, accessMode: "speaker" });
+    await sessionEventService.appendEvent(app.db, viewerCtx.agent.uuid, c, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId: viewerCtx.memberId,
+    });
+    const event = summary.recentEvents.find((e) => e.chatId === c);
+    expect(event?.viewerCanAccess).toBe(false);
+    // Org-wide transparency is unchanged: the label/id stay visible.
+    expect(event?.chatId).toBe(c);
+    expect(event?.chatTitle).toBe("private");
+  });
+
+  it("marks viewerCanAccess false for a cross-org chat even when a viewer is supplied", async () => {
+    const app = getApp();
+    const { agent, memberId, organizationId } = await createTestAgent(app);
+    const humanAgentId = await humanAgentIdFor(app, memberId);
+
+    const orgB = uuidv7();
+    await app.db.insert(organizations).values({
+      id: orgB,
+      name: `org-b-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Org B",
+    });
+    const crossOrgChatId = chatId();
+    await app.db.insert(chats).values({ id: crossOrgChatId, organizationId: orgB, type: "direct", topic: "leaked" });
+    await sessionEventService.appendEvent(app.db, agent.uuid, crossOrgChatId, {
+      kind: "context_tree_usage",
+      payload: { purpose: "design_decision", treeRepoUrl: null, nodePath: "NODE.md" },
+    });
+
+    const summary = await sessionEventService.summarizeContextTreeUsage(app.db, organizationId, 3, {
+      humanAgentId,
+      memberId,
+    });
+    expect(summary.recentEvents[0]?.chatId).toBeNull();
+    expect(summary.recentEvents[0]?.viewerCanAccess).toBe(false);
+  });
 });
+
+/** Resolve the human agent uuid for a member row (the chat_membership anchor). */
+async function humanAgentIdFor(app: FastifyInstance, memberId: string): Promise<string> {
+  const [row] = await app.db
+    .select({ agentId: members.agentId })
+    .from(members)
+    .where(eq(members.id, memberId))
+    .limit(1);
+  if (!row) throw new Error("member row missing");
+  return row.agentId;
+}

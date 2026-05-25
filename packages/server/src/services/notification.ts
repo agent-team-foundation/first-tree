@@ -1,18 +1,10 @@
-import {
-  AGENT_STATUSES,
-  AGENT_VISIBILITY,
-  type NotificationQuery,
-  type NotificationSeverity,
-  type NotificationType,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, lt, ne, or } from "drizzle-orm";
+import { NOTIFICATION_TYPES, type NotificationSeverity, type NotificationType } from "@first-tree/shared";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { notifications } from "../db/schema/notifications.js";
 import { uuidv7 } from "../uuid.js";
-import { broadcastToAdmins } from "./admin-broadcast.js";
 
 export type CreateNotificationData = {
   organizationId: string;
@@ -20,20 +12,36 @@ export type CreateNotificationData = {
   severity: NotificationSeverity;
   agentId?: string | null;
   chatId?: string | null;
-  /**
-   * ID of the physical client (computer) the notification is about. Only
-   * used to surface on the admin WS envelope — not persisted on the
-   * notifications table itself.
-   */
-  clientId?: string | null;
   message: string;
+  /**
+   * Optional dedup key. While a prior unread notification with the same
+   * `(organizationId, dedupKey)` exists, repeated inserts are suppressed at
+   * the DB layer (partial unique index `uq_notifications_org_dedup_unread`).
+   * After the row flips to read (e.g. via {@link markAgentFaultsResolved}),
+   * a new notification can fire. Producers without a dedup key get the
+   * legacy always-insert behaviour.
+   */
+  dedupKey?: string | null;
 };
 
-/** Create a notification, persist it, and fire-and-forget push to all channels. */
+/**
+ * Persist a notification and fire-and-forget push to the outbound webhook.
+ *
+ * Dedup contract (when `dedupKey` is set and an unread row already exists):
+ *   - **severity escalates monotonically** — `high` never drops back to
+ *     `medium`, `medium` never drops back to `low`.
+ *   - **type and message take the latest event's values** — so a row keyed by
+ *     `agent:{id}:fault` reflects the most recent observation.
+ *   - **createdAt is preserved** so ordering tracks "when did this incident
+ *     open" rather than "when was the last observation".
+ *
+ * Rows without a `dedupKey` never hit the partial unique index and keep the
+ * legacy always-insert behaviour.
+ */
 export async function createNotification(db: Database, data: CreateNotificationData) {
   const id = uuidv7();
 
-  const [row] = await db
+  const inserted = await db
     .insert(notifications)
     .values({
       id,
@@ -43,10 +51,27 @@ export async function createNotification(db: Database, data: CreateNotificationD
       agentId: data.agentId ?? null,
       chatId: data.chatId ?? null,
       message: data.message,
+      dedupKey: data.dedupKey ?? null,
+    })
+    .onConflictDoUpdate({
+      target: [notifications.organizationId, notifications.dedupKey],
+      set: {
+        severity: sql`CASE
+          WHEN ${notifications.severity} = 'high' OR excluded.severity = 'high' THEN 'high'
+          WHEN ${notifications.severity} = 'medium' OR excluded.severity = 'medium' THEN 'medium'
+          ELSE 'low'
+        END`,
+        type: sql`excluded.type`,
+        message: sql`excluded.message`,
+      },
+      targetWhere: sql`${notifications.read} = false AND ${notifications.dedupKey} IS NOT NULL`,
     })
     .returning();
 
-  if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
+  const row = inserted[0];
+  if (!row) {
+    return null;
+  }
 
   const notification = {
     id: row.id,
@@ -60,140 +85,9 @@ export async function createNotification(db: Database, data: CreateNotificationD
     createdAt: row.createdAt.toISOString(),
   };
 
-  // Fire-and-forget push to all channels. The WS layer re-filters by
-  // per-member agent visibility so a push about a private agent never reaches
-  // members who can't see that agent via REST.
-  pushToAdminWs(notification);
   pushToWebhook(notification).catch(() => {});
 
   return notification;
-}
-
-/**
- * List notifications with pagination and optional filters, scoped to the
- * caller's visible agents.
- *
- * Rule: a member sees a notification iff
- *   - it carries an `agentId` the member can see
- *     (`agents.visibility = organization` OR `agents.managerId = self`), OR
- *   - it has no `agentId` (org-wide system notification)
- *
- * Private agents owned by other members never surface.
- */
-export async function listNotifications(db: Database, orgId: string, memberId: string, query: NotificationQuery) {
-  const visibleAgents = await loadVisibleAgentIds(db, orgId, memberId);
-
-  if (query.agentId && !visibleAgents.has(query.agentId)) {
-    return { items: [], nextCursor: null };
-  }
-
-  const conditions = [eq(notifications.organizationId, orgId)];
-  if (query.cursor) conditions.push(lt(notifications.createdAt, new Date(query.cursor)));
-  if (query.severity) conditions.push(eq(notifications.severity, query.severity));
-  if (query.read !== undefined) conditions.push(eq(notifications.read, query.read));
-  if (query.agentId) conditions.push(eq(notifications.agentId, query.agentId));
-
-  const where = and(...conditions);
-
-  // Overscan to absorb rows discarded by the visibility post-filter. Without
-  // overscan, a page containing many invisible-agent rows could silently
-  // return an empty payload even when more visible rows exist past the cursor.
-  const overscanFactor = 4;
-  const targetLimit = query.limit;
-  const rawLimit = Math.min(targetLimit * overscanFactor + 1, 400);
-
-  const rows = await db
-    .select()
-    .from(notifications)
-    .where(where)
-    .orderBy(desc(notifications.createdAt))
-    .limit(rawLimit);
-
-  const visible = rows.filter((n) => n.agentId === null || visibleAgents.has(n.agentId));
-  const hasMore = visible.length > targetLimit;
-  const items = hasMore ? visible.slice(0, targetLimit) : visible;
-  const last = items[items.length - 1];
-  const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
-
-  return {
-    items: items.map((n) => ({
-      ...n,
-      createdAt: n.createdAt.toISOString(),
-    })),
-    nextCursor,
-  };
-}
-
-/** Mark a single notification as read, scoped to organization + visible agents. */
-export async function markRead(db: Database, notificationId: string, orgId: string, memberId: string) {
-  const [existing] = await db
-    .select({ id: notifications.id, agentId: notifications.agentId })
-    .from(notifications)
-    .where(and(eq(notifications.id, notificationId), eq(notifications.organizationId, orgId)))
-    .limit(1);
-  if (!existing) return null;
-
-  if (existing.agentId) {
-    const visible = await loadVisibleAgentIds(db, orgId, memberId);
-    if (!visible.has(existing.agentId)) return null;
-  }
-
-  const [updated] = await db
-    .update(notifications)
-    .set({ read: true })
-    .where(and(eq(notifications.id, notificationId), eq(notifications.organizationId, orgId)))
-    .returning();
-  return updated ?? null;
-}
-
-/** Mark all notifications visible to this member as read. */
-export async function markAllRead(db: Database, orgId: string, memberId: string) {
-  const visible = await loadVisibleAgentIds(db, orgId, memberId);
-
-  // Fetch unread rows (bounded: typical notification volume per org is small).
-  // Drizzle doesn't express "agentId IS NULL OR agentId IN (...)" cleanly over
-  // a potentially large id list, so we select then update by id. Cap the scan
-  // to avoid worst-case blowups.
-  const unread = await db
-    .select({ id: notifications.id, agentId: notifications.agentId })
-    .from(notifications)
-    .where(and(eq(notifications.organizationId, orgId), eq(notifications.read, false)))
-    .limit(1000);
-
-  const idsToMark = unread.filter((n) => n.agentId === null || visible.has(n.agentId)).map((n) => n.id);
-
-  if (idsToMark.length === 0) return;
-
-  // Batch so query size stays bounded for the rare extreme tail.
-  const batchSize = 200;
-  for (let i = 0; i < idsToMark.length; i += batchSize) {
-    const batch = idsToMark.slice(i, i + batchSize);
-    await db
-      .update(notifications)
-      .set({ read: true })
-      .where(
-        and(eq(notifications.organizationId, orgId), eq(notifications.read, false), inArray(notifications.id, batch)),
-      );
-  }
-}
-
-/**
- * Shared visibility predicate. Mirrors
- * {@link packages/server/src/services/access-control.ts#agentVisibilityCondition}
- * but returns a Set because the notification query joins are mostly in Node.
- */
-async function loadVisibleAgentIds(db: Database, orgId: string, memberId: string): Promise<Set<string>> {
-  const rows = await db
-    .select({ id: agents.uuid })
-    .from(agents)
-    .where(
-      and(
-        eq(agents.organizationId, orgId),
-        ne(agents.status, AGENT_STATUSES.DELETED),
-        or(eq(agents.visibility, AGENT_VISIBILITY.ORGANIZATION), eq(agents.managerId, memberId)),
-      ),
-    );
-  return new Set(rows.map((r) => r.id));
 }
 
 // -- Message composition --------------------------------------------------
@@ -203,10 +97,6 @@ type AgentContext = {
   agentName: string;
   clientId: string | null;
   clientLabel: string | null;
-};
-
-type ChatContext = {
-  chatLabel: string;
 };
 
 async function resolveAgentContext(db: Database, agentId: string): Promise<AgentContext | null> {
@@ -240,55 +130,30 @@ async function resolveAgentContext(db: Database, agentId: string): Promise<Agent
   };
 }
 
-async function resolveChatContext(db: Database, chatId: string): Promise<ChatContext> {
-  const [chat] = await db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
-  // Chat topic is nullable; fall back to a short hash of the chat id so the
-  // message still reads as a concrete entity rather than "Chat null completed".
-  const shortId = chatId.slice(0, 8);
-  const label = chat?.topic && chat.topic.trim().length > 0 ? chat.topic.trim() : `Chat ${shortId}`;
-  return { chatLabel: label };
-}
-
-/**
- * Compose a human-readable message for each notification type.
- *
- * Keep subjects consistent with what the dashboard shows the member:
- *   - Session-scoped events → subject is the chat (topic / "Chat xxxxxxxx")
- *   - Client-scoped events  → subject is the computer (hostname / clientId)
- *   - Agent-scoped events   → subject is the agent display name
- */
-function composeMessage(type: NotificationType, agentCtx: AgentContext, chatCtx: ChatContext | null): string {
+function composeMessage(type: NotificationType, agentCtx: AgentContext): string {
   const agent = agentCtx.agentName;
   const computer = agentCtx.clientLabel ?? "Unknown computer";
-  const chat = chatCtx?.chatLabel ?? null;
 
   switch (type) {
-    case "session_completed":
-      return chat ? `${chat} completed` : `${agent} completed a task`;
-    case "session_error":
-      return chat ? `${chat} hit an error` : `${agent} hit a session error`;
-    case "agent_disconnected":
-      return `Computer ${computer} disconnected`;
-    case "agent_connected":
-      return `Computer ${computer} reconnected`;
     case "agent_stale":
       return `Computer ${computer} is unresponsive`;
     case "agent_error":
       return `${agent} entered error state`;
     case "agent_blocked":
       return `${agent} is blocked`;
-    case "agent_needs_decision":
-      return chat ? `${agent} needs a decision in ${chat}` : `${agent} needs a decision`;
     default:
       return `${agent} event`;
   }
 }
 
 /**
- * Convenience: create a notification for an agent event, resolving org,
- * agent display name, computer hostname, and chat topic automatically.
- * Callers supply the event type and severity; the message text is generated
- * here so language/phrasing is centralized (see {@link composeMessage}).
+ * Convenience: create a notification for an agent event, resolving org and
+ * agent display name automatically.
+ *
+ * Default dedup_key when none is supplied: `agent:{agentId}:fault`. All three
+ * current fault types (error / blocked / stale) collapse onto one unread row
+ * per agent. Pair with {@link markAgentFaultsResolved}, which closes the row
+ * when the agent recovers.
  *
  * Fire-and-forget — errors are swallowed so event producers never fail just
  * because the notification pipeline is unhealthy.
@@ -298,46 +163,62 @@ export async function notifyAgentEvent(
   agentId: string,
   type: NotificationType,
   severity: NotificationSeverity,
-  chatId?: string | null,
+  options: { dedupKey?: string | null } = {},
 ): Promise<void> {
   try {
     const agentCtx = await resolveAgentContext(db, agentId);
     if (!agentCtx) return;
 
-    const chatCtx = chatId ? await resolveChatContext(db, chatId) : null;
-    const message = composeMessage(type, agentCtx, chatCtx);
+    const message = composeMessage(type, agentCtx);
+    const dedupKey = options.dedupKey === undefined ? `agent:${agentId}:fault` : options.dedupKey;
 
     await createNotification(db, {
       organizationId: agentCtx.organizationId,
       type,
       severity,
       agentId,
-      chatId: chatId ?? null,
-      clientId: agentCtx.clientId,
       message,
+      dedupKey,
     });
   } catch {
     // fire-and-forget
   }
 }
 
-// -- Push channels (fire-and-forget) --
-
-function pushToAdminWs(notification: Record<string, unknown>): void {
-  // organizationId is hoisted to the top of the envelope so the admin WS route
-  // can filter strictly (no `!orgId` fallback that silently fans out to every
-  // org). `agentId` is also hoisted so the WS route can additionally scope by
-  // per-member agent visibility before relaying to a given socket.
-  broadcastToAdmins({
-    type: "notification",
-    organizationId: notification.organizationId as string,
-    agentId: (notification.agentId as string | null) ?? null,
-    data: notification,
-  });
+/**
+ * Mark every unread fault-scoped notification for this agent as read. Called
+ * when the agent recovers — either by rebinding (offline → online) or by
+ * reporting a healthy runtime state (error/blocked → idle/working). Without
+ * this, a transient incident leaves its row in "unread" forever and dedup
+ * would suppress the next genuine incident.
+ *
+ * Fire-and-forget — same rationale as {@link notifyAgentEvent}.
+ */
+export async function markAgentFaultsResolved(db: Database, agentId: string): Promise<void> {
+  try {
+    await db
+      .update(notifications)
+      .set({ read: true })
+      .where(
+        and(
+          eq(notifications.agentId, agentId),
+          eq(notifications.read, false),
+          inArray(notifications.type, [
+            NOTIFICATION_TYPES.AGENT_ERROR,
+            NOTIFICATION_TYPES.AGENT_BLOCKED,
+            NOTIFICATION_TYPES.AGENT_STALE,
+          ]),
+        ),
+      );
+  } catch {
+    // fire-and-forget
+  }
 }
 
+// -- Outbound webhook (fire-and-forget) -----------------------------------
+
 async function pushToWebhook(notification: Record<string, unknown>): Promise<void> {
-  const webhookUrl = process.env.FIRST_TREE_HUB_NOTIFICATION_WEBHOOK_URL;
+  const webhookUrl = process.env.FIRST_TREE_NOTIFICATION_WEBHOOK_URL;
   if (!webhookUrl) return;
 
   try {

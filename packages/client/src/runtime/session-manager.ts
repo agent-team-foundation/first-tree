@@ -1,10 +1,15 @@
+import { existsSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type {
+  AgentRuntimeConfigPayload,
+  GitRepo,
   InboxEntryWithMessage,
   RuntimeState,
   SessionEvent,
   SessionState,
-} from "@agent-team-foundation/first-tree-hub-shared";
-import { tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
+} from "@first-tree/shared";
+import { deriveRepoLocalPath } from "@first-tree/shared";
+import { hasPendingForChat, tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
@@ -38,6 +43,93 @@ type PendingMessage = {
   entryId: number;
 };
 
+/**
+ * Resolve the directory the runtime reads markdown doc snapshots against —
+ * the same dir the handler actually hands the agent as cwd for this chat.
+ *
+ * Two layouts coexist after the per-agent-home redesign (#506) and its
+ * legacy-resume hotfix (#530):
+ *  - NEW chats run cwd = the per-agent home (`<workspaceRoot>` itself, see
+ *    `acquireAgentHome`), with predeclared source repos materialised at the
+ *    TOP LEVEL (`<workspaceRoot>/<localPath>`). No `<workspaceRoot>/<chatId>/`
+ *    dir is ever created.
+ *  - LEGACY chats (created before #506) keep their original per-chat cwd
+ *    `<workspaceRoot>/<chatId>/`, with their own v1.x layout (source repos at
+ *    `<workspaceRoot>/<chatId>/<localPath>`); #530 resumes them in place.
+ *
+ * The doc base MUST agree with whichever cwd the handler chose, or the
+ * snapshot scanner realpaths a non-existent root and embeds ZERO snapshots —
+ * so every `.md` mention stays plain text instead of rendering a clickable
+ * preview (the symptom this fixes for new chats). We discriminate by the same
+ * cheap signal #530's claude-code `resume()` uses first: does the legacy
+ * per-chat dir physically exist? Present ⇒ legacy layout; absent ⇒ per-agent
+ * home.
+ *
+ * Pure read-only `existsSync` — no `acquireWorkspace`/`acquireAgentHome`,
+ * whose mkdir side effects must not run on every outbound message.
+ *
+ * IMPORTANT — `existsSync(legacyDir)` is a *proxy* for "the handler chose the
+ * legacy cwd". It is exact for new chats (no legacy dir ⇒ agent home, for both
+ * handlers) but `SessionManager` is handler-agnostic (it only knows
+ * `workspaceRoot`, never the handler kind), so two legacy-chat cases diverge —
+ * the resolver returns the legacy dir while the handler actually ran at the
+ * agent home:
+ *   1. CODEX legacy chats. The codex handler has NO legacy-cwd branch:
+ *      `start()` and `resume()` both use `acquireAgentHome` (see
+ *      `handlers/codex.ts`; #530 left codex alone because its transcripts are
+ *      not cwd-keyed). Pre-#506 codex still created `<workspaceRoot>/<chatId>/`,
+ *      and those dirs persist (`cleanWorkspaces` is a no-op), so every legacy
+ *      codex chat hits this divergence.
+ *   2. A claude-code legacy chat whose SDK transcript was lost resumes COLD at
+ *      the agent home (#530 case 3) while its `<chatId>/` dir still exists.
+ * In both, a freshly-written doc at the agent home may snapshot a STALE copy
+ * from the legacy dir, or stay plain text if it exists only at the home.
+ *
+ * This is NOT a regression: the prior code used `join(workspaceRoot, chatId)`
+ * unconditionally, so legacy chats already resolved to the legacy dir — this
+ * fix changes only the new-chat (no-legacy-dir) path. The divergence is
+ * graceful (older revision, never an empty/wrong file), bounded to legacy chats
+ * (which shrink over time), and the clean fix is to thread the handler's
+ * resolved cwd through to the sink instead of re-probing here.
+ */
+export function resolveSessionDocRoot(workspaceRoot: string, chatId: string): string {
+  const legacyPerChatRoot = join(workspaceRoot, chatId);
+  return existsSync(legacyPerChatRoot) ? legacyPerChatRoot : workspaceRoot;
+}
+
+/**
+ * Resolve the base path the runtime reads markdown doc snapshots against,
+ * given the session doc root from {@link resolveSessionDocRoot}.
+ *
+ * NEVER returns null — every chat has a workspace, and the snapshot scanner
+ * existence-checks each candidate inside the returned root, so a bare mention
+ * that doesn't physically exist simply stays plain text rather than
+ * mis-resolving. Previously this returned null for zero/multi-repo
+ * workspaces, which left those messages with no `documentContext` at all, so
+ * a doc the agent wrote in the workspace could never be previewed.
+ *
+ * Resolution:
+ *  - exactly one repo → that repo's worktree, the unambiguous markdown-link
+ *    root. The worktree is materialised at `<sessionRoot>/<localPath>`, so the
+ *    base MUST be that ABSOLUTE path. Returning a bare relative `localPath`
+ *    (the old behaviour) made the runtime resolve it against its own
+ *    `process.cwd()` — the launch dir, not the session workspace — so it
+ *    silently failed to find any doc and cloud preview was dead.
+ *  - zero or multiple repos → the session doc root.
+ */
+export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, sessionRoot: string): string {
+  if (payload.gitRepos.length === 1) {
+    const repo = payload.gitRepos[0];
+    const localPath = repo ? repoLocalPath(repo).trim() : "";
+    if (localPath.length > 0) return join(sessionRoot, localPath);
+  }
+  return sessionRoot;
+}
+
+function repoLocalPath(repo: GitRepo): string {
+  return repo.localPath ?? deriveRepoLocalPath(repo.url);
+}
+
 type SessionManagerConfig = {
   session: SessionConfig;
   concurrency: number;
@@ -51,24 +143,16 @@ type SessionManagerConfig = {
   agentConfigCache?: AgentConfigCache;
   /**
    * Ack channel used by `dispatch` when an entry transitions out of `delivered`.
-   * Defaults to `sdk.ack` (HTTP `POST /inbox/:id/ack`) — the legacy poll path.
-   * The WS push path (proposal hub-inbox-ws-data-plane §3.4) overrides this
-   * with `clientConnection.sendInboxAck` so the entry is acked over the same
-   * socket that delivered it. Without this hook a push-mode slot would
-   * silently double-ack: HTTP first (status `delivered → acked`) followed by
-   * WS (no-op against the now-acked row), and the server-side per-agent
-   * in-flight counter — which only decrements on a successful WS ack —
-   * would leak to the cap and stop pushing.
+   * Wired to `clientConnection.sendInboxAck` so the entry is acked over the
+   * same socket that delivered it.
    */
-  ackEntry?: (entryId: number) => Promise<void>;
+  ackEntry: (entryId: number) => Promise<void>;
   /** Callback when a session state changes (per-session granularity). */
   onStateChange?: (chatId: string, state: SessionState) => void;
   /** Callback when aggregated runtime state changes. */
   onRuntimeStateChange?: (state: RuntimeState) => void;
   /** Callback when a session emits a structured event (tool_call / error). */
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
-  /** Callback when a session query completes end-to-end. */
-  onSessionCompletion?: (chatId: string) => void;
 };
 
 /**
@@ -121,17 +205,11 @@ export class SessionManager {
    * not on pull. `delivered` = pulled but not yet processing,
    * `acked` = handler has started processing (read receipt).
    *
-   * One routing guard fires before any session lookup (see
-   * proposals/hub-agent-messaging-reply-and-mentions §3.5):
-   *
-   * - **Echo suppression** — in direct chats, a peer's reply to a message
-   *   *we* sent here but whose `replyTo` points elsewhere would otherwise
-   *   bounce our session back on. Suppress it so the reply routes only to
-   *   the external chat where we're actually waiting.
-   *
-   * The mention filter used to live here too, but it moved server-side to
-   * the fan-out step — see `services/message.ts sendMessage`. Anything
-   * reaching dispatch has already passed that check.
+   * No routing guards run client-side any more: the cross-chat
+   * reply-routing mechanism (`replyToChat` / `shouldSuppressEcho`) has been
+   * removed (see first-tree-context PR #281), and the mention filter moved
+   * server-side to fan-out (`services/message.ts sendMessage`). Anything
+   * reaching dispatch is, by construction, meant for this agent.
    */
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
@@ -169,12 +247,12 @@ export class SessionManager {
       // Fall through to normal dispatch.
     }
 
-    // 1. Deduplication — key by (chatId, messageId), not messageId alone.
-    // replyTo cross-chat routing legitimately fan-outs the same message into
-    // two inbox_entries with different chatIds (one in the original chat,
-    // one in the replyTo target chat); server-side identity is (inboxId,
-    // messageId, chatId) and client dedup must mirror that, otherwise the
-    // second entry is silently dropped.
+    // 1. Deduplication — key by (chatId, messageId). Cross-chat reply
+    // routing has been removed (see first-tree-context PR #281) so a single
+    // message now produces exactly one inbox entry per recipient, but the
+    // server-side identity is still (inboxId, messageId, chatId) and we
+    // mirror it defensively in case a legacy entry surfaces or fan-out is
+    // ever extended again.
     const dedupKey = `${chatId}:${messageId}`;
     if (this.deduplicator.isDuplicate(dedupKey)) {
       this.config.log.debug({ chatId, messageId }, "duplicate message, skipping");
@@ -203,16 +281,6 @@ export class SessionManager {
           "config version mismatch — skipping refresh",
         );
       }
-    }
-
-    // 3. Routing guards — do not start a session for messages we must not answer.
-    if (shouldSuppressEcho(entry, this.config.agentIdentity.agentId)) {
-      this.config.log.info(
-        { chatId, messageId },
-        "suppressing echo — message replies to our own send whose replyTo points elsewhere",
-      );
-      await this.ackEntry(entry.id, chatId);
-      return;
     }
 
     // Note: the "mention_only" filter now lives on the server (see
@@ -349,6 +417,18 @@ export class SessionManager {
     }));
   }
 
+  /**
+   * ChatIds the client still holds in `evictedMappings` — i.e. either
+   * hydrated from disk on startup or dropped from `sessions` by LRU. Used
+   * by the agent-slot full-state-sync to advertise these as "suspended" on
+   * the wire, so the server's `agent_chat_sessions.state` doesn't get
+   * stuck on a pre-restart "active" snapshot when the in-memory handler is
+   * actually gone.
+   */
+  getEvictedChatIds(): string[] {
+    return [...this.evictedMappings.keys()];
+  }
+
   // ---- Internal -----------------------------------------------------------
 
   private async routeMessage(chatId: string, message: SessionMessage, entryId?: number): Promise<void> {
@@ -370,6 +450,16 @@ export class SessionManager {
           await this.ackEntry(entryId, chatId);
           existing.handler.inject(message);
           existing.lastActivity = Date.now();
+          // Re-arm the working-grace guard in `evictIdle`. Without this, a
+          // turn that ends with `setRuntimeState("idle")` (claude-code.ts on
+          // every result message) leaves the next inject-triggered turn
+          // observable as `idle` — and a long-thinking turn that produces
+          // no SDK messages for `idle_timeout` (300s default) trips
+          // evictIdle's suspend path even though the agent is actively
+          // working. Setting `working` here puts the session under the
+          // `idle_timeout + working_grace_seconds` umbrella until the next
+          // result flips it back.
+          this.setSessionRuntimeState(chatId, "working");
           this.config.log.debug({ chatId }, "message injected");
           return;
 
@@ -504,7 +594,17 @@ export class SessionManager {
     entry.lastActivity = Date.now();
 
     try {
-      await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
+      // Mirror the pattern in `startNewSession` (line 449): the handler may
+      // return a DIFFERENT sessionId than the one passed in — e.g. when the
+      // claude-code handler detects a stale SDK transcript and falls
+      // through to fresh-start semantics — and `entry.claudeSessionId` has
+      // to track the handler's truth or future resume cycles will keep
+      // calling the stale id. PR #530 nit baixiaohang flagged: without the
+      // assignment back, a fresh-start fallback would persist the OLD id,
+      // and the next suspend→resume cycle would re-trigger the same
+      // missing-transcript fallback ad infinitum.
+      const resumedSessionId = await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
+      entry.claudeSessionId = resumedSessionId;
       this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
       this.notifySessionState(entry.chatId, "active");
@@ -631,11 +731,13 @@ export class SessionManager {
         this._activeCount--;
         candidate.session.handler.shutdown().catch(() => {});
       }
-      // LRU eviction is a local memory-management concern, not operator intent
-      // — do NOT emit a wire state. The server row stays as last reported;
-      // the local `evictedMappings` entry keeps resume-on-next-message working.
-      // (`suspended` here would accumulate rows in agent_chat_sessions forever
-      // since the cleanup cron is out of scope for this redesign.)
+      // LRU eviction is local memory-management, not operator intent — do
+      // NOT emit a wire state here. The chat now lives in `evictedMappings`
+      // and the next `agent:bound` (initial bind or reconnect) will pick it
+      // up via `getEvictedChatIds()` in `agent-slot.fullStateSync` and
+      // advertise it as `suspended`, so the server's `agent_chat_sessions.state`
+      // converges to "handler is gone" on the next sync without churn on
+      // every eviction.
       this.sessions.delete(candidate.key);
       this.sessionRuntimeStates.delete(candidate.key);
       // Drop the trigger alongside the session — the next message routed to
@@ -649,33 +751,99 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Reclaim slots whose sessions have gone quiet.
+   *
+   * Invariants this routine relies on:
+   *   1. `lastActivity` is monotonic per session and is bumped by every
+   *      inbound activity — `dispatch` (new chat / resume), `inject`
+   *      (mid-turn message), and the handler's `touch()` on each SDK event.
+   *   2. `runtimeState` reflects what the agent is currently doing as best
+   *      the runtime can tell:
+   *        - `working` — a turn is in flight. Set by the handler at the top
+   *          of its consume loop AND by `SessionManager` on every `inject`
+   *          (because the handler can't observe inject from inside the SDK
+   *          for-await — see #536). Cleared back to `idle` on each
+   *          `result` message from the SDK.
+   *        - `blocked` — only reachable if a handler chooses to set it
+   *          explicitly. The runtime no longer auto-migrates `working` →
+   *          `blocked` on inactivity: with reasoning models a 2-minute
+   *          quiet stretch is normal deep-thinking, not a stuck process,
+   *          and the auto-migration was producing false-positive UI
+   *          warnings. State kept as a semantic slot for future use
+   *          (e.g. if/when the SDK transport exposes a real stuck signal).
+   *        - `idle` — no work in flight.
+   *      If you add a new way to wake the session up, you MUST also set
+   *      `runtimeState` to `working` from that path, or this guard will
+   *      treat the chat as idle and reap it.
+   *   3. `working_grace_seconds` is an UPPER bound on how long a `working`
+   *      / `blocked` chat can hold a slot past `idle_timeout` — defends
+   *      against a stuck handler that never flips back to `idle`.
+   */
   private evictIdle(): void {
     const timeoutMs = this.config.session.idle_timeout * 1000;
-    // Blocked detection — 2 minutes without activity while session is active
-    const blockedThresholdMs = 120_000;
+    const workingGraceMs = this.config.session.working_grace_seconds * 1000;
     const now = Date.now();
+    const agentId = this.config.agentIdentity.agentId;
 
     for (const [, session] of this.sessions) {
       if (session.status !== "active") continue;
       const inactiveMs = now - session.lastActivity;
+      if (inactiveMs <= timeoutMs) continue;
 
-      if (inactiveMs > timeoutMs) {
+      const currentState = this.sessionRuntimeStates.get(session.chatId);
+
+      // Hard cap: regardless of `runtimeState`, once we are past
+      // `idle_timeout + working_grace_seconds` the slot MUST be reclaimed.
+      // Anything else means a stuck handler can hold a slot forever just
+      // by never flipping `runtimeState` back to `idle`.
+      const pastHardCap = inactiveMs >= timeoutMs + workingGraceMs;
+
+      // #418: when an AskUserQuestion is in flight, suspending tears down
+      // the SDK transport and silently drops the bridge entry — the
+      // eventual answer then arrives with no live waiter and the asker
+      // session is permanently stuck. Skip the suspend so the awaiter can
+      // resolve through the live-bridge path. `lastActivity` still ticks
+      // forward on inject, so a runaway pending entry is bounded by the
+      // supersede paths (chat archive / client claim) and, as a last
+      // resort, by the hard cap above.
+      if (!pastHardCap && hasPendingForChat(agentId, session.chatId)) {
         this.config.log.info(
-          { chatId: session.chatId, idleTimeoutSec: this.config.session.idle_timeout },
-          "session idle, suspending",
+          { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
+          "session idle but AskUserQuestion in flight — skipping suspend",
         );
-        this.suspendSession(session);
-      } else if (inactiveMs > blockedThresholdMs) {
-        // Only mark blocked if handler was actively working — don't override idle
-        const currentState = this.sessionRuntimeStates.get(session.chatId);
-        if (currentState === "working") {
-          this.config.log.warn(
-            { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
-            "session working but no output, marking blocked",
-          );
-          this.setSessionRuntimeState(session.chatId, "blocked");
-        }
+        continue;
       }
+
+      // `lastActivity` is bumped per inbound SDK message/event (handler
+      // `touch()`), so a long thinking turn or a single very large message
+      // looks identical to "session has been idle" here. Without this
+      // exemption the runtime suspends the SDK transport mid-thinking and
+      // the work is lost. The hard cap above bounds the worst case.
+      const stillProgressing = currentState === "working" || currentState === "blocked";
+      if (stillProgressing && !pastHardCap) {
+        this.config.log.info(
+          {
+            chatId: session.chatId,
+            runtimeState: currentState,
+            inactiveSec: Math.round(inactiveMs / 1000),
+            graceSec: this.config.session.working_grace_seconds,
+          },
+          "session idle threshold reached but still working — skipping suspend",
+        );
+        continue;
+      }
+
+      this.config.log.info(
+        {
+          chatId: session.chatId,
+          idleTimeoutSec: this.config.session.idle_timeout,
+          runtimeState: currentState ?? "idle",
+          pastHardCap,
+        },
+        "session idle, suspending",
+      );
+      this.suspendSession(session);
     }
   }
 
@@ -698,21 +866,13 @@ export class SessionManager {
   }
 
   /**
-   * ACK an inbox entry — delayed until handler starts processing.
-   *
-   * Routes through `config.ackEntry` when set (WS push path) or falls back to
-   * `sdk.ack` (HTTP poll path). One ack per entry, one channel per slot —
-   * mixing channels in one slot would leak the server's per-agent in-flight
-   * counter (proposal hub-inbox-ws-data-plane §3.5).
+   * ACK an inbox entry — delayed until handler starts processing. Routes
+   * through `config.ackEntry`, which is wired to the WS data plane.
    */
   private async ackEntry(entryId: number | undefined, chatId: string): Promise<void> {
     if (entryId === undefined) return;
     try {
-      if (this.config.ackEntry) {
-        await this.config.ackEntry(entryId);
-      } else {
-        await this.config.sdk.ack(entryId);
-      }
+      await this.config.ackEntry(entryId);
     } catch {
       this.config.log.warn({ chatId, entryId }, "ACK failed, continuing");
     }
@@ -725,11 +885,30 @@ export class SessionManager {
     // to other places that want structured fields.
     const log = (msg: string) => sessionLog.info(msg);
 
-    // One participant cache per session — shared by result-sink (for the
-    // direct-vs-group default-mention decision) and formatInboundContent
-    // (for resolving `[From: <name>]`). First use triggers a fetch;
-    // subsequent calls in either consumer hit memory.
+    // One participant cache per session — consumed by formatInboundContent
+    // (for resolving `[From: <name>]`). First use triggers a fetch; subsequent
+    // calls hit memory. v1 §四 改造 4 removed result-sink's dependency on
+    // this cache (the trigger-sender mention branch is gone), so the cache
+    // now flows only into the inbound-formatter path.
     const participants = createParticipantCache(this.config.sdk, chatId, log);
+
+    // Cross-agent doc preview: `workspaceRoot` is `<workspaces>/<agentSlug>`
+    // (see agent-slot.ts), so the shared common root is its parent and this
+    // agent's slug is its basename — derived from existing config, no new
+    // config surface (decision: config-ascent).
+    const workspacesRoot = dirname(this.config.handlerConfig.workspaceRoot);
+    const selfSlug = basename(this.config.handlerConfig.workspaceRoot);
+    // Resolve the doc base SYNCHRONOUSLY from the already-populated config
+    // cache so it can ride the agent's env (`buildAgentEnv` is sync). This
+    // lets a `first-tree chat send` sub-process snapshot referenced docs
+    // exactly like result-sink does (L3: unify capture across send paths).
+    // result-sink keeps its own async `getDocumentBasePath`; both read the
+    // same cache (`refreshIfNewer(_, 0)` returns the cached payload), so the
+    // base they compute agrees. Falls back to the session doc root when the
+    // cache has no payload yet (== the single/zero-repo default).
+    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
+    const cachedPayload = this.config.agentConfigCache?.get(this.config.agentIdentity.agentId)?.payload;
+    const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, sessionRoot) : sessionRoot;
 
     const forwardResult = createResultSink({
       sdk: this.config.sdk,
@@ -740,10 +919,17 @@ export class SessionManager {
         this.currentTrigger.delete(chatId);
       },
       log,
-      participants,
+      getDocumentBasePath: () => this.resolveDocumentBasePath(log, chatId),
+      workspacesRoot,
+      selfSlug,
     });
 
-    const envCtx = { sdk: this.config.sdk, agent: this.config.agentIdentity, chatId };
+    const envCtx = {
+      sdk: this.config.sdk,
+      agent: this.config.agentIdentity,
+      chatId,
+      docContext: { base: docBase, workspacesRoot, selfSlug },
+    };
 
     return {
       agent: this.config.agentIdentity,
@@ -762,14 +948,29 @@ export class SessionManager {
       emitEvent: (event) => {
         this.config.onSessionEvent?.(chatId, event);
       },
-      reportSessionCompletion: () => {
-        this.config.onSessionCompletion?.(chatId);
-      },
       forwardResult,
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
       resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),
     };
+  }
+
+  private async resolveDocumentBasePath(log: (msg: string) => void, chatId: string): Promise<string> {
+    // Session doc root: the dir the handler actually hands the agent as cwd —
+    // the per-agent home for new chats, the legacy `<workspaceRoot>/<chatId>/`
+    // dir for pre-#506 chats. See `resolveSessionDocRoot` (read-only existsSync;
+    // no acquire* side effects on every outbound message).
+    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
+    if (!this.config.agentConfigCache) return sessionRoot;
+    try {
+      const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
+      return documentBasePathFromRuntimeConfig(payload, sessionRoot);
+    } catch (err) {
+      log(
+        `document preview base path: config unavailable, using session doc root: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return sessionRoot;
+    }
   }
 
   /** Update per-session runtime state and recompute aggregate. Only active sessions may update. */
@@ -856,34 +1057,4 @@ export class SessionManager {
     }
     this.registry.save(entries);
   }
-}
-
-/**
- * Core echo rule: a reply to a message *we* sent in this same chat, whose
- * original carried a `replyTo` pointing to a *different* chat, must not wake
- * our session on this side. Server-side replyTo routing already delivers a
- * second entry in the target chat, so suppressing the fan-out copy here
- * leaves exactly one path from peer's reply to our waiting session.
- *
- * The four early-returns spell out "when this is NOT an echo":
- *  - no snapshot        → just a regular message, not a reply
- *  - sender isn't us    → replying to someone else's message, clearly not an echo
- *  - original chat != this chat
- *       → the reply arrived in a chat where we never sent the original;
- *         could only happen via replyTo fan-out of a different thread, so
- *         suppressing would silence a legit cross-chat handoff
- *  - original had no replyTo → sender didn't ask replies to route away, so
- *                              the peer's reply here is the canonical path
- *
- * Only when all four are satisfied AND the replyTo target is a different
- * chat do we suppress — that's exactly proposal §3.5 Case A.
- */
-export function shouldSuppressEcho(entry: InboxEntryWithMessage, myAgentId: string): boolean {
-  const snapshot = entry.message.inReplyToSnapshot;
-  if (!snapshot) return false;
-  const entryChatId = entry.chatId ?? entry.message.chatId;
-  if (snapshot.senderId !== myAgentId) return false;
-  if (snapshot.chatId !== entryChatId) return false;
-  if (snapshot.replyToChat === null) return false;
-  return snapshot.replyToChat !== entryChatId;
 }

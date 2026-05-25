@@ -1,4 +1,4 @@
-export { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+export { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 export { observabilityPlugin } from "./fastify-plugin.js";
 export {
   classifyJoseError,
