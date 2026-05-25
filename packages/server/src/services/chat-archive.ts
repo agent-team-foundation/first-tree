@@ -11,11 +11,14 @@
  *   Route A — chats with at least one `github_entity_chat_mappings` row.
  *     Archive (for every mapped human) once *all* bound entities are
  *     terminal (`entity_state` in `('closed','merged')`) AND the chat has
- *     been silent for `mappedIdleSeconds` (default 1h).
+ *     been silent for `mappedIdleSeconds` (default 1h). Additionally:
+ *     skip the whole chat if it has any `pending` ask-user question, and
+ *     skip individual users whose `unread_mention_count > 0`.
  *
  *   Route B — chats with no GitHub mapping. Archive only the (chat, user)
  *     pairs where the user has no unread mentions AND the chat has been
- *     silent for `unmappedIdleSeconds` (default 12h).
+ *     silent for `unmappedIdleSeconds` (default 12h). Same chat-level
+ *     pending-question skip as Route A.
  *
  * Per-user safety: writes use the same UPSERT + setWhere guard as the
  * removed `archiveChatsForMergedPr` — only implicit-active or
@@ -64,13 +67,23 @@ export async function sweepChatArchive(
 /**
  * Route A: chats whose every GitHub-mapped entity is terminal AND have been
  * silent for at least `idleSeconds`. Archives every (chat, human) pair from
- * the mapping table — matches the legacy `archiveChatsForMergedPr` reach.
+ * the mapping table — matches the legacy `archiveChatsForMergedPr` reach,
+ * minus the per-user unread / chat-level pending-question carve-outs added
+ * here.
  *
  * Implemented as a single `INSERT … SELECT … ON CONFLICT` round-trip:
  *  - The inner CTE picks chats whose `BOOL_AND(entity_state IN
- *    ('closed','merged'))` and idle timestamp both hold.
+ *    ('closed','merged'))` and idle timestamp both hold, and that have no
+ *    `pending` ask-user question outstanding. The pending-question carve-out
+ *    is chat-scoped (a single pending row defers the whole chat) because the
+ *    askee is always some human member of the chat, so per-user dispatch
+ *    would not buy anything and the chat-level skip is cheaper.
  *  - The outer SELECT joins back to the mapping table for the (chat,
- *    human) pairs.
+ *    human) pairs. A second per-user guard excludes humans whose
+ *    `unread_mention_count > 0` — the schema column is semantically
+ *    overloaded as "any kind of unread" (see chat_user_state docstring and
+ *    me-chat.ts:markChatUnread), so this also covers manually-marked-unread
+ *    chats.
  *  - A LEFT JOIN on `chat_user_state` filters out rows that are already
  *    `archived`/`deleted` so we never even SELECT them again on the next
  *    tick (the `ON CONFLICT … WHERE` guard handles the race window).
@@ -87,6 +100,10 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
        WHERE c.parent_chat_id IS NULL
          AND c.last_message_at IS NOT NULL
          AND c.last_message_at < NOW() - make_interval(secs => ${idleSeconds})
+         AND NOT EXISTS (
+           SELECT 1 FROM pending_questions pq
+            WHERE pq.chat_id = m.chat_id AND pq.status = 'pending'
+         )
        GROUP BY m.chat_id
       HAVING bool_and(m.entity_state IN ('closed', 'merged'))
        LIMIT ${batchSize}
@@ -98,9 +115,11 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
       LEFT JOIN chat_user_state cus
              ON cus.chat_id = m.chat_id AND cus.agent_id = m.human_agent_id
      WHERE COALESCE(cus.engagement_status, 'active') = 'active'
+       AND COALESCE(cus.unread_mention_count, 0) = 0
         ON CONFLICT (chat_id, agent_id) DO UPDATE
            SET engagement_status = 'archived'
          WHERE chat_user_state.engagement_status = 'active'
+           AND chat_user_state.unread_mention_count = 0
     RETURNING chat_id
   `);
   return rows.length;
@@ -116,7 +135,9 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
  *     chat in their Archived tab without ever having seen it,
  *   - the user has no unread mentions,
  *   - the user's engagement is currently `active` (either an explicit
- *     row or the implicit default via missing row).
+ *     row or the implicit default via missing row),
+ *   - the chat has no `pending` ask-user question outstanding (chat-level
+ *     skip, same rationale as Route A: askee is always a human member).
  *
  * The `last_read_at IS NOT NULL` condition implies `cus` is materialised,
  * so the `COALESCE(cus.engagement_status, 'active') = 'active'` clause
@@ -148,10 +169,15 @@ async function sweepUnmapped(db: Database, idleSeconds: number, batchSize: numbe
        AND cus.last_read_at IS NOT NULL
        AND cus.unread_mention_count = 0
        AND cus.engagement_status = 'active'
+       AND NOT EXISTS (
+         SELECT 1 FROM pending_questions pq
+          WHERE pq.chat_id = cm.chat_id AND pq.status = 'pending'
+       )
      LIMIT ${batchSize}
         ON CONFLICT (chat_id, agent_id) DO UPDATE
            SET engagement_status = 'archived'
          WHERE chat_user_state.engagement_status = 'active'
+           AND chat_user_state.unread_mention_count = 0
     RETURNING chat_id
   `);
   return rows.length;
