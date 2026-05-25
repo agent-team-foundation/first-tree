@@ -35,8 +35,12 @@ if [[ -d "$LEGACY_DEV_HOME" && ! -d "$NEW_DEV_HOME" ]]; then
   mv "$LEGACY_DEV_HOME" "$NEW_DEV_HOME"
 fi
 
-# Build dist (always — covers source edits since the last run).
-pnpm --filter first-tree-dev build
+# Build dist (always — covers source edits since the last run). Go
+# through turbo so workspace dependencies (`@first-tree/shared` in
+# particular) build first per `turbo.json`'s `dependsOn: ["^build"]`.
+# A plain `pnpm --filter first-tree-dev build` skips dependency
+# resolution and fails with missing exports from a stale `dist/`.
+pnpm exec turbo run build --filter=first-tree-dev
 
 # Symlink to user-local PATH. Both names point at the same dist so they
 # stay in sync without a second link step.

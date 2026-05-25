@@ -61,7 +61,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
 
   ```bash
   pnpm --filter @first-tree/server build
-  pnpm --filter first-tree-dev build
+  pnpm exec turbo run build --filter=first-tree-dev
   ```
 
 ## Commands

@@ -34,15 +34,18 @@ const DIST = resolve(__dirname, "../../dist/cli/index.mjs");
 
 function ensureDistBuilt(): void {
   if (existsSync(DIST)) return;
-  // `frozen-lockfile=false` because the post-Phase-2 lockfile change
-  // may need re-resolve in CI fresh checkouts.
-  const build = spawnSync("pnpm", ["--filter", "first-tree-dev", "build"], {
+  // Use turbo (not plain pnpm -F) so workspace dependencies
+  // (`@first-tree/shared` especially) build first per turbo.json's
+  // `dependsOn: ["^build"]`. A plain `pnpm --filter first-tree-dev
+  // build` skips dependency resolution and fails with missing exports
+  // from stale `packages/shared/dist/`.
+  const build = spawnSync("pnpm", ["exec", "turbo", "run", "build", "--filter=first-tree-dev"], {
     encoding: "utf-8",
     timeout: 120_000,
     stdio: "inherit",
   });
   if (build.status !== 0) {
-    throw new Error(`pnpm build failed (status ${build.status ?? "unknown"})`);
+    throw new Error(`turbo build failed (status ${build.status ?? "unknown"})`);
   }
   if (!existsSync(DIST)) {
     throw new Error(`build succeeded but ${DIST} still missing`);
