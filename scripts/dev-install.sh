@@ -35,12 +35,21 @@ if [[ -d "$LEGACY_DEV_HOME" && ! -d "$NEW_DEV_HOME" ]]; then
   mv "$LEGACY_DEV_HOME" "$NEW_DEV_HOME"
 fi
 
-# Build dist (always — covers source edits since the last run). Go
-# through turbo so workspace dependencies (`@first-tree/shared` in
-# particular) build first per `turbo.json`'s `dependsOn: ["^build"]`.
-# A plain `pnpm --filter first-tree-dev build` skips dependency
-# resolution and fails with missing exports from a stale `dist/`.
-pnpm exec turbo run build --filter=first-tree-dev
+# Ensure all workspace packages are installed. Idempotent — a no-op
+# when the lockfile already matches the on-disk state. Without this,
+# any missing `packages/*/node_modules/.bin/tsdown` (e.g. after a
+# fresh checkout or a lockfile bump) blows up `pnpm build` with the
+# unhelpful "tsdown: not found" error from a transitive workspace
+# package, not from us.
+pnpm install
+
+# Build everything (full monorepo). Turbo respects per-task
+# `dependsOn` so packages build in dependency order, and a warm cache
+# makes subsequent runs sub-second. Using `pnpm build` here keeps the
+# dev workflow aligned with CI (`.github/workflows/ci.yml` also runs
+# `pnpm build`) — any filter-based partial build risks the multi-env
+# foot-gun of leaving `packages/shared/dist/` stale.
+pnpm build
 
 # Symlink to user-local PATH. Both names point at the same dist so they
 # stay in sync without a second link step.

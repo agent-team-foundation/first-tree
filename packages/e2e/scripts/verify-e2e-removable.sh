@@ -6,7 +6,7 @@
 #   2. Strip `e2e:*` script entries from the root `package.json`.
 #   3. Strip e2e task definitions from `turbo.json`.
 #   4. Run `pnpm install`, `pnpm typecheck`, `pnpm test`, `pnpm build`,
-#      and `pnpm exec turbo run build --filter=first-tree-dev`.
+#      and `pnpm build`.
 #   5. Capture the CLI tarball file hash, restore everything, rebuild,
 #      and assert the published artifact hash is byte-identical.
 #

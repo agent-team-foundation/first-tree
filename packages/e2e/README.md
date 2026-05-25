@@ -60,8 +60,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
 - Built dist for server + CLI:
 
   ```bash
-  pnpm --filter @first-tree/server build
-  pnpm exec turbo run build --filter=first-tree-dev
+  pnpm build
   ```
 
 ## Commands

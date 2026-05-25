@@ -88,7 +88,7 @@ pnpm --filter doc-website docs:preview
 If you touch the published CLI package, also verify the built entry manually:
 
 ```bash
-pnpm --filter first-tree-dev build
+pnpm build
 node apps/cli/dist/index.js --help
 ```
 
@@ -97,7 +97,7 @@ If you touch both code and docs, run:
 ```bash
 pnpm lint
 pnpm typecheck
-pnpm --filter first-tree-dev build
+pnpm build
 pnpm --filter doc-website docs:build
 ```
 

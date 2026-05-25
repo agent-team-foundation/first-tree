@@ -26,11 +26,7 @@ jobs:
           node-version: "22"
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
-      # turbo via `--filter` respects dependsOn: ["^build"] from turbo.json,
-      # so @first-tree/shared (and other workspace deps) build first. Plain
-      # `pnpm -F first-tree-dev build` skips that and fails with missing
-      # exports from the stale `packages/shared/dist/`.
-      - run: pnpm exec turbo run build --filter=first-tree-dev
+      - run: pnpm build
       - run: bash e2e/github-validate-e2e.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -46,9 +42,5 @@ jobs:
           node-version: "22"
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
-      # turbo via `--filter` respects dependsOn: ["^build"] from turbo.json,
-      # so @first-tree/shared (and other workspace deps) build first. Plain
-      # `pnpm -F first-tree-dev build` skips that and fails with missing
-      # exports from the stale `packages/shared/dist/`.
-      - run: pnpm exec turbo run build --filter=first-tree-dev
+      - run: pnpm build
       - run: bash e2e/onboarding-smoke.sh

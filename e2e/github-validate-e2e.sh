@@ -93,9 +93,7 @@ if [[ ! -f "$FT_CLI" ]]; then
   log "Building first-tree CLI because $FT_CLI does not exist"
   (
     cd "$ROOT_DIR"
-    # turbo respects dependsOn from turbo.json so @first-tree/shared
-    # rebuilds first; plain `pnpm -F` skips that.
-    pnpm exec turbo run build --filter=first-tree-dev
+    pnpm build
   )
 fi
 

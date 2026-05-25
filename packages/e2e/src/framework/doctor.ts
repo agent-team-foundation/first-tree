@@ -71,7 +71,7 @@ export function runDoctor(repoRoot: string): DoctorResult {
     issues.push({
       kind: "io",
       what: "command dist",
-      detail: `Missing ${commandDist}. Run \`pnpm exec turbo run build --filter=first-tree-dev\` first.`,
+      detail: `Missing ${commandDist}. Run \`pnpm build\` first.`,
     });
   }
 

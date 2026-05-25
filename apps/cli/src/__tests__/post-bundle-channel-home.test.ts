@@ -26,26 +26,26 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
  * a const from `defaultHome()` / `defaultConfigDir()` / `defaultDataDir()`)
  * gets caught.
  *
- * Test infra: builds dist on demand via `pnpm --filter first-tree-dev
- * build` if it's missing. CI typically runs `pnpm build` before tests
- * so the build is a cached no-op.
+ * Test infra: builds dist on demand via the root `pnpm build` if it's
+ * missing. CI typically runs `pnpm build` before tests so the build
+ * is a cached no-op.
  */
 const DIST = resolve(__dirname, "../../dist/cli/index.mjs");
 
 function ensureDistBuilt(): void {
   if (existsSync(DIST)) return;
-  // Use turbo (not plain pnpm -F) so workspace dependencies
-  // (`@first-tree/shared` especially) build first per turbo.json's
-  // `dependsOn: ["^build"]`. A plain `pnpm --filter first-tree-dev
-  // build` skips dependency resolution and fails with missing exports
-  // from stale `packages/shared/dist/`.
-  const build = spawnSync("pnpm", ["exec", "turbo", "run", "build", "--filter=first-tree-dev"], {
+  // Full monorepo build via the root `pnpm build` script — turbo
+  // respects per-task `dependsOn` and caches, so warm runs are
+  // sub-second. Filtering (`--filter=first-tree-dev`) sometimes
+  // tripped on missing transitive workspace `.bin/` dirs after a
+  // fresh checkout; the unfiltered full build sidesteps that.
+  const build = spawnSync("pnpm", ["build"], {
     encoding: "utf-8",
-    timeout: 120_000,
+    timeout: 300_000,
     stdio: "inherit",
   });
   if (build.status !== 0) {
-    throw new Error(`turbo build failed (status ${build.status ?? "unknown"})`);
+    throw new Error(`pnpm build failed (status ${build.status ?? "unknown"})`);
   }
   if (!existsSync(DIST)) {
     throw new Error(`build succeeded but ${DIST} still missing`);
