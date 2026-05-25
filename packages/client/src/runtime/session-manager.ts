@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type {
   AgentRuntimeConfigPayload,
@@ -43,7 +44,62 @@ type PendingMessage = {
 };
 
 /**
- * Resolve the base path the runtime reads markdown doc snapshots against.
+ * Resolve the directory the runtime reads markdown doc snapshots against —
+ * the same dir the handler actually hands the agent as cwd for this chat.
+ *
+ * Two layouts coexist after the per-agent-home redesign (#506) and its
+ * legacy-resume hotfix (#530):
+ *  - NEW chats run cwd = the per-agent home (`<workspaceRoot>` itself, see
+ *    `acquireAgentHome`), with predeclared source repos materialised at the
+ *    TOP LEVEL (`<workspaceRoot>/<localPath>`). No `<workspaceRoot>/<chatId>/`
+ *    dir is ever created.
+ *  - LEGACY chats (created before #506) keep their original per-chat cwd
+ *    `<workspaceRoot>/<chatId>/`, with their own v1.x layout (source repos at
+ *    `<workspaceRoot>/<chatId>/<localPath>`); #530 resumes them in place.
+ *
+ * The doc base MUST agree with whichever cwd the handler chose, or the
+ * snapshot scanner realpaths a non-existent root and embeds ZERO snapshots —
+ * so every `.md` mention stays plain text instead of rendering a clickable
+ * preview (the symptom this fixes for new chats). We discriminate by the same
+ * cheap signal #530's claude-code `resume()` uses first: does the legacy
+ * per-chat dir physically exist? Present ⇒ legacy layout; absent ⇒ per-agent
+ * home.
+ *
+ * Pure read-only `existsSync` — no `acquireWorkspace`/`acquireAgentHome`,
+ * whose mkdir side effects must not run on every outbound message.
+ *
+ * IMPORTANT — `existsSync(legacyDir)` is a *proxy* for "the handler chose the
+ * legacy cwd". It is exact for new chats (no legacy dir ⇒ agent home, for both
+ * handlers) but `SessionManager` is handler-agnostic (it only knows
+ * `workspaceRoot`, never the handler kind), so two legacy-chat cases diverge —
+ * the resolver returns the legacy dir while the handler actually ran at the
+ * agent home:
+ *   1. CODEX legacy chats. The codex handler has NO legacy-cwd branch:
+ *      `start()` and `resume()` both use `acquireAgentHome` (see
+ *      `handlers/codex.ts`; #530 left codex alone because its transcripts are
+ *      not cwd-keyed). Pre-#506 codex still created `<workspaceRoot>/<chatId>/`,
+ *      and those dirs persist (`cleanWorkspaces` is a no-op), so every legacy
+ *      codex chat hits this divergence.
+ *   2. A claude-code legacy chat whose SDK transcript was lost resumes COLD at
+ *      the agent home (#530 case 3) while its `<chatId>/` dir still exists.
+ * In both, a freshly-written doc at the agent home may snapshot a STALE copy
+ * from the legacy dir, or stay plain text if it exists only at the home.
+ *
+ * This is NOT a regression: the prior code used `join(workspaceRoot, chatId)`
+ * unconditionally, so legacy chats already resolved to the legacy dir — this
+ * fix changes only the new-chat (no-legacy-dir) path. The divergence is
+ * graceful (older revision, never an empty/wrong file), bounded to legacy chats
+ * (which shrink over time), and the clean fix is to thread the handler's
+ * resolved cwd through to the sink instead of re-probing here.
+ */
+export function resolveSessionDocRoot(workspaceRoot: string, chatId: string): string {
+  const legacyPerChatRoot = join(workspaceRoot, chatId);
+  return existsSync(legacyPerChatRoot) ? legacyPerChatRoot : workspaceRoot;
+}
+
+/**
+ * Resolve the base path the runtime reads markdown doc snapshots against,
+ * given the session doc root from {@link resolveSessionDocRoot}.
  *
  * NEVER returns null — every chat has a workspace, and the snapshot scanner
  * existence-checks each candidate inside the returned root, so a bare mention
@@ -54,20 +110,20 @@ type PendingMessage = {
  *
  * Resolution:
  *  - exactly one repo → that repo's worktree, the unambiguous markdown-link
- *    root. The worktree is materialised at `<perChatRoot>/<localPath>`, so the
+ *    root. The worktree is materialised at `<sessionRoot>/<localPath>`, so the
  *    base MUST be that ABSOLUTE path. Returning a bare relative `localPath`
  *    (the old behaviour) made the runtime resolve it against its own
- *    `process.cwd()` — the launch dir, not the per-chat workspace — so it
+ *    `process.cwd()` — the launch dir, not the session workspace — so it
  *    silently failed to find any doc and cloud preview was dead.
- *  - zero or multiple repos → the per-chat workspace root.
+ *  - zero or multiple repos → the session doc root.
  */
-export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, perChatRoot: string): string {
+export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, sessionRoot: string): string {
   if (payload.gitRepos.length === 1) {
     const repo = payload.gitRepos[0];
     const localPath = repo ? repoLocalPath(repo).trim() : "";
-    if (localPath.length > 0) return join(perChatRoot, localPath);
+    if (localPath.length > 0) return join(sessionRoot, localPath);
   }
-  return perChatRoot;
+  return sessionRoot;
 }
 
 function repoLocalPath(repo: GitRepo): string {
@@ -856,11 +912,11 @@ export class SessionManager {
     // exactly like result-sink does (L3: unify capture across send paths).
     // result-sink keeps its own async `getDocumentBasePath`; both read the
     // same cache (`refreshIfNewer(_, 0)` returns the cached payload), so the
-    // base they compute agrees. Falls back to the per-chat root when the
+    // base they compute agrees. Falls back to the session doc root when the
     // cache has no payload yet (== the single/zero-repo default).
-    const perChatRoot = join(this.config.handlerConfig.workspaceRoot, chatId);
+    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
     const cachedPayload = this.config.agentConfigCache?.get(this.config.agentIdentity.agentId)?.payload;
-    const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, perChatRoot) : perChatRoot;
+    const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, sessionRoot) : sessionRoot;
 
     const forwardResult = createResultSink({
       sdk: this.config.sdk,
@@ -908,20 +964,20 @@ export class SessionManager {
   }
 
   private async resolveDocumentBasePath(log: (msg: string) => void, chatId: string): Promise<string> {
-    // Per-chat workspace root: the same dir the handler hands the agent as cwd
-    // (`acquireWorkspace(workspaceRoot, chatId)` returns `<workspaceRoot>/<chatId>`).
-    // Computed with a pure `join` — NOT `acquireWorkspace`, whose mkdir/rmSync
-    // side effects must not run on every outbound message.
-    const perChatRoot = join(this.config.handlerConfig.workspaceRoot, chatId);
-    if (!this.config.agentConfigCache) return perChatRoot;
+    // Session doc root: the dir the handler actually hands the agent as cwd —
+    // the per-agent home for new chats, the legacy `<workspaceRoot>/<chatId>/`
+    // dir for pre-#506 chats. See `resolveSessionDocRoot` (read-only existsSync;
+    // no acquire* side effects on every outbound message).
+    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
+    if (!this.config.agentConfigCache) return sessionRoot;
     try {
       const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
-      return documentBasePathFromRuntimeConfig(payload, perChatRoot);
+      return documentBasePathFromRuntimeConfig(payload, sessionRoot);
     } catch (err) {
       log(
-        `document preview base path: config unavailable, using workspace root: ${err instanceof Error ? err.message : String(err)}`,
+        `document preview base path: config unavailable, using session doc root: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return perChatRoot;
+      return sessionRoot;
     }
   }
 
