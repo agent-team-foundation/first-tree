@@ -76,9 +76,9 @@ describe("resolveSessionDocRoot — per-agent-home vs legacy per-chat layout", (
   it("resolves a NEW single-repo chat's doc base under the agent home, not a per-chat phantom", () => {
     // End-to-end of the bug: compose the root resolver with the base builder.
     const base = documentBasePathFromRuntimeConfig(
-      payload([{ url: "https://github.com/agent-team-foundation/first-tree-hub.git" }]),
+      payload([{ url: "https://github.com/agent-team-foundation/first-tree.git" }]),
       resolveSessionDocRoot(workspaceRoot, "another-new-chat"),
     );
-    expect(base).toBe(join(workspaceRoot, "first-tree-hub"));
+    expect(base).toBe(join(workspaceRoot, "first-tree"));
   });
 });
