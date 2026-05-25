@@ -15,7 +15,15 @@
 //      every entry's `tag` has the matching `NNNN_` prefix).
 //   2. The on-disk .sql files and the journal agree (no orphan .sql, no
 //      missing .sql for a journal entry).
-//   3. Every new journal entry vs. origin/main has idx > max(main idx) —
+//   3. packages/server/drizzle/LATEST holds the journal's last tag. This
+//      sentinel is the merge-time anchor: because every migration PR
+//      rewrites the same single line, two PRs that race to add a migration
+//      against the same base produce a deterministic git modify/modify
+//      conflict at merge time (instead of the unreliable add/add-adjacent
+//      behavior that journal-append alone gives). Keep it in sync via
+//      `pnpm --filter @first-tree/server db:generate`, which now invokes
+//      scripts/sync-migration-head.mjs.
+//   4. Every new journal entry vs. origin/main has idx > max(main idx) —
 //      i.e. PRs may only append migrations, never reuse or rewrite a
 //      number already on main. When the comparison base isn't available
 //      (e.g. workflow_dispatch without a fetched main), the cross-branch
@@ -30,6 +38,8 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const drizzleDir = resolve(repoRoot, "packages/server/drizzle");
 const journalPath = resolve(drizzleDir, "meta/_journal.json");
 const journalRelPath = "packages/server/drizzle/meta/_journal.json";
+const latestPath = resolve(drizzleDir, "LATEST");
+const latestRelPath = "packages/server/drizzle/LATEST";
 
 const errors = [];
 const fail = (msg) => errors.push(msg);
@@ -84,6 +94,31 @@ function validateContiguous(entries, label) {
       );
     }
     priorIdx = idx;
+  }
+}
+
+function validateLatestSentinel(entries) {
+  if (entries.length === 0) return;
+  const expected = entries.at(-1).tag;
+  let raw;
+  try {
+    raw = readFileSync(latestPath, "utf8");
+  } catch (err) {
+    fail(
+      `${latestRelPath}: cannot read sentinel (${err.message}). ` +
+        "Run `pnpm --filter @first-tree/server db:generate` to recreate it, " +
+        "or `node scripts/sync-migration-head.mjs` to sync without regenerating.",
+    );
+    return;
+  }
+  const actual = raw.trim();
+  if (actual !== expected) {
+    fail(
+      `${latestRelPath}: sentinel is "${actual}" but the journal's last tag is "${expected}". ` +
+        "Run `node scripts/sync-migration-head.mjs` (or re-run `db:generate`) so the sentinel " +
+        "matches the journal — this file is the merge-time anchor that forces a git conflict " +
+        "when two PRs race to add a migration.",
+    );
   }
 }
 
@@ -145,6 +180,7 @@ const headEntries = readJournal({
 if (headEntries) {
   validateContiguous(headEntries, journalRelPath);
   validateFilesMatchJournal(headEntries);
+  validateLatestSentinel(headEntries);
 
   const mainSource = readMainJournal();
   if (!mainSource.skipped) {
