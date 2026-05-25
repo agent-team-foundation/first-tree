@@ -230,6 +230,35 @@ function decodeJwtExp(token: string): number | null {
 }
 
 /**
+ * Bash stdout reaches handlers as `string` via Buffer.toString('utf8'), so a
+ * tool whose output is binary (e.g. `gh api .../actions/runs/<id>/logs`
+ * returns a ZIP archive) lands in `resultPreview` peppered with U+FFFD
+ * replacements and embedded NULs. PostgreSQL JSONB rejects NUL outright, which
+ * used to drop the entire session event server-side; a forest of `(replacement chars)` would
+ * also be useless to the UI. Replace such previews with a placeholder so the
+ * event still persists and the timeline shows the call happened.
+ */
+const REPLACEMENT_CHAR_BINARY_THRESHOLD = 8;
+
+function looksBinary(s: string): boolean {
+  if (s.includes("\u0000")) return true;
+  return (s.match(/\uFFFD/g)?.length ?? 0) > REPLACEMENT_CHAR_BINARY_THRESHOLD;
+}
+
+export function sanitizeSessionEventForTransport(event: SessionEvent): SessionEvent {
+  if (event.kind !== "tool_call") return event;
+  const preview = event.payload.resultPreview;
+  if (preview === undefined || !looksBinary(preview)) return event;
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      resultPreview: `[binary content, ${preview.length} chars elided]`,
+    },
+  };
+}
+
+/**
  * Client WS — one socket per client, many agents multiplexed.
  *
  * Handshake sequence (unified-user-token):
@@ -439,7 +468,8 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event }));
+    const sanitized = sanitizeSessionEventForTransport(event);
+    this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event: sanitized }));
   }
 
   /** Ask the server which of the supplied chatIds the client should drop. */
