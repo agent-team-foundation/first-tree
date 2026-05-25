@@ -62,7 +62,14 @@ export async function appendEvent(
 
   for (let attempt = 0; attempt < MAX_SEQ_RETRIES; attempt++) {
     const id = uuidv7();
-    const payloadJson = JSON.stringify(validated.payload);
+    // PG JSONB rejects U+0000 outright. Strip the escaped sequence from the
+    // serialized JSON so a binary preview (e.g. ZIP bytes from
+    // `gh api .../actions/runs/<id>/logs` reaching us through a tool stdout)
+    // does not nuke the whole event. The client already replaces obvious
+    // binary previews with a placeholder; this is the last-mile gate for any
+    // path the client sanitizer does not cover (future handlers, other
+    // free-form string fields).
+    const payloadJson = JSON.stringify(validated.payload).replaceAll("\\u0000", "");
     const result = await db.execute<{
       id: string;
       agent_id: string;
