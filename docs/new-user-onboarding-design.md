@@ -1,9 +1,27 @@
 # New-User Onboarding Redesign — Design Doc
 
-**Status:** Implemented in PR #248 with **amendments** — see §13 for the locked decisions that were reversed during implementation. Read §13 alongside §6 / §7 / §8 / §11 for the actual shipped behaviour.
+**Status:** Implemented in PR #248 with **amendments** (§13), then the UI delivery was **superseded** — see the banner below before relying on any section.
 **Branch:** `feat/onboarding-redesign`
 **Scope:** Hosted Hub (first-tree.ai) post-signup onboarding for brand-new users.
 **Out of scope:** Local self-hosted onboarding (`first-tree start`) — covered in [docs/onboarding-redesign.md](onboarding-redesign.md). NewAgentDialog rewrite — covered in PR #237.
+
+> ⚠️ **ARCHITECTURE SUPERSEDED (2026-05).** This doc specifies onboarding as an
+> **inline** experience — a stepper above `CenterPanel`, `OnboardingView` bodies,
+> Step 3 reusing the workspace `ChatView` in place. That architecture has been
+> **retired**. Onboarding now ships as a **standalone, full-screen `/onboarding`
+> route** ([packages/web/src/pages/onboarding/](../packages/web/src/pages/onboarding/));
+> the workspace root redirects unfinished users into it via `shouldEnterOnboarding`
+> (`pages/onboarding/steps.ts`).
+>
+> Read accordingly:
+> - **Obsolete (UI architecture only):** §4 (inline layout / `OnboardingView` /
+>   stepper-above-CenterPanel) and §7.1–§7.4 (Step 3 sub-state UI). The components
+>   it names (`onboarding-view`, `onboarding-stepper`, `step1/2/3` bodies,
+>   `step-frame`) have been deleted and no longer exist.
+> - **Still authoritative (product + server semantics):** §5 (team auto-naming,
+>   incl. §5.5), §6 (agent creation), §7.5–§7.6 + the bootstrap message, §8
+>   (completion model — `onboarding_dismissed_at` / `onboarding_completed_at`),
+>   §9. Source comments cite these section anchors, so the numbering is kept stable.
 
 ---
 
@@ -21,7 +39,7 @@ The three steps are **parallel pillars, not levels of importance** — each conf
 
 In old scope, Step 1 was implicit (auto-created at OAuth, invisible) and Step 3 was outside onboarding (users could leave with a chatting-but-context-less agent). New scope makes both **first-class steps** because they're structurally essential to the product, not optional extras.
 
-The current `OnboardingView` ([packages/web/src/pages/workspace/center/onboarding-view.tsx](../packages/web/src/pages/workspace/center/onboarding-view.tsx)) reflects the old scope: a single-page form that conflates agent name + computer connect + runtime choice. It has no path for team confirmation, no repo binding, and no path to tree initialization.
+The original `OnboardingView` (since retired — see the banner above) reflected the old scope: a single-page form that conflated agent name + computer connect + runtime choice. It had no path for team confirmation, no repo binding, and no path to tree initialization.
 
 Goals of the redesign:
 1. **Expand onboarding scope** to cover the full first-tree setup ceremony (team / agent / tree), reflecting the product's actual value chain — not just "an agent that chats"
@@ -66,6 +84,12 @@ Concrete assumptions:
 ---
 
 ## 4. Architecture
+
+> **Superseded:** this section describes the retired *inline* layout. The shipped
+> flow is the standalone `/onboarding` route — see
+> [packages/web/src/pages/onboarding/](../packages/web/src/pages/onboarding/)
+> (`onboarding-shell.tsx` chrome, `progress-rail.tsx` stepper, `steps.ts` gating).
+> Kept for historical rationale only.
 
 ### 4.1 Layout — stepper above CenterPanel only (not above rail)
 
@@ -354,7 +378,7 @@ Why not deferred / per-step incremental upgrade: a second GitHub redirect mid-on
 
 ### 6.4 Computer connection
 
-Identical mechanism to current OnboardingView ([packages/web/src/pages/workspace/center/onboarding-view.tsx:144-174](../packages/web/src/pages/workspace/center/onboarding-view.tsx)):
+Same mechanism the retired inline view used (now in the standalone flow's [`use-computer-connection.ts`](../packages/web/src/pages/onboarding/use-computer-connection.ts)):
 - Lazy-mint a connect token on Step 2 mount
 - Display `npm install -g first-tree && first-tree login <token>`
 - Poll `listClients()` every 3s; flip from "Waiting" pulsing dot to "✓ <hostname> connected" pill when a client comes online
@@ -453,6 +477,13 @@ Why this text and not something shorter:
 The bootstrap message is the **only** Hub-injected interaction in Step 3. From that point on, agent and user converse freely.
 
 ### 7.4 Sub-state B — ChatView (plain, unwrapped)
+
+> **Superseded (UI delivery only):** the kickoff no longer renders inside the
+> workspace `ChatView` behind a persistent stepper. The standalone flow sends the
+> bootstrap message, then navigates to `/?c=<chatId>` to drop the user into their
+> first real chat (`pages/onboarding/steps/step-kickoff.tsx`). The **bind-tree
+> "Path B"** that `org bind-tree` refers to is unchanged: the agent still
+> creates/binds a context-tree repo and the Hub records it in org settings.
 
 The user is in **the same ChatView** they'll use post-onboarding. No onboarding chrome inside. The stepper at the top of the workspace shell is the only "you're still in onboarding" signal.
 
@@ -876,7 +907,7 @@ For clarity, these remain as locked in §4-§12:
 ## 14. References
 
 - Existing local-scenario doc: [docs/onboarding-redesign.md](onboarding-redesign.md)
-- Current OnboardingView: [packages/web/src/pages/workspace/center/onboarding-view.tsx](../packages/web/src/pages/workspace/center/onboarding-view.tsx)
+- Standalone onboarding flow (current): [packages/web/src/pages/onboarding/](../packages/web/src/pages/onboarding/) — `onboarding-page.tsx`, `onboarding-flow.tsx`, `onboarding-shell.tsx`, `steps.ts`
 - CenterPanel routing: [packages/web/src/pages/workspace/center/index.tsx](../packages/web/src/pages/workspace/center/index.tsx)
 - ChatView: [packages/web/src/pages/workspace/center/chat-view.tsx](../packages/web/src/pages/workspace/center/chat-view.tsx)
 - GitHub OAuth: [packages/server/src/api/auth/github.ts](../packages/server/src/api/auth/github.ts)

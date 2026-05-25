@@ -1,10 +1,24 @@
 # 新用户 Onboarding 重设计 — 设计文档
 
-**状态：** 草稿 / 讨论中。落地前需 lock。
+**状态：** 已落地（PR #248，含修订），随后 UI 实现方式被**取代** — 引用任何章节前请先读下方横幅。
 **分支：** `feat/onboarding-redesign`
 **范围：** 托管版 Hub（first-tree.ai）新用户登录后的 onboarding。
 **不在范围：** 本地自建 Hub（`first-tree start`）— 见 [docs/onboarding-redesign.md](onboarding-redesign.md)。NewAgentDialog 重写 — 见 PR #237。
 **英文版：** [new-user-onboarding-design.md](new-user-onboarding-design.md)（同步维护）。
+
+> ⚠️ **架构已被取代（2026-05）。** 本文档把 onboarding 描述为**内联**形态 ——
+> stepper 悬在 `CenterPanel` 上方、`OnboardingView` 分支渲染各步骤、Step 3 原地复用
+> 工作区的 `ChatView`。这套架构已**清退**。onboarding 现在是一个**独立的全屏
+> `/onboarding` 路由**（[packages/web/src/pages/onboarding/](../packages/web/src/pages/onboarding/)）；
+> 工作区根路径通过 `shouldEnterOnboarding`（`pages/onboarding/steps.ts`）把未完成设置的用户重定向进去。
+>
+> 据此阅读：
+> - **已过时（仅 UI 架构）：** §4（内联布局 / `OnboardingView` / stepper-在-CenterPanel-上方）
+>   与 §7.1–§7.4（Step 3 子状态 UI）。文中提到的组件（`onboarding-view`、`onboarding-stepper`、
+>   `step1/2/3` body、`step-frame`）均已删除、不再存在。
+> - **仍然权威（产品 + 服务端语义）：** §5（team 自动命名，含 §5.5）、§6（agent 创建）、
+>   §7.5–§7.6 + bootstrap 消息、§8（完成模型 — `onboarding_dismissed_at` /
+>   `onboarding_completed_at`）、§9。英文版的同名章节锚点被源码注释引用，故编号保持稳定。
 
 ---
 
@@ -22,7 +36,7 @@
 
 旧 scope 下 Step 1 是隐式的（OAuth 时自动建、用户看不见），Step 3 在 onboarding 范畴外（用户可能离开时 agent 能聊但无 context）。新 scope 把这俩都做成 **first-class step**，因为它们对产品**结构上是必须的**，不是可选附加。
 
-当前 `OnboardingView`（[packages/web/src/pages/workspace/center/onboarding-view.tsx](../packages/web/src/pages/workspace/center/onboarding-view.tsx)）反映的是旧 scope：单页表单把 agent name + 接电脑 + 选 runtime 三件事压在一起。没有 team 确认、没有 repo 绑定、没有 tree 初始化的路径。
+原 `OnboardingView`（已清退 —— 见上方横幅）反映的是旧 scope：单页表单把 agent name + 接电脑 + 选 runtime 三件事压在一起。没有 team 确认、没有 repo 绑定、没有 tree 初始化的路径。
 
 重设计的目标：
 1. **扩展 onboarding scope** 覆盖完整的 first-tree setup ceremony（team / agent / tree），反映产品真实的价值链 —— 而不仅仅是"一个能聊天的 agent"
@@ -67,6 +81,11 @@
 ---
 
 ## 4. 架构
+
+> **已被取代：** 本节描述的是已清退的*内联*布局。实际上线的是独立 `/onboarding`
+> 路由 —— 见 [packages/web/src/pages/onboarding/](../packages/web/src/pages/onboarding/)
+> （`onboarding-shell.tsx` 外壳、`progress-rail.tsx` stepper、`steps.ts` 网关）。
+> 此处仅作历史 rationale 保留。
 
 ### 4.1 布局 — stepper 只在 CenterPanel 上方（不横跨 rail）
 
@@ -355,7 +374,7 @@ const personal = await createPersonalTeam(app.db, {
 
 ### 6.4 接电脑
 
-跟当前 OnboardingView（[packages/web/src/pages/workspace/center/onboarding-view.tsx:144-174](../packages/web/src/pages/workspace/center/onboarding-view.tsx)）一样：
+跟已清退的内联视图一样的机制（现位于独立流程的 [`use-computer-connection.ts`](../packages/web/src/pages/onboarding/use-computer-connection.ts)）：
 - Step 2 mount 时 lazy-mint connect token
 - 显示 `npm install -g first-tree && first-tree login <token>`
 - 每 3 秒 poll `listClients()`；client 上线时把"Waiting"脉冲点切成"✓ <hostname> connected"
@@ -454,6 +473,11 @@ Use the latest First-Tree CLI to install the skill in the current repository and
 引导消息是 Step 3 里**唯一**的 Hub 注入交互。从那一刻起 agent 和用户完全自由对话。
 
 ### 7.4 子状态 B — ChatView（原生、无包装）
+
+> **已被取代（仅 UI 呈现方式）：** kickoff 不再在工作区 `ChatView` 里、stepper 常驻地
+> 原地渲染。独立流程发出 bootstrap 消息后,导航到 `/?c=<chatId>`,把用户放进第一个真实
+> 聊天（`pages/onboarding/steps/step-kickoff.tsx`）。`org bind-tree` 所指的 **bind-tree
+> "Path B"** 未变:agent 仍会创建/绑定 context-tree repo,Hub 仍把它记到 org 设置里。
 
 用户在的就是 onboarding 完成后日常使用的**同一个 ChatView**。chat 内部没有任何 onboarding chrome。workspace 顶部的 stepper 是"你还在 onboarding"的唯一信号。
 
@@ -698,7 +722,7 @@ Step 4 重启时：
 ## 13. References
 
 - 已有的本地场景文档：[docs/onboarding-redesign.md](onboarding-redesign.md)
-- 当前 OnboardingView：[packages/web/src/pages/workspace/center/onboarding-view.tsx](../packages/web/src/pages/workspace/center/onboarding-view.tsx)
+- 独立 onboarding 流程（当前）：[packages/web/src/pages/onboarding/](../packages/web/src/pages/onboarding/) —— `onboarding-page.tsx`、`onboarding-flow.tsx`、`onboarding-shell.tsx`、`steps.ts`
 - CenterPanel 路由：[packages/web/src/pages/workspace/center/index.tsx](../packages/web/src/pages/workspace/center/index.tsx)
 - ChatView：[packages/web/src/pages/workspace/center/chat-view.tsx](../packages/web/src/pages/workspace/center/chat-view.tsx)
 - GitHub OAuth：[packages/server/src/api/auth/github.ts](../packages/server/src/api/auth/github.ts)
