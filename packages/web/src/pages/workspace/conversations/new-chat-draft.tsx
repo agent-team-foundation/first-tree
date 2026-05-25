@@ -1,8 +1,7 @@
 import { type Agent, extractMentions, type MentionParticipant } from "@first-tree/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listAgents } from "../../../api/agents.js";
 import { readFileAsBase64, sendChatMessage, sendFileMessage } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
 import { createMeChat } from "../../../api/me-chats.js";
@@ -17,6 +16,7 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
+import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { type PendingImage, usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
 
@@ -87,18 +87,12 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   useAutoResizeTextarea(textareaRef, draft);
 
   /** Candidate source: org-wide addressable agents (humans + AI), backed
-   *  by `GET /orgs/:orgId/agents` (`listAgents`). Pre-issue 343 we sourced
-   *  this from `/activity`, which filters on `runtimeState IS NOT NULL`
-   *  and silently dropped human members — making it impossible to start
-   *  a chat with a coworker. `listAgents` already LEFT-JOINs
-   *  `agent_presence` and surfaces humans natively. `limit: 100` is the
-   *  server's enforced cap in `paginationQuerySchema`; orgs above that
-   *  threshold need pagination here. */
-  const { data: orgAgentsPage } = useQuery({
-    queryKey: ["org-agents"],
-    queryFn: () => listAgents({ limit: 100 }),
-    refetchInterval: 30_000,
-  });
+   *  by `GET /orgs/:orgId/agents` via the shared `useOrgAgents` hook.
+   *  Pre-issue 343 we sourced this from `/activity`, which filters on
+   *  `runtimeState IS NOT NULL` and silently dropped human members —
+   *  making it impossible to start a chat with a coworker. `listAgents`
+   *  already LEFT-JOINs `agent_presence` and surfaces humans natively. */
+  const { data: orgAgentsPage } = useOrgAgents();
 
   const candidates = useMemo<MentionCandidate[]>(() => {
     const out: MentionCandidate[] = [];
