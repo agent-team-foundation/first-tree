@@ -531,11 +531,6 @@
     opacity: 0;
   }
 }
-@keyframes dash-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -596,19 +591,6 @@
   }
 }
 
-/* Chat-row avatar working ring — steady breathe to signal "agent is
-   responding now" without the urgency of a flash. opacity-only so the
-   animation stays GPU-cheap on long conversation lists. */
-@keyframes chat-row-avatar-working-breathe {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 @keyframes context-live-halo-breathe {
   0%,
   100% {
@@ -631,12 +613,29 @@
   }
 }
 
-.chat-row-avatar__working-ring {
-  animation: chat-row-avatar-working-breathe 1.6s ease-in-out infinite;
+/* Chat-row activity dots ("•••") — the list time-slot indicator for "an
+   agent is producing output now". Three working-blue dots do a staggered
+   typing-style wave (translateY bounce, per-dot animation-delay set inline)
+   so it reads as clearly "alive" at scan distance. The opacity floor stays
+   high (0.5) so the dots never fade out; ~1.3s cycle. */
+@keyframes chat-row-activity-dot {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+.chat-row-activity-dot {
+  animation: chat-row-activity-dot 1.3s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-row-avatar__working-ring {
+  .chat-row-activity-dot {
     animation: none;
+    transform: none;
     opacity: 1;
   }
 }
@@ -663,6 +662,35 @@
     animation: none;
     opacity: 1;
     transform: none;
+  }
+}
+
+/* ── Canonical agent-status pulses (agent-status-ui §9.3) ──────────────
+   working / needs-you breathe the dot body's own opacity — no concentric
+   ring — so every status point keeps an identical footprint and a long
+   roster column stays aligned. opacity-led → GPU-cheap. working breathes a
+   touch faster (reads "alive"); needs-you slower (a calm "waiting for you",
+   not an alarm). reduced-motion falls back to a solid dot. */
+@keyframes status-dot-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.agent-status-pulse--working {
+  animation: status-dot-breathe 1.4s ease-in-out infinite;
+}
+.agent-status-pulse--needs-you {
+  animation: status-dot-breathe 1.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-status-pulse--working,
+  .agent-status-pulse--needs-you {
+    animation: none;
+    opacity: 1;
   }
 }
 

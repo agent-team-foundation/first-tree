@@ -1,6 +1,6 @@
-import type { MeChatRow } from "@first-tree/shared";
+import { compareMainStatus, type MeChatRow } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { groupRows } from "../conversations/group-rows.js";
+import { groupRows, splitAttentionRows } from "../conversations/group-rows.js";
 
 // Fixed reference "now" — picked to be mid-week so the
 // `startOfWeek` (Monday) maths is exercised non-trivially. UTC noon
@@ -26,6 +26,8 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     engagementStatus: overrides.engagementStatus ?? "active",
     engagedAgentIds: overrides.engagedAgentIds ?? [],
     liveActivity: overrides.liveActivity ?? null,
+    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
+    failedAgentIds: overrides.failedAgentIds ?? [],
   };
 }
 
@@ -172,5 +174,62 @@ describe("groupRows — type", () => {
     const buckets = groupRows(rows, "type", NOW);
     expect(buckets.map((b) => b.key)).toEqual(["direct", "other"]);
     expect(buckets[1]?.label).toBe("Other");
+  });
+});
+
+describe("splitAttentionRows — pinned failed + needs-you partition", () => {
+  it("separates failed and needs-you rows from the rest, preserving order", () => {
+    const rows = [
+      row({ id: "a", lastMessageAt: offsetIso(-1) }),
+      row({ id: "b", lastMessageAt: offsetIso(-2), pendingQuestionAgentIds: ["agent-1"] }),
+      row({ id: "c", lastMessageAt: offsetIso(-3) }),
+      row({ id: "d", lastMessageAt: offsetIso(-4), failedAgentIds: ["agent-2"] }),
+    ];
+    const { attention, rest } = splitAttentionRows(rows);
+    // failed (d) ranks above needs-you (b); rest keeps source order.
+    expect(attention.map((r) => r.chatId)).toEqual(["d", "b"]);
+    expect(rest.map((r) => r.chatId)).toEqual(["a", "c"]);
+  });
+
+  it("failed ranks above needs-you within the attention bucket", () => {
+    const rows = [
+      row({ id: "n", lastMessageAt: offsetIso(-1), pendingQuestionAgentIds: ["a1"] }),
+      row({ id: "f", lastMessageAt: offsetIso(-2), failedAgentIds: ["a2"] }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["f", "n"]);
+  });
+
+  it("a chat that is both failed AND needs-you appears once, in the failed tier", () => {
+    const rows = [
+      row({ id: "both", lastMessageAt: offsetIso(-1), failedAgentIds: ["a1"], pendingQuestionAgentIds: ["a2"] }),
+      row({ id: "n", lastMessageAt: offsetIso(-2), pendingQuestionAgentIds: ["a3"] }),
+    ];
+    const { attention, rest } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["both", "n"]);
+    expect(rest).toEqual([]);
+  });
+
+  it("all-quiet → empty attention", () => {
+    const { attention, rest } = splitAttentionRows([row({ id: "x", lastMessageAt: null })]);
+    expect(attention).toEqual([]);
+    expect(rest.map((r) => r.chatId)).toEqual(["x"]);
+  });
+
+  it("orders the attention bucket via compareMainStatus, not a hardcoded concat", () => {
+    // Interleaved failed / needs-you; the bucket order must equal sorting their
+    // composite mains by compareMainStatus — so a future MAIN_STATUS_PRIORITY
+    // change flows through here automatically (no parallel hardcoded order).
+    const rows = [
+      row({ id: "n1", lastMessageAt: offsetIso(-1), pendingQuestionAgentIds: ["a"] }),
+      row({ id: "f1", lastMessageAt: offsetIso(-2), failedAgentIds: ["b"] }),
+      row({ id: "n2", lastMessageAt: offsetIso(-3), pendingQuestionAgentIds: ["c"] }),
+      row({ id: "f2", lastMessageAt: offsetIso(-4), failedAgentIds: ["d"] }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    const mains = attention.map((r): "failed" | "needs_you" => (r.failedAgentIds.length > 0 ? "failed" : "needs_you"));
+    expect(mains).toEqual([...mains].sort((x, y) => compareMainStatus(x, y)));
+    // failed tier first (stable within tier), then needs-you tier (stable).
+    expect(attention.map((r) => r.chatId)).toEqual(["f1", "f2", "n1", "n2"]);
   });
 });
