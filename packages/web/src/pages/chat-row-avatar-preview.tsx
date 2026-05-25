@@ -37,6 +37,8 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     engagementStatus: overrides.engagementStatus ?? "active",
     engagedAgentIds: overrides.engagedAgentIds ?? [],
     liveActivity: overrides.liveActivity ?? null,
+    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
+    failedAgentIds: overrides.failedAgentIds ?? [],
   };
 }
 
@@ -271,8 +273,9 @@ function PreviewCard({ name, row }: { name: string; row: MeChatRow }) {
           type={row.type}
           participants={row.participants}
           selfAgentId={SELF_ID}
-          engagedAgentIds={row.engagedAgentIds}
           unreadCount={row.unreadMentionCount}
+          needsYou={row.pendingQuestionAgentIds.length > 0}
+          failed={row.failedAgentIds.length > 0}
         />
         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
           <div className="flex items-baseline" style={{ gap: 6 }}>

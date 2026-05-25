@@ -4,7 +4,8 @@ import { api, withOrg } from "./client.js";
 export type SessionListItem = {
   agentId: string;
   chatId: string;
-  state: string;
+  /** Per-(agent,chat) session lifecycle (C vocabulary). */
+  state: SessionState;
   /**
    * Agent-global `agent_presence.runtime_state` copied onto every session
    * the agent owns. NOT per-session — every row for the same agent carries

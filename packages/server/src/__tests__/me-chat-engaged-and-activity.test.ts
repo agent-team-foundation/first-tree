@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { createMeChat, listMeChats, toLiveActivity } from "../services/me-chat.js";
+import { createMeChat, listMeChats, previewToolArgs, toLiveActivity } from "../services/me-chat.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -347,5 +347,56 @@ describe("toLiveActivity pure helper", () => {
     const ts = new Date("2026-05-14T01:23:45.000Z");
     const a = toLiveActivity({ ...baseRow, kind: "thinking", created_at: ts });
     expect(a?.startedAt).toBe("2026-05-14T01:23:45.000Z");
+  });
+
+  it("tool_call carries a `detail` arg preview; thinking/writing have none", () => {
+    const bash = toLiveActivity({
+      ...baseRow,
+      kind: "tool_call",
+      payload: { toolUseId: "t1", name: "Bash", args: { command: "npm test" }, status: "pending" },
+    });
+    expect(bash?.detail).toBe("npm test");
+    // No useful args → detail omitted (not empty string).
+    expect(
+      toLiveActivity({ ...baseRow, kind: "tool_call", payload: { name: "Bash", args: {} } })?.detail,
+    ).toBeUndefined();
+    expect(toLiveActivity({ ...baseRow, kind: "thinking" })?.detail).toBeUndefined();
+  });
+});
+
+describe("previewToolArgs", () => {
+  it("returns undefined for no/empty args", () => {
+    expect(previewToolArgs(undefined)).toBeUndefined();
+    expect(previewToolArgs(null)).toBeUndefined();
+    expect(previewToolArgs({})).toBeUndefined();
+    expect(previewToolArgs("   ")).toBeUndefined();
+  });
+
+  it("picks a meaningful field for common tools", () => {
+    expect(previewToolArgs({ command: "npm test" })).toBe("npm test");
+    expect(previewToolArgs({ file_path: "/a/b.ts" })).toBe("/a/b.ts");
+    expect(previewToolArgs({ query: "needle" })).toBe("needle");
+  });
+
+  it("uses a raw string arg directly", () => {
+    expect(previewToolArgs("ls -la")).toBe("ls -la");
+  });
+
+  it("collapses whitespace and truncates long previews to <=32 chars", () => {
+    const out = previewToolArgs({ command: "echo   one    two\nthree   four five six seven eight" });
+    expect(out).toBeDefined();
+    expect((out as string).length).toBeLessThanOrEqual(32);
+    expect(out).toContain("…");
+    expect(out).not.toContain("\n");
+  });
+
+  it("falls back to JSON for objects without a known field", () => {
+    expect(previewToolArgs({ foo: "bar" })).toBe('{"foo":"bar"}');
+  });
+
+  it("does NOT treat `description` as an arg value (it's a tool self-description)", () => {
+    // `description` is not in the recognised-arg list → JSON fallback, not the
+    // raw description string. (Short value so it stays under the truncate cap.)
+    expect(previewToolArgs({ description: "hi" })).toBe('{"description":"hi"}');
   });
 });

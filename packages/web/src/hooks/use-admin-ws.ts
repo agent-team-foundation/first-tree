@@ -94,6 +94,12 @@ const meChatsInvalidator = createThrottledInvalidator(["me", "chats"], INVALIDAT
 // 1s window as `me/chats` so all three keys stay roughly in lock-step.
 const activityInvalidator = createThrottledInvalidator(["activity"], INVALIDATE_THROTTLE_MS);
 const sessionsInvalidator = createThrottledInvalidator(["sessions"], INVALIDATE_THROTTLE_MS);
+// `["chat-agent-status", chatId]` powers the right-sidebar AgentStatusPanel
+// (and step 7's compose bar). Its composite per-agent status moves with
+// session:state (engagement / suspend), session:event (live activity →
+// working), and chat:message (needs-you supersede). Prefix-invalidate so
+// every open chat's panel refreshes; throttled like the rest.
+const chatAgentStatusInvalidator = createThrottledInvalidator(["chat-agent-status"], INVALIDATE_THROTTLE_MS);
 // Replaces the per-component `refetchInterval` previously wired into
 // SessionContext, ChatView's right-sidebar session card, the per-agent
 // roster panel, and AgentRow. The frame carries `agentId` + `chatId`
@@ -171,6 +177,7 @@ function broadcast(msg: WsMessage) {
       // on / off in real time without waiting for the 15s `refetchInterval`.
       // Throttled because the upstream frames can burst tool-call-fast.
       meChatsInvalidator.invalidate(latestQc);
+      chatAgentStatusInvalidator.invalidate(latestQc);
       // Precise invalidate for the (agent, chat) the frame is about, so a
       // burst for one agent doesn't fan out onto every sibling agent's
       // sessionQuery in the same chat. See `invalidateSessionPair` for the
@@ -191,6 +198,7 @@ function broadcast(msg: WsMessage) {
       // Re-uses the same leading + trailing throttle helper as
       // `session:state` (window defined by `INVALIDATE_THROTTLE_MS`).
       meChatsInvalidator.invalidate(latestQc);
+      chatAgentStatusInvalidator.invalidate(latestQc);
       // Frame carries `agentId` + `chatId` (api/orgs/ws.ts:82 spreads the
       // notifier payload), so we can target the exact session-events query
       // ChatView reads (`["session-events", agentId, chatId]`) rather than
@@ -211,10 +219,20 @@ function broadcast(msg: WsMessage) {
       // already wired into ChatView.
       const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
       meChatsInvalidator.invalidate(latestQc);
+      chatAgentStatusInvalidator.invalidate(latestQc);
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: ["chat-messages", chatId] });
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
       }
+    } else if (msg.type === "pulse:tick") {
+      // Per-org runtime-state aggregate (pulse-aggregator broadcasts every 5s).
+      // The composite `offline` (client_id → null) and runtime-`error` → failed
+      // inputs to `chat-agent-status` move ONLY via runtime state, with no
+      // session:state / session:event / chat:message frame — so without this
+      // branch a silent disconnect or runtime error would wait out the 30s
+      // refetchInterval before the sidebar/header point flips. Same throttled
+      // prefix invalidator; the server already 5s-throttles + org-scopes pulse.
+      chatAgentStatusInvalidator.invalidate(latestQc);
     }
   }
 }
@@ -267,6 +285,7 @@ function connect() {
       latestQc.invalidateQueries({ queryKey: ["activity"] });
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
       latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
+      latestQc.invalidateQueries({ queryKey: ["chat-agent-status"] });
       // Catch-up parity with the steady-state `session:state` /
       // `session:event` branches: these prefixes back panels that used to
       // self-poll, so reconnect must refresh them too.
@@ -348,6 +367,7 @@ function teardown() {
   meChatsInvalidator.dispose();
   activityInvalidator.dispose();
   sessionsInvalidator.dispose();
+  chatAgentStatusInvalidator.dispose();
   disposeSessionPairThrottle();
   if (ws) {
     ws.close(1000, "unmount");

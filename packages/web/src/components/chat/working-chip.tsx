@@ -35,7 +35,25 @@ export function formatElapsed(ms: number): string {
   return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
 }
 
-export function WorkingChip({ activity }: { activity: LiveActivity }) {
+export function WorkingChip({
+  activity,
+  showDot = true,
+  prefix,
+  monochrome = false,
+}: {
+  activity: LiveActivity;
+  /** Render the leading pulse dot. Off where a status point already sits
+   *  alongside (the AgentStatusPanel row already shows the avatar dot, so a
+   *  second pulsing dot here would be redundant). Default on for the compose
+   *  status bar's standalone chip. */
+  showDot?: boolean;
+  /** Optional state word shown before the activity, joined with "·"
+   *  (e.g. "Working · Bash · 12s"). */
+  prefix?: string;
+  /** When true the elapsed timer inherits the working blue instead of the
+   *  muted --fg-4 — used where the whole second line is colour-coded by state. */
+  monochrome?: boolean;
+}) {
   // Ticker — re-render every second so the elapsed string moves forward.
   // The interval is mount-once; when a new live event arrives the parent
   // re-renders with a fresh `activity.startedAt`, and the next derivation
@@ -50,29 +68,34 @@ export function WorkingChip({ activity }: { activity: LiveActivity }) {
   }, []);
 
   const elapsed = formatElapsed(now - startedAt);
+  const lead = prefix ? `${prefix} · ${activity.label}` : activity.label;
+  const ariaLabel = [prefix, activity.label, elapsed].filter(Boolean).join(", ");
 
   return (
     <span
       role="status"
-      aria-label={`${activity.label}, ${elapsed}`}
+      aria-label={ariaLabel}
       className="mono text-caption shrink-0 inline-flex items-center"
       style={{ gap: 6, color: "var(--state-working)" }}
     >
-      <span
-        aria-hidden="true"
-        className="chat-row-live-chip__dot"
-        style={{
-          display: "inline-block",
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: "var(--state-working)",
-        }}
-      />
-      <span className="truncate" style={{ maxWidth: 96 }}>
-        {activity.label}
+      {showDot ? (
+        <span
+          aria-hidden="true"
+          className="chat-row-live-chip__dot"
+          style={{
+            display: "inline-block",
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: "var(--state-working)",
+          }}
+        />
+      ) : null}
+      <span className="truncate" style={{ maxWidth: 160 }}>
+        {lead}
       </span>
-      <span style={{ color: "var(--fg-4)" }}>{elapsed}</span>
+      <span aria-hidden="true">·</span>
+      <span style={{ color: monochrome ? "var(--state-working)" : "var(--fg-4)" }}>{elapsed}</span>
     </span>
   );
 }

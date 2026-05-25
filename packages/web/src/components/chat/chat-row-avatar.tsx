@@ -1,28 +1,24 @@
 /**
  * ChatRowAvatar — left-side avatar slot for the conversation list row.
  *
- * Renders three orthogonal signals in one 36x36 unit:
+ * Renders two orthogonal signals in one 36x36 unit:
  *
  *   1. Identity. Direct chats show a single initial; group chats use a
  *      Telegram-style split-disc composite (vertical bisection for 2,
  *      T-split for 3, 2x2 for exactly 4, 3 + "+N" tile for >=5).
- *   2. Engaged state. When any speaker in this chat has an active
- *      per-(agent, chat) session (`engagedAgentIds` is non-empty), an
- *      accent ring breathes around the avatar. The derivation is now
- *      per-(agent, chat) — driven by `agent_chat_sessions.state ===
- *      'active'` — so cross-chat false-positives are impossible by
- *      construction and the previous direct-only render hack is gone.
- *   3. Unread. A `--state-error` badge at the bottom-right corner
- *      replaces the legacy small text-row dot. Numeric up to 99, then
- *      "99+". When count = 0 the badge is omitted entirely.
+ *   2. Attention. A single corner badge encodes the highest-priority
+ *      "do I need to look here" signal: failed (an agent errored, red `!`)
+ *      outranks needs-you (a pending AskUserQuestion, amber `?`) outranks an
+ *      unread-mention count (red N, numeric up to 99 then "99+"). Omitted when
+ *      none apply. The activity axis ("an agent is producing output now")
+ *      lives in the row's time slot (the scrolling `•••`), not here.
  *
- * The component owns its z-index ladder: badge (3) > engaged ring (1)
- * > avatar (0). All overlays carry a hairline-bold `var(--bg-raised)`
- * border so they read clearly against the underlying avatar without
- * bleeding into adjacent rows.
+ * The avatar no longer carries the engaged breathe ring — "engaged but
+ * idle" was low-value at list-scan distance and is expressed per-agent
+ * in the right sidebar instead.
  *
  * A11y: this span's `aria-label` carries the dynamic *state* only
- * (`"engaged"`, `"3 unread"`). The enclosing chat-row button already
+ * (`"needs you"`, `"3 unread"`). The enclosing chat-row button already
  * renders the chat title as visible text — repeating it here would
  * make screen readers announce the title twice. When the avatar has
  * no state to surface, it goes fully `aria-hidden` so the row's
@@ -30,6 +26,7 @@
  */
 
 import type { MeChatRow } from "@first-tree/shared";
+import type { ReactNode } from "react";
 
 type Participant = MeChatRow["participants"][number];
 
@@ -114,9 +111,10 @@ export function formatUnreadLabel(count: number): string | null {
  * already on the row button). When there is state, it's joined as
  * `"engaged, N unread"`.
  */
-export function buildAvatarAriaLabel(opts: { engaged: boolean; unread: number }): string | null {
+export function buildAvatarAriaLabel(opts: { failed: boolean; needsYou: boolean; unread: number }): string | null {
   const parts: string[] = [];
-  if (opts.engaged) parts.push("engaged");
+  if (opts.failed) parts.push("failed");
+  if (opts.needsYou) parts.push("needs you");
   if (opts.unread > 0) parts.push(`${opts.unread} unread`);
   return parts.length > 0 ? parts.join(", ") : null;
 }
@@ -126,8 +124,9 @@ export function ChatRowAvatar({
   type,
   participants,
   selfAgentId,
-  engagedAgentIds,
   unreadCount,
+  needsYou = false,
+  failed = false,
   size = 36,
 }: {
   /** Resolved chat title — used as a fallback initial when no peer exists. */
@@ -138,29 +137,25 @@ export function ChatRowAvatar({
   participants: ReadonlyArray<Participant>;
   /** Caller's own agent_id, so we can identify the peer in a direct chat. */
   selfAgentId: string;
-  /** Speakers with `agent_chat_sessions(agent_id, chat_id).state === 'active'`. */
-  engagedAgentIds: ReadonlyArray<string>;
   /** `chat_user_state.unread_mention_count`. */
   unreadCount: number;
+  /** Any speaker in this chat has a pending AskUserQuestion (needs-you). */
+  needsYou?: boolean;
+  /** Any speaker in this chat is in the composite `failed` state. Outranks
+   *  needs-you and unread for the corner badge. */
+  failed?: boolean;
   /** Pixel diameter of the avatar disc. Default 36 fits the narrow rail. */
   size?: number;
 }) {
   const isDirect = type === "direct";
-  // Defensive: older server builds may omit `participants` / `engagedAgentIds`
-  // from the me/chats payload. Schema marks them required, but a version-skewed
-  // backend (or a partial cache from a prior schema) should not crash the
-  // entire conversation list — fall back to empty arrays.
+  // Defensive: older server builds may omit `participants` from the me/chats
+  // payload. Schema marks it required, but a version-skewed backend (or a
+  // partial cache) should not crash the conversation list — fall back to [].
   const safeParticipants = participants ?? [];
-  const safeEngagedAgentIds = engagedAgentIds ?? [];
   const peers = safeParticipants.filter((p) => p.agentId !== selfAgentId);
-
-  // Ring fires whenever any non-self speaker has an active per-(agent, chat)
-  // session — works equally for direct and group chats since the derivation
-  // is now per-pair.
   const peer = peers[0];
-  const anyPeerEngaged = peers.some((p) => safeEngagedAgentIds.includes(p.agentId));
 
-  const ariaLabel = buildAvatarAriaLabel({ engaged: anyPeerEngaged, unread: unreadCount });
+  const ariaLabel = buildAvatarAriaLabel({ failed, needsYou, unread: unreadCount });
   const a11yProps: { role?: string; "aria-label"?: string; "aria-hidden"?: boolean } =
     ariaLabel === null ? { "aria-hidden": true } : { role: "img", "aria-label": ariaLabel };
 
@@ -186,8 +181,7 @@ export function ChatRowAvatar({
       ) : (
         <CompositeAvatar size={size} peers={peers} />
       )}
-      {anyPeerEngaged && <EngagedRing size={size} />}
-      {unreadCount > 0 && <UnreadBadge count={unreadCount} />}
+      <AttentionBadge failed={failed} needsYou={needsYou} unread={unreadCount} />
     </span>
   );
 }
@@ -420,61 +414,76 @@ function SegMore({ count, fontSize }: { count: number; fontSize: number }) {
   );
 }
 
-function EngagedRing({ size }: { size: number }) {
-  // Hairline-bold border, offset 3 outside the avatar. The breathe
-  // keyframes + `prefers-reduced-motion` fallback live in index.css
-  // under `.chat-row-avatar__working-ring` — the class name is kept for
-  // CSS continuity even though the prop and field now read "engaged".
+/**
+ * Attention badge on the whole avatar unit (single or group composite) —
+ * one small corner circle encoding the highest-priority "do I need to look
+ * here" signal. failed (an agent errored, red `!`) outranks needs-you (a
+ * pending AskUserQuestion, amber `?`) outranks an unread-mention count (red N).
+ * Renders nothing when none apply. All three share one circle; only the colour
+ * and glyph differ — failed's `!` and unread's number are both red but never
+ * co-occur (failed wins), and the glyph keeps them legible.
+ *
+ * A tight circle (not a horizontal pill) so it reads as an avatar badge, not a
+ * standalone tag stealing the title's attention. Only the rare ≥3-char unread
+ * ("99+") flexes to a small capsule; `!` / `?` / 1–2 digits stay circular.
+ */
+function AttentionBadge({ failed, needsYou, unread }: { failed: boolean; needsYou: boolean; unread: number }) {
+  if (failed) return <CornerBadge background="var(--state-error)">!</CornerBadge>;
+  if (needsYou) return <CornerBadge background="var(--state-blocked)">?</CornerBadge>;
+  const label = formatUnreadLabel(unread);
+  if (label === null) return null;
   return (
-    <span
-      aria-hidden="true"
-      className="chat-row-avatar__working-ring"
-      style={{
-        position: "absolute",
-        inset: -3,
-        width: size + 6,
-        height: size + 6,
-        borderRadius: "50%",
-        border: "var(--hairline-bold) solid var(--state-working)",
-        pointerEvents: "none",
-        zIndex: 1,
-      }}
-    />
+    <CornerBadge background="var(--state-error)" wide={label.length >= 3}>
+      {label}
+    </CornerBadge>
   );
 }
 
-function UnreadBadge({ count }: { count: number }) {
-  const label = formatUnreadLabel(count);
-  if (label === null) return null;
-  // Pinned at --sp-4 (16) x --sp-4 (16), --sp-2 (8) corner radius — the
-  // badge is a self-contained capsule and intentionally tighter than the
-  // generic content padding scale, so it reads as a discrete signal
-  // rather than a control. Offset by 3 outside the avatar so the
-  // hairline-bold border cuts cleanly through the working ring.
+/** Diameter of the avatar corner badge. Small enough to read as a badge, not a
+ *  tag; the bold theme-bg stroke around it adds a touch more. */
+const CORNER_BADGE_SIZE = 18;
+
+/**
+ * Shared geometry for the avatar corner badge (see AttentionBadge): a solid
+ * colour circle with a white glyph and a theme-background stroke that lifts it
+ * off the (vivid) avatar. Static — no animation. `wide` lets the overflow
+ * unread ("99+") flex to a small capsule; everything else is a fixed circle.
+ */
+function CornerBadge({
+  background,
+  children,
+  wide = false,
+}: {
+  background: string;
+  children: ReactNode;
+  wide?: boolean;
+}) {
   return (
     <span
       aria-hidden="true"
       style={{
         position: "absolute",
-        bottom: -3,
-        right: -3,
-        minWidth: "var(--sp-4)",
-        height: "var(--sp-4)",
-        padding: "0 var(--sp-1)",
-        borderRadius: "var(--sp-2)",
-        background: "var(--state-error)",
+        bottom: -2,
+        right: -2,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: CORNER_BADGE_SIZE,
+        height: CORNER_BADGE_SIZE,
+        padding: wide ? "0 var(--sp-1)" : 0,
+        borderRadius: wide ? CORNER_BADGE_SIZE / 2 : "50%",
+        background,
         color: "var(--fg-on-vivid)",
         fontSize: "var(--text-caption)",
         fontWeight: 700,
-        lineHeight: "var(--sp-4)",
-        textAlign: "center",
+        lineHeight: 1,
         border: "var(--hairline-bold) solid var(--bg-raised)",
         boxSizing: "content-box",
         zIndex: 3,
         userSelect: "none",
       }}
     >
-      {label}
+      {children}
     </span>
   );
 }

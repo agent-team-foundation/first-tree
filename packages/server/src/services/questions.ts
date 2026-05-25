@@ -316,19 +316,24 @@ export async function markSupersededByChat(tx: TxLike, chatId: string, reason = 
  * Mark every pending row owned by any of `agentIds` as superseded. Used when
  * the client carrying these agents is claimed by a new user — the previous
  * owner's runtime is detached and cannot deliver an answer back.
+ *
+ * Returns the DISTINCT chat ids that had a row superseded, so the caller can
+ * fire a post-commit `notifyChatMessage(chatId)` to clear any stale needs-you
+ * indicator (this path, unlike chat-archive, emits no session:state change
+ * that would otherwise refresh the chat list).
  */
 export async function markSupersededByAgents(
   tx: TxLike,
   agentIds: string[],
   reason = "client_claimed",
-): Promise<number> {
-  if (agentIds.length === 0) return 0;
+): Promise<string[]> {
+  if (agentIds.length === 0) return [];
   const rows = await tx
     .update(pendingQuestions)
     .set({ status: "superseded", supersededAt: new Date(), supersededReason: reason })
     .where(and(inArray(pendingQuestions.agentId, agentIds), eq(pendingQuestions.status, "pending")))
-    .returning({ id: pendingQuestions.id });
-  return rows.length;
+    .returning({ id: pendingQuestions.id, chatId: pendingQuestions.chatId });
+  return [...new Set(rows.map((r) => r.chatId))];
 }
 
 /**
