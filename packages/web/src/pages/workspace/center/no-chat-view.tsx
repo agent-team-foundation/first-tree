@@ -3,11 +3,11 @@ import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import { Button } from "../../../components/ui/button.js";
 
 /**
- * Center-panel placeholder shown when onboarding is complete/dismissed but no
- * chat is selected. Sibling of ChatView and OnboardingView; CenterPanel picks
- * one of the three based on URL params + onboardingStep. The primary action is
- * starting a new chat — the left rail is a conversation list, not an agent
- * roster, so the old "pick an agent from the roster" guidance no longer holds.
+ * Center-panel placeholder shown when no chat is selected. Sibling of
+ * NewChatDraft and ChatByIdView; CenterPanel picks one based on URL params.
+ * The primary action is starting a new chat — the left rail is a conversation
+ * list, not an agent roster, so the old "pick an agent from the roster"
+ * guidance no longer holds.
  */
 export function NoChatView({ onNewChat }: { onNewChat: () => void }) {
   return (

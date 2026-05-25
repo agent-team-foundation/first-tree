@@ -121,24 +121,29 @@ export type OnboardingGateFacts = {
  * Should the workspace root (`/`) bounce an authenticated user into the
  * standalone onboarding flow?
  *
- * Yes only when the user hasn't finished the *resource* setup yet — they
- * have no agent (server step `connect` or `create_agent`) — and they
- * haven't completed or hidden onboarding.
+ * Yes whenever the user has *started but not finished* setup — server step
+ * `connect`, `create_agent`, or `completed` (computer + agent exist but the
+ * Context Tree kickoff hasn't run) — and they haven't terminally completed
+ * or hidden onboarding. The standalone flow resumes at the right step. The
+ * `completed` case is now redirected (it previously fell through to an inline
+ * workspace onboarding, which has been retired).
  *
- * We deliberately do NOT bounce a server-`completed` user (one who already
- * has a computer + an agent). Two reasons:
- *   - A brand-new user reaches the final kickoff step via in-flow state
- *     (create-agent advances to it); if they leave early, Settings → Setup
- *     resumes it. The `/` gate doesn't need to drag them back.
- *   - An existing, already-onboarded user must never be yanked into the
- *     wizard on deploy just because they predate the `completed_at` stamp
- *     (their server step is `completed` but the column was never written).
+ * The `completed_at` guard is what protects genuinely-finished users: once
+ * setup is terminally complete the stamp is set and they're never bounced.
+ * (Legacy caveat: a user who predates the `completed_at` column has step
+ * `completed` + a null stamp, so they'd be redirected once — acceptable, the
+ * now-removed inline onboarding showed them the same kickoff anyway; a one-off
+ * `onboarding_completed_at` backfill would remove even that.)
  */
 export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
   if (facts.onboardingCompletedAt) return false;
   if (facts.onboardingDismissedAt) return false;
-  return facts.onboardingStep === "connect" || facts.onboardingStep === "create_agent";
+  return (
+    facts.onboardingStep === "connect" ||
+    facts.onboardingStep === "create_agent" ||
+    facts.onboardingStep === "completed"
+  );
 }
 
 /**

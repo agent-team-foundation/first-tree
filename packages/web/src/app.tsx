@@ -78,9 +78,9 @@ export function App() {
                   }
                 />
               ) : null}
-              {/* Auth-required pages. Onboarding is now an inline view inside
-                CenterPanel (OnboardingView) — no separate /welcome route, no
-                provider, no banner. */}
+              {/* Auth-required pages. Onboarding is a standalone full-screen
+                /onboarding route (below); the workspace root redirects users
+                who haven't finished setup into it. */}
               <Route element={<RequireAuth />}>
                 {/* Standalone onboarding — full-screen, outside the workspace
                     chrome. The workspace root redirects incomplete users

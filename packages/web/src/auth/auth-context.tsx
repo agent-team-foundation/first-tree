@@ -25,12 +25,13 @@ type MeResponse = {
   memberships?: MeMembership[];
   onboarding?: {
     step: "connect" | "create_agent" | "completed";
-    /** ISO timestamp when the user dismissed the onboarding stepper, else null. */
+    /** ISO timestamp when the user dismissed onboarding ("finish later"), else null. */
     dismissedAt?: string | null;
     /**
-     * ISO timestamp when the user walked Step 3 to success. Distinct from
-     * `dismissedAt` (which only hides the stepper UI). Once set, the
-     * Settings → Onboarding entry point disappears permanently.
+     * ISO timestamp when the user finished the kickoff (Context Tree) step.
+     * Distinct from `dismissedAt` (which only hides onboarding, leaving it
+     * resumable). Once set, the Settings → Onboarding entry point disappears
+     * permanently.
      */
     completedAt?: string | null;
   };
@@ -75,29 +76,28 @@ type AuthContextValue = {
   orgHasOtherMembers: boolean;
   onboardingStep: "connect" | "create_agent" | "completed" | null;
   /**
-   * ISO timestamp when the user clicked `✕` on the onboarding stepper.
-   * Decoupled from `onboardingStep` (see docs/new-user-onboarding-design.md
-   * §8) — `null` means the stepper should render.
+   * ISO timestamp when the user dismissed onboarding ("finish later").
+   * Decoupled from `onboardingStep` — `null` means onboarding is still
+   * pending, so the workspace root redirects the user into `/onboarding`.
    */
   onboardingDismissedAt: string | null;
   /**
-   * ISO timestamp when the user walked Step 3 to terminal success. Once
+   * ISO timestamp when the user finished the kickoff (Context Tree) step. Once
    * non-null, the Settings → Onboarding sidebar entry and Resume button
-   * disappear permanently — subsequent config edits go through Settings →
-   * Team and the per-agent settings pages. `null` while setup is still
-   * incomplete OR while the user has only dismissed (not completed) the
-   * wizard.
+   * disappear permanently — subsequent config edits go through Settings → Team
+   * and the per-agent settings pages. `null` while setup is still incomplete
+   * OR while the user has only dismissed (not finished) onboarding.
    */
   onboardingCompletedAt: string | null;
   /**
    * PATCH `/me/onboarding { dismissed: true }`. Optimistically flips
-   * `onboardingDismissedAt` so the stepper unmounts immediately.
+   * `onboardingDismissedAt` so the workspace stops redirecting into onboarding.
    */
   dismissOnboarding: () => Promise<void>;
   /**
-   * PATCH `/me/onboarding { dismissed: false }`. Clears
-   * `onboardingDismissedAt` so the stepper renders again. Used by the
-   * Settings → Setup "Resume setup" toggle.
+   * PATCH `/me/onboarding { dismissed: false }`. Clears `onboardingDismissedAt`
+   * so onboarding is pending again (the root redirects into `/onboarding`).
+   * Used by the Settings → Setup "Resume setup" toggle.
    */
   restoreOnboarding: () => Promise<void>;
   /**
@@ -273,8 +273,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [onboardingDismissedAt]);
 
   const dismissOnboarding = useCallback(async () => {
-    // Optimistic: stamp client-side immediately so the stepper unmounts
-    // without a round-trip. Server returns the canonical timestamp.
+    // Optimistic: stamp client-side immediately so the workspace stops
+    // redirecting into onboarding without a round-trip. Server returns the
+    // canonical timestamp.
     const prior = dismissedAtRef.current;
     setOnboardingDismissedAt(new Date().toISOString());
     try {
@@ -288,7 +289,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const restoreOnboarding = useCallback(async () => {
-    // Optimistic clear so the stepper reappears immediately.
+    // Optimistic clear so onboarding is pending again immediately.
     const prior = dismissedAtRef.current;
     setOnboardingDismissedAt(null);
     try {
