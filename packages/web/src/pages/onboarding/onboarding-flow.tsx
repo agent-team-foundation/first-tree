@@ -55,7 +55,7 @@ export type OnboardingFlowValue = {
   finishLater: () => Promise<void>;
 };
 
-const OnboardingFlowContext = createContext<OnboardingFlowValue | null>(null);
+export const OnboardingFlowContext = createContext<OnboardingFlowValue | null>(null);
 
 // Remember the active step for the tab's lifetime so a full-page round-trip
 // (notably the GitHub App install redirect to github.com and back) returns
