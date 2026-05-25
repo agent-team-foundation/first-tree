@@ -19,7 +19,10 @@ const latestPath = resolve(repoRoot, "packages/server/drizzle/LATEST");
 const journal = JSON.parse(readFileSync(journalPath, "utf8"));
 const lastEntry = journal.entries?.at(-1);
 if (!lastEntry?.tag) {
-  console.error("sync-migration-head: _journal.json has no entries — nothing to sync.");
+  // Reachable in practice only if `drizzle-kit generate` produced nothing
+  // (the prior step in `db:generate`). Surface that instead of a generic
+  // "no entries" error.
+  console.error("sync-migration-head: _journal.json has no entries — did `drizzle-kit generate` produce a migration?");
   process.exit(1);
 }
 
