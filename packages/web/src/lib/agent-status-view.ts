@@ -1,4 +1,57 @@
-import type { AgentMainStatus, SessionState } from "@first-tree/shared";
+import {
+  type AgentChatStatus,
+  type AgentMainStatus,
+  deriveMainStatus,
+  LIVE_ACTIVITY_STALE_MS,
+  type SessionState,
+} from "@first-tree/shared";
+
+/**
+ * Upsert one agent's composite status into a cached `AgentChatStatus[]`,
+ * returning a new array (or `prev` unchanged when there is nothing to do).
+ * Used by the admin-WS delta patch to apply a server-pushed status in place
+ * instead of refetching. Pure.
+ */
+export function upsertAgentStatus(prev: AgentChatStatus[], status: AgentChatStatus): AgentChatStatus[] {
+  const idx = prev.findIndex((s) => s.agentId === status.agentId);
+  if (idx === -1) return [...prev, status];
+  const next = prev.slice();
+  next[idx] = status;
+  return next;
+}
+
+/**
+ * Locally clear a lingering "working" status whose live activity has gone stale
+ * (no new event for > LIVE_ACTIVITY_STALE_MS), re-deriving `main` so a surface's
+ * 1s ticker drops the chip precisely at expiry instead of waiting for the next
+ * server refetch. Non-working / non-stale statuses pass through untouched.
+ * Returns the same array reference when nothing changed (stable for effect deps
+ * / memoisation). Pure.
+ */
+export function clearStaleWorking(statuses: AgentChatStatus[], now: number): AgentChatStatus[] {
+  let changed = false;
+  const out = statuses.map((s) => {
+    if (!s.working || !s.activity) return s;
+    const staleAt = s.activity.staleAt
+      ? new Date(s.activity.staleAt).getTime()
+      : new Date(s.activity.startedAt).getTime() + LIVE_ACTIVITY_STALE_MS;
+    if (now <= staleAt) return s;
+    changed = true;
+    return {
+      ...s,
+      working: false,
+      activity: null,
+      main: deriveMainStatus({
+        reachable: s.reachable,
+        errored: s.errored,
+        needsYou: s.needsYou,
+        working: false,
+        engagement: s.engagement,
+      }),
+    };
+  });
+  return changed ? out : statuses;
+}
 
 /**
  * Map a per-(agent,chat) `session.state` (the C vocabulary:

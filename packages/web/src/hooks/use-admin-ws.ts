@@ -1,6 +1,9 @@
+import { type AgentChatStatus, agentChatStatusSchema } from "@first-tree/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import { chatAgentStatusQueryKey } from "../api/agent-status.js";
 import { getStoredTokens, refreshAccessToken } from "../api/client.js";
+import { upsertAgentStatus } from "../lib/agent-status-view.js";
 
 type WsMessage = {
   type: string;
@@ -158,6 +161,27 @@ function disposeSessionPairThrottle(): void {
   sessionPairThrottle.clear();
 }
 
+/**
+ * Apply a session frame's per-agent status delta. When the server attached the
+ * recomputed `status` (only for sockets whose viewer can access the chat),
+ * upsert it into `["chat-agent-status", chatId]` so compose / panel update
+ * without a refetch. Otherwise fall back to the throttled prefix invalidation.
+ * The 30s `refetchInterval` on those queries remains the safety floor either way.
+ */
+function patchOrInvalidateAgentStatus(qc: QC, msg: WsMessage): void {
+  const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
+  const parsed = agentChatStatusSchema.safeParse(msg.status);
+  if (chatId && parsed.success) {
+    qc.setQueryData<AgentChatStatus[]>(chatAgentStatusQueryKey(chatId), (prev) =>
+      // No cached query (panel/compose not mounted) → nothing to patch; the
+      // next mount/refetch populates it fresh.
+      prev ? upsertAgentStatus(prev, parsed.data) : prev,
+    );
+    return;
+  }
+  chatAgentStatusInvalidator.invalidate(qc);
+}
+
 function broadcast(msg: WsMessage) {
   for (const sub of subscribers) {
     try {
@@ -176,7 +200,7 @@ function broadcast(msg: WsMessage) {
       // without waiting for the refetchInterval. Throttled because the upstream
       // frames can burst tool-call-fast.
       meChatsInvalidator.invalidate(latestQc);
-      chatAgentStatusInvalidator.invalidate(latestQc);
+      patchOrInvalidateAgentStatus(latestQc, msg);
       // Precise invalidate for the (agent, chat) the frame is about, so a
       // burst for one agent doesn't fan out onto every sibling agent's
       // sessionQuery in the same chat. See `invalidateSessionPair` for the
@@ -197,7 +221,7 @@ function broadcast(msg: WsMessage) {
       // Re-uses the same leading + trailing throttle helper as
       // `session:state` (window defined by `INVALIDATE_THROTTLE_MS`).
       meChatsInvalidator.invalidate(latestQc);
-      chatAgentStatusInvalidator.invalidate(latestQc);
+      patchOrInvalidateAgentStatus(latestQc, msg);
       // Frame carries `agentId` + `chatId` (api/orgs/ws.ts:82 spreads the
       // notifier payload), so we can target the exact session-events query
       // ChatView reads (`["session-events", agentId, chatId]`) rather than

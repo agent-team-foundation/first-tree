@@ -102,15 +102,18 @@ export function toLiveActivity(row: {
   created_at: Date | string;
 }): LiveActivity | null {
   const startedAt = new Date(row.created_at).toISOString();
+  // Expiry the client uses to self-clear a lingering chip (matches the read-time
+  // stale cutoff this module already applies in `deriveActivities`).
+  const staleAt = new Date(new Date(row.created_at).getTime() + LIVE_ACTIVITY_STALE_MS).toISOString();
   switch (row.kind) {
     case "tool_call": {
       const payload = (row.payload ?? {}) as Partial<ToolCallEventPayload>;
       const label = typeof payload.name === "string" && payload.name.length > 0 ? payload.name : "Tool";
       const detail = previewToolArgs(payload.args);
-      return { agentId: row.agent_id, kind: "tool_call", label, startedAt, ...(detail ? { detail } : {}) };
+      return { agentId: row.agent_id, kind: "tool_call", label, startedAt, staleAt, ...(detail ? { detail } : {}) };
     }
     case "thinking":
-      return { agentId: row.agent_id, kind: "thinking", label: "Thinking", startedAt };
+      return { agentId: row.agent_id, kind: "thinking", label: "Thinking", startedAt, staleAt };
     case "assistant_text": {
       const payload = (row.payload ?? {}) as Partial<AssistantTextEventPayload>;
       const detail = previewAssistantText(payload.text);
@@ -119,6 +122,7 @@ export function toLiveActivity(row: {
         kind: "assistant_text",
         label: "Writing",
         startedAt,
+        staleAt,
         ...(detail ? { detail } : {}),
       };
     }

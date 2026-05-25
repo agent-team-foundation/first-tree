@@ -8,7 +8,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, CornerDownLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
-import { viewOf } from "../../lib/agent-status-view.js";
+import { useNow } from "../../hooks/use-now.js";
+import { clearStaleWorking, viewOf } from "../../lib/agent-status-view.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
@@ -38,6 +39,9 @@ import { formatElapsed } from "./working-chip.js";
  * (React-Query-deduped, admin-WS-live, ~1s-throttled).
  */
 const ATTENTION: ReadonlySet<string> = new Set(["needs_you", "failed", "working"]);
+/** Stable empty default so `clearStaleWorking(statuses ?? EMPTY_STATUSES, now)`
+ *  keeps a stable array ref across ticks while the query is still loading. */
+const EMPTY_STATUSES: AgentChatStatus[] = [];
 const TICK_INTERVAL_MS = 1000;
 const LEAD_HOLD_MS = 4000;
 const EXPANDED_MAX_HEIGHT = 180;
@@ -130,28 +134,34 @@ export function ComposeStatusBar({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
-  const { data: statuses, dataUpdatedAt } = useQuery({
+  const { data: statuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000,
   });
   const mounted = useMountedAnchors();
+  // 1s ticker self-clears a "working" lead whose activity has gone stale (no new
+  // event past `staleAt`) — re-deriving `main` locally so the bar drops it at
+  // expiry instead of waiting for the 30s refetch. `clearStaleWorking` returns
+  // the same array ref when nothing is stale, so this is render-cheap.
+  const now = useNow(TICK_INTERVAL_MS);
+  const liveStatuses = clearStaleWorking(statuses ?? EMPTY_STATUSES, now);
 
-  // Re-pick the lead on every data update, and once more after the hold could
-  // expire (so a steadily most-recent agent can take over even with no new
-  // data). pickLead is pure; the timer just lets the hold lapse.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: statuses is keyed by dataUpdatedAt
+  // Re-pick the lead whenever the (stale-cleared) status set changes, and once
+  // more after the hold could expire so a steadily most-recent agent can take
+  // over even with no new data. pickLead is pure; the timer just lets the hold
+  // lapse.
   useEffect(() => {
-    const attention = selectAttention(statuses ?? []);
+    const attention = selectAttention(liveStatuses);
     const alerts = attention.filter(isAlert);
     const working = attention.filter((s) => s.main === "working");
     const repick = () => setLead((prev) => pickLead(prev, Date.now(), alerts, working, LEAD_HOLD_MS));
     repick();
     const t = setTimeout(repick, LEAD_HOLD_MS);
     return () => clearTimeout(t);
-  }, [dataUpdatedAt]);
+  }, [liveStatuses]);
 
-  const attention = selectAttention(statuses ?? []);
+  const attention = selectAttention(liveStatuses);
   if (attention.length === 0) return null; // all quiet → hidden
 
   // Resolve the held lead to a live row; fall back to the top of `attention`

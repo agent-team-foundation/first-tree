@@ -161,6 +161,15 @@ export const liveActivitySchema = z.object({
    * `liveActivity`, and absent when the turn has produced no prose yet.
    */
   turnText: z.string().optional(),
+  /**
+   * ISO timestamp at which this activity goes stale (= `startedAt` +
+   * `LIVE_ACTIVITY_STALE_MS`). The server already drops stale activities at
+   * read time; this lets a live surface's 1s ticker clear a lingering
+   * "working" chip precisely at expiry — re-deriving `main` once `now > staleAt`
+   * — instead of waiting for the next refetch. Optional for version skew:
+   * clients fall back to `startedAt + LIVE_ACTIVITY_STALE_MS` when absent.
+   */
+  staleAt: z.string().optional(),
 });
 export type LiveActivity = z.infer<typeof liveActivitySchema>;
 
