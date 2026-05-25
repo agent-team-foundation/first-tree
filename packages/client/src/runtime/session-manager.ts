@@ -763,10 +763,15 @@ export class SessionManager {
    *        - `working` — a turn is in flight. Set by the handler at the top
    *          of its consume loop AND by `SessionManager` on every `inject`
    *          (because the handler can't observe inject from inside the SDK
-   *          for-await — see #530 follow-up). Clearing it back to `idle`
-   *          happens on each `result` message from the SDK.
-   *        - `blocked` — `working`, but no SDK output for
-   *          `blockedThresholdMs`. Diagnostic only.
+   *          for-await — see #536). Cleared back to `idle` on each
+   *          `result` message from the SDK.
+   *        - `blocked` — only reachable if a handler chooses to set it
+   *          explicitly. The runtime no longer auto-migrates `working` →
+   *          `blocked` on inactivity: with reasoning models a 2-minute
+   *          quiet stretch is normal deep-thinking, not a stuck process,
+   *          and the auto-migration was producing false-positive UI
+   *          warnings. State kept as a semantic slot for future use
+   *          (e.g. if/when the SDK transport exposes a real stuck signal).
    *        - `idle` — no work in flight.
    *      If you add a new way to wake the session up, you MUST also set
    *      `runtimeState` to `working` from that path, or this guard will
@@ -778,80 +783,67 @@ export class SessionManager {
   private evictIdle(): void {
     const timeoutMs = this.config.session.idle_timeout * 1000;
     const workingGraceMs = this.config.session.working_grace_seconds * 1000;
-    // Blocked detection — 2 minutes without activity while session is active
-    const blockedThresholdMs = 120_000;
     const now = Date.now();
     const agentId = this.config.agentIdentity.agentId;
 
     for (const [, session] of this.sessions) {
       if (session.status !== "active") continue;
       const inactiveMs = now - session.lastActivity;
+      if (inactiveMs <= timeoutMs) continue;
 
-      if (inactiveMs > timeoutMs) {
-        const currentState = this.sessionRuntimeStates.get(session.chatId);
+      const currentState = this.sessionRuntimeStates.get(session.chatId);
 
-        // Hard cap: regardless of `runtimeState`, once we are past
-        // `idle_timeout + working_grace_seconds` the slot MUST be
-        // reclaimed. Anything else means a stuck handler can hold a slot
-        // forever just by never flipping `runtimeState` back to `idle`.
-        const pastHardCap = inactiveMs >= timeoutMs + workingGraceMs;
+      // Hard cap: regardless of `runtimeState`, once we are past
+      // `idle_timeout + working_grace_seconds` the slot MUST be reclaimed.
+      // Anything else means a stuck handler can hold a slot forever just
+      // by never flipping `runtimeState` back to `idle`.
+      const pastHardCap = inactiveMs >= timeoutMs + workingGraceMs;
 
-        // #418: when an AskUserQuestion is in flight, suspending tears down
-        // the SDK transport and silently drops the bridge entry — the
-        // eventual answer then arrives with no live waiter and the asker
-        // session is permanently stuck. Skip the suspend so the awaiter
-        // can resolve through the live-bridge path. `lastActivity` still
-        // ticks forward on inject, so a runaway pending entry is bounded
-        // by the supersede paths (chat archive / client claim) and, as a
-        // last resort, by the hard cap above.
-        if (!pastHardCap && hasPendingForChat(agentId, session.chatId)) {
-          this.config.log.info(
-            { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
-            "session idle but AskUserQuestion in flight — skipping suspend",
-          );
-          continue;
-        }
+      // #418: when an AskUserQuestion is in flight, suspending tears down
+      // the SDK transport and silently drops the bridge entry — the
+      // eventual answer then arrives with no live waiter and the asker
+      // session is permanently stuck. Skip the suspend so the awaiter can
+      // resolve through the live-bridge path. `lastActivity` still ticks
+      // forward on inject, so a runaway pending entry is bounded by the
+      // supersede paths (chat archive / client claim) and, as a last
+      // resort, by the hard cap above.
+      if (!pastHardCap && hasPendingForChat(agentId, session.chatId)) {
+        this.config.log.info(
+          { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
+          "session idle but AskUserQuestion in flight — skipping suspend",
+        );
+        continue;
+      }
 
-        // `lastActivity` is bumped per inbound SDK message/event (handler
-        // `touch()`), so a long thinking turn or a single very large message
-        // looks identical to "session has been idle" here. Without this
-        // exemption the runtime suspends the SDK transport mid-thinking and
-        // the work is lost. The hard cap above bounds the worst case.
-        const stillProgressing = currentState === "working" || currentState === "blocked";
-        if (stillProgressing && !pastHardCap) {
-          this.config.log.info(
-            {
-              chatId: session.chatId,
-              runtimeState: currentState,
-              inactiveSec: Math.round(inactiveMs / 1000),
-              graceSec: this.config.session.working_grace_seconds,
-            },
-            "session idle threshold reached but still working — skipping suspend",
-          );
-          continue;
-        }
-
+      // `lastActivity` is bumped per inbound SDK message/event (handler
+      // `touch()`), so a long thinking turn or a single very large message
+      // looks identical to "session has been idle" here. Without this
+      // exemption the runtime suspends the SDK transport mid-thinking and
+      // the work is lost. The hard cap above bounds the worst case.
+      const stillProgressing = currentState === "working" || currentState === "blocked";
+      if (stillProgressing && !pastHardCap) {
         this.config.log.info(
           {
             chatId: session.chatId,
-            idleTimeoutSec: this.config.session.idle_timeout,
-            runtimeState: currentState ?? "idle",
-            pastHardCap,
+            runtimeState: currentState,
+            inactiveSec: Math.round(inactiveMs / 1000),
+            graceSec: this.config.session.working_grace_seconds,
           },
-          "session idle, suspending",
+          "session idle threshold reached but still working — skipping suspend",
         );
-        this.suspendSession(session);
-      } else if (inactiveMs > blockedThresholdMs) {
-        // Only mark blocked if handler was actively working — don't override idle
-        const currentState = this.sessionRuntimeStates.get(session.chatId);
-        if (currentState === "working") {
-          this.config.log.warn(
-            { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
-            "session working but no output, marking blocked",
-          );
-          this.setSessionRuntimeState(session.chatId, "blocked");
-        }
+        continue;
       }
+
+      this.config.log.info(
+        {
+          chatId: session.chatId,
+          idleTimeoutSec: this.config.session.idle_timeout,
+          runtimeState: currentState ?? "idle",
+          pastHardCap,
+        },
+        "session idle, suspending",
+      );
+      this.suspendSession(session);
     }
   }
 

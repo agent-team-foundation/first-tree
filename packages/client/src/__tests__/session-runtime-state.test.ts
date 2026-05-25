@@ -426,7 +426,12 @@ describe("SessionManager.evictIdle — working-state grace window", () => {
     }
   });
 
-  it("also exempts 'blocked' (the state evictIdle itself flips 'working' into after 2 minutes)", async () => {
+  // `blocked` is no longer auto-set by evictIdle (the 120s auto-migration
+  // was removed because reasoning-model thinking turns commonly exceed 2
+  // minutes between SDK events, producing false-positive UI warnings).
+  // The grace-window exemption still covers `blocked` so any handler that
+  // sets it explicitly — present or future — is treated like `working`.
+  it("also exempts 'blocked' from idle suspend inside the grace window", async () => {
     vi.useFakeTimers();
     try {
       let capturedCtx: SessionContext | undefined;
@@ -474,6 +479,47 @@ describe("SessionManager.evictIdle — working-state grace window", () => {
       await vi.advanceTimersByTimeAsync(20_000);
 
       expect(handler.suspend).toHaveBeenCalledTimes(1);
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression for the removed 120s working→blocked auto-migration.
+  // Before this change evictIdle would flip a `working` session to
+  // `blocked` after 2 minutes of SDK silence, surfacing as a yellow UI
+  // warning even when the agent was just deep-thinking. The grace
+  // window above proved that's never a real problem (we don't actually
+  // suspend), so the auto-migration was pure UX noise — removed.
+  it("does NOT auto-migrate 'working' → 'blocked' on inactivity (no false alarms during long reasoning)", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimeChanges: Array<"idle" | "working" | "blocked" | "error"> = [];
+      let capturedCtx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_msg, ctx) {
+          capturedCtx = ctx;
+          return "s-no-auto-blocked";
+        },
+      });
+      const sm = createSessionManager({
+        handler,
+        // Big idle_timeout so we don't trip the suspend path while we're
+        // proving the *non*-transition.
+        session: { idle_timeout: 3600, max_sessions: 10, working_grace_seconds: 60, reconcile_interval_seconds: 300 },
+        onRuntimeStateChange: (state) => runtimeChanges.push(state),
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-thinking" }));
+      defined(capturedCtx, "ctx").setRuntimeState("working");
+      runtimeChanges.length = 0;
+
+      // Past the old 120s threshold; the runtime would previously have
+      // flipped the state to `blocked` here.
+      await vi.advanceTimersByTimeAsync(180_000);
+
+      expect(runtimeChanges).not.toContain("blocked");
+      expect(handler.suspend).not.toHaveBeenCalled();
       await sm.shutdown();
     } finally {
       vi.useRealTimers();
