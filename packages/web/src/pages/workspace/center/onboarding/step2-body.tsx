@@ -225,12 +225,13 @@ export function Step2Body({
   const trimmedName = displayName.trim();
   const nameOrFallback = trimmedName || "your agent";
 
-  // Prefer the server-built command (channel-aware npm spec); fall back to
-  // a client-side construction only if the bootstrap field is missing —
-  // e.g. an old server, or a transient race where `connectToken` arrives
-  // but `bootstrapCommand` hasn't landed in state yet.
-  const cliCommand =
-    bootstrapCommand ?? (connectToken ? `npm install -g first-tree\nfirst-tree login ${connectToken}` : null);
+  // Trust the server-built command: it picks the right npm package
+  // (`first-tree` / `first-tree-staging`) and bin name (`first-tree` /
+  // `first-tree-staging` / `first-tree-dev`) based on this Hub's channel.
+  // Hardcoding a `first-tree` fallback here would silently mis-onboard
+  // staging users to the prod package — the multi-env footgun this
+  // refactor exists to close.
+  const cliCommand = bootstrapCommand;
 
   const pollUntilReady = useCallback(
     async (agentUuid: string): Promise<void> => {
@@ -642,13 +643,21 @@ function CommandBox({ command }: { command: string | null }) {
   const [copied, setCopied] = useState(false);
 
   const lines = command ? command.split("\n") : [];
-  const connectLine = lines.find((l) => l.startsWith("first-tree")) ?? "";
-  const connectPrefix = "first-tree login ";
-  const commandPreview = connectLine.startsWith(connectPrefix)
-    ? `${connectPrefix}${connectLine.slice(connectPrefix.length, connectPrefix.length + 22)}…`
-    : connectLine.length > 52
-      ? `${connectLine.slice(0, 52)}…`
-      : connectLine;
+  // Find the `<bin> login <token>` line. Multi-env: bin is
+  // `first-tree` (prod) / `first-tree-staging` (staging) /
+  // `first-tree-dev` (dev) — we don't know which without trusting the
+  // server, so match any bin name starting with `first-tree` followed
+  // by ` login `.
+  const loginMarker = " login ";
+  const connectLine = lines.find((l) => l.startsWith("first-tree") && l.includes(loginMarker)) ?? "";
+  const loginAt = connectLine.indexOf(loginMarker);
+  const connectPrefix = loginAt >= 0 ? connectLine.slice(0, loginAt + loginMarker.length) : "";
+  const commandPreview =
+    connectPrefix.length > 0
+      ? `${connectPrefix}${connectLine.slice(connectPrefix.length, connectPrefix.length + 22)}…`
+      : connectLine.length > 52
+        ? `${connectLine.slice(0, 52)}…`
+        : connectLine;
 
   const handleCopy = async (): Promise<void> => {
     if (!command) return;

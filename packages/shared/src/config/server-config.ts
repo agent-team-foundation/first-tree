@@ -1,12 +1,27 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
-import { DEFAULT_DATA_DIR } from "./resolver.js";
+import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
 
 export const serverConfigSchema = defineConfig({
+  /**
+   * Which release channel this server speaks to. Single switch that drives
+   * every CLI-facing identifier emitted by the server:
+   *   - `prod`    → tells web/CLI to install `first-tree`           (bin `first-tree`)
+   *   - `staging` → tells web/CLI to install `first-tree-staging`   (bin `first-tree-staging`)
+   *   - `dev`     → no npm package; bootstrap commands skip `npm install -g`
+   *
+   * Set via `FIRST_TREE_CHANNEL` in the deployment env. Default `dev` makes
+   * `pnpm --filter @first-tree/server dev` Just Work on a developer machine.
+   *
+   * See `packages/shared/src/channel/` for the full identity table.
+   */
+  channel: field(z.enum(["dev", "staging", "prod"]).default("dev"), {
+    env: "FIRST_TREE_CHANNEL",
+  }),
   database: {
     url: field(z.string(), {
       env: "FIRST_TREE_DATABASE_URL",
@@ -38,7 +53,7 @@ export const serverConfigSchema = defineConfig({
     publicUrl: field(z.string().optional(), { env: "FIRST_TREE_PUBLIC_URL" }),
   },
   workspace: {
-    root: field(z.string().default(join(DEFAULT_DATA_DIR, "workspaces")), {
+    root: field(z.string().default(join(defaultDataDir(), "workspaces")), {
       env: "FIRST_TREE_WORKSPACES_ROOT",
     }),
   },
@@ -285,29 +300,29 @@ export const serverConfigSchema = defineConfig({
    * Command-package version advertisement. The server broadcasts a version
    * string to every Client via `server:welcome` so clients can detect drift
    * and self-update. We resolve the value at runtime by polling the npm
-   * registry for the configured channel's current `dist-tag` —
-   * decoupling "what version clients should run" from the server's own
-   * build/deploy cadence (otherwise prod auto-update silently stalls
-   * whenever the server image lags behind a fresh CLI publish).
+   * registry for the configured channel's `latest` dist-tag — decoupling
+   * "what version clients should run" from the server's own build/deploy
+   * cadence (otherwise prod auto-update silently stalls whenever the
+   * server image lags behind a fresh CLI publish).
    *
-   * - `channel`: which npm `dist-tag` to track. Staging deployments set
-   *   `alpha` so clients automatically follow CI's preview builds; prod stays
-   *   on `latest`.
+   * Multi-env: each channel (prod / staging) ships as its own npm package
+   * with its own `latest` dist-tag, so the per-channel selection happens
+   * via the top-level `channel` field above — there is no separate
+   * `update.channel` knob anymore. dev servers (channel=dev) skip the
+   * poll entirely (no published package to poll).
+   *
    * - `commandVersion`: bootstrap fallback used until the first successful
    *   poll, and the cache value when the registry is unreachable.
    *   Docker images inject `apps/cli/package.json.version` at build
    *   time via the `COMMAND_VERSION` build-arg.
    * - `pollIntervalMinutes`: refresh cadence. 60 minutes is the safe default
-   *   for both prod (slow stable cadence) and staging (frequent alpha
-   *   publishes still get picked up within an hour). Tune lower on staging
-   *   for tighter alpha rollout.
+   *   for both prod (slow stable cadence) and staging (frequent publishes
+   *   still get picked up within an hour). Tune lower on staging for
+   *   tighter rollout.
    * - `registryUrl`: lets corp deployments point at a Verdaccio/Artifactory
    *   mirror with the same dist-tags.
    */
   update: {
-    channel: field(z.enum(["latest", "alpha"]).default("latest"), {
-      env: "FIRST_TREE_UPDATE_CHANNEL",
-    }),
     commandVersion: field(z.string().optional(), {
       env: "FIRST_TREE_COMMAND_VERSION",
     }),

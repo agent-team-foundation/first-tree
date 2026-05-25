@@ -1,111 +1,148 @@
-# Local development with isolation from prod
+# Local development with isolation from prod / staging
 
 This repo's CLI is a long-running background service on the developer's
-machine. Most of us already have a production `first-tree` installed
-globally (via `npm i -g first-tree`), with a
-running systemd unit / launchd plist keeping our personal agents online.
-Naively running an in-tree dev build against the same machine would:
+machine. Most of us run prod (`first-tree`) or staging
+(`first-tree-staging`) somewhere — installed globally via npm and kept
+alive by systemd / launchd. The in-tree dev build must coexist with
+both without touching their state.
 
-- overwrite `~/.first-tree/hub/credentials.json` with test credentials
-- rewrite `~/.config/systemd/user/first-tree-client.service` to point
-  at the dev binary, killing the prod service and replacing it with the
-  in-progress code
-- leak crash-loop noise into the prod journald stream
+The multi-env split (see [`MIGRATION.md`](../MIGRATION.md) Phase 2)
+makes this trivial: every channel has its own bin name, default home,
+and service unit. Running `scripts/dev-install.sh` installs the dev
+channel (`first-tree-dev` / `~/.first-tree-dev/` /
+`first-tree-dev.service`) alongside whatever prod / staging install you
+already have.
 
-The repo gives you two layered isolation knobs that compose:
+| Channel | Install via | Bin | Default home | Service unit |
+|---|---|---|---|---|
+| dev | `scripts/dev-install.sh` (in-tree, symlinked) | `first-tree-dev` / `ftd` | `~/.first-tree-dev/` | `first-tree-dev.service` |
+| staging | `npm i -g first-tree-staging` | `first-tree-staging` / `fts` | `~/.first-tree-staging/` | `first-tree-staging.service` |
+| prod | `npm i -g first-tree` | `first-tree` / `ft` | `~/.first-tree/` | `first-tree.service` |
 
-| Knob | What it isolates | Set by |
-|---|---|---|
-| `FIRST_TREE_HOME` | config / credentials / workspaces / sessions / logs | already documented in `CLAUDE.md` |
-| Home-derived service suffix | systemd unit name / launchd label / `SyslogIdentifier` | automatic — derived from the `FIRST_TREE_HOME` basename |
-
-`scripts/dev-cli.sh` wires both together with a sensible default so you
-don't have to remember either.
+Each install registers as a separate `clientId` on whichever hub it
+connects to (dev → local server, staging → `dev.cloud.first-tree.ai`,
+prod → `cloud.first-tree.ai`), so server-side state stays cleanly
+partitioned too.
 
 ## Quickstart
 
 ```bash
 # from repo root, first-time use
-./scripts/dev-cli.sh --rebuild login <connect-token>
+./scripts/dev-install.sh
 
-# day-to-day
-./scripts/dev-cli.sh daemon status
-./scripts/dev-cli.sh daemon restart
-./scripts/dev-cli.sh upgrade --check
-journalctl --user -u first-tree-client-dev -f
+# Start your local hub server (any way you like — e.g. `pnpm --filter @first-tree/server dev`)
+
+first-tree-dev login <connect-token>   # token from http://127.0.0.1:8000/clients
+first-tree-dev daemon status
+journalctl --user -u first-tree-dev -f
 ```
 
-After that, on Linux:
+After editing any source file, re-run `./scripts/dev-install.sh` (it
+rebuilds dist) and restart the daemon if it's already running:
+
+```bash
+./scripts/dev-install.sh && first-tree-dev daemon restart
+```
+
+After login, on Linux:
 
 ```bash
 $ systemctl --user list-units 'first-tree*'
-  first-tree-client.service       loaded active running    # prod, untouched
-  first-tree-client-dev.service   loaded active running    # dev, installed by dev-cli.sh
+  first-tree.service             loaded active running    # prod (if installed), untouched
+  first-tree-staging.service     loaded active running    # staging (if installed), untouched
+  first-tree-dev.service         loaded active running    # dev, installed by dev-install.sh
 ```
 
-The two services have independent unit files, independent PIDs,
-independent journald identifiers, and independent state under
-`~/.first-tree/hub` (prod) vs `~/.first-tree/hub-dev` (dev).
+Three independent unit files, three PIDs, three journald identifiers,
+three home dirs. No cross-contamination.
 
-## How the suffix is derived
+## How channel identity is wired
 
-The systemd unit name and launchd label come from the basename of
-`FIRST_TREE_HOME` via `deriveServiceSuffix` in
-[`apps/cli/src/core/service-install.ts`](../apps/cli/src/core/service-install.ts).
-Rules:
+`apps/cli/src/build-info.ts` exports a single `CHANNEL` constant
+(`"dev"` in source, rewritten to `"prod"` / `"staging"` by CI before
+publish). All downstream identifiers — npm package name, bin name,
+default home, default server URL, service unit, launchd label — derive
+from this single value via `getChannelConfig` in
+[`packages/shared/src/channel/`](../packages/shared/src/channel/index.ts).
 
-| Home basename | systemd unit | launchd label |
-|---|---|---|
-| `hub` (default — what every prod machine in the field has) | `first-tree-client.service` | `dev.first-tree.client` |
-| `hub-dev` (script default) | `first-tree-client-dev.service` | `dev.first-tree.client.dev` |
-| `hub-test` | `first-tree-client-test.service` | `dev.first-tree.client.test` |
-| `scratch` (anything not starting with `hub`) | `first-tree-client-scratch.service` | `dev.first-tree.client.scratch` |
+`apps/cli/src/core/channel-env.ts` runs as the very first import in the
+CLI entry. It sets `process.env.FIRST_TREE_HOME` from the channel's
+default home (unless the operator already set the env explicitly),
+which the `@first-tree/shared/config` module then reads at load time.
+That's how every const-import of `DEFAULT_HOME_DIR` automatically picks
+up the right channel-aware path with zero refactoring at call sites.
 
-The "`hub` → no suffix" rule is deliberate backwards-compatibility with
-every machine that already has the prod unit registered. We never want
-a CLI upgrade to silently rename people's prod service.
+The published-package `name` and `bin` get rewritten by the CI publish
+job alongside `CHANNEL` — the source-tree `apps/cli/package.json`
+always carries the dev shape (`name: "first-tree-dev"`, bin
+`first-tree-dev` / `ftd`).
 
-## When to use which knob
+## Auto-update across channels
 
-- **`scripts/dev-cli.sh` with default home** — most testing, including
-  end-to-end `login` / `daemon start|stop|restart` / `upgrade`.
-  Coexists with prod.
-- **Custom dev home via `FIRST_TREE_DEV_HOME=$HOME/.first-tree/hub-foo`**
-  — when you want a second parallel dev install (e.g. one per branch).
-  Each home gets its own unit name automatically.
-- **Direct `pnpm --filter ... dev`** — when iterating on code that does
-  not touch service install, config, or credentials. `tsx` runs against
-  source so `detectInstallMode()` returns `"source"` and any `upgrade`
-  path short-circuits — fine for everything except testing the
-  install/restart side of `upgrade` itself.
-- **`./scripts/dev-cli.sh --rebuild`** — rebuilds dist before running.
-  Use after editing any source under `packages/`.
+`UpdateManager` keeps polling the server for a target version. The
+client-side guard in
+[`apps/cli/src/core/update.ts`](../apps/cli/src/core/update.ts) refuses
+to install a version whose channel does not match this binary's
+channel — `inferChannelFromVersion("0.5.2-staging.42.1") === "staging"`,
+so a prod CLI told to install that target logs an error and skips.
+Dev binaries refuse self-update entirely (`packageName === null`).
 
-## What `dev-cli.sh` does NOT isolate
+If you need to swap dev for staging without `git pull`, install staging
+side-by-side:
 
-- The PostgreSQL database. Hub server uses one shared DB by default.
-  If you also run an in-tree server (`pnpm --filter @first-tree/server dev`),
+```bash
+npm i -g first-tree-staging
+first-tree-staging login <staging-token>
+# now both `first-tree-dev daemon status` and `first-tree-staging daemon status` work
+```
+
+## When to use which install
+
+- **`scripts/dev-install.sh`** — actively iterating on CLI / client /
+  shared code. Build is local, no npm round-trip. `upgrade` short-circuits
+  because `detectInstallMode()` returns `"source"`.
+- **Direct `pnpm --filter ... dev`** — running parts of the system in
+  isolation (server-only, web-only) where you don't need the full CLI
+  surface. `tsx` runs against source.
+- **`npm i -g first-tree-staging`** — when you want to test against the
+  exact bits that team members run. Coexists with dev install; data
+  stays in `~/.first-tree-staging/`.
+
+## What `dev-install.sh` does NOT isolate
+
+- The PostgreSQL database. Hub server uses one shared DB by default. If
+  you also run an in-tree server (`pnpm --filter @first-tree/server dev`),
   use a separate DB URL via `FIRST_TREE_DATABASE_URL`.
-- Global npm packages. `upgrade --no-restart` will still run
-  `npm install -g first-tree@latest` and
-  upgrade your machine-wide binary. Use `upgrade --check` for safe
-  read-only verification.
-- Credentials shared with the Hub server (Hub-side rows in
-  `clients` / `agents` tables). The dev install registers as a
-  *separate* `clientId` because the home is different — server-side
-  state stays clean.
+- Global npm packages. If you have both staging and prod installed,
+  upgrading either (e.g. via `first-tree-staging upgrade`) goes through
+  npm and affects your machine-wide install. Dev is immune because its
+  source-checkout install mode short-circuits the upgrade path.
+- `~/.first-tree/github-scan/` — independent subsystem, unrelated to
+  channel home.
 
 ## Tearing down a dev install
 
 ```bash
-./scripts/dev-cli.sh daemon stop
-# Optional — fully remove unit file + auto-start:
-systemctl --user disable first-tree-client-dev.service
-rm ~/.config/systemd/user/first-tree-client-dev.service
+first-tree-dev daemon stop
+# Optional — fully remove the unit file + auto-start:
+systemctl --user disable first-tree-dev.service
+rm ~/.config/systemd/user/first-tree-dev.service
 systemctl --user daemon-reload
 
+# Remove the bin symlinks
+rm ~/.local/bin/first-tree-dev ~/.local/bin/ftd
+
 # Wipe the isolated home if you want a fresh slate
-rm -rf ~/.first-tree/hub-dev
+rm -rf ~/.first-tree-dev
 ```
 
-Prod is unaffected throughout.
+Prod / staging installs are unaffected throughout.
+
+## Migrating from the pre-multi-env layout
+
+If you ran `scripts/dev-cli.sh` before this PR, your dev data lives at
+`~/.first-tree/hub-dev/`. `scripts/dev-install.sh` auto-`mv`s it to
+`~/.first-tree-dev/` on first run — no manual step required.
+
+Prod / staging migration (replacing the old single-package install) is
+documented in [`MIGRATION.md`](../MIGRATION.md) Phase 2.

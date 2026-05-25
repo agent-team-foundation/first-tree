@@ -25,6 +25,29 @@ export type ConnectTokenExchange = z.infer<typeof connectTokenExchangeSchema>;
 export const connectTokenResponseSchema = z.object({
   token: z.string(),
   expiresIn: z.number(),
+  /** `<binName> login <token>` — channel-aware bin name. */
   command: z.string(),
+  /**
+   * Full bootstrap line shown by web onboarding / connect-computer dialogs.
+   * For prod/staging: `npm install -g <pkg>\n<binName> login <token>`.
+   * For dev (server has no published package): just the `<binName> login
+   * <token>` line.
+   */
+  bootstrapCommand: z.string(),
+  /**
+   * Bare npm package name (no `@<dist-tag>` suffix; multi-env each
+   * channel has its own `latest`). `null` for dev servers — the web UI
+   * suppresses the `npm install -g` step.
+   */
+  npmSpec: z.string().nullable(),
+  /**
+   * Bin name the operator types after install. Channel-aware:
+   *   - prod    → "first-tree"
+   *   - staging → "first-tree-staging"
+   *   - dev     → "first-tree-dev"
+   * Web onboarding uses this to render the right `… login <token>` line
+   * (and the right `… agent add` prefix in the new-agent-dialog).
+   */
+  binName: z.string(),
 });
 export type ConnectTokenResponse = z.infer<typeof connectTokenResponseSchema>;

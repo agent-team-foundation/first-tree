@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+// MUST be the first import: this side-effect module sets
+// `process.env.FIRST_TREE_HOME` from the channel default before any
+// other module loads `@first-tree/shared/config`. Re-ordering this line
+// after a config-touching import re-introduces the multi-env footgun
+// where staging/dev binaries silently fall back to the prod home.
+import "../core/channel-env.js";
 import { applyClientLoggerConfig } from "@first-tree/client";
 import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent/index.js";

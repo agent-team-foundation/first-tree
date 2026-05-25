@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { UpdateAttempt } from "@first-tree/shared";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultDataDir } from "@first-tree/shared/config";
 import { ClientConnection } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { AccessTokenProvider } from "../sdk.js";
@@ -88,12 +88,12 @@ export class AgentRuntime {
     // would defeat the lock the moment two agents in the same chat boot
     // simultaneously.
     this.gitMirrorManager = createGitMirrorManager({
-      dataDir: DEFAULT_DATA_DIR,
+      dataDir: defaultDataDir(),
       log: createLogger("git-mirror"),
       // Authorise auto-recovery of orphaned worktree leftovers (kill holders +
       // rm -rf) for any target under the per-agent workspaces tree. Operator
       // paths outside this root still fail loud — see GitMirrorManagerOptions.
-      hubManagedRoots: [join(DEFAULT_DATA_DIR, "workspaces")],
+      hubManagedRoots: [join(defaultDataDir(), "workspaces")],
     });
 
     for (const [name, agentConfig] of Object.entries(this.config.agents)) {

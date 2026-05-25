@@ -1,23 +1,29 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
 
 /**
- * Version of the consumer-facing `first-tree`
- * package. Read once at module load so the CLI, client runtime, and server
- * bootstrap all quote the same string.
+ * Version of the consumer-facing CLI package. Read once at module load so
+ * the CLI, client runtime, and server bootstrap all quote the same string.
  *
- * Path-based lookups (`require("../../package.json")`) do not survive the
- * tsdown bundle: the source lives at `src/core/version.ts` but every
- * emitted chunk lands in `dist/` — shifting the relative depth by one and
- * pointing at `packages/package.json` instead of our own manifest (the
- * v0.9.1 "Cannot find module ../../package.json" crash). Walk up from this
- * module's URL and accept the first `package.json` whose `name` matches, so
- * dev runs (`tsx src/cli/index.ts`) and the published bundle
- * (`dist/cli/index.mjs`) both resolve the same file.
+ * Multi-env: every channel has its own package.json `name` —
+ *   - prod    → "first-tree"
+ *   - staging → "first-tree-staging"
+ *   - dev     → "first-tree-dev" (source-tree manifest; never published)
+ *
+ * Walking up the module tree finds whichever manifest matches THIS channel's
+ * name, so dev runs (`tsx src/cli/index.ts`), the published prod bundle
+ * (`dist/cli/index.mjs` from `first-tree@latest`), and the published
+ * staging bundle (`first-tree-staging@latest`) all resolve their own file.
+ *
+ * `packageName ?? binName`: dev channel sets `packageName=null` (not
+ * published) but its bin name and source-tree manifest name both equal
+ * `"first-tree-dev"`. Falling back to binName covers that case without
+ * baking a fourth identifier.
  */
-const PACKAGE_NAME = "first-tree";
+const PACKAGE_NAME = channelConfig.packageName ?? channelConfig.binName;
 
 /**
  * Sentinel returned when the walker exhausts every parent directory without

@@ -16,9 +16,9 @@ export type { ConfigMeta } from "./resolver.js";
 export {
   buildZodSchema,
   collectMissingPrompts,
-  DEFAULT_CONFIG_DIR,
-  DEFAULT_DATA_DIR,
-  DEFAULT_HOME_DIR,
+  defaultConfigDir,
+  defaultDataDir,
+  defaultHome,
   getConfigMeta,
   getConfigValue,
   initConfig,

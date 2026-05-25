@@ -6,7 +6,8 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { getChannelConfig } from "@first-tree/shared/channel";
+import { defaultDataDir } from "@first-tree/shared/config";
 import { FIRST_TREE_ATTR, redactUrl } from "@first-tree/shared/observability";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
@@ -80,7 +81,7 @@ import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
-import { COMMAND_PACKAGE_NAME, createCommandVersionPoller } from "./services/command-version-poller.js";
+import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
@@ -293,12 +294,18 @@ export async function buildApp(config: Config) {
   // server's deploy cadence no longer gates client auto-update. Bootstrap
   // value is the build-arg-injected version; the poller takes over on
   // `onReady`.
+  //
+  // Multi-env: the package name to poll is derived from this server's
+  // channel (`config.channel`). dev servers (channel=dev) get
+  // `packageName=null`, putting the poller into no-op mode — there is no
+  // published package to poll when the operator is running a symlinked
+  // source build.
+  const channelIdentity = getChannelConfig(config.channel);
   const bootstrapCommandVersion = resolveBootstrapCommandVersion(config.update.commandVersion);
   const commandVersionPoller = createCommandVersionPoller({
     logger: app.log,
     registryUrl: config.update.registryUrl,
-    packageName: COMMAND_PACKAGE_NAME,
-    channel: config.update.channel,
+    packageName: channelIdentity.packageName,
     intervalMs: config.update.pollIntervalMinutes * 60_000,
     initialVersion: bootstrapCommandVersion,
   });
@@ -306,7 +313,9 @@ export async function buildApp(config: Config) {
   app.log.info(
     {
       bootstrapCommandVersion,
-      channel: config.update.channel,
+      channel: config.channel,
+      packageName: channelIdentity.packageName,
+      binName: channelIdentity.binName,
       pollIntervalMinutes: config.update.pollIntervalMinutes,
     },
     "Hub server advertising command version (poller bootstrap)",
@@ -605,7 +614,7 @@ export async function buildApp(config: Config) {
   app.decorate("adapterManager", adapterManager);
 
   // Kael runtime — server-embedded forwarding to Kael API
-  const contextTreeDir = join(DEFAULT_DATA_DIR, "context-tree");
+  const contextTreeDir = join(defaultDataDir(), "context-tree");
   const kaelRuntime = config.kael?.endpoint
     ? createKaelRuntime(
         db,

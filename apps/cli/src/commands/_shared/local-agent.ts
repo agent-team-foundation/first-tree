@@ -3,7 +3,7 @@ import { FirstTreeHubSDK, SdkError } from "@first-tree/client";
 import {
   agentConfigSchema,
   clientConfigSchema,
-  DEFAULT_CONFIG_DIR,
+  defaultConfigDir,
   loadAgents,
   resolveConfigReadonly,
 } from "@first-tree/shared/config";
@@ -37,7 +37,7 @@ export function resolveLocalAgent(
   agentName?: string,
   extraHint?: { ambiguous?: string; envMismatch?: string },
 ): ResolvedAgentConfig {
-  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+  const agentsDir = join(defaultConfigDir(), "agents");
   const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
   const resolution = resolveSenderName({

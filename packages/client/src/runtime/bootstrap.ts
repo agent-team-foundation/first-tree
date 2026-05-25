@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultDataDir } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import type { ChatContext } from "./chat-context.js";
@@ -10,7 +10,13 @@ import { renderChatContextSection } from "./chat-context-section.js";
 import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
 
-const CONTEXT_TREE_REPOS_DIR = join(DEFAULT_DATA_DIR, "context-tree-repos");
+// Function rather than top-level const: see CLI's `channel-env.ts`
+// history note — locking a path at module load re-introduces the bundle
+// eval-order foot-gun the resolver function-ization fixed.
+function contextTreeReposDir(): string {
+  return join(defaultDataDir(), "context-tree-repos");
+}
+
 const contextTreeSyncLocks = new Map<string, Promise<ContextTreeBinding | null>>();
 
 /**
@@ -27,7 +33,7 @@ export type ContextTreeBinding = {
 
 export function contextTreeCloneDir(repo: string, branch: string): string {
   const digest = createHash("sha256").update(`${repo}\0${branch}`).digest("hex");
-  return join(CONTEXT_TREE_REPOS_DIR, digest);
+  return join(contextTreeReposDir(), digest);
 }
 
 /**

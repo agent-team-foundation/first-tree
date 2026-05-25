@@ -1,4 +1,4 @@
-import { DEFAULT_HOME_DIR, type HomeMigrationResult, migrateLegacyHome } from "@first-tree/shared/config";
+import { defaultHome, type HomeMigrationResult, migrateLegacyHome } from "@first-tree/shared/config";
 import { print } from "./output.js";
 import { getClientServiceStatus, installClientService } from "./service-install.js";
 
@@ -25,7 +25,7 @@ import { getClientServiceStatus, installClientService } from "./service-install.
  */
 export function runHomeMigration(): void {
   const result: HomeMigrationResult = migrateLegacyHome({
-    newHome: DEFAULT_HOME_DIR,
+    newHome: defaultHome(),
     envOverride: process.env.FIRST_TREE_HOME ?? null,
   });
 

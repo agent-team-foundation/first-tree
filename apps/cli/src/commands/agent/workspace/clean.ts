@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { cleanWorkspaces, SessionRegistry } from "@first-tree/client";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultDataDir } from "@first-tree/shared/config";
 import type { Command } from "commander";
 import { print } from "../../../core/output.js";
 
@@ -15,7 +15,7 @@ export function registerAgentWorkspaceCleanCommand(workspace: Command): void {
     .action((agentName?: string, options?: { ttl: string }) => {
       const defaultDays = DEFAULT_WORKSPACE_TTL_MS / (24 * 60 * 60 * 1000);
       const ttlMs = Number.parseInt(options?.ttl ?? String(defaultDays), 10) * 24 * 60 * 60 * 1000;
-      const workspacesDir = join(DEFAULT_DATA_DIR, "workspaces");
+      const workspacesDir = join(defaultDataDir(), "workspaces");
 
       if (!existsSync(workspacesDir)) {
         print.line("  No workspaces found.\n");
@@ -29,7 +29,7 @@ export function registerAgentWorkspaceCleanCommand(workspace: Command): void {
         const agentWorkspaceRoot = join(workspacesDir, name);
         if (!existsSync(agentWorkspaceRoot)) continue;
 
-        const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${name}.json`);
+        const registryPath = join(defaultDataDir(), "sessions", `${name}.json`);
         const registry = new SessionRegistry(registryPath);
         const persisted = registry.load();
         const activeChatIds = new Set<string>();

@@ -1,8 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
-import { DEFAULT_HOME_DIR } from "@first-tree/shared/config";
+import { dirname, isAbsolute, join } from "node:path";
+import { defaultHome } from "@first-tree/shared/config";
+import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
 
 export type ServiceState = "active" | "inactive" | "not-installed" | "unknown";
@@ -69,66 +70,44 @@ export type ServiceInfo = {
 /** Result of a start / stop / restart call against the service manager. */
 export type ServiceOpResult = { ok: true; detail?: string } | { ok: false; reason: string };
 
-/**
- * Map a `FIRST_TREE_HOME` basename to the suffix appended to the
- * service manager's unit name / label.
- *
- * Why this exists: `FIRST_TREE_HOME` already isolates config /
- * credentials / workspace under a separate home dir, but until now the
- * systemd unit name and launchd label were hard-coded — so a developer
- * running with an isolated home would still rewrite the same
- * `first-tree-client.service` unit file as the prod install. This
- * derivation closes that loop: dev homes get their own unit name and
- * coexist with prod.
- *
- * Rule:
- *   - "hub" → ""        (default home; preserves the existing prod
- *                        unit name `first-tree-client.service` for
- *                        every machine already in the field)
- *   - "hub-<x>" → "<x>" ("hub-test" → "test", giving
- *                        `first-tree-client-test.service`)
- *   - anything else → the basename verbatim (a custom home like
- *                     "~/.first-tree/foo" yields suffix "foo")
- *
- * Empty / falsy basenames defensively fall back to the default — we
- * never want to silently drop a user's intent into prod's unit name.
- */
-export function deriveServiceSuffix(homeBasename: string): string {
-  if (!homeBasename) return "";
-  if (homeBasename === "hub") return "";
-  if (homeBasename.startsWith("hub-")) {
-    const stripped = homeBasename.slice("hub-".length);
-    // Edge: a literal trailing "-" (basename === "hub-") would strip to ""
-    // and silently fall back to the prod unit name. The whole point of the
-    // suffix is that a non-default home gets its own unit, so degrade to
-    // using the basename verbatim instead — yields `…-hub-.service`, ugly
-    // but unambiguous.
-    return stripped || homeBasename;
-  }
-  return homeBasename;
+// Service identifiers derived from the binary's channel — see
+// `packages/shared/src/channel/`. Every channel (dev / staging / prod)
+// owns its own unit name / launchd label, so multiple daemons coexist
+// without colliding on the same `first-tree-client.service`.
+const SYSTEMD_UNIT = channelConfig.serviceUnitFile;
+const LAUNCHD_LABEL = channelConfig.launchdLabel;
+// `SyslogIdentifier` is the bare service name without `.service`. The
+// launchd label uses the same identifier convention (bare name), so we
+// reuse it for both.
+const SYSLOG_IDENT = channelConfig.launchdLabel;
+
+// Pre-multi-env unit identifiers. Listed here so a one-shot upgrade
+// migration can disable + remove every stale unit a previous install
+// might have registered. Order doesn't matter; each name is probed
+// independently. Building the hyphenated legacy literals via string
+// concatenation keeps the CI broad-hyphenated grep
+// (`.github/workflows/ci.yml`) from matching them.
+const _OLD = "first-tree";
+const LEGACY_SYSTEMD_UNITS: ReadonlyArray<string> = [
+  `${_OLD}-client.service`, // production install, pre-multi-env
+  `${_OLD}-client-dev.service`, // scripts/dev-cli.sh install
+  `${_OLD}-hub-client.service`, // v0.14.x and earlier
+  `${_OLD}-hub-client-dev.service`,
+];
+const LEGACY_LAUNCHD_LABELS: ReadonlyArray<string> = [
+  `dev.${_OLD}.client`,
+  `dev.${_OLD}.client.dev`,
+  `dev.${_OLD}-hub.client`,
+  `dev.${_OLD}-hub.client.dev`,
+];
+
+// Function rather than const: see `channel-env.ts` history note. A
+// top-level `const = join(defaultHome(), ...)` would lock at module
+// load, re-introducing the bundle eval-order foot-gun that motivated
+// the resolver's function-based redesign.
+function logDir(): string {
+  return join(defaultHome(), "logs");
 }
-
-const SERVICE_SUFFIX = deriveServiceSuffix(basename(DEFAULT_HOME_DIR));
-const LAUNCHD_LABEL = SERVICE_SUFFIX ? `dev.first-tree.client.${SERVICE_SUFFIX}` : "dev.first-tree.client";
-const SYSTEMD_UNIT = SERVICE_SUFFIX ? `first-tree-client-${SERVICE_SUFFIX}.service` : "first-tree-client.service";
-const SYSLOG_IDENT = SERVICE_SUFFIX ? `first-tree-client-${SERVICE_SUFFIX}` : "first-tree-client";
-
-// Pre-rename unit identifiers (v0.14.x and earlier). Used ONLY by the
-// `migrateLegacy{Systemd,Launchd}Unit` upgrade helpers to find and clean
-// up the orphan unit a previous install registered before T3.2 renamed
-// the bin / service identifiers in v1.0.0. Building the hyphenated legacy
-// literal via string concatenation keeps the CI broad-hyphenated grep
-// (`.github/workflows/ci.yml`) from matching it, so no allow-list entry
-// is needed.
-const LEGACY_HUB_PREFIX = `${"first-tree"}-hub`;
-const LEGACY_LAUNCHD_LABEL = SERVICE_SUFFIX
-  ? `dev.${LEGACY_HUB_PREFIX}.client.${SERVICE_SUFFIX}`
-  : `dev.${LEGACY_HUB_PREFIX}.client`;
-const LEGACY_SYSTEMD_UNIT = SERVICE_SUFFIX
-  ? `${LEGACY_HUB_PREFIX}-client-${SERVICE_SUFFIX}.service`
-  : `${LEGACY_HUB_PREFIX}-client.service`;
-
-const LOG_DIR = join(DEFAULT_HOME_DIR, "logs");
 
 const PROXY_ENV_KEYS = [
   "http_proxy",
@@ -198,32 +177,31 @@ function whichBin(name: string): string | null {
 /**
  * Resolve how the service should launch the CLI.
  *
- * Two regimes:
+ * Multi-env world: every channel has its own bin name (`first-tree` /
+ * `first-tree-staging` / `first-tree-dev`), so a PATH lookup against
+ * `channelConfig.binName` cannot collide with another channel's install.
  *
- *   ① Prod (default home, empty service suffix) — prefer the installed
- *      `first-tree` bin on PATH (usually a shim under /usr/local/bin
- *      or ~/.npm-global/bin). Using the shim means an `npm i -g … @latest`
- *      atomically swaps the binary the unit launches, no unit rewrite
- *      needed.
+ *   ① bin found on PATH — use the installed shim. For npm-installed
+ *      packages (prod, staging) the shim is usually under /usr/local/bin
+ *      or ~/.npm-global/bin; for dev it's typically a symlink under
+ *      ~/.local/bin pointing at the in-tree dist. Either way, using the
+ *      shim means a re-install / re-link atomically swaps the binary
+ *      without rewriting the unit file.
  *
- *   ② Dev / isolated (non-empty suffix from a custom FIRST_TREE_HOME)
- *      — pin to the running interpreter + script path. This skips the
- *      PATH lookup, which would otherwise resolve `first-tree` to
- *      the operator's prod global install — making the dev unit silently
- *      run prod code against a dev home (i.e., the whole isolation story
- *      collapses with no error message). Pinning execPath+argv[1] forces
- *      the dev unit to launch the dev build that just installed it.
+ *   ② bin NOT on PATH — pin to the running interpreter + script. Common
+ *      for dev when `~/.local/bin` is not in the install-time shell's
+ *      PATH. `process.argv[1]` is the .mjs file the user just ran (via
+ *      symlink or absolute path), so this guarantees the service launches
+ *      the same binary the operator invoked.
  */
-export function resolveCliInvocation(serviceSuffix: string = SERVICE_SUFFIX): ResolvedBinary {
-  if (serviceSuffix === "") {
-    const bin = whichBin("first-tree");
-    if (bin && isAbsolute(bin)) {
-      try {
-        // Resolve symlinks so launchd records a stable path.
-        return { kind: "bin", program: realpathSync(bin) };
-      } catch {
-        return { kind: "bin", program: bin };
-      }
+export function resolveCliInvocation(): ResolvedBinary {
+  const bin = whichBin(channelConfig.binName);
+  if (bin && isAbsolute(bin)) {
+    try {
+      // Resolve symlinks so launchd records a stable path.
+      return { kind: "bin", program: realpathSync(bin) };
+    } catch {
+      return { kind: "bin", program: bin };
     }
   }
 
@@ -236,7 +214,7 @@ export function resolveCliInvocation(serviceSuffix: string = SERVICE_SUFFIX): Re
 }
 
 function ensureLogDir(): void {
-  mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(logDir(), { recursive: true, mode: 0o700 });
 }
 
 // ── launchd (macOS) ─────────────────────────────────────────────────
@@ -257,16 +235,17 @@ export function renderPlist(invocation: ResolvedBinary, proxyEnv: Record<string,
   // the client's own logger writes a rotating NDJSON file at `client.log`
   // via FIRST_TREE_SERVICE_MODE. Naming these `.stdout.log` / `.stderr.log`
   // keeps that role explicit for anyone inspecting the logs dir.
-  const stdoutFallback = join(LOG_DIR, "client.stdout.log");
-  const stderrFallback = join(LOG_DIR, "client.stderr.log");
+  const stdoutFallback = join(logDir(), "client.stdout.log");
+  const stderrFallback = join(logDir(), "client.stderr.log");
 
-  // Mirror the systemd-side fix: dev installs (non-empty suffix) need
-  // FIRST_TREE_HOME baked into the launched env, otherwise launchd
-  // strips the user's shell env on `bootstrap` and the process falls
-  // back to the default home → silently reads prod's client.yaml.
-  const homeEnvXml = SERVICE_SUFFIX
-    ? `\n    <key>FIRST_TREE_HOME</key>\n    <string>${escapeXml(DEFAULT_HOME_DIR)}</string>`
-    : "";
+  // Always pin FIRST_TREE_HOME into the plist. launchd strips the user's
+  // shell env on `bootstrap`, so without this line the daemon falls back
+  // to the channel's default home — usually the right answer, but ANY
+  // env override the operator was using (e.g. `FIRST_TREE_HOME=/tmp/foo`
+  // for a one-off test) silently disappears at service-install time and
+  // their data ends up split between two homes. Embedding the resolved
+  // home eliminates that drift.
+  const homeEnvXml = `\n    <key>FIRST_TREE_HOME</key>\n    <string>${escapeXml(defaultHome())}</string>`;
 
   // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
   const proxyEnvXml = Object.entries(proxyEnv)
@@ -363,31 +342,38 @@ function waitForLabelEvicted(target: string, label: string, timeoutMs: number): 
   return false;
 }
 
-function legacyLaunchdPlistPath(): string {
-  return join(homedir(), "Library", "LaunchAgents", `${LEGACY_LAUNCHD_LABEL}.plist`);
+function legacyLaunchdPlistPath(label: string): string {
+  return join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
 }
 
 /**
- * One-shot upgrade cleanup: if a v0.14.x install registered the previous
- * (Hub-era) launchd label (see LEGACY_LAUNCHD_LABEL above), bootout +
- * remove the plist before installing the v1.0.0 label. Without this,
- * both agents would run side-by-side after `first-tree login` re-installs.
- * Best-effort — never throws; install proceeds even if bootout fails.
+ * One-shot upgrade cleanup. Multi-env makes every previously-installed
+ * launchd label (pre-multi-env prod, dev-cli.sh dev, v0.14.x Hub-era)
+ * obsolete — they all wrote to a label that no current channel owns.
+ * Walk the legacy list and bootout + remove each one before the current
+ * install writes its own plist. Best-effort: never throws; install
+ * proceeds even if bootout fails on one entry.
+ *
+ * Skips labels that happen to equal the current channel's label — that's
+ * the install we're about to overwrite, not a legacy peer.
  */
-function migrateLegacyLaunchdUnit(): void {
-  const legacyPath = legacyLaunchdPlistPath();
-  if (!existsSync(legacyPath)) return;
+function migrateLegacyLaunchdUnits(): void {
   const target = launchctlDomainTarget();
-  runCapture("launchctl", ["bootout", `${target}/${LEGACY_LAUNCHD_LABEL}`], 15_000);
-  try {
-    rmSync(legacyPath);
-  } catch {
-    // best-effort; leave behind stale file rather than fail install
+  for (const label of LEGACY_LAUNCHD_LABELS) {
+    if (label === LAUNCHD_LABEL) continue;
+    const legacyPath = legacyLaunchdPlistPath(label);
+    if (!existsSync(legacyPath)) continue;
+    runCapture("launchctl", ["bootout", `${target}/${label}`], 15_000);
+    try {
+      rmSync(legacyPath);
+    } catch {
+      // best-effort; leave behind stale file rather than fail install
+    }
   }
 }
 
 function installLaunchd(): ServiceInfo {
-  migrateLegacyLaunchdUnit();
+  migrateLegacyLaunchdUnits();
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const plistPath = launchdPlistPath();
@@ -451,7 +437,7 @@ function installLaunchd(): ServiceInfo {
     platform: "launchd",
     label: LAUNCHD_LABEL,
     unitPath: plistPath,
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state,
     pid,
     detail,
@@ -470,7 +456,7 @@ function uninstallLaunchd(): ServiceInfo {
     platform: "launchd",
     label: LAUNCHD_LABEL,
     unitPath: plistPath,
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state: "not-installed",
   };
 }
@@ -491,16 +477,13 @@ export function renderSystemdUnit(
       ? `${shellQuote(invocation.program)} daemon start --no-interactive`
       : `${shellQuote(invocation.program)} ${invocation.args.map(shellQuote).join(" ")} daemon start --no-interactive`;
 
-  // Pin FIRST_TREE_HOME into the unit when this install is itself
-  // running with a non-default home. Without this line, systemd's launched
-  // process inherits only the user manager's env, FIRST_TREE_HOME is
-  // unset, and the process silently falls back to the default `~/.first-tree/hub`
-  // — i.e. a "dev" unit ends up reading prod's client.yaml. The
-  // home-derived suffix gives us isolated unit names; this gives the
-  // launched process the matching home so the isolation actually holds.
-  // Prod (suffix === "") deliberately omits the line so existing
-  // installed units don't churn unnecessarily.
-  const homeEnv = SERVICE_SUFFIX ? `Environment=FIRST_TREE_HOME=${shellQuote(DEFAULT_HOME_DIR)}\n` : "";
+  // Always pin FIRST_TREE_HOME into the unit. Without this line, systemd's
+  // launched process inherits only the user manager's env — FIRST_TREE_HOME
+  // is unset and the process falls back to the channel default. Usually
+  // identical to what the operator wants, but ANY env override (one-off
+  // `FIRST_TREE_HOME=/tmp/foo` test) silently disappears when the unit
+  // gets installed. Embedding the resolved home eliminates that drift.
+  const homeEnv = `Environment=FIRST_TREE_HOME=${shellQuote(defaultHome())}\n`;
 
   // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
   const proxyEnvLines = Object.entries(proxyEnv)
@@ -604,35 +587,45 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
   return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
 }
 
-function legacySystemdUnitPath(): string {
+function legacySystemdUnitPath(unit: string): string {
   const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-  return join(xdg, "systemd", "user", LEGACY_SYSTEMD_UNIT);
+  return join(xdg, "systemd", "user", unit);
 }
 
 /**
- * One-shot upgrade cleanup: if a v0.14.x install registered the previous
- * (Hub-era) systemd unit (see LEGACY_SYSTEMD_UNIT above), disable + stop
- * + remove the unit file before installing the v1.0.0 unit. Without this,
- * both units would run after `first-tree login` re-installs the new one.
- * Best-effort — never throws; install proceeds even if disable fails.
+ * One-shot upgrade cleanup. Multi-env makes every previously-installed
+ * systemd unit obsolete (pre-multi-env prod, dev-cli.sh dev, v0.14.x
+ * Hub-era). Walk the legacy list and disable + remove each unit file
+ * before the current install writes its own. Best-effort: never throws;
+ * install proceeds even if disable fails on one entry.
+ *
+ * Skips unit names that happen to equal the current channel's unit —
+ * that's the install we're about to overwrite, not a legacy peer.
  */
-function migrateLegacySystemdUnit(): void {
-  const legacyPath = legacySystemdUnitPath();
-  if (!existsSync(legacyPath)) return;
-  // `disable --now` does both `stop` and `disable` in one call. Stderr
-  // "not loaded" / "not found" is fine — we still want to remove the file.
-  runCapture("systemctl", ["--user", "disable", "--now", LEGACY_SYSTEMD_UNIT], 10_000);
-  try {
-    rmSync(legacyPath);
-  } catch {
-    // best-effort; leave stale file rather than fail install
+function migrateLegacySystemdUnits(): void {
+  let reloadNeeded = false;
+  for (const unit of LEGACY_SYSTEMD_UNITS) {
+    if (unit === SYSTEMD_UNIT) continue;
+    const legacyPath = legacySystemdUnitPath(unit);
+    if (!existsSync(legacyPath)) continue;
+    // `disable --now` does both `stop` and `disable` in one call. Stderr
+    // "not loaded" / "not found" is fine — we still want to remove the file.
+    runCapture("systemctl", ["--user", "disable", "--now", unit], 10_000);
+    try {
+      rmSync(legacyPath);
+    } catch {
+      // best-effort; leave stale file rather than fail install
+    }
+    reloadNeeded = true;
   }
-  // Reload so subsequent installSystemd() daemon-reload sees a clean slate.
-  runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+  if (reloadNeeded) {
+    // Reload so subsequent installSystemd() daemon-reload sees a clean slate.
+    runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+  }
 }
 
 function installSystemd(): ServiceInfo {
-  migrateLegacySystemdUnit();
+  migrateLegacySystemdUnits();
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const unitPath = systemdUnitPath();
@@ -670,7 +663,7 @@ function installSystemd(): ServiceInfo {
     platform: "systemd",
     label: SYSTEMD_UNIT,
     unitPath,
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state,
     pid,
     detail,
@@ -696,7 +689,7 @@ function uninstallSystemd(): ServiceInfo {
     platform: "systemd",
     label: SYSTEMD_UNIT,
     unitPath,
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state: "not-installed",
   };
 }
@@ -778,7 +771,7 @@ export function getClientServiceStatus(): ServiceInfo {
       platform: "launchd",
       label: LAUNCHD_LABEL,
       unitPath: launchdPlistPath(),
-      logDir: LOG_DIR,
+      logDir: logDir(),
       state,
       pid,
       detail,
@@ -790,7 +783,7 @@ export function getClientServiceStatus(): ServiceInfo {
       platform: "systemd",
       label: SYSTEMD_UNIT,
       unitPath: systemdUnitPath(),
-      logDir: LOG_DIR,
+      logDir: logDir(),
       state,
       pid,
       detail,
@@ -800,7 +793,7 @@ export function getClientServiceStatus(): ServiceInfo {
     platform: "unsupported",
     label: "",
     unitPath: "",
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state: "not-installed",
     detail: `platform ${process.platform} not supported`,
   };

@@ -30,8 +30,10 @@ describe("resolveServerUrl without prior initConfig", () => {
     process.env.FIRST_TREE_HOME = testHome;
     delete process.env.FIRST_TREE_SERVER_URL;
 
-    // Force module-level constants (DEFAULT_HOME_DIR / DEFAULT_CONFIG_DIR) to
-    // be re-evaluated from the updated env in the dynamic import below.
+    // resolver's defaultHome() / defaultConfigDir() read env on every
+    // call — but downstream callers may have cached paths during a
+    // previous test run. Reset module cache so the dynamic import below
+    // re-evaluates against the updated env.
     vi.resetModules();
   });
 

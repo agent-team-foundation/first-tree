@@ -93,7 +93,7 @@ if [[ ! -f "$FT_CLI" ]]; then
   log "Building first-tree CLI because $FT_CLI does not exist"
   (
     cd "$ROOT_DIR"
-    pnpm --filter first-tree build
+    pnpm --filter first-tree-dev build
   )
 fi
 

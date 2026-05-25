@@ -86,8 +86,10 @@ describe("org bind-tree CLI", () => {
       return true;
     }) as typeof process.stdout.write;
 
-    // Force module-level constants (DEFAULT_HOME_DIR / DEFAULT_CONFIG_DIR)
-    // to re-evaluate against the new env in each dynamic import.
+    // resolver's defaultHome() / defaultConfigDir() read env on every
+    // call. Reset module cache so any path memoized in upper layers
+    // (e.g. const at module load in a downstream caller) is recomputed
+    // against this test's freshly set FIRST_TREE_HOME.
     vi.resetModules();
   });
 

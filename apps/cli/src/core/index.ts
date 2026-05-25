@@ -57,7 +57,6 @@ export { reconcileLocalRuntimeProviders, uploadClientCapabilities } from "./runt
 // Background service install (launchd / systemd --user)
 export type { ServiceInfo, ServiceOpResult, ServiceState } from "./service-install.js";
 export {
-  deriveServiceSuffix,
   getClientServiceStatus,
   installClientService,
   isServiceSupported,
