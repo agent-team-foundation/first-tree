@@ -40,12 +40,13 @@
  * any) is unaffected — no state-carry transaction needed.
  */
 
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
+import { backfillSilentContextForNewParticipants } from "./inbox.js";
 
 /**
  * Structural DB type that accepts both the top-level `Database` and a
@@ -90,15 +91,43 @@ export type AddChatParticipantsOptions = {
  *
  * Reads:
  *   - `chats.id` for the target chat (NotFoundError on missing).
- *   - `agents.uuid` for every requested participant (BadRequestError on
- *     missing). When `assertHuman` is set, also validates `agents.type`.
+ *   - `agents.uuid`, `agents.type`, `agents.inboxId` for every requested
+ *     participant (BadRequestError on missing). When `assertHuman` is set,
+ *     also validates `agents.type`. `inboxId` feeds the silent-context
+ *     backfill (see below).
+ *   - `chat_membership` rows for the (chatId, agentIds) tuple, to classify
+ *     each input as `alreadySpeaker` (skip) / `upgradingWatcher` / `brandNew`.
  *
- * Writes one INSERT (multi-row) per call.
+ * Writes:
+ *   - One INSERT (multi-row) into `chat_membership` per call.
+ *   - One INSERT (multi-row) into `inbox_entries` carrying the chat's most
+ *     recent N messages as silent (notify=false) rows, for every agent whose
+ *     access_mode just transitioned to `speaker` (`brandNew` ∪
+ *     `upgradingWatcher`). Skipped when no such transition happens.
+ *
+ * Why backfill lives here (not at the service entrypoints):
+ *
+ *   The "an agent crossing into `accessMode='speaker'` must be able to read
+ *   prior chat history" invariant is a property of writing the membership
+ *   row, not of any particular service entrypoint. Anchoring it to the
+ *   single helper that owns the write means new service entrypoints
+ *   (`addParticipant`, `addMeChatParticipants`, `ensureParticipant`,
+ *   `joinChat`, `joinAsParticipant`, `findOrCreateChatForChannel`, …) all
+ *   inherit it for free. The previous arrangement — backfill scattered at
+ *   `addParticipant` only — regressed silently when the web path went
+ *   through `addMeChatParticipants` instead (PR #393 follow-up).
+ *
+ * Watcher → speaker upgrades also backfill: watchers do not receive inbox
+ * fan-out (`message.ts` filters by `access_mode='speaker'`), so the moment
+ * they become speakers, everything before that moment is unreachable
+ * without the silent-context replay.
  *
  * No watcher / audience-cache side effects — the caller owns those, since
  * different entrypoints have different surrounding work (watcher recompute,
- * audience invalidation). Keeping this module side-effect-free makes it
- * testable from any tx context.
+ * audience invalidation). Keeping this module otherwise side-effect-free
+ * makes it testable from any tx context. Backfill is the one exception
+ * because, unlike watcher / audience cache, it is an invariant of writing
+ * the row itself, not a choice the caller makes.
  *
  * v2: `chat_membership.mode` is written as the constant `"mention_only"`.
  * No chat-type / agent-type / peer-shape derivation. See file-level
@@ -121,7 +150,7 @@ export async function addChatParticipants(
 
   const agentIds = participants.map((p) => p.agentId);
   const agentRows = await tx
-    .select({ uuid: agents.uuid, type: agents.type })
+    .select({ uuid: agents.uuid, type: agents.type, inboxId: agents.inboxId })
     .from(agents)
     .where(inArray(agents.uuid, agentIds));
   const agentSet = new Set(agentRows.map((r) => r.uuid));
@@ -138,6 +167,16 @@ export async function addChatParticipants(
       );
     }
   }
+
+  // Classify each requested agent against the live chat_membership row (if
+  // any) so we can decide who actually crosses into speaker. Read inside the
+  // caller's tx so a concurrent membership write can't move the line under us.
+  const existing = await tx
+    .select({ agentId: chatMembership.agentId, accessMode: chatMembership.accessMode })
+    .from(chatMembership)
+    .where(and(eq(chatMembership.chatId, chatId), inArray(chatMembership.agentId, agentIds)));
+  const existingMode = new Map(existing.map((r) => [r.agentId, r.accessMode]));
+  const inboxByAgent = new Map(agentRows.map((r) => [r.uuid, r.inboxId]));
 
   const rows = participants.map((spec) => ({
     chatId,
@@ -167,5 +206,26 @@ export async function addChatParticipants(
     await insert.onConflictDoNothing({ target: [chatMembership.chatId, chatMembership.agentId] });
   } else {
     await insert;
+  }
+
+  // Silent-context backfill invariant. Triggers when an agent crosses into
+  // `accessMode='speaker'` — either brand-new (no prior membership row) or
+  // promoted from watcher. Already-speaker rows are skipped because
+  // re-inserting them was a no-op above. When `upgradeWatcherToSpeaker` is
+  // not set, the watcher branch is naturally empty (the INSERT would have
+  // crashed on the unique key) — defensive filtering keeps the contract
+  // explicit either way.
+  const crossingIntoSpeaker = participants.filter((p) => {
+    const prior = existingMode.get(p.agentId);
+    if (prior === "speaker") return false;
+    if (prior === "watcher") return options.upgradeWatcherToSpeaker === true;
+    return true;
+  });
+  if (crossingIntoSpeaker.length > 0) {
+    const backfillTargets = crossingIntoSpeaker
+      .map((p) => inboxByAgent.get(p.agentId))
+      .filter((inboxId): inboxId is string => typeof inboxId === "string")
+      .map((inboxId) => ({ inboxId }));
+    await backfillSilentContextForNewParticipants(tx, chatId, backfillTargets);
   }
 }

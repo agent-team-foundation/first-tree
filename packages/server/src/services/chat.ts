@@ -9,7 +9,6 @@ import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
-import { backfillSilentContextForNewParticipants } from "./inbox.js";
 import { resolveChatTitle } from "./me-chat.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
 import { addChatParticipants } from "./participant-mode.js";
@@ -359,9 +358,9 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
 
   // Resolve the target by uuid or by name. Name lookup is scoped to the
   // chat's organization so an agent in another org can never be pulled in
-  // by name collision. `inboxId` is needed for the v1.7 silent-context
-  // backfill; `visibility` and `managerId` are needed for PR #402's
-  // owner-exclusive check.
+  // by name collision. `visibility` and `managerId` are needed for PR #402's
+  // owner-exclusive check; `inboxId` is fetched by `addChatParticipants`
+  // itself for the silent-context backfill, so no need to thread it here.
   const targetSelector = data.agentId
     ? eq(agents.uuid, data.agentId)
     : and(eq(agents.organizationId, chat.organizationId), eq(agents.name, data.agentName ?? ""));
@@ -369,7 +368,6 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
     .select({
       id: agents.uuid,
       organizationId: agents.organizationId,
-      inboxId: agents.inboxId,
       visibility: agents.visibility,
       managerId: agents.managerId,
     })
@@ -428,14 +426,13 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
   // structurally separate so read state is preserved without a state-carry
   // transaction.
   await db.transaction(async (tx) => {
+    // Silent-context backfill is now an invariant of `addChatParticipants`
+    // (proposals/hub-chat-message-v1-design §四 改造 2 follow-up): the helper
+    // detects watcher → speaker / brand-new crossings and writes the silent
+    // inbox rows itself, so every join entrypoint inherits the behaviour for
+    // free instead of having to remember the hook.
     await addChatParticipants(tx, chatId, [{ agentId: targetAgent.id }], { upgradeWatcherToSpeaker: true });
     await recomputeChatWatchers(tx, chatId);
-    // v1 §四 改造 2: backfill the most recent N messages as silent
-    // (notify=false) inbox rows for the new participant so a future trigger
-    // (mention / chat send / replyTo) can replay them as preceding
-    // context. Hook lives in the service layer — caller-agnostic, so
-    // human web / dispatcher / future agent-CLI all benefit.
-    await backfillSilentContextForNewParticipants(tx, chatId, [{ inboxId: targetAgent.inboxId }]);
   });
   invalidateChatAudience(chatId);
 

@@ -1,5 +1,6 @@
 import type { InboxEntryWithMessage, PrecedingMessage } from "@first-tree/shared";
 import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
@@ -14,6 +15,13 @@ type ClaimedEntry = typeof inboxEntries.$inferSelect;
 
 /** Structurally-typed DB so both `Database` and transaction clients work. */
 type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete" | "insert">;
+
+/** Wider DB shape that matches both the concrete `Database` and the
+ *  `PgDatabase` widening used by sibling services (e.g. participant-mode).
+ *  Used by entrypoints that need to accept a tx handed in from outside this
+ *  module. The narrower `TxLike` is retained for module-internal callers. */
+// biome-ignore lint/suspicious/noExplicitAny: needed for cross-schema compatibility
+type WideTxLike = PgDatabase<PgQueryResultHKT, any, any>;
 
 const DEFAULT_INBOX_TIMEOUT_SECONDS = 300;
 const DEFAULT_MAX_RETRY_COUNT = 3;
@@ -67,7 +75,7 @@ export const PRECEDING_CONTEXT_WINDOW_SECONDS = 24 * 60 * 60;
  * See proposals/hub-chat-message-v1-design §四 改造 2.
  */
 export async function backfillSilentContextForNewParticipants(
-  tx: TxLike,
+  tx: WideTxLike,
   chatId: string,
   newParticipants: ReadonlyArray<{ inboxId: string }>,
 ): Promise<void> {
