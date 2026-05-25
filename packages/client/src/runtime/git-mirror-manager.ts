@@ -14,7 +14,15 @@ const SESSION_BRANCH_PREFIX = "hub-session";
  * Backoff schedule for retrying a remote-talking git op (`fetch`,
  * `remote set-head --auto`) on a transient network-layer failure. Each entry
  * is the wait BEFORE the next attempt, so this lays out 4 attempts total
- * (1 initial + 3 retries) with a worst-case sleep budget of ~5s.
+ * (1 initial + 3 retries) with a worst-case sleep budget of ~5s **per
+ * protocol attempt**.
+ *
+ * Per-call totals depend on whether the helper chains a primary + fallback:
+ *   - `fetchOrigin` ≤ 5s sleep budget: the SSH fallback only fires when
+ *     the primary's terminal failure is credential-shaped, which a transient
+ *     stderr will never be. So a transient-only failure burns ~5s.
+ *   - `setHeadAuto` ≤ 10s sleep budget: the fallback fires on ANY terminal
+ *     primary failure, so a doubly-transient run burns ~5s + ~5s ≈ 10s.
  *
  * Tuned for the operator-visible case of session start/resume hitting a
  * proxy / VPN that flips a rule, restarts a TUN, or drops a TLS handshake
@@ -397,6 +405,13 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
    * mirrors the historical `gitOk` semantics — non-fatal). No `GitMirrorAuthError`
    * here: callers that need origin/HEAD already get a clear
    * `GitMirrorError("Cannot resolve default branch …")` if both attempts fail.
+   */
+  /**
+   * Worst-case sleep budget: ~10s (primary ~5s + fallback ~5s). Unlike
+   * `fetchOrigin`, which gates fallback on a credential-shaped terminal
+   * error, `setHeadAuto` always falls through on any primary failure, so
+   * a doubly-transient run pays both retry budgets. Per-call 30s timeout
+   * still caps each individual git invocation.
    */
   async function setHeadAuto(mirrorPath: string, originUrl: string): Promise<boolean> {
     try {

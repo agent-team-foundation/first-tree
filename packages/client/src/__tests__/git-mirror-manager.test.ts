@@ -1133,6 +1133,13 @@ describe("GitMirrorManager — ssh fallback", () => {
     expect(caught).not.toBeInstanceOf(GitMirrorAuthError);
   });
 
+  // 30s vitest timeout: `Connection refused` is in the transient-retry set
+  // (intentionally — localhost-proxy listeners commonly bounce), so this
+  // test now eats the full ~5s of retry sleeps plus 4 × git-curl-fail-fast
+  // attempts before reaching the terminal assertion. On Linux dev machines
+  // that pushes wall-clock to ~15s, past vitest's default 5s testTimeout.
+  // CI Linux runners aren't affected, but cross-platform portability
+  // matters — see PR #548 review feedback.
   it("does NOT classify a non-credential https failure as auth — bootstrap against an unreachable https URL throws raw GitMirrorError", async () => {
     // Drive `ensureMirror` (which goes through the same `fetchOrigin` helper
     // as `fetchMirror`) against an https URL whose connect() always refuses.
@@ -1154,7 +1161,7 @@ describe("GitMirrorManager — ssh fallback", () => {
     }
     expect(caught).toBeInstanceOf(GitMirrorError);
     expect(caught).not.toBeInstanceOf(GitMirrorAuthError);
-  });
+  }, 30_000);
 });
 
 describe("GitMirrorManager — concurrency", () => {
