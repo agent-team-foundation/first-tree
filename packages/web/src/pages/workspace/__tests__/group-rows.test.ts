@@ -1,4 +1,4 @@
-import type { MeChatRow } from "@first-tree/shared";
+import { compareMainStatus, type MeChatRow } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { groupRows, splitAttentionRows } from "../conversations/group-rows.js";
 
@@ -214,5 +214,22 @@ describe("splitAttentionRows — pinned failed + needs-you partition", () => {
     const { attention, rest } = splitAttentionRows([row({ id: "x", lastMessageAt: null })]);
     expect(attention).toEqual([]);
     expect(rest.map((r) => r.chatId)).toEqual(["x"]);
+  });
+
+  it("orders the attention bucket via compareMainStatus, not a hardcoded concat", () => {
+    // Interleaved failed / needs-you; the bucket order must equal sorting their
+    // composite mains by compareMainStatus — so a future MAIN_STATUS_PRIORITY
+    // change flows through here automatically (no parallel hardcoded order).
+    const rows = [
+      row({ id: "n1", lastMessageAt: offsetIso(-1), pendingQuestionAgentIds: ["a"] }),
+      row({ id: "f1", lastMessageAt: offsetIso(-2), failedAgentIds: ["b"] }),
+      row({ id: "n2", lastMessageAt: offsetIso(-3), pendingQuestionAgentIds: ["c"] }),
+      row({ id: "f2", lastMessageAt: offsetIso(-4), failedAgentIds: ["d"] }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    const mains = attention.map((r): "failed" | "needs_you" => (r.failedAgentIds.length > 0 ? "failed" : "needs_you"));
+    expect(mains).toEqual([...mains].sort((x, y) => compareMainStatus(x, y)));
+    // failed tier first (stable within tier), then needs-you tier (stable).
+    expect(attention.map((r) => r.chatId)).toEqual(["f1", "f2", "n1", "n2"]);
   });
 });

@@ -1,4 +1,4 @@
-import type { ChatSource, MeChatRow } from "@first-tree/shared";
+import { type ChatSource, compareMainStatus, type MeChatRow } from "@first-tree/shared";
 
 export type GroupMode = "recency" | "source" | "type" | "none";
 
@@ -196,12 +196,13 @@ export function rowNeedsYou(r: MeChatRow): boolean {
 }
 
 /**
- * Partition rows into the pinned "Needs attention" set and the rest, preserving
- * order within each priority tier. Failed chats rank above needs-you (mirrors
- * the composite priority offline→failed→needs-you; offline isn't pinned), so
- * the attention bucket is `[...failed, ...needsYouOnly]`. A chat that is both
- * failed AND needs-you appears once, in the failed tier. The caller hoists
- * `attention` into a single pinned bucket at the top and groups `rest`
+ * Partition rows into the pinned "Needs attention" set and the rest. Attention
+ * rows are ordered by delegating to the shared `compareMainStatus`
+ * (`MAIN_STATUS_PRIORITY`) — failed ranks above needs-you, matching the sidebar
+ * / composer — rather than a hardcoded concat with no link to the priority
+ * ladder. `Array.sort` is stable, so source order within a tier is preserved. A
+ * chat that is both failed AND needs-you sorts under the failed tier. The caller
+ * hoists `attention` into a single pinned bucket at the top and groups `rest`
  * normally, so a chat appears in exactly one place.
  *
  * ⚠️ Operates on the already-loaded rows only: an attention chat outside the
@@ -209,13 +210,16 @@ export function rowNeedsYou(r: MeChatRow): boolean {
  * the §8.1#2 follow-up).
  */
 export function splitAttentionRows(rows: ReadonlyArray<MeChatRow>): { attention: MeChatRow[]; rest: MeChatRow[] } {
-  const failed: MeChatRow[] = [];
-  const needsYou: MeChatRow[] = [];
+  const attention: MeChatRow[] = [];
   const rest: MeChatRow[] = [];
   for (const r of rows) {
-    if (rowIsFailed(r)) failed.push(r);
-    else if (rowNeedsYou(r)) needsYou.push(r);
+    if (rowIsFailed(r) || rowNeedsYou(r)) attention.push(r);
     else rest.push(r);
   }
-  return { attention: [...failed, ...needsYou], rest };
+  // The maintenance point for attention ordering: a contributor adding a new
+  // pinned status updates MAIN_STATUS_PRIORITY and the literal here, nothing else.
+  attention.sort((a, b) =>
+    compareMainStatus(rowIsFailed(a) ? "failed" : "needs_you", rowIsFailed(b) ? "failed" : "needs_you"),
+  );
+  return { attention, rest };
 }

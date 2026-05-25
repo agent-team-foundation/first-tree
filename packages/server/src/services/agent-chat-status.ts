@@ -78,6 +78,11 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
       // `failed` predicate: session errored OR runtime error. The chat-list
       // path mirrors this as a SQL clause in `deriveFailedAgents` (me-chat.ts)
       // — keep the two in lockstep if either changes (covered by tests).
+      // When the failed causes grow from 2 to ≥3 (e.g. "deadline expired" /
+      // "presence stale"), stop relying on this cross-ref + test pinning and
+      // extract a shared `FailedReason` (TS predicate + mirrored Drizzle
+      // builder) so both surfaces derive from one source. At 2 reasons that
+      // indirection costs more than it saves, so we keep the duplicated literal.
       errored: state === "errored" || p?.runtimeState === "error",
       needsYou: pendingAgents.has(agentId),
       working: activity != null,

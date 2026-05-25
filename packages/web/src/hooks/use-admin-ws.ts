@@ -224,6 +224,15 @@ function broadcast(msg: WsMessage) {
         latestQc.invalidateQueries({ queryKey: ["chat-messages", chatId] });
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
       }
+    } else if (msg.type === "pulse:tick") {
+      // Per-org runtime-state aggregate (pulse-aggregator broadcasts every 5s).
+      // The composite `offline` (client_id → null) and runtime-`error` → failed
+      // inputs to `chat-agent-status` move ONLY via runtime state, with no
+      // session:state / session:event / chat:message frame — so without this
+      // branch a silent disconnect or runtime error would wait out the 30s
+      // refetchInterval before the sidebar/header point flips. Same throttled
+      // prefix invalidator; the server already 5s-throttles + org-scopes pulse.
+      chatAgentStatusInvalidator.invalidate(latestQc);
     }
   }
 }
