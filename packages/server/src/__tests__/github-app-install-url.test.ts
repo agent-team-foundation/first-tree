@@ -49,6 +49,40 @@ describe("GET /api/v1/orgs/:orgId/github-app-installation/install-url", () => {
     expect(verified.next).toBe("/settings/github");
   });
 
+  it("bakes an allowlisted ?next= into the signed state (onboarding flow)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/install-url?next=${encodeURIComponent("/onboarding")}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const state = new URL(res.json<{ installUrl: string }>().installUrl).searchParams.get("state");
+    const cookieNonce = readStateCookie(res.headers["set-cookie"]);
+    const verified = await verifyOAuthState(TEST_JWT_SECRET, state ?? "", cookieNonce);
+    expect(verified.next).toBe("/onboarding");
+  });
+
+  it("ignores a ?next= that isn't on the allowlist (no open redirect)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/install-url?next=${encodeURIComponent("https://evil.example.com")}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const state = new URL(res.json<{ installUrl: string }>().installUrl).searchParams.get("state");
+    const cookieNonce = readStateCookie(res.headers["set-cookie"]);
+    const verified = await verifyOAuthState(TEST_JWT_SECRET, state ?? "", cookieNonce);
+    expect(verified.next).toBe("/settings/github");
+  });
+
   it("403s for a non-admin member of the org", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

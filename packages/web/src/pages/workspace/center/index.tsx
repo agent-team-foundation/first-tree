@@ -43,5 +43,5 @@ export function CenterPanel({
     return <OnboardingView />;
   }
 
-  return <NoChatView />;
+  return <NoChatView onNewChat={() => onSelectChat(DRAFT_CHAT_ID)} />;
 }
