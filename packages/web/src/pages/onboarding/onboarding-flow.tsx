@@ -35,7 +35,7 @@ export type OnboardingFlowValue = {
   retryAgent: () => Promise<void>;
   createdAgentUuid: string | null;
   /**
-   * True once the user has an AI teammate (server reports `completed`, or one
+   * True once the user has an agent (server reports `completed`, or one
    * was just created this session). Gates whether leaving to the workspace is
    * useful — before this there's nothing there, so the flow withholds the
    * "I'll finish later" escape.
@@ -48,6 +48,13 @@ export type OnboardingFlowValue = {
   setTreeMode: (next: TreeMode) => void;
   treeUrl: string;
   setTreeUrl: (next: string) => void;
+  /**
+   * True once the kickoff step's existing-tree auto-detect has run. Held here
+   * (not in a per-mount ref) so leaving kickoff and coming back doesn't re-fire
+   * the detect and overwrite the user's explicit "Create new instead" choice.
+   */
+  treeAutoInitDone: boolean;
+  markTreeAutoInitDone: () => void;
 
   /** Mark setup finished and drop the user into their first chat. */
   completeAndEnterChat: (chatId: string) => Promise<void>;
@@ -143,6 +150,8 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   const [selectedRepoUrls, setSelectedRepoUrls] = useState<string[]>([]);
   const [treeMode, setTreeMode] = useState<TreeMode>("new");
   const [treeUrl, setTreeUrl] = useState<string>("");
+  const [treeAutoInitDone, setTreeAutoInitDone] = useState(false);
+  const markTreeAutoInitDone = useCallback(() => setTreeAutoInitDone(true), []);
 
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
@@ -193,6 +202,8 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       setTreeMode,
       treeUrl,
       setTreeUrl,
+      treeAutoInitDone,
+      markTreeAutoInitDone,
       completeAndEnterChat,
       finishLater,
     }),
@@ -221,6 +232,8 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       selectedRepoUrls,
       treeMode,
       treeUrl,
+      treeAutoInitDone,
+      markTreeAutoInitDone,
       completeAndEnterChat,
       finishLater,
     ],

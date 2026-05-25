@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight } from "lucide-react";
-import { useState } from "react";
+import { ArrowRight, Check } from "lucide-react";
+import { useEffect, useState } from "react";
 import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { listGithubRepos } from "../../../api/github.js";
@@ -14,7 +14,7 @@ import {
 import { Button } from "../../../components/ui/button.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
-import { FlowNote, RepoPicker, WorkingState } from "../flow-ui.js";
+import { FlowNote, RepoPicker, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
@@ -96,12 +96,44 @@ export function StepKickoff() {
 // ── Admin ───────────────────────────────────────────────────────────────
 
 function AdminKickoff() {
-  const { organizationId, selectedRepoUrls, treeMode, setTreeMode, treeUrl, setTreeUrl, completeAndEnterChat } =
-    useOnboardingFlow();
+  const {
+    organizationId,
+    selectedRepoUrls,
+    treeMode,
+    setTreeMode,
+    treeUrl,
+    setTreeUrl,
+    treeAutoInitDone,
+    markTreeAutoInitDone,
+    completeAndEnterChat,
+  } = useOnboardingFlow();
   const [phase, setPhase] = useState<"form" | "starting">("form");
   const [error, setError] = useState<string | null>(null);
 
   const hasRepos = selectedRepoUrls.length > 0;
+
+  // Auto-detect an existing team Context Tree so a re-run / second admin /
+  // CLI-bound tree doesn't default to creating a duplicate. retry:false so a
+  // "no tree yet" miss falls through to the new-tree path fast.
+  const treeSettingQuery = useQuery({
+    queryKey: ["onboarding", "context-tree", organizationId],
+    queryFn: () => getContextTreeSetting(organizationId ?? ""),
+    enabled: !!organizationId && hasRepos,
+    retry: false,
+  });
+  const detectedTreeUrl = treeSettingQuery.data?.repo ?? null;
+  useEffect(() => {
+    // One-shot: when an existing tree first arrives, default to "use existing"
+    // with the URL pre-filled. After that the user can toggle freely — the
+    // done-flag lives in the provider, so re-entering this step (e.g. via the
+    // rail) won't re-fire and clobber a "Create new instead" choice.
+    if (treeAutoInitDone || !detectedTreeUrl) return;
+    markTreeAutoInitDone();
+    setTreeUrl(detectedTreeUrl);
+    setTreeMode("existing");
+  }, [detectedTreeUrl, setTreeUrl, setTreeMode, treeAutoInitDone, markTreeAutoInitDone]);
+  const autoDetected = treeMode === "existing" && !!detectedTreeUrl && treeUrl === detectedTreeUrl;
+
   const trimmedTreeUrl = treeUrl.trim();
   const urlInvalid = treeMode === "existing" && trimmedTreeUrl.length > 0 && !/^https:\/\//.test(trimmedTreeUrl);
   const canStart = phase === "form" && (!hasRepos || treeMode === "new" || (trimmedTreeUrl.length > 0 && !urlInvalid));
@@ -145,91 +177,99 @@ function AdminKickoff() {
 
   if (phase === "starting") return <StartingState />;
 
-  return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-      {hasRepos ? (
-        <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-          {treeMode === "new" ? (
-            <>
-              <FlowNote tone="info">{COPY.kickoff.createBlurb}</FlowNote>
-              <button
-                type="button"
-                onClick={() => setTreeMode("existing")}
-                className="text-label self-start"
-                style={LINK_STYLE}
-              >
-                {COPY.kickoff.haveExisting}
-              </button>
-            </>
-          ) : (
-            <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
-              <label htmlFor="onboarding-tree-url" className="text-label" style={{ color: "var(--fg-3)" }}>
-                {COPY.kickoff.existingUrlLabel}
-              </label>
-              <input
-                id="onboarding-tree-url"
-                value={treeUrl}
-                onChange={(e) => setTreeUrl(e.target.value)}
-                placeholder="https://github.com/your-team/knowledge"
-                className="text-body mono"
-                style={{
-                  padding: "var(--sp-2) var(--sp-3)",
-                  background: "var(--bg)",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: "var(--radius-input)",
-                  color: "var(--fg)",
-                  outline: "none",
-                }}
-              />
-              {urlInvalid && <FlowNote>{COPY.kickoff.invalidUrl}</FlowNote>}
-              <button
-                type="button"
-                onClick={() => {
-                  setTreeUrl("");
-                  setTreeMode("new");
-                }}
-                className="text-label self-start"
-                style={LINK_STYLE}
-              >
-                {COPY.kickoff.createInstead}
-              </button>
-            </div>
-          )}
-          <div className="flex items-center" style={{ gap: "var(--sp-1_5)", flexWrap: "wrap" }}>
-            <span className="text-label" style={{ color: "var(--fg-4)" }}>
-              Working on
-            </span>
-            {selectedRepoUrls.map((url) => (
-              <span
-                key={url}
-                className="mono text-caption"
-                style={{
-                  padding: "var(--sp-0_5) var(--sp-2)",
-                  borderRadius: "var(--radius-input)",
-                  background: "color-mix(in oklch, var(--bg-sunken) 50%, transparent)",
-                  border: "var(--hairline) solid var(--border-faint)",
-                  color: "var(--fg-2)",
-                }}
-              >
-                {repoLabel(url)}
-              </span>
-            ))}
+  // C — no project connected: agent just introduces itself.
+  if (!hasRepos) {
+    return (
+      <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
+        <StepHeading title={COPY.kickoff.noProjectTitle} />
+        <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+          <FlowNote tone="info">{COPY.kickoff.noProjectBody}</FlowNote>
+          {error && <FlowNote>{error}</FlowNote>}
+          <div className="flex">
+            <Button type="button" onClick={() => void handleStart()} disabled={!canStart}>
+              <span>{COPY.kickoff.start}</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
           </div>
         </div>
-      ) : (
-        <FlowNote tone="info">
-          No project is connected, so your AI teammate will start with a quick intro. You can connect a project later
-          from Settings to give it real context.
-        </FlowNote>
-      )}
+      </div>
+    );
+  }
 
-      {error && <FlowNote>{error}</FlowNote>}
+  // Wait for the existing-tree probe so we don't flash "new" then jump to A.
+  if (treeSettingQuery.isLoading) {
+    return (
+      <p className="text-label" style={{ color: "var(--fg-4)" }}>
+        Checking your team's setup…
+      </p>
+    );
+  }
 
-      <div className="flex">
-        <Button type="button" onClick={() => void handleStart()} disabled={!canStart}>
-          <span>{COPY.kickoff.start}</span>
-          <ArrowRight className="h-4 w-4" />
-        </Button>
+  const isExisting = treeMode === "existing";
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
+      <StepHeading
+        title={isExisting ? COPY.kickoff.existingTitle : COPY.kickoff.newTitle}
+        why={isExisting ? COPY.kickoff.existingWhy : COPY.kickoff.newWhy}
+      />
+      <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+        {isExisting ? (
+          // A (auto-detected, pre-filled) or B′ (manually "I already have one").
+          <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
+            <label htmlFor="onboarding-tree-url" className="text-label" style={{ color: "var(--fg-3)" }}>
+              {COPY.kickoff.existingUrlLabel}
+            </label>
+            <input
+              id="onboarding-tree-url"
+              value={treeUrl}
+              onChange={(e) => setTreeUrl(e.target.value)}
+              placeholder="https://github.com/your-team/context-tree"
+              className="text-body mono"
+              style={{
+                padding: "var(--sp-2) var(--sp-3)",
+                background: "var(--bg)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-input)",
+                color: "var(--fg)",
+                outline: "none",
+              }}
+            />
+            {autoDetected ? (
+              <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+                {COPY.kickoff.autoDetectedNote}
+              </p>
+            ) : null}
+            {urlInvalid && <FlowNote>{COPY.kickoff.invalidUrl}</FlowNote>}
+            <button
+              type="button"
+              onClick={() => {
+                setTreeUrl("");
+                setTreeMode("new");
+              }}
+              className="text-label self-start"
+              style={LINK_STYLE}
+            >
+              {COPY.kickoff.createInstead}
+            </button>
+          </div>
+        ) : (
+          // B (new tree, default): quiet secondary link to the existing path.
+          <button
+            type="button"
+            onClick={() => setTreeMode("existing")}
+            className="text-label self-start"
+            style={LINK_STYLE}
+          >
+            {COPY.kickoff.haveExisting}
+          </button>
+        )}
+        {error && <FlowNote>{error}</FlowNote>}
+        <div className="flex">
+          <Button type="button" onClick={() => void handleStart()} disabled={!canStart}>
+            <span>{COPY.kickoff.start}</span>
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -249,7 +289,7 @@ function InviteeKickoff() {
       return { treeUrl: tree.repo ?? "", teamRepoUrls: (repos.repos ?? []).map((r) => r.url) };
     },
     enabled: !!organizationId,
-    // While the team has no knowledge link yet, keep polling so the invitee
+    // While the team has no Context Tree link yet, keep polling so the invitee
     // advances on its own the moment the admin finishes — no manual refresh.
     refetchInterval: (query) => (query.state.data?.treeUrl ? false : 5000),
   });
@@ -305,48 +345,55 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
   if (phase === "starting") return <StartingState />;
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <FlowNote tone="info">{COPY.invitee.confirmBody}</FlowNote>
-      <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-        {teamRepoUrls.map((url) => {
-          const active = chosen.includes(url);
-          return (
-            <label
-              key={url}
-              className="onboarding-choice flex items-center text-body"
-              style={{
-                gap: "var(--sp-2_5)",
-                padding: "var(--sp-2) var(--sp-2_5)",
-                borderRadius: "var(--radius-input)",
-                cursor: "pointer",
-                background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
-                color: active ? "var(--fg)" : "var(--fg-2)",
-              }}
-            >
-              <input type="checkbox" checked={active} onChange={() => toggle(url)} className="sr-only" />
-              <span
-                aria-hidden="true"
-                className="inline-flex items-center justify-center"
+    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
+      <StepHeading title={COPY.invitee.confirmTitle} why={COPY.invitee.confirmBody} />
+      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+          {teamRepoUrls.map((url) => {
+            const active = chosen.includes(url);
+            return (
+              <label
+                key={url}
+                className="onboarding-choice flex items-center text-body"
                 style={{
-                  width: "var(--sp-4)",
-                  height: "var(--sp-4)",
-                  flexShrink: 0,
+                  gap: "var(--sp-2_5)",
+                  padding: "var(--sp-2) var(--sp-2_5)",
                   borderRadius: "var(--radius-input)",
-                  border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
-                  background: active ? "var(--accent)" : "transparent",
+                  cursor: "pointer",
+                  background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
+                  color: active ? "var(--fg)" : "var(--fg-2)",
                 }}
-              />
-              <span className="font-medium">{repoLabel(url)}</span>
-            </label>
-          );
-        })}
-      </div>
-      {error && <FlowNote>{error}</FlowNote>}
-      <div className="flex">
-        <Button type="button" onClick={() => void handleStart()} disabled={chosen.length === 0}>
-          <span>{COPY.kickoff.start}</span>
-          <ArrowRight className="h-4 w-4" />
-        </Button>
+              >
+                <input type="checkbox" checked={active} onChange={() => toggle(url)} className="sr-only" />
+                <span
+                  aria-hidden="true"
+                  className="inline-flex items-center justify-center"
+                  style={{
+                    width: "var(--sp-4)",
+                    height: "var(--sp-4)",
+                    flexShrink: 0,
+                    borderRadius: "var(--radius-input)",
+                    border: active
+                      ? "var(--hairline) solid var(--accent)"
+                      : "var(--hairline) solid var(--border-strong)",
+                    background: active ? "var(--accent)" : "transparent",
+                    color: "var(--bg)",
+                  }}
+                >
+                  {active && <Check className="h-3 w-3" />}
+                </span>
+                <span className="font-medium">{repoLabel(url)}</span>
+              </label>
+            );
+          })}
+        </div>
+        {error && <FlowNote>{error}</FlowNote>}
+        <div className="flex">
+          <Button type="button" onClick={() => void handleStart()} disabled={chosen.length === 0}>
+            <span>{COPY.kickoff.start}</span>
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -383,23 +430,25 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
   if (phase === "starting") return <StartingState />;
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <FlowNote tone="info">Your team's knowledge base is ready. Pick the project you'll work on.</FlowNote>
-      {reposQuery.isLoading ? (
-        <p className="text-label" style={{ color: "var(--fg-4)" }}>
-          Loading your projects…
-        </p>
-      ) : (reposQuery.data?.length ?? 0) === 0 ? (
-        <FlowNote tone="info">{COPY.connectCode.noRepos}</FlowNote>
-      ) : (
-        <RepoPicker repos={reposQuery.data ?? []} selected={selected} onToggle={toggle} />
-      )}
-      {error && <FlowNote>{error}</FlowNote>}
-      <div className="flex">
-        <Button type="button" onClick={() => void handleStart()} disabled={selected.length === 0}>
-          <span>{COPY.kickoff.start}</span>
-          <ArrowRight className="h-4 w-4" />
-        </Button>
+    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
+      <StepHeading title={COPY.kickoff.inviteePickerTitle} why={COPY.kickoff.inviteePickerWhy} />
+      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        {reposQuery.isLoading ? (
+          <p className="text-label" style={{ color: "var(--fg-4)" }}>
+            Loading your projects…
+          </p>
+        ) : (reposQuery.data?.length ?? 0) === 0 ? (
+          <FlowNote tone="info">{COPY.connectCode.noRepos}</FlowNote>
+        ) : (
+          <RepoPicker repos={reposQuery.data ?? []} selected={selected} onToggle={toggle} fill />
+        )}
+        {error && <FlowNote>{error}</FlowNote>}
+        <div className="flex">
+          <Button type="button" onClick={() => void handleStart()} disabled={selected.length === 0}>
+            <span>{COPY.kickoff.start}</span>
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -408,15 +457,15 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
 function InviteeWaiting() {
   const { finishLater } = useOnboardingFlow();
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <p className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-        {COPY.invitee.waitingTitle}
-      </p>
-      <FlowNote tone="info">{COPY.invitee.waitingBody}</FlowNote>
-      <div className="flex">
-        <Button type="button" variant="outline" onClick={() => void finishLater()}>
-          Start chatting anyway
-        </Button>
+    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
+      <StepHeading title={COPY.invitee.waitingTitle} />
+      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <FlowNote tone="info">{COPY.invitee.waitingBody}</FlowNote>
+        <div className="flex">
+          <Button type="button" variant="outline" onClick={() => void finishLater()}>
+            Start chatting anyway
+          </Button>
+        </div>
       </div>
     </div>
   );

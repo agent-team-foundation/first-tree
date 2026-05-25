@@ -68,7 +68,7 @@ export function LoginPage() {
               First Tree <span className="font-normal text-muted-foreground">Hub</span>
             </CardTitle>
             <p className="text-label text-muted-foreground" style={{ marginTop: "var(--sp-1)" }}>
-              Sign in to set up your team and your first AI teammate.
+              Sign in to set up your team and your first AI agent.
             </p>
           </CardHeader>
           <CardContent className="space-y-4">

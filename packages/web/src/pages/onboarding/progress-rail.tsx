@@ -15,9 +15,10 @@ const STEP_ICON: Record<StepId, LucideIcon> = {
 
 /**
  * Vertical progress rail down the left of the onboarding shell. Shows every
- * step, the one you're on, and the ones you've finished. Finished steps are
- * clickable so the user can step back to review or change an answer; future
- * steps are inert (no skipping ahead).
+ * step with its full label (no truncation — vertical space is cheap), the one
+ * you're on, and the ones you've finished. Finished steps are clickable to step
+ * back; future steps are inert (no skipping ahead) but visible so the whole
+ * journey is previewable up front.
  */
 export function ProgressRail() {
   const { sequence, activeIndex, goTo } = useOnboardingFlow();
@@ -30,6 +31,7 @@ export function ProgressRail() {
         const isLast = index === sequence.length - 1;
         const clickable = state === "complete";
         const Icon = STEP_ICON[id];
+
         return (
           <li key={id} className="flex" style={{ gap: "var(--sp-3)" }}>
             {/* icon disc + connector column */}
@@ -79,8 +81,8 @@ export function ProgressRail() {
               )}
             </div>
 
-            {/* label */}
-            <div style={{ paddingBottom: "var(--sp-4)", paddingTop: "var(--sp-0_5)" }}>
+            {/* full step label */}
+            <div style={{ paddingBottom: isLast ? 0 : "var(--sp-4)", paddingTop: "var(--sp-0_5)", minWidth: 0 }}>
               {clickable ? (
                 <button
                   type="button"
@@ -100,6 +102,7 @@ export function ProgressRail() {
               ) : (
                 <span
                   className="text-label"
+                  aria-current={state === "active" ? "step" : undefined}
                   style={{
                     color: state === "active" ? "var(--fg)" : "var(--fg-4)",
                     fontWeight: state === "active" ? 600 : 400,

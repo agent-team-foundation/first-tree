@@ -2,7 +2,7 @@ import { listManagedAgents, type ManagedAgent } from "../../api/agents.js";
 import { readOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
 
 /**
- * Find the AI teammate the kickoff step should act on.
+ * Find the agent the kickoff step should act on.
  *
  * Priority:
  *   1. The exact agent created earlier this session (uuid stashed by the
@@ -27,7 +27,7 @@ export async function resolveOnboardingAgent(): Promise<ManagedAgent> {
   const newestFirst = [...managed].sort((a, b) => b.uuid.localeCompare(a.uuid));
   const agent = newestFirst[0];
   if (!agent) {
-    throw new Error("No AI teammate found — create one first.");
+    throw new Error("No agent found — create one first.");
   }
   return agent;
 }

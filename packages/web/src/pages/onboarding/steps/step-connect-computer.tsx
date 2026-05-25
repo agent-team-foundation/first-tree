@@ -13,7 +13,7 @@ import { useOnboardingFlow } from "../onboarding-flow.js";
 const STUCK_AFTER_MS = 75_000;
 
 /**
- * Connect the computer the AI teammate will run on. The user pastes a
+ * Connect the computer the agent will run on. The user pastes a
  * one-liner into a terminal; we poll until the computer shows up and confirm
  * an AI engine is ready on it. No "runtime"/"terminal-jockey" assumptions —
  * if it stalls we surface plain-language recovery (the #1 cause is "npm not

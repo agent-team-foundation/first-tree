@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import type { GithubRepo } from "../../api/github.js";
 
-/** Checklist of outcomes for the side panel: "what you'll have after this". */
+/** Checklist of outcomes for the footer: "what you'll have after this". */
 export function OutcomeList({ items }: { items: readonly string[] }) {
   return (
     <ul className="flex flex-col" style={{ gap: "var(--sp-2_5)", margin: 0, padding: 0, listStyle: "none" }}>
@@ -28,6 +28,27 @@ export function OutcomeList({ items }: { items: readonly string[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Step heading (title + optional one-line "why"). Used when a step renders its
+ * own heading per sub-state instead of the shell's static one — the shell
+ * skips title/why when STEP_COPY leaves them empty. Spacing matches the shell's
+ * heading so per-state steps line up with static ones.
+ */
+export function StepHeading({ title, why }: { title: string; why?: string | null }) {
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-2_5)" }}>
+      <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+        {title}
+      </h1>
+      {why ? (
+        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+          {why}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -133,20 +154,20 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
 }
 
 /**
- * The terminal one-liner the user pastes to connect a computer. Shows a
- * shortened preview but copies the full multi-line command (npm install +
- * login). Lifted from the legacy Step2Body CommandBox.
+ * The terminal one-liner the user pastes to connect a computer. Renders the
+ * install + login lines filling the box width (ellipsizing only the overflow)
+ * and copies the full multi-line command (npm install + login). Lifted from the
+ * legacy Step2Body CommandBox.
  */
 export function CommandBox({ command }: { command: string | null }) {
   const [copied, setCopied] = useState(false);
-  const lines = command ? command.split("\n") : [];
-  const connectLine = lines.find((l) => l.startsWith("first-tree")) ?? "";
-  const prefix = "first-tree login ";
-  const preview = connectLine.startsWith(prefix)
-    ? `${prefix}${connectLine.slice(prefix.length, prefix.length + 22)}…`
-    : connectLine.length > 52
-      ? `${connectLine.slice(0, 52)}…`
-      : connectLine;
+  const lines = command ? command.split("\n").filter((l) => l.trim().length > 0) : [];
+  // Show both lines — install and login — each on its own row, filling the box
+  // width and ellipsizing only what overflows. So the long opaque token shows
+  // as much as fits (not a stingy fixed slice) and grows with the box width.
+  // Copy still puts the complete multi-line command on the clipboard.
+  const installLine = lines.find((l) => l.startsWith("npm")) ?? "";
+  const loginLine = lines.find((l) => l.startsWith("first-tree")) ?? "";
 
   const handleCopy = async (): Promise<void> => {
     if (!command) return;
@@ -157,9 +178,9 @@ export function CommandBox({ command }: { command: string | null }) {
 
   return (
     <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
-      <pre
+      <div
         className="mono text-label"
-        title={connectLine}
+        title={command ?? undefined}
         style={{
           flex: 1,
           minHeight: 38,
@@ -169,15 +190,27 @@ export function CommandBox({ command }: { command: string | null }) {
           border: "var(--hairline) solid color-mix(in oklch, var(--border-faint) 58%, transparent)",
           borderRadius: "var(--radius-input)",
           color: "var(--fg-2)",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
           minWidth: 0,
+          lineHeight: 1.65,
           display: "flex",
-          alignItems: "center",
+          flexDirection: "column",
+          justifyContent: "center",
+          gap: "var(--sp-0_5)",
         }}
       >
-        {preview || "Generating command…"}
-      </pre>
+        {command ? (
+          <>
+            {installLine && (
+              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{installLine}</span>
+            )}
+            {loginLine && (
+              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{loginLine}</span>
+            )}
+          </>
+        ) : (
+          "Generating command…"
+        )}
+      </div>
       <button
         type="button"
         onClick={handleCopy}
@@ -211,30 +244,58 @@ export function RepoPicker({
   repos,
   selected,
   onToggle,
+  fill = false,
 }: {
   repos: readonly GithubRepo[];
   selected: readonly string[];
   onToggle: (cloneUrl: string) => void;
+  /** Flex to fill the space left in the step (scrolls internally) instead of a fixed cap. */
+  fill?: boolean;
 }) {
   return (
     <div
       className="flex flex-col"
       style={{
         gap: "var(--sp-1)",
-        maxHeight: 320,
         overflowY: "auto",
         padding: "var(--sp-1)",
         border: "var(--hairline) solid var(--border-faint)",
         borderRadius: "var(--radius-input)",
+        // flexShrink 0 makes the height deterministic: always min(content, cap),
+        // never shrunk by the surrounding flex chain. Without it the picker has
+        // three competing constraints (its cap, flex-shrink, and main's
+        // maxHeight) the browser resolves over several layout passes — which
+        // shows up as a brief overflow/scrollbar before it settles.
+        flexShrink: 0,
+        // `fill`: a generous viewport-relative cap — the list takes most of the
+        // height the step leaves and scrolls internally, so a long repo list
+        // never pushes the page into a scrollbar. The 33rem subtracts the shell
+        // chrome: header + the body's 6rem top-anchor + bottom padding + the
+        // step's non-picker content. (Keep in sync with the shell's paddingTop.)
+        // Resolves on first paint (no flex-height reflow), so no transient
+        // overflow. Otherwise a sane fixed cap.
+        ...(fill ? { maxHeight: "min(40rem, calc(100vh - 33rem))" } : { maxHeight: "min(16rem, 40vh)" }),
       }}
     >
       {repos.map((repo) => {
         const active = selected.includes(repo.cloneUrl);
+        // Split owner/name so the repeated owner prefix recedes and the
+        // distinguishing repo name carries the weight.
+        const slash = repo.fullName.lastIndexOf("/");
+        const repoOwner = slash >= 0 ? repo.fullName.slice(0, slash + 1) : "";
+        const repoName = slash >= 0 ? repo.fullName.slice(slash + 1) : repo.fullName;
         return (
           <label
             key={repo.cloneUrl}
             className="onboarding-choice flex items-center text-body"
             style={{
+              // position:relative makes this row the containing block for the
+              // sr-only checkbox below. Without it, the absolutely-positioned
+              // checkbox is laid out against the nearest *transformed* ancestor
+              // (the fade-in step wrapper), escaping the picker's overflow clip —
+              // all the rows' checkboxes stack far past the viewport and force
+              // the whole page to scroll.
+              position: "relative",
               gap: "var(--sp-2_5)",
               padding: "var(--sp-2) var(--sp-2_5)",
               borderRadius: "var(--radius-input)",
@@ -263,7 +324,8 @@ export function RepoPicker({
               className="font-medium"
               style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
             >
-              {repo.fullName}
+              {repoOwner && <span style={{ color: "var(--fg-4)" }}>{repoOwner}</span>}
+              <span style={{ color: active ? "var(--fg)" : "var(--fg-2)" }}>{repoName}</span>
             </span>
             {repo.private && <Lock className="h-3.5 w-3.5" style={{ color: "var(--fg-4)", flexShrink: 0 }} />}
             <a
@@ -271,6 +333,7 @@ export function RepoPicker({
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
+              className="repo-open"
               style={{ color: "var(--fg-4)", flexShrink: 0, display: "inline-flex" }}
               aria-label={`Open ${repo.fullName} on GitHub`}
             >

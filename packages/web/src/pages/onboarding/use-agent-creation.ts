@@ -20,7 +20,7 @@ export type CreateAgentArgs = {
 };
 
 /**
- * Creates the first AI teammate (an unbound `personal_assistant`) and waits
+ * Creates the first agent (an unbound `personal_assistant`) and waits
  * for it to come online on the connected computer.
  *
  * Same two-phase shape the legacy Step2Body used: POST `/agents`, then poll
@@ -95,7 +95,7 @@ export function useAgentCreation(onOnline: (uuid: string) => void) {
         writeOnboardingAgentUuid(agentUuid);
         void reportOnboardingEvent("agent_created", { runtimeProvider: args.runtimeProvider });
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to create your AI teammate");
+        setError(err instanceof Error ? err.message : "Failed to create your agent");
         setPhase("idle");
         return;
       }

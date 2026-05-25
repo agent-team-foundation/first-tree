@@ -1349,6 +1349,20 @@ tr[data-interactive]:hover {
   outline-offset: var(--sp-0_5);
 }
 
+/* Repo picker "open on GitHub" affordance: quiet by default, revealed on row
+   hover/focus so a long list stays uncluttered. On touch (no hover) it stays
+   visible so it remains reachable. */
+@media (hover: hover) {
+  .onboarding-choice .repo-open {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .onboarding-choice:hover .repo-open,
+  .onboarding-choice:focus-within .repo-open {
+    opacity: 1;
+  }
+}
+
 /* Breathing dots for the "creating teammate" / "getting started" waits. The
    animation lives here (not inline) so reduced-motion can override it. */
 .onboarding-working-dot {

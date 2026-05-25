@@ -47,27 +47,34 @@ export function SettingsOnboardingPage() {
           title="Guided setup"
           description={
             isDismissed
-              ? "Setup is hidden. Resume it to finish connecting your AI teammate and your team's knowledge base."
-              : "You can hide the guided setup any time once your AI teammate is ready."
+              ? "Setup is hidden. Resume it to finish connecting your agent and your team's Context Tree."
+              : "You can hide the guided setup any time once your agent is ready."
           }
           action={isDismissed ? null : <ActiveBadge />}
         >
-          {isDismissed ? (
-            <Button type="button" size="sm" onClick={() => void handleResume()}>
-              Resume setup
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => void dismissOnboarding()}
-              disabled={!canHide}
-              title={canHide ? undefined : "Finish setting up your AI teammate first"}
-            >
-              Hide setup guide
-            </Button>
-          )}
+          {/* Section renders children flush against its top divider; without
+              this the button sits on the hairline ("压线"). Scoped here rather
+              than in the shared Section (used on 18 surfaces) to keep this PR
+              to onboarding — the shared component's flush children is a latent
+              issue worth its own styling pass. */}
+          <div style={{ paddingTop: "var(--sp-3)" }}>
+            {isDismissed ? (
+              <Button type="button" size="sm" onClick={() => void handleResume()}>
+                Resume setup
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void dismissOnboarding()}
+                disabled={!canHide}
+                title={canHide ? undefined : "Finish setting up your agent first"}
+              >
+                Hide setup guide
+              </Button>
+            )}
+          </div>
         </Section>
       </div>
     </>

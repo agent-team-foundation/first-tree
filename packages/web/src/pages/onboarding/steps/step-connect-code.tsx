@@ -13,7 +13,7 @@ import { useOnboardingFlow } from "../onboarding-flow.js";
 /**
  * Admin step: install the GitHub App (the only reliable code-connection
  * entry — `installations/new`, not the sign-in `authorize` URL), then pick
- * the project the AI teammate should help with.
+ * the project the agent should help with.
  *
  * Resilient by design — the team's first run can hit any of: App not
  * installed, App not configured on this server, caller isn't an admin,
@@ -146,7 +146,7 @@ export function StepConnectCode() {
         ) : (reposQuery.data?.length ?? 0) === 0 ? (
           <FlowNote tone="info">{COPY.connectCode.noRepos}</FlowNote>
         ) : (
-          <RepoPicker repos={reposQuery.data ?? []} selected={selectedRepoUrls} onToggle={toggleRepo} />
+          <RepoPicker repos={reposQuery.data ?? []} selected={selectedRepoUrls} onToggle={toggleRepo} fill />
         )}
       </div>
 

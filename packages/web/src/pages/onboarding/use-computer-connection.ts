@@ -8,7 +8,7 @@ const CLIENT_DETECT_POLL_MS = 5_000;
 
 /**
  * Watches for the user's computer coming online and figures out whether it
- * can host an AI teammate.
+ * can host an agent.
  *
  * Lifecycle (mirrors the proven logic from the legacy Step2Body):
  *   1. Mint a short-lived connect token + bootstrap command (the one-liner

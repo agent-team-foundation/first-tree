@@ -10,7 +10,7 @@
  * Two paths:
  *   - "admin"   — the team creator (org admin). Walks the full ceremony:
  *                 name the team, connect code, connect a computer, create
- *                 the AI teammate, and kick off the first task.
+ *                 the agent, and kick off the first task.
  *   - "invitee" — joining a team an admin has already set up. Skips the
  *                 team + code steps (the team already owns those) and just
  *                 connects a computer, creates their teammate, and starts.
@@ -122,7 +122,7 @@ export type OnboardingGateFacts = {
  * standalone onboarding flow?
  *
  * Yes only when the user hasn't finished the *resource* setup yet — they
- * have no AI teammate (server step `connect` or `create_agent`) — and they
+ * have no agent (server step `connect` or `create_agent`) — and they
  * haven't completed or hidden onboarding.
  *
  * We deliberately do NOT bounce a server-`completed` user (one who already
@@ -158,7 +158,7 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
  * Which invitee kickoff sub-state to show, given what the team has set up.
  * Pure so it's unit-testable (the React component just maps the result to a
  * body):
- *   - no team knowledge link yet            → "waiting" (admin isn't done)
+ *   - no Context Tree link yet              → "waiting" (admin isn't done)
  *   - link + the team listed its projects   → "confirm" (pick from them)
  *   - link but no team projects listed      → "picker"  (invitee picks own)
  */

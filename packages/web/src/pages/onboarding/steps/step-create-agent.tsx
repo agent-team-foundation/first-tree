@@ -9,17 +9,17 @@ const VISIBILITY_OPTIONS: ReadonlyArray<{ value: AgentVisibility; title: string;
   {
     value: "organization",
     title: "Shared with team",
-    description: "Anyone on your team can talk to this AI teammate.",
+    description: "Anyone on your team can talk to this agent.",
   },
   {
     value: "private",
     title: "Just me",
-    description: "Only you can see and talk to this AI teammate.",
+    description: "Only you can see and talk to this agent.",
   },
 ];
 
 /**
- * Name the AI teammate and choose who can use it. The computer + runtime
+ * Name the agent and choose who can use it. The computer + runtime
  * were settled in the previous step; we read them off the flow and never
  * surface "runtime" / "client" here. On success the flow auto-advances to
  * kickoff (the agent-online callback), so this renders form → creating →
@@ -86,7 +86,6 @@ export function StepCreateAgent() {
         </label>
         <input
           id="onboarding-agent-name"
-          aria-label="AI teammate name"
           value={agentDisplayName}
           onChange={(e) => setAgentDisplayName(e.target.value)}
           placeholder="e.g. Buddy, Helper"
@@ -177,7 +176,7 @@ export function StepCreateAgent() {
 
       <div className="flex">
         <Button type="button" onClick={handleCreate} disabled={!canCreate}>
-          <span>Create {trimmed || "your AI teammate"}</span>
+          <span>Create {trimmed || "your agent"}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
