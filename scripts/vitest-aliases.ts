@@ -20,6 +20,10 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 // to a bogus path with `/observability` appended to the file.
 export const monorepoSourceAliases: { find: RegExp; replacement: string }[] = [
   {
+    find: /^@first-tree\/shared\/channel$/,
+    replacement: resolve(root, "packages/shared/src/channel/index.ts"),
+  },
+  {
     find: /^@first-tree\/shared\/config$/,
     replacement: resolve(root, "packages/shared/src/config/index.ts"),
   },

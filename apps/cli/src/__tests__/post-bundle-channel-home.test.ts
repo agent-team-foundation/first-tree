@@ -31,15 +31,30 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
  * is a cached no-op.
  */
 const DIST = resolve(__dirname, "../../dist/cli/index.mjs");
+const REPO_ROOT = resolve(__dirname, "../../../..");
+// Also bear-witness that `@first-tree/client`'s dist is present — the
+// bundle imports it at runtime (workspace symlink → packages/client),
+// and a missing `packages/client/dist/index.mjs` triggers
+// `ERR_MODULE_NOT_FOUND` from inside the spawned dist. CI's test job
+// historically didn't run `pnpm build` before tests, so on a cold
+// runner this file may be missing even though apps/cli/dist exists
+// (e.g. from a previous local build cached in the worktree).
+const CLIENT_DIST = resolve(REPO_ROOT, "packages/client/dist/index.mjs");
 
 function ensureDistBuilt(): void {
-  if (existsSync(DIST)) return;
-  // Full monorepo build via the root `pnpm build` script — turbo
-  // respects per-task `dependsOn` and caches, so warm runs are
-  // sub-second. Filtering (`--filter=first-tree-dev`) sometimes
-  // tripped on missing transitive workspace `.bin/` dirs after a
-  // fresh checkout; the unfiltered full build sidesteps that.
+  if (existsSync(DIST) && existsSync(CLIENT_DIST)) return;
+  // Full monorepo build via the root `pnpm build` script (= `turbo run
+  // build`). Turbo respects per-task `dependsOn` so packages build in
+  // topological order — `@first-tree/shared` → `@first-tree/client` →
+  // `first-tree-dev` — and caches keep warm runs sub-second.
+  //
+  // **cwd: REPO_ROOT is load-bearing**. Without it, `pnpm build` runs
+  // apps/cli/package.json's `build` script (which only invokes tsdown
+  // for apps/cli) instead of the root's `turbo run build`, leaving
+  // workspace deps like `packages/client/dist/` unbuilt. The bundle
+  // then ERR_MODULE_NOT_FOUNDs on `@first-tree/client` at spawn time.
   const build = spawnSync("pnpm", ["build"], {
+    cwd: REPO_ROOT,
     encoding: "utf-8",
     timeout: 300_000,
     stdio: "inherit",
@@ -49,6 +64,9 @@ function ensureDistBuilt(): void {
   }
   if (!existsSync(DIST)) {
     throw new Error(`build succeeded but ${DIST} still missing`);
+  }
+  if (!existsSync(CLIENT_DIST)) {
+    throw new Error(`build succeeded but ${CLIENT_DIST} still missing — root pnpm build may have skipped workspace deps`);
   }
 }
 
