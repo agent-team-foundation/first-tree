@@ -319,6 +319,7 @@ export {
 } from "./schemas/invitation.js";
 export {
   type AddMeChatParticipants,
+  ASSISTANT_TEXT_PREVIEW_MAX,
   addMeChatParticipantsSchema,
   CHAT_ENGAGEMENT_VIEWS,
   type ChatEngagementView,

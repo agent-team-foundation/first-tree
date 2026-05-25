@@ -1,6 +1,13 @@
+import { ASSISTANT_TEXT_PREVIEW_MAX } from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { createMeChat, listMeChats, previewToolArgs, toLiveActivity } from "../services/me-chat.js";
+import {
+  createMeChat,
+  listMeChats,
+  previewAssistantText,
+  previewToolArgs,
+  toLiveActivity,
+} from "../services/me-chat.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -349,7 +356,7 @@ describe("toLiveActivity pure helper", () => {
     expect(a?.startedAt).toBe("2026-05-14T01:23:45.000Z");
   });
 
-  it("tool_call carries a `detail` arg preview; thinking/writing have none", () => {
+  it("tool_call carries a `detail` arg preview; thinking has none", () => {
     const bash = toLiveActivity({
       ...baseRow,
       kind: "tool_call",
@@ -361,6 +368,40 @@ describe("toLiveActivity pure helper", () => {
       toLiveActivity({ ...baseRow, kind: "tool_call", payload: { name: "Bash", args: {} } })?.detail,
     ).toBeUndefined();
     expect(toLiveActivity({ ...baseRow, kind: "thinking" })?.detail).toBeUndefined();
+  });
+
+  it("assistant_text carries a collapsed reply preview; empty text → none", () => {
+    const writing = toLiveActivity({
+      ...baseRow,
+      kind: "assistant_text",
+      payload: { text: "Let me check\n the  schema first" },
+    });
+    expect(writing?.label).toBe("Writing");
+    expect(writing?.detail).toBe("Let me check the schema first");
+    // Empty / whitespace-only / missing block → no detail (status bar falls
+    // back to the static "Writing").
+    expect(toLiveActivity({ ...baseRow, kind: "assistant_text", payload: { text: "   " } })?.detail).toBeUndefined();
+    expect(toLiveActivity({ ...baseRow, kind: "assistant_text", payload: {} })?.detail).toBeUndefined();
+  });
+});
+
+describe("previewAssistantText", () => {
+  it("returns undefined for non-string / empty / whitespace-only", () => {
+    expect(previewAssistantText(undefined)).toBeUndefined();
+    expect(previewAssistantText(null)).toBeUndefined();
+    expect(previewAssistantText(123)).toBeUndefined();
+    expect(previewAssistantText("")).toBeUndefined();
+    expect(previewAssistantText("   \n  ")).toBeUndefined();
+  });
+
+  it("collapses whitespace to a single line", () => {
+    expect(previewAssistantText("foo   bar\nbaz")).toBe("foo bar baz");
+  });
+
+  it("hard-caps to ASSISTANT_TEXT_PREVIEW_MAX chars without an ellipsis", () => {
+    const out = previewAssistantText("x".repeat(ASSISTANT_TEXT_PREVIEW_MAX + 50));
+    expect(out).toHaveLength(ASSISTANT_TEXT_PREVIEW_MAX);
+    expect(out).not.toContain("…");
   });
 });
 

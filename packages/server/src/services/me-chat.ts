@@ -20,6 +20,8 @@ import { randomUUID } from "node:crypto";
 import {
   type AddMeChatParticipants,
   AGENT_VISIBILITY,
+  ASSISTANT_TEXT_PREVIEW_MAX,
+  type AssistantTextEventPayload,
   CHAT_ENGAGEMENT_STATUSES,
   type ChatEngagementStatus,
   type ChatEngagementView,
@@ -723,6 +725,21 @@ export function previewToolArgs(args: unknown): string | undefined {
 }
 
 /**
+ * One-line preview of an assistant text block for the compose status bar's
+ * liveness detail. Whitespace-collapsed and hard-capped to
+ * {@link ASSISTANT_TEXT_PREVIEW_MAX} — no trailing "…" is added, since the
+ * rail's CSS owns the visible ellipsis. Returns undefined for an empty /
+ * whitespace-only block so the status bar falls back to the static "Writing".
+ * Exported for unit testing.
+ */
+export function previewAssistantText(text: unknown): string | undefined {
+  if (typeof text !== "string") return undefined;
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length === 0) return undefined;
+  return oneLine.slice(0, ASSISTANT_TEXT_PREVIEW_MAX);
+}
+
+/**
  * Translate a `session_events` row into a `LiveActivity`, or null when the
  * kind is terminal (`turn_end` / `error`) or unrecognised. Pure & exported
  * for unit testing.
@@ -744,8 +761,17 @@ export function toLiveActivity(row: {
     }
     case "thinking":
       return { agentId: row.agent_id, kind: "thinking", label: "Thinking", startedAt };
-    case "assistant_text":
-      return { agentId: row.agent_id, kind: "assistant_text", label: "Writing", startedAt };
+    case "assistant_text": {
+      const payload = (row.payload ?? {}) as Partial<AssistantTextEventPayload>;
+      const detail = previewAssistantText(payload.text);
+      return {
+        agentId: row.agent_id,
+        kind: "assistant_text",
+        label: "Writing",
+        startedAt,
+        ...(detail ? { detail } : {}),
+      };
+    }
     default:
       // turn_end / error / unknown → no live indicator
       return null;
