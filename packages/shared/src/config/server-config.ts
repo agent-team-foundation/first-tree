@@ -53,9 +53,17 @@ export const serverConfigSchema = defineConfig({
     publicUrl: field(z.string().optional(), { env: "FIRST_TREE_PUBLIC_URL" }),
   },
   workspace: {
-    root: field(z.string().default(join(defaultDataDir(), "workspaces")), {
-      env: "FIRST_TREE_WORKSPACES_ROOT",
-    }),
+    // Lazy default (function form): zod's `.default(value)` evaluates
+    // `value` at schema-definition time, which would module-load-bake
+    // `defaultDataDir()` against whatever `FIRST_TREE_HOME` happened to
+    // be set when this file first loaded. `.default(() => ...)`
+    // evaluates per parse instead, so the env is read at config-init
+    // time — see `__tests__/no-toplevel-default-home-const.test.ts`
+    // for the corresponding regression guard.
+    root: field(
+      z.string().default(() => join(defaultDataDir(), "workspaces")),
+      { env: "FIRST_TREE_WORKSPACES_ROOT" },
+    ),
   },
   secrets: {
     jwtSecret: field(z.string(), {

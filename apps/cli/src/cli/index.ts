@@ -20,20 +20,14 @@ import { registerOrgCommands } from "../commands/org/index.js";
 import { registerStatusCommand } from "../commands/status.js";
 import { registerTreeCommands } from "../commands/tree/index.js";
 import { registerUpgradeCommand } from "../commands/upgrade.js";
-import { runHomeMigration } from "../core/migrate-home.js";
+import { channelConfig } from "../core/channel.js";
 import { setJsonMode } from "../core/output.js";
 import { COMMAND_VERSION } from "../core/version.js";
-
-// Run once at startup, BEFORE any command touches config/credentials so the
-// very first CLI invocation on an upgraded install transparently picks up
-// the renamed `~/.first-tree/hub` home. Never throws — failures degrade to
-// a stderr warning and the CLI still runs.
-runHomeMigration();
 
 const program = new Command();
 
 program
-  .name("first-tree")
+  .name(channelConfig.binName)
   .description("First Tree — Context Tree, GitHub Scan, and Hub agent collaboration in one CLI")
   .version(COMMAND_VERSION)
   .option("--json", "emit only machine-readable JSON on stdout; silence human status lines on stderr")
