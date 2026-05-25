@@ -479,4 +479,52 @@ describe("SessionManager.evictIdle — working-state grace window", () => {
       vi.useRealTimers();
     }
   });
+
+  // Reproduces the post-#477 regression observed in production: a turn that
+  // ends with `setRuntimeState("idle")` (handler claude-code does this on
+  // every result message) left the next inject-triggered turn observable
+  // as `idle`, so a long thinking turn that produced no SDK output for
+  // `idle_timeout` (300s) tripped evictIdle's suspend path even though the
+  // agent was still working. `dispatch` for an active chat must put the
+  // session back into `working` BEFORE the handler starts its next turn
+  // so the grace-window guard above kicks in.
+  it("'idle' → inject restores 'working' so the grace window protects long thinking turns", async () => {
+    vi.useFakeTimers();
+    try {
+      let capturedCtx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_msg, ctx) {
+          capturedCtx = ctx;
+          return "s-inject-grace";
+        },
+      });
+      const sm = createSessionManager({
+        handler,
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 60, reconcile_interval_seconds: 300 },
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-inject" }));
+      // Handler completed its first turn — back to idle, mirroring
+      // claude-code.ts on every result message.
+      defined(capturedCtx, "ctx").setRuntimeState("idle");
+
+      // User sends a follow-up. Without the inject→working fix, this
+      // refreshes lastActivity but leaves runtimeState=idle, so the next
+      // evictIdle tick past idle_timeout would suspend the chat
+      // mid-thinking.
+      await sm.dispatch(mockEntry({ id: 2, chatId: "chat-inject" }));
+      expect(handler.inject).toHaveBeenCalledTimes(1);
+
+      // 20s ≫ idle_timeout (1s) but ≪ idle_timeout + grace (61s). The
+      // handler is "thinking" — no touch() calls — so lastActivity stays
+      // pinned at the inject moment. The grace window must keep the slot
+      // alive.
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(handler.suspend).not.toHaveBeenCalled();
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
