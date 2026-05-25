@@ -104,7 +104,14 @@ export async function deliverNormalizedEvent(
             ...(mentionedUser ? { mentionedUser } : {}),
           },
         },
-        { addressedToAgentIds: [target.delegateAgentId] },
+        {
+          addressedToAgentIds: [target.delegateAgentId],
+          // Opt in to writing `metadata.systemSender` — the message service
+          // strips that key from every other caller (web / agent SDK POST)
+          // so HTTP boundaries cannot impersonate the GitHub sender in the
+          // chat UI. This is the one trusted-internal path.
+          allowSystemSender: true,
+        },
       );
       notifyRecipients(app.notifier, recipients, message.id);
       stats.delivered += 1;

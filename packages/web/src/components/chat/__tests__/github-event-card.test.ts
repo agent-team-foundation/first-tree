@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isGithubEventCardContent, isGithubSystemSenderMetadata } from "../github-event-card.js";
+import {
+  isGithubEventCardContent,
+  isGithubSystemSenderMetadata,
+  isTrustedGithubDispatcherMessage,
+} from "../github-event-card.js";
 
 /**
  * Pin the type guard so the chat-view dispatch logic at chat-view.tsx can
@@ -106,5 +110,49 @@ describe("isGithubSystemSenderMetadata", () => {
     expect(isGithubSystemSenderMetadata(undefined)).toBe(false);
     expect(isGithubSystemSenderMetadata("github")).toBe(false);
     expect(isGithubSystemSenderMetadata(42)).toBe(false);
+  });
+});
+
+/**
+ * The chat view re-attributes a row to the synthetic "GitHub" sender only
+ * when every signal lines up. These tests pin the conjunctive guard so a
+ * future change cannot weaken it back to a metadata-only check without
+ * lighting up red — the metadata field alone is forgeable (per the
+ * external code review on this PR), so each test inverts exactly one of
+ * the four required properties and expects rejection.
+ */
+const trustedMsg = {
+  source: "github",
+  format: "card",
+  content: validCard,
+  metadata: { systemSender: "github" },
+};
+
+describe("isTrustedGithubDispatcherMessage", () => {
+  it("accepts a message that matches every dispatcher signal", () => {
+    expect(isTrustedGithubDispatcherMessage(trustedMsg)).toBe(true);
+  });
+
+  it("rejects when source is not 'github' (agent CLI / web / api send)", () => {
+    for (const source of ["api", "cli", "web", "feishu", null, undefined]) {
+      expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, source })).toBe(false);
+    }
+  });
+
+  it("rejects when format is not 'card' (plain text / markdown send)", () => {
+    for (const format of ["text", "markdown", "question", "file"]) {
+      expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, format })).toBe(false);
+    }
+  });
+
+  it("rejects when the content payload is not a valid GithubEventCard", () => {
+    expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, content: "hello" })).toBe(false);
+    expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, content: { type: "github_mention" } })).toBe(false);
+  });
+
+  it("rejects when the metadata marker is missing or wrong", () => {
+    expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: {} })).toBe(false);
+    expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: { systemSender: "feishu" } })).toBe(false);
+    expect(isTrustedGithubDispatcherMessage({ ...trustedMsg, metadata: null })).toBe(false);
   });
 });

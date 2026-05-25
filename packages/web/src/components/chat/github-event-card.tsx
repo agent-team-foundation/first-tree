@@ -21,6 +21,35 @@ export function isGithubSystemSenderMetadata(metadata: unknown): boolean {
   return (metadata as { systemSender?: unknown }).systemSender === "github";
 }
 
+/**
+ * Conjunctive trust gate for re-attributing a row to the synthetic
+ * "GitHub" sender. Metadata alone is not sufficient — `sendMessageSchema`
+ * accepts arbitrary `metadata`, so a malicious agent could otherwise post
+ * a normal text message with `{ systemSender: "github" }` and have the UI
+ * render it as if from GitHub (sender-impersonation / phishing surface
+ * flagged in code review). The dispatcher path uniquely sets
+ * ALL of: `source === "github"`, `format === "card"`, a content payload
+ * that validates as a `GithubEventCard`, and the metadata marker.
+ * Requiring the conjunction makes the override impossible to trigger
+ * from regular agent sends and impossible to trigger accidentally even
+ * if a future write path mis-copies one flag.
+ */
+type TrustedGithubMessageShape = {
+  source: string | null | undefined;
+  format: string;
+  content: unknown;
+  metadata: unknown;
+};
+
+export function isTrustedGithubDispatcherMessage(msg: TrustedGithubMessageShape): boolean {
+  return (
+    msg.source === "github" &&
+    msg.format === "card" &&
+    isGithubEventCardContent(msg.content) &&
+    isGithubSystemSenderMetadata(msg.metadata)
+  );
+}
+
 export function GithubSystemAvatar({ size = 20 }: { size?: number }) {
   const dim = `${size}px`;
   return (
@@ -93,7 +122,13 @@ function subscribedVerb(kind: GithubEventCard["kind"]): string {
     case "commit_commented":
       return "commented on a commit";
     case "assigned":
-      return "updated assignees";
+      // Passive voice on the subscribed track avoids a semantic clash
+      // with `actionVerb`'s "assigned this to you" (reason=assigned),
+      // which addresses the recipient directly. The subscribed track is
+      // an audience announcement, not a directed assignment, so a
+      // bystander reads "was assigned" without inferring it's pointed at
+      // them.
+      return "was assigned";
     case "edited":
       return "edited this";
     case "other":
@@ -114,22 +149,43 @@ function actionVerb(content: GithubEventCard): string {
   }
 }
 
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function highlightMention(body: string, mentionedUser: string | undefined): ReactNode {
   if (!mentionedUser) return body;
   // github-delivery writes the bare login (no `@`); GitHub bodies usually
-  // carry the `@` prefix. Try `@login` first, fall back to bare login so
-  // we still highlight if upstream ever changes the convention.
-  const candidates = [`@${mentionedUser}`, mentionedUser];
-  for (const needle of candidates) {
-    const idx = body.indexOf(needle);
-    if (idx < 0) continue;
+  // carry the `@` prefix. Try `@login` first (literal `indexOf`, since `@`
+  // is not a word char so a partial match like `@melon` for login `me` is
+  // impossible). Fall back to a word-boundary regex so a bare-login
+  // search for `me` doesn't highlight the `me` inside `melon` — the
+  // fallback fires only when upstream stops including `@` in the body,
+  // so its match window is rarer and worth the stricter check.
+  const prefixed = `@${mentionedUser}`;
+  const prefixedIdx = body.indexOf(prefixed);
+  if (prefixedIdx >= 0) {
     return (
       <>
-        {body.slice(0, idx)}
+        {body.slice(0, prefixedIdx)}
         <span className="font-medium" style={{ color: "var(--accent)" }}>
-          {body.slice(idx, idx + needle.length)}
+          {body.slice(prefixedIdx, prefixedIdx + prefixed.length)}
         </span>
-        {body.slice(idx + needle.length)}
+        {body.slice(prefixedIdx + prefixed.length)}
+      </>
+    );
+  }
+  const bareMatch = new RegExp(`\\b${escapeRegex(mentionedUser)}\\b`).exec(body);
+  if (bareMatch) {
+    const start = bareMatch.index;
+    const end = start + bareMatch[0].length;
+    return (
+      <>
+        {body.slice(0, start)}
+        <span className="font-medium" style={{ color: "var(--accent)" }}>
+          {body.slice(start, end)}
+        </span>
+        {body.slice(end)}
       </>
     );
   }

@@ -44,7 +44,7 @@ import {
   GithubEventCardMessage,
   GithubSystemAvatar,
   isGithubEventCardContent,
-  isGithubSystemSenderMetadata,
+  isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
 import {
   isQuestionAnswerContent,
@@ -281,9 +281,13 @@ function TextRow({
   // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
   // routing / read-receipts / mention-resolution stay consistent, but we
   // re-attribute the row to a synthetic "GitHub" sender in the UI. The
-  // `isSelf` check is also overridden so the recipient does not see their
-  // own name color treatment on a card the dispatcher wrote on their row.
-  const isGithubSystem = isGithubSystemSenderMetadata(msg.metadata);
+  // gate is conjunctive (`source` + `format` + content shape + metadata
+  // marker) because `sendMessageSchema` accepts arbitrary metadata — a
+  // metadata-only check would let any agent spoof a "from GitHub" card by
+  // posting plain text with the marker set. `isSelf` is also overridden
+  // so the recipient does not see their own name color treatment on a
+  // card the dispatcher wrote on their row.
+  const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
   const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
   const isSelf = !isGithubSystem && myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
