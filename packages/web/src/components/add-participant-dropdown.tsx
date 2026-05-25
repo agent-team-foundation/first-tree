@@ -2,6 +2,9 @@ import { useMutation } from "@tanstack/react-query";
 import { Loader2, Plus, UserPlus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { addMeChatParticipants } from "../api/me-chats.js";
+import { useAuth } from "../auth/auth-context.js";
+import { useDebouncedValue } from "../lib/use-debounced-value.js";
+import { useOrgAgentsSearch } from "../lib/use-org-agents.js";
 import { Avatar as RealAvatar } from "./avatar.js";
 import {
   ambiguousDisplayNames,
@@ -10,42 +13,69 @@ import {
   MentionLabel,
 } from "./mention-autocomplete.js";
 
-type AgentIdentityResolver = (
-  uuid: string | null | undefined,
-) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
-
 /**
  * Shared "add an agent to this chat" dropdown. Backs both the header
  * quick-add icon (`variant="icon"`) and the right-sidebar inline row
  * (`variant="inline"`). Only the trigger shell differs by variant; the
- * dropdown list is identical across both surfaces: avatar + "mine / others"
- * grouping with a divider.
+ * dropdown body is identical across both surfaces: search input on top,
+ * then the avatar + "mine / others" grouping with a divider.
  *
- * The component owns disclosure (open / click-outside / Esc), keyboard
- * navigation, and the immediate `addMeChatParticipants` mutation. Callers
- * pass the candidate union (members + org-discoverable, already shaped to
- * `MentionCandidate`, self excluded) and the current `participantIds`; the
- * already-in members are filtered out here.
+ * The component owns disclosure (open / click-outside / Esc), search
+ * input state + debounce, the server-side query
+ * ({@link useOrgAgentsSearch}), keyboard navigation, and the immediate
+ * `addMeChatParticipants` mutation. Server search keys the picker on the
+ * typed term so orgs above the org-list 100-row first-page cap can still
+ * reach every addable agent (issue 494). The caller supplies the chat
+ * id, the current participant ids (already-in members are filtered out
+ * here), the variant, and the post-add callback.
  */
 export function AddParticipantDropdown({
   chatId,
-  candidates,
   participantIds,
-  agentIdentity,
   onAdded,
   variant,
 }: {
   chatId: string;
-  candidates: MentionCandidate[];
   participantIds: string[];
-  agentIdentity: AgentIdentityResolver;
   onAdded: () => void;
   variant: "icon" | "inline";
 }) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
+  const [searchInput, setSearchInput] = useState("");
+  const debouncedSearch = useDebouncedValue(searchInput, 200);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const { agentId: myAgentId, memberId: myMemberId } = useAuth();
+  const { data: agentsPage, isFetching: searchFetching } = useOrgAgentsSearch(debouncedSearch);
+
+  const candidates = useMemo<MentionCandidate[]>(() => {
+    const out: MentionCandidate[] = [];
+    for (const a of agentsPage?.items ?? []) {
+      if (a.status === "suspended") continue;
+      if (myAgentId && a.uuid === myAgentId) continue;
+      if (!a.name) continue;
+      out.push({
+        agentId: a.uuid,
+        name: a.name,
+        displayName: a.displayName,
+        managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
+      });
+    }
+    return out;
+  }, [agentsPage?.items, myAgentId, myMemberId]);
+
+  // Server response carries the resolved avatar URL — keep a uuid → URL
+  // index so each row can render straight from it without re-routing the
+  // lookup through the identity-map cache (which is itself capped at the
+  // first 100 agents and would miss search hits beyond that window).
+  const avatarById = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const a of agentsPage?.items ?? []) map.set(a.uuid, a.avatarImageUrl ?? null);
+    return map;
+  }, [agentsPage?.items]);
 
   // Click-outside closes the dropdown.
   useEffect(() => {
@@ -78,6 +108,7 @@ export function AddParticipantDropdown({
     mutationFn: (agentId: string) => addMeChatParticipants(chatId, { participantIds: [agentId] }),
     onSuccess: () => {
       setOpen(false);
+      setSearchInput("");
       onAdded();
     },
   });
@@ -86,8 +117,6 @@ export function AddParticipantDropdown({
     () => candidates.filter((c) => !participantIds.includes(c.agentId)),
     [candidates, participantIds],
   );
-  const allAdded = outsideCandidates.length === 0;
-  const disabled = allAdded || addMut.isPending;
 
   // Unified appearance: mine-first / others grouping with a divider.
   // `items` carries the divider marker; `selectable` is the divider-free
@@ -96,28 +125,46 @@ export function AddParticipantDropdown({
   const selectable = useMemo(() => items.filter((it): it is MentionCandidate => !("divider" in it)), [items]);
   const ambiguous = useMemo(() => ambiguousDisplayNames(outsideCandidates), [outsideCandidates]);
 
+  // Search input is always visible — orgs above the org-list 100-row cap
+  // need it to reach agents past page 1, and small orgs get a fast
+  // client-feel filter for free. Disable the trigger only while a mutation
+  // is in-flight; "empty result set" no longer disables the trigger because
+  // the user may simply not have typed yet.
+  const disabled = addMut.isPending;
+
   // Reset the highlight whenever the menu opens or the option set changes,
-  // and focus the menu so it receives arrow / Enter keystrokes.
+  // and focus the search input so the user can type immediately. The menu
+  // itself is no longer the keystroke target — arrow / Enter keys are
+  // captured on the input so the user never loses focus while typing.
   useEffect(() => {
     if (open) {
       setHighlight(0);
-      menuRef.current?.focus();
+      inputRef.current?.focus();
     }
   }, [open]);
+  // Re-clamp the highlight whenever the candidate set shifts so the
+  // active row never points past the end of the new list (debounced
+  // search lands, a candidate gets added to the chat, etc.).
+  useEffect(() => {
+    if (selectable.length === 0) {
+      setHighlight(0);
+      return;
+    }
+    setHighlight((i) => Math.min(i, selectable.length - 1));
+  }, [selectable]);
 
   const commit = (agentId: string): void => {
     if (addMut.isPending) return;
     addMut.mutate(agentId);
   };
 
-  const onMenuKeyDown = (e: React.KeyboardEvent): void => {
-    if (selectable.length === 0) return;
+  const onInputKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setHighlight((i) => (i + 1) % selectable.length);
+      setHighlight((i) => (selectable.length === 0 ? 0 : (i + 1) % selectable.length));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setHighlight((i) => (i - 1 + selectable.length) % selectable.length);
+      setHighlight((i) => (selectable.length === 0 ? 0 : (i - 1 + selectable.length) % selectable.length));
     } else if (e.key === "Enter") {
       e.preventDefault();
       const picked = selectable[highlight] ?? selectable[0];
@@ -126,7 +173,22 @@ export function AddParticipantDropdown({
     // Escape is handled by the capture-phase document listener above.
   };
 
-  const label = addMut.isPending ? "Adding…" : allAdded ? "All added" : "Add";
+  const label = addMut.isPending ? "Adding…" : "Add";
+
+  /**
+   * Empty-state hint surfaced under the search input when the visible
+   * candidate list is empty. We distinguish:
+   *   - mid-fetch: don't promise "no matches" — let the user wait
+   *   - search has a non-empty term: explicit "no match" for it
+   *   - search is empty: rare ("no agents to add"), means every other
+   *     visible agent in the org is already a participant
+   */
+  const emptyHint = (() => {
+    if (selectable.length > 0) return null;
+    if (searchFetching) return "Searching…";
+    if (debouncedSearch.length > 0) return `No agents match “${debouncedSearch}”`;
+    return "No agents to add";
+  })();
 
   return (
     <div ref={containerRef} className="relative">
@@ -135,7 +197,7 @@ export function AddParticipantDropdown({
           type="button"
           onClick={() => setOpen(!open)}
           disabled={disabled}
-          title={allAdded ? "All available agents are already in this chat" : "Add participant"}
+          title="Add participant"
           aria-label="Add participant"
           aria-haspopup="menu"
           aria-expanded={open}
@@ -168,7 +230,6 @@ export function AddParticipantDropdown({
             background: "transparent",
             color: disabled ? "var(--fg-4)" : "var(--fg-3)",
             cursor: disabled ? "not-allowed" : "pointer",
-            opacity: allAdded ? 0.55 : 1,
           }}
         >
           {/* Dashed-circle avatar stand-in — keeps the row left edge aligned
@@ -190,14 +251,13 @@ export function AddParticipantDropdown({
         </button>
       )}
 
-      {open && !allAdded && (
+      {open && (
         <div
           ref={menuRef}
           role="menu"
           aria-label="Add participant"
           tabIndex={-1}
-          onKeyDown={onMenuKeyDown}
-          className="absolute z-20 max-h-72 overflow-auto border shadow-lg outline-none"
+          className="absolute z-20 flex flex-col border shadow-lg outline-none"
           style={{
             top: "calc(100% + var(--sp-1))",
             // Icon trigger sits at the panel's right edge → grow leftward;
@@ -208,51 +268,83 @@ export function AddParticipantDropdown({
             borderRadius: "var(--radius-input)",
           }}
         >
-          {(() => {
-            let idx = -1;
-            return items.map((it) => {
-              if ("divider" in it) {
-                return (
-                  <div
-                    key="__divider"
-                    role="presentation"
-                    style={{
-                      height: "var(--hairline)",
-                      background: "var(--border-faint)",
-                      margin: "var(--sp-0_5) var(--sp-3)",
-                    }}
-                  />
-                );
-              }
-              idx += 1;
-              const myIdx = idx;
-              const active = myIdx === highlight;
-              const ident = agentIdentity(it.agentId);
-              const fallback = it.displayName ?? it.name ?? it.agentId.slice(0, 8);
-              return (
-                <button
-                  key={it.agentId}
-                  type="button"
-                  role="menuitem"
-                  title={it.name ? `@${it.name}` : undefined}
-                  onClick={() => commit(it.agentId)}
-                  onMouseEnter={() => setHighlight(myIdx)}
-                  disabled={addMut.isPending}
-                  className="flex w-full items-center text-left transition-colors"
-                  style={{
-                    gap: "var(--sp-2_5)",
-                    padding: "var(--sp-1_75) var(--sp-2)",
-                    border: 0,
-                    background: active ? "var(--bg-hover)" : "transparent",
-                    cursor: addMut.isPending ? "default" : "pointer",
-                  }}
-                >
-                  <RealAvatar src={ident?.avatarImageUrl ?? null} name={fallback} seed={it.agentId} size={28} />
-                  <MentionLabel candidate={it} ambiguous={ambiguous} />
-                </button>
-              );
-            });
-          })()}
+          <div
+            style={{
+              padding: "var(--sp-1_5) var(--sp-2)",
+              borderBottom: "var(--hairline) solid var(--border-faint)",
+            }}
+          >
+            <input
+              ref={inputRef}
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={onInputKeyDown}
+              placeholder="Search by name…"
+              aria-label="Search agents"
+              className="w-full text-body outline-none"
+              style={{
+                padding: "var(--sp-1) var(--sp-1_5)",
+                background: "var(--bg-sunken)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-input)",
+                color: "var(--fg)",
+              }}
+            />
+          </div>
+          <div className="overflow-auto" style={{ maxHeight: "18rem" }}>
+            {emptyHint !== null ? (
+              <div className="text-body" style={{ padding: "var(--sp-2_5) var(--sp-2)", color: "var(--fg-3)" }}>
+                {emptyHint}
+              </div>
+            ) : (
+              (() => {
+                let idx = -1;
+                return items.map((it) => {
+                  if ("divider" in it) {
+                    return (
+                      <div
+                        key="__divider"
+                        role="presentation"
+                        style={{
+                          height: "var(--hairline)",
+                          background: "var(--border-faint)",
+                          margin: "var(--sp-0_5) var(--sp-3)",
+                        }}
+                      />
+                    );
+                  }
+                  idx += 1;
+                  const myIdx = idx;
+                  const active = myIdx === highlight;
+                  const fallback = it.displayName ?? it.name ?? it.agentId.slice(0, 8);
+                  const avatarSrc = avatarById.get(it.agentId) ?? null;
+                  return (
+                    <button
+                      key={it.agentId}
+                      type="button"
+                      role="menuitem"
+                      title={it.name ? `@${it.name}` : undefined}
+                      onClick={() => commit(it.agentId)}
+                      onMouseEnter={() => setHighlight(myIdx)}
+                      disabled={addMut.isPending}
+                      className="flex w-full items-center text-left transition-colors"
+                      style={{
+                        gap: "var(--sp-2_5)",
+                        padding: "var(--sp-1_75) var(--sp-2)",
+                        border: 0,
+                        background: active ? "var(--bg-hover)" : "transparent",
+                        cursor: addMut.isPending ? "default" : "pointer",
+                      }}
+                    >
+                      <RealAvatar src={avatarSrc} name={fallback} seed={it.agentId} size={28} />
+                      <MentionLabel candidate={it} ambiguous={ambiguous} />
+                    </button>
+                  );
+                });
+              })()
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -29,7 +29,8 @@ type PaginatedAgents = Awaited<ReturnType<typeof listAgents>>;
  * consumer would kick off an extra fetch right after a recent poll.
  *
  * `limit: 100` is the server's enforced cap in `paginationQuerySchema`; orgs
- * above that threshold need pagination at the consumer level.
+ * above that threshold reach agents past the first page via
+ * {@link useOrgAgentsSearch} (issue 494).
  */
 export function useOrgAgents(): UseQueryResult<PaginatedAgents> {
   return useQuery({
@@ -38,4 +39,35 @@ export function useOrgAgents(): UseQueryResult<PaginatedAgents> {
     refetchInterval: 30_000,
     staleTime: 30_000,
   });
+}
+
+/**
+ * Server-side substring search over the org's visible agents. Backs the
+ * participant pickers (chat-header `[+]`, right-sidebar `[+]`,
+ * new-chat-draft chip picker, new-chat-draft textarea `@` autocomplete) so
+ * orgs above the 100-row first-page cap can still surface every addable
+ * agent (issue 494).
+ *
+ * Distinct from {@link useOrgAgents}: this hook keys on the query string so
+ * each typed term has its own cache entry, and it does NOT poll — picker
+ * results are pulled on demand, not on a background tick. Empty query
+ * (after trimming) is short-circuited to the cached first page so picker
+ * open never round-trips for the small-org default case.
+ *
+ * Caller is responsible for debouncing the input — wiring this directly to
+ * an onChange handler would issue one fetch per keystroke.
+ */
+export function useOrgAgentsSearch(query: string): UseQueryResult<PaginatedAgents> {
+  const trimmed = query.trim();
+  const unfiltered = useOrgAgents();
+  const search = useQuery({
+    queryKey: ["agents", "org-list", "search", trimmed],
+    queryFn: () => listAgents({ limit: 100, query: trimmed }),
+    // Search results stay fresh briefly so re-opening the picker with the
+    // same term doesn't re-hit the server; expire fast enough that a newly
+    // added agent shows up under search within a reasonable window.
+    staleTime: 10_000,
+    enabled: trimmed.length > 0,
+  });
+  return trimmed.length > 0 ? search : unfiltered;
 }

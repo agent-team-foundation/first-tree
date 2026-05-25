@@ -15,7 +15,7 @@ import {
   defaultRuntimeConfigPayload,
   isReservedAgentName,
 } from "@first-tree/shared";
-import { and, count, desc, eq, lt, ne } from "drizzle-orm";
+import { and, count, desc, eq, ilike, lt, ne, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
@@ -665,6 +665,13 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
 /**
  * List agents visible to a specific member.
  * Uses agentVisibilityCondition from access-control (same rules for all roles).
+ *
+ * `query`, when set, narrows the result set to rows whose `name` or
+ * `displayName` matches the term as a case-insensitive substring. Used by
+ * the web participant picker so orgs above the `limit` cap (100) can still
+ * surface agents past the first page (issue 494). The visibility predicate
+ * still wraps the search, so private agents owned by other members never
+ * leak through a `?query=` lookup.
  */
 export async function listAgentsForMember(
   db: Database,
@@ -672,11 +679,22 @@ export async function listAgentsForMember(
   limit: number,
   cursor?: string,
   type?: string,
+  query?: string,
 ) {
   // agentVisibilityCondition already includes org + status + visibility filtering
   const conditions = [agentVisibilityCondition(scope.organizationId, scope.memberId)];
   if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
   if (type) conditions.push(eq(agents.type, type));
+  if (query) {
+    // Drizzle escapes the bound value, but we still need to neutralise the
+    // ILIKE wildcards (`%`, `_`) inside the user-supplied substring so a
+    // search for "10%_off" matches that literal text instead of acting as
+    // a wildcard pattern.
+    const escaped = query.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+    const pattern = `%${escaped}%`;
+    const match = or(ilike(agents.name, pattern), ilike(agents.displayName, pattern));
+    if (match) conditions.push(match);
+  }
 
   const where = and(...conditions);
 

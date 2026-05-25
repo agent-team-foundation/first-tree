@@ -176,6 +176,111 @@ describe("Agent Visibility", () => {
     });
   });
 
+  /**
+   * Server-side ?query= search powers the web participant picker so orgs
+   * with more than `limit` (100) visible agents can still reach agents
+   * past the first page (issue 494). The contracts under test:
+   *   1. Match is case-insensitive substring against name + displayName.
+   *   2. Search is wrapped by the visibility predicate — private agents
+   *      owned by other members must not leak through `?query=`.
+   *   3. Humans surface under search the same way they do unfiltered
+   *      (lockstep with issue 343 / #492).
+   *   4. ILIKE wildcards in user input are neutralised so a literal
+   *      "%" or "_" doesn't act as a pattern.
+   */
+  describe("?query= server-side picker search", () => {
+    it("matches by case-insensitive substring on both name and displayName", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "query-aardvark", type: "autonomous_agent", displayName: "Aardvark" });
+      await seedAgent(app, { name: "query-buffalo", type: "autonomous_agent", displayName: "Buffalo Bot" });
+      // Match by displayName only — the slug does not contain "buff".
+      await seedAgent(app, { name: "query-misc", type: "autonomous_agent", displayName: "Wild Buffer" });
+      await seedAgent(app, { name: "query-cheetah", type: "autonomous_agent", displayName: "Cheetah" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=BUFF`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      expect(names).toContain("query-buffalo");
+      expect(names).toContain("query-misc");
+      expect(names).not.toContain("query-aardvark");
+      expect(names).not.toContain("query-cheetah");
+    });
+
+    it("respects visibility — does not surface other members' private agents", async () => {
+      const app = getApp();
+      const adminBundle = await authedRequest(app);
+      const member = await createMemberAndLogin(app, adminBundle);
+
+      await seedAgent(app, { name: "qpriv-mine", type: "personal_assistant", managerId: member.memberId });
+      await seedAgent(app, { name: "qpriv-other", type: "personal_assistant" });
+
+      const orgId = adminBundle.admin.organizationId;
+      const res = await member.req("GET", `/api/v1/orgs/${orgId}/agents?query=qpriv`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      expect(names).toContain("qpriv-mine");
+      expect(names).not.toContain("qpriv-other");
+    });
+
+    it("surfaces humans the same way the unfiltered list does", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "qhuman-needle", type: "human", displayName: "Needle Human" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=needle`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string; type: string }> }>().items.map((a) => a.name);
+
+      expect(names).toContain("qhuman-needle");
+    });
+
+    it("treats ILIKE wildcards in user input as literals", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      // Slugs are restricted by AGENT_NAME_REGEX (lowercase + - / _), so a `%`
+      // can only land in `displayName` — which is exactly where the literal
+      // match guarantee matters. A naive ILIKE would treat `%` as wildcard
+      // and "%off" would match every display name.
+      await seedAgent(app, { name: "qwild-target", type: "autonomous_agent", displayName: "50%off promo" });
+      await seedAgent(app, { name: "qwild-decoy", type: "autonomous_agent", displayName: "regular off-sale" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("%off")}`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      expect(names).toContain("qwild-target");
+      expect(names).not.toContain("qwild-decoy");
+    });
+
+    it("ignores `?query=` when value is whitespace-only (parsed as omitted)", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "qblank-a", type: "autonomous_agent" });
+      await seedAgent(app, { name: "qblank-b", type: "autonomous_agent" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("   ")}`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      // Both seeded names survive — `query` after schema-level trim
+      // collapses to "" and the service falls back to the unfiltered
+      // listing (the route accepts the empty string instead of returning
+      // 400, so the picker never has to pre-validate whitespace).
+      expect(names).toEqual(expect.arrayContaining(["qblank-a", "qblank-b"]));
+    });
+  });
+
   describe("visibility in single agent GET", () => {
     it("member cannot access private agent managed by another member", async () => {
       const app = getApp();

@@ -69,6 +69,8 @@ export {
   contextTreeInfoSchema,
   createAgentSchema,
   isReservedAgentName,
+  type ListAgentsQuery,
+  listAgentsQuerySchema,
   RESERVED_AGENT_NAMES,
   type RebindAgent,
   rebindAgentSchema,

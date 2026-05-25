@@ -4,112 +4,92 @@ import { type PickDefaultAgent, pickDefault } from "../new-chat-draft.js";
 /**
  * Pure-function tests for the New Chat default-chip seed (`pickDefault`).
  *
- * Locks the post-issue 343 / issue 342 behavior:
- *   - my-managed scope (never seed a coworker's agent — see PR 328)
- *   - PA-first, then any my-managed AI agent
- *   - humans never seed (a human "self-mirror" chip is nonsense)
- *   - suspended rows ignored
- *   - no MRU keyed on `runtimeUpdatedAt` (used to flip between clicks)
- *   - returns null when `myMemberId` is null or no managed agents exist
+ * Locks the issue 494 behaviour:
+ *   - default = caller's own human agent's `delegateMention`
+ *   - null when caller has no `delegateMention` set
+ *   - null when the delegate target is missing from the org list
+ *   - null when the delegate target is suspended
+ *   - null when the caller's own row is missing from the org list (rare —
+ *     the user's row is past the 100-row first-page cap of `useOrgAgents`)
+ *   - null when `myAgentId` is null (logged-out or org not yet selected)
  */
 
-const ME = "member-me-1";
-const OTHER = "member-other-1";
+const ME_HUMAN = "human-me";
+const DELEGATE = "agent-delegate";
+const OTHER = "agent-other";
 
 /** Build an agent slice with only the fields `pickDefault` reads. */
 function agent(partial: Partial<PickDefaultAgent> & Pick<PickDefaultAgent, "uuid">): PickDefaultAgent {
   return {
     type: "autonomous_agent",
-    managerId: ME,
+    managerId: null,
     status: "active",
+    delegateMention: null,
     ...partial,
   };
 }
 
 describe("pickDefault", () => {
-  it("returns null when myMemberId is null (logged-out or org not yet selected)", () => {
-    const agents = [agent({ uuid: "a1", type: "personal_assistant" })];
+  it("returns null when myAgentId is null (logged-out or org not yet selected)", () => {
+    const agents = [agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }), agent({ uuid: DELEGATE })];
     expect(pickDefault(agents, null)).toBeNull();
   });
 
-  it("returns null when the caller manages no agents", () => {
+  it("returns the human's delegateMention when set and the target is visible + active", () => {
     const agents = [
-      agent({ uuid: "a1", managerId: OTHER }),
-      agent({ uuid: "a2", managerId: OTHER, type: "personal_assistant" }),
+      agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
+      agent({ uuid: DELEGATE, type: "personal_assistant" }),
+      agent({ uuid: OTHER, type: "autonomous_agent" }),
     ];
-    expect(pickDefault(agents, ME)).toBeNull();
+    expect(pickDefault(agents, ME_HUMAN)).toBe(DELEGATE);
   });
 
-  it("prefers a my-managed personal_assistant", () => {
+  it("returns null when the human has no delegateMention set", () => {
     const agents = [
-      agent({ uuid: "a1" }), // autonomous, mine
-      agent({ uuid: "a2", type: "personal_assistant" }), // PA, mine — winner
-      agent({ uuid: "a3", type: "personal_assistant", managerId: OTHER }), // PA, NOT mine
+      agent({ uuid: ME_HUMAN, type: "human", delegateMention: null }),
+      agent({ uuid: OTHER, type: "personal_assistant" }),
     ];
-    expect(pickDefault(agents, ME)).toBe("a2");
+    // Notably we do NOT fall back to PA / other my-managed agents —
+    // the caller must declare a delegate explicitly.
+    expect(pickDefault(agents, ME_HUMAN)).toBeNull();
   });
 
-  it("falls back to the first my-managed agent when no PA is mine", () => {
-    const agents = [
-      agent({ uuid: "a1", type: "personal_assistant", managerId: OTHER }), // PA but coworker's
-      agent({ uuid: "a2", type: "autonomous_agent" }), // mine, winner
-      agent({ uuid: "a3", type: "autonomous_agent" }), // mine, but later
-    ];
-    expect(pickDefault(agents, ME)).toBe("a2");
+  it("returns null when the delegate target is missing from the org list", () => {
+    // The delegate uuid was set sometime in the past; meanwhile the row
+    // was deleted / made private / moved orgs. We refuse to seed a chip
+    // that can't be confirmed against the current visible roster.
+    const agents = [agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE })];
+    expect(pickDefault(agents, ME_HUMAN)).toBeNull();
   });
 
-  it("excludes humans even when managerId matches (humans self-manage; chip = self is nonsense)", () => {
+  it("returns null when the delegate target is suspended", () => {
     const agents = [
-      agent({ uuid: "me-human", type: "human" }), // my human mirror
-      agent({ uuid: "a1", type: "autonomous_agent" }), // my AI agent — winner
+      agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
+      agent({ uuid: DELEGATE, type: "personal_assistant", status: "suspended" }),
     ];
-    expect(pickDefault(agents, ME)).toBe("a1");
+    expect(pickDefault(agents, ME_HUMAN)).toBeNull();
   });
 
-  it("returns null if the ONLY my-managed row is my human mirror", () => {
-    const agents = [agent({ uuid: "me-human", type: "human" })];
-    expect(pickDefault(agents, ME)).toBeNull();
+  it("returns null when the caller's own human row is missing from the org list", () => {
+    // Edge: caller's human agent is past the 100-row first-page cap, so
+    // we can't read its `delegateMention`. Falling back to null is
+    // intentional — better an empty chip row than guessing.
+    const agents = [agent({ uuid: DELEGATE, type: "personal_assistant" })];
+    expect(pickDefault(agents, ME_HUMAN)).toBeNull();
   });
 
-  it("excludes suspended agents", () => {
+  it("is stable across calls — does not depend on runtime presence (issue 342 regression lock)", () => {
+    // The pre-issue 343 implementation sorted by `runtimeUpdatedAt` and
+    // could flip between adjacent calls when presence shifted; the
+    // delegate-based default has no such dependency, so two passes
+    // over the same input must agree.
     const agents = [
-      agent({ uuid: "a1", type: "personal_assistant", status: "suspended" }), // suspended PA — skip
-      agent({ uuid: "a2", type: "autonomous_agent" }), // active AI — winner
+      agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
+      agent({ uuid: DELEGATE, type: "personal_assistant" }),
     ];
-    expect(pickDefault(agents, ME)).toBe("a2");
-  });
-
-  it("returns null when every my-managed agent is suspended", () => {
-    const agents = [
-      agent({ uuid: "a1", type: "personal_assistant", status: "suspended" }),
-      agent({ uuid: "a2", type: "autonomous_agent", status: "suspended" }),
-    ];
-    expect(pickDefault(agents, ME)).toBeNull();
-  });
-
-  it("is stable across calls — does not depend on `runtimeUpdatedAt` (issue 342 regression lock)", () => {
-    // Identical input set yields identical output. The pre-issue 343 implementation
-    // sorted by `runtimeUpdatedAt` and could flip between adjacent calls when
-    // runtime presence shifted; the new implementation has no such dependency,
-    // so two passes over the same input must agree.
-    const agents = [
-      agent({ uuid: "a1", type: "autonomous_agent" }),
-      agent({ uuid: "a2", type: "autonomous_agent" }),
-      agent({ uuid: "a3", type: "personal_assistant" }),
-    ];
-    const first = pickDefault(agents, ME);
-    const second = pickDefault(agents, ME);
+    const first = pickDefault(agents, ME_HUMAN);
+    const second = pickDefault(agents, ME_HUMAN);
     expect(first).toBe(second);
-    expect(first).toBe("a3"); // PA wins
-  });
-
-  it("ignores agents managed by others mixed with my agents", () => {
-    const agents = [
-      agent({ uuid: "a1", managerId: OTHER }),
-      agent({ uuid: "a2", managerId: OTHER, type: "personal_assistant" }),
-      agent({ uuid: "a3", managerId: ME, type: "autonomous_agent" }), // winner
-      agent({ uuid: "a4", managerId: OTHER }),
-    ];
-    expect(pickDefault(agents, ME)).toBe("a3");
+    expect(first).toBe(DELEGATE);
   });
 });

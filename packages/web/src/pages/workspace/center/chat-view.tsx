@@ -915,16 +915,16 @@ export function ChatView({
     enabled: !!chatId,
   });
 
-  /** Org-wide agent list, consumed only by the ParticipantsHeader `[+]`
-   *  dropdown via `addableCandidates`. The `@` autocomplete is
+  /** Org-wide agent list, consumed by `managedByMeMap` for picker
+   *  grouping and by the identity-map hooks (`useAgentIdentityMap` etc.)
+   *  that drive chip / avatar rendering. The `@` autocomplete is
    *  membership-scoped (`mentionCandidates` below) and does NOT read
    *  from this list — inviting a new agent goes through the `[+]`
-   *  button explicitly, not through `@<outsider>`. Also feeds
-   *  `managedByMeMap` for picker grouping.
+   *  button, which owns its own server-search via `useOrgAgentsSearch`
+   *  (issue 494) and is therefore not capped at the 100-row first page.
    *
-   *  Shared with the identity-map hooks (`useAgentIdentityMap` etc.) via
-   *  `useOrgAgents` — single React Query cache, one HTTP fetch per
-   *  refetch tick. See issue 495. */
+   *  Shared single React Query cache, one HTTP fetch per refetch tick.
+   *  See issue 495. */
   const { data: orgAgentsPage } = useOrgAgents();
 
   /**
@@ -1923,10 +1923,10 @@ export function ChatView({
   // off membership — instead of org-wide discovery — keeps the picker
   // focused on the people who'll actually receive the message. To pull
   // a new agent into the conversation, use the ParticipantsHeader `[+]`
-  // button (which is fed by `addableCandidates` below). Any participant
-  // without a slug (`name`) is skipped — mentions need one. Private
-  // agents in the chat surface here because membership, not discovery,
-  // is the source of truth.
+  // button (`AddParticipantDropdown` — owns its own search). Any
+  // participant without a slug (`name`) is skipped — mentions need one.
+  // Private agents in the chat surface here because membership, not
+  // discovery, is the source of truth.
   const mentionCandidates = useMemo<MentionCandidate[]>(() => {
     const out: MentionCandidate[] = [];
     for (const p of chatDetail?.participants ?? []) {
@@ -1943,48 +1943,12 @@ export function ChatView({
     return out;
   }, [chatDetail?.participants, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
 
-  // Candidates for the ParticipantsHeader `[+]` add-member dropdown:
-  // every agent the user might invite, union of current members and
-  // org-wide discoverable agents from `/orgs/:orgId/agents`. The
-  // dropdown filters out already-joined participants internally, so we
-  // pass the union and let it compute `outsideCandidates`. Self is
-  // excluded; missing slug is skipped. Suspended rows are excluded so
-  // the picker never offers a row the server would refuse on add.
-  //
-  // Identity resolution: prefer the shared `useAgentIdentityMap`, fall
-  // back to the raw `listAgents` row when the map hasn't resolved yet.
-  // Both surfaces are fed by `listAgents` ultimately, so the window is
-  // short, but on a brand-new teammate's first paint the identity map
-  // may not have indexed them yet — without the fallback they'd briefly
-  // drop out of the picker. Mirrors the fallback pattern in
-  // `new-chat-draft.tsx`.
-  const addableCandidates = useMemo<MentionCandidate[]>(() => {
-    const orgRowById = new Map<string, { name: string | null; displayName: string }>();
-    for (const a of orgAgentsPage?.items ?? []) {
-      if (a.status === "suspended") continue;
-      orgRowById.set(a.uuid, { name: a.name, displayName: a.displayName });
-    }
-    const ids = new Set<string>();
-    for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
-    for (const id of orgRowById.keys()) ids.add(id);
-    if (ids.size === 0) ids.add(agentId);
-    const out: MentionCandidate[] = [];
-    for (const id of ids) {
-      if (id === myAgentId) continue;
-      const ident = chatScopedAgentIdentity(id);
-      const orgRow = orgRowById.get(id);
-      const name = ident?.name ?? orgRow?.name ?? null;
-      if (!name) continue;
-      const displayName = ident?.displayName ?? orgRow?.displayName ?? null;
-      out.push({
-        agentId: id,
-        name,
-        displayName,
-        managedByMe: managedByMeMap.get(id) ?? false,
-      });
-    }
-    return out;
-  }, [chatDetail?.participants, orgAgentsPage?.items, agentId, chatScopedAgentIdentity, myAgentId, managedByMeMap]);
+  // The `[+]` participant picker (chat header + right-sidebar) owns its
+  // search input and fetches candidates directly via
+  // `useOrgAgentsSearch`, so this view no longer composes a union of
+  // chat participants + org-list for it. Pre-issue 494 the picker
+  // sourced an in-memory list capped at 100 rows; the server-side search
+  // model bypasses that cap, which is the whole point of issue 494.
 
   /**
    * "Needs explicit @mention" guard: a real group (3+ speakers), OR a 1-on-1
@@ -2291,8 +2255,6 @@ export function ChatView({
                   variant="icon"
                   chatId={chatId}
                   participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-                  candidates={addableCandidates}
-                  agentIdentity={chatScopedAgentIdentity}
                   onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
                 />
               )}
@@ -2866,8 +2828,6 @@ export function ChatView({
             participants={chatDetail?.participants ?? []}
             participantsLoading={chatDetailLoading}
             managedByMe={managedByMeMap}
-            addParticipantsCandidates={addableCandidates}
-            agentIdentity={chatScopedAgentIdentity}
             onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
             onClose={() => setShowSidebar(false)}
             readOnly={readOnly}

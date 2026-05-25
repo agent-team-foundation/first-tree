@@ -1,13 +1,14 @@
 import { type Agent, extractMentions, type MentionParticipant } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readFileAsBase64, sendChatMessage, sendFileMessage } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
   ambiguousDisplayNames,
+  detectMentionTrigger,
   groupAndSortCandidates,
   MentionAutocompletePopover,
   type MentionCandidate,
@@ -16,7 +17,8 @@ import {
 } from "../../../components/mention-autocomplete.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
-import { useOrgAgents } from "../../../lib/use-org-agents.js";
+import { useDebouncedValue } from "../../../lib/use-debounced-value.js";
+import { useOrgAgents, useOrgAgentsSearch } from "../../../lib/use-org-agents.js";
 import { type PendingImage, usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
 
@@ -68,6 +70,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seededDefaultRef = useRef(false);
   const pickerContainerRef = useRef<HTMLDivElement>(null);
@@ -86,46 +89,133 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   // both adjust instantly; past the cap content scrolls inside.
   useAutoResizeTextarea(textareaRef, draft);
 
-  /** Candidate source: org-wide addressable agents (humans + AI), backed
-   *  by `GET /orgs/:orgId/agents` via the shared `useOrgAgents` hook.
-   *  Pre-issue 343 we sourced this from `/activity`, which filters on
-   *  `runtimeState IS NOT NULL` and silently dropped human members —
-   *  making it impossible to start a chat with a coworker. `listAgents`
-   *  already LEFT-JOINs `agent_presence` and surfaces humans natively. */
+  /** First-page baseline of org-wide addressable agents (humans + AI),
+   *  backed by `GET /orgs/:orgId/agents` via `useOrgAgents`. Used to
+   *  seed the default chip and feed `extractMentions` for raw-typed
+   *  `@name` resolution on the small-org fast path. Picker dropdown and
+   *  `@`-autocomplete results come from the server-search hook below so
+   *  orgs above the 100-row cap can still reach every addable agent
+   *  (issue 494). */
   const { data: orgAgentsPage } = useOrgAgents();
 
-  const candidates = useMemo<MentionCandidate[]>(() => {
+  /** Map of every uuid we have ever shown to the user this session —
+   *  seeded from the first page and grown with each search round-trip
+   *  (chip picker + textarea `@`). Keeps chip labels and
+   *  `extractMentions` stable after the user opens then clears a
+   *  search input. */
+  const [knownAgents, setKnownAgents] = useState<Map<string, MentionCandidate>>(() => new Map());
+  const mergeKnown = useCallback(
+    (rows: ReadonlyArray<Agent>) => {
+      setKnownAgents((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const a of rows) {
+          if (myAgentId && a.uuid === myAgentId) continue;
+          if (!a.name) continue;
+          if (a.status === "suspended") continue;
+          if (next.has(a.uuid)) continue;
+          next.set(a.uuid, {
+            agentId: a.uuid,
+            name: a.name,
+            displayName: a.displayName,
+            managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
+          });
+          changed = true;
+        }
+        return changed ? next : prev;
+      });
+    },
+    [myAgentId, myMemberId],
+  );
+  useEffect(() => {
+    if (!orgAgentsPage?.items) return;
+    mergeKnown(orgAgentsPage.items);
+  }, [orgAgentsPage?.items, mergeKnown]);
+
+  /** Active `@<query>` trigger derived from the textarea's text +
+   *  cursor. Drives a server-side search so the autocomplete popover
+   *  can show matches past the first-page cap. We compute it inline
+   *  (rather than rely on `useMentionAutocomplete`'s internal trigger)
+   *  because we need the query string for the search hook before the
+   *  hook itself runs. The hook re-detects below; both calls are cheap
+   *  pure functions. */
+  const trigger = useMemo(() => detectMentionTrigger(draft, cursor), [draft, cursor]);
+  const triggerQuery = trigger?.query ?? "";
+  const { data: triggerSearchPage } = useOrgAgentsSearch(triggerQuery);
+  useEffect(() => {
+    if (!triggerSearchPage?.items) return;
+    mergeKnown(triggerSearchPage.items);
+  }, [triggerSearchPage?.items, mergeKnown]);
+
+  /** Chip-picker search, debounced. Independent of the textarea-`@`
+   *  trigger above — different surface, different debounce timing
+   *  (chips picker hits server only on input lull; `@` trigger fires
+   *  per detected trigger string). The shared `useOrgAgentsSearch`
+   *  hook dedupes by query key, so if both surfaces happen to search
+   *  the same term React Query coalesces them into one fetch. */
+  const debouncedPickerSearch = useDebouncedValue(pickerSearch, 200);
+  const { data: pickerSearchPage, isFetching: pickerFetching } = useOrgAgentsSearch(debouncedPickerSearch);
+  useEffect(() => {
+    if (!pickerSearchPage?.items) return;
+    mergeKnown(pickerSearchPage.items);
+  }, [pickerSearchPage?.items, mergeKnown]);
+
+  /** Rows fed to the `[+]` chip-picker dropdown — server-search hits,
+   *  minus chips already on the row and minus self / suspended / no-slug. */
+  const pickerCandidates = useMemo<MentionCandidate[]>(() => {
+    const chipSet = new Set(chips);
     const out: MentionCandidate[] = [];
-    for (const a of orgAgentsPage?.items ?? []) {
+    for (const a of pickerSearchPage?.items ?? []) {
+      if (chipSet.has(a.uuid)) continue;
       if (myAgentId && a.uuid === myAgentId) continue;
       if (!a.name) continue;
       if (a.status === "suspended") continue;
-      const ident = agentIdentity(a.uuid);
-      // Prefer the shared identity map (kept fresh by other queries) but
-      // fall back to the agent row itself — `listAgents` is the only
-      // source guaranteed to surface humans, so an identity-map miss for
-      // a never-seen human shouldn't drop them from the picker.
-      const name = ident?.name ?? a.name;
-      const displayName = ident?.displayName ?? a.displayName;
       out.push({
         agentId: a.uuid,
-        name,
-        displayName,
+        name: a.name,
+        displayName: a.displayName,
         managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
       });
     }
     return out;
-  }, [orgAgentsPage?.items, agentIdentity, myAgentId, myMemberId]);
+  }, [pickerSearchPage?.items, chips, myAgentId, myMemberId]);
+
+  /** Candidates exposed to `useMentionAutocomplete` — union of the
+   *  trigger-driven search hits and the running `knownAgents` map.
+   *  Picking from this set is what promotes an agent to a chip; raw
+   *  `@name` typed without autocomplete pick is best-effort resolved
+   *  via `extractMentions` against the same set. */
+  const candidates = useMemo<MentionCandidate[]>(() => {
+    const byId = new Map<string, MentionCandidate>(knownAgents);
+    for (const a of triggerSearchPage?.items ?? []) {
+      if (myAgentId && a.uuid === myAgentId) continue;
+      if (!a.name) continue;
+      if (a.status === "suspended") continue;
+      // Re-run the identity-map join so a renamed agent surfaces its
+      // latest displayName even when knownAgents has a stale entry.
+      const ident = agentIdentity(a.uuid);
+      byId.set(a.uuid, {
+        agentId: a.uuid,
+        name: ident?.name ?? a.name,
+        displayName: ident?.displayName ?? a.displayName,
+        managedByMe: Boolean(myMemberId && a.managerId === myMemberId),
+      });
+    }
+    return Array.from(byId.values());
+  }, [knownAgents, triggerSearchPage?.items, agentIdentity, myAgentId, myMemberId]);
 
   useEffect(() => {
     if (seededDefaultRef.current) return;
     if (chips.length > 0) return;
-    if (candidates.length === 0) return;
-    const defaultId = pickDefault(orgAgentsPage?.items ?? [], myMemberId);
-    if (!defaultId) return;
-    setChips([defaultId]);
+    // Wait for the org-list query to settle before picking — without
+    // this guard the pre-fetch render would always pick `null` and
+    // arm `seededDefaultRef`, locking out the real default once the
+    // data arrives.
+    if (!orgAgentsPage?.items) return;
+    const defaultId = pickDefault(orgAgentsPage.items, myAgentId);
     seededDefaultRef.current = true;
-  }, [candidates, orgAgentsPage?.items, myMemberId, chips.length]);
+    if (defaultId) setChips([defaultId]);
+  }, [orgAgentsPage?.items, myAgentId, chips.length]);
 
   const bodyMentions = useMemo(() => {
     const ps: MentionParticipant[] = candidates.map((c) => ({ agentId: c.agentId, name: c.name }));
@@ -284,8 +374,8 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   const addChip = (agentId: string): void => {
     setChips((prev) => (prev.includes(agentId) ? prev : [...prev, agentId]));
     setPickerOpen(false);
+    setPickerSearch("");
   };
-  const chipCandidates = useMemo(() => candidates.filter((c) => !chips.includes(c.agentId)), [candidates, chips]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" style={{ background: "var(--bg-base)" }}>
@@ -312,7 +402,10 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
             <ParticipantChips
               chips={chips}
               candidates={candidates}
-              chipCandidates={chipCandidates}
+              pickerCandidates={pickerCandidates}
+              pickerSearch={pickerSearch}
+              setPickerSearch={setPickerSearch}
+              pickerFetching={pickerFetching}
               pickerOpen={pickerOpen}
               setPickerOpen={setPickerOpen}
               pickerContainerRef={pickerContainerRef}
@@ -525,11 +618,18 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
 
 /** Participant chip row at the top of the composer card. Renders one
  *  pill per chip with `×` revealed on hover, plus a `[+]` button that
- *  anchors a small dropdown of remaining candidates. */
+ *  anchors a search-driven dropdown. The search input is always shown so
+ *  orgs above the 100-row first-page cap can reach every addable agent
+ *  (issue 494); the parent owns the search state + the
+ *  `useOrgAgentsSearch` call so its results can also feed the running
+ *  `knownAgents` map used elsewhere in the composer. */
 function ParticipantChips({
   chips,
   candidates,
-  chipCandidates,
+  pickerCandidates,
+  pickerSearch,
+  setPickerSearch,
+  pickerFetching,
   pickerOpen,
   setPickerOpen,
   pickerContainerRef,
@@ -538,13 +638,64 @@ function ParticipantChips({
 }: {
   chips: string[];
   candidates: MentionCandidate[];
-  chipCandidates: MentionCandidate[];
+  pickerCandidates: MentionCandidate[];
+  pickerSearch: string;
+  setPickerSearch: (value: string) => void;
+  pickerFetching: boolean;
   pickerOpen: boolean;
   setPickerOpen: (open: boolean) => void;
   pickerContainerRef: React.RefObject<HTMLDivElement | null>;
   onAdd: (agentId: string) => void;
   onRemove: (agentId: string) => void;
 }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [highlight, setHighlight] = useState(0);
+  // Mine-first / others grouping + divider, sorted alphabetically within
+  // each group. `selectable` strips the divider so keyboard navigation
+  // walks only commit-able rows.
+  const items = useMemo(() => groupAndSortCandidates(pickerCandidates), [pickerCandidates]);
+  const selectable = useMemo(() => items.filter((it): it is MentionCandidate => !("divider" in it)), [items]);
+  const ambiguous = useMemo(() => ambiguousDisplayNames(pickerCandidates), [pickerCandidates]);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    setHighlight(0);
+    inputRef.current?.focus();
+  }, [pickerOpen]);
+  // Re-clamp the highlight whenever the candidate set shifts (debounced
+  // search lands, chip removed, etc.) so it never points past the end.
+  useEffect(() => {
+    if (selectable.length === 0) {
+      setHighlight(0);
+      return;
+    }
+    setHighlight((i) => Math.min(i, selectable.length - 1));
+  }, [selectable]);
+
+  const onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight((i) => (selectable.length === 0 ? 0 : (i + 1) % selectable.length));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((i) => (selectable.length === 0 ? 0 : (i - 1 + selectable.length) % selectable.length));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const picked = selectable[highlight] ?? selectable[0];
+      if (picked) onAdd(picked.agentId);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setPickerOpen(false);
+    }
+  };
+
+  const emptyHint = (() => {
+    if (selectable.length > 0) return null;
+    if (pickerFetching) return "Searching…";
+    if (pickerSearch.trim().length > 0) return `No agents match “${pickerSearch.trim()}”`;
+    return "No agents to add";
+  })();
+
   return (
     <div
       className="flex items-center flex-wrap"
@@ -597,24 +748,25 @@ function ParticipantChips({
           onClick={() => setPickerOpen(!pickerOpen)}
           title="Add participant"
           aria-label="Add participant"
-          disabled={chipCandidates.length === 0}
+          aria-haspopup="listbox"
+          aria-expanded={pickerOpen}
           className="inline-flex items-center transition-colors hover:bg-[var(--bg-sunken)]"
           style={{
             padding: "var(--sp-0_5) var(--sp-1)",
             borderRadius: "var(--radius-chip)",
             border: "var(--hairline) solid var(--border)",
             background: "transparent",
-            color: chipCandidates.length === 0 ? "var(--fg-4)" : "var(--fg-3)",
-            cursor: chipCandidates.length === 0 ? "not-allowed" : "pointer",
+            color: "var(--fg-3)",
+            cursor: "pointer",
           }}
         >
           <Plus className="h-3 w-3" />
         </button>
-        {pickerOpen && chipCandidates.length > 0 && (
+        {pickerOpen && (
           <div
             role="listbox"
             aria-label="Add participant"
-            className="absolute z-20 max-h-56 overflow-auto rounded-md border shadow-lg"
+            className="absolute z-20 flex flex-col rounded-md border shadow-lg"
             style={{
               top: "calc(100% + var(--sp-1))",
               left: 0,
@@ -623,54 +775,80 @@ function ParticipantChips({
               borderColor: "var(--border)",
             }}
           >
-            {(() => {
-              const ambiguous = ambiguousDisplayNames(chipCandidates);
-              // My-managed agents first, then teammates', alphabetical
-              // within each group, divider between the two groups (only
-              // when both are non-empty). The thin --border-faint
-              // hairline is intentional: visible enough to read as
-              // grouping, quiet enough to not compete for attention.
-              return groupAndSortCandidates(chipCandidates).map((item) => {
-                if ("divider" in item) {
-                  return (
-                    <div
-                      key="__divider"
-                      // `role="presentation"` strips this from the a11y
-                      // tree: listbox semantics expect children to be
-                      // `option`s, and an announced separator inflates
-                      // the "N of M" count in some screen readers. The
-                      // grouping is purely a visual cue.
-                      role="presentation"
-                      style={{
-                        height: "var(--hairline)",
-                        background: "var(--border-faint)",
-                        margin: "var(--sp-0_5) var(--sp-3)",
-                      }}
-                    />
-                  );
-                }
-                return (
-                  <button
-                    key={item.agentId}
-                    type="button"
-                    role="option"
-                    aria-selected="false"
-                    title={item.name ? `@${item.name}` : undefined}
-                    onClick={() => onAdd(item.agentId)}
-                    className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                    style={{
-                      background: "transparent",
-                      color: "var(--fg)",
-                      border: "none",
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    <MentionLabel candidate={item} ambiguous={ambiguous} />
-                  </button>
-                );
-              });
-            })()}
+            <div
+              style={{
+                padding: "var(--sp-1_5) var(--sp-2)",
+                borderBottom: "var(--hairline) solid var(--border-faint)",
+              }}
+            >
+              <input
+                ref={inputRef}
+                type="text"
+                value={pickerSearch}
+                onChange={(e) => setPickerSearch(e.target.value)}
+                onKeyDown={onInputKeyDown}
+                placeholder="Search by name…"
+                aria-label="Search agents"
+                className="w-full text-body outline-none"
+                style={{
+                  padding: "var(--sp-1) var(--sp-1_5)",
+                  background: "var(--bg-sunken)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: "var(--radius-input)",
+                  color: "var(--fg)",
+                }}
+              />
+            </div>
+            <div className="overflow-auto" style={{ maxHeight: "16rem" }}>
+              {emptyHint !== null ? (
+                <div className="text-body" style={{ padding: "var(--sp-2_5) var(--sp-2)", color: "var(--fg-3)" }}>
+                  {emptyHint}
+                </div>
+              ) : (
+                (() => {
+                  let idx = -1;
+                  return items.map((item) => {
+                    if ("divider" in item) {
+                      return (
+                        <div
+                          key="__divider"
+                          role="presentation"
+                          style={{
+                            height: "var(--hairline)",
+                            background: "var(--border-faint)",
+                            margin: "var(--sp-0_5) var(--sp-3)",
+                          }}
+                        />
+                      );
+                    }
+                    idx += 1;
+                    const myIdx = idx;
+                    const active = myIdx === highlight;
+                    return (
+                      <button
+                        key={item.agentId}
+                        type="button"
+                        role="option"
+                        aria-selected={active}
+                        title={item.name ? `@${item.name}` : undefined}
+                        onClick={() => onAdd(item.agentId)}
+                        onMouseEnter={() => setHighlight(myIdx)}
+                        className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                        style={{
+                          background: active ? "var(--bg-hover)" : "transparent",
+                          color: "var(--fg)",
+                          border: "none",
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <MentionLabel candidate={item} ambiguous={ambiguous} />
+                      </button>
+                    );
+                  });
+                })()
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -680,40 +858,36 @@ function ParticipantChips({
 
 /** Pick a default seed chip when the user opens an empty draft.
  *
- *  Scope: agents the caller **personally manages** — never another
- *  member's agent (even if it's org-visible). Defaulting a new chat to
- *  a coworker's agent is a footgun: the user might fire off a message
- *  thinking it's their own assistant. When the caller manages no
- *  agents, return `null` and let the user pick — better an empty chip
- *  row than a wrong default.
+ *  Single rule: the caller's own human agent's `delegateMention` — i.e.
+ *  the agent the user has explicitly designated as their stand-in. When
+ *  it's unset (or the target was suspended / deleted) we return `null`
+ *  and let the user pick.
  *
- *  Within the my-managed subset (in priority order):
- *    1. Any `personal_assistant` — the user's primary AI representative.
- *    2. First my-managed agent — final fallback so we always seed
- *       something if I do manage at least one.
+ *  Pre-issue 494 the default walked the caller's managed agents
+ *  (personal_assistant first, then any) — which seeded a chip even when
+ *  the user had no opinion about who that should be. Defaulting to the
+ *  caller-declared delegate is a more deliberate signal: if the user
+ *  hasn't set one, no chip is the right starting state.
  *
- *  Humans never seed: a human "self-mirror" chip in a new chat is
- *  nonsense (you don't start a chat with yourself).
- *
- *  Pre-issue 343 there was also a "most-recently-active by
- *  `runtimeUpdatedAt`" step 1, which made the default flip between
- *  clicks whenever runtime presence shifted (issue 342). Dropped here —
- *  stability across clicks is more important than "show me my busiest
- *  agent". A more deliberate default (e.g. the caller's
- *  `delegateMention`) is tracked separately in issue 342. */
+ *  Validation: we still need to confirm the delegate is in the org list
+ *  and not suspended, so a delegate set months ago but since deleted
+ *  doesn't seed a dangling uuid. When the user's own row is past the
+ *  100-row first-page cap of `useOrgAgents()` we can't validate — in
+ *  that rare case we return null rather than seed a chip we can't
+ *  confirm. */
 
 /** Exported for `__tests__/pick-default.test.ts`. The signature accepts
  *  a `Pick<Agent, ...>` slice rather than `Agent` so callers (and tests)
  *  can pass minimal fixtures without inventing inboxIds, metadata, etc. */
-export type PickDefaultAgent = Pick<Agent, "uuid" | "type" | "managerId" | "status">;
+export type PickDefaultAgent = Pick<Agent, "uuid" | "type" | "managerId" | "status" | "delegateMention">;
 
-export function pickDefault(orgAgents: ReadonlyArray<PickDefaultAgent>, myMemberId: string | null): string | null {
-  if (!myMemberId) return null;
-  const mine = orgAgents.filter((a) => a.managerId === myMemberId && a.status !== "suspended" && a.type !== "human");
-  if (mine.length === 0) return null;
-
-  const pa = mine.find((a) => a.type === "personal_assistant");
-  if (pa) return pa.uuid;
-
-  return mine[0]?.uuid ?? null;
+export function pickDefault(orgAgents: ReadonlyArray<PickDefaultAgent>, myAgentId: string | null): string | null {
+  if (!myAgentId) return null;
+  const myHuman = orgAgents.find((a) => a.uuid === myAgentId);
+  const delegateUuid = myHuman?.delegateMention ?? null;
+  if (!delegateUuid) return null;
+  const delegate = orgAgents.find((a) => a.uuid === delegateUuid);
+  if (!delegate) return null;
+  if (delegate.status === "suspended") return null;
+  return delegate.uuid;
 }
