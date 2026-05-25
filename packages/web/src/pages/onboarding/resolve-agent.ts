@@ -10,9 +10,8 @@ import { readOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
  *   2. The most recently created managed non-human agent (uuid v7 is
  *      time-ordered, so a descending string sort puts the newest first).
  *
- * Mirrors the legacy `resolveOnboardingAgent` in step3-intro-body.tsx so
- * behaviour is identical; extracted here so the standalone flow doesn't
- * depend on the legacy view.
+ * (Originally extracted from the now-removed inline onboarding's Step 3 so the
+ * standalone flow owns its own agent-resolution logic.)
  */
 export async function resolveOnboardingAgent(): Promise<ManagedAgent> {
   const agents = await listManagedAgents();
