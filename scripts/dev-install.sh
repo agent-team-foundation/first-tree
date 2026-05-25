@@ -27,7 +27,10 @@ BIN_DIR="${HOME}/.local/bin"
 
 # Auto-migrate the legacy dev home from the pre-multi-env layout
 # (scripts/dev-cli.sh used ~/.first-tree/hub-dev). One-shot mv — never
-# copies, so the data structure is preserved bit-for-bit.
+# copies, so the data structure is preserved bit-for-bit. Limited to
+# the dev-side hub-dev path so it cannot touch peer staging / prod
+# state (the cli-side auto unit cleanup was removed for that exact
+# reason — see service-install.ts docblocks).
 LEGACY_DEV_HOME="${HOME}/.first-tree/hub-dev"
 NEW_DEV_HOME="${HOME}/.first-tree-dev"
 if [[ -d "$LEGACY_DEV_HOME" && ! -d "$NEW_DEV_HOME" ]]; then

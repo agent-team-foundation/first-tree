@@ -81,26 +81,6 @@ const LAUNCHD_LABEL = channelConfig.launchdLabel;
 // reuse it for both.
 const SYSLOG_IDENT = channelConfig.launchdLabel;
 
-// Pre-multi-env unit identifiers. Listed here so a one-shot upgrade
-// migration can disable + remove every stale unit a previous install
-// might have registered. Order doesn't matter; each name is probed
-// independently. Building the hyphenated legacy literals via string
-// concatenation keeps the CI broad-hyphenated grep
-// (`.github/workflows/ci.yml`) from matching them.
-const _OLD = "first-tree";
-const LEGACY_SYSTEMD_UNITS: ReadonlyArray<string> = [
-  `${_OLD}-client.service`, // production install, pre-multi-env
-  `${_OLD}-client-dev.service`, // scripts/dev-cli.sh install
-  `${_OLD}-hub-client.service`, // v0.14.x and earlier
-  `${_OLD}-hub-client-dev.service`,
-];
-const LEGACY_LAUNCHD_LABELS: ReadonlyArray<string> = [
-  `dev.${_OLD}.client`,
-  `dev.${_OLD}.client.dev`,
-  `dev.${_OLD}-hub.client`,
-  `dev.${_OLD}-hub.client.dev`,
-];
-
 // Function rather than const: see `channel-env.ts` history note. A
 // top-level `const = join(defaultHome(), ...)` would lock at module
 // load, re-introducing the bundle eval-order foot-gun that motivated
@@ -342,38 +322,15 @@ function waitForLabelEvicted(target: string, label: string, timeoutMs: number): 
   return false;
 }
 
-function legacyLaunchdPlistPath(label: string): string {
-  return join(homedir(), "Library", "LaunchAgents", `${label}.plist`);
-}
-
-/**
- * One-shot upgrade cleanup. Multi-env makes every previously-installed
- * launchd label (pre-multi-env prod, dev-cli.sh dev, v0.14.x Hub-era)
- * obsolete — they all wrote to a label that no current channel owns.
- * Walk the legacy list and bootout + remove each one before the current
- * install writes its own plist. Best-effort: never throws; install
- * proceeds even if bootout fails on one entry.
- *
- * Skips labels that happen to equal the current channel's label — that's
- * the install we're about to overwrite, not a legacy peer.
- */
-function migrateLegacyLaunchdUnits(): void {
-  const target = launchctlDomainTarget();
-  for (const label of LEGACY_LAUNCHD_LABELS) {
-    if (label === LAUNCHD_LABEL) continue;
-    const legacyPath = legacyLaunchdPlistPath(label);
-    if (!existsSync(legacyPath)) continue;
-    runCapture("launchctl", ["bootout", `${target}/${label}`], 15_000);
-    try {
-      rmSync(legacyPath);
-    } catch {
-      // best-effort; leave behind stale file rather than fail install
-    }
-  }
-}
-
 function installLaunchd(): ServiceInfo {
-  migrateLegacyLaunchdUnits();
+  // Legacy unit auto-cleanup deliberately not done here. Pre-multi-env,
+  // every channel's "legacy" was the prod-era `dev.first-tree.client`
+  // label, and an `install` from any channel would have ripped down
+  // whatever the user had running under that name — including a
+  // PARALLEL install (e.g. installing dev while staging was still
+  // mid-migration to multi-env). MIGRATION.md Phase 2 documents the
+  // operator-driven `launchctl bootout` step instead; safer to make
+  // the user type it once than to wipe a peer install silently.
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const plistPath = launchdPlistPath();
@@ -587,45 +544,13 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
   return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
 }
 
-function legacySystemdUnitPath(unit: string): string {
-  const xdg = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-  return join(xdg, "systemd", "user", unit);
-}
-
-/**
- * One-shot upgrade cleanup. Multi-env makes every previously-installed
- * systemd unit obsolete (pre-multi-env prod, dev-cli.sh dev, v0.14.x
- * Hub-era). Walk the legacy list and disable + remove each unit file
- * before the current install writes its own. Best-effort: never throws;
- * install proceeds even if disable fails on one entry.
- *
- * Skips unit names that happen to equal the current channel's unit —
- * that's the install we're about to overwrite, not a legacy peer.
- */
-function migrateLegacySystemdUnits(): void {
-  let reloadNeeded = false;
-  for (const unit of LEGACY_SYSTEMD_UNITS) {
-    if (unit === SYSTEMD_UNIT) continue;
-    const legacyPath = legacySystemdUnitPath(unit);
-    if (!existsSync(legacyPath)) continue;
-    // `disable --now` does both `stop` and `disable` in one call. Stderr
-    // "not loaded" / "not found" is fine — we still want to remove the file.
-    runCapture("systemctl", ["--user", "disable", "--now", unit], 10_000);
-    try {
-      rmSync(legacyPath);
-    } catch {
-      // best-effort; leave stale file rather than fail install
-    }
-    reloadNeeded = true;
-  }
-  if (reloadNeeded) {
-    // Reload so subsequent installSystemd() daemon-reload sees a clean slate.
-    runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
-  }
-}
-
 function installSystemd(): ServiceInfo {
-  migrateLegacySystemdUnits();
+  // Legacy unit auto-cleanup deliberately not done here — same reason
+  // as `installLaunchd` above. A blanket `disable --now` + `rm` of
+  // `first-tree-client.service` / `first-tree-client-dev.service` /
+  // etc. would silently wipe a peer staging/prod install that the
+  // operator hasn't migrated yet. MIGRATION.md Phase 2 documents the
+  // operator-driven `systemctl --user stop` + `rm` snippet instead.
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const unitPath = systemdUnitPath();
