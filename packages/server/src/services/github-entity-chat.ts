@@ -16,20 +16,28 @@ const log = createLogger("GithubEntityChat");
 
 /**
  * `bound_via` audit values:
- *   - "direct"        — first-touch row created in `resolveTargetChat` step (c)
- *   - "fixes_link"    — secondary row written by the `Fixes #N` linker
- *   - "agent_created" — proactively written when an agent's tool_call creates
- *                       a PR/Issue, before the corresponding `*.opened` webhook
- *                       arrives. See `maybeBindGithubEntityFromToolCall`.
+ *   - "direct"         — first-touch row created in `resolveTargetChat` step (c)
+ *   - "fixes_link"     — secondary row written by the `Fixes #N` linker
+ *   - "agent_created"  — proactively written when an agent's tool_call creates
+ *                        a PR/Issue, before the corresponding `*.opened` webhook
+ *                        arrives. See `maybeBindGithubEntityFromToolCall`.
+ *   - "human_fallback" — sibling row written by step (a.5) when an event arrives
+ *                        for a `(human, delegate)` pair that has no mapping yet,
+ *                        but another delegate under the same `(human, entity)`
+ *                        already does. Reuses the existing chat instead of
+ *                        minting a fresh one. Surfaces in telemetry so we can
+ *                        observe how often the involves→delegate mismatch path
+ *                        actually fires in production.
  *
  * Routing logic ignores the distinction; this column is purely for audit /
  * future strategy tweaks.
  */
-export type BoundVia = "direct" | "fixes_link" | "agent_created";
+export type BoundVia = "direct" | "fixes_link" | "agent_created" | "human_fallback";
 
 function asBoundVia(value: string): BoundVia {
   if (value === "fixes_link") return "fixes_link";
   if (value === "agent_created") return "agent_created";
+  if (value === "human_fallback") return "human_fallback";
   return "direct";
 }
 
@@ -119,7 +127,7 @@ export async function resolveTargetChat(
       delegateAgentId,
       entity,
       chatId: humanScoped.chatId,
-      boundVia: "direct",
+      boundVia: "human_fallback",
     });
     return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
   }

@@ -346,9 +346,12 @@ describe("resolveTargetChat", () => {
 
     expect(followUp.chatId).toBe(created.chatId);
     expect(followUp.created).toBe(false);
+    expect(followUp.boundVia).toBe("human_fallback");
 
     // Sibling mapping row written for (human, delegateB, entity) → same chat;
     // both rows now exist so the next event for either delegate hits (a).
+    // The sibling carries bound_via="human_fallback" so audit / telemetry can
+    // tell it apart from a first-touch direct binding.
     const mappings = await app.db
       .select()
       .from(githubEntityChatMappings)
@@ -356,6 +359,10 @@ describe("resolveTargetChat", () => {
     expect(mappings).toHaveLength(2);
     expect(new Set(mappings.map((m) => m.delegateAgentId))).toEqual(new Set([delegateA, delegateB]));
     expect(new Set(mappings.map((m) => m.chatId))).toEqual(new Set([created.chatId]));
+    const sibling = mappings.find((m) => m.delegateAgentId === delegateB);
+    expect(sibling?.boundVia).toBe("human_fallback");
+    const original = mappings.find((m) => m.delegateAgentId === delegateA);
+    expect(original?.boundVia).toBe("direct");
 
     const allChats = await app.db.select({ id: chats.id }).from(chats).where(eq(chats.id, created.chatId));
     expect(allChats).toHaveLength(1);

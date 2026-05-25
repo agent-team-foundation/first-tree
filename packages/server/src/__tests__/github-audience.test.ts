@@ -304,6 +304,72 @@ describe("resolveAudience", () => {
     expect(audience[0]?.chatId).toBe(chatId);
   });
 
+  it("collapses subscribed rows by human (sibling mappings on same chat → one audience target)", async () => {
+    // Once `resolveTargetChat` step (a.5) lands sibling mapping rows
+    // (same chat, different delegate under the same human), naive subscribed
+    // expansion would post the same card to the chat N times. Subscribed
+    // dedup collapses by humanAgentId; sibling rows always share chatId by
+    // construction, so we keep the earliest bound_at row as the
+    // representative.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateOriginal = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-original-${randomUUID().slice(0, 6)}`,
+    });
+    const delegateSibling = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-sibling-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `eve-${randomUUID().slice(0, 6)}`,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+
+    // Original row first (earlier bound_at), then sibling — simulates the
+    // (a.5) write order. We do not control bound_at directly; the default
+    // `now()` clock + serial insert order suffices because the assertions
+    // only require the representative to be one of the two rows sharing
+    // chatId, and both point at the same chat.
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegateOriginal,
+      entityType: "issue",
+      entityKey: "owner/repo#301",
+      chatId,
+    });
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegateSibling,
+      entityType: "issue",
+      entityKey: "owner/repo#301",
+      chatId,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#301",
+        actorLogin: "outsider",
+        kind: "commented",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.humanAgentId).toBe(human);
+    expect(audience[0]?.chatId).toBe(chatId);
+  });
+
   it("dedups involves by human even when the existing mapping uses a different delegate", async () => {
     // Regression for the assignee-creates-new-chat bug. The chat-binding was
     // written under (human, delegateA) when the agent first created the

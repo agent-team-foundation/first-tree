@@ -124,6 +124,7 @@ export async function resolveAudience(
       humanAgentId: githubEntityChatMappings.humanAgentId,
       delegateAgentId: githubEntityChatMappings.delegateAgentId,
       chatId: githubEntityChatMappings.chatId,
+      boundAt: githubEntityChatMappings.boundAt,
     })
     .from(githubEntityChatMappings)
     .where(
@@ -134,7 +135,22 @@ export async function resolveAudience(
       ),
     );
 
-  const subscribed: AudienceTarget[] = subscribedRows.map((row) => ({
+  // Dedup subscribed rows by `humanAgentId` (keep earliest `bound_at`).
+  // After `resolveTargetChat` step (a.5) lands, the same `(human, entity)`
+  // pair can have multiple mapping rows pointing at the *same* chat (one
+  // per delegate that ever drove an event for this entity under this
+  // human). Without this dedup the audience loops the same chatId N times
+  // and `deliverNormalizedEvent` posts N identical cards. Sibling rows are
+  // guaranteed to share `chatId` because (a.5) always inserts using the
+  // human-scoped lookup's `chatId`, so collapsing them is loss-free.
+  const earliestByHuman = new Map<string, (typeof subscribedRows)[number]>();
+  for (const row of subscribedRows) {
+    const current = earliestByHuman.get(row.humanAgentId);
+    if (!current || row.boundAt < current.boundAt) {
+      earliestByHuman.set(row.humanAgentId, row);
+    }
+  }
+  const subscribed: AudienceTarget[] = [...earliestByHuman.values()].map((row) => ({
     humanAgentId: row.humanAgentId,
     delegateAgentId: row.delegateAgentId,
     kind: "existing",
