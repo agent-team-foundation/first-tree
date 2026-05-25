@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 /**
  * Post-bundle channel-home isolation: spawns the **built dist binary**
@@ -66,7 +66,9 @@ function ensureDistBuilt(): void {
     throw new Error(`build succeeded but ${DIST} still missing`);
   }
   if (!existsSync(CLIENT_DIST)) {
-    throw new Error(`build succeeded but ${CLIENT_DIST} still missing — root pnpm build may have skipped workspace deps`);
+    throw new Error(
+      `build succeeded but ${CLIENT_DIST} still missing — root pnpm build may have skipped workspace deps`,
+    );
   }
 }
 
@@ -107,8 +109,17 @@ function spawnHomeInfo(env: NodeJS.ProcessEnv): HomeInfo {
 describe("post-bundle channel-home isolation", () => {
   let tmpHome: string;
 
-  beforeEach(() => {
+  // CI's test job does not run `pnpm build` before `pnpm test`, so the
+  // first call to ensureDistBuilt triggers a full cold-cache turbo
+  // build (~30–60s on GitHub runners). vitest's default hook timeout
+  // is 10s — way too short. Run once in `beforeAll` (not beforeEach)
+  // with an explicit 5-minute budget; subsequent test cases skip the
+  // ensureDistBuilt path because dist now exists.
+  beforeAll(() => {
     ensureDistBuilt();
+  }, 300_000);
+
+  beforeEach(() => {
     tmpHome = mkdtempSync(join(tmpdir(), "post-bundle-home-"));
   });
 
