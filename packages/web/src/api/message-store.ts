@@ -98,15 +98,13 @@ export async function getCachedMessages(chatId: string): Promise<MessageWithDeli
     const req = index.openCursor(range);
     req.onsuccess = () => {
       const cursor = req.result;
-      if (!cursor) {
-        resolve(out);
-        return;
-      }
+      if (!cursor) return;
       const row = cursor.value as StoredMessage;
       out.push(row.payload);
       cursor.continue();
     };
-    req.onerror = () => resolve(out);
+    tx.oncomplete = () => resolve(out);
+    tx.onerror = () => resolve(out);
     tx.onabort = () => resolve(out);
   });
 }
