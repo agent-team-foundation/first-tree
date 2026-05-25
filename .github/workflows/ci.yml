@@ -159,15 +159,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Need main reachable so check-migrations.mjs can compare HEAD's
-          # _journal.json against main's. The job only ever runs `git show`
-          # against origin/main, so a depth-1 fetch of main below is enough —
-          # no need to pull full history.
           fetch-depth: 1
       - name: Fetch main for cross-branch comparison
-        # On a push to main, origin/main and HEAD coincide; the script
-        # detects this and skips the cross-branch check. On PRs we need
-        # an explicit fetch because checkout@v4 only fetches the PR ref.
+        # Only PR runs need to compare HEAD against main. On push-to-main
+        # the local contiguity check is sufficient (a duplicate idx that
+        # snuck through two racing PRs surfaces as a broken sequence in
+        # _journal.json) and fetching main risks a TOCTOU "missing from
+        # HEAD" false positive if another push lands between this push
+        # and the fetch.
+        if: github.event_name == 'pull_request'
         run: git fetch --depth=1 origin main:refs/remotes/origin/main
       - uses: actions/setup-node@v4
         with:
