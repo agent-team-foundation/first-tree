@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { LiveActivity } from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { pendingQuestions } from "../db/schema/pending-questions.js";
-import { getChatAgentStatuses } from "../services/agent-chat-status.js";
+import { getChatAgentStatuses, withTurnNarration } from "../services/agent-chat-status.js";
 import { createMeChat, deriveFailedAgents } from "../services/me-chat.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
@@ -109,6 +110,78 @@ describe("getChatAgentStatuses", () => {
     expect(s?.working).toBe(true);
     expect(s?.main).toBe("working");
     expect(s?.activity?.label).toBe("Bash");
+  });
+
+  it("keeps the current turn's narration on turnText even after a tool_call (sticky)", async () => {
+    const { app, peer, chatId } = await newChatWithAgent();
+    await bindPresence(peer.agent.uuid, peer.clientId);
+    await setSession(peer.agent.uuid, chatId, "active");
+    // Narration, then a tool_call right after — the tool_call is the newest
+    // event, so without sticky narration the bar would read "Using Read".
+    await app.db.execute(sql`
+      INSERT INTO session_events (id, agent_id, chat_id, seq, kind, payload, created_at)
+      VALUES
+        (${randomUUID()}, ${peer.agent.uuid}, ${chatId}, 1, 'assistant_text',
+          ${JSON.stringify({ text: "Let me check compose-status-bar.tsx" })}::jsonb, NOW()),
+        (${randomUUID()}, ${peer.agent.uuid}, ${chatId}, 2, 'tool_call',
+          ${JSON.stringify({ toolUseId: "t1", name: "Read", args: { file_path: "x" }, status: "pending" })}::jsonb, NOW())
+    `);
+
+    const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+    expect(s?.main).toBe("working");
+    // Base activity stays the tool — sidebar / chat-list keep "Using Read".
+    expect(s?.activity?.kind).toBe("tool_call");
+    expect(s?.activity?.label).toBe("Read");
+    // Compose bar reads the sticky narration off turnText.
+    expect(s?.activity?.turnText).toBe("Let me check compose-status-bar.tsx");
+  });
+
+  it("does not carry a previous turn's narration into a fresh turn (turnText past turn_end)", async () => {
+    const { app, peer, chatId } = await newChatWithAgent();
+    await bindPresence(peer.agent.uuid, peer.clientId);
+    await setSession(peer.agent.uuid, chatId, "active");
+    await app.db.execute(sql`
+      INSERT INTO session_events (id, agent_id, chat_id, seq, kind, payload, created_at)
+      VALUES
+        (${randomUUID()}, ${peer.agent.uuid}, ${chatId}, 1, 'assistant_text',
+          ${JSON.stringify({ text: "old turn narration" })}::jsonb, NOW()),
+        (${randomUUID()}, ${peer.agent.uuid}, ${chatId}, 2, 'turn_end',
+          ${JSON.stringify({ status: "success" })}::jsonb, NOW()),
+        (${randomUUID()}, ${peer.agent.uuid}, ${chatId}, 3, 'tool_call',
+          ${JSON.stringify({ toolUseId: "t2", name: "Bash", args: null, status: "pending" })}::jsonb, NOW())
+    `);
+
+    const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+    expect(s?.main).toBe("working");
+    expect(s?.activity?.kind).toBe("tool_call");
+    expect(s?.activity?.turnText).toBeUndefined();
+  });
+});
+
+describe("withTurnNarration — sticky narration on the working activity", () => {
+  const base: LiveActivity = {
+    agentId: "a1",
+    kind: "tool_call",
+    label: "Bash",
+    startedAt: "2026-05-25T00:00:00.000Z",
+    detail: "npm test",
+  };
+
+  it("returns null when there is no base activity", () => {
+    expect(withTurnNarration(null, "anything")).toBeNull();
+  });
+
+  it("keeps the base activity unchanged when there is no narration text", () => {
+    expect(withTurnNarration(base, null)).toBe(base);
+    expect(withTurnNarration(base, "   ")).toBe(base);
+  });
+
+  it("attaches a collapsed narration as turnText without touching kind / label / detail", () => {
+    const out = withTurnNarration(base, "  Let me   check\nthe file  ");
+    expect(out?.kind).toBe("tool_call");
+    expect(out?.label).toBe("Bash");
+    expect(out?.detail).toBe("npm test");
+    expect(out?.turnText).toBe("Let me check the file");
   });
 });
 

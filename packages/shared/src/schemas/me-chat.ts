@@ -150,6 +150,17 @@ export const liveActivitySchema = z.object({
    * thinking.
    */
   detail: z.string().optional(),
+  /**
+   * The current turn's latest `assistant_text`, one-line preview (collapsed +
+   * capped to {@link ASSISTANT_TEXT_PREVIEW_MAX}). Distinct from `detail`,
+   * which describes the *latest event*: `turnText` is the agent's running
+   * narration for the whole turn, so a `tool_call` fired immediately after a
+   * sentence does not bury what the agent is saying. Populated only by the
+   * per-agent chat-status path (`agent-chat-status.ts`) and rendered only by
+   * the compose status bar's sticky lead; absent on the chat-list
+   * `liveActivity`, and absent when the turn has produced no prose yet.
+   */
+  turnText: z.string().optional(),
 });
 export type LiveActivity = z.infer<typeof liveActivitySchema>;
 

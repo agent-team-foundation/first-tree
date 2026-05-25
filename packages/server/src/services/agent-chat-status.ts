@@ -11,7 +11,7 @@ import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
-import { derivePendingQuestions, toLiveActivity } from "./me-chat.js";
+import { derivePendingQuestions, previewAssistantText, toLiveActivity } from "./me-chat.js";
 
 /**
  * Composite per-(agent,chat) status for every non-human speaker in a chat —
@@ -93,15 +93,39 @@ export async function getChatAgentStatuses(db: Database, chatId: string): Promis
 }
 
 /**
+ * Sticky narration for a working agent's live activity. Surfaces the current
+ * turn's latest `assistant_text` (what the agent is *saying*) on `turnText` so
+ * the compose status bar keeps showing the narration even after a `tool_call`
+ * arrives — without it the activity is the single newest event, and a tool call
+ * fired right after a sentence buries the prose. Leaves `turnText` absent (base
+ * activity unchanged) when the turn has produced no prose yet. Base `kind` /
+ * `label` are preserved, so the sidebar AgentRow and chat-list chip keep
+ * reading `Using <tool>`. Pure & exported for unit testing.
+ */
+export function withTurnNarration(base: LiveActivity | null, narrationText: unknown): LiveActivity | null {
+  if (!base) return null;
+  const narration = previewAssistantText(narrationText);
+  return narration ? { ...base, turnText: narration } : base;
+}
+
+/**
  * Per-agent live activity in `chatId`: the latest `session_events` row per
  * pair, mapped through `toLiveActivity` (so terminal kinds → absent) and
  * dropped when older than the stale threshold. Per-pair LATERAL seek on the
  * unique `(agent_id, chat_id, seq)` index — the same shape as
  * `deriveLiveActivity`, resolved per agent rather than collapsed per chat.
+ *
+ * A second LATERAL seeks the current turn's latest `assistant_text` (seq past
+ * the last `turn_end`); `withTurnNarration` rides it along as `turnText` so the
+ * compose status bar can show the running narration even while a tool runs.
+ * Only this focused single-chat status query pays for the extra seek; the
+ * chat-list `deriveLiveActivity` is unchanged.
  */
 async function deriveAgentActivity(db: Database, chatId: string): Promise<Map<string, LiveActivity>> {
   const rows = (await db.execute(sql`
-    SELECT acs.agent_id AS agent_id, e.kind AS kind, e.payload AS payload, e.created_at AS created_at
+    SELECT acs.agent_id AS agent_id,
+           e.kind AS kind, e.payload AS payload, e.created_at AS created_at,
+           t.text AS turn_text
       FROM agent_chat_sessions acs
       CROSS JOIN LATERAL (
         SELECT kind, payload, created_at, seq
@@ -111,20 +135,43 @@ async function deriveAgentActivity(db: Database, chatId: string): Promise<Map<st
          ORDER BY se.seq DESC
          LIMIT 1
       ) e
+      LEFT JOIN LATERAL (
+        SELECT LEFT(se.payload->>'text', 200) AS text
+          FROM session_events se
+         WHERE se.agent_id = acs.agent_id
+           AND se.chat_id  = acs.chat_id
+           AND se.kind     = 'assistant_text'
+           AND se.seq > COALESCE((
+             SELECT MAX(se2.seq)
+               FROM session_events se2
+              WHERE se2.agent_id = acs.agent_id
+                AND se2.chat_id  = acs.chat_id
+                AND se2.kind     = 'turn_end'
+           ), 0)
+         ORDER BY se.seq DESC
+         LIMIT 1
+      ) t ON TRUE
      WHERE acs.chat_id = ${chatId}
        AND acs.state <> 'evicted'
-  `)) as unknown as Array<{ agent_id: string; kind: string; payload: unknown; created_at: Date | string }>;
+  `)) as unknown as Array<{
+    agent_id: string;
+    kind: string;
+    payload: unknown;
+    created_at: Date | string;
+    turn_text: string | null;
+  }>;
   const now = Date.now();
   const out = new Map<string, LiveActivity>();
   for (const r of rows) {
     if (now - new Date(r.created_at).getTime() > LIVE_ACTIVITY_STALE_MS) continue;
-    const activity = toLiveActivity({
+    const base = toLiveActivity({
       agent_id: r.agent_id,
       chat_id: chatId,
       kind: r.kind,
       payload: r.payload,
       created_at: r.created_at,
     });
+    const activity = withTurnNarration(base, r.turn_text);
     if (activity) out.set(r.agent_id, activity);
   }
   return out;

@@ -295,11 +295,21 @@ function WorkingDetail({ activity }: { activity: LiveActivity | null }) {
   );
 }
 
-/** "Thinking" (sans), the assistant reply preview ("…what the agent is saying",
- *  falling back to "Writing" when the block is empty), or "Using <tool> · <arg>"
- *  (sans word + mono tool/arg). Both previews are already truncated server-side;
- *  the reply preview is additionally width-capped so it reads as a glance. */
+/** The current turn's running narration (`turnText`, sticky across tool calls)
+ *  when present; else "Thinking", the latest assistant reply preview (falling
+ *  back to "Writing"), or "Using <tool> · <arg>" (sans word + mono tool/arg).
+ *  The narration / reply previews are truncated server-side and width-capped
+ *  here so they read as a glance. */
 function ActivityText({ activity }: { activity: LiveActivity }) {
+  // Sticky narration: the current turn's running reply text takes precedence
+  // over the tool_call / thinking indicator, so a tool call fired right after a
+  // sentence doesn't bury what the agent is saying.
+  if (activity.turnText)
+    return (
+      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
+        {activity.turnText}
+      </span>
+    );
   if (activity.kind === "thinking") return <span className="truncate">Thinking</span>;
   if (activity.kind === "assistant_text")
     return (
