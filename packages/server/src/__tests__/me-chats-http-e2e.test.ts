@@ -5,15 +5,14 @@ import { createMeChat } from "../services/me-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
- * Wire-level end-to-end coverage for the engaged-ring + live-activity
- * fields exposed by `GET /orgs/:orgId/chats?scope=mine`. The pure
- * service-level invariants live in `me-chat-engaged-and-activity.test.ts`;
- * this file pins the HTTP shape (Fastify response serialisation does not
- * strip the new fields) and the cross-user / cross-org isolation that
- * was the original #366 / #367 motivator.
+ * Wire-level end-to-end coverage for the live-activity field exposed by
+ * `GET /orgs/:orgId/chats?scope=mine`. The pure service-level invariants
+ * live in `me-chat-activity.test.ts`; this file pins the HTTP shape (Fastify
+ * response serialisation does not strip the field) and the cross-user /
+ * cross-org isolation that was the original #366 / #367 motivator.
  */
 
-describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape", () => {
+describe("GET /orgs/:orgId/chats — liveActivity wire shape", () => {
   const getApp = useTestApp();
 
   async function setSessionState(db: ReturnType<typeof getApp>["db"], agentId: string, chatId: string, state: string) {
@@ -41,7 +40,7 @@ describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape",
     `);
   }
 
-  it("response payload exposes both new fields with the correct types", async () => {
+  it("response payload exposes liveActivity with the correct types (and no engaged/working fields)", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);
     const peer = await createAgent(app.db, {
@@ -73,11 +72,12 @@ describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape",
     const row = body.rows.find((r) => r.chatId === chatId);
     expect(row, "chat row should be present in the response").toBeDefined();
 
-    // 1. workingAgentIds is GONE (breaking rename); engagedAgentIds is the new name.
+    // 1. The legacy per-agent ring fields are GONE — `liveActivity` presence is
+    //    the only working signal the chat list consumes.
     expect(row).not.toHaveProperty("workingAgentIds");
-    expect(row?.engagedAgentIds).toEqual([peer.uuid]);
+    expect(row).not.toHaveProperty("engagedAgentIds");
 
-    // 2. liveActivity is a structured object with the four documented fields.
+    // 2. liveActivity is a structured object with the documented fields.
     expect(row?.liveActivity).toMatchObject({
       agentId: peer.uuid,
       kind: "tool_call",
@@ -86,7 +86,7 @@ describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape",
     expect(typeof (row?.liveActivity as { startedAt: unknown }).startedAt).toBe("string");
   });
 
-  it("idle session → liveActivity null, engagedAgentIds still present (just empty)", async () => {
+  it("idle session → liveActivity null", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);
     const peer = await createAgent(app.db, {
@@ -108,11 +108,10 @@ describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape",
     });
     expect(res.statusCode).toBe(200);
     const row = res.json<{ rows: Array<Record<string, unknown>> }>().rows.find((r) => r.chatId === chatId);
-    expect(row?.engagedAgentIds).toEqual([]);
     expect(row?.liveActivity).toBeNull();
   });
 
-  it("turn_end → liveActivity null (ring may still be on if session stays active)", async () => {
+  it("turn_end → liveActivity null", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);
     const peer = await createAgent(app.db, {
@@ -140,10 +139,8 @@ describe("GET /orgs/:orgId/chats — engagedAgentIds + liveActivity wire shape",
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     const row = res.json<{ rows: Array<Record<string, unknown>> }>().rows.find((r) => r.chatId === chatId);
-    // Engaged ring: lifecycle still active → still on. The 300s idle suspend
-    // is what eventually turns the ring off; turn_end alone shouldn't.
-    expect(row?.engagedAgentIds).toEqual([peer.uuid]);
-    // Live indicator: terminal event → no chip.
+    // Live indicator: terminal event → no chip (the session lifecycle stays
+    // active, but the chat list only consumes liveActivity presence now).
     expect(row?.liveActivity).toBeNull();
   });
 });
@@ -216,7 +213,7 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
     });
     // No events at all for Bob's chat with Kael.
 
-    // Alice's chat list — Kael's chat should light up both axes.
+    // Alice's chat list — Kael's chat should light up the live activity.
     const aliceRes = await app.inject({
       method: "GET",
       url: `/api/v1/orgs/${encodeURIComponent(orgId)}/chats`,
@@ -225,7 +222,6 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
     const aliceRow = aliceRes
       .json<{ rows: Array<Record<string, unknown>> }>()
       .rows.find((r) => r.chatId === aliceChat.chatId);
-    expect(aliceRow?.engagedAgentIds, "Alice's row: Kael is engaged").toEqual([kael.uuid]);
     expect((aliceRow?.liveActivity as { label?: string })?.label, "Alice's row: live label").toBe("Edit");
 
     // Bob's chat list — Kael's chat must NOT light up.
@@ -237,7 +233,6 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
     const bobRow = bobRes
       .json<{ rows: Array<Record<string, unknown>> }>()
       .rows.find((r) => r.chatId === bobChat.chatId);
-    expect(bobRow?.engagedAgentIds, "Bob's row: Kael is NOT engaged").toEqual([]);
     expect(bobRow?.liveActivity, "Bob's row: no live activity").toBeNull();
   });
 });

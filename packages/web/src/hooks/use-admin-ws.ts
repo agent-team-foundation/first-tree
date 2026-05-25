@@ -37,9 +37,9 @@ let refCount = 0;
 // after it ends.
 //
 // 1s is the long-enough-to-fold-a-burst, short-enough-to-feel-live
-// trade-off — `engagedAgentIds` (avatar ring) and `liveActivity`
-// (WorkingChip) update with at most ~1s lag, well inside the 60s
-// server-side `liveActivity` window. Also applied to `chat:message`
+// trade-off — `liveActivity` (WorkingChip / chat-list dot) updates with at
+// most ~1s lag, well inside the 60s server-side `liveActivity` window. Also
+// applied to `chat:message`
 // to fold storm-of-messages flurries (formerly invalidated every frame
 // without a throttle).
 //
@@ -170,12 +170,11 @@ function broadcast(msg: WsMessage) {
     if (msg.type === "session:state") {
       activityInvalidator.invalidate(latestQc);
       sessionsInvalidator.invalidate(latestQc);
-      // `MeChatRow.engagedAgentIds` is derived from
-      // `agent_chat_sessions(agent_id, chat_id).state === 'active'`, which
-      // is mutated by the same `session:state` event upstream. Invalidate
-      // the conversation-list query so the avatar engaged ring switches
-      // on / off in real time without waiting for the 15s `refetchInterval`.
-      // Throttled because the upstream frames can burst tool-call-fast.
+      // A `session:state` change mutates the per-(agent,chat) session
+      // lifecycle, which feeds the conversation-list status projections
+      // (live-dot / failed). Invalidate the list so they refresh in real time
+      // without waiting for the refetchInterval. Throttled because the upstream
+      // frames can burst tool-call-fast.
       meChatsInvalidator.invalidate(latestQc);
       chatAgentStatusInvalidator.invalidate(latestQc);
       // Precise invalidate for the (agent, chat) the frame is about, so a

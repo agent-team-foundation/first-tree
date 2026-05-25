@@ -35,7 +35,6 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     unreadMentionCount: overrides.unreadMentionCount ?? 0,
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
-    engagedAgentIds: overrides.engagedAgentIds ?? [],
     liveActivity: overrides.liveActivity ?? null,
     pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
@@ -75,7 +74,6 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       title: "kael",
       participants: [KAEL],
-      engagedAgentIds: [KAEL.agentId],
       lastMessagePreview: "Analyzing logs from the last 24h…",
     }),
   },
@@ -111,7 +109,6 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       title: "kael",
       participants: [KAEL],
-      engagedAgentIds: [KAEL.agentId],
       unreadMentionCount: 3,
       lastMessagePreview: "Pulling the next batch now.",
     }),
