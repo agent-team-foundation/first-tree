@@ -24,7 +24,7 @@
 
 import type { MessageWithDelivery } from "./chats.js";
 
-const DB_NAME = "first-tree-hub-chat-cache";
+const DB_NAME = "first-tree-chat-cache";
 // Schema version is shared with read-state-store.ts (M2). Both modules
 // open the same DB; whichever opens first triggers any pending upgrade.
 // Each module's onupgradeneeded must defensively create-if-not-exists

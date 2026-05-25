@@ -29,7 +29,7 @@
  * 120.
  */
 
-const DB_NAME = "first-tree-hub-chat-cache";
+const DB_NAME = "first-tree-chat-cache";
 const DB_VERSION = 2;
 const MESSAGES_STORE = "messages";
 const MESSAGES_INDEX = "by_chat_created";
