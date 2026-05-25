@@ -10,11 +10,19 @@ import {
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, MoreHorizontal, Paperclip, X } from "lucide-react";
-import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
-import { listAgents } from "../../../api/agents.js";
 import {
   type FileMessageContent,
   getChat,
@@ -29,6 +37,8 @@ import {
   sendFileMessage,
 } from "../../../api/chats.js";
 import { getImage, putImage } from "../../../api/image-store.js";
+import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
+import { getReadState, type ReadState, setReadState } from "../../../api/read-state-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -48,18 +58,24 @@ import {
   type QuestionStatus,
 } from "../../../components/chat/question-message.js";
 import { WorkingBubble } from "../../../components/chat/working-bubble.js";
+import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
   MentionAutocompletePopover,
   type MentionCandidate,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
+import { NewMessagesPill } from "../../../components/new-messages-pill.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
+import { UnreadDivider } from "../../../components/unread-divider.js";
+import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
+import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
 import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
+import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
 import { computeRequiresMention } from "../../../utils/requires-mention.js";
@@ -187,9 +203,12 @@ function AssistantTextRow({
   );
 }
 
-function ErrorRow({ event }: { event: SessionEventRow }) {
+function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?: (id: string) => string }) {
   const payload = asErrorPayload(event.payload);
   const ts = formatClockTime(event.createdAt);
+  // Resolve the emitting agent so the header reads "error · <agent> · runtime · …".
+  // Falls back gracefully if the lookup function isn't provided (legacy callers).
+  const agentName = agentNameFn ? agentNameFn(event.agentId) : null;
   return (
     <div
       // Anchor for the compose rail's jump-to-timeline (failed → this agent's error).
@@ -202,7 +221,7 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
       }}
     >
       <div className="mono uppercase text-caption" style={{ color: "var(--state-error)" }}>
-        error · {payload?.source ?? "unknown"} · {ts}
+        error{agentName ? ` · ${agentName}` : ""} · {payload?.source ?? "unknown"} · {ts}
       </div>
       <div
         className="text-label"
@@ -370,6 +389,7 @@ function TextRow({
   return (
     <div
       className="grid"
+      data-message-id={msg.id}
       style={{
         gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
@@ -557,6 +577,7 @@ function QuestionMessageRow({
   return (
     <div
       className="grid"
+      data-message-id={msg.id}
       // Anchors for the compose status bar's jump-to-timeline. The boolean
       // flag drives the legacy "scroll to latest pending" path; the agent one
       // lets the rail locate *this* agent's pending question by id.
@@ -612,6 +633,7 @@ function QuestionAnswerRow({
   return (
     <div
       className="grid"
+      data-message-id={msg.id}
       style={{
         gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
@@ -803,6 +825,19 @@ export function ChatView({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Scrollable container that holds the message timeline. Ref is wired
+  // up on the corresponding <div> below; consumed by useChatScroll (for
+  // ResizeObserver-stabilised scrolling) and useReadTracker (as the
+  // IntersectionObserver root).
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // useChatScroll is declared up here (rather than alongside the M2
+  // jump-to-position logic below) because `sendMut`'s onSuccess
+  // needs to call `scrollToBottom` — and sendMut is declared
+  // shortly after this point. The hook only depends on
+  // `scrollContainerRef`, which is just a ref.
+  const { scrollToBottomImmediate, scrollToMessageImmediate, scrollToBottom, isAtBottom } =
+    useChatScroll(scrollContainerRef);
 
   // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
   // visible lines). Same hook as the new-chat composer for a consistent
@@ -822,15 +857,47 @@ export function ChatView({
     focusPrimedRef.current = false;
   }, [chatId]);
 
-  // FOLLOW-UP: this loads only the latest 50 messages (no pagination) and the
-  // events query below only the primary agent's events. The status surfaces'
-  // "jump to timeline" gates clickability on what's actually mounted
-  // (useMountedAnchors), so older / non-primary-agent anchors simply aren't
-  // clickable yet. Full jump coverage needs message pagination + multi-agent
-  // event loading — tracked as a separate effort, not in this status-UI PR.
+  // Hydrate timeline from local IndexedDB cache so chat-switches feel
+  // instant (no spinner-then-content flash). Cache scope is messages only;
+  // session_events / session_outputs are session-lifecycle scoped on the
+  // server (see agent-hub/client-runtime.md) and intentionally not cached.
+  // staleTime: Infinity — cache lookup never re-fetches; React Query's
+  // gcTime keeps the result in memory for instant re-display when the user
+  // bounces between chats.
+  const { data: cachedMessages } = useQuery({
+    queryKey: ["chat-messages-cache", chatId],
+    queryFn: () => getCachedMessages(chatId),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+  // Server fetch — same 5s polling as before, plus a fire-and-forget
+  // write-through to the cache so subsequent opens hit hot. The cache
+  // write is intentionally not awaited: it must never delay rendering or
+  // surface as an error to the user; on IndexedDB unavailability it
+  // silently no-ops.
+  //
+  // FOLLOW-UP: this loads only the latest 50 messages (no pagination) and
+  // the events query below only the primary agent's events. The status
+  // surfaces' "jump to timeline" gates clickability on what's actually
+  // mounted (useMountedAnchors), so older / non-primary-agent anchors
+  // simply aren't clickable yet. Full jump coverage needs message
+  // pagination + multi-agent event loading — tracked as a separate effort.
+  //
+  // TODO(perf): the write-through re-upserts all 50 messages every 5s
+  // (~600 idempotent IDB puts/min/chat). Functionally correct because
+  // upsert is keyed by [chatId, messageId], but most writes overwrite
+  // identical rows. A future iteration can diff against the cached set
+  // and only write rows whose id is new or whose deliveryStatus changed.
+  // Flagged by yuezengwu in PR 286 review — non-blocking.
   const { data: messagesData } = useQuery({
     queryKey: ["chat-messages", chatId],
-    queryFn: () => listChatMessages(chatId, { limit: 50 }),
+    queryFn: async () => {
+      const fresh = await listChatMessages(chatId, { limit: 50 });
+      void cacheMessages(chatId, fresh.items);
+      return fresh;
+    },
+    refetchInterval: 5_000,
   });
 
   // Fetch newest events first so the turn-grouping filter always sees the
@@ -855,17 +922,10 @@ export function ChatView({
    *  button explicitly, not through `@<outsider>`. Also feeds
    *  `managedByMeMap` for picker grouping.
    *
-   *  Backed by `GET /orgs/:orgId/agents` (`listAgents`) rather than
-   *  `/activity`: the activity feed filters on `runtimeState IS NOT NULL`
-   *  to mean "AI agents with a live runtime", which drops human members
-   *  entirely (humans never bind a runtime). See issue 343. `limit: 100`
-   *  is the server's enforced cap in `paginationQuerySchema`; orgs above
-   *  that threshold need pagination here. */
-  const { data: orgAgentsPage } = useQuery({
-    queryKey: ["org-agents"],
-    queryFn: () => listAgents({ limit: 100 }),
-    refetchInterval: 30_000,
-  });
+   *  Shared with the identity-map hooks (`useAgentIdentityMap` etc.) via
+   *  `useOrgAgents` — single React Query cache, one HTTP fetch per
+   *  refetch tick. See issue 495. */
+  const { data: orgAgentsPage } = useOrgAgents();
 
   /**
    * Optimistic-update helpers for the messages cache. Wrap setQueryData so
@@ -929,6 +989,31 @@ export function ChatView({
     [chatId, myAgentId],
   );
 
+  // Pre-advance target for the session high water: the id of a
+  // message the USER just sent (text-only or file path). The actual
+  // `setSessionHighestId` call happens in an effect further down,
+  // because `setSessionHighestId` is declared below this point with
+  // the rest of the tracker/pill state — both paths surface a
+  // pending advance here, the effect drains it.
+  //
+  // Why pre-advance is the right mechanism: without it, after the
+  // server returns the new message and `mergedMessages` grows, the
+  // tracker still reports the PREVIOUS last-visible message as the
+  // bottom-visible until the smooth-scroll animation reaches the
+  // new row. During that ~300ms window, `pillCount = 1` and the
+  // pill flashes "↓ 1 new message" for the user's own send. By
+  // bumping `sessionHighestId` to the new message's id immediately
+  // on `onSuccess`, `pillCount` stays 0 from the very first render
+  // that contains the new message — no flash possible.
+  //
+  // The `chatId` is tracked alongside the message id so a send
+  // whose response arrives AFTER the user has switched chats
+  // doesn't pollute the new chat's watermark. Per PR 286 manual
+  // sign-off rev 10 (reviewer's option C).
+  const [pendingHighWaterAdvance, setPendingHighWaterAdvance] = useState<{ chatId: string; messageId: string } | null>(
+    null,
+  );
+
   const sendMut = useMutation({
     mutationFn: (content: string) => sendChatMessage(chatId, content),
     // Optimistic insert: render the user's row above the composer immediately
@@ -953,6 +1038,35 @@ export function ChatView({
       // wait up to 10s for the polling refetch. See M plan Step 3 in
       // docs/session-creation-on-first-message.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+      // Persist the own-send advance to chat-A's read-state row
+      // both in the React Query cache and in IndexedDB, keyed by
+      // the `chatId` captured in this closure at send time. The
+      // direct write makes the snapshot durable even if the user
+      // switches chats before the tracker's debounce window
+      // settles. The just-sent message is also the chat tip — so
+      // `latestKnownMessageId = saved.id` is both the visual anchor
+      // and the freshness marker.
+      const ownSendReadState: ReadState = {
+        chatId,
+        bottomVisibleMessageId: saved.id,
+        latestKnownMessageId: saved.id,
+        updatedAt: Date.now(),
+      };
+      queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
+      void setReadState(chatId, saved.id, saved.id);
+      // Pre-advance the in-memory high water to the new message id
+      // BEFORE initiating the smooth scroll. By the time the new
+      // message commits to `mergedMessages`, `sessionHighestIdx`
+      // already resolves to the new last index → `pillCount = 0` →
+      // pill never flashes for the user's own send.
+      setPendingHighWaterAdvance({ chatId, messageId: saved.id });
+      // When the user sends a message, scroll all the way to the
+      // bottom so they see their own send. ResizeObserver-debounced
+      // (non-immediate) variant so the scroll lands after the
+      // newly-arrived message has been rendered. Without this,
+      // M2's once-per-chat-visit gate would suppress any scroll
+      // and the user's just-sent message would arrive off-screen.
+      scrollToBottom("smooth");
     },
     // Server-side `enforceGroupMention` + unresolved-token guard 400s
     // (e.g. user typed `@<outsider>` who's not in the chat) surface here.
@@ -1030,6 +1144,12 @@ export function ChatView({
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
       const pendingTempIds = new Set<string>();
       try {
+        // Track the latest server-returned message id across the
+        // sequence of file POSTs (and the optional trailing text
+        // POST) so we can pre-advance the high water in one shot
+        // after the whole batch lands. See `pendingHighWaterAdvance`
+        // for rationale.
+        let lastSentMessageId: string | null = null;
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
           const imageId = crypto.randomUUID();
@@ -1076,6 +1196,8 @@ export function ChatView({
             replaceOptimisticMessage(tempId, saved);
             pendingTempIds.delete(tempId);
           }
+          lastSentMessageId = saved.id;
+          URL.revokeObjectURL(img.previewUrl);
         }
         if (text) {
           const optimistic = buildOptimisticTextMessage(text);
@@ -1089,12 +1211,33 @@ export function ChatView({
             replaceOptimisticMessage(tempId, saved);
             pendingTempIds.delete(tempId);
           }
+          lastSentMessageId = saved.id;
         }
         // Mirror sendMut.onSettled: predictive session-activation only shows
         // up in the sidebar after we invalidate, otherwise the file-send path
         // for the first message in a new chat waits for 10s polling.
         queryClient.invalidateQueries({ queryKey: messagesQueryKey });
         queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+        // Pre-advance the high water before the smooth scroll for
+        // the same reason as in sendMut.onSuccess — pill never
+        // flashes for the user's own send. Also persist directly to
+        // queryClient cache + IDB so the chat-switch-mid-send case
+        // is durable (see sendMut.onSuccess for rationale).
+        if (lastSentMessageId) {
+          const ownSendReadState: ReadState = {
+            chatId,
+            bottomVisibleMessageId: lastSentMessageId,
+            latestKnownMessageId: lastSentMessageId,
+            updatedAt: Date.now(),
+          };
+          queryClient.setQueryData<ReadState>(["chat-read-state", chatId], ownSendReadState);
+          void setReadState(chatId, lastSentMessageId, lastSentMessageId);
+          setPendingHighWaterAdvance({ chatId, messageId: lastSentMessageId });
+        }
+        // Same scroll-on-send as sendMut.onSuccess — the file-send
+        // path goes through a different code branch so we have to
+        // repeat the call here.
+        scrollToBottom("smooth");
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Failed to send image");
         // Roll back unacknowledged optimistic rows + restore the draft so the
@@ -1156,8 +1299,48 @@ export function ChatView({
    * bucket, so intermediate streamed text stays visible as its own row
    * even when surrounded by tool calls.
    */
+  // Merge cached + server messages, dedup by id (server wins so updated
+  // delivery status / metadata overrides any older cached copy), and
+  // sort by createdAt. This is the union the timeline renders from.
+  const mergedMessages = useMemo<MessageWithDelivery[]>(() => {
+    const fromCache = cachedMessages ?? [];
+    const fromServer = messagesData?.items ?? [];
+    const byId = new Map<string, MessageWithDelivery>();
+    for (const m of fromCache) byId.set(m.id, m);
+    for (const m of fromServer) byId.set(m.id, m);
+    return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }, [cachedMessages, messagesData]);
+
+  // Detect a known gap between the cache range and the server's "last 50"
+  // window: if there's no overlap and the server's oldest fetched message
+  // is strictly newer than the cache's newest, the user was away long
+  // enough that more than 50 messages went past in between, and we have
+  // no way to fill them in until cursor pagination ships. Render a banner
+  // after the message id returned here. Returns null when there's overlap
+  // (the common case) or when either side is empty.
+  const gapAfterMessageId = useMemo<string | null>(() => {
+    const fromCache = cachedMessages ?? [];
+    const fromServer = messagesData?.items ?? [];
+    const firstCached = fromCache[0];
+    const firstServer = fromServer[0];
+    if (!firstCached || !firstServer) return null;
+    const serverIds = new Set(fromServer.map((m) => m.id));
+    for (const cached of fromCache) {
+      if (serverIds.has(cached.id)) return null;
+    }
+    let newestCached = firstCached;
+    for (const m of fromCache) {
+      if (m.createdAt > newestCached.createdAt) newestCached = m;
+    }
+    let oldestServer = firstServer;
+    for (const m of fromServer) {
+      if (m.createdAt < oldestServer.createdAt) oldestServer = m;
+    }
+    if (oldestServer.createdAt <= newestCached.createdAt) return null;
+    return newestCached.id;
+  }, [cachedMessages, messagesData]);
+
   const items: TimelineItem[] = useMemo(() => {
-    const msgs = messagesData?.items ?? [];
     const rawEvents = eventsData?.items ?? [];
     const visibleEvents = filterEventsForTimeline(rawEvents);
 
@@ -1173,8 +1356,12 @@ export function ChatView({
       if (e.kind === "turn_end" && e.seq > lastTurnEndSeq) lastTurnEndSeq = e.seq;
     }
 
+    // Feed `mergedMessages` (IDB cache ∪ server) into the timeline, not the
+    // raw server window. Otherwise cached messages outside the server's
+    // "last 50" window would silently disappear on chat re-open until the
+    // server fetch lands.
     const flat: TimelineItem[] = [
-      ...msgs.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
+      ...mergedMessages.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
       ...visibleEvents.map((e) => ({ kind: "event" as const, at: e.createdAt, key: `e-${e.id}`, data: e })),
     ];
     flat.sort((a, b) => a.at.localeCompare(b.at));
@@ -1204,7 +1391,7 @@ export function ChatView({
     }
     flushBucket();
     return grouped;
-  }, [messagesData, eventsData]);
+  }, [mergedMessages, eventsData]);
 
   /**
    * For every `format=question` message we render, we need the matching
@@ -1214,23 +1401,423 @@ export function ChatView({
    * the canonical "answered" signal. v1 collapses superseded into pending
    * since we don't have a WS-pushed supersede signal yet (commit 6).
    */
+  // Build the lookup from mergedMessages (cache ∪ server), not just
+  // messagesData. Otherwise a cached question_answer that has aged out of
+  // the server's "last 50" window would be invisible to this lookup —
+  // its matching question would render as `pending` even though the
+  // answer is right there in the timeline (cached). Caught in PR 286
+  // review by Codex / yuezengwu.
   const answersByCorrelationId = useMemo(() => {
     const map = new Map<string, QuestionAnswerMessageContent>();
-    for (const m of messagesData?.items ?? []) {
+    for (const m of mergedMessages) {
       if (m.format !== "question_answer") continue;
       if (isQuestionAnswerContent(m.content)) {
         map.set(m.content.correlationId, m.content);
       }
     }
     return map;
-  }, [messagesData]);
+  }, [mergedMessages]);
 
   const itemCount = items.length;
-  useEffect(() => {
-    if (itemCount > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+
+  // M2: scroll-position snapshot — synchronous IndexedDB lookup of
+  // where the user's viewport bottom was the last time they left
+  // this chat. React Query's cache holds it after first read so a
+  // chat re-open does not block on IDB.
+  const { data: readState } = useQuery({
+    queryKey: ["chat-read-state", chatId],
+    queryFn: () => getReadState(chatId),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+  const storedBottomVisibleId = readState?.bottomVisibleMessageId ?? null;
+
+  // Resolve the stored bottom-visible id against the rendered set
+  // so we can decide where to scroll on chat open. If the stored
+  // id is gone (deleted message, or not in the current window),
+  // we fall back to first-time-open semantics.
+  const bottomVisibleResolution = useMemo<{ anchorId: string; index: number } | null>(() => {
+    if (!storedBottomVisibleId || mergedMessages.length === 0) return null;
+    const exact = mergedMessages.findIndex((m) => m.id === storedBottomVisibleId);
+    if (exact >= 0) {
+      const exactMsg = mergedMessages[exact];
+      if (exactMsg) return { anchorId: exactMsg.id, index: exact };
     }
-  }, [itemCount]);
+    return null;
+  }, [storedBottomVisibleId, mergedMessages]);
+
+  // Frozen-at-open snapshot of `readState.latestKnownMessageId` —
+  // the chat tip the user left this chat at on the previous visit.
+  // Drives BOTH the "New Messages" divider and the "↓ N new messages"
+  // pill: the boundary between already-seen-before-leaving and
+  // arrived-since-then.
+  //
+  // Why frozen: as the user scrolls, the in-session read tracker
+  // writes fresh `latestKnownMessageId` values back into the IDB
+  // row (and the React Query cache), advancing the LIVE
+  // `readState.latestKnownMessageId` to the current DOM tip. If
+  // either the divider or the pill read from that live value, the
+  // anchor would slide forward during the visit — the divider
+  // would not render and the pill would never reach a non-zero
+  // count. Both must use this snapshot instead.
+  //
+  // History: PR 286 manual sign-off rev 8 — code-reviewer reproduced
+  // "pill never shows on return-to-chat-with-injected-messages" and
+  // root-caused it to the live readState read in the pill baseline.
+  const [dividerAnchorMessageId, setDividerAnchorMessageId] = useState<string | null>(null);
+  // Dismiss when the divider has scrolled out the top of the
+  // viewport (IntersectionObserver below). Kept as state so the
+  // render path can drop the divider once dismissed. Reset on chat
+  // switch.
+  const [dividerDismissed, setDividerDismissed] = useState<boolean>(false);
+  // Tracks which chatId we have already snapshotted the divider
+  // anchor for. Without this guard, the snapshot would re-fire on
+  // every tracker IDB write (each one updates the React Query
+  // cache for the chat-read-state key) and the anchor would slide
+  // forward — defeating the "frozen at open" intent.
+  const dividerSnapshotChatIdRef = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
+  useLayoutEffect(() => {
+    setDividerAnchorMessageId(null);
+    setDividerDismissed(false);
+    dividerSnapshotChatIdRef.current = null;
+  }, [chatId]);
+  // Snapshot once the read-state query for this chatId has resolved
+  // (data is `undefined` while loading, `null` for no row, and a
+  // `ReadState` otherwise). Skips when there is no prior IDB row —
+  // first-time visits intentionally show no divider.
+  useEffect(() => {
+    if (dividerSnapshotChatIdRef.current === chatId) return;
+    if (readState === undefined) return;
+    dividerSnapshotChatIdRef.current = chatId;
+    setDividerAnchorMessageId(readState?.latestKnownMessageId ?? null);
+  }, [chatId, readState]);
+
+  // Index of the snapshotted anchor in the current `mergedMessages`.
+  // -1 when there is no anchor (first-time visit or while readState
+  // is still loading) or when the anchor has aged out of the
+  // server window. Used as the boundary for BOTH the divider
+  // position and the pill's "new since last visit" baseline — the
+  // canonical "everything up to here was already on screen when the
+  // user last left" pointer.
+  //
+  // Index-based (not lex on message id) because `crypto.randomUUID()`
+  // in `server/src/services/message.ts:188` produces UUID v4, which
+  // is NOT time-sortable. A v4 id for a brand-new message can lex
+  // compare LESS than an older anchor's id and silently get
+  // classified as "already seen". `mergedMessages` is already sorted
+  // by `createdAt` ascending, so the index is the right ordering.
+  const unreadAnchorIdx = useMemo<number>(() => {
+    if (!dividerAnchorMessageId) return -1;
+    return mergedMessages.findIndex((m) => m.id === dividerAnchorMessageId);
+  }, [dividerAnchorMessageId, mergedMessages]);
+
+  // Live bottom-visible id during the current session. Driven by
+  // useReadTracker's `onBottomVisibleChange` callback. Used as the
+  // signal that advances the session high watermark below.
+  const [liveBottomVisibleId, setLiveBottomVisibleId] = useState<string | null>(null);
+
+  // Session high watermark — id of the latest message the user has
+  // reached (had at viewport bottom) at any point during the
+  // current chat session. Stored as a MESSAGE ID, not an index,
+  // because indices into `mergedMessages` are not stable across
+  // (a) polled window shifts (server may slide the visible window
+  // forward as new messages arrive — old indices then point to
+  // different messages) and (b) `scrollIntoView` boundary quirks.
+  // An id is content-addressed and resolves to the correct row
+  // regardless of how the underlying list moves.
+  //
+  // Monotonic forward semantics: we only set this to a new id if
+  // that id is chronologically later than the current one (resolved
+  // via `findIndex` at advance time). Scrolling back UP after
+  // reaching a high water leaves the id unchanged.
+  //
+  // Combined with the frozen-at-open anchor index (`unreadAnchorIdx`,
+  // derived from the snapshotted `dividerAnchorMessageId`), this is
+  // the "everything up to here is known to the user" pointer that
+  // drives the pill count.
+  //
+  // History: the previous implementation stored an integer
+  // `sessionHighestRaw` and caused the pill-never-shows bug
+  // liuchao-001 reported — when poll-driven window shift moved old
+  // messages off the top, `sessionHighestRaw=49` ended up pointing
+  // at a brand-new message the user had never seen, suppressing
+  // the pill. PR 286 manual sign-off rev 7 (code-reviewer's repro).
+  const [sessionHighestId, setSessionHighestId] = useState<string | null>(null);
+  // Reset the in-session watermark (and the live bottom-visible
+  // mirror) on every chat switch.
+  //
+  // useLayoutEffect (not useEffect): runs synchronously after DOM
+  // commit but before paint, and the `setState`s here trigger a
+  // synchronous re-render before paint as well. Without this, on
+  // A → B with B warm-cached the first paint of B would briefly
+  // render with A's stale `sessionHighestId`. If A's high water id
+  // resolved to an in-range index in B's list, that paint would
+  // show a false "↓ N new messages" pill for a fraction of a
+  // second before useEffect cleared it. useLayoutEffect closes
+  // the window — the user never sees the stale state.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is the trigger; setters are stable.
+  useLayoutEffect(() => {
+    setSessionHighestId(null);
+    setLiveBottomVisibleId(null);
+    // Drop any pending own-send pre-advance from the previous
+    // chat — the new chat's watermark should not inherit the
+    // outgoing chat's last sent message.
+    setPendingHighWaterAdvance(null);
+  }, [chatId]);
+  // Drain `pendingHighWaterAdvance` into `sessionHighestId`. Lives
+  // here (not directly inside `sendMut.onSuccess` / the file-send
+  // path) because `setSessionHighestId` is declared in this block —
+  // a useEffect lets the setter signal flow forward without a
+  // forward reference. The `chatId` check protects against the
+  // race where a send's response arrives AFTER the user has
+  // switched to a different chat.
+  useEffect(() => {
+    if (!pendingHighWaterAdvance) return;
+    if (pendingHighWaterAdvance.chatId !== chatId) {
+      setPendingHighWaterAdvance(null);
+      return;
+    }
+    setSessionHighestId(pendingHighWaterAdvance.messageId);
+    setPendingHighWaterAdvance(null);
+  }, [pendingHighWaterAdvance, chatId]);
+  // Advance the watermark id whenever the user's viewport bottom
+  // reaches a message later than the previous high water.
+  // Comparison goes through current `mergedMessages` so both ids
+  // are resolved against the live ordering — invariant to window
+  // shifts.
+  //
+  // Regression guard: if `sessionHighestId` is set but currently
+  // unresolvable in `mergedMessages` (i.e., the id doesn't appear
+  // in the rendered list yet), bail without advancing. This covers
+  // two cases:
+  //   1. Pre-advance: `sendMut.onSuccess` just set `sessionHighestId`
+  //      to the brand-new server-returned id, but the cache
+  //      invalidation+refetch hasn't landed yet, so the new msg
+  //      isn't in `mergedMessages`. Without this guard the advance
+  //      effect would observe the OLD last-visible id and overwrite
+  //      the pre-advance, re-opening the own-send flash window.
+  //   2. Window-shift drop-off: a previously valid high-water id
+  //      that has fallen out of the polling window. In that case
+  //      "the user has already seen everything older than the
+  //      current window" is the conservative interpretation, but
+  //      regressing to the new bottom-visible would be wrong — wait
+  //      until the next forward advance instead.
+  useEffect(() => {
+    if (!liveBottomVisibleId) return;
+    const newIdx = mergedMessages.findIndex((m) => m.id === liveBottomVisibleId);
+    if (newIdx < 0) return;
+    if (sessionHighestId !== null) {
+      const curIdx = mergedMessages.findIndex((m) => m.id === sessionHighestId);
+      if (curIdx < 0) return;
+      if (newIdx <= curIdx) return;
+    }
+    setSessionHighestId(liveBottomVisibleId);
+  }, [liveBottomVisibleId, mergedMessages, sessionHighestId]);
+  // Effective high water index, resolved from `sessionHighestId`
+  // against the live `mergedMessages`. Max with the frozen-at-open
+  // anchor index covers the re-visit-without-scroll path (no
+  // in-session advance, but the prior-visit high water still
+  // applies). The baseline MUST come from the frozen anchor —
+  // reading the live `readState.latestKnownMessageId` here is the
+  // bug code-reviewer caught in rev 8: the tracker's debounced
+  // write at ~600ms after chat-open advances the live value to the
+  // current DOM tip, which would lift this baseline above every
+  // newly-injected message and suppress the pill.
+  const sessionHighestIdx = useMemo<number>(() => {
+    const sessionIdx = sessionHighestId ? mergedMessages.findIndex((m) => m.id === sessionHighestId) : -1;
+    return Math.max(sessionIdx, unreadAnchorIdx);
+  }, [sessionHighestId, mergedMessages, unreadAnchorIdx]);
+
+  // Pill count = messages strictly newer than the effective high
+  // watermark. Hides (count = 0) whenever the user has had every
+  // currently-rendered message at viewport bottom at some point
+  // (either this session or a prior one persisted in IDB).
+  const pillCount = useMemo<number>(() => {
+    if (mergedMessages.length === 0) return 0;
+    if (sessionHighestIdx < 0) return 0;
+    return Math.max(0, mergedMessages.length - 1 - sessionHighestIdx);
+  }, [mergedMessages, sessionHighestIdx]);
+
+  // Index of the first message strictly newer than the snapshotted
+  // anchor — i.e., where the "New Messages" line slots in.
+  //
+  // Comparison is by index in `mergedMessages` (which is sorted by
+  // `createdAt` ascending). DO NOT compare by lex order on the
+  // message id: `server/src/services/message.ts:188` generates ids
+  // with `crypto.randomUUID()` (UUID v4, random), so id ordering
+  // does not match time ordering. An earlier version used `id > anchor`
+  // and silently dropped the divider whenever the freshly-injected
+  // message's id happened to sort lexicographically below the
+  // anchor's — the bug code-reviewer reproduced in rev 8.
+  //
+  // Returns -1 when the divider should not render (no anchor, anchor
+  // has aged out of the window, or no newer messages).
+  const firstNewItemIdx = useMemo<number>(() => {
+    if (unreadAnchorIdx < 0) return -1;
+    const idxById = new Map<string, number>();
+    for (let i = 0; i < mergedMessages.length; i++) {
+      const msg = mergedMessages[i];
+      if (msg) idxById.set(msg.id, i);
+    }
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item || item.kind !== "message") continue;
+      const idx = idxById.get(item.data.id);
+      if (idx !== undefined && idx > unreadAnchorIdx) return i;
+    }
+    return -1;
+  }, [items, mergedMessages, unreadAnchorIdx]);
+
+  // Hide the divider the moment it scrolls past the top of the
+  // viewport — but keep it visible while the user is still looking
+  // at it, even after they have read every new message below.
+  // Dismissal is one-way during a visit; the next chat open
+  // re-evaluates from the fresh snapshot.
+  const dividerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (dividerDismissed) return;
+    if (firstNewItemIdx < 0) return;
+    const node = dividerRef.current;
+    const container = scrollContainerRef.current;
+    if (!node || !container) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const rootBounds = entry.rootBounds;
+          if (!rootBounds) continue;
+          if (entry.boundingClientRect.bottom < rootBounds.top) {
+            setDividerDismissed(true);
+            return;
+          }
+        }
+      },
+      { root: container, threshold: 0 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [firstNewItemIdx, dividerDismissed]);
+
+  // Decide where to land on chat open. Fires exactly once per chat-
+  // id visit, the first moment the timeline has items to scroll
+  // within — so a hard-reload that loads chatId before queries
+  // hydrate still lands correctly when items arrive.
+  //
+  // Gated by `landedForChatRef`. Subsequent itemCount changes
+  // (poll-driven append) are bailed; new-message handling falls to
+  // the pill instead.
+  //
+  // useLayoutEffect (not useEffect): fires synchronously after DOM
+  // commit but before paint, so the first frame the user sees is
+  // already at the right scroll position.
+  //
+  // Earlier rounds:
+  //  - PR 286 review M1 round → answersByCorrelationId source fix.
+  //  - PR 286 review M2 round → Bug 1 (hard reload landed at top
+  //    because deps were `[chatId]` only and bailed on itemCount=0).
+  //  - liuchao-001 manual sign-off → top-then-bottom flash (fixed
+  //    by switching to useLayoutEffect + *Immediate variants).
+  //  - liuchao-001 manual sign-off → model swap from monotonic
+  //    "last-read marker" to "bottom-visible-on-leave snapshot",
+  //    so coming back to a chat lands you where you were visually,
+  //    not at "the bottom of all content I've ever seen here".
+  const landedForChatRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (itemCount === 0) return;
+    if (landedForChatRef.current === chatId) return;
+    landedForChatRef.current = chatId;
+    if (bottomVisibleResolution) {
+      // Land the stored anchor at the viewport bottom. Any messages
+      // newer than the anchor sit below the fold; the pill will
+      // surface them.
+      scrollToMessageImmediate(bottomVisibleResolution.anchorId, "end", "auto");
+    } else {
+      // No prior snapshot (first-time visit, or the stored anchor
+      // is gone): preserve the M1-era "open scrolls to bottom"
+      // behavior.
+      scrollToBottomImmediate("auto");
+    }
+  }, [chatId, itemCount, bottomVisibleResolution, scrollToMessageImmediate, scrollToBottomImmediate]);
+
+  // Watches the scroll position and persists the bottom-visible
+  // message id per chat. Distinct from the prior monotonic-marker
+  // model — the snapshot reflects where the viewport bottom WAS,
+  // not what the user has read.
+  //
+  // `onWrite` mirrors every IDB write into React Query's cache for
+  // the `["chat-read-state", chatId]` key, so a same-session re-visit
+  // (A → B → A) picks up the latest snapshot even though the query
+  // has `staleTime: Infinity`.
+  //
+  // `onBottomVisibleChange` publishes the live value so the pill
+  // can recompute its count on every scroll event without an IDB
+  // round-trip.
+  useReadTracker({
+    containerRef: scrollContainerRef,
+    messages: mergedMessages,
+    chatId,
+    onWrite: (cid, bottomVisibleMessageId, latestKnownMessageId) => {
+      queryClient.setQueryData<ReadState>(["chat-read-state", cid], {
+        chatId: cid,
+        bottomVisibleMessageId,
+        latestKnownMessageId,
+        updatedAt: Date.now(),
+      });
+    },
+    onBottomVisibleChange: setLiveBottomVisibleId,
+  });
+
+  // Pill click: jump to the bottom. As the scroll lands, the
+  // tracker's scroll listener picks up the new bottom-visible id
+  // (the latest message), pillCount zeroes out, and the pill
+  // unmounts. No need to manually clear state.
+  const onPillClick = useCallback(() => {
+    scrollToBottom("smooth");
+  }, [scrollToBottom]);
+
+  // Thought-stream auto-follow. When the agent is actively
+  // working, its session_events (assistant_text / tool_call /
+  // thinking) arrive incrementally via 5s polling and render as
+  // "streaming" rows in the timeline. M1 followed every itemCount
+  // change to the bottom, which kept the viewport tracking the
+  // stream. M2's once-per-visit gate eliminated that, leaving the
+  // stream piling up off-screen for at-bottom users.
+  //
+  // Restore the behavior, narrowly: when items grow due to
+  // *events only* (not new messages) AND the user is at the
+  // bottom, smooth-scroll to follow. Final-message arrivals are
+  // still NOT followed — they surface via the pill, per the user
+  // spec ("agent's chunky reply shouldn't yank scroll, but the
+  // streaming thought process should").
+  //
+  // Once issue 130 lands WebSocket push for session_events, this
+  // path will fire at sub-second granularity instead of every 5s,
+  // and the same follow logic stays correct.
+  //
+  // Caught in PR 286 manual sign-off rev 3 — the prior M2 silently
+  // broke this behavior, the user flagged it.
+  const prevCountsRef = useRef<{ chatId: string; itemCount: number; messagesCount: number }>({
+    chatId: "",
+    itemCount: 0,
+    messagesCount: 0,
+  });
+  useEffect(() => {
+    const prev = prevCountsRef.current;
+    if (prev.chatId !== chatId) {
+      // Chat switched — establish a fresh baseline, no follow.
+      prevCountsRef.current = { chatId, itemCount, messagesCount: mergedMessages.length };
+      return;
+    }
+    const itemsGrew = itemCount > prev.itemCount;
+    const messagesGrew = mergedMessages.length > prev.messagesCount;
+    if (itemsGrew && !messagesGrew && isAtBottom) {
+      // Growth is event-only (a streaming thought / tool call /
+      // assistant_text row appeared); the user is currently at
+      // the bottom, so pull them along with the stream.
+      scrollToBottom("smooth");
+    }
+    prevCountsRef.current = { chatId, itemCount, messagesCount: mergedMessages.length };
+  }, [chatId, itemCount, mergedMessages.length, isAtBottom, scrollToBottom]);
 
   /**
    * Chat-scoped identity index. The chat detail endpoint resolves each
@@ -1770,99 +2357,154 @@ export function ChatView({
             </div>
           )}
 
-          {/* Timeline. Scroll viewport stays full-width so the scrollbar hugs
-          the panel's right edge — pushing it inward would float the column.
-          Reading column inside is capped via `maxWidth` and centered to
-          align with the composer below into one vertical thread. Side
-          padding (sp-6) prevents content from kissing the panel border on
-          narrow viewports. */}
-          <div className="flex-1 overflow-y-auto relative" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
-            <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-              {itemCount === 0 && (
-                <div
-                  className="flex flex-col items-center text-body"
-                  style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
-                >
-                  <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
-                  {readOnly ? "No messages yet" : "Send a message to start the conversation"}
-                </div>
-              )}
-              <div className="flex flex-col" style={{ gap: 4 }}>
-                {items.map((item) => {
-                  if (item.kind === "workgroup") {
-                    // Default to folded while chatDetail is still loading — opening
-                    // a group chat's bubble for one frame and then folding it after
-                    // chatDetail resolves is worse than under-opening direct chats
-                    // by the same one-frame window.
-                    return (
-                      <WorkingBubble key={item.key} events={item.events} defaultOpen={chatDetail?.type === "direct"} />
-                    );
-                  }
-                  if (item.kind === "event") {
-                    const ev = item.data;
-                    switch (ev.kind) {
-                      case "assistant_text":
-                        return (
-                          <AssistantTextRow
+          {/* Timeline region. Outer `relative flex-col` wrapper exists solely
+          as the containing block for the floating pill — putting `position:
+          relative` on the scroll container itself let the pill drift mid-list
+          in some browsers (PR 286 manual sign-off rev 8). The wrapper sizes to
+          the same bounds as the scroll viewport (single `flex-1` child + own
+          `min-h-0`), so `absolute; bottom: var(--sp-3)` lands at the visible
+          bottom of the chat panel regardless of scroll position.
+
+          Scroll viewport stays full-width so the scrollbar hugs the panel's
+          right edge — pushing it inward would float the column. Reading column
+          inside is capped via `maxWidth` and centered to align with the
+          composer below into one vertical thread. Side padding (sp-6) prevents
+          content from kissing the panel border on narrow viewports. */}
+          <div className="relative flex-1 flex flex-col min-h-0">
+            <div
+              ref={scrollContainerRef}
+              className="flex-1 overflow-y-auto"
+              style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
+            >
+              <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+                {itemCount === 0 && (
+                  <div
+                    className="flex flex-col items-center text-body"
+                    style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
+                  >
+                    <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
+                    {readOnly ? "No messages yet" : "Send a message to start the conversation"}
+                  </div>
+                )}
+                <div className="flex flex-col" style={{ gap: 4 }}>
+                  {items.flatMap((item, idx) => {
+                    let node: ReactNode = null;
+                    if (item.kind === "workgroup") {
+                      // Default to folded while chatDetail is still loading —
+                      // opening a group chat's bubble for one frame and then
+                      // folding it after chatDetail resolves is worse than
+                      // under-opening direct chats by the same one-frame window.
+                      node = (
+                        <WorkingBubble
+                          key={item.key}
+                          events={item.events}
+                          defaultOpen={chatDetail?.type === "direct"}
+                        />
+                      );
+                    } else if (item.kind === "event") {
+                      const ev = item.data;
+                      switch (ev.kind) {
+                        case "assistant_text":
+                          node = (
+                            <AssistantTextRow
+                              key={item.key}
+                              event={ev}
+                              agentId={agentId}
+                              agentNameFn={chatScopedAgentName}
+                              agentAvatarFn={agentAvatar}
+                              agentColorTokenFn={agentColorToken}
+                            />
+                          );
+                          break;
+                        case "error":
+                          node = <ErrorRow key={item.key} event={ev} agentNameFn={chatScopedAgentName} />;
+                          break;
+                        default:
+                          // tool_call / thinking are folded into the workgroup
+                          // above; turn_end is filtered upstream; anything else
+                          // is dropped.
+                          node = null;
+                      }
+                    } else {
+                      const msg = item.data;
+                      if (msg.format === "question" && isQuestionContent(msg.content)) {
+                        const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
+                        const status: QuestionStatus = answer ? "answered" : "pending";
+                        node = (
+                          <QuestionMessageRow
                             key={item.key}
-                            event={ev}
-                            agentId={agentId}
+                            msg={msg}
+                            chatId={chatId}
+                            content={msg.content}
+                            answer={answer}
+                            status={status}
                             agentNameFn={chatScopedAgentName}
                             agentAvatarFn={agentAvatar}
                             agentColorTokenFn={agentColorToken}
                           />
                         );
-                      case "error":
-                        return <ErrorRow key={item.key} event={ev} />;
-                      default:
-                        // tool_call / thinking are folded into the workgroup above;
-                        // turn_end is filtered upstream; anything else is dropped.
-                        return null;
+                      } else if (msg.format === "question_answer") {
+                        node = (
+                          <QuestionAnswerRow
+                            key={item.key}
+                            msg={msg}
+                            agentNameFn={chatScopedAgentName}
+                            agentAvatarFn={agentAvatar}
+                            agentColorTokenFn={agentColorToken}
+                          />
+                        );
+                      } else {
+                        node = (
+                          <TextRow
+                            key={item.key}
+                            msg={msg}
+                            myAgentId={myAgentId}
+                            agentNameFn={chatScopedAgentName}
+                            agentAvatarFn={agentAvatar}
+                            agentColorTokenFn={agentColorToken}
+                          />
+                        );
+                      }
                     }
-                  }
-                  const msg = item.data;
-                  if (msg.format === "question" && isQuestionContent(msg.content)) {
-                    const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
-                    const status: QuestionStatus = answer ? "answered" : "pending";
-                    return (
-                      <QuestionMessageRow
-                        key={item.key}
-                        msg={msg}
-                        chatId={chatId}
-                        content={msg.content}
-                        answer={answer}
-                        status={status}
-                        agentNameFn={chatScopedAgentName}
-                        agentAvatarFn={agentAvatar}
-                        agentColorTokenFn={agentColorToken}
-                      />
-                    );
-                  }
-                  if (msg.format === "question_answer") {
-                    return (
-                      <QuestionAnswerRow
-                        key={item.key}
-                        msg={msg}
-                        agentNameFn={chatScopedAgentName}
-                        agentAvatarFn={agentAvatar}
-                        agentColorTokenFn={agentColorToken}
-                      />
-                    );
-                  }
-                  return (
-                    <TextRow
-                      key={item.key}
-                      msg={msg}
-                      myAgentId={myAgentId}
-                      agentNameFn={chatScopedAgentName}
-                      agentAvatarFn={agentAvatar}
-                      agentColorTokenFn={agentColorToken}
-                    />
-                  );
-                })}
+                    // Insert the gap banner immediately after the last cached
+                    // message when there's a known break between cache and the
+                    // server window.
+                    const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
+                    // Insert the "New Messages" divider before the first item
+                    // whose message id is strictly newer than the snapshot
+                    // taken at chat-open. Dismissed once it has scrolled past
+                    // the top of the viewport (IntersectionObserver above).
+                    const showDivider = !dividerDismissed && idx === firstNewItemIdx;
+                    const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
+                    const epilogue =
+                      isGapAnchor && item.kind === "message" ? (
+                        <HistoryGapBanner key={`gap-after-${item.data.id}`} />
+                      ) : null;
+                    if (prelude || epilogue) {
+                      const out: ReactNode[] = [];
+                      if (prelude) out.push(prelude);
+                      out.push(node);
+                      if (epilogue) out.push(epilogue);
+                      return out;
+                    }
+                    return node;
+                  })}
+                </div>
+                <div ref={messagesEndRef} />
               </div>
-              <div ref={messagesEndRef} />
             </div>
+            {/* Floating "↓ N new messages" pill — surfaces whenever there are
+                messages newer than the user's session high watermark. Own
+                sends never trigger the pill because `sendMut.onSuccess` /
+                the file-send path pre-advance the watermark to the new
+                message's id before initiating the smooth scroll, so
+                `pillCount` stays 0 throughout the animation (PR 286 manual
+                sign-off rev 10). Rendered as a sibling of the scroll
+                container, not a child, so its `absolute` positioning
+                anchors to the outer wrapper's visible bounds instead of
+                being affected by the scroll container's internal
+                `overflow-auto` + `position: relative` interaction (rev 8). */}
+            {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
           </div>
 
           {/* Input. Outer band keeps full-width border-top + side padding so

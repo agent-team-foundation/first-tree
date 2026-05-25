@@ -1,12 +1,19 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { inferChannelFromVersion } from "@first-tree/shared/channel";
 import * as semver from "semver";
+import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
 
 export type InstallMode = "global" | "npx" | "source";
 
-export const PACKAGE_NAME = "first-tree";
+/**
+ * npm package name this binary self-updates against. Derived from the
+ * channel (`first-tree`, `first-tree-staging`, or `null` for dev — dev
+ * binaries are not published and refuse self-update entirely).
+ */
+export const PACKAGE_NAME = channelConfig.packageName;
 
 /**
  * Pick the `npm` binary to invoke for self-update. Background service units
@@ -36,7 +43,15 @@ function resolveNpmCommand(): string {
  *  - `"npx"` (fallback): any other path (e.g. one-shot `npx`, pnpm dlx). Auto
  *    update is not safe; log a hint and skip.
  */
-export function detectInstallMode(argv1: string = process.argv[1] ?? ""): InstallMode {
+export function detectInstallMode(
+  argv1: string = process.argv[1] ?? "",
+  packageName: string | null = PACKAGE_NAME,
+): InstallMode {
+  // dev channel is not published to npm — there is no `node_modules/<pkg>`
+  // tree to detect a "global" install against. Treat dev binaries as
+  // running from source so the update path declines self-update with the
+  // "use git pull" hint.
+  if (packageName === null) return "source";
   if (!argv1) return "npx";
   // Resolve symlinks first. Standard `npm i -g` lays the binary out as
   // `<prefix>/bin/<name> -> ../lib/node_modules/<pkg>/dist/cli/index.mjs`,
@@ -94,7 +109,7 @@ export function detectInstallMode(argv1: string = process.argv[1] ?? ""): Instal
     if (existsSync(pkgPath)) {
       try {
         const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { name?: string };
-        if (pkg.name === PACKAGE_NAME) {
+        if (pkg.name === packageName) {
           // Installed package — treat as global. `npx` also lays the tree out
           // this way, but npx caches under a path whose basename starts with
           // an underscore and lives under `_npx`. Probe for that.
@@ -131,10 +146,15 @@ function isSafeInstallSpec(spec: string): boolean {
   if (typeof spec !== "string" || spec.length === 0 || spec.length > 128) return false;
   // Allow letters, digits, dot, plus, hyphen — covers every legal SemVer +
   // dist-tag. Crucially excludes whitespace, `@`, `/`, `=`, shell quotes.
-  // Hyphens inside the body are fine (`0.14.8-alpha.286.1`), but a leading
-  // hyphen would let the spec smuggle in as an npm flag.
+  // Hyphens inside the body are fine (`0.14.8-staging.286.1`), but a
+  // leading hyphen would let the spec smuggle in as an npm flag.
   if (spec.startsWith("-")) return false;
   return /^[A-Za-z0-9.+-]+$/.test(spec);
+}
+
+/** Does this spec look like a concrete SemVer (vs a dist-tag like "latest")? */
+function looksLikeVersion(spec: string): boolean {
+  return /^\d+\.\d+\.\d+(?:-|$)/.test(spec);
 }
 
 /**
@@ -158,6 +178,34 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
       mode: "global",
       reason: `Refusing to install: invalid npm spec ${JSON.stringify(spec)}`,
     };
+  }
+  // dev channel is not published — `npm install -g <null>` makes no sense.
+  // Bail out before spawning npm.
+  if (PACKAGE_NAME === null) {
+    return {
+      ok: false,
+      mode: "global",
+      reason: "self-update disabled: this binary's channel does not publish to npm (dev channel).",
+    };
+  }
+  // Channel-mismatch guard: if the spec is a concrete version (not a
+  // dist-tag like "latest"), refuse to install when its inferred channel
+  // does not match this binary's channel. The common trigger is a hub
+  // server with the wrong `FIRST_TREE_CHANNEL` env — without this guard,
+  // a prod CLI would auto-install a `…-staging.X.Y` build and brick its
+  // service unit. Fail-closed on "unknown" predicates (`-beta.N`,
+  // `-rc.N`, legacy `-alpha.N`) — extending support requires explicitly
+  // teaching `inferChannelFromVersion`.
+  if (looksLikeVersion(spec)) {
+    const targetChannel = inferChannelFromVersion(spec);
+    if (targetChannel !== channelConfig.channel) {
+      const reason =
+        `Refusing to install ${spec}: target channel "${targetChannel}" does not match my channel ` +
+        `"${channelConfig.channel}". This usually means the hub server is misconfigured ` +
+        `(check FIRST_TREE_CHANNEL on the server).`;
+      print.line(`  [update] ${reason}\n`);
+      return { ok: false, mode: "global", reason };
+    }
   }
   return new Promise((resolvePromise) => {
     const npmCmd = resolveNpmCommand();
@@ -209,6 +257,10 @@ export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
  * but version unknown".
  */
 function parseInstalledVersion(stdout: string): string | null {
+  // PACKAGE_NAME === null is unreachable here (installGlobalSpec bails
+  // before spawning npm), but defend anyway so this function stays safe
+  // to call standalone.
+  if (PACKAGE_NAME === null) return null;
   const match = new RegExp(`${escapeForRegex(PACKAGE_NAME)}@(\\S+)`).exec(stdout);
   if (!match?.[1]) return null;
   const cleaned = match[1].replace(/[,\s)]+$/, "");
@@ -228,6 +280,9 @@ function escapeForRegex(s: string): string {
  * Artifactory mirrors.
  */
 export function fetchLatestVersion(timeoutMs = 10_000): { ok: true; version: string } | { ok: false; reason: string } {
+  if (PACKAGE_NAME === null) {
+    return { ok: false, reason: "this binary's channel does not publish to npm (dev channel)." };
+  }
   const res = spawnSync(resolveNpmCommand(), ["view", PACKAGE_NAME, "version"], {
     encoding: "utf-8",
     timeout: timeoutMs,

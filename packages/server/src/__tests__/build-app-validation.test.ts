@@ -12,6 +12,7 @@ import type { Config } from "../config.js";
  * path so a config typo trips the assertion before listen() returns.
  */
 const baseConfig: Config = {
+  channel: "dev",
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
@@ -33,7 +34,6 @@ const baseConfig: Config = {
     notificationWebhookUrl: undefined,
   },
   update: {
-    channel: "latest",
     commandVersion: "test.version",
     pollIntervalMinutes: 1440,
     registryUrl: "https://localhost.invalid",

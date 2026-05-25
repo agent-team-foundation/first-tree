@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { agentConfigSchema, DEFAULT_CONFIG_DIR, loadAgents, readConfigFile } from "@first-tree/shared/config";
+import { agentConfigSchema, defaultConfigDir, loadAgents, readConfigFile } from "@first-tree/shared/config";
 import { loadCredentials } from "../../core/bootstrap.js";
 import { print } from "../../core/output.js";
 import { getClientServiceStatus, isServiceSupported } from "../../core/service-install.js";
@@ -39,7 +39,7 @@ export function renderServiceBlock(): void {
 }
 
 export function renderHubBlock(): void {
-  const clientYaml = join(DEFAULT_CONFIG_DIR, "client.yaml");
+  const clientYaml = join(defaultConfigDir(), "client.yaml");
   if (!existsSync(clientYaml)) {
     print.line("  Hub:      (not configured — run `first-tree login <token>`)\n");
     return;
@@ -86,7 +86,7 @@ export function renderAuthBlock(): void {
 }
 
 export function renderAgentsBlock(): void {
-  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+  const agentsDir = join(defaultConfigDir(), "agents");
   try {
     const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
     if (agents.size === 0) {

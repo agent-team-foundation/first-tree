@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { listAgents, listManagedAgents } from "../api/agents.js";
+import { listManagedAgents } from "../api/agents.js";
+import { useOrgAgents } from "./use-org-agents.js";
 
 /**
  * Shared hook that builds a UUID → name lookup map from the agents list.
@@ -21,11 +22,7 @@ import { listAgents, listManagedAgents } from "../api/agents.js";
  * fetch or a dedicated lookup endpoint.
  */
 export function useAgentNameMap(): (uuid: string | null | undefined) => string {
-  const { data } = useQuery({
-    queryKey: ["agents", "name-map"],
-    queryFn: () => listAgents({ limit: 100 }),
-    staleTime: 30_000,
-  });
+  const { data } = useOrgAgents();
   const { data: managed } = useQuery({
     queryKey: ["managed-agents", "name-map"],
     queryFn: listManagedAgents,
@@ -71,11 +68,7 @@ export function useAgentNameMap(): (uuid: string | null | undefined) => string {
  * message sender.
  */
 export function useAgentSlugToIdMap(): (slug: string | null | undefined) => string | null {
-  const { data } = useQuery({
-    queryKey: ["agents", "name-map"],
-    queryFn: () => listAgents({ limit: 100 }),
-    staleTime: 30_000,
-  });
+  const { data } = useOrgAgents();
   const { data: managed } = useQuery({
     queryKey: ["managed-agents", "name-map"],
     queryFn: listManagedAgents,
@@ -147,11 +140,7 @@ export type AgentIdentity = {
  * have rendered before this token field existed.
  */
 export function useAgentIdentityMap(): (uuid: string | null | undefined) => AgentIdentity | null {
-  const { data } = useQuery({
-    queryKey: ["agents", "name-map"],
-    queryFn: () => listAgents({ limit: 100 }),
-    staleTime: 30_000,
-  });
+  const { data } = useOrgAgents();
   const { data: managed } = useQuery({
     queryKey: ["managed-agents", "name-map"],
     queryFn: listManagedAgents,

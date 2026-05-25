@@ -20,7 +20,7 @@
     "build": "tsdown src/index.ts src/app.ts src/observability/index.ts --format esm --no-dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate",
+    "db:generate": "drizzle-kit generate && node ../../scripts/sync-migration-head.mjs",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"
   },

@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG_DIR, setConfigValue } from "@first-tree/shared/config";
+import { defaultConfigDir, setConfigValue } from "@first-tree/shared/config";
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { promptAddAgent } from "../../core/index.js";
@@ -22,7 +22,7 @@ export function registerAgentAddCommand(agent: Command): void {
           fail("MISSING_AGENT_ARGS", "Agent UUID (and a hub name for that UUID) are required.", 2);
         }
 
-        const agentDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
+        const agentDir = join(defaultConfigDir(), "agents", agentName);
         mkdirSync(agentDir, { recursive: true, mode: 0o700 });
         setConfigValue(join(agentDir, "agent.yaml"), "agentId", agentId);
 

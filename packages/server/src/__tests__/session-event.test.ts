@@ -112,6 +112,42 @@ describe("sessionEventService", () => {
     ).rejects.toThrow();
   });
 
+  // PG JSONB rejects U+0000 outright — without the NUL strip in appendEvent,
+  // any tool whose stdout was binary (e.g. `gh api .../actions/runs/<id>/logs`
+  // returns a ZIP archive that survives Buffer.toString('utf8') with embedded
+  // NULs) would drop the whole event server-side. The client sanitizer
+  // replaces obvious binary previews with a placeholder, but this last-mile
+  // gate covers any field/path the client does not.
+  it("persists tool_call events whose payload string fields contain NUL", async () => {
+    const app = getApp();
+    const a = agentId();
+    const c = chatId();
+    const NUL = String.fromCharCode(0);
+
+    const persisted = await sessionEventService.appendEvent(app.db, a, c, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-binary",
+        name: "Bash",
+        args: { command: `echo ${NUL}` },
+        status: "ok",
+        durationMs: 5,
+        resultPreview: `before${NUL}after${NUL}end`,
+      },
+    });
+
+    expect(persisted.seq).toBe(1);
+    expect(persisted.kind).toBe("tool_call");
+    const payload = persisted.payload as {
+      toolUseId: string;
+      resultPreview?: string;
+      args: { command: string };
+    };
+    expect(payload.toolUseId).toBe("tu-binary");
+    expect(payload.resultPreview).toBe("beforeafterend");
+    expect(payload.args.command).toBe("echo ");
+  });
+
   it("listEvents paginates by seq asc", async () => {
     const app = getApp();
     const a = agentId();

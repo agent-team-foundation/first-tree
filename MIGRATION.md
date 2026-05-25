@@ -5,6 +5,134 @@ top. Each section pins a single self-contained migration.
 
 ---
 
+## Phase 2 — multi-env split (prod / staging / dev as independent CLIs)
+
+**Affects**: every team member running a daemon connected to
+`dev.cloud.first-tree.ai` (today's "staging" via the single
+`first-tree` package). Local-dev users who use `scripts/dev-cli.sh` are
+auto-migrated by the replacement `scripts/dev-install.sh`.
+
+**Why**: prod and staging daemons need to coexist on the same machine
+with independent auto-update tracks. A single npm package can't host
+that — one global install per package name. We split into three
+packages and home dirs, one per channel:
+
+| Layer | Before (single pkg) | prod | staging | dev |
+| --- | --- | --- | --- | --- |
+| npm package | `first-tree` | `first-tree` | `first-tree-staging` | (not published) |
+| bin name | `first-tree` / `ft` | `first-tree` / `ft` | `first-tree-staging` / `fts` | `first-tree-dev` / `ftd` |
+| Default home | `~/.first-tree/hub/` | `~/.first-tree/` | `~/.first-tree-staging/` | `~/.first-tree-dev/` |
+| systemd unit | `first-tree-client.service` | `first-tree.service` | `first-tree-staging.service` | `first-tree-dev.service` |
+| launchd label | `dev.first-tree.client` | `first-tree` | `first-tree-staging` | `first-tree-dev` |
+| Default server | (set at login time) | `cloud.first-tree.ai` | `dev.cloud.first-tree.ai` | `127.0.0.1:8000` |
+
+Auto-update is now gated on a channel-mismatch guard: a binary refuses
+to install a target version whose channel does not match its own (e.g.
+prod CLI refuses `…-staging.X.Y`). Misconfigured hub servers can no
+longer brick a connected daemon by advertising a cross-channel version.
+
+### Team-member staging migration
+
+Get a fresh connect-token from <https://dev.cloud.first-tree.ai/clients>
+(**Connect computer** button), then run on each machine. **Data
+preservation**: every step is `mv`-only — `credentials.json`,
+`client.yaml`, workspaces, logs, and session state all move bit-for-bit.
+
+#### Linux (systemd)
+
+```bash
+TOKEN=<paste-token-here>
+
+# 1. Stop + remove the old service unit
+systemctl --user stop first-tree-client.service 2>/dev/null || true
+systemctl --user disable first-tree-client.service 2>/dev/null || true
+rm -f ~/.config/systemd/user/first-tree-client.service \
+      ~/.config/systemd/user/first-tree-hub-client-dev.service
+systemctl --user daemon-reload
+
+# 2. Move the home dir (data preserved)
+mv ~/.first-tree/hub ~/.first-tree-staging
+
+# 3. Switch CLI package
+npm uninstall -g first-tree 2>/dev/null || true
+npm install -g first-tree-staging
+
+# 4. Re-login — rewrites first-tree-staging.service and starts the daemon
+first-tree-staging login "$TOKEN"
+
+# 5. Verify
+systemctl --user status first-tree-staging.service
+first-tree-staging status
+```
+
+#### macOS (launchd)
+
+```bash
+TOKEN=<paste-token-here>
+
+# 1. Stop + remove the old plist
+launchctl bootout gui/$(id -u)/dev.first-tree.client 2>/dev/null || true
+rm -f ~/Library/LaunchAgents/dev.first-tree.client.plist
+
+# 2-4. Same as Linux above
+
+# 5. Verify
+launchctl list | grep first-tree
+first-tree-staging status
+```
+
+### Rollback
+
+If `npm install -g first-tree-staging` or `first-tree-staging login`
+fails after step 2 has already moved your home dir, the original layout
+is one `mv` away (everything is preserved bit-for-bit since the migration
+never copies):
+
+```bash
+mv ~/.first-tree-staging ~/.first-tree/hub
+npm install -g first-tree         # restore the old package
+first-tree login "$TOKEN"          # rewrites the original service unit
+```
+
+### What does NOT migrate (intentional)
+
+- `~/.first-tree/hub-dev/` — dev workspace data. `scripts/dev-install.sh`
+  on first run auto-`mv`s this to `~/.first-tree-dev/`. Don't pre-move it.
+- `~/.first-tree/github-scan/` — github-scan daemon, independent
+  subsystem. Stays on the original path; its daemon auto-recreates the
+  directory on first run.
+- `~/.first-tree/hub.broken-snapshot-*` — historical backups, untouched.
+- `~/.first-tree/version-check.json` — CLI cache, rebuilt on next start.
+
+### Adding a prod daemon later
+
+Once you have a prod connect-token, install the prod package alongside
+staging — they share zero state:
+
+```bash
+npm install -g first-tree
+first-tree login <prod-token>
+# → ~/.first-tree/, first-tree.service, prod cloud
+```
+
+Two daemons now run side-by-side. `first-tree-staging status` and
+`first-tree status` report independently.
+
+### Bin name break
+
+The old `ft` short alias now belongs exclusively to the prod package.
+Staging uses `fts`, dev uses `ftd`. Update any shell aliases / scripts.
+
+### Server-side ops
+
+Each cluster now sets one new env var: `FIRST_TREE_CHANNEL=prod|staging|dev`.
+Web onboarding / "Connect computer" commands and the npm auto-update
+poller derive package name and bin name from this single switch. The
+old `FIRST_TREE_UPDATE_CHANNEL` env is removed (each package owns its
+own `latest` dist-tag, no per-server channel selection needed).
+
+---
+
 ## Phase 1A — commands tree restructure + env rename (PR #502)
 
 **Affects**: everyone on a Hub CLI from before this change, and every

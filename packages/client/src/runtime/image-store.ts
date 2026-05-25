@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { IMAGE_MIME_TO_EXT, type SupportedImageMime } from "@first-tree/shared";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultDataDir } from "@first-tree/shared/config";
 
 /** UUIDs are the only shape we generate for imageId, but accept the same
  * loose character set as chatId sanitisers elsewhere so a malformed field
@@ -12,7 +12,7 @@ function sanitize(segment: string): string {
 }
 
 function imageDir(chatId: string): string {
-  return join(DEFAULT_DATA_DIR, "chats", sanitize(chatId), "images");
+  return join(defaultDataDir(), "chats", sanitize(chatId), "images");
 }
 
 export function imagePath(chatId: string, imageId: string, mimeType: SupportedImageMime): string {

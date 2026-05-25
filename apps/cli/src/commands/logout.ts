@@ -1,6 +1,6 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG_DIR } from "@first-tree/shared/config";
+import { defaultConfigDir } from "@first-tree/shared/config";
 import type { Command } from "commander";
 import { getClientServiceStatus, isServiceSupported, stopClientService } from "../core/index.js";
 import { print } from "../core/output.js";
@@ -26,14 +26,14 @@ export function registerLogoutCommand(program: Command): void {
         }
       }
       // 2. Remove credentials.
-      const credsPath = join(DEFAULT_CONFIG_DIR, "credentials.json");
+      const credsPath = join(defaultConfigDir(), "credentials.json");
       if (existsSync(credsPath)) {
         unlinkSync(credsPath);
         print.line(`  ✓ Removed credentials\n`);
       }
       // 3. --purge: also remove client.yaml.
       if (options.purge) {
-        const yamlPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
+        const yamlPath = join(defaultConfigDir(), "client.yaml");
         if (existsSync(yamlPath)) {
           unlinkSync(yamlPath);
           print.line(`  ✓ Removed client.yaml\n`);

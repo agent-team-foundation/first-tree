@@ -41,7 +41,11 @@ export function registerUpgradeCommand(program: Command): void {
       }
       if (mode === "npx") {
         print.line("\n  Not launched from a global npm install — cannot self-upgrade.\n");
-        print.line(`  Install globally first:  npm i -g ${PACKAGE_NAME}\n\n`);
+        // PACKAGE_NAME is never null in this branch: dev channel (null
+        // pkg) short-circuits to mode==="source" above. Defend anyway so
+        // the message stays readable if that contract ever changes.
+        const installHint = PACKAGE_NAME ?? "first-tree";
+        print.line(`  Install globally first:  npm i -g ${installHint}\n\n`);
         return;
       }
 

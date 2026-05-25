@@ -1,6 +1,6 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultDataDir } from "@first-tree/shared/config";
 import { AppError, ForbiddenError, NotFoundError } from "../errors.js";
 
 const MAX_DOC_BYTES = 5 * 1024 * 1024;
@@ -27,7 +27,7 @@ export type MeDocPreview = {
 };
 
 export async function getMeDocPreview(input: WorkspaceDocPreviewInput): Promise<MeDocPreview> {
-  const workspacesRoot = input.workspacesRoot ?? join(DEFAULT_DATA_DIR, "workspaces");
+  const workspacesRoot = input.workspacesRoot ?? join(defaultDataDir(), "workspaces");
   const workspaceRoot = join(workspacesRoot, input.agentName, input.chatId);
   const workspaceRootReal = await realpathOrNotFound(workspaceRoot);
   const relativePath = join(input.basePath ?? "", input.path);

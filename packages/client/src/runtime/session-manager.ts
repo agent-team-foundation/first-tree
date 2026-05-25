@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type {
   AgentRuntimeConfigPayload,
@@ -43,7 +44,62 @@ type PendingMessage = {
 };
 
 /**
- * Resolve the base path the runtime reads markdown doc snapshots against.
+ * Resolve the directory the runtime reads markdown doc snapshots against —
+ * the same dir the handler actually hands the agent as cwd for this chat.
+ *
+ * Two layouts coexist after the per-agent-home redesign (#506) and its
+ * legacy-resume hotfix (#530):
+ *  - NEW chats run cwd = the per-agent home (`<workspaceRoot>` itself, see
+ *    `acquireAgentHome`), with predeclared source repos materialised at the
+ *    TOP LEVEL (`<workspaceRoot>/<localPath>`). No `<workspaceRoot>/<chatId>/`
+ *    dir is ever created.
+ *  - LEGACY chats (created before #506) keep their original per-chat cwd
+ *    `<workspaceRoot>/<chatId>/`, with their own v1.x layout (source repos at
+ *    `<workspaceRoot>/<chatId>/<localPath>`); #530 resumes them in place.
+ *
+ * The doc base MUST agree with whichever cwd the handler chose, or the
+ * snapshot scanner realpaths a non-existent root and embeds ZERO snapshots —
+ * so every `.md` mention stays plain text instead of rendering a clickable
+ * preview (the symptom this fixes for new chats). We discriminate by the same
+ * cheap signal #530's claude-code `resume()` uses first: does the legacy
+ * per-chat dir physically exist? Present ⇒ legacy layout; absent ⇒ per-agent
+ * home.
+ *
+ * Pure read-only `existsSync` — no `acquireWorkspace`/`acquireAgentHome`,
+ * whose mkdir side effects must not run on every outbound message.
+ *
+ * IMPORTANT — `existsSync(legacyDir)` is a *proxy* for "the handler chose the
+ * legacy cwd". It is exact for new chats (no legacy dir ⇒ agent home, for both
+ * handlers) but `SessionManager` is handler-agnostic (it only knows
+ * `workspaceRoot`, never the handler kind), so two legacy-chat cases diverge —
+ * the resolver returns the legacy dir while the handler actually ran at the
+ * agent home:
+ *   1. CODEX legacy chats. The codex handler has NO legacy-cwd branch:
+ *      `start()` and `resume()` both use `acquireAgentHome` (see
+ *      `handlers/codex.ts`; #530 left codex alone because its transcripts are
+ *      not cwd-keyed). Pre-#506 codex still created `<workspaceRoot>/<chatId>/`,
+ *      and those dirs persist (`cleanWorkspaces` is a no-op), so every legacy
+ *      codex chat hits this divergence.
+ *   2. A claude-code legacy chat whose SDK transcript was lost resumes COLD at
+ *      the agent home (#530 case 3) while its `<chatId>/` dir still exists.
+ * In both, a freshly-written doc at the agent home may snapshot a STALE copy
+ * from the legacy dir, or stay plain text if it exists only at the home.
+ *
+ * This is NOT a regression: the prior code used `join(workspaceRoot, chatId)`
+ * unconditionally, so legacy chats already resolved to the legacy dir — this
+ * fix changes only the new-chat (no-legacy-dir) path. The divergence is
+ * graceful (older revision, never an empty/wrong file), bounded to legacy chats
+ * (which shrink over time), and the clean fix is to thread the handler's
+ * resolved cwd through to the sink instead of re-probing here.
+ */
+export function resolveSessionDocRoot(workspaceRoot: string, chatId: string): string {
+  const legacyPerChatRoot = join(workspaceRoot, chatId);
+  return existsSync(legacyPerChatRoot) ? legacyPerChatRoot : workspaceRoot;
+}
+
+/**
+ * Resolve the base path the runtime reads markdown doc snapshots against,
+ * given the session doc root from {@link resolveSessionDocRoot}.
  *
  * NEVER returns null — every chat has a workspace, and the snapshot scanner
  * existence-checks each candidate inside the returned root, so a bare mention
@@ -54,20 +110,20 @@ type PendingMessage = {
  *
  * Resolution:
  *  - exactly one repo → that repo's worktree, the unambiguous markdown-link
- *    root. The worktree is materialised at `<perChatRoot>/<localPath>`, so the
+ *    root. The worktree is materialised at `<sessionRoot>/<localPath>`, so the
  *    base MUST be that ABSOLUTE path. Returning a bare relative `localPath`
  *    (the old behaviour) made the runtime resolve it against its own
- *    `process.cwd()` — the launch dir, not the per-chat workspace — so it
+ *    `process.cwd()` — the launch dir, not the session workspace — so it
  *    silently failed to find any doc and cloud preview was dead.
- *  - zero or multiple repos → the per-chat workspace root.
+ *  - zero or multiple repos → the session doc root.
  */
-export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, perChatRoot: string): string {
+export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, sessionRoot: string): string {
   if (payload.gitRepos.length === 1) {
     const repo = payload.gitRepos[0];
     const localPath = repo ? repoLocalPath(repo).trim() : "";
-    if (localPath.length > 0) return join(perChatRoot, localPath);
+    if (localPath.length > 0) return join(sessionRoot, localPath);
   }
-  return perChatRoot;
+  return sessionRoot;
 }
 
 function repoLocalPath(repo: GitRepo): string {
@@ -394,6 +450,16 @@ export class SessionManager {
           await this.ackEntry(entryId, chatId);
           existing.handler.inject(message);
           existing.lastActivity = Date.now();
+          // Re-arm the working-grace guard in `evictIdle`. Without this, a
+          // turn that ends with `setRuntimeState("idle")` (claude-code.ts on
+          // every result message) leaves the next inject-triggered turn
+          // observable as `idle` — and a long-thinking turn that produces
+          // no SDK messages for `idle_timeout` (300s default) trips
+          // evictIdle's suspend path even though the agent is actively
+          // working. Setting `working` here puts the session under the
+          // `idle_timeout + working_grace_seconds` umbrella until the next
+          // result flips it back.
+          this.setSessionRuntimeState(chatId, "working");
           this.config.log.debug({ chatId }, "message injected");
           return;
 
@@ -460,10 +526,12 @@ export class SessionManager {
       // server's `agent_chat_sessions.state` stayed `active`, no chat
       // message was emitted, and the agent looked silently failed to
       // every observer. F2 (chat-participant-mode-fix-design.md §3.3)
-      // signals the failure three ways: structured log (existing),
-      // `session:state=errored` to the server (so admin/UI see it), and
-      // a single user-visible chat message via the result-sink (so the
-      // requester knows the agent didn't drop their message on purpose).
+      // signals the failure two ways: structured log (existing), and a
+      // `session:state=errored` to the server (so admin/UI see it).
+      // A user-visible signal goes out as a structured `error` session
+      // event (rendered by the web ErrorRow), not as a plain text
+      // message — otherwise it's indistinguishable from a normal agent
+      // reply in the timeline.
       const errMsg = err instanceof Error ? err.message : String(err);
       const phase: "start" | "resume" = evicted ? "resume" : "start";
       this.config.log.error({ chatId, err, phase }, "session start/resume failed");
@@ -473,21 +541,18 @@ export class SessionManager {
       //    for this chat, this `errored` transition will go through.
       this.notifySessionState(chatId, "errored");
 
-      // 2) User-visible chat message. Truncate to 800 chars so we don't
-      //    leak full stderr (which may include FS paths or git internals)
-      //    into the chat timeline; the full error is in the structured log.
-      try {
-        const preview = errMsg.slice(0, 800);
-        const agentLabel = this.config.agentIdentity.displayName ?? this.config.agentIdentity.agentId;
-        const userMsg = `⚠️ Session ${phase} failed (${agentLabel}): ${preview}`;
-        await ctx.forwardResult(userMsg);
-      } catch (forwardErr) {
-        this.config.log.warn({ chatId, forwardErr }, "session error forward failed");
-      }
+      // 2) User-visible structured error event. Truncate to 800 chars so
+      //    we don't leak full stderr (which may include FS paths or git
+      //    internals) into the chat timeline; the full error is in the
+      //    structured log. The web `ErrorRow` renders these with distinct
+      //    error styling and a "session start/resume failed" header.
+      const preview = errMsg.slice(0, 800);
+      ctx.emitEvent({
+        kind: "error",
+        payload: { source: "runtime", message: `Session ${phase} failed: ${preview}` },
+      });
 
-      // 3) Existing local cleanup. Forward first, tear down second —
-      //    keeps the order obviously safe regardless of future cleanup-
-      //    block refactors. The follow-up message routes as a fresh
+      // 3) Existing local cleanup. The follow-up message routes as a fresh
       //    start once the entry is gone.
       this.sessions.delete(chatId);
       this.sessionRuntimeStates.delete(chatId);
@@ -547,21 +612,18 @@ export class SessionManager {
       // throws is not the same shape as a suspend (the entry is unusable,
       // not just idle), so leaving `status = "suspended"` would lie to the
       // server and let the broken entry persist locally. Notify `errored`,
-      // forward a chat-visible error, then drop the entry so the next
+      // emit a chat-visible error event, then drop the entry so the next
       // inbound message routes through `startNewSession` for a clean restart.
       const errMsg = err instanceof Error ? err.message : String(err);
       this.config.log.error({ chatId: entry.chatId, err }, "resume failed");
 
       this.notifySessionState(entry.chatId, "errored");
 
-      try {
-        const preview = errMsg.slice(0, 800);
-        const agentLabel = this.config.agentIdentity.displayName ?? this.config.agentIdentity.agentId;
-        const userMsg = `⚠️ Session resume failed (${agentLabel}): ${preview}`;
-        await ctx.forwardResult(userMsg);
-      } catch (forwardErr) {
-        this.config.log.warn({ chatId: entry.chatId, forwardErr }, "session error forward failed");
-      }
+      const preview = errMsg.slice(0, 800);
+      ctx.emitEvent({
+        kind: "error",
+        payload: { source: "runtime", message: `Session resume failed: ${preview}` },
+      });
 
       this.sessions.delete(entry.chatId);
       this.sessionRuntimeStates.delete(entry.chatId);
@@ -685,77 +747,99 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Reclaim slots whose sessions have gone quiet.
+   *
+   * Invariants this routine relies on:
+   *   1. `lastActivity` is monotonic per session and is bumped by every
+   *      inbound activity — `dispatch` (new chat / resume), `inject`
+   *      (mid-turn message), and the handler's `touch()` on each SDK event.
+   *   2. `runtimeState` reflects what the agent is currently doing as best
+   *      the runtime can tell:
+   *        - `working` — a turn is in flight. Set by the handler at the top
+   *          of its consume loop AND by `SessionManager` on every `inject`
+   *          (because the handler can't observe inject from inside the SDK
+   *          for-await — see #536). Cleared back to `idle` on each
+   *          `result` message from the SDK.
+   *        - `blocked` — only reachable if a handler chooses to set it
+   *          explicitly. The runtime no longer auto-migrates `working` →
+   *          `blocked` on inactivity: with reasoning models a 2-minute
+   *          quiet stretch is normal deep-thinking, not a stuck process,
+   *          and the auto-migration was producing false-positive UI
+   *          warnings. State kept as a semantic slot for future use
+   *          (e.g. if/when the SDK transport exposes a real stuck signal).
+   *        - `idle` — no work in flight.
+   *      If you add a new way to wake the session up, you MUST also set
+   *      `runtimeState` to `working` from that path, or this guard will
+   *      treat the chat as idle and reap it.
+   *   3. `working_grace_seconds` is an UPPER bound on how long a `working`
+   *      / `blocked` chat can hold a slot past `idle_timeout` — defends
+   *      against a stuck handler that never flips back to `idle`.
+   */
   private evictIdle(): void {
     const timeoutMs = this.config.session.idle_timeout * 1000;
     const workingGraceMs = this.config.session.working_grace_seconds * 1000;
-    // Blocked detection — 2 minutes without activity while session is active
-    const blockedThresholdMs = 120_000;
     const now = Date.now();
     const agentId = this.config.agentIdentity.agentId;
 
     for (const [, session] of this.sessions) {
       if (session.status !== "active") continue;
       const inactiveMs = now - session.lastActivity;
+      if (inactiveMs <= timeoutMs) continue;
 
-      if (inactiveMs > timeoutMs) {
-        // #418: when an AskUserQuestion is in flight, suspending tears down
-        // the SDK transport and silently drops the bridge entry — the
-        // eventual answer then arrives with no live waiter and the asker
-        // session is permanently stuck. Skip the suspend so the awaiter
-        // can resolve through the live-bridge path. `lastActivity` still
-        // ticks forward on inject, so a runaway pending entry is bounded
-        // by the supersede paths (chat archive / client claim) rather
-        // than by idle eviction.
-        if (hasPendingForChat(agentId, session.chatId)) {
-          this.config.log.info(
-            { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
-            "session idle but AskUserQuestion in flight — skipping suspend",
-          );
-          continue;
-        }
+      const currentState = this.sessionRuntimeStates.get(session.chatId);
 
-        // `lastActivity` is bumped per inbound SDK message/event (handler
-        // `touch()`), so a long thinking turn or a single very large message
-        // looks identical to "session has been idle" here. Without this
-        // exemption the runtime suspends the SDK transport mid-thinking and
-        // the work is lost. `working_grace_seconds` bounds the worst case:
-        // if a handler bug strands the state at `working`/`blocked`, the
-        // slot is reclaimed after the grace window expires.
-        const currentState = this.sessionRuntimeStates.get(session.chatId);
-        const stillProgressing = currentState === "working" || currentState === "blocked";
-        if (stillProgressing && inactiveMs < timeoutMs + workingGraceMs) {
-          this.config.log.info(
-            {
-              chatId: session.chatId,
-              runtimeState: currentState,
-              inactiveSec: Math.round(inactiveMs / 1000),
-              graceSec: this.config.session.working_grace_seconds,
-            },
-            "session idle threshold reached but still working — skipping suspend",
-          );
-          continue;
-        }
+      // Hard cap: regardless of `runtimeState`, once we are past
+      // `idle_timeout + working_grace_seconds` the slot MUST be reclaimed.
+      // Anything else means a stuck handler can hold a slot forever just
+      // by never flipping `runtimeState` back to `idle`.
+      const pastHardCap = inactiveMs >= timeoutMs + workingGraceMs;
 
+      // #418: when an AskUserQuestion is in flight, suspending tears down
+      // the SDK transport and silently drops the bridge entry — the
+      // eventual answer then arrives with no live waiter and the asker
+      // session is permanently stuck. Skip the suspend so the awaiter can
+      // resolve through the live-bridge path. `lastActivity` still ticks
+      // forward on inject, so a runaway pending entry is bounded by the
+      // supersede paths (chat archive / client claim) and, as a last
+      // resort, by the hard cap above.
+      if (!pastHardCap && hasPendingForChat(agentId, session.chatId)) {
+        this.config.log.info(
+          { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
+          "session idle but AskUserQuestion in flight — skipping suspend",
+        );
+        continue;
+      }
+
+      // `lastActivity` is bumped per inbound SDK message/event (handler
+      // `touch()`), so a long thinking turn or a single very large message
+      // looks identical to "session has been idle" here. Without this
+      // exemption the runtime suspends the SDK transport mid-thinking and
+      // the work is lost. The hard cap above bounds the worst case.
+      const stillProgressing = currentState === "working" || currentState === "blocked";
+      if (stillProgressing && !pastHardCap) {
         this.config.log.info(
           {
             chatId: session.chatId,
-            idleTimeoutSec: this.config.session.idle_timeout,
-            runtimeState: currentState ?? "idle",
+            runtimeState: currentState,
+            inactiveSec: Math.round(inactiveMs / 1000),
+            graceSec: this.config.session.working_grace_seconds,
           },
-          "session idle, suspending",
+          "session idle threshold reached but still working — skipping suspend",
         );
-        this.suspendSession(session);
-      } else if (inactiveMs > blockedThresholdMs) {
-        // Only mark blocked if handler was actively working — don't override idle
-        const currentState = this.sessionRuntimeStates.get(session.chatId);
-        if (currentState === "working") {
-          this.config.log.warn(
-            { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
-            "session working but no output, marking blocked",
-          );
-          this.setSessionRuntimeState(session.chatId, "blocked");
-        }
+        continue;
       }
+
+      this.config.log.info(
+        {
+          chatId: session.chatId,
+          idleTimeoutSec: this.config.session.idle_timeout,
+          runtimeState: currentState ?? "idle",
+          pastHardCap,
+        },
+        "session idle, suspending",
+      );
+      this.suspendSession(session);
     }
   }
 
@@ -816,11 +900,11 @@ export class SessionManager {
     // exactly like result-sink does (L3: unify capture across send paths).
     // result-sink keeps its own async `getDocumentBasePath`; both read the
     // same cache (`refreshIfNewer(_, 0)` returns the cached payload), so the
-    // base they compute agrees. Falls back to the per-chat root when the
+    // base they compute agrees. Falls back to the session doc root when the
     // cache has no payload yet (== the single/zero-repo default).
-    const perChatRoot = join(this.config.handlerConfig.workspaceRoot, chatId);
+    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
     const cachedPayload = this.config.agentConfigCache?.get(this.config.agentIdentity.agentId)?.payload;
-    const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, perChatRoot) : perChatRoot;
+    const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, sessionRoot) : sessionRoot;
 
     const forwardResult = createResultSink({
       sdk: this.config.sdk,
@@ -868,20 +952,20 @@ export class SessionManager {
   }
 
   private async resolveDocumentBasePath(log: (msg: string) => void, chatId: string): Promise<string> {
-    // Per-chat workspace root: the same dir the handler hands the agent as cwd
-    // (`acquireWorkspace(workspaceRoot, chatId)` returns `<workspaceRoot>/<chatId>`).
-    // Computed with a pure `join` — NOT `acquireWorkspace`, whose mkdir/rmSync
-    // side effects must not run on every outbound message.
-    const perChatRoot = join(this.config.handlerConfig.workspaceRoot, chatId);
-    if (!this.config.agentConfigCache) return perChatRoot;
+    // Session doc root: the dir the handler actually hands the agent as cwd —
+    // the per-agent home for new chats, the legacy `<workspaceRoot>/<chatId>/`
+    // dir for pre-#506 chats. See `resolveSessionDocRoot` (read-only existsSync;
+    // no acquire* side effects on every outbound message).
+    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
+    if (!this.config.agentConfigCache) return sessionRoot;
     try {
       const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
-      return documentBasePathFromRuntimeConfig(payload, perChatRoot);
+      return documentBasePathFromRuntimeConfig(payload, sessionRoot);
     } catch (err) {
       log(
-        `document preview base path: config unavailable, using workspace root: ${err instanceof Error ? err.message : String(err)}`,
+        `document preview base path: config unavailable, using session doc root: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return perChatRoot;
+      return sessionRoot;
     }
   }
 

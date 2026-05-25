@@ -9,9 +9,9 @@ import {
 import {
   agentConfigSchema,
   clientConfigSchema,
-  DEFAULT_CONFIG_DIR,
-  DEFAULT_DATA_DIR,
-  DEFAULT_HOME_DIR,
+  defaultConfigDir,
+  defaultDataDir,
+  defaultHome,
   initConfig,
   loadAgents,
   resetConfig,
@@ -158,7 +158,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // NDJSON file instead of stderr, so the supervisor's stdout/stderr
         // capture stays empty under normal operation.
         if (process.env.FIRST_TREE_SERVICE_MODE === "1") {
-          configureClientLoggerForService(join(DEFAULT_HOME_DIR, "logs"));
+          configureClientLoggerForService(join(defaultHome(), "logs"));
         }
 
         // Load agents (may be empty — daemon can start without agents).
@@ -167,12 +167,12 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // drifted from the server-authoritative `agent.name` slug is renamed
         // first. `loadAgents` then enumerates the up-to-date layout.
         // The migration is best-effort — it never blocks startup.
-        const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+        const agentsDir = join(defaultConfigDir(), "agents");
         try {
           await migrateLocalAgentDirs({
             agentsDir,
-            workspacesDir: join(DEFAULT_DATA_DIR, "workspaces"),
-            sessionsDir: join(DEFAULT_DATA_DIR, "sessions"),
+            workspacesDir: join(defaultDataDir(), "workspaces"),
+            sessionsDir: join(defaultDataDir(), "sessions"),
             resolver: createApiNameResolver(config.server.url, () => ensureFreshAccessToken()),
           });
         } catch (err) {
@@ -270,7 +270,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         if (error instanceof ClientOrgMismatchError) {
           await handleClientOrgMismatch(error, {
             managed: options.interactive === false,
-            configDir: DEFAULT_CONFIG_DIR,
+            configDir: defaultConfigDir(),
             rerunCommand: "first-tree daemon start",
           });
         }

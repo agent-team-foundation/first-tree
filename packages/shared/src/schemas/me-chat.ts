@@ -137,12 +137,17 @@ export const liveActivitySchema = z.object({
   /** ISO timestamp of the originating event; web uses this as the ticker base. */
   startedAt: z.string(),
   /**
-   * Optional truncated context for a tool call — a preview of the tool's args
-   * (e.g. "npm test" for Bash, a path for Read), already trimmed to a short
-   * length server-side. Only the compose status bar (the focal "what's
-   * happening now" strip) renders it; the chat-row WorkingChip and the
-   * AgentRow second line intentionally stay at `Using <tool> · <timer>`
-   * without it. Absent for thinking / writing and when there are no args.
+   * Optional truncated context for the activity, already trimmed server-side:
+   *   - tool_call → a preview of the tool's args (e.g. "npm test" for Bash, a
+   *     path for Read). Absent when there are no useful args.
+   *   - assistant_text → a one-line preview of the reply body the model is
+   *     writing (collapsed + capped to {@link ASSISTANT_TEXT_PREVIEW_MAX}), so
+   *     the compose status bar can read out *what* the agent is saying instead
+   *     of a static "Writing". Absent when the text block is empty.
+   * Only the compose status bar (the focal "what's happening now" strip)
+   * renders it; the chat-row WorkingChip and the AgentRow second line
+   * intentionally stay at `Using <tool> · <timer>` without it. Absent for
+   * thinking.
    */
   detail: z.string().optional(),
 });
@@ -150,6 +155,15 @@ export type LiveActivity = z.infer<typeof liveActivitySchema>;
 
 /** Stale threshold (ms) past which a `session_events` row stops driving liveActivity. */
 export const LIVE_ACTIVITY_STALE_MS = 60_000;
+
+/**
+ * Max length of the assistant-text reply preview surfaced in
+ * `LiveActivity.detail` for the compose status bar. Purely a wire bound (the
+ * stored block can be up to 8000 chars) — the visible length is capped far
+ * lower by the rail's CSS `max-width`, so this sits beyond what ever renders
+ * and the on-screen ellipsis stays CSS-driven. No trailing "…" is appended.
+ */
+export const ASSISTANT_TEXT_PREVIEW_MAX = 120;
 
 export const meChatRowSchema = z.object({
   chatId: z.string(),

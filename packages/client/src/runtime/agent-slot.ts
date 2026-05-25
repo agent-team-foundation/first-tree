@@ -6,7 +6,7 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultDataDir } from "@first-tree/shared/config";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { RegisterResult } from "../sdk.js";
@@ -145,7 +145,7 @@ export class AgentSlot {
       { event: "session:reconcile:result", fn: onReconcileResult },
     );
 
-    const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${this.config.name}.json`);
+    const registryPath = join(defaultDataDir(), "sessions", `${this.config.name}.json`);
 
     // The runtime owns the GitMirrorManager and injects it here — sharing one
     // manager across slots is what makes `withUrlLock` actually serialise
@@ -165,7 +165,7 @@ export class AgentSlot {
       concurrency: this.config.concurrency,
       handlerFactory: this.config.handlerFactory,
       handlerConfig: {
-        workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name),
+        workspaceRoot: join(defaultDataDir(), "workspaces", this.config.name),
         agentName: this.config.name,
         contextTreePath: contextTreeBinding?.path,
         contextTreeRepoUrl: contextTreeBinding?.repoUrl,
