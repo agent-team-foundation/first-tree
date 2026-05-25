@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalizeRepoUrl,
   createGitMirrorManager,
@@ -16,6 +16,8 @@ import {
   httpsToSshBaseRewrite,
   isLikelyHttpsAuthFailure,
   isLikelySshAuthFailure,
+  isLikelyTransientNetworkError,
+  retryOnTransientNetwork,
   sshToHttpsBaseRewrite,
 } from "../runtime/git-mirror-manager.js";
 import { isUnderManagedRoot } from "../runtime/worktree-cleanup.js";
@@ -685,6 +687,196 @@ describe("GitMirrorManager — SSH auth failure heuristic (isLikelySshAuthFailur
   });
 });
 
+describe("GitMirrorManager — transient network error heuristic (isLikelyTransientNetworkError)", () => {
+  it.each([
+    // The canonical session-resume failure that motivated the retry path —
+    // verbatim from the operator-reported chat error.
+    "git fetch --prune origin exited with code 128: fatal: unable to access 'https://github.com/agent-team-foundation/first-tree/': LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443",
+    "fatal: unable to access 'https://github.com/foo/bar/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 54",
+    "fatal: unable to access 'https://github.com/x/y/': Recv failure: Connection reset by peer",
+    "fatal: unable to access 'https://github.com/x/y/': Failed to connect to 127.0.0.1 port 6152: Connection refused",
+    "fatal: unable to access 'https://github.com/x/y/': Operation timed out after 30000 milliseconds",
+    "fatal: unable to access 'https://github.com/x/y/': Could not resolve host: github.com",
+    "ssh: Could not resolve hostname github.com: Temporary failure in name resolution",
+    "fatal: the remote end hung up unexpectedly\nfatal: early EOF\nfatal: index-pack failed",
+    "error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: PROTOCOL_ERROR (err 1)",
+    "error: RPC failed; HTTP 500 curl 22",
+    "fatal: unexpected disconnect while reading sideband packet",
+    "fetch-pack: unexpected disconnect while reading sideband packet",
+    "fatal: TLS handshake failed",
+    "GnuTLS recv error (-110): The TLS connection was non-properly terminated.",
+    "transfer closed with outstanding read data remaining",
+    "ssh: connect to host github.com port 22: Network is unreachable",
+    // Raw OpenSSL form for a TLS connection the peer closed mid-stream —
+    // distinct from `SSL_ERROR_SYSCALL` and distinct from the cert-verify
+    // failures (negative case below). Narrow pattern by design.
+    "fatal: unable to access 'https://github.com/x/y/': error:0A000126:SSL routines::unexpected eof while reading",
+  ])("matches transient network error: %s", (msg) => {
+    expect(isLikelyTransientNetworkError(msg)).toBe(true);
+  });
+
+  it.each([
+    "",
+    // Credential failures must NOT be retried — they go through the protocol
+    // fallback path, not the same-protocol retry loop.
+    "fatal: Authentication failed for 'https://github.com/foo/bar.git/'",
+    "fatal: could not read Username for 'https://github.com'",
+    "remote: HTTP Basic: Access denied",
+    "fatal: unable to access 'https://example.com/x.git/': The requested URL returned error: 401",
+    "fatal: unable to access 'https://example.com/x.git/': The requested URL returned error: 403",
+    "git@github.com: Permission denied (publickey).",
+    "Host key verification failed.",
+    // Even a stderr that mentions a transient-looking word should be classified
+    // as credential when the credential pattern matches — switching protocol
+    // is the right move, not retrying the same one.
+    "fatal: Authentication failed for 'https://github.com/x.git/': SSL connection established",
+    // Deterministic content errors — retrying won't help.
+    "fatal: repository 'https://example.com/none.git/' not found",
+    "fatal: couldn't find remote ref refs/heads/missing",
+    // TLS trust failures — retrying would mask the real misconfiguration and
+    // burn the full retry budget on a deterministic error. Covers the
+    // user-friendly form, the raw OpenSSL form (the regression Codex flagged
+    // on PR #548 — earlier `/SSL routines/i` pattern swept this up as
+    // transient), and the common variants (expired cert, missing CA bundle).
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: self signed certificate",
+    "fatal: unable to access 'https://example.com/x.git/': server certificate verification failed.",
+    "fatal: unable to access 'https://example.com/x.git/': error:0A000086:SSL routines::certificate verify failed",
+    "fatal: unable to access 'https://example.com/x.git/': error:0A000412:SSL routines::sslv3 alert bad certificate",
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: unable to get local issuer certificate",
+    "fatal: unable to access 'https://example.com/x.git/': SSL certificate problem: certificate has expired",
+    // Our own per-call timeout — retrying with a fresh full budget is the
+    // wrong policy; the op was either making progress or wasn't.
+    "git fetch --prune origin timed out after 300000ms",
+    // Repo-state / local errors.
+    "fatal: index file corrupt",
+    "error: Could not write config file",
+  ])("does NOT match: %s", (msg) => {
+    expect(isLikelyTransientNetworkError(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — retryOnTransientNetwork policy", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const transientErr = new Error("LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443");
+  const credentialErr = new Error("fatal: Authentication failed for 'https://github.com/foo.git/'");
+  const isRetryable = isLikelyTransientNetworkError;
+
+  /**
+   * Drive an async expression to completion under fake timers. Each iteration
+   * flushes microtasks (so the awaited `setTimeout` registers its scheduler
+   * call) and then drains pending timers. Stops when the promise settles.
+   * Mirrors the pattern in sdk-retry.test.ts so behaviour is comparable.
+   */
+  async function flush<T>(promise: Promise<T>, maxFlushes = 50): Promise<T> {
+    let settled = false;
+    let result: T | undefined;
+    let error: unknown;
+    promise.then(
+      (v) => {
+        result = v;
+        settled = true;
+      },
+      (e) => {
+        error = e;
+        settled = true;
+      },
+    );
+    for (let i = 0; i < maxFlushes && !settled; i++) {
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+    }
+    if (!settled) throw new Error("flush: promise never settled within maxFlushes iterations");
+    if (error !== undefined) throw error;
+    return result as T;
+  }
+
+  it("returns the first success without sleeping", async () => {
+    const op = vi.fn().mockResolvedValueOnce("ok");
+    const onRetry = vi.fn();
+    const result = await flush(retryOnTransientNetwork(op, { delaysMs: [500, 1500, 3000], isRetryable, onRetry }));
+    expect(result).toBe("ok");
+    expect(op).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient failure up to 4 attempts (1 + 3) and then surfaces it", async () => {
+    const op = vi.fn().mockRejectedValue(transientErr);
+    const onRetry = vi.fn();
+    await expect(
+      flush(retryOnTransientNetwork(op, { delaysMs: [500, 1500, 3000], isRetryable, onRetry })),
+    ).rejects.toThrow(transientErr);
+    expect(op).toHaveBeenCalledTimes(4);
+    // 3 retries scheduled → 3 onRetry callbacks
+    expect(onRetry).toHaveBeenCalledTimes(3);
+    const recordedDelays = onRetry.mock.calls.map((c) => (c[0] as { nextDelayMs: number }).nextDelayMs);
+    // Each scheduled delay must be ≥ the base and within 25% jitter window.
+    expect(recordedDelays[0]).toBeGreaterThanOrEqual(500);
+    expect(recordedDelays[0]).toBeLessThanOrEqual(500 + Math.floor(500 / 4));
+    expect(recordedDelays[1]).toBeGreaterThanOrEqual(1500);
+    expect(recordedDelays[1]).toBeLessThanOrEqual(1500 + Math.floor(1500 / 4));
+    expect(recordedDelays[2]).toBeGreaterThanOrEqual(3000);
+    expect(recordedDelays[2]).toBeLessThanOrEqual(3000 + Math.floor(3000 / 4));
+  });
+
+  it("recovers when a transient failure is followed by a success", async () => {
+    const op = vi
+      .fn()
+      .mockRejectedValueOnce(transientErr)
+      .mockRejectedValueOnce(transientErr)
+      .mockResolvedValueOnce("ok");
+    const onRetry = vi.fn();
+    const result = await flush(retryOnTransientNetwork(op, { delaysMs: [500, 1500, 3000], isRetryable, onRetry }));
+    expect(result).toBe("ok");
+    expect(op).toHaveBeenCalledTimes(3);
+    expect(onRetry).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT retry a non-transient (credential) failure", async () => {
+    const op = vi.fn().mockRejectedValue(credentialErr);
+    const onRetry = vi.fn();
+    await expect(
+      flush(retryOnTransientNetwork(op, { delaysMs: [500, 1500, 3000], isRetryable, onRetry })),
+    ).rejects.toThrow(credentialErr);
+    expect(op).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("propagates the original error instance unchanged so downstream `instanceof` checks still work", async () => {
+    // The fetchOrigin SSH fallback path does `direction.shouldRetry(primaryMessage)`
+    // on the terminal error — if the retry helper wrapped the error in something
+    // else, the fallback classifier would see the wrapper's message instead of
+    // the underlying git stderr and silently miscategorise the failure.
+    class AuthErr extends Error {
+      readonly tag = "auth";
+    }
+    const original = new AuthErr("fatal: Authentication failed for 'https://github.com/x.git/'");
+    const op = vi.fn().mockRejectedValue(original);
+    await expect(flush(retryOnTransientNetwork(op, { delaysMs: [500, 1500], isRetryable }))).rejects.toBe(original);
+  });
+
+  it("with an empty delays array, makes exactly one attempt (no retries)", async () => {
+    const op = vi.fn().mockRejectedValue(transientErr);
+    await expect(flush(retryOnTransientNetwork(op, { delaysMs: [], isRetryable }))).rejects.toThrow(transientErr);
+    expect(op).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles non-Error throwables by classifying via String(value)", async () => {
+    const op = vi.fn().mockRejectedValue("LibreSSL SSL_connect: SSL_ERROR_SYSCALL");
+    const onRetry = vi.fn();
+    await expect(flush(retryOnTransientNetwork(op, { delaysMs: [500], isRetryable, onRetry }))).rejects.toBe(
+      "LibreSSL SSL_connect: SSL_ERROR_SYSCALL",
+    );
+    expect(op).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("GitMirrorManager — hubManagedRoots safety guards", () => {
   it("isUnderManagedRoot returns false when target === root (refuses to nuke the managed root itself)", () => {
     // Without this guard, a caller that accidentally passes the managed root
@@ -941,6 +1133,13 @@ describe("GitMirrorManager — ssh fallback", () => {
     expect(caught).not.toBeInstanceOf(GitMirrorAuthError);
   });
 
+  // 30s vitest timeout: `Connection refused` is in the transient-retry set
+  // (intentionally — localhost-proxy listeners commonly bounce), so this
+  // test now eats the full ~5s of retry sleeps plus 4 × git-curl-fail-fast
+  // attempts before reaching the terminal assertion. On Linux dev machines
+  // that pushes wall-clock to ~15s, past vitest's default 5s testTimeout.
+  // CI Linux runners aren't affected, but cross-platform portability
+  // matters — see PR #548 review feedback.
   it("does NOT classify a non-credential https failure as auth — bootstrap against an unreachable https URL throws raw GitMirrorError", async () => {
     // Drive `ensureMirror` (which goes through the same `fetchOrigin` helper
     // as `fetchMirror`) against an https URL whose connect() always refuses.
@@ -962,7 +1161,7 @@ describe("GitMirrorManager — ssh fallback", () => {
     }
     expect(caught).toBeInstanceOf(GitMirrorError);
     expect(caught).not.toBeInstanceOf(GitMirrorAuthError);
-  });
+  }, 30_000);
 });
 
 describe("GitMirrorManager — concurrency", () => {

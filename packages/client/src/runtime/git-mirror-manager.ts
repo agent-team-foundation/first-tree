@@ -11,6 +11,30 @@ const FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const SESSION_BRANCH_PREFIX = "hub-session";
 
 /**
+ * Backoff schedule for retrying a remote-talking git op (`fetch`,
+ * `remote set-head --auto`) on a transient network-layer failure. Each entry
+ * is the wait BEFORE the next attempt, so this lays out 4 attempts total
+ * (1 initial + 3 retries) with a worst-case sleep budget of ~5s **per
+ * protocol attempt**.
+ *
+ * Per-call totals depend on whether the helper chains a primary + fallback:
+ *   - `fetchOrigin` ≤ 5s sleep budget: the SSH fallback only fires when
+ *     the primary's terminal failure is credential-shaped, which a transient
+ *     stderr will never be. So a transient-only failure burns ~5s.
+ *   - `setHeadAuto` ≤ 10s sleep budget: the fallback fires on ANY terminal
+ *     primary failure, so a doubly-transient run burns ~5s + ~5s ≈ 10s.
+ *
+ * Tuned for the operator-visible case of session start/resume hitting a
+ * proxy / VPN that flips a rule, restarts a TUN, or drops a TLS handshake
+ * mid-flight. The user's own manual workaround in those cases is "@-mention
+ * the agent again 2 seconds later" — this is that, automated.
+ *
+ * Per-step jitter (up to 25% of the delay) prevents thundering-herd retries
+ * when several agents resume in lockstep against the same flaky proxy.
+ */
+const NETWORK_RETRY_DELAYS_MS: readonly number[] = [500, 1500, 3000];
+
+/**
  * Per-URL bare mirror manager.
  *
  * Layout:
@@ -327,6 +351,24 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     }
   }
 
+  async function gitWithNetworkRetry(
+    args: string[],
+    cwd: string | null,
+    timeoutMs: number,
+    opLabel: string,
+  ): Promise<{ stdout: string; stderr: string; elapsedMs: number }> {
+    return retryOnTransientNetwork(() => git(args, cwd, timeoutMs), {
+      delaysMs: NETWORK_RETRY_DELAYS_MS,
+      isRetryable: isLikelyTransientNetworkError,
+      onRetry: ({ attempt, nextDelayMs, message }) => {
+        log?.warn(
+          { op: opLabel, attempt, nextDelayMs, stderr: message.slice(0, 512) },
+          "git remote op hit transient network error — retrying",
+        );
+      },
+    });
+  }
+
   /**
    * `git fetch --prune origin` with one-shot bidirectional protocol fallback.
    *
@@ -364,15 +406,34 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
    * here: callers that need origin/HEAD already get a clear
    * `GitMirrorError("Cannot resolve default branch …")` if both attempts fail.
    */
+  /**
+   * Worst-case sleep budget: ~10s (primary ~5s + fallback ~5s). Unlike
+   * `fetchOrigin`, which gates fallback on a credential-shaped terminal
+   * error, `setHeadAuto` always falls through on any primary failure, so
+   * a doubly-transient run pays both retry budgets. Per-call 30s timeout
+   * still caps each individual git invocation.
+   */
   async function setHeadAuto(mirrorPath: string, originUrl: string): Promise<boolean> {
-    if (await gitOk(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000)) return true;
+    try {
+      await gitWithNetworkRetry(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000, "set-head:primary");
+      return true;
+    } catch {
+      // Primary attempt failed terminally (after any transient retries). Fall
+      // through to the SSH-side rewrite — same fallback rules as fetchOrigin.
+    }
     const direction = pickFallbackDirection(originUrl);
     if (!direction) return false;
-    return await gitOk(
-      ["-c", `url.${direction.peerBase}.insteadOf=${direction.originBase}`, "remote", "set-head", "origin", "--auto"],
-      mirrorPath,
-      30_000,
-    );
+    try {
+      await gitWithNetworkRetry(
+        ["-c", `url.${direction.peerBase}.insteadOf=${direction.originBase}`, "remote", "set-head", "origin", "--auto"],
+        mirrorPath,
+        30_000,
+        "set-head:fallback",
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function readOriginUrl(mirrorPath: string): Promise<string | null> {
@@ -390,7 +451,12 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   ): Promise<{ elapsedMs: number; usedFallback: boolean }> {
     const direction = pickFallbackDirection(originUrl);
     try {
-      const { elapsedMs } = await git(["fetch", "--prune", "origin"], mirrorPath, cloneTimeoutMs);
+      const { elapsedMs } = await gitWithNetworkRetry(
+        ["fetch", "--prune", "origin"],
+        mirrorPath,
+        cloneTimeoutMs,
+        "fetch:primary",
+      );
       return { elapsedMs, usedFallback: false };
     } catch (primaryErr) {
       const primaryMessage = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
@@ -407,10 +473,11 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         "fetch failed with credential-shaped error; retrying with peer-protocol insteadOf rewrite",
       );
       try {
-        const { elapsedMs } = await git(
+        const { elapsedMs } = await gitWithNetworkRetry(
           ["-c", `url.${direction.peerBase}.insteadOf=${direction.originBase}`, "fetch", "--prune", "origin"],
           mirrorPath,
           cloneTimeoutMs,
+          "fetch:fallback",
         );
         log?.info({ gitUrl: originUrl, toProtocol: direction.toProtocol }, "protocol-fallback fetch succeeded");
         return { elapsedMs, usedFallback: true };
@@ -980,6 +1047,89 @@ export function isLikelyAuthFailure(message: string): boolean {
 }
 
 /**
+ * Heuristic for transient network-layer failures emitted by `git` over
+ * HTTPS or SSH. These are the failure modes a brief proxy/VPN hiccup, TLS
+ * handshake blip, or peer connection reset produces mid-fetch — exactly
+ * what `SSL_connect: SSL_ERROR_SYSCALL` looks like when Surge / Clash
+ * swaps a rule mid-flight, what `early EOF` looks like when an HTTP/2
+ * stream is reset, and what `Connection refused` looks like when a local
+ * proxy listener restarts.
+ *
+ * Used by the `gitWithNetworkRetry` wrapper around `fetch` and
+ * `remote set-head --auto` to absorb the kind of hiccup that today
+ * surfaces as `Session start/resume failed (…)` in chat and only goes
+ * away when the operator manually @-mentions the agent again two seconds
+ * later.
+ *
+ * Negative space (intentionally NOT matched):
+ *   - credential failures — handled by the protocol-fallback path; retrying
+ *     in the same protocol won't help.
+ *   - `Repository not found`, `couldn't find remote ref` — deterministic
+ *     content errors; a 500ms retry won't fix them.
+ *   - `SSL certificate problem` — TLS trust failures; retrying won't help
+ *     and silently masking them would hide a real misconfiguration.
+ *   - `git … timed out after Xms` — our own per-call timeout. The op was
+ *     making progress (or wasn't); either way another full timeout window
+ *     is the wrong response.
+ *
+ * On localhost-proxy specifically (the common case for this codebase),
+ * `ECONNREFUSED` IS a transient signal — when Surge / Clash bounces the
+ * listener, the next attempt sees the same listener back up within
+ * seconds. This is why we diverge from the SDK's `doFetch` policy (which
+ * does NOT retry `ECONNREFUSED` because there the peer is the remote hub).
+ *
+ * Exported for unit testing.
+ */
+export function isLikelyTransientNetworkError(message: string): boolean {
+  if (!message) return false;
+  // Don't shadow a credential failure: switching to SSH is the right move
+  // for those, retrying the same protocol is not.
+  if (isLikelyHttpsAuthFailure(message) || isLikelySshAuthFailure(message)) return false;
+  // Don't shadow a TLS trust failure: those are deterministic misconfigurations
+  // (custom intercepting cert chain, expired cert, missing CA bundle, …) that
+  // a 5s retry budget won't fix. Burning the budget AND emitting transient-
+  // warning log lines for a deterministic failure would also mislead operators
+  // diagnosing a real cert problem. Matches both the user-friendly form
+  // (`SSL certificate problem: …`) and the raw OpenSSL form
+  // (`error:…:SSL routines::certificate verify failed`).
+  if (
+    /SSL certificate problem/i.test(message) ||
+    /server certificate verification failed/i.test(message) ||
+    /certificate verify failed/i.test(message) ||
+    /self.signed certificate/i.test(message) ||
+    /unable to get local issuer certificate/i.test(message) ||
+    /certificate has expired/i.test(message)
+  )
+    return false;
+  return (
+    /SSL_ERROR_SYSCALL/i.test(message) ||
+    // OpenSSL's transient "the peer closed mid-stream" signal. Matches the
+    // raw form (`error:…:SSL routines::unexpected eof while reading`) emitted
+    // when github.com's edge resets the TLS connection mid-fetch. Narrowly
+    // scoped to the exact phrase to avoid re-introducing the broad
+    // `SSL routines` match that swept up cert verify failures.
+    /unexpected eof while reading/i.test(message) ||
+    /TLS handshake|gnutls_handshake|gnutls\s+recv\s+error/i.test(message) ||
+    /\bConnection reset(?:\s+by\s+peer)?\b/i.test(message) ||
+    /\bConnection refused\b/i.test(message) ||
+    /\bConnection timed out\b/i.test(message) ||
+    /\bOperation timed out\b/i.test(message) ||
+    /\bNetwork is unreachable\b/i.test(message) ||
+    /Could not resolve host(?:name)?/i.test(message) ||
+    /Temporary failure in name resolution/i.test(message) ||
+    /\bRPC failed\b/i.test(message) ||
+    /\bearly EOF\b/i.test(message) ||
+    /the remote end hung up unexpectedly/i.test(message) ||
+    /transfer closed with outstanding read data remaining/i.test(message) ||
+    /HTTP\/2 stream\s+\d+\s+was\s+(?:not\s+)?(?:reset|closed)/i.test(message) ||
+    /HTTP\/2 stream was reset/i.test(message) ||
+    /unexpected disconnect while reading sideband packet/i.test(message) ||
+    /fetch-pack: unexpected disconnect/i.test(message) ||
+    /\bsend-pack:\s+unexpected\s+disconnect\b/i.test(message)
+  );
+}
+
+/**
  * Map an HTTPS git URL to the `insteadOf` rewrite needed to make git resolve
  * it through SSH. Returns *base* strings (suitable for
  * `git -c url.<sshBase>.insteadOf=<httpsBase>`) — git's `insteadOf` is a
@@ -1125,4 +1275,53 @@ function pickFallbackDirection(originUrl: string): FallbackDirection | null {
 function truncate(text: string, max = 512): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}…[truncated]`;
+}
+
+/**
+ * Run `op` once, and on a `isRetryable`-classified failure replay it on the
+ * given backoff schedule. Non-retryable failures propagate to the caller
+ * immediately — those won't be cured by waiting and silently retrying would
+ * mask real bugs and exhaust the retry budget.
+ *
+ * Per-attempt timeouts (when `op` enforces one of its own) are NOT reset
+ * across attempts: each attempt gets its own full budget. Right policy for
+ * `git fetch` where a slow but progressing transfer on attempt N+1 should
+ * not be aborted because attempt N ate part of a shared budget.
+ *
+ * Exported so unit tests can drive the retry policy with a mock `op`
+ * instead of standing up a real flaky network. Module-scope so the helper
+ * stays pure and side-effect-free.
+ */
+export async function retryOnTransientNetwork<T>(
+  op: (attempt: number) => Promise<T>,
+  options: {
+    delaysMs: readonly number[];
+    isRetryable: (message: string) => boolean;
+    onRetry?: (info: { attempt: number; nextDelayMs: number; message: string }) => void;
+  },
+): Promise<T> {
+  const { delaysMs, isRetryable, onRetry } = options;
+  const maxAttempts = delaysMs.length + 1;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await op(attempt);
+    } catch (err) {
+      lastErr = err;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!isRetryable(message)) throw err;
+      if (attempt === maxAttempts) throw err;
+      // `delaysMs.length === maxAttempts - 1`, so `attempt - 1` is in range
+      // for every iteration that reaches this line. The explicit guard keeps
+      // TS strict happy without resorting to a non-null assertion.
+      const baseDelay = delaysMs[attempt - 1];
+      if (baseDelay === undefined) throw err;
+      const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(baseDelay / 4)));
+      const delayMs = baseDelay + jitter;
+      onRetry?.({ attempt, nextDelayMs: delayMs, message });
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  // Unreachable — the loop always either returns or throws by `maxAttempts`.
+  throw lastErr;
 }
