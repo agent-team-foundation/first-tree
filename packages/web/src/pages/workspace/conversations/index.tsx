@@ -136,8 +136,10 @@ export function ConversationList({
   // extraPages bypass react-query entirely — without this stamp, a row from
   // an older page whose agent crashed mid-turn would keep flashing busy
   // forever. The render path drops busyAgentIds on rows from pages older
-  // than RUNTIME_STALE_MS (90s), keeping the stuck-busy window inside the
-  // documented SLO without disrupting the user's loaded position.
+  // than RUNTIME_STALE_MS (60s) plus one refetchInterval (30s) — total
+  // worst-case stuck-busy window ~90s on these rows, vs ≤60s for the first
+  // page that refetches directly. No UX disruption from the user's
+  // loaded position.
   const [extraPages, setExtraPages] = useState<Array<{ fetchedAt: number; rows: MeChatRow[] }>>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
@@ -184,12 +186,12 @@ export function ConversationList({
     // signals projected onto each row: `busyAgentIds` lights the chat-list
     // dot for the working / codex-no-events case, and the only way the
     // dot self-heals after a client crash is for a fresh `listMeChats`
-    // to discover `runtime_state_at` aged past `RUNTIME_STALE_MS` (90s)
+    // to discover `runtime_state_at` aged past `RUNTIME_STALE_MS` (60s)
     // — the server emits no notification when staleness is reached
     // passively. Without this interval the dot would stay lit forever
     // until some unrelated invalidation. 30s matches the
-    // `chat-agent-status` query and keeps the user-perceived stuck-busy
-    // window within the documented 90s SLO.
+    // `chat-agent-status` query, so the first-page stuck-busy window is
+    // bounded by RUNTIME_STALE_MS (60s) + one refetch (30s) ≈ 90s upper.
     refetchInterval: 30_000,
   });
 
@@ -221,14 +223,18 @@ export function ConversationList({
 
   const baseRows = data?.rows ?? [];
   // Render-time staleness sieve for extraPages: any row whose page was
-  // fetched > RUNTIME_STALE_MS (90s) ago has its `busyAgentIds` blanked,
-  // matching the server-side fail-closed window. `dataUpdatedAt` (set by
-  // react-query on every successful refetch, even when content is
-  // structurally identical) is the time anchor — `baseRows` identity can
-  // stay stable across refetches when structural sharing kicks in, so
-  // depending on it alone would leave a memo that never re-evaluates
-  // `Date.now()` and an old extraPage row could keep flashing busy
-  // forever. Rationale: see the comment on the `extraPages` declaration.
+  // fetched > RUNTIME_STALE_MS (60s) ago has its `busyAgentIds` blanked.
+  // The check tracks the server's fail-closed window but the recompute
+  // cadence is bounded by react-query's refetchInterval (30s), so the
+  // real upper bound is `RUNTIME_STALE_MS + refetchInterval` ≈ 90s on
+  // extraPage rows specifically (vs ≤60s on the first page, which
+  // refetches directly). `dataUpdatedAt` (set on every successful
+  // refetch, even when content is structurally identical) is the time
+  // anchor — `baseRows` identity can stay stable across refetches when
+  // structural sharing kicks in, so depending on it alone would leave
+  // a memo that never re-evaluates `Date.now()` and an old extraPage
+  // row could keep flashing busy forever. Rationale: see the comment on
+  // the `extraPages` declaration.
   // biome-ignore lint/correctness/useExhaustiveDependencies: dataUpdatedAt is the time-tick that drives stale recomputation; not a value read
   const allRows = useMemo(() => {
     const now = Date.now();

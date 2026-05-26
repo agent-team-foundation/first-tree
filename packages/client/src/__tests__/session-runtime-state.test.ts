@@ -420,8 +420,8 @@ describe("SessionManager: per-(agent,chat) runtime callback (#553 rebase)", () =
       // only re-affirm output.
       seen.length = 0;
 
-      // Reaffirm base = 30s + ±20% jitter — 60s straddles the upper bound
-      // (36s) twice so at least one fire is guaranteed even at max jitter.
+      // Reaffirm base = 20s + ±20% jitter — 60s straddles the upper bound
+      // (24s) twice so at least one fire is guaranteed even at max jitter.
       await vi.advanceTimersByTimeAsync(60_000);
 
       const reaffirms = seen.filter((e) => e.chatId === "chat-w" || e.chatId === "chat-i");

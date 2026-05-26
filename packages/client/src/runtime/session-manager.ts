@@ -212,12 +212,13 @@ const MAX_EVICTED_MAPPINGS = 500;
 /**
  * Base interval for re-affirming per-(agent,chat) runtime so the server-side
  * `runtime_state_at` stays inside its freshness window during a long turn.
- * Kept well under the server's `RUNTIME_STALE_MS` (90 s) so a single dropped
- * frame doesn't let a live turn flap to idle. The actual fire time is jittered
- * ±20 % around this base to prevent thundering-herd alignment across hundreds
- * of clients restarting at once.
+ * Kept at 1/3 of the server's `RUNTIME_STALE_MS` (60 s) so a single dropped
+ * frame doesn't let a live turn flap to idle — matches the approved spec
+ * (proposals/hub-agent-status-working-freshness.20260525.md §6.1 §10). The
+ * actual fire time is jittered ±20 % around this base to prevent
+ * thundering-herd alignment across hundreds of clients restarting at once.
  */
-const RUNTIME_REAFFIRM_BASE_MS = 30_000;
+const RUNTIME_REAFFIRM_BASE_MS = 20_000;
 const RUNTIME_REAFFIRM_JITTER_RATIO = 0.2;
 
 function jitteredReaffirmDelay(): number {

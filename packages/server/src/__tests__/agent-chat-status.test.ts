@@ -231,18 +231,37 @@ describe("agent-chat-status", () => {
       expect(s?.main).toBe("failed");
     });
 
-    // Reverse #366 regression: agent-global presence.runtime_state='error' must
-    // NOT contribute to the per-chat composite errored axis — otherwise an
-    // error in chat A would light up every other chat that agent participates
-    // in. The per-chat row is the only authority.
-    it("agent-global presence.runtime_state='error' does NOT make the composite errored", async () => {
+    // Reverse #366 regression — for NEW clients (any per-chat session that has
+    // reported `session:runtime` at least once): agent-global
+    // presence.runtime_state='error' must NOT contribute to the per-chat
+    // composite errored axis. The per-chat row is the only authority once
+    // the stamp is non-null.
+    it("agent-global presence.runtime_state='error' does NOT leak into errored on the new-client path", async () => {
       const { app, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId, "error");
       await setSession(peer.agent.uuid, chatId, "active");
-      // No per-chat runtime report — runtime_state_at stays NULL (sentinel).
+      // Mark this session as a NEW client: a per-chat runtime report has
+      // landed (idle is fine, the point is `runtime_state_at` becomes
+      // non-null and the fallback no longer applies).
+      await setRuntime(peer.agent.uuid, chatId, "idle");
       const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
       expect(s?.errored).toBe(false);
       expect(s?.main).toBe("ready"); // active session, no working, no error
+    });
+
+    // Old-client fallback (one release cycle, spec §6.1 §10): NULL
+    // runtime_state_at means the client has never reported per-chat, so
+    // composite errored falls back to the legacy agent-global OR-fold.
+    // This preserves pre-PR behaviour while the upgrade window is open and
+    // self-closes the moment the client reports.
+    it("agent-global presence.runtime_state='error' DOES light errored when runtime_state_at is NULL (old-client fallback)", async () => {
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId, "error");
+      await setSession(peer.agent.uuid, chatId, "active");
+      // No `setRuntime` call — runtime_state_at stays NULL (old client).
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.errored).toBe(true);
+      expect(s?.main).toBe("failed");
     });
 
     it("an unreachable errored agent is offline, not failed (reachability gates)", async () => {
@@ -399,23 +418,59 @@ describe("agent-chat-status", () => {
       );
     });
 
-    it("computeWorking: true only when fresh AND runtime_state==='working'", () => {
+    it("computeWorking — new-client authoritative path: true only when fresh AND runtime_state==='working'", () => {
       const ok = { state: "active" as const, runtimeState: "working", runtimeStateAt: recent(-1000) };
-      expect(computeWorking(ok, now)).toBe(true);
-      expect(computeWorking({ ...ok, runtimeState: "idle" }, now)).toBe(false);
-      expect(computeWorking({ ...ok, runtimeState: "blocked" }, now)).toBe(false);
-      expect(computeWorking({ ...ok, runtimeStateAt: null }, now)).toBe(false);
+      expect(computeWorking(ok, null, now)).toBe(true);
+      expect(computeWorking({ ...ok, runtimeState: "idle" }, null, now)).toBe(false);
+      expect(computeWorking({ ...ok, runtimeState: "blocked" }, null, now)).toBe(false);
+      // Stale stamp on a known-new client: stay on new path, fail-closed.
+      expect(
+        computeWorking(
+          { ...ok, runtimeStateAt: recent(-(RUNTIME_STALE_MS + 1000)) },
+          { agentId: "a", kind: "tool_call", label: "x", startedAt: new Date().toISOString() },
+          now,
+        ),
+      ).toBe(false);
     });
 
-    it("computeErrored: state='errored' always errored; per-chat runtime='error' errored when fresh+active", () => {
-      // C-axis lifecycle errored sticks regardless of D-axis state.
-      expect(computeErrored({ state: "errored", runtimeState: "idle", runtimeStateAt: null }, now)).toBe(true);
-      // D-axis 'error' only counts when fresh + active.
-      expect(computeErrored({ state: "active", runtimeState: "error", runtimeStateAt: recent(-1000) }, now)).toBe(true);
-      expect(computeErrored({ state: "active", runtimeState: "error", runtimeStateAt: null }, now)).toBe(false);
-      expect(computeErrored({ state: "suspended", runtimeState: "error", runtimeStateAt: recent(-1000) }, now)).toBe(
-        false,
+    it("computeWorking — old-client fallback (NULL stamp): true iff a non-terminal activity is present", () => {
+      const active = { state: "active" as const, runtimeState: "idle", runtimeStateAt: null };
+      const activity: LiveActivity = {
+        agentId: "a",
+        kind: "tool_call",
+        label: "Bash",
+        startedAt: new Date().toISOString(),
+      };
+      expect(computeWorking(active, activity, now)).toBe(true);
+      expect(computeWorking(active, null, now)).toBe(false);
+      // Old-client fallback still gated on active.
+      expect(computeWorking({ ...active, state: "suspended" }, activity, now)).toBe(false);
+    });
+
+    it("computeErrored — new-client authoritative: state='errored' OR fresh runtime='error'", () => {
+      // C-axis lifecycle errored sticks regardless of D-axis state, irrespective of stamp.
+      expect(computeErrored({ state: "errored", runtimeState: "idle", runtimeStateAt: null }, null, now)).toBe(true);
+      expect(computeErrored({ state: "errored", runtimeState: "idle", runtimeStateAt: null }, "error", now)).toBe(true);
+      // D-axis 'error' only counts when fresh + active (new-client path).
+      expect(computeErrored({ state: "active", runtimeState: "error", runtimeStateAt: recent(-1000) }, null, now)).toBe(
+        true,
       );
+      expect(
+        computeErrored({ state: "suspended", runtimeState: "error", runtimeStateAt: recent(-1000) }, null, now),
+      ).toBe(false);
+    });
+
+    it("computeErrored — old-client fallback (NULL stamp): legacy presence.runtime_state OR-fold", () => {
+      const active = { state: "active" as const, runtimeState: "idle", runtimeStateAt: null };
+      // Fallback path lights errored from agent-global presence error — this
+      // is pre-PR behaviour, retained for one release cycle; self-closes the
+      // moment the client upgrades and starts reporting per-chat runtime.
+      expect(computeErrored(active, "error", now)).toBe(true);
+      // Non-error presence on an old-client active row: not errored.
+      expect(computeErrored(active, "working", now)).toBe(false);
+      expect(computeErrored(active, null, now)).toBe(false);
+      // Non-active old-client row: fallback does NOT apply.
+      expect(computeErrored({ ...active, state: "suspended" }, "error", now)).toBe(false);
     });
   });
 
