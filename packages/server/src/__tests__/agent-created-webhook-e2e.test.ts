@@ -250,6 +250,115 @@ describe("Agent-created → real webhook end-to-end", () => {
     expect(sentToOrg).toHaveLength(0);
   });
 
+  it("issues.assigned does NOT mint a sibling chat when the assignee's delegateMention differs from the chat's agent_created delegate", async () => {
+    // Regression for the assignee-creates-new-chat bug. Real-world repro:
+    //   1. Inside a chat, the user asked their assistant agent to open an
+    //      issue via `gh issue create`. Mapping written under
+    //      (human, assistantDelegate, issue).
+    //   2. The human's `delegateMention` happens to point at a *different*
+    //      delegate (e.g. their main workhorse agent) — the assistant that
+    //      created the issue was a one-off helper.
+    //   3. A collaborator opens the issue on GitHub and assigns it to the
+    //      human. The assign webhook arrives with `involves=[human,
+    //      reason=assigned]` and sender=collaborator (external actor).
+    //
+    // Bug (pre-fix): audience built `kind:"new"` for (human, delegateMention)
+    // because the dedup key included delegate, then `resolveTargetChat` did
+    // not find a mapping under that delegate and minted a fresh chat.
+    //
+    // Fix: audience dedups by human alone; resolveTargetChat falls back to
+    // any chat already bound for (human, entity) regardless of delegate.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 200005;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const assistantDelegate = await seedDelegateAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `assistant-${randomUUID().slice(0, 6)}`,
+    });
+    const workhorseDelegate = await seedDelegateAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `workhorse-${randomUUID().slice(0, 6)}`,
+    });
+    // The human's delegateMention points at the workhorse, NOT the assistant
+    // that created the issue. This is the misalignment the bug exposes.
+    const humanName = `assignee-${randomUUID().slice(0, 6)}`;
+    const human = await app.db
+      .insert(agents)
+      .values({
+        uuid: randomUUID(),
+        name: humanName,
+        organizationId: admin.organizationId,
+        type: "human",
+        displayName: humanName,
+        inboxId: `inbox_${randomUUID()}`,
+        managerId: admin.memberId,
+        delegateMention: workhorseDelegate,
+      })
+      .returning({ uuid: agents.uuid });
+    const humanUuid = human[0]?.uuid;
+    if (!humanUuid) throw new Error("seeded human agent missing uuid");
+
+    const chatId = await seedDirectChat(app, admin.organizationId, humanUuid, assistantDelegate);
+
+    // Stage 1: assistant agent opens the issue via gh issue create.
+    await maybeBindGithubEntityFromToolCall(app.db, assistantDelegate, chatId, {
+      toolUseId: "tu-assign-1",
+      name: "Bash",
+      args: { command: 'gh issue create --title "track Z" --body "ctx"' },
+      status: "ok",
+      resultPreview: "https://github.com/owner/repo/issues/905",
+    });
+    const initialMappings = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#905"));
+    expect(initialMappings).toHaveLength(1);
+    expect(initialMappings[0]?.chatId).toBe(chatId);
+    expect(initialMappings[0]?.delegateAgentId).toBe(assistantDelegate);
+
+    const beforeChats = (await app.db.select().from(chats)).length;
+    const beforeMessages = (await app.db.select().from(messages).where(eq(messages.chatId, chatId))).length;
+
+    // Stage 2: collaborator assigns the issue to our human. Webhook fires
+    // with involves=[human]. Old code would mint a sibling chat for
+    // (human, workhorseDelegate); new code routes back to chatId.
+    const res = await postWebhook(app, "issues", {
+      action: "assigned",
+      issue: {
+        number: 905,
+        title: "track Z",
+        html_url: "https://github.com/owner/repo/issues/905",
+        body: "ctx",
+        assignee: { login: humanName },
+      },
+      assignee: { login: humanName },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "collaborator-zed", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.delivered).toBe(1);
+    expect(body.newChats).toBe(0);
+
+    // No extra chats, card landed in the original chat, no sibling mapping.
+    const afterChats = (await app.db.select().from(chats)).length;
+    expect(afterChats).toBe(beforeChats);
+    const sent = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(sent).toHaveLength(beforeMessages + 1);
+    const finalMappings = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#905"));
+    expect(finalMappings).toHaveLength(1);
+    expect(finalMappings[0]?.chatId).toBe(chatId);
+    expect(finalMappings[0]?.delegateAgentId).toBe(assistantDelegate);
+  });
+
   it("opened webhook with body @mention still creates a chat (mention exemption preserved)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

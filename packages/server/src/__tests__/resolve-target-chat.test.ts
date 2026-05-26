@@ -312,6 +312,62 @@ describe("resolveTargetChat", () => {
     expect(mappings[0]?.chatId).toBe(r1.chatId);
   });
 
+  it("reuses the existing chat when a different delegate hits the same (human, entity) tuple", async () => {
+    // Regression for the assignee-creates-new-chat bug. The agent that
+    // created the issue (delegateA) wrote a mapping under (human, delegateA).
+    // A later webhook resolves the audience via `human.delegateMention =
+    // delegateB` — under the old logic this minted a sibling chat. With the
+    // (a.5) human-scoped fallback in place, the existing chat is reused and a
+    // sibling mapping row is recorded so subsequent events hit (a) directly.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedDelegate(app, admin.organizationId, admin.memberId, `dlgA-${randomUUID().slice(0, 6)}`);
+    const delegateB = await seedDelegate(app, admin.organizationId, admin.memberId, `dlgB-${randomUUID().slice(0, 6)}`);
+
+    const created = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegateA,
+      entity: issue42,
+      relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
+    });
+
+    const followUp = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegateB,
+      entity: issue42,
+      relatedEntities: [],
+      eventType: "issues",
+      action: "assigned",
+    });
+
+    expect(followUp.chatId).toBe(created.chatId);
+    expect(followUp.created).toBe(false);
+    expect(followUp.boundVia).toBe("human_fallback");
+
+    // Sibling mapping row written for (human, delegateB, entity) → same chat;
+    // both rows now exist so the next event for either delegate hits (a).
+    // The sibling carries bound_via="human_fallback" so audit / telemetry can
+    // tell it apart from a first-touch direct binding.
+    const mappings = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, issue42.key));
+    expect(mappings).toHaveLength(2);
+    expect(new Set(mappings.map((m) => m.delegateAgentId))).toEqual(new Set([delegateA, delegateB]));
+    expect(new Set(mappings.map((m) => m.chatId))).toEqual(new Set([created.chatId]));
+    const sibling = mappings.find((m) => m.delegateAgentId === delegateB);
+    expect(sibling?.boundVia).toBe("human_fallback");
+    const original = mappings.find((m) => m.delegateAgentId === delegateA);
+    expect(original?.boundVia).toBe("direct");
+
+    const allChats = await app.db.select({ id: chats.id }).from(chats).where(eq(chats.id, created.chatId));
+    expect(allChats).toHaveLength(1);
+  });
+
   it("renders 'PR Review' topic when a PR chat is first created by review_requested", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
