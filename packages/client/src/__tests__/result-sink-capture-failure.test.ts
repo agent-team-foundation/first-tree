@@ -39,7 +39,7 @@ describe("createResultSink — capture/parse failure preserves the original body
       getTrigger: () => null,
       clearTrigger: () => {},
       log: () => {},
-      getDocumentBasePath: vi.fn().mockResolvedValue("/ws/coder/chat-1"),
+      getSelfFence: vi.fn().mockResolvedValue({ agentHome: "/ws/coder/chat-1" }),
       workspacesRoot: "/ws",
       selfSlug: "coder",
     });

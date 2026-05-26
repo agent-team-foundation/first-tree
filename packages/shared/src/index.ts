@@ -5,6 +5,7 @@ export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } fro
 export {
   buildWorkspaceDocKey,
   isCanonicalDocLinkPath,
+  looksLikeChatId,
   normalizeDocLinkPath,
   parseWorkspaceDocKey,
 } from "./lib/doc-path.js";

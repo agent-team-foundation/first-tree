@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { documentBasePathFromRuntimeConfig, resolveSessionDocRoot } from "../runtime/session-manager.js";
+import {
+  documentBasePathFromRuntimeConfig,
+  resolveSessionDocRoot,
+  selfFenceFromRuntimeConfig,
+  singleRepoLocalPathFromPayload,
+} from "../runtime/session-manager.js";
 
 function payload(gitRepos: AgentRuntimeConfigPayload["gitRepos"]): AgentRuntimeConfigPayload {
   return { kind: "claude-code", prompt: { append: "" }, model: "", mcpServers: [], env: [], gitRepos };
@@ -80,5 +85,39 @@ describe("resolveSessionDocRoot — per-agent-home vs legacy per-chat layout", (
       resolveSessionDocRoot(workspaceRoot, "another-new-chat"),
     );
     expect(base).toBe(join(workspaceRoot, "first-tree"));
+  });
+});
+
+describe("singleRepoLocalPathFromPayload + selfFenceFromRuntimeConfig", () => {
+  it("returns null for zero-repo and multi-repo payloads — no promotion path", () => {
+    expect(singleRepoLocalPathFromPayload(payload([]))).toBeNull();
+    expect(
+      singleRepoLocalPathFromPayload(payload([{ url: "https://x/y.git" }, { url: "https://x/z.git" }])),
+    ).toBeNull();
+  });
+
+  it("derives the localPath from the repo URL when explicit localPath is absent", () => {
+    expect(singleRepoLocalPathFromPayload(payload([{ url: "https://github.com/a/first-tree.git" }]))).toBe(
+      "first-tree",
+    );
+  });
+
+  it("honours an explicit localPath; treats a blank string as no promotion", () => {
+    expect(singleRepoLocalPathFromPayload(payload([{ url: "https://x/y.git", localPath: "nested/repo" }]))).toBe(
+      "nested/repo",
+    );
+    expect(singleRepoLocalPathFromPayload(payload([{ url: "https://x/y.git", localPath: "   " }]))).toBeNull();
+  });
+
+  it("selfFenceFromRuntimeConfig packs agentHome + optional singleRepoLocalPath for the snapshot pipeline", () => {
+    expect(selfFenceFromRuntimeConfig(payload([{ url: "https://github.com/a/first-tree.git" }]), "/ws/coder")).toEqual({
+      agentHome: "/ws/coder",
+      singleRepoLocalPath: "first-tree",
+    });
+    expect(selfFenceFromRuntimeConfig(payload([]), "/ws/coder")).toEqual({ agentHome: "/ws/coder" });
+  });
+
+  it("returns agentHome-only when no payload is cached yet (very first message)", () => {
+    expect(selfFenceFromRuntimeConfig(null, "/ws/coder")).toEqual({ agentHome: "/ws/coder" });
   });
 });

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { SelfFence } from "../runtime/doc-snapshots.js";
 import { createResultSink, type Trigger } from "../runtime/result-sink.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
@@ -24,7 +25,7 @@ const ME = "agent-me";
 type SinkFixtures = {
   trigger: Trigger | null;
   sendMessage?: ReturnType<typeof vi.fn>;
-  getDocumentBasePath?: () => Promise<string | null>;
+  getSelfFence?: () => Promise<SelfFence | null>;
 };
 
 function buildSink(fx: SinkFixtures) {
@@ -53,7 +54,7 @@ function buildSink(fx: SinkFixtures) {
       trigger = null;
     },
     log: (msg) => logs.push(msg),
-    getDocumentBasePath: fx.getDocumentBasePath,
+    getSelfFence: fx.getSelfFence,
   });
 
   return { sink, sendMessage, logs };
@@ -102,7 +103,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     // documentContext at all (and still no auto-mentions array).
     const { sink, sendMessage } = buildSink({
       trigger: { messageId: "m1", senderId: "agent-peer" },
-      getDocumentBasePath: vi.fn().mockResolvedValue("first-tree"),
+      getSelfFence: vi.fn().mockResolvedValue({ agentHome: "first-tree" } satisfies SelfFence),
     });
 
     await sink("see [design](docs/design.md)");
@@ -137,7 +138,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     it("emits kind=snapshot when basePath resolves and the text references a real .md", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("see [design](design.md)");
@@ -165,7 +166,7 @@ describe("createResultSink — forwardResult enrichment", () => {
       // the same canonical key so the click hits the snapshot in cache.
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("created design.md just now");
@@ -180,7 +181,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     it("strips :line[:col] from bare paths so snapshot keys match what the click handler resolves", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("see docs/intro.md:42:1 for details");
@@ -194,7 +195,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     it("rejects dotfiles / hidden dirs and attaches NO documentContext when no docs survive", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("hidden: [secret](.agent/secret.md)");
@@ -213,7 +214,7 @@ describe("createResultSink — forwardResult enrichment", () => {
       // matching what `docPreviewPathFromHref` produces for a click.
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("see [a](./docs/intro.md) and [b](./other/../docs/intro.md)");
@@ -234,7 +235,7 @@ describe("createResultSink — forwardResult enrichment", () => {
       // would pass; realpath-relative segments must fail.
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("see [public](public.md)");
@@ -264,7 +265,7 @@ describe("createResultSink — forwardResult enrichment", () => {
 
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("see [broken](broken.md)");
@@ -294,7 +295,7 @@ describe("createResultSink — forwardResult enrichment", () => {
 
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("see [evil](https://x.com/api.md) and [also](//x.com/a.md) and [mail](mailto:a@b.md)");
@@ -310,7 +311,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     it("ignores escaped link `\\[...](path.md)` and image link `![alt](path.md)`", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       await sink("escaped: \\[design](design.md) and image: ![diagram](api.md)");
@@ -328,7 +329,7 @@ describe("createResultSink — forwardResult enrichment", () => {
       // web renders a native link whose href is the snapshot key.
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
-        getDocumentBasePath: vi.fn().mockResolvedValue(worktree),
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
 
       const abs = join(worktree, "design.md");

@@ -16,6 +16,7 @@ import type { AgentConfigCache } from "./agent-config-cache.js";
 import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
+import type { SelfFence } from "./doc-snapshots.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -118,12 +119,42 @@ export function resolveSessionDocRoot(workspaceRoot: string, chatId: string): st
  *  - zero or multiple repos → the session doc root.
  */
 export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, sessionRoot: string): string {
-  if (payload.gitRepos.length === 1) {
-    const repo = payload.gitRepos[0];
-    const localPath = repo ? repoLocalPath(repo).trim() : "";
-    if (localPath.length > 0) return join(sessionRoot, localPath);
-  }
-  return sessionRoot;
+  const localPath = singleRepoLocalPathFromPayload(payload);
+  return localPath ? join(sessionRoot, localPath) : sessionRoot;
+}
+
+/**
+ * Extract the lone declared source-repo `localPath` for snapshot self-fence
+ * promotion. Returns null when the agent has zero or multiple repos, or when
+ * the single repo's localPath is blank — both cases bypass promotion so a
+ * relative `docs/foo.md` resolves against the agent home directly.
+ *
+ * Centralised here (rather than reimplemented in {@link documentBasePathFromRuntimeConfig})
+ * so the env-path / sessionRoot / SelfFence all derive from one source.
+ */
+export function singleRepoLocalPathFromPayload(payload: AgentRuntimeConfigPayload): string | null {
+  if (payload.gitRepos.length !== 1) return null;
+  const repo = payload.gitRepos[0];
+  if (!repo) return null;
+  const localPath = repoLocalPath(repo).trim();
+  return localPath.length > 0 ? localPath : null;
+}
+
+/**
+ * Build the {@link SelfFence} the snapshot pipeline gates absolute paths on.
+ * `agentHome` is whatever `resolveSessionDocRoot` picked (per-agent home for
+ * new chats, legacy per-chat dir for pre-#506 chats); the optional
+ * `singleRepoLocalPath` enables relative-path promotion so the abs and rel
+ * forms of a source-repo doc share a single snapshot key.
+ *
+ * Mirrors {@link documentBasePathFromRuntimeConfig} but exposes the agent home
+ * itself, not the narrower source-repo top — so on-demand `worktrees/<task>/`
+ * checkouts (PR #498's idiom) also resolve.
+ */
+export function selfFenceFromRuntimeConfig(payload: AgentRuntimeConfigPayload | null, sessionRoot: string): SelfFence {
+  if (!payload) return { agentHome: sessionRoot };
+  const singleRepoLocalPath = singleRepoLocalPathFromPayload(payload);
+  return singleRepoLocalPath ? { agentHome: sessionRoot, singleRepoLocalPath } : { agentHome: sessionRoot };
 }
 
 function repoLocalPath(repo: GitRepo): string {
@@ -911,16 +942,19 @@ export class SessionManager {
     // config surface (decision: config-ascent).
     const workspacesRoot = dirname(this.config.handlerConfig.workspaceRoot);
     const selfSlug = basename(this.config.handlerConfig.workspaceRoot);
-    // Resolve the doc base SYNCHRONOUSLY from the already-populated config
+    // Resolve the self-fence SYNCHRONOUSLY from the already-populated config
     // cache so it can ride the agent's env (`buildAgentEnv` is sync). This
     // lets a `first-tree chat send` sub-process snapshot referenced docs
     // exactly like result-sink does (L3: unify capture across send paths).
-    // result-sink keeps its own async `getDocumentBasePath`; both read the
-    // same cache (`refreshIfNewer(_, 0)` returns the cached payload), so the
-    // base they compute agrees. Falls back to the session doc root when the
-    // cache has no payload yet (== the single/zero-repo default).
+    // result-sink keeps its own async `getSelfFence`; both read the same cache
+    // (`refreshIfNewer(_, 0)` returns the cached payload), so the fence they
+    // compute agrees. The legacy `base` env var (`FIRST_TREE_DOC_BASE`) is
+    // kept emitting the OLD source-repo-top semantics so a stale pre-fix
+    // `chat send` binary inherited from this process still snapshots like it
+    // used to — see `agent-io.ts` for the wire-compat plumbing.
     const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
-    const cachedPayload = this.config.agentConfigCache?.get(this.config.agentIdentity.agentId)?.payload;
+    const cachedPayload = this.config.agentConfigCache?.get(this.config.agentIdentity.agentId)?.payload ?? null;
+    const selfFence = selfFenceFromRuntimeConfig(cachedPayload, sessionRoot);
     const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, sessionRoot) : sessionRoot;
 
     const forwardResult = createResultSink({
@@ -932,7 +966,7 @@ export class SessionManager {
         this.currentTrigger.delete(chatId);
       },
       log,
-      getDocumentBasePath: () => this.resolveDocumentBasePath(log, chatId),
+      getSelfFence: () => this.resolveSelfFence(log, chatId),
       workspacesRoot,
       selfSlug,
     });
@@ -941,7 +975,13 @@ export class SessionManager {
       sdk: this.config.sdk,
       agent: this.config.agentIdentity,
       chatId,
-      docContext: { base: docBase, workspacesRoot, selfSlug },
+      docContext: {
+        base: docBase,
+        agentHome: selfFence.agentHome,
+        singleRepoLocalPath: selfFence.singleRepoLocalPath,
+        workspacesRoot,
+        selfSlug,
+      },
     };
 
     return {
@@ -968,21 +1008,21 @@ export class SessionManager {
     };
   }
 
-  private async resolveDocumentBasePath(log: (msg: string) => void, chatId: string): Promise<string> {
+  private async resolveSelfFence(log: (msg: string) => void, chatId: string): Promise<SelfFence> {
     // Session doc root: the dir the handler actually hands the agent as cwd —
     // the per-agent home for new chats, the legacy `<workspaceRoot>/<chatId>/`
     // dir for pre-#506 chats. See `resolveSessionDocRoot` (read-only existsSync;
     // no acquire* side effects on every outbound message).
     const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
-    if (!this.config.agentConfigCache) return sessionRoot;
+    if (!this.config.agentConfigCache) return { agentHome: sessionRoot };
     try {
       const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
-      return documentBasePathFromRuntimeConfig(payload, sessionRoot);
+      return selfFenceFromRuntimeConfig(payload, sessionRoot);
     } catch (err) {
       log(
-        `document preview base path: config unavailable, using session doc root: ${err instanceof Error ? err.message : String(err)}`,
+        `document preview self-fence: config unavailable, using agent home only: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return sessionRoot;
+      return { agentHome: sessionRoot };
     }
   }
 

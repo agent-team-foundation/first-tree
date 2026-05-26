@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildWorkspaceDocKey,
   isCanonicalDocLinkPath,
+  looksLikeChatId,
   normalizeDocLinkPath,
   parseWorkspaceDocKey,
 } from "../doc-path.js";
@@ -135,5 +136,37 @@ describe("parseWorkspaceDocKey", () => {
   it("round-trips with buildWorkspaceDocKey", () => {
     const key = buildWorkspaceDocKey("assistant", "chat-1", "docs/design.md") as string;
     expect(parseWorkspaceDocKey(key)).toEqual({ agentSlug: "assistant", chatId: "chat-1", rel: "docs/design.md" });
+  });
+});
+
+describe("looksLikeChatId", () => {
+  it("accepts canonical UUID v4 / v7 chat ids (the shape `randomUUID` mints)", () => {
+    // Real chat ids — services/chat.ts uses `randomUUID()` from node:crypto.
+    expect(looksLikeChatId("11111111-1111-4111-8111-111111111111")).toBe(true);
+    // UUID v7 (time-ordered) — used elsewhere in the project for message ids;
+    // chatIds may rotate to v7 in the future, so the check must accept it.
+    expect(looksLikeChatId("018f8f3c-8c4f-7f5a-9a4b-1a2b3c4d5e6f")).toBe(true);
+    // Mixed case is canonical too.
+    expect(looksLikeChatId("ABCDEF12-3456-7890-ABCD-EF1234567890")).toBe(true);
+  });
+
+  it("rejects everyday subdir names — the disambiguator's whole purpose", () => {
+    // Without this rejection, the server validator would over-reject promoted
+    // self keys like `<localPath>/docs/intro.md` whenever `<localPath>`
+    // collides with a participant slug (worktree-fence-widening codex P2).
+    expect(looksLikeChatId("docs")).toBe(false);
+    expect(looksLikeChatId("worktrees")).toBe(false);
+    expect(looksLikeChatId("api")).toBe(false);
+    expect(looksLikeChatId("chat-1")).toBe(false);
+    expect(looksLikeChatId("other-chat")).toBe(false);
+  });
+
+  it("rejects strings that are uuid-like but structurally off", () => {
+    expect(looksLikeChatId("")).toBe(false);
+    expect(looksLikeChatId("11111111-1111-4111-8111-11111111111")).toBe(false); // 35 chars
+    expect(looksLikeChatId("11111111-1111-4111-8111-1111111111111")).toBe(false); // 37 chars
+    expect(looksLikeChatId("11111111-1111-9111-8111-111111111111")).toBe(false); // version=9 (invalid)
+    expect(looksLikeChatId("11111111-1111-4111-c111-111111111111")).toBe(false); // variant=c (invalid)
+    expect(looksLikeChatId("g1111111-1111-4111-8111-111111111111")).toBe(false); // non-hex
   });
 });
