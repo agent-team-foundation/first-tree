@@ -8,8 +8,8 @@ import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
   ambiguousDisplayNames,
+  buildPickerSections,
   detectMentionTrigger,
-  groupAndSortCandidates,
   MentionAutocompletePopover,
   type MentionCandidate,
   MentionLabel,
@@ -704,17 +704,15 @@ function ParticipantChips({
         .sort((a, b) => (a.displayName ?? a.name ?? "").localeCompare(b.displayName ?? b.name ?? "")),
     [pickerCandidates, chipSet],
   );
-  // Mine-first / others grouping + divider on the addable section, then
-  // the already-in section at the bottom under its own divider.
-  // `selectable` is the addable subset — keyboard navigation + Enter only
-  // walk it; already-in rows are display-only.
-  const items = useMemo(() => {
-    const head = groupAndSortCandidates(addable);
-    if (alreadyIn.length === 0) return head;
-    const tail: Array<MentionCandidate | { divider: true }> = [{ divider: true }, ...alreadyIn];
-    return [...head, ...tail];
-  }, [addable, alreadyIn]);
-  const selectable = useMemo(() => addable, [addable]);
+  // `items` and `selectable` share `buildPickerSections` so the render
+  // walk-order (mine / others / divider / already-in) and the
+  // keyboard-navigation order (the divider-stripped addable view of the
+  // same list) are derived from a single source — eliminating the
+  // wrong-recipient drift where Enter committed a different row than
+  // the visible highlight pointed at. Same helper as
+  // `AddParticipantDropdown`; the invariant is unit-tested in
+  // `mention-autocomplete.test.ts`.
+  const { items, selectable } = useMemo(() => buildPickerSections(addable, alreadyIn), [addable, alreadyIn]);
   const ambiguous = useMemo(() => ambiguousDisplayNames([...addable, ...alreadyIn]), [addable, alreadyIn]);
 
   useEffect(() => {

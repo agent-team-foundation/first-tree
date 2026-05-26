@@ -303,6 +303,37 @@ describe("Agent Visibility", () => {
       expect(names).not.toContain("qwild-decoy");
     });
 
+    it("escapes ILIKE wildcards per-token — one bare `%` doesn't leak into a sibling token's pattern", async () => {
+      // The multi-token split happens BEFORE per-token escaping. The
+      // worry this case locks down: if a future refactor flattened the
+      // escape step (e.g. escape once, then split) a `%` in token 0
+      // could end up acting as a wildcard inside token 1's pattern,
+      // matching rows the user didn't ask for.
+      //
+      // Setup: a slug containing "picker-agent-110" (no `%`), and an
+      // unrelated row that contains "110" but no `%` anywhere.
+      // Searching for `% 110` should match NEITHER (the `%` token must
+      // be a literal `%`, which neither row has).
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "qpct-110", type: "autonomous_agent", displayName: "Picker Agent 110" });
+      await seedAgent(app, { name: "qpct-110-sibling", type: "autonomous_agent", displayName: "Sibling 110" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("% 110")}`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      // Per-token escape means token 0 (`%`) ILIKE compiles to
+      // `%\%%` — match anything containing a literal `%`. Neither
+      // seeded row has one, so AND of (`%` token) and (`110` token)
+      // selects nothing among the seeded rows even though both contain
+      // "110".
+      expect(names).not.toContain("qpct-110");
+      expect(names).not.toContain("qpct-110-sibling");
+    });
+
     it("ignores `?query=` when value is whitespace-only (parsed as omitted)", async () => {
       const app = getApp();
       const { req: adminReq, admin } = await authedRequest(app);

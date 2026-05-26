@@ -8,7 +8,7 @@ import { useOrgAgentsSearch } from "../lib/use-org-agents.js";
 import { Avatar as RealAvatar } from "./avatar.js";
 import {
   ambiguousDisplayNames,
-  groupAndSortCandidates,
+  buildPickerSections,
   type MentionCandidate,
   MentionLabel,
 } from "./mention-autocomplete.js";
@@ -128,18 +128,14 @@ export function AddParticipantDropdown({
     [candidates, participantSet],
   );
 
-  // Unified appearance: mine-first / others grouping with a divider, then
-  // the already-in section at the bottom under its own divider. `items`
-  // carries the divider markers; `selectable` is the divider-free list of
-  // ADDABLE rows that keyboard navigation + Enter operate on (already-in
-  // rows are display-only).
-  const items = useMemo(() => {
-    const head = groupAndSortCandidates(addable);
-    if (alreadyIn.length === 0) return head;
-    const tail: Array<MentionCandidate | { divider: true }> = [{ divider: true }, ...alreadyIn];
-    return [...head, ...tail];
-  }, [addable, alreadyIn]);
-  const selectable = useMemo(() => addable, [addable]);
+  // `items` is the render walk-order (mine-first / others / divider /
+  // already-in); `selectable` is the addable subset in the SAME order
+  // (divider stripped) so the keyboard highlight index lines up with
+  // the Enter commit target. Routing both through `buildPickerSections`
+  // is the single source of truth — the third Codex / human review of
+  // PR 556 caught a regression where the two derived from different
+  // sources and the highlight could drift from the row Enter committed.
+  const { items, selectable } = useMemo(() => buildPickerSections(addable, alreadyIn), [addable, alreadyIn]);
   const ambiguous = useMemo(() => ambiguousDisplayNames([...addable, ...alreadyIn]), [addable, alreadyIn]);
 
   // Search input is always visible — orgs above the org-list 100-row cap

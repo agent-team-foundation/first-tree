@@ -697,6 +697,16 @@ export async function listAgentsForMember(
     // ILIKE wildcards (`%`, `_`) inside the user-supplied substring so a
     // search for "10%_off" matches that literal text instead of acting as
     // a wildcard pattern.
+    //
+    // Performance: each token compiles to two leading-wildcard `ILIKE`
+    // predicates, which Postgres can't use a btree index for and always
+    // run as a sequential scan over the visibility-filtered subset. Fine
+    // for the few-thousand-agents-per-org orders of magnitude we live in
+    // today; if a single org grows past ~50k agents and the picker latency
+    // starts biting, the right next step is `pg_trgm` + a GIN index on
+    // both columns (`USING gin (name gin_trgm_ops)` + likewise on
+    // `display_name`). That belongs in a follow-up — not worth the
+    // extension dependency until the measured pain shows up.
     for (const token of query.split(/\s+/).filter((t) => t.length > 0)) {
       const escaped = token.replace(/[\\%_]/g, (ch) => `\\${ch}`);
       const pattern = `%${escaped}%`;
