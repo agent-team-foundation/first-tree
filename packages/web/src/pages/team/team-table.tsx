@@ -1,7 +1,6 @@
 import type { Agent } from "@first-tree/shared";
 import { Bot, Lock, type LucideIcon, User, Users } from "lucide-react";
 import { type CSSProperties, useState } from "react";
-import type { RuntimeAgent } from "../../api/activity.js";
 import { AgentChip } from "../../components/agent-chip.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
 import {
@@ -12,8 +11,8 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../../components/ui/dense-table.js";
+import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
-import { StateChip } from "../../components/ui/state-chip.js";
 import { formatDay } from "../../lib/utils.js";
 
 export type { RowAction };
@@ -80,7 +79,6 @@ export type TeamGroup = {
 
 type Props = {
   groups: TeamGroup[];
-  runtimeMap: Map<string, RuntimeAgent>;
   /** clientId → hostname; agents whose client isn't in the map render runtime alone. */
   clientHostMap: Map<string, string>;
   onAgentClick: (uuid: string) => void;
@@ -122,14 +120,7 @@ function sectionCellStyle(isLast: boolean, style?: CSSProperties): CSSProperties
   return { ...style, borderBottom: 0 };
 }
 
-export function TeamTable({
-  groups,
-  runtimeMap,
-  clientHostMap,
-  onAgentClick,
-  getHumanActions,
-  getAgentActions,
-}: Props) {
+export function TeamTable({ groups, clientHostMap, onAgentClick, getHumanActions, getAgentActions }: Props) {
   return (
     <DenseTable className="table-fixed">
       <DenseTableHeader>
@@ -152,7 +143,6 @@ export function TeamTable({
         <GroupBody
           key={group.key}
           group={group}
-          runtimeMap={runtimeMap}
           clientHostMap={clientHostMap}
           onAgentClick={onAgentClick}
           getHumanActions={getHumanActions}
@@ -165,14 +155,12 @@ export function TeamTable({
 
 function GroupBody({
   group,
-  runtimeMap,
   clientHostMap,
   onAgentClick,
   getHumanActions,
   getAgentActions,
 }: {
   group: TeamGroup;
-  runtimeMap: Map<string, RuntimeAgent>;
   clientHostMap: Map<string, string>;
   onAgentClick: (uuid: string) => void;
   getHumanActions: (row: HumanRow) => RowAction[];
@@ -207,7 +195,6 @@ function GroupBody({
             <AgentRowView
               key={`a:${row.agent.uuid}`}
               row={row}
-              runtime={runtimeMap.get(row.agent.uuid) ?? null}
               clientHost={row.agent.clientId ? (clientHostMap.get(row.agent.clientId) ?? null) : null}
               actions={getAgentActions(row)}
               onClick={() => onAgentClick(row.agent.uuid)}
@@ -449,14 +436,12 @@ function HumanDelegateCell({ row }: { row: HumanRow }) {
 
 function AgentRowView({
   row,
-  runtime,
   clientHost,
   actions,
   onClick,
   isLast,
 }: {
   row: AgentRow;
-  runtime: RuntimeAgent | null;
   clientHost: string | null;
   actions: RowAction[];
   onClick: () => void;
@@ -505,7 +490,7 @@ function AgentRowView({
         </div>
       </DenseTableCell>
       <DenseTableCell style={sectionCellStyle(isLast)}>
-        <StateChip state={runtime?.runtimeState ?? null} />
+        <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
       </DenseTableCell>
       <DenseTableCell className="mono text-caption" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         {formatDay(agent.createdAt)}

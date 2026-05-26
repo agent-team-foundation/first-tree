@@ -15,7 +15,7 @@ import {
   defaultRuntimeConfigPayload,
   isReservedAgentName,
 } from "@first-tree/shared";
-import { and, count, desc, eq, ilike, lt, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
@@ -531,13 +531,40 @@ export async function checkAgentNameAvailability(
   return existing ? { available: false, reason: "taken" } : { available: true };
 }
 
-export async function getAgent(db: Database, uuid: string) {
-  const [agent] = await db
-    .select()
+/**
+ * Reusable projection for single-agent reads + mutation responses: every
+ * column on `agents` plus `agent_presence.runtimeState` (the M1+ authority
+ * for "is this agent running"; NULL when the agent has no presence row
+ * yet, i.e. never bound a runtime client).
+ *
+ * Threading this through `getAgent`, `requireAgentAccess`, and every
+ * mutation service is what keeps `runtimeState` on the wire across all
+ * single-agent endpoints — see PR #571 review: the previous shape lost
+ * the field on `GET /:uuid` and every PATCH/rebind/suspend/reactivate
+ * response, which made management surfaces (Team / Settings) read a
+ * fictitious "offline" state.
+ *
+ * Returns `null` when no row exists (the caller decides whether that's a
+ * 404 or an internal invariant violation post-update).
+ */
+export async function selectAgentRowWithRuntime(db: Database, uuid: string): Promise<AgentRowWithRuntime | null> {
+  const [row] = await db
+    .select({
+      ...getTableColumns(agents),
+      runtimeState: agentPresence.runtimeState,
+    })
     .from(agents)
-    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .where(eq(agents.uuid, uuid))
     .limit(1);
-  if (!agent) {
+  return row ?? null;
+}
+
+export type AgentRowWithRuntime = typeof agents.$inferSelect & { runtimeState: string | null };
+
+export async function getAgent(db: Database, uuid: string): Promise<AgentRowWithRuntime> {
+  const agent = await selectAgentRowWithRuntime(db, uuid);
+  if (!agent || agent.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
   return agent;
@@ -851,7 +878,11 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   if (data.managerId !== undefined && data.managerId !== agent.managerId) {
     await recomputeWatchersForAgent(db, agent.uuid);
   }
-  return updated;
+  // Re-fetch via the unified projection so the wire response carries
+  // `runtimeState` like every other single-agent endpoint.
+  const refreshed = await selectAgentRowWithRuntime(db, agent.uuid);
+  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+  return refreshed;
 }
 
 /**
@@ -897,7 +928,9 @@ export async function rebindAgent(db: Database, uuid: string, data: RebindAgent)
     .returning();
 
   if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
-  return updated;
+  const refreshed = await selectAgentRowWithRuntime(db, uuid);
+  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+  return refreshed;
 }
 
 /**
@@ -923,7 +956,9 @@ export async function reactivateAgent(db: Database, uuid: string) {
     .returning();
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
-  return agent;
+  const refreshed = await selectAgentRowWithRuntime(db, uuid);
+  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+  return refreshed;
 }
 
 /**
@@ -941,7 +976,9 @@ export async function suspendAgent(db: Database, uuid: string) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
 
-  return agent;
+  const refreshed = await selectAgentRowWithRuntime(db, uuid);
+  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+  return refreshed;
 }
 
 /**

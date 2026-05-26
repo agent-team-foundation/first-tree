@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { gitRepoSchema } from "./agent-runtime-config.js";
 import { paginationQuerySchema } from "./common.js";
-import { presenceStatusSchema } from "./presence.js";
+import { presenceStatusSchema, runtimeStateSchema } from "./presence.js";
 import { runtimeProviderSchema } from "./runtime-provider.js";
 
 export const AGENT_TYPES = {
@@ -221,6 +221,14 @@ export const agentSchema = z.object({
    */
   avatarImageUrl: z.string().nullable(),
   presenceStatus: presenceStatusSchema.optional(),
+  /**
+   * Runtime-A business state from `agent_presence.runtime_state` (the M1+
+   * authority for "is this agent running"; NULL when not bound). Carried on
+   * single-agent reads + mutations so management surfaces can derive
+   * reachability (`runtimeState != null` ⟺ reachable) without depending on
+   * the legacy `presenceStatus` column.
+   */
+  runtimeState: runtimeStateSchema.nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

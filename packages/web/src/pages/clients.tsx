@@ -31,9 +31,9 @@ import {
   DenseTableRow,
 } from "../components/ui/dense-table.js";
 import { PageHeader } from "../components/ui/page-header.js";
+import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
 import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
-import { StateChip } from "../components/ui/state-chip.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate } from "../lib/utils.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
@@ -327,7 +327,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   getClientAgents(confirmDisconnect.id).map((a) => (
                     <li key={a.agentId} className="text-body flex items-center gap-2">
                       <span className="font-medium">{agentName(a.agentId)}</span>
-                      <StateChip state={a.runtimeState} />
+                      <PresenceChip status={runtimeStateToPresence(a.runtimeState)} />
                     </li>
                   ))
                 )}
@@ -741,7 +741,10 @@ function ClientRow({
   // row's status pill: "auth expired" must outrank the plain "offline" so
   // the user knows it isn't going to come back without intervention.
   const authBroken = client.authState !== "ok";
-  const statusState = client.status === "connected" ? "idle" : "offline";
+  // The Computer row's connection pill collapses the richer `HubClient.status`
+  // enum (connected/disconnected/…) into the two-state reachability vocabulary
+  // shared with agent presence — same visual element, different data source.
+  const presenceForChip = client.status === "connected" ? "online" : "offline";
   return (
     <>
       <DenseTableRow interactive={!restricted} selected={effectiveExpanded} onClick={restricted ? undefined : onToggle}>
@@ -768,7 +771,7 @@ function ClientRow({
         <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
           {client.connectedAt ? formatDate(client.connectedAt) : "—"}
         </DenseTableCell>
-        <DenseTableCell>{authBroken ? <AuthExpiredChip /> : <StateChip state={statusState} />}</DenseTableCell>
+        <DenseTableCell>{authBroken ? <AuthExpiredChip /> : <PresenceChip status={presenceForChip} />}</DenseTableCell>
         {/* Overflow menu for row actions. Reconnect / Disconnect / Retire
             are all low-frequency operations (Retire is destructive and
             once-off, Disconnect is rare, Reconnect only matters when offline)
@@ -807,7 +810,7 @@ function ClientRow({
                       <span className="font-medium" style={{ minWidth: 140 }}>
                         {agentName(a.agentId)}
                       </span>
-                      <StateChip state={a.runtimeState} />
+                      <PresenceChip status={runtimeStateToPresence(a.runtimeState)} />
                       {a.activeSessions !== null && (
                         <span className="mono tnum text-caption" style={{ color: "var(--fg-3)" }}>
                           {a.activeSessions} / {a.totalSessions ?? 0} sessions
