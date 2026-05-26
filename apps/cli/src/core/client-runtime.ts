@@ -14,7 +14,7 @@ import {
 } from "@first-tree/client";
 import type { AgentPinnedMessage } from "@first-tree/shared";
 import type { AgentConfig } from "@first-tree/shared/config";
-import { agentConfigSchema, DEFAULT_DATA_DIR, loadAgents } from "@first-tree/shared/config";
+import { agentConfigSchema, defaultDataDir, loadAgents } from "@first-tree/shared/config";
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 import { print } from "./output.js";
@@ -94,12 +94,12 @@ export class ClientRuntime {
       getLastUpdateAttempt: () => readUpdateState()?.last ?? null,
     });
     this.gitMirrorManager = createGitMirrorManager({
-      dataDir: DEFAULT_DATA_DIR,
+      dataDir: defaultDataDir(),
       log: createLogger("git-mirror"),
       // Authorise auto-recovery of orphaned worktree leftovers (kill holders +
       // rm -rf) for any target under the per-agent workspaces tree. Operator
       // paths outside this root still fail loud — see GitMirrorManagerOptions.
-      hubManagedRoots: [join(DEFAULT_DATA_DIR, "workspaces")],
+      hubManagedRoots: [join(defaultDataDir(), "workspaces")],
     });
     registerBuiltinHandlers();
 

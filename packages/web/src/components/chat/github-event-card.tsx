@@ -1,78 +1,191 @@
-import { type GithubEventCard, githubEventCardSchema } from "@first-tree/shared";
+import { type GithubEntityType, type GithubEventCard, githubEventCardSchema } from "@first-tree/shared";
+import { Github } from "lucide-react";
 import type { ReactNode } from "react";
 
 export function isGithubEventCardContent(content: unknown): content is GithubEventCard {
   return githubEventCardSchema.safeParse(content).success;
 }
 
-type ChipTone = "accent" | "warn" | "success" | "neutral";
+/**
+ * The GitHub-dispatcher delivery path writes `systemSender: "github"` into
+ * `message.metadata` so the chat view can render the row with a synthetic
+ * "GitHub" sender (icon + name) instead of the human-agent row whose id we
+ * still keep in `senderId` for routing / read-receipts. Helpers live here
+ * next to the card so the metadata flag and the visual override stay in
+ * lockstep.
+ */
+export const GITHUB_SYSTEM_SENDER_NAME = "GitHub";
 
-const REASON_LABEL: Record<GithubEventCard["reason"], string> = {
-  mentioned: "mentioned",
-  review_requested: "review requested",
-  assigned: "assigned",
-  subscribed: "subscribed",
+export function isGithubSystemSenderMetadata(metadata: unknown): boolean {
+  if (typeof metadata !== "object" || metadata === null) return false;
+  return (metadata as { systemSender?: unknown }).systemSender === "github";
+}
+
+/**
+ * Conjunctive trust gate for re-attributing a row to the synthetic
+ * "GitHub" sender. Metadata alone is not sufficient — `sendMessageSchema`
+ * accepts arbitrary `metadata`, so a malicious agent could otherwise post
+ * a normal text message with `{ systemSender: "github" }` and have the UI
+ * render it as if from GitHub (sender-impersonation / phishing surface
+ * flagged in code review). The dispatcher path uniquely sets
+ * ALL of: `source === "github"`, `format === "card"`, a content payload
+ * that validates as a `GithubEventCard`, and the metadata marker.
+ * Requiring the conjunction makes the override impossible to trigger
+ * from regular agent sends and impossible to trigger accidentally even
+ * if a future write path mis-copies one flag.
+ */
+type TrustedGithubMessageShape = {
+  source: string | null | undefined;
+  format: string;
+  content: unknown;
+  metadata: unknown;
 };
 
-const REASON_TONE: Record<GithubEventCard["reason"], ChipTone> = {
-  mentioned: "accent",
-  review_requested: "warn",
-  assigned: "success",
-  subscribed: "neutral",
+export function isTrustedGithubDispatcherMessage(msg: TrustedGithubMessageShape): boolean {
+  return (
+    msg.source === "github" &&
+    msg.format === "card" &&
+    isGithubEventCardContent(msg.content) &&
+    isGithubSystemSenderMetadata(msg.metadata)
+  );
+}
+
+export function GithubSystemAvatar({ size = 20 }: { size?: number }) {
+  const dim = `${size}px`;
+  return (
+    <span
+      role="img"
+      aria-label={GITHUB_SYSTEM_SENDER_NAME}
+      style={{
+        width: dim,
+        height: dim,
+        borderRadius: "50%",
+        background: "var(--fg)",
+        color: "var(--bg)",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        lineHeight: 1,
+      }}
+    >
+      <Github size={Math.round(size * 0.65)} strokeWidth={2} />
+    </span>
+  );
+}
+
+const ENTITY_TAG_LABEL: Record<GithubEntityType, string> = {
+  issue: "Issue",
+  pull_request: "PR",
+  discussion: "Discussion",
+  commit: "Commit",
 };
 
-const TONE_STYLE: Record<ChipTone, { background: string; color: string; border: string }> = {
-  accent: {
-    background: "var(--accent-bg)",
-    color: "var(--accent-dim)",
-    border: "var(--accent-ring)",
-  },
-  warn: {
-    background: "var(--bg-warn-soft)",
-    color: "var(--fg-warn-strong)",
-    border: "transparent",
-  },
-  success: {
-    background: "var(--bg-success-soft)",
-    color: "var(--fg-success-strong)",
-    border: "transparent",
-  },
-  neutral: {
-    background: "var(--bg-sunken)",
-    color: "var(--fg-3)",
-    border: "var(--border)",
-  },
-};
-
-function actionPhrase(card: GithubEventCard): string {
-  switch (card.reason) {
-    case "mentioned":
-      return "in";
-    case "review_requested":
-      return "on";
-    case "assigned":
-      return "to you on";
-    case "subscribed":
-      return card.action ? `${card.action.replace(/_/g, " ")} on` : "on";
+/**
+ * `entity.key` arrives as `owner/repo#N` or `owner/repo@<sha>`. Strip the
+ * repo prefix so the chip renders the short `#N` / `@<sha>` form. Falls
+ * back defensively to the segment after the last `/` if the prefix does
+ * not match (older messages, schema drift).
+ */
+function shortEntityNumber(key: string, repository: string): string {
+  if (repository && (key.startsWith(`${repository}#`) || key.startsWith(`${repository}@`))) {
+    return key.slice(repository.length);
   }
+  const lastSlash = key.lastIndexOf("/");
+  return lastSlash >= 0 ? key.slice(lastSlash + 1) : key;
+}
+
+function shortRepoName(repository: string): string {
+  const lastSlash = repository.lastIndexOf("/");
+  return lastSlash >= 0 ? repository.slice(lastSlash + 1) : repository;
+}
+
+function subscribedVerb(kind: GithubEventCard["kind"]): string {
+  switch (kind) {
+    case "opened":
+      return "opened this";
+    case "closed":
+      return "closed this";
+    case "merged":
+      return "merged this";
+    case "reopened":
+      return "reopened this";
+    case "commented":
+      return "commented";
+    case "reviewed":
+      return "reviewed";
+    case "review_comment":
+      return "left a review comment";
+    case "review_requested":
+      return "requested a review";
+    case "synchronized":
+      return "pushed new commits";
+    case "commit_commented":
+      return "commented on a commit";
+    case "assigned":
+      // Passive voice on the subscribed track avoids a semantic clash
+      // with `actionVerb`'s "assigned this to you" (reason=assigned),
+      // which addresses the recipient directly. The subscribed track is
+      // an audience announcement, not a directed assignment, so a
+      // bystander reads "was assigned" without inferring it's pointed at
+      // them.
+      return "was assigned";
+    case "edited":
+      return "edited this";
+    case "other":
+      return "updated this";
+  }
+}
+
+function actionVerb(content: GithubEventCard): string {
+  switch (content.reason) {
+    case "mentioned":
+      return "mentioned you";
+    case "review_requested":
+      return "requested your review";
+    case "assigned":
+      return "assigned this to you";
+    case "subscribed":
+      return subscribedVerb(content.kind);
+  }
+}
+
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function highlightMention(body: string, mentionedUser: string | undefined): ReactNode {
   if (!mentionedUser) return body;
   // github-delivery writes the bare login (no `@`); GitHub bodies usually
-  // carry the `@` prefix. Try `@login` first, fall back to bare login so
-  // we still highlight if upstream ever changes the convention.
-  const candidates = [`@${mentionedUser}`, mentionedUser];
-  for (const needle of candidates) {
-    const idx = body.indexOf(needle);
-    if (idx < 0) continue;
+  // carry the `@` prefix. Try `@login` first (literal `indexOf`, since `@`
+  // is not a word char so a partial match like `@melon` for login `me` is
+  // impossible). Fall back to a word-boundary regex so a bare-login
+  // search for `me` doesn't highlight the `me` inside `melon` — the
+  // fallback fires only when upstream stops including `@` in the body,
+  // so its match window is rarer and worth the stricter check.
+  const prefixed = `@${mentionedUser}`;
+  const prefixedIdx = body.indexOf(prefixed);
+  if (prefixedIdx >= 0) {
     return (
       <>
-        {body.slice(0, idx)}
+        {body.slice(0, prefixedIdx)}
         <span className="font-medium" style={{ color: "var(--accent)" }}>
-          {body.slice(idx, idx + needle.length)}
+          {body.slice(prefixedIdx, prefixedIdx + prefixed.length)}
         </span>
-        {body.slice(idx + needle.length)}
+        {body.slice(prefixedIdx + prefixed.length)}
+      </>
+    );
+  }
+  const bareMatch = new RegExp(`\\b${escapeRegex(mentionedUser)}\\b`).exec(body);
+  if (bareMatch) {
+    const start = bareMatch.index;
+    const end = start + bareMatch[0].length;
+    return (
+      <>
+        {body.slice(0, start)}
+        <span className="font-medium" style={{ color: "var(--accent)" }}>
+          {body.slice(start, end)}
+        </span>
+        {body.slice(end)}
       </>
     );
   }
@@ -88,58 +201,79 @@ function truncateBody(body: string): string {
 }
 
 export function GithubEventCardMessage({ content }: { content: GithubEventCard }) {
-  const tone = REASON_TONE[content.reason];
-  const toneStyle = TONE_STYLE[tone];
-  const previewBody = content.body.trim().length > 0 ? truncateBody(content.body) : null;
   // schema types both urls as `z.string()` (no `.url()` / `.min(1)`), so an
   // empty string is a possible wire value; `??` would only catch `null` and
   // would render `<a href="">` as a dead link.
   const link = content.entity.url || content.url || null;
+  const previewBody = content.body.trim().length > 0 ? truncateBody(content.body) : null;
+  const tagLabel = ENTITY_TAG_LABEL[content.entity.type];
+  const entityNumber = shortEntityNumber(content.entity.key, content.repository);
+  const repoShort = shortRepoName(content.repository);
+  const verb = actionVerb(content);
+
+  const entityChip = (
+    <span
+      className="mono text-label"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "var(--sp-1)",
+        padding: "var(--sp-px) var(--sp-1_5)",
+        borderRadius: "var(--radius-chip)",
+        background: "var(--bg-sunken)",
+        border: "var(--hairline) solid var(--border)",
+        whiteSpace: "nowrap",
+        lineHeight: 1.4,
+      }}
+    >
+      <span className="font-semibold" style={{ color: "var(--accent-dim)" }}>
+        {tagLabel}
+      </span>
+      <span style={{ color: "var(--fg-3)" }}>{entityNumber}</span>
+    </span>
+  );
 
   return (
     <div className="text-body">
-      <span style={{ display: "inline-flex", alignItems: "center", flexWrap: "wrap", columnGap: "var(--sp-1_5)" }}>
-        <span
-          className="mono text-label"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            padding: "var(--sp-px) var(--sp-1_5)",
-            borderRadius: "var(--radius-chip)",
-            border: `var(--hairline) solid ${toneStyle.border}`,
-            background: toneStyle.background,
-            color: toneStyle.color,
-            whiteSpace: "nowrap",
-          }}
-        >
-          {REASON_LABEL[content.reason]}
+      {/* L1 — entity row: syntax-highlight chip + clickable title + faded repo */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          flexWrap: "wrap",
+          columnGap: "var(--sp-1_5)",
+          rowGap: "var(--sp-px)",
+        }}
+      >
+        {entityChip}
+        {content.title ? (
+          link ? (
+            <a
+              href={link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium no-underline hover:underline"
+              style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto", textDecoration: "none" }}
+            >
+              {content.title}
+            </a>
+          ) : (
+            <span className="font-medium" style={{ color: "var(--fg)", minWidth: 0, flex: "1 1 auto" }}>
+              {content.title}
+            </span>
+          )
+        ) : null}
+        <span className="mono text-caption" style={{ color: "var(--fg-4)", marginLeft: "auto", flexShrink: 0 }}>
+          {repoShort}
         </span>
-        <span style={{ color: "var(--fg-3)" }}>{actionPhrase(content)}</span>
-        {link ? (
-          <a
-            href={link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium text-[color:var(--fg)] no-underline hover:text-[color:var(--accent-dim)] hover:underline"
-          >
-            {/* Inner spans inherit `color` from <a> so hover recolors the
-                whole link, not just the title. Fade weight comes from
-                varying the dim factor via opacity instead. */}
-            <span className="mono" style={{ opacity: 0.65 }}>
-              {content.repository}
-            </span>
-            <span className="mono" style={{ opacity: 0.5 }}>
-              {content.entity.key}
-            </span>
-            {content.title ? <span> — {content.title}</span> : null}
-          </a>
-        ) : null}
-        {content.sender ? (
-          <span style={{ color: "var(--fg-3)" }}>
-            by <span className="mono">@{content.sender}</span>
-          </span>
-        ) : null}
-      </span>
+      </div>
+
+      {/* L2 — action sentence: @actor verb */}
+      <div className="text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+        <span className="mono">@{content.sender}</span> {verb}
+      </div>
+
+      {/* L3 — quoted body preview */}
       {previewBody ? (
         <div
           className="text-body"

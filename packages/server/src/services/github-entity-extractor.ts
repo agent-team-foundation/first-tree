@@ -4,7 +4,7 @@ import type { ToolCallEventPayload } from "@first-tree/shared";
  * Phase 1 fallback path for chat ↔ GitHub entity binding.
  *
  * The long-term direction is *not* to extend this whitelist indefinitely —
- * see `docs/github-entity-chat-binding-design.md` for the four-family
+ * see `first-tree-context:agent-hub/github-entity-chat-binding.md` for the four-family
  * framing (declaration / outbound proxy / webhook backfill / stdout
  * extraction). Stdout extraction is the cheapest first cut, not the
  * canonical entry point; once an explicit `bind_chat_to_github_entity`

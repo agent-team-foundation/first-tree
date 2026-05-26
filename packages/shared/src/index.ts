@@ -5,6 +5,7 @@ export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } fro
 export {
   buildWorkspaceDocKey,
   isCanonicalDocLinkPath,
+  looksLikeChatId,
   normalizeDocLinkPath,
   parseWorkspaceDocKey,
 } from "./lib/doc-path.js";
@@ -69,6 +70,8 @@ export {
   contextTreeInfoSchema,
   createAgentSchema,
   isReservedAgentName,
+  type ListAgentsQuery,
+  listAgentsQuerySchema,
   RESERVED_AGENT_NAMES,
   type RebindAgent,
   rebindAgentSchema,
@@ -122,6 +125,7 @@ export {
   type DeriveMainStatusInput,
   deriveMainStatus,
   MAIN_STATUS_PRIORITY,
+  RUNTIME_STALE_MS,
 } from "./schemas/agent-status.js";
 export {
   type ConnectTokenExchange,
@@ -319,6 +323,7 @@ export {
 } from "./schemas/invitation.js";
 export {
   type AddMeChatParticipants,
+  ASSISTANT_TEXT_PREVIEW_MAX,
   addMeChatParticipantsSchema,
   CHAT_ENGAGEMENT_VIEWS,
   type ChatEngagementView,
@@ -509,8 +514,10 @@ export {
   runtimeStateMessageSchema,
   runtimeStateSchema,
   SESSION_STATES,
+  type SessionRuntimeMessage,
   type SessionState,
   type SessionStateMessage,
+  sessionRuntimeMessageSchema,
   sessionStateMessageSchema,
   sessionStateSchema,
 } from "./schemas/presence.js";

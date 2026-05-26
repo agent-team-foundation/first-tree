@@ -32,11 +32,34 @@ export function buildAgentEnv(
      * Resolved doc-preview context for this session, so a `first-tree
      * chat send` sub-process can snapshot referenced `.md` the same way
      * `result-sink` does for final-text (L3: unify capture across send
-     * paths). Absent → `chat send` skips snapshotting (self-only fallback /
-     * no doc base). All three are required together for cross-agent
-     * resolution; `base` alone still enables self snapshots.
+     * paths). Absent → `chat send` skips snapshotting.
+     *
+     * Two boundaries are exported:
+     *  - `agentHome` — the WIDE fence: per-agent home (or legacy per-chat
+     *    dir for pre-#506 chats). Covers on-demand `worktrees/<task>/`
+     *    checkouts that #498's idiom puts here. New chat-send binaries read
+     *    `FIRST_TREE_DOC_AGENT_HOME`.
+     *  - `base` — the NARROW fence: source repo top (`<agentHome>/<localPath>`
+     *    for single-repo, `agentHome` otherwise). Kept emitting under the
+     *    legacy `FIRST_TREE_DOC_BASE` name so a stale pre-fix `chat send`
+     *    binary still snapshots like it used to (graceful degradation: no
+     *    worktree preview, but source-repo docs work).
+     *
+     * Cross-agent resolution needs `workspacesRoot` + `selfSlug` + chatId;
+     * `agentHome` alone (or `base` alone for legacy) still enables self
+     * snapshots.
      */
-    docContext?: { base: string; workspacesRoot: string; selfSlug: string };
+    docContext?: {
+      /** Legacy narrow fence (source-repo top); ridden by pre-fix `chat send`. */
+      base: string;
+      /** Wide fence (agent home / legacy per-chat dir). */
+      agentHome: string;
+      /** Single declared source-repo `localPath` — promotes relative `docs/foo.md`
+       *  to the same canonical key as the absolute form. */
+      singleRepoLocalPath?: string;
+      workspacesRoot: string;
+      selfSlug: string;
+    };
   },
 ): NodeJS.ProcessEnv {
   return {
@@ -48,6 +71,10 @@ export function buildAgentEnv(
     ...(ctx.docContext
       ? {
           FIRST_TREE_DOC_BASE: ctx.docContext.base,
+          FIRST_TREE_DOC_AGENT_HOME: ctx.docContext.agentHome,
+          ...(ctx.docContext.singleRepoLocalPath
+            ? { FIRST_TREE_DOC_REPO_LOCAL_PATH: ctx.docContext.singleRepoLocalPath }
+            : {}),
           FIRST_TREE_WORKSPACES_ROOT: ctx.docContext.workspacesRoot,
           FIRST_TREE_AGENT_SLUG: ctx.docContext.selfSlug,
         }

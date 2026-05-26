@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { pendingQuestions } from "../db/schema/pending-questions.js";
-import { derivePendingQuestions } from "../services/me-chat.js";
+import { derivePendingQuestions } from "../services/agent-chat-status.js";
 import { useTestApp } from "./helpers.js";
 
 // `pending_questions` has no foreign keys (integrity enforced in the service

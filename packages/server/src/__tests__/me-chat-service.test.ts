@@ -20,7 +20,7 @@
  *      to 3, and watcher rows are flipped to speaker for newly-joined
  *      speakers (orthogonal axes: role + access_mode).
  *
- * See docs/chat-first-workspace-product-design.md for the contract under test.
+ * See first-tree-context:agent-hub/web-console.md for the contract under test.
  */
 
 import { sql } from "drizzle-orm";

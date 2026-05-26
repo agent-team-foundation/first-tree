@@ -14,7 +14,7 @@ export const users = pgTable("users", {
    * `onboardingStep` so the stepper can keep rendering across all three
    * UI steps (server-side onboardingStep flips to `completed` at the end of
    * Step 2 — Step 3 is purely client-driven). NULL = stepper renders.
-   * See docs/new-user-onboarding-design.md §8.
+   * See first-tree-context:agent-hub/onboarding.md (was §8. in source design)
    */
   onboardingDismissedAt: timestamp("onboarding_dismissed_at", { withTimezone: true }),
   /**

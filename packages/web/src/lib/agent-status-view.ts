@@ -1,4 +1,18 @@
-import type { AgentMainStatus, SessionState } from "@first-tree/shared";
+import type { AgentChatStatus, AgentMainStatus, SessionState } from "@first-tree/shared";
+
+/**
+ * Upsert one agent's composite status into a cached `AgentChatStatus[]`,
+ * returning a new array (or `prev` unchanged when there is nothing to do).
+ * Used by the admin-WS delta patch to apply a server-pushed status in place
+ * instead of refetching. Pure.
+ */
+export function upsertAgentStatus(prev: AgentChatStatus[], status: AgentChatStatus): AgentChatStatus[] {
+  const idx = prev.findIndex((s) => s.agentId === status.agentId);
+  if (idx === -1) return [...prev, status];
+  const next = prev.slice();
+  next[idx] = status;
+  return next;
+}
 
 /**
  * Map a per-(agent,chat) `session.state` (the C vocabulary:

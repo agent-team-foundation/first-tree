@@ -41,6 +41,11 @@ const ATTENTION: ReadonlySet<string> = new Set(["needs_you", "failed", "working"
 const TICK_INTERVAL_MS = 1000;
 const LEAD_HOLD_MS = 4000;
 const EXPANDED_MAX_HEIGHT = 180;
+/** Visual cap (in pixels) for the assistant-text reply preview, so it reads as a
+ *  glance (one clause) on the rail instead of sprawling across the wide composer;
+ *  CSS `truncate` adds the ellipsis. Roughly 30 CJK / 55 latin chars at the
+ *  caption font size. */
+const ASSISTANT_PREVIEW_MAX_WIDTH = 300;
 
 function isAlert(s: AgentChatStatus): boolean {
   return s.main === "needs_you" || s.main === "failed";
@@ -125,17 +130,21 @@ export function ComposeStatusBar({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
-  const { data: statuses, dataUpdatedAt } = useQuery({
+  const { data: statuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000,
   });
   const mounted = useMountedAnchors();
 
-  // Re-pick the lead on every data update, and once more after the hold could
-  // expire (so a steadily most-recent agent can take over even with no new
-  // data). pickLead is pure; the timer just lets the hold lapse.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: statuses is keyed by dataUpdatedAt
+  // Per the per-chat-runtime authority refactor: working is now per-chat
+  // (runtime_state + freshness stamp) and pushed via admin-WS delta, so the
+  // local stale-clear ticker that used to live here is gone — the server
+  // self-heals after RUNTIME_STALE_MS and pushes the delta down.
+  // Re-pick the lead whenever the status set changes, and once more after
+  // the hold could expire so a steadily most-recent agent can take over
+  // even with no new data. pickLead is pure; the timer just lets the hold
+  // lapse.
   useEffect(() => {
     const attention = selectAttention(statuses ?? []);
     const alerts = attention.filter(isAlert);
@@ -144,7 +153,7 @@ export function ComposeStatusBar({
     repick();
     const t = setTimeout(repick, LEAD_HOLD_MS);
     return () => clearTimeout(t);
-  }, [dataUpdatedAt]);
+  }, [statuses]);
 
   const attention = selectAttention(statuses ?? []);
   if (attention.length === 0) return null; // all quiet → hidden
@@ -290,11 +299,28 @@ function WorkingDetail({ activity }: { activity: LiveActivity | null }) {
   );
 }
 
-/** "Thinking" / "Writing" (sans) or "Using <tool> · <arg>" (sans word + mono
- *  tool/arg). arg preview is already truncated server-side. */
+/** The current turn's running narration (`turnText`, sticky across tool calls)
+ *  when present; else "Thinking", the latest assistant reply preview (falling
+ *  back to "Writing"), or "Using <tool> · <arg>" (sans word + mono tool/arg).
+ *  The narration / reply previews are truncated server-side and width-capped
+ *  here so they read as a glance. */
 function ActivityText({ activity }: { activity: LiveActivity }) {
+  // Sticky narration: the current turn's running reply text takes precedence
+  // over the tool_call / thinking indicator, so a tool call fired right after a
+  // sentence doesn't bury what the agent is saying.
+  if (activity.turnText)
+    return (
+      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
+        {activity.turnText}
+      </span>
+    );
   if (activity.kind === "thinking") return <span className="truncate">Thinking</span>;
-  if (activity.kind === "assistant_text") return <span className="truncate">Writing</span>;
+  if (activity.kind === "assistant_text")
+    return (
+      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
+        {activity.detail ?? "Writing"}
+      </span>
+    );
   return (
     <span className="inline-flex min-w-0 items-center" style={{ gap: 4 }}>
       <span className="shrink-0">Using</span>

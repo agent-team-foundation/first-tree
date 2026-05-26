@@ -780,8 +780,8 @@ function BindClientList({
           color: "var(--fg-3)",
         }}
       >
-        No connected computers available. Run <code className="mono text-label">first-tree login &lt;token&gt;</code> on
-        the computer that should run this agent, then reopen this dialog.
+        No connected computers available. Use the <strong>Connect computer</strong> button on the Computers page to set
+        one up, then reopen this dialog.
       </div>
     );
   }

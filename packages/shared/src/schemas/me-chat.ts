@@ -4,7 +4,7 @@ import { chatSourceSchema, githubEntityTypeSchema } from "./chat-metadata.js";
 
 /**
  * Member-facing chat APIs (`/me/chats*`) for the chat-first workspace.
- * See docs/chat-first-workspace-product-design.md "API Contract".
+ * See first-tree-context:agent-hub/web-console.md "API Contract".
  */
 
 /**
@@ -137,19 +137,53 @@ export const liveActivitySchema = z.object({
   /** ISO timestamp of the originating event; web uses this as the ticker base. */
   startedAt: z.string(),
   /**
-   * Optional truncated context for a tool call — a preview of the tool's args
-   * (e.g. "npm test" for Bash, a path for Read), already trimmed to a short
-   * length server-side. Only the compose status bar (the focal "what's
-   * happening now" strip) renders it; the chat-row WorkingChip and the
-   * AgentRow second line intentionally stay at `Using <tool> · <timer>`
-   * without it. Absent for thinking / writing and when there are no args.
+   * Optional truncated context for the activity, already trimmed server-side:
+   *   - tool_call → a preview of the tool's args (e.g. "npm test" for Bash, a
+   *     path for Read). Absent when there are no useful args.
+   *   - assistant_text → a one-line preview of the reply body the model is
+   *     writing (collapsed + capped to {@link ASSISTANT_TEXT_PREVIEW_MAX}), so
+   *     the compose status bar can read out *what* the agent is saying instead
+   *     of a static "Writing". Absent when the text block is empty.
+   * Only the compose status bar (the focal "what's happening now" strip)
+   * renders it; the chat-row WorkingChip and the AgentRow second line
+   * intentionally stay at `Using <tool> · <timer>` without it. Absent for
+   * thinking.
    */
   detail: z.string().optional(),
+  /**
+   * The current turn's latest `assistant_text`, one-line preview (collapsed +
+   * capped to {@link ASSISTANT_TEXT_PREVIEW_MAX}). Distinct from `detail`,
+   * which describes the *latest event*: `turnText` is the agent's running
+   * narration for the whole turn, so a `tool_call` fired immediately after a
+   * sentence does not bury what the agent is saying. Populated only by the
+   * per-agent status path (`/agent-status`, `withTurnText`) and rendered only
+   * by the compose status bar's sticky lead; absent on the chat-list
+   * `liveActivity`, and absent when the turn has produced no prose yet.
+   */
+  turnText: z.string().optional(),
+  /**
+   * ISO timestamp at which this activity goes stale (= `startedAt` +
+   * `LIVE_ACTIVITY_STALE_MS`). The server already drops stale activities at
+   * read time; this lets a live surface's 1s ticker clear a lingering
+   * "working" chip precisely at expiry — re-deriving `main` once `now > staleAt`
+   * — instead of waiting for the next refetch. Optional for version skew:
+   * clients fall back to `startedAt + LIVE_ACTIVITY_STALE_MS` when absent.
+   */
+  staleAt: z.string().optional(),
 });
 export type LiveActivity = z.infer<typeof liveActivitySchema>;
 
 /** Stale threshold (ms) past which a `session_events` row stops driving liveActivity. */
 export const LIVE_ACTIVITY_STALE_MS = 60_000;
+
+/**
+ * Max length of the assistant-text reply preview surfaced in
+ * `LiveActivity.detail` for the compose status bar. Purely a wire bound (the
+ * stored block can be up to 8000 chars) — the visible length is capped far
+ * lower by the rail's CSS `max-width`, so this sits beyond what ever renders
+ * and the on-screen ellipsis stays CSS-driven. No trailing "…" is appended.
+ */
+export const ASSISTANT_TEXT_PREVIEW_MAX = 120;
 
 export const meChatRowSchema = z.object({
   chatId: z.string(),
@@ -201,17 +235,6 @@ export const meChatRowSchema = z.object({
   canReply: z.boolean(),
   engagementStatus: chatEngagementStatusSchema,
   /**
-   * Speakers in this chat with an active per-(agent,chat) session
-   * (`agent_chat_sessions.state === 'active'`). Drives the breathing ring
-   * around the avatar — "session online, can be reached". Per-pair signal,
-   * not affected by the agent's activity in other chats. Independent of
-   * `liveActivity` (which is the live "working right now" signal).
-   *
-   * Always returned, possibly empty. No schema migration required: derived
-   * at query time from the existing `agent_chat_sessions` table.
-   */
-  engagedAgentIds: z.array(z.string()),
-  /**
    * Live "working right now" signal derived from the latest `session_events`
    * row for this chat. Null when:
    *   - no events recorded for this chat, OR
@@ -243,6 +266,24 @@ export const meChatRowSchema = z.object({
    * for version skew, same rationale as `pendingQuestionAgentIds`.
    */
   failedAgentIds: z.array(z.string()).default([]),
+  /**
+   * Speakers in this chat whose composite status is `working` — the D-axis
+   * "is a turn in flight right now in THIS chat" signal. Drives the chat-list
+   * activity indicator directly so it lights up even when a runtime emits no
+   * intermediate `session_events` (e.g. codex tools that only emit on turn
+   * completion) — the case `liveActivity` alone cannot cover. `liveActivity`
+   * stays as the *description* ("Using Bash · 12s") when available; this set
+   * is the authority for "is anyone working". Derived at query time from
+   * `agent_chat_sessions.runtime_state` (per-chat). `.default([])` for
+   * version skew (web bundle older than server), same rationale as
+   * `pendingQuestionAgentIds`.
+   *
+   * NAMING: deliberately NOT `workingAgentIds` — that name was a retired
+   * agent-global misnomer behind the #366 cross-chat false-positive. The
+   * per-chat replacement uses a fresh name to avoid resurrecting the
+   * poisoned identifier.
+   */
+  busyAgentIds: z.array(z.string()).default([]),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 

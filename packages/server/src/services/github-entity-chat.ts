@@ -1,6 +1,6 @@
 import type { ToolCallEventPayload } from "@first-tree/shared";
 import { chatMetadataSchema } from "@first-tree/shared";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { formatEntityTitle } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
@@ -16,20 +16,28 @@ const log = createLogger("GithubEntityChat");
 
 /**
  * `bound_via` audit values:
- *   - "direct"        — first-touch row created in `resolveTargetChat` step (c)
- *   - "fixes_link"    — secondary row written by the `Fixes #N` linker
- *   - "agent_created" — proactively written when an agent's tool_call creates
- *                       a PR/Issue, before the corresponding `*.opened` webhook
- *                       arrives. See `maybeBindGithubEntityFromToolCall`.
+ *   - "direct"         — first-touch row created in `resolveTargetChat` step (c)
+ *   - "fixes_link"     — secondary row written by the `Fixes #N` linker
+ *   - "agent_created"  — proactively written when an agent's tool_call creates
+ *                        a PR/Issue, before the corresponding `*.opened` webhook
+ *                        arrives. See `maybeBindGithubEntityFromToolCall`.
+ *   - "human_fallback" — sibling row written by step (a.5) when an event arrives
+ *                        for a `(human, delegate)` pair that has no mapping yet,
+ *                        but another delegate under the same `(human, entity)`
+ *                        already does. Reuses the existing chat instead of
+ *                        minting a fresh one. Surfaces in telemetry so we can
+ *                        observe how often the involves→delegate mismatch path
+ *                        actually fires in production.
  *
  * Routing logic ignores the distinction; this column is purely for audit /
  * future strategy tweaks.
  */
-export type BoundVia = "direct" | "fixes_link" | "agent_created";
+export type BoundVia = "direct" | "fixes_link" | "agent_created" | "human_fallback";
 
 function asBoundVia(value: string): BoundVia {
   if (value === "fixes_link") return "fixes_link";
   if (value === "agent_created") return "agent_created";
+  if (value === "human_fallback") return "human_fallback";
   return "direct";
 }
 
@@ -104,6 +112,26 @@ export async function resolveTargetChat(
     return { chatId: direct.chatId, created: false, boundVia: direct.boundVia };
   }
 
+  // (a.5) Human-scoped fallback. The mapping primary key still includes
+  // `delegate_agent_id`, but routing treats `(org, human, entity)` as the
+  // logical cluster: an entity that is already bound to a chat under this
+  // human should never trigger a fresh chat just because a *different*
+  // delegate happened to drive this event. Pick the existing chat (open
+  // entities first, then earliest `bound_at`) and write a sibling mapping
+  // row so the next event hits (a) directly.
+  const humanScoped = await lookupMappingByHuman(db, organizationId, humanAgentId, entity);
+  if (humanScoped) {
+    const inserted = await insertMappingIfAbsent(db, {
+      organizationId,
+      humanAgentId,
+      delegateAgentId,
+      entity,
+      chatId: humanScoped.chatId,
+      boundVia: "human_fallback",
+    });
+    return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
+  }
+
   // (b) Fixes-link reuse.
   for (const ref of relatedEntities) {
     const linked = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, ref);
@@ -172,6 +200,38 @@ async function lookupMapping(
     .limit(1);
   if (!row) return null;
   return { chatId: row.chatId, boundVia: asBoundVia(row.boundVia) };
+}
+
+/**
+ * Find any chat already bound to `(org, human, entity)` regardless of delegate.
+ *
+ * Multiple rows can legitimately exist when the same human created the entity
+ * via one delegate and later got fanned out via another delegate's
+ * `delegateMention` configuration. Pick deterministically:
+ *   1. `entity_state = 'open'` rows first (active conversation).
+ *   2. Then earliest `bound_at` — the original chat is the canonical thread.
+ */
+async function lookupMappingByHuman(
+  db: Database,
+  organizationId: string,
+  humanAgentId: string,
+  entity: GithubEntity,
+): Promise<{ chatId: string } | null> {
+  const [row] = await db
+    .select({ chatId: githubEntityChatMappings.chatId })
+    .from(githubEntityChatMappings)
+    .where(
+      and(
+        eq(githubEntityChatMappings.organizationId, organizationId),
+        eq(githubEntityChatMappings.humanAgentId, humanAgentId),
+        eq(githubEntityChatMappings.entityType, entity.type),
+        eq(githubEntityChatMappings.entityKey, entity.key),
+      ),
+    )
+    .orderBy(desc(sql`${githubEntityChatMappings.entityState} = 'open'`), asc(githubEntityChatMappings.boundAt))
+    .limit(1);
+  if (!row) return null;
+  return { chatId: row.chatId };
 }
 
 async function insertMappingIfAbsent(

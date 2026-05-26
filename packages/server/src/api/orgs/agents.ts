@@ -1,11 +1,10 @@
 import {
   agentPinnedMessageSchema,
-  agentTypeSchema,
   createAgentSchema,
+  listAgentsQuerySchema,
   paginationQuerySchema,
 } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
 import { ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import * as agentService from "../../services/agent.js";
@@ -45,15 +44,10 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     sendToClient(agent.clientId, parsed.data);
   }
 
-  const listAgentsFilterSchema = z.object({
-    type: agentTypeSchema.optional(),
-  });
-
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
     const scope = await requireOrgMembership(request, app.db);
-    const query = paginationQuerySchema.parse(request.query);
-    const { type } = listAgentsFilterSchema.parse(request.query);
-    const result = await agentService.listAgentsForMember(app.db, scope, query.limit, query.cursor, type);
+    const { limit, cursor, type, query } = listAgentsQuerySchema.parse(request.query);
+    const result = await agentService.listAgentsForMember(app.db, scope, limit, cursor, type, query);
     return {
       items: result.items.map(({ avatarImageUpdatedAt, userAvatarUrl, ...a }) => ({
         ...a,

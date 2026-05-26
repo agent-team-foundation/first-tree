@@ -176,6 +176,184 @@ describe("Agent Visibility", () => {
     });
   });
 
+  /**
+   * Server-side ?query= search powers the web participant picker so orgs
+   * with more than `limit` (100) visible agents can still reach agents
+   * past the first page (issue 494). The contracts under test:
+   *   1. Match is case-insensitive substring against name + displayName.
+   *   2. Search is wrapped by the visibility predicate — private agents
+   *      owned by other members must not leak through `?query=`.
+   *   3. Humans surface under search the same way they do unfiltered
+   *      (lockstep with issue 343 / #492).
+   *   4. ILIKE wildcards in user input are neutralised so a literal
+   *      "%" or "_" doesn't act as a pattern.
+   */
+  describe("?query= server-side picker search", () => {
+    it("matches by case-insensitive substring on both name and displayName", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "query-aardvark", type: "autonomous_agent", displayName: "Aardvark" });
+      await seedAgent(app, { name: "query-buffalo", type: "autonomous_agent", displayName: "Buffalo Bot" });
+      // Match by displayName only — the slug does not contain "buff".
+      await seedAgent(app, { name: "query-misc", type: "autonomous_agent", displayName: "Wild Buffer" });
+      await seedAgent(app, { name: "query-cheetah", type: "autonomous_agent", displayName: "Cheetah" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=BUFF`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      expect(names).toContain("query-buffalo");
+      expect(names).toContain("query-misc");
+      expect(names).not.toContain("query-aardvark");
+      expect(names).not.toContain("query-cheetah");
+    });
+
+    it("whitespace-splits the query into AND-of-keyword matches against name + displayName", async () => {
+      // The user-perceived failure this protects: a search for "Picker
+      // 110" should reach an agent named `picker-agent-110` even though
+      // the literal substring "Picker 110" (with a space) appears in
+      // neither `name` nor `displayName`. Each token alone does, so the
+      // AND-of-OR semantics light it up.
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "picker-agent-110", type: "autonomous_agent", displayName: "Picker Agent 110" });
+      await seedAgent(app, { name: "picker-agent-220", type: "autonomous_agent", displayName: "Picker Agent 220" });
+      // Match by displayName cross-field: token "blue" only appears here,
+      // token "110" only in the `name` of an unrelated row above. AND-of-
+      // tokens means "blue 110" should match nothing.
+      await seedAgent(app, { name: "blue-team-bot", type: "autonomous_agent", displayName: "Blue Team Bot" });
+
+      const orgId = admin.organizationId;
+
+      // Multi-token, ordering-agnostic — both arrangements should match.
+      for (const q of ["Picker 110", "110 picker"]) {
+        const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent(q)}`);
+        expect(res.statusCode, `query="${q}" should succeed`).toBe(200);
+        const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+        expect(names, `query="${q}" must hit picker-agent-110`).toContain("picker-agent-110");
+        expect(names, `query="${q}" must not hit picker-agent-220`).not.toContain("picker-agent-220");
+      }
+
+      // Cross-token AND must fail when no single row contains both tokens
+      // across either column.
+      const noMatch = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("blue 110")}`);
+      expect(noMatch.statusCode).toBe(200);
+      const noMatchNames = noMatch.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+      expect(noMatchNames).not.toContain("picker-agent-110");
+      expect(noMatchNames).not.toContain("blue-team-bot");
+
+      // Cross-column AND still works: "Bot" in displayName, "blue" in name.
+      const crossCol = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("blue bot")}`);
+      expect(crossCol.statusCode).toBe(200);
+      const crossColNames = crossCol.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+      expect(crossColNames).toContain("blue-team-bot");
+    });
+
+    it("respects visibility — does not surface other members' private agents", async () => {
+      const app = getApp();
+      const adminBundle = await authedRequest(app);
+      const member = await createMemberAndLogin(app, adminBundle);
+
+      await seedAgent(app, { name: "qpriv-mine", type: "personal_assistant", managerId: member.memberId });
+      await seedAgent(app, { name: "qpriv-other", type: "personal_assistant" });
+
+      const orgId = adminBundle.admin.organizationId;
+      const res = await member.req("GET", `/api/v1/orgs/${orgId}/agents?query=qpriv`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      expect(names).toContain("qpriv-mine");
+      expect(names).not.toContain("qpriv-other");
+    });
+
+    it("surfaces humans the same way the unfiltered list does", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "qhuman-needle", type: "human", displayName: "Needle Human" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=needle`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string; type: string }> }>().items.map((a) => a.name);
+
+      expect(names).toContain("qhuman-needle");
+    });
+
+    it("treats ILIKE wildcards in user input as literals", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      // Slugs are restricted by AGENT_NAME_REGEX (lowercase + - / _), so a `%`
+      // can only land in `displayName` — which is exactly where the literal
+      // match guarantee matters. A naive ILIKE would treat `%` as wildcard
+      // and "%off" would match every display name.
+      await seedAgent(app, { name: "qwild-target", type: "autonomous_agent", displayName: "50%off promo" });
+      await seedAgent(app, { name: "qwild-decoy", type: "autonomous_agent", displayName: "regular off-sale" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("%off")}`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      expect(names).toContain("qwild-target");
+      expect(names).not.toContain("qwild-decoy");
+    });
+
+    it("escapes ILIKE wildcards per-token — one bare `%` doesn't leak into a sibling token's pattern", async () => {
+      // The multi-token split happens BEFORE per-token escaping. The
+      // worry this case locks down: if a future refactor flattened the
+      // escape step (e.g. escape once, then split) a `%` in token 0
+      // could end up acting as a wildcard inside token 1's pattern,
+      // matching rows the user didn't ask for.
+      //
+      // Setup: a slug containing "picker-agent-110" (no `%`), and an
+      // unrelated row that contains "110" but no `%` anywhere.
+      // Searching for `% 110` should match NEITHER (the `%` token must
+      // be a literal `%`, which neither row has).
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "qpct-110", type: "autonomous_agent", displayName: "Picker Agent 110" });
+      await seedAgent(app, { name: "qpct-110-sibling", type: "autonomous_agent", displayName: "Sibling 110" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("% 110")}`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      // Per-token escape means token 0 (`%`) ILIKE compiles to
+      // `%\%%` — match anything containing a literal `%`. Neither
+      // seeded row has one, so AND of (`%` token) and (`110` token)
+      // selects nothing among the seeded rows even though both contain
+      // "110".
+      expect(names).not.toContain("qpct-110");
+      expect(names).not.toContain("qpct-110-sibling");
+    });
+
+    it("ignores `?query=` when value is whitespace-only (parsed as omitted)", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "qblank-a", type: "autonomous_agent" });
+      await seedAgent(app, { name: "qblank-b", type: "autonomous_agent" });
+
+      const orgId = admin.organizationId;
+      const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("   ")}`);
+      expect(res.statusCode).toBe(200);
+      const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+
+      // Both seeded names survive — `query` after schema-level trim
+      // collapses to "" and the service falls back to the unfiltered
+      // listing (the route accepts the empty string instead of returning
+      // 400, so the picker never has to pre-validate whitespace).
+      expect(names).toEqual(expect.arrayContaining(["qblank-a", "qblank-b"]));
+    });
+  });
+
   describe("visibility in single agent GET", () => {
     it("member cannot access private agent managed by another member", async () => {
       const app = getApp();
@@ -457,8 +635,13 @@ describe("Chat Access Control", () => {
     });
   });
 
-  describe("POST /admin/chats/:chatId/join — manager joins chat", () => {
-    it("manager can join a chat of their managed agent", async () => {
+  describe("POST /chats/:chatId/workspace-join — manager joins chat", () => {
+    // The v1 supervision-check route `POST /chats/:chatId/join` was removed
+    // along with its `joinChat` service. In v2 the manager's relationship to
+    // the chat is materialised as a watcher row by `recomputeChatWatchers`
+    // (run on every speaker write via `addChatParticipants`), and the
+    // `/workspace-join` route gates on "you're already a watcher".
+    it("manager can join a chat of their managed agent (watcher → speaker)", async () => {
       const app = getApp();
       const adminBundle = await authedRequest(app);
       const member = await createMemberAndLogin(app, adminBundle);
@@ -475,18 +658,28 @@ describe("Chat Access Control", () => {
         managerId: member.memberId,
       });
 
-      // Create a chat between the two agents (not including human agent)
+      // Create a chat between the two agents (not including human agent).
+      // `createChat` → `addChatParticipants` already recomputes watchers, so
+      // the member's human agent lands as a watcher row immediately and
+      // `/workspace-join` will accept the promotion.
       const chat = await createChat(app.db, agentA.uuid, {
         type: "group",
         participantIds: [agentB.uuid],
       });
 
-      // Member joins the chat
-      const res = await member.req("POST", `/api/v1/chats/${chat.id}/join`);
-      expect(res.statusCode).toBe(200);
-      const body = res.json<{ participants: Array<{ agentId: string }> }>();
-      const participantIds = body.participants.map((p) => p.agentId);
-      expect(participantIds).toContain(member.agentId);
+      // Member joins the chat.
+      const res = await member.req("POST", `/api/v1/chats/${chat.id}/workspace-join`);
+      expect(res.statusCode).toBe(204);
+
+      // Verify the human agent is now a speaker in the chat.
+      const { chatMembership } = await import("../db/schema/chat-membership.js");
+      const { and: andOp, eq: eqOp } = await import("drizzle-orm");
+      const [row] = await app.db
+        .select({ accessMode: chatMembership.accessMode })
+        .from(chatMembership)
+        .where(andOp(eqOp(chatMembership.chatId, chat.id), eqOp(chatMembership.agentId, member.agentId)))
+        .limit(1);
+      expect(row?.accessMode).toBe("speaker");
     });
 
     it("member cannot join a chat they don't supervise", async () => {
@@ -513,10 +706,10 @@ describe("Chat Access Control", () => {
         participantIds: [agentA2.uuid],
       });
 
-      // Member B tries to join — refused. Under the new requireChatAccess
-      // model the gate returns 404 (not 403) so a non-participant cannot
-      // enumerate chat UUIDs by probing.
-      const res = await memberB.req("POST", `/api/v1/chats/${chat.id}/join`);
+      // Member B tries to join — refused. memberB has no watcher row for
+      // this chat (they manage none of its speakers), so requireChatAccess
+      // returns 404 (probing-protection) before `joinMeChat` is even called.
+      const res = await memberB.req("POST", `/api/v1/chats/${chat.id}/workspace-join`);
       expect(res.statusCode).toBe(404);
     });
   });

@@ -64,11 +64,56 @@ export type WorkspaceFence = {
   selfSlug: string;
 };
 
+/**
+ * Self-fence config: the agent's own workspace root + an optional source-repo
+ * `localPath` for relative-path promotion.
+ *
+ * Why two roots: after #506 the agent's cwd is the per-agent home and the
+ * `git worktree add` workflow (#498) puts task-scoped checkouts at
+ * `<agentHome>/worktrees/<task>/`. Those are **siblings** of the predeclared
+ * source repo at `<agentHome>/<localPath>/`. Containment-checking absolute
+ * paths against the source repo alone (the pre-#535 behaviour, restored by
+ * #535 to the right root but not widened) drops every worktree mention back to
+ * plain text. The fix is to gate absolute paths on the wider `agentHome`
+ * boundary while keeping relative paths resolving against the source repo top
+ * (where "docs/foo.md" has always meant "in the source repo").
+ *
+ * `singleRepoLocalPath`, when set, is used both to RESOLVE relative mentions
+ * (against `<agentHome>/<localPath>`) AND to **promote** the resulting snapshot
+ * key to `<localPath>/<rel>` so a file written two ways (relative
+ * `docs/foo.md` and absolute `<agentHome>/<localPath>/docs/foo.md`) ends up
+ * with one shared canonical key. Zero / multi-repo agents skip the promotion;
+ * relative mentions resolve against `agentHome` directly.
+ */
+export type SelfFence = {
+  /** Per-agent home (`acquireAgentHome` return value) or legacy per-chat dir
+   *  for pre-#506 chats. Absolute paths must realpath inside this; snapshot
+   *  keys are emitted relative to this root. */
+  agentHome: string;
+  /** Single declared source-repo `localPath` — e.g. `"first-tree"`. Set when
+   *  `payload.gitRepos.length === 1` and its localPath is non-empty. */
+  singleRepoLocalPath?: string;
+};
+
+type ResolvedRoots = {
+  agentHomeReal: string;
+  /** Where relative paths resolve. Equals `agentHomeReal` when no singleRepo
+   *  localPath; equals `<agentHomeReal>/<localPath>` realpath'd otherwise. May
+   *  fall back to `agentHomeReal` when the localPath dir doesn't yet exist. */
+  docBaseReal: string;
+  /** `<localPath>` as a POSIX-canonical key prefix (or null when no promotion).
+   *  Used to promote a relative `docs/foo.md` into agent-home-relative form
+   *  `<localPath>/docs/foo.md`. */
+  promotePrefix: string | null;
+};
+
 type ResolvedOccurrence = DocPathOccurrence & {
   kind: "self" | "cross" | null;
-  /** Snapshot key: bare base-relative for self, global `<slug>/<chatId>/<rel>` for cross. */
+  /** Snapshot key: agent-home-relative for self (key collisions with cross
+   *  ruled out because cross keys are global `<slug>/<chatId>/<rel>`). */
   key: string | null;
-  /** Realpath of the file to read (cross only; self resolves against `root`). */
+  /** Realpath of the file to read (cross only; self resolves against
+   *  `agentHomeReal`). */
   file: string | null;
   /** Rewrite replacement for a cross mention: short `<ownerSlug>/<rel>`. */
   shortForm: string;
@@ -76,29 +121,31 @@ type ResolvedOccurrence = DocPathOccurrence & {
 
 export async function buildMessageDocumentSnapshots(
   text: string,
-  root: string,
+  self: string | SelfFence,
   fence?: WorkspaceFence,
 ): Promise<{ docs: SnapshotDoc[]; skipped: number; rewrittenText: string }> {
   const occurrences = collectDocPathOccurrences(text);
   if (occurrences.length === 0) return { docs: [], skipped: 0, rewrittenText: text };
 
-  const rootReal = await safeRealpath(root);
-  if (!rootReal) return { docs: [], skipped: occurrences.length, rewrittenText: text };
+  const selfConfig: SelfFence = typeof self === "string" ? { agentHome: self } : self;
+  const roots = await resolveSelfRoots(selfConfig);
+  if (!roots) return { docs: [], skipped: occurrences.length, rewrittenText: text };
 
   const workspacesRootReal = fence ? await safeRealpath(fence.workspacesRoot) : null;
 
   // Pass 1 — resolve every occurrence to a snapshot plan:
-  //   self  → bare key relative to `root` (unchanged from #474/#480); the
-  //           absolute-in-root case canonicalises to the same relative key web
-  //           derives once the text is rewritten.
+  //   self  → key relative to `agentHomeReal`; relative mentions in single-
+  //           repo workspaces are PROMOTED to `<localPath>/<rel>` so the abs
+  //           and rel forms of the same source-repo file share one canonical
+  //           key.
   //   cross → global key `<ownerSlug>/<chatId>/<rel>` for a file that realpaths
   //           into ANOTHER agent's workspace under the shared common root.
   const resolved: ResolvedOccurrence[] = await Promise.all(
     occurrences.map(async (occ): Promise<ResolvedOccurrence> => {
-      const selfKey = await canonicalizeWorkspacePath(rootReal, occ.writtenPath);
+      const selfKey = await canonicalizeWorkspacePath(roots, occ.writtenPath);
       if (selfKey) return { ...occ, kind: "self", key: selfKey, file: null, shortForm: "" };
-      // Only an ABSOLUTE path can escape the sender's own root into a sibling
-      // workspace; a relative mention always resolves under `root`.
+      // Only an ABSOLUTE path can escape the sender's own home into a sibling
+      // workspace; a relative mention always resolves under the self roots.
       if (workspacesRootReal && fence && isAbsolute(occ.writtenPath)) {
         const cross = await resolveCrossWorkspaceDoc(workspacesRootReal, fence, occ.writtenPath);
         if (cross) return { ...occ, kind: "cross", key: cross.key, file: cross.file, shortForm: cross.shortForm };
@@ -130,9 +177,9 @@ export async function buildMessageDocumentSnapshots(
       continue;
     }
 
-    // Self keys resolve back against `root`; cross keys already carry the
-    // realpath'd file from the fenced lookup.
-    const file = occ.kind === "cross" ? occ.file : await resolveWorkspaceFile(rootReal, key);
+    // Self keys resolve back against `agentHomeReal`; cross keys already
+    // carry the realpath'd file from the fenced lookup.
+    const file = occ.kind === "cross" ? occ.file : await resolveWorkspaceFile(roots.agentHomeReal, key);
     if (!file) {
       skipped += 1;
       continue;
@@ -294,27 +341,101 @@ function scanInlineMarkdownLinks(text: string): InlineLinkMatch[] {
 }
 
 /**
- * Resolve the canonical workspace-relative key for a written `.md` path,
- * accepting BOTH relative paths and absolute paths that land inside the
- * workspace root.
+ * Realpath the two self roots up-front so every occurrence in `Pass 1` shares
+ * the same containment-check fixtures. Returns null when `agentHome` itself is
+ * unrealpath'able — there is no workspace to snapshot against, so every
+ * occurrence is "skipped" by the caller.
+ *
+ * `docBaseReal` falls back to `agentHomeReal` when `singleRepoLocalPath` is
+ * unset OR points to a directory that doesn't physically exist yet (e.g. the
+ * source repo hasn't been materialised when the very first message goes out).
+ * In both cases the promotion is silently dropped — relative mentions still
+ * resolve, just against the agent home directly, matching the legacy
+ * zero/multi-repo path.
+ */
+async function resolveSelfRoots(self: SelfFence): Promise<ResolvedRoots | null> {
+  const agentHomeReal = await safeRealpath(self.agentHome);
+  if (!agentHomeReal) return null;
+  const localPath = self.singleRepoLocalPath?.trim();
+  if (!localPath) {
+    return { agentHomeReal, docBaseReal: agentHomeReal, promotePrefix: null };
+  }
+  const docBaseReal = await safeRealpath(resolve(agentHomeReal, localPath));
+  if (!docBaseReal) {
+    return { agentHomeReal, docBaseReal: agentHomeReal, promotePrefix: null };
+  }
+  // Defence in depth: the localPath dir must still be inside the agent home.
+  // A misconfigured `localPath: "../escape"` would otherwise let the docBase
+  // wander outside the fence and accept files we don't intend to snapshot.
+  const prefix = agentHomeReal.endsWith(sep) ? agentHomeReal : agentHomeReal + sep;
+  if (docBaseReal !== agentHomeReal && !docBaseReal.startsWith(prefix)) {
+    return { agentHomeReal, docBaseReal: agentHomeReal, promotePrefix: null };
+  }
+  // Promote relative keys to `<localPath>/<rel>` so abs + rel forms of the
+  // same source-repo file share one canonical key. `normalizeDocLinkPath`
+  // canonicalises here too, so a stray leading "/" or "./" in the operator's
+  // config doesn't leak through into snapshot keys.
+  const promote = normalizeDocLinkPath(relative(agentHomeReal, docBaseReal));
+  return {
+    agentHomeReal,
+    docBaseReal,
+    promotePrefix: promote && promote.length > 0 ? promote : null,
+  };
+}
+
+/**
+ * Resolve the canonical agent-home-relative snapshot key for a written `.md`
+ * path. Accepts BOTH relative paths (resolved against `docBaseReal` — the
+ * source repo top for single-repo agents, the agent home otherwise) and
+ * absolute paths (containment-checked against the wider `agentHomeReal` so
+ * `<agentHome>/worktrees/<task>/foo.md` and `<agentHome>/<localPath>/docs/foo.md`
+ * both land inside the fence).
  *
  * Absolute paths are `realpath`'d FIRST, then checked for containment — so an
- * ancestor symlink cannot be used to claim a path is "inside" the root when
- * its real target is not. The relative result is run back through
- * `normalizeDocLinkPath` so the key is POSIX-canonical and any hidden segment
- * exposed by the realpath (`<root>/.agent/x.md` reached via a symlink) is
- * rejected — matching what web's re-scan derives from the rewritten relative
- * token. Returns null when the path escapes the root, hides, or cannot be
- * realpath'd; the caller then leaves the text untouched and embeds no snapshot.
+ * ancestor symlink cannot be used to claim a path is "inside" the home when
+ * its real target is not. The result is run back through `normalizeDocLinkPath`
+ * so the key is POSIX-canonical and any hidden segment exposed by the realpath
+ * (`<agentHome>/.agent/x.md` reached via a symlink) is rejected — matching
+ * what web's re-scan derives from the rewritten token. Returns null when the
+ * path escapes the home, hides, or cannot be realpath'd; the caller then leaves
+ * the text untouched and embeds no snapshot.
+ *
+ * Relative paths get a second pass: `<docBaseReal>/<rel>` is realpath'd to
+ * confirm the file physically exists inside the fence (so the snapshot key
+ * agrees with what `resolveWorkspaceFile` will read) and to derive the
+ * agent-home-relative form. A relative mention that points at a non-existent
+ * file falls back to the un-promoted `normalizeDocLinkPath` so we don't change
+ * pre-#535 behaviour for tokens that were always dropped anyway.
  */
-async function canonicalizeWorkspacePath(rootReal: string, writtenPath: string): Promise<string | null> {
-  if (!isAbsolute(writtenPath)) return normalizeDocLinkPath(writtenPath);
+async function canonicalizeWorkspacePath(roots: ResolvedRoots, writtenPath: string): Promise<string | null> {
+  if (isAbsolute(writtenPath)) {
+    const real = await safeRealpath(writtenPath);
+    if (!real) return null;
+    const prefix = roots.agentHomeReal.endsWith(sep) ? roots.agentHomeReal : roots.agentHomeReal + sep;
+    if (real !== roots.agentHomeReal && !real.startsWith(prefix)) return null;
+    return normalizeDocLinkPath(relative(roots.agentHomeReal, real));
+  }
 
-  const real = await safeRealpath(writtenPath);
-  if (!real) return null;
-  const prefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
-  if (real !== rootReal && !real.startsWith(prefix)) return null;
-  return normalizeDocLinkPath(relative(rootReal, real));
+  // Relative path. Try to land it inside the fence so abs and rel forms agree
+  // on the same key; if it can't be realpath'd, fall back to the bare
+  // normalized form (legacy: caller's resolveWorkspaceFile will still drop it).
+  const normalized = normalizeDocLinkPath(writtenPath);
+  if (!normalized) return null;
+  const real = await safeRealpath(resolve(roots.docBaseReal, normalized));
+  if (!real) {
+    // The file may not exist yet (or the path leaves the fence via `..`); the
+    // pre-promotion key remains valid for the legacy single-root resolve in
+    // resolveWorkspaceFile, where promotePrefix is null. With a promotePrefix
+    // we still need agent-home-relative output, so synthesise it from the
+    // normalized rel form.
+    if (roots.promotePrefix) {
+      return normalizeDocLinkPath(`${roots.promotePrefix}/${normalized}`);
+    }
+    return normalized;
+  }
+  const prefix = roots.agentHomeReal.endsWith(sep) ? roots.agentHomeReal : roots.agentHomeReal + sep;
+  if (real !== roots.agentHomeReal && !real.startsWith(prefix)) return null;
+  return normalizeDocLinkPath(relative(roots.agentHomeReal, real));
 }
 
 /**

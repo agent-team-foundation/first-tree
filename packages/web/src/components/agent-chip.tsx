@@ -7,7 +7,7 @@ import { cn } from "../lib/utils.js";
  * dropdown, mention previews). Collapses the three previous ad-hoc
  * renderings into a single component so tweaks only happen once.
  *
- * Display contract (see docs/agent-naming-design.md §3.3):
+ * Display contract (see first-tree-context:agent-hub/agent-naming.md §3.3):
  *   - `displayName` is the primary (human) label.
  *   - `name` is shown as the @-prefixed mention target, in monospace, dim.
  *   - When only one of the two is set, the chip still reads naturally:

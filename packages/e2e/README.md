@@ -1,6 +1,6 @@
 # `@first-tree/e2e` — cross-process E2E framework
 
-Real-process E2E for Hub: each run boots a fresh PostgreSQL (Docker), spawns
+Real-process E2E for first-tree: each run boots a fresh PostgreSQL (Docker), spawns
 the built server and the unified CLI as **separate Node processes**, and
 talks to them over real HTTP + WS. Distinct from the in-process
 `packages/server/src/__tests__/*` suite (which uses `fastify.inject` and stays
@@ -60,8 +60,7 @@ real-world runs the CI wiring (proposal §九 M3) will land separately.
 - Built dist for server + CLI:
 
   ```bash
-  pnpm --filter @first-tree/server build
-  pnpm --filter first-tree build
+  pnpm build
   ```
 
 ## Commands
@@ -124,9 +123,9 @@ packages/e2e/
     │   │   └── dev-callback.ts  # M3: mint extra user JWTs via the dev-callback bypass
     │   ├── cli-driver/
     │   │   ├── exec.ts          # M3: execCli (one-shot) + spawnCli (long-running) + ambient FIRST_TREE_* sanitization
-    │   │   └── client-foreground.ts # M3: thin spawnCli wrapper for `client start --foreground`
+    │   │   └── client-foreground.ts # M3: thin spawnCli wrapper for `daemon start --foreground`
     │   ├── credentials.ts       # M5 fixture: single-user PG seed for tests (paired with setup-devuser.ts; one is the fixture, the other is the live-seed)
-    │   ├── setup-devuser.ts     # M5 dev-user seed: dev-callback → connect-token → CLI client start → agent/chat/message (driven from up.ts, not tests)
+    │   ├── setup-devuser.ts     # M5 dev-user seed: dev-callback → connect-token → CLI daemon start → agent/chat/message (driven from up.ts, not tests)
     │   ├── github-mock.ts       # M4: signs + delivers webhooks, stubs /api/*
     │   ├── github-app-fixture.ts# M4: GitHub App key + installation token fixture
     │   └── agent-mock.ts        # M4: stand-in for the agent runtime side

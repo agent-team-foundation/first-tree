@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadRuntimeConfig } from "../runtime/config.js";
-import { CONCURRENCY, IDLE_TIMEOUT_MS, MAX_SESSIONS } from "../runtime/constants.js";
 
 function writeTempYaml(content: string): string {
   const path = join(tmpdir(), `first-tree-test-${crypto.randomUUID().slice(0, 8)}.yaml`);
@@ -27,12 +26,13 @@ agents:
     expect(kael).toBeDefined();
     expect(kael?.agentId).toBe("agent-kael-uuid");
     expect(kael?.type).toBe("claude-code");
-    // Step 11 (PRD §D15): runtime params come from runtime/constants.ts,
-    // not from agent.yaml (the legacy fields are still warned about but
-    // ignored).
-    expect(kael?.concurrency).toBe(CONCURRENCY);
-    expect(kael?.session.idle_timeout).toBe(IDLE_TIMEOUT_MS / 1000);
-    expect(kael?.session.max_sessions).toBe(MAX_SESSIONS);
+    // Defaults are kept in lock-step with `@first-tree/shared`
+    // `agentConfigSchema` — see runtime/config.ts. The shipped CLI goes
+    // through that schema; this YAML loader is the legacy back-door.
+    expect(kael?.concurrency).toBe(5);
+    expect(kael?.session.idle_timeout).toBe(300);
+    expect(kael?.session.max_sessions).toBe(10);
+    expect(kael?.session.working_grace_seconds).toBe(3600);
   });
 
   it("loads config with custom session and concurrency settings", () => {

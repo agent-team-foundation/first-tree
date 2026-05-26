@@ -1,12 +1,12 @@
 import { join } from "node:path";
-import { clientConfigSchema, DEFAULT_CONFIG_DIR, getConfigValue, readConfigFile } from "@first-tree/shared/config";
+import { clientConfigSchema, defaultConfigDir, getConfigValue, readConfigFile } from "@first-tree/shared/config";
 import type { Command } from "commander";
 import { print } from "../../core/output.js";
 import { isSecretField, printFlat } from "./_shared/format.js";
 
 export function registerConfigShowCommand(config: Command): void {
   const clientSchema = clientConfigSchema as Record<string, unknown>;
-  const clientYamlPath = (): string => join(DEFAULT_CONFIG_DIR, "client.yaml");
+  const clientYamlPath = (): string => join(defaultConfigDir(), "client.yaml");
 
   config
     .command("show [key]")

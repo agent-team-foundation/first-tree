@@ -148,7 +148,41 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-turbo-test-
       - run: pnpm install --frozen-lockfile
+      # `post-bundle-channel-home.test.ts` spawns the built CLI dist
+      # binary to verify channel-home resolution. Without an explicit
+      # build step ahead of `pnpm test`, the test's `ensureDistBuilt`
+      # fallback runs `pnpm build` inside vitest's `beforeAll` — that
+      # took ~125s on a cold CI runner and tripped vitest's
+      # worker→controller RPC heartbeat timeout (`Unhandled Error:
+      # Timeout calling "onTaskUpdate"`), failing the job even though
+      # all 233 tests passed. Building before vitest starts keeps the
+      # heavy work outside the worker IPC window.
+      - run: pnpm build
       - run: pnpm test
+
+  check-migrations:
+    name: Migrations
+    runs-on: ubuntu-latest
+    # Always runs — even on PRs that touch no server code. Branch protection
+    # no longer requires PRs to be up to date with main, so this job is the
+    # single guard against two PRs landing colliding migration idxs.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Fetch main for cross-branch comparison
+        # Only PR runs need to compare HEAD against main. On push-to-main
+        # the local contiguity check is sufficient (a duplicate idx that
+        # snuck through two racing PRs surfaces as a broken sequence in
+        # _journal.json) and fetching main risks a TOCTOU "missing from
+        # HEAD" false positive if another push lands between this push
+        # and the fetch.
+        if: github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin main:refs/remotes/origin/main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node scripts/check-migrations.mjs
 
   grep-legacy-names:
     name: Forbid legacy CLI / env names
@@ -190,7 +224,6 @@ jobs:
           # Legitimate residues (allow-listed and filtered out via the trailing
           # `grep -v` pipeline):
           # - docs/migration/**                          : migration tables show old↔new
-          # - docs/development/git-history.md            : merge anchor doc cites legacy repo URL
           # - .github/workflows/ci.yml                   : this file's own regex literals (self-immunity via [f])
           # - packages/server/drizzle/*.sql              : SQL migrations are immutable historical artifacts
           hits=$(grep -rEn \
@@ -200,7 +233,7 @@ jobs:
             --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
             --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
             "[f]irst-tree-hub" packages apps scripts docs skills .github \
-            | grep -v -E '^docs/development/git-history\.md:|^\.github/workflows/ci\.yml:' \
+            | grep -v -E '^\.github/workflows/ci\.yml:' \
             || true)
           if [ -n "$hits" ]; then
             echo "::error::found a 'first-tree-hub' literal outside the documented allow-list — see N-1 in PR-1 description"
@@ -216,9 +249,9 @@ jobs:
           #
           # The `[F]` self-immunity trick keeps this file's own comments
           # (which must spell out the forbidden literal) from tripping the
-          # check. Same allow-list as the broad sweep above; docs/ is also
-          # currently allow-listed until the N-4 design-docs sweep lands —
-          # see PR-1 description "First Tree Hub product-name residues".
+          # check. Same allow-list as the broad sweep above; docs/ stays
+          # excluded because the migration tables and cli-reference may
+          # still mention the three-word form historically.
           hits=$(grep -rEn \
             --exclude-dir=migration \
             --exclude-dir=node_modules \
@@ -227,7 +260,7 @@ jobs:
             --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
             --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
             "[F]irst Tree Hub" packages apps scripts docs skills .github \
-            | grep -v -E '^docs/development/git-history\.md:|^\.github/workflows/ci\.yml:' \
+            | grep -v -E '^\.github/workflows/ci\.yml:' \
             || true)
           if [ -n "$hits" ]; then
             echo "::error::found a 'First Tree Hub' three-word product-name literal outside the allow-list — N-3 brand retirement"

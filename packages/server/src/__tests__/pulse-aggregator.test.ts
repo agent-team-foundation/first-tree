@@ -27,6 +27,7 @@ function makeMockNotifier(): {
     notifyConfigChange: vi.fn(async () => {}),
     notifySessionStateChange: vi.fn(async () => {}),
     notifyRuntimeStateChange: vi.fn(async () => {}),
+    notifySessionRuntime: vi.fn(async () => {}),
     notifyChatMessage: vi.fn(async () => {}),
     notifySessionEvent: vi.fn(async () => {}),
     pushFrameToInbox: vi.fn(async () => 0),
@@ -36,6 +37,7 @@ function makeMockNotifier(): {
     onRuntimeStateChange: vi.fn((handler: RuntimeStateChangeHandler) => {
       handlers.push(handler);
     }),
+    onSessionRuntime: vi.fn(),
     onChatMessage: vi.fn(),
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),

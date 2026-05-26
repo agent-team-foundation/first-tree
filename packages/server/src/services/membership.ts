@@ -111,7 +111,7 @@ type CreatePersonalTeamInput = {
  *   - On collision: append a 4-char hex disambiguator
  *
  * Default team display name is `${login}'s team` (set by the caller — see
- * docs/new-user-onboarding-design.md §5.5). Reads as "this is a collective
+ * first-tree-context:agent-hub/onboarding.md (was §5.5 in source design)). Reads as "this is a collective
  * space" from day one so a later teammate-invite doesn't surface a label
  * that looks like a private sandbox. Users can rename via Step 1 of the
  * onboarding flow or Settings.

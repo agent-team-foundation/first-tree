@@ -6,7 +6,7 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
-import { DEFAULT_DATA_DIR } from "@first-tree/shared/config";
+import { defaultDataDir } from "@first-tree/shared/config";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { RegisterResult } from "../sdk.js";
@@ -145,7 +145,7 @@ export class AgentSlot {
       { event: "session:reconcile:result", fn: onReconcileResult },
     );
 
-    const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${this.config.name}.json`);
+    const registryPath = join(defaultDataDir(), "sessions", `${this.config.name}.json`);
 
     // The runtime owns the GitMirrorManager and injects it here — sharing one
     // manager across slots is what makes `withUrlLock` actually serialise
@@ -165,7 +165,7 @@ export class AgentSlot {
       concurrency: this.config.concurrency,
       handlerFactory: this.config.handlerFactory,
       handlerConfig: {
-        workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name),
+        workspaceRoot: join(defaultDataDir(), "workspaces", this.config.name),
         agentName: this.config.name,
         contextTreePath: contextTreeBinding?.path,
         contextTreeRepoUrl: contextTreeBinding?.repoUrl,
@@ -187,6 +187,7 @@ export class AgentSlot {
       onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
       onRuntimeStateChange: (state) => this.reportRuntimeState(state),
       onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
+      onSessionRuntimeChange: (chatId, state) => this.reportSessionRuntime(chatId, state),
     });
 
     const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
@@ -232,8 +233,18 @@ export class AgentSlot {
     this.clientConnection.reportSessionEvent(this.config.agentId, chatId, event);
   }
 
+  private reportSessionRuntime(chatId: string, state: RuntimeState): void {
+    this.clientConnection.reportSessionRuntime(this.config.agentId, chatId, state);
+  }
+
   private fullStateSync(): void {
     if (!this.sessionManager) return;
+    // ORDERING IS LOAD-BEARING: `session:state` frames flush before any
+    // `session:runtime` frame so the server's `setSessionRuntime` (gated
+    // on `state='active'`) can't fail-close because the state write
+    // hadn't landed yet. TCP/WS preserves the order across this single
+    // send loop, and the server-side `chainSessionOp` per-(agent,chat)
+    // queue preserves it through the processing pipeline as well.
     for (const { chatId, state } of this.sessionManager.getSessionStates()) {
       this.clientConnection.reportSessionState(this.config.agentId, chatId, state);
     }
@@ -246,6 +257,15 @@ export class AgentSlot {
     // closest in-schema state for "handler is gone but resumable".
     for (const chatId of this.sessionManager.getEvictedChatIds()) {
       this.clientConnection.reportSessionState(this.config.agentId, chatId, "suspended");
+    }
+    // Re-assert the *real* per-chat runtime of every still-live session.
+    // On a network reconnect (process intact) a session mid-turn is still
+    // `working` and must stay so — this is what distinguishes a reconnect
+    // from a process restart (where `sessions` is empty, so nothing here
+    // reports `working` and the agent-global reset below settles
+    // everything to idle).
+    for (const { chatId, runtimeState } of this.sessionManager.getSessionRuntimeStates()) {
+      this.clientConnection.reportSessionRuntime(this.config.agentId, chatId, runtimeState);
     }
     // Explicit "idle" clears any stale `working`/`blocked` on the server:
     // any in-flight work owned by the previous process died with its SDK

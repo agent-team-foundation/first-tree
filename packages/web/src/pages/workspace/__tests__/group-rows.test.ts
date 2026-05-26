@@ -24,10 +24,10 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     unreadMentionCount: overrides.unreadMentionCount ?? 0,
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
-    engagedAgentIds: overrides.engagedAgentIds ?? [],
     liveActivity: overrides.liveActivity ?? null,
     pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
+    busyAgentIds: overrides.busyAgentIds ?? [],
   };
 }
 

@@ -71,22 +71,31 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
     }
   }, [agentQuery.data, onBound]);
 
-  // Assemble the Last-step one-liner entirely on the web side so the server
-  // stays out of UI-shaped concerns (it only returns the raw `connect <token>`
-  // invocation). The three segments, in order:
-  //   1. `npm install -g` — bootstrap the CLI for users who've never run it
-  //   2. `agent add`      — pure local file write,no auth/network;the
-  //                          resulting `agent.yaml` is what the runtime picks
-  //                          up on first load
-  //   3. `connect <token>` — computer-level auth + launchd/systemd service;
-  //                          runtime's first `loadAgents` already sees the
-  //                          agent written in step 2,no watcher race
+  // Assemble the Last-step one-liner from the channel-aware fields the
+  // server returns. The three segments, in order:
+  //   1. `npm install -g <pkg>` — bootstrap the CLI for users who've
+  //                                never run it. SKIPPED for dev servers
+  //                                (npmSpec=null) since dev installs from
+  //                                source via scripts/dev-install.sh.
+  //   2. `<bin> agent add`      — pure local file write, no auth/network;
+  //                                the resulting `agent.yaml` is what the
+  //                                runtime picks up on first load.
+  //   3. `<bin> login <token>`  — computer-level auth + launchd/systemd
+  //                                service; runtime's first `loadAgents`
+  //                                already sees the agent written in step
+  //                                2, no watcher race.
   const baseCommand = tokenQuery.data?.command ?? "";
+  const npmSpec = tokenQuery.data?.npmSpec ?? null;
+  const binName = tokenQuery.data?.binName ?? "";
   const command =
-    baseCommand && agent.name
-      ? `npm install -g first-tree && ` +
-        `first-tree agent add ${shellQuote(agent.name)} --agent-id ${agent.uuid} && ` +
-        baseCommand
+    baseCommand && agent.name && binName
+      ? [
+          npmSpec ? `npm install -g ${npmSpec}` : null,
+          `${binName} agent add ${shellQuote(agent.name)} --agent-id ${agent.uuid}`,
+          baseCommand,
+        ]
+          .filter((part): part is string => part !== null)
+          .join(" && ")
       : baseCommand;
 
   function handleCopy() {

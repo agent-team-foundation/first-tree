@@ -2,18 +2,22 @@ import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
-import { addParticipant, createChat, ensureParticipant, joinChat } from "../services/chat.js";
-import { createTestAgent, useTestApp } from "./helpers.js";
+import { addParticipant, createChat, ensureParticipant } from "../services/chat.js";
+import { joinMeChat } from "../services/me-chat.js";
+import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * Validates `addChatParticipants` invariants under v2:
  *
  *   - `chat_membership.mode` is decision-inert; every speaker row written
  *     through `createChat` / `addParticipant` / `ensureParticipant` /
- *     `joinChat` lands as the constant `'mention_only'`. There is no
- *     longer a chat-type re-grade pass — `chats.type` is locked to
- *     `'group'` (first-tree-context PR #465) and the v1 size=2→3
- *     `regradeNonHumansToMentionOnly` helper has been retired.
+ *     `joinMeChat` (watcher → speaker upgrade) lands as the constant
+ *     `'mention_only'`. There is no longer a chat-type re-grade pass —
+ *     `chats.type` is locked to `'group'` (first-tree-context PR #465) and
+ *     the v1 size=2→3 `regradeNonHumansToMentionOnly` helper has been
+ *     retired. The v1 `joinChat` service / `POST /:chatId/join` route was
+ *     also removed; the only "manager joins chat" path today is
+ *     `joinMeChat` / `POST /:chatId/workspace-join`.
  *
  * The `describe` label "chat upgrade — direct to group" is kept to
  * preserve git history and downstream test-output greppability, but the
@@ -72,40 +76,35 @@ describe("chat upgrade — direct to group", () => {
     expect((await loadParticipant(chat.id, a3.uuid))?.mode).toBe("mention_only");
   });
 
-  it("upgrades the chat and keeps the joining human at full mode (Web-console join path)", async () => {
+  it("keeps the joining human at mention_only when they go watcher → speaker via joinMeChat", async () => {
+    // The v2 "manager joins chat" path: `POST /:chatId/workspace-join` →
+    // `joinMeChat` → `joinAsParticipant`. The watcher row that gates this
+    // path is materialised by `recomputeChatWatchers`, which is now
+    // automatically run by `addChatParticipants` — so the admin's
+    // human-agent watcher row lands the moment `createChat` finishes.
     const app = getApp();
-    const uid = crypto.randomUUID().slice(0, 6);
-    const a1 = await createTestAgent(app, { name: `hup-a1-${uid}` });
-    const { agent: a2 } = await createTestAgent(app, { name: `hup-a2-${uid}` });
-
-    // A human agent owned by the same member who manages a1 — joinChat
-    // authorises via managerId.
-    const { agent: human } = await createTestAgent(app, {
-      name: `hup-human-${uid}`,
-      type: "human",
-    });
-    // Rewrite managerId so joinChat permits the join (supervision must match
-    // at least one existing participant).
+    const admin = await createTestAdmin(app);
     const { agents: agentsTable } = await import("../db/schema/agents.js");
-    // a1's member manages both a1 and the human agent row by default; but
-    // the human agent we just created belongs to a *different* admin. Force
-    // it to the same manager so the join is authorised.
-    await app.db.update(agentsTable).set({ managerId: a1.memberId }).where(eq(agentsTable.uuid, human.uuid));
-    await app.db.update(agentsTable).set({ managerId: a1.memberId }).where(eq(agentsTable.uuid, a2.uuid));
+
+    const a1 = await createTestAgent(app, { name: `hup-a1-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a2 } = await createTestAgent(app, { name: `hup-a2-${crypto.randomUUID().slice(0, 6)}` });
+
+    // Force both non-human agents onto the admin so the recompute that runs
+    // inside `createChat` pins the admin's human agent as a watcher.
+    await app.db.update(agentsTable).set({ managerId: admin.memberId }).where(eq(agentsTable.uuid, a1.agent.uuid));
+    await app.db.update(agentsTable).set({ managerId: admin.memberId }).where(eq(agentsTable.uuid, a2.uuid));
 
     const chat = await createChat(app.db, a1.agent.uuid, {
       type: "group",
       participantIds: [a2.uuid],
     });
 
-    await joinChat(app.db, chat.id, a1.memberId, human.uuid);
+    await joinMeChat(app.db, chat.id, admin.humanAgentUuid);
 
     expect(await loadChatType(chat.id)).toBe("group");
-    // v2: `chat_membership.mode` is decision-inert; every speaker row is
-    // written as the constant `'mention_only'`.
     expect((await loadParticipant(chat.id, a1.agent.uuid))?.mode).toBe("mention_only");
     expect((await loadParticipant(chat.id, a2.uuid))?.mode).toBe("mention_only");
-    expect((await loadParticipant(chat.id, human.uuid))?.mode).toBe("mention_only");
+    expect((await loadParticipant(chat.id, admin.humanAgentUuid))?.mode).toBe("mention_only");
   });
 
   it("is a no-op on a chat that is already a group (doesn't re-flip existing participant modes)", async () => {

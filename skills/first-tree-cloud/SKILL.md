@@ -34,8 +34,7 @@ This shape drives almost every command: `daemon` and `config` target this machin
    - `config show/set/get` to read or write `client.yaml`, instead of hand-editing it
 3. **Read the canonical repo docs when the task becomes specialized.**
    - `docs/cli-reference.md` — every flag and env var in one place
-   - `docs/onboarding-guide.md` — full onboarding walkthrough
-   - `docs/claim-agent-guide.md` — agent claim + Feishu binding
+   - `docs/onboarding-guide.md` — full onboarding walkthrough, including agent claim + Feishu binding
 4. **On a fresh machine, verify prerequisites before proposing a flow.**
    - Node.js `>= 22.16`
    - Install: `npm install -g first-tree`

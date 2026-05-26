@@ -45,6 +45,9 @@ export function AgentStatusPanel({
     refetchInterval: 30_000, // safety net; the WS invalidation is the live path
   });
   const mounted = useMountedAnchors();
+  // Per the per-chat-runtime authority refactor: working is per-chat
+  // freshness stamp the server self-heals from; no local stale-clear ticker
+  // needed. The admin-WS delta pushes the recomputed status down.
 
   const byAgent = new Map<string, AgentChatStatus>((statuses ?? []).map((s) => [s.agentId, s]));
 

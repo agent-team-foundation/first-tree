@@ -1,4 +1,4 @@
-import { AGENT_STATUSES, AGENT_VISIBILITY } from "@first-tree/shared";
+import { AGENT_STATUSES, AGENT_VISIBILITY, type AgentChatStatus } from "@first-tree/shared";
 import { and, eq, ne, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
@@ -6,10 +6,18 @@ import type { WebSocket } from "ws";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { members } from "../../db/schema/members.js";
-import { endWsConnectionSpan, setWsConnectionAttrs, startWsConnectionSpan } from "../../observability/index.js";
+import {
+  createLogger,
+  endWsConnectionSpan,
+  setWsConnectionAttrs,
+  startWsConnectionSpan,
+} from "../../observability/index.js";
 import { registerAdminBroadcaster } from "../../services/admin-broadcast.js";
+import { getChatAgentStatuses } from "../../services/agent-chat-status.js";
 import { getCachedAudience } from "../../services/chat-audience-cache.js";
 import type { Notifier } from "../../services/notifier.js";
+
+const log = createLogger("OrgWs");
 
 /**
  * Class B — `/api/v1/orgs/:orgId/ws`. Real-time admin push channel.
@@ -72,19 +80,72 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
   registerAdminBroadcaster(broadcastOrgScoped);
 
   notifier.onSessionStateChange((payload) => {
-    broadcastOrgScoped({ type: "session:state", ...payload });
+    void dispatchSessionFrame("session:state", payload);
   });
 
   notifier.onSessionEvent((payload) => {
-    // Frame intentionally minimal — admin WS consumers (web's
-    // `use-admin-ws.ts`) refetch `me/chats` rather than reconstructing the
-    // session_event locally, so we only carry the routing dimensions.
-    broadcastOrgScoped({ type: "session:event", ...payload });
+    void dispatchSessionFrame("session:event", payload);
+  });
+
+  notifier.onSessionRuntime((payload) => {
+    // Same shape as session:state — a per-(agent,chat) flip whose composite
+    // status the audience patches in place. Audience filter is the same
+    // (status carries narration via the freshly-recomputed activity).
+    void dispatchSessionFrame("session:runtime", payload);
   });
 
   notifier.onChatMessage(({ chatId }) => {
     void dispatchChatMessage(chatId);
   });
+
+  /**
+   * Deliver a session:state / session:event / session:runtime frame. The
+   * recomputed agent status carries the agent's narration (activity.detail
+   * / turnText), so it is attached ONLY for sockets whose viewer can access
+   * the chat — NEVER sent org-wide. Audience members get the enriched frame
+   * and patch `["chat-agent-status", chatId]` in place; every other org
+   * socket gets the bare routing frame (invalidate-only). Computed once per
+   * NOTIFY, only while admin sockets are connected.
+   *
+   * `session:runtime` rides on the same path as `session:state` because
+   * they are semantically siblings — both signal "a per-(agent,chat)
+   * composite axis flipped", just on different axes (lifecycle vs D-axis
+   * runtime). Sharing the path keeps the web cache reconciliation
+   * deterministic (one in-place patch, no invalidate races).
+   */
+  async function dispatchSessionFrame(
+    type: "session:state" | "session:event" | "session:runtime",
+    payload: { agentId: string; chatId: string; organizationId: string } & Record<string, unknown>,
+  ): Promise<void> {
+    if (adminSockets.size === 0) return;
+    let status: AgentChatStatus | undefined;
+    let audience: ReadonlySet<string> | null = null;
+    try {
+      const db = getDbForChatLookup();
+      audience = await getCachedAudience(db, payload.chatId);
+      if (audience && audience.size > 0) {
+        status = (await getChatAgentStatuses(db, payload.chatId)).find((s) => s.agentId === payload.agentId);
+      }
+    } catch (err) {
+      // Best-effort enrichment: on any failure fall back to the bare frame
+      // everywhere (the client's invalidate path + refetch floor still cover it).
+      // Logged (not silent) so a sustained DB hiccup that degrades the realtime
+      // delta to refetch-latency is visible rather than invisible.
+      log.warn({ err, chatId: payload.chatId, agentId: payload.agentId }, "session-frame status enrichment failed");
+      status = undefined;
+    }
+    const bareFrame = JSON.stringify({ type, ...payload });
+    const enrichedFrame = status ? JSON.stringify({ type, ...payload, status }) : bareFrame;
+    for (const [ws, meta] of adminSockets) {
+      if (ws.readyState !== 1 || meta.organizationId !== payload.organizationId) continue;
+      const frame = status && audience?.has(meta.humanAgentId) ? enrichedFrame : bareFrame;
+      try {
+        ws.send(frame);
+      } catch {
+        // socket-level errors surface via close handler
+      }
+    }
+  }
 
   async function dispatchChatMessage(chatId: string): Promise<void> {
     if (adminSockets.size === 0) return;

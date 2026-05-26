@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMentionInsert,
+  buildPickerSections,
   type CandidateDivider,
   detectMentionTrigger,
   groupAndSortCandidates,
@@ -232,10 +233,101 @@ describe("rankCandidates", () => {
     expect(result.map((c) => c.agentId)).toEqual(["z", "y", "x"]);
   });
 
+  it("non-empty query: name-contains is the lowest-tier fallback (issue 494)", () => {
+    // Mirrors the user-perceived gap: typing `@agent-110` against a slug
+    // `picker-agent-110` returned nothing pre-fix, because none of the
+    // three prior tiers matched (name doesn't start with "agent-110";
+    // displayName "Picker Agent 110" has a space, not a hyphen, so the
+    // contains check on displayName also fails). Name-substring now
+    // catches it.
+    const input = [
+      cand({ agentId: "noise", name: "unrelated", displayName: "Nothing" }),
+      cand({ agentId: "picker-110", name: "picker-agent-110", displayName: "Picker Agent 110" }),
+      cand({ agentId: "picker-220", name: "picker-agent-220", displayName: "Picker Agent 220" }),
+    ];
+    const result = rankCandidates(input, "agent-110");
+    expect(result.map((c) => c.agentId)).toEqual(["picker-110"]);
+  });
+
+  it("non-empty query: prefix-on-name still outranks the new name-contains tier", () => {
+    // Don't regress the prefix-first ordering — `agent` as a query
+    // should still float a slug starting with "agent" above an unrelated
+    // slug that merely contains "agent" mid-token.
+    const input = [
+      cand({ agentId: "mid", name: "test-agent-99", displayName: "X" }), // name contains
+      cand({ agentId: "pfx", name: "agent-1", displayName: "Y" }), // name prefix — winner
+    ];
+    const result = rankCandidates(input, "agent");
+    expect(result.map((c) => c.agentId)[0]).toBe("pfx");
+  });
+
   it("empty query: caps the popover at 8 entries even when more match", () => {
     const input = Array.from({ length: 12 }, (_, i) =>
       cand({ agentId: `agent-${i.toString().padStart(2, "0")}`, managedByMe: i < 3 }),
     );
     expect(rankCandidates(input, "").length).toBe(8);
+  });
+});
+
+describe("buildPickerSections", () => {
+  it("selectable mirrors the addable rows in `items` walk-order — same source, divider stripped (issue 494 regression lock)", () => {
+    // The bug this asserts against: pre-fix, the picker derived
+    // `selectable` straight from the caller's `addable` array, while
+    // `items` re-grouped/re-sorted via `groupAndSortCandidates`. Render
+    // walked `items` to paint highlights; Enter indexed into
+    // `selectable`. With mine-first + alphabetical-within-group sorting
+    // applied to `addable` (which arrives in arbitrary server order),
+    // the highlighted row could differ from the row actually committed
+    // on Enter — a wrong-recipient hazard.
+    const addable = [
+      cand({ agentId: "z-mine", displayName: "Zed", managedByMe: true }), // mine, last alpha
+      cand({ agentId: "b-other", displayName: "Bob", managedByMe: false }), // others, alpha-1
+      cand({ agentId: "a-mine", displayName: "Alice", managedByMe: true }), // mine, first alpha
+      cand({ agentId: "c-other", displayName: "Carol", managedByMe: false }), // others, alpha-2
+    ];
+    const { items, selectable } = buildPickerSections(addable, []);
+
+    // Render walk-order: every non-divider item in `items`.
+    const itemsOrder = items.filter((it): it is MentionCandidate => !isDivider(it));
+
+    // The invariant: same uuids in the same order, regardless of how
+    // groupAndSortCandidates chose to sort. If anyone ever derives
+    // selectable from a different source, this test fires.
+    expect(selectable.map((c) => c.agentId)).toEqual(itemsOrder.map((c) => c.agentId));
+    // Belt-and-braces — also lock the actual expected order so a
+    // regression in groupAndSortCandidates is caught here too.
+    expect(selectable.map((c) => c.agentId)).toEqual(["a-mine", "z-mine", "b-other", "c-other"]);
+  });
+
+  it("appends already-in rows under a single divider; only addable rows enter `selectable`", () => {
+    const addable = [cand({ agentId: "add-1", displayName: "Add 1" })];
+    const alreadyIn = [cand({ agentId: "in-2", displayName: "In 2" }), cand({ agentId: "in-1", displayName: "In 1" })];
+    const { items, selectable } = buildPickerSections(addable, alreadyIn);
+
+    // selectable is addable-only — already-in rows are display-only ✓
+    // markers that arrow / Enter must skip past.
+    expect(selectable.map((c) => c.agentId)).toEqual(["add-1"]);
+
+    // Items: addable rows, then one divider, then already-in rows in
+    // the caller-supplied order (caller has already sorted them).
+    const dividerCount = items.filter(isDivider).length;
+    expect(dividerCount).toBe(1);
+    const ids = items.filter((it): it is MentionCandidate => !isDivider(it)).map((c) => c.agentId);
+    expect(ids).toEqual(["add-1", "in-2", "in-1"]);
+  });
+
+  it("omits the head-vs-tail divider entirely when alreadyIn is empty", () => {
+    const addable = [cand({ agentId: "x", displayName: "X" }), cand({ agentId: "y", displayName: "Y" })];
+    const { items } = buildPickerSections(addable, []);
+    // groupAndSortCandidates puts no internal divider when only one
+    // group is non-empty, and buildPickerSections adds no tail divider
+    // when alreadyIn is empty — net: zero dividers.
+    expect(items.filter(isDivider).length).toBe(0);
+  });
+
+  it("returns empty items + empty selectable when both inputs are empty", () => {
+    const { items, selectable } = buildPickerSections([], []);
+    expect(items).toEqual([]);
+    expect(selectable).toEqual([]);
   });
 });

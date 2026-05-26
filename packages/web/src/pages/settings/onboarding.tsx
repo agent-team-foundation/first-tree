@@ -1,5 +1,5 @@
 import { Check } from "lucide-react";
-import { Navigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { PageHeader } from "../../components/ui/page-header.js";
@@ -16,6 +16,7 @@ import { Section } from "../../components/ui/section.js";
  * one-way action. This page is the recovery path.
  */
 export function SettingsOnboardingPage() {
+  const navigate = useNavigate();
   const { onboardingStep, onboardingDismissedAt, onboardingCompletedAt, dismissOnboarding, restoreOnboarding } =
     useAuth();
   // Terminal state — Step 3 was completed. The wizard is one-shot;
@@ -33,35 +34,47 @@ export function SettingsOnboardingPage() {
   // itself is the kind of asymmetric affordance that makes UI feel buggy.
   const canHide = onboardingStep === "completed";
 
+  const handleResume = async (): Promise<void> => {
+    await restoreOnboarding();
+    navigate("/onboarding");
+  };
+
   return (
     <>
-      <PageHeader title="Onboarding" subtitle="Guided setup controls" />
+      <PageHeader title="Setup" subtitle="Finish or revisit your setup" />
       <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
         <Section
-          title="Onboarding guide"
+          title="Guided setup"
           description={
             isDismissed
-              ? "The stepper is hidden. Bring it back if you want to walk through Step 3 (build your context-tree)."
-              : "The stepper is shown above your workspace. You can hide it any time once your agent is set up."
+              ? "Setup is hidden. Resume it to finish connecting your agent and your team's Context Tree."
+              : "You can hide the guided setup any time once your agent is ready."
           }
           action={isDismissed ? null : <ActiveBadge />}
         >
-          {isDismissed ? (
-            <Button type="button" size="sm" onClick={() => void restoreOnboarding()}>
-              Resume onboarding
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => void dismissOnboarding()}
-              disabled={!canHide}
-              title={canHide ? undefined : "Finish setting up your agent first"}
-            >
-              Hide onboarding guide
-            </Button>
-          )}
+          {/* Section renders children flush against its top divider; without
+              this the button sits on the hairline ("压线"). Scoped here rather
+              than in the shared Section (used on 18 surfaces) to keep this PR
+              to onboarding — the shared component's flush children is a latent
+              issue worth its own styling pass. */}
+          <div style={{ paddingTop: "var(--sp-3)" }}>
+            {isDismissed ? (
+              <Button type="button" size="sm" onClick={() => void handleResume()}>
+                Resume setup
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void dismissOnboarding()}
+                disabled={!canHide}
+                title={canHide ? undefined : "Finish setting up your agent first"}
+              >
+                Hide setup guide
+              </Button>
+            )}
+          </div>
         </Section>
       </div>
     </>

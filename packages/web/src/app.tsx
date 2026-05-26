@@ -16,6 +16,7 @@ import { ContextPage } from "./pages/context.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
+import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
 import { SettingsIntegrationsPage } from "./pages/settings/integrations.js";
@@ -77,10 +78,14 @@ export function App() {
                   }
                 />
               ) : null}
-              {/* Auth-required pages. Onboarding is now an inline view inside
-                CenterPanel (OnboardingView) — no separate /welcome route, no
-                provider, no banner. */}
+              {/* Auth-required pages. Onboarding is a standalone full-screen
+                /onboarding route (below); the workspace root redirects users
+                who haven't finished setup into it. */}
               <Route element={<RequireAuth />}>
+                {/* Standalone onboarding — full-screen, outside the workspace
+                    chrome. The workspace root redirects incomplete users
+                    here; this route redirects back once setup is complete. */}
+                <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route
                   element={
                     <PulseProvider>

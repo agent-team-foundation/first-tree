@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Invariant tests for the route naming conventions documented in
- * `docs/http-path-conventions.md`. They replace the old
+ * `docs/development/http-path-conventions.md`. They replace the old
  * `admin-routes-org-scope-invariant.test.ts` (deleted with the JWT-ambient-
  * scope refactor) and pin three layers of defense:
  *

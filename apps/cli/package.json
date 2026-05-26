@@ -1,8 +1,8 @@
 {
-  "name": "first-tree",
-  "version": "0.5.1",
+  "name": "first-tree-dev",
+  "version": "0.5.2",
   "type": "module",
-  "description": "First Tree — unified CLI for Context Tree onboarding, GitHub Scan automation, agent management, and Hub messaging.",
+  "description": "First Tree — unified CLI for Context Tree onboarding, GitHub Scan automation, agent management, and Hub messaging. (Source-tree dev build; CI rewrites `name` and `bin` for prod / staging publishes — see docs/local-dev-isolation.md.)",
   "keywords": [
     "agents",
     "cli",
@@ -22,8 +22,8 @@
     }
   },
   "bin": {
-    "first-tree": "./dist/cli/index.mjs",
-    "ft": "./dist/cli/index.mjs"
+    "first-tree-dev": "./dist/cli/index.mjs",
+    "ftd": "./dist/cli/index.mjs"
   },
   "files": [
     "dist"

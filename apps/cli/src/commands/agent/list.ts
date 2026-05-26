@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { agentConfigSchema, DEFAULT_CONFIG_DIR, loadAgents } from "@first-tree/shared/config";
+import { agentConfigSchema, defaultConfigDir, loadAgents } from "@first-tree/shared/config";
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
@@ -20,7 +20,7 @@ export function registerAgentListCommand(agent: Command): void {
     .action(async (options: { remote?: boolean; org?: string; server?: string }) => {
       const wantRemote = options.remote === true || typeof options.org === "string";
       if (!wantRemote) {
-        const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+        const agentsDir = join(defaultConfigDir(), "agents");
         try {
           const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
           if (agents.size === 0) {

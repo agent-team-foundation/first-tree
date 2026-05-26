@@ -19,7 +19,17 @@ const log = createLogger("SessionEvent");
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
-const MAX_SEQ_RETRIES = 3;
+// Worst-case under READ COMMITTED, N concurrent appendEvent calls on the same
+// (agent, chat) all snapshot `MAX(seq)` together and lock-step into the same
+// candidate seq — each round eliminates exactly one loser, so up to N retries
+// can be needed before the last caller finds a free slot. 8 leaves slack for
+// the realistic burst ceiling (production is ~1 concurrent per session); a
+// CI herd at N=5 with the old budget of 3 flaked.
+const MAX_SEQ_RETRIES = 8;
+// Spread retriers so they don't re-read `MAX(seq)` in lock-step after losing
+// the previous round. Skipped on the first attempt — the happy path stays
+// zero-latency.
+const RETRY_JITTER_MS = 20;
 
 export type SessionEventRow = {
   id: string;
@@ -61,8 +71,18 @@ export async function appendEvent(
   const validated = sessionEventSchema.parse(event);
 
   for (let attempt = 0; attempt < MAX_SEQ_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, Math.random() * RETRY_JITTER_MS));
+    }
     const id = uuidv7();
-    const payloadJson = JSON.stringify(validated.payload);
+    // PG JSONB rejects U+0000 outright. Strip the escaped sequence from the
+    // serialized JSON so a binary preview (e.g. ZIP bytes from
+    // `gh api .../actions/runs/<id>/logs` reaching us through a tool stdout)
+    // does not nuke the whole event. The client already replaces obvious
+    // binary previews with a placeholder; this is the last-mile gate for any
+    // path the client sanitizer does not cover (future handlers, other
+    // free-form string fields).
+    const payloadJson = JSON.stringify(validated.payload).replaceAll("\\u0000", "");
     const result = await db.execute<{
       id: string;
       agent_id: string;
