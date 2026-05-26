@@ -28,7 +28,7 @@ import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./
 import { Button } from "./../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
-import { StateChip } from "./../components/ui/state-chip.js";
+import { PresenceChip } from "./../components/ui/presence-chip.js";
 import { humanizeAgentType, humanizeVisibility } from "./../lib/agent-labels.js";
 import { cn, formatDate } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
@@ -37,7 +37,7 @@ import { ContextBar } from "./agent-detail/context-bar.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { ReBindDialog } from "./agent-detail/re-bind-dialog.js";
 import { SaveBar } from "./agent-detail/save-bar.js";
-import { deriveSaveHint } from "./agent-detail/status-bar.js";
+import { deriveSaveHint } from "./agent-detail/save-hint.js";
 import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config-draft.js";
 import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redirect.js";
 
@@ -80,6 +80,13 @@ export function AgentDetailPage() {
     queryKey: ["agent", uuid],
     queryFn: () => getAgent(uuid),
     enabled: !!uuid,
+    // The header `<PresenceChip>` and the Test-action gate both read
+    // `agent.presenceStatus` off this query. No admin-WS frame invalidates
+    // `["agent"]` today, so without polling an agent that goes offline /
+    // reconnects while the page stays open would keep showing the cached
+    // value. Match the 10s cadence the legacy `/activity` poll used before
+    // this surface migrated off it.
+    refetchInterval: 10_000,
   });
   const canManageAgent = canManageAgentDetail(agentQuery.data, memberId, role);
   const canEditConfig = agentQuery.data?.type !== "human" && canManageAgent;
@@ -94,6 +101,12 @@ export function AgentDetailPage() {
     queryKey: ["agent-client-status", uuid],
     queryFn: () => getAgentClientStatus(uuid),
     enabled: !!uuid && agentQuery.data?.type !== "human",
+    // Drives `isUnclaimed` (`!clientStatus?.clientId`), `isOffline`'s
+    // bound-vs-unclaimed qualifier, and the "offline since {date}"
+    // subtitle. None of those are pushed through the admin WS, so match
+    // the 10s polling cadence that `agentQuery` above (and the legacy
+    // `/activity` poll) used.
+    refetchInterval: 10_000,
   });
 
   const sessionsQuery = useQuery({
@@ -350,16 +363,19 @@ export function AgentDetailPage() {
         ? "Unknown"
         : null;
   const isUnclaimed = !isHuman && clientStatusQuery.isSuccess && !clientStatus?.clientId;
-  const isOffline = !isHuman && clientStatus ? !clientStatus.online && !!clientStatus.clientId : false;
+  // `isUnclaimed` is the binding-identity question ("does this agent have a
+  // computer at all"). `isOffline` is the reachability question, sourced
+  // from the agent's `presenceStatus` (the authoritative two-state column),
+  // but qualified with `clientStatus?.clientId` so unclaimed agents don't
+  // double-count as "offline" — we surface those separately.
+  const isOffline = !isHuman && agent.presenceStatus === "offline" && !!clientStatus?.clientId;
   const testAction = getAgentTestActionState({
     agentStatus: agent.status,
     clientStatus,
     clientStatusLoading: clientStatusInitialLoading,
+    presenceStatus: agent.presenceStatus,
     testPending: testMutation.isPending,
   });
-
-  const runtimeExt = agent as Record<string, unknown>;
-  const runtimeState = (runtimeExt.runtimeState as string | null) ?? null;
 
   const shortId = agent.uuid.slice(0, 8);
 
@@ -467,7 +483,7 @@ export function AgentDetailPage() {
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <StateChip state={runtimeState} />
+            <PresenceChip status={agent.presenceStatus} />
             {activeSessions > 0 && (
               <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
                 {activeSessions} active

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, UserPlus } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { getActivityOverview, listClients, type RuntimeAgent } from "../../api/activity.js";
+import { listClients } from "../../api/activity.js";
 import {
   deleteAgent,
   listAgents,
@@ -118,18 +118,15 @@ export function TeamPage() {
   const agentsQuery = useQuery({
     queryKey: ["agents", "team-page", isAdmin ? "admin" : "member"],
     queryFn: () => fetchAllAgents((params) => (isAdmin ? listAllAgents(params) : listAgents(params))),
-  });
-
-  const { data: activity } = useQuery({
-    queryKey: ["activity"],
-    queryFn: getActivityOverview,
+    // Reachability (the Status column's `<PresenceChip>`) reads
+    // `agent.presenceStatus` off this list. No admin-WS frame invalidates
+    // `["agents"]` today, so without polling an agent that flips between
+    // online and offline while the Team tab stays open would keep showing
+    // the stale value until the user refocuses or remounts. Match the 10s
+    // cadence the legacy `/activity` poll used before this surface migrated
+    // off it.
     refetchInterval: 10_000,
   });
-  const runtimeMap = useMemo(() => {
-    const m = new Map<string, RuntimeAgent>();
-    for (const r of activity?.agents ?? []) m.set(r.agentId, r);
-    return m;
-  }, [activity?.agents]);
 
   // `/me/clients` is the cross-org list of clients the caller owns. We use
   // it to enrich each agent's Runtime cell with the host it's bound to
@@ -372,7 +369,6 @@ export function TeamPage() {
         ) : (
           <TeamTable
             groups={groups}
-            runtimeMap={runtimeMap}
             clientHostMap={clientHostMap}
             onAgentClick={(uuid) => navigate(`/agents/${encodeURIComponent(uuid)}`)}
             getHumanActions={getHumanActions}
