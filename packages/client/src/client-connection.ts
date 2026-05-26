@@ -5,6 +5,7 @@ import {
   type AgentBindRejectReason,
   type AgentPinnedMessage,
   agentPinnedMessageSchema,
+  type ClientPausedReason,
   type InboxDeliverFrame,
   imagePayloadFrameSchema,
   inboxDeliverFrameSchema,
@@ -132,8 +133,30 @@ type ClientConnectionEvents = {
    * has stopped trying to reconnect; the consumer should surface a recovery
    * prompt to the operator (re-run `first-tree login <token>`) and
    * usually exit so a supervisor can back off instead of looping at 1 Hz.
+   *
+   * Bug 2 fix (client-resilience design §5.2): consumers should NO LONGER
+   * exit the process on this event — they should listen for `auth:paused`
+   * instead and pause work, then resume when fresh credentials arrive. The
+   * `auth:fatal` channel is kept for backward compatibility and emitted in
+   * tandem with `auth:paused` for the same root cause.
    */
   "auth:fatal": [error: Error];
+  /**
+   * The connection has entered paused mode — refresh credentials cannot
+   * recover the current session and we are deliberately not retrying.
+   * Reconnect attempts are suspended until {@link ClientConnection.clearPaused}
+   * is called (typically by a credentials-file watcher that detects a fresh
+   * `first-tree login`). The WebSocket may be closed at the time of emit;
+   * the connection still answers `isConnected === false` and `isPaused
+   * === true`.
+   */
+  "auth:paused": [reason: ClientPausedReason, error: Error];
+  /**
+   * Mirror of {@link "auth:paused"} — emitted when paused mode is cleared
+   * (credentials refreshed). Consumers can use this to log resumption or
+   * re-enable slot processing UIs.
+   */
+  "auth:resumed": [previousReason: ClientPausedReason];
   "server:welcome": [welcome: ServerWelcome];
 };
 
@@ -311,6 +334,13 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private nextReconnectMinDelayMs = 0;
   private closing = false;
   private registered = false;
+  /**
+   * Paused state (Bug 2): refresh failed / token revoked. Reconnect attempts
+   * are suspended until {@link clearPaused} fires. Heartbeat tick still
+   * decorates frames with the reason while paused, so admin surfaces can
+   * show "client alive but waiting on operator".
+   */
+  private pausedReason: ClientPausedReason | null = null;
   /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
   private welcomeFramesReceived = 0;
   /**
@@ -375,6 +405,33 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN && this.registered;
   }
 
+  /** Whether the connection is currently in {@link "auth:paused"} mode. */
+  isPaused(): boolean {
+    return this.pausedReason !== null;
+  }
+
+  /** Last paused reason. `null` when not paused. */
+  getPausedReason(): ClientPausedReason | null {
+    return this.pausedReason;
+  }
+
+  /**
+   * Clear paused mode and kick off a reconnect attempt. Intended to be
+   * called by the consumer's credentials-file watcher after the operator
+   * runs `first-tree login <new-token>` (which writes a fresh JWT to
+   * credentials.json).
+   */
+  clearPaused(): void {
+    if (this.pausedReason === null) return;
+    const prev = this.pausedReason;
+    this.pausedReason = null;
+    this.wsLogger.info({ previousReason: prev, resilienceEvent: "resilience.connection.resumed" }, "auth paused cleared");
+    this.emit("auth:resumed", prev);
+    if (!this.closing && !this.isConnected) {
+      this.scheduleReconnect();
+    }
+  }
+
   get agents(): ReadonlyMap<string, BoundAgent> {
     return this.boundAgents;
   }
@@ -419,6 +476,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           return;
         } catch (err) {
           if (this.closing) throw err;
+          // Bug 2: paused mode (auth_rejected / auth_refresh_failed) is an
+          // operator-recovery state — keep the initial-connect promise from
+          // looping forever. Surface the error so the consumer knows the
+          // initial handshake failed; the credentials watcher will trigger
+          // a fresh `connect()` once login succeeds.
+          if (this.pausedReason !== null) throw err;
           attempt++;
           const delayMs = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
           this.wsLogger.warn(
@@ -428,6 +491,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           this.emit("error", err instanceof Error ? err : new Error(String(err)));
           await waitWithAbort(delayMs, this.connectAbort.signal);
           if (this.closing) throw err;
+          if (this.pausedReason !== null) throw err;
         }
       }
     } finally {
@@ -608,8 +672,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           // command depends on client, not the other way around).
           const e = err instanceof Error ? err : new Error(String(err));
           if (e.name === "AuthRefreshFailedError") {
-            this.closing = true;
-            this.emit("auth:fatal", e);
+            // Bug 2: instead of marking the connection permanently closed and
+            // letting the consumer process.exit, enter paused mode. The
+            // operator can recover by running `first-tree login` and the
+            // credentials-watcher will call clearPaused() to resume.
+            this.enterPausedMode("auth_refresh_failed", e);
           } else if (e.name === "AuthRefreshRateLimitedError") {
             // Pull the server-suggested wait off the typed error and stash it
             // for the next scheduleReconnect; falls back to 30s if absent.
@@ -738,17 +805,14 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.emit("auth:expired");
       } else {
         // auth:rejected means the token itself was refused — retrying with
-        // the same token would just thrash. Mark closing so neither the
-        // close-handler reconnect path nor the initial-connect retry loop
-        // tries again, and reuse the auth:fatal channel so the consumer
-        // surfaces the same recovery prompt (re-run `connect <token>`) +
-        // `process.exit(75)` it already runs for AuthRefreshFailedError.
-        // Without the emit, both runtime and initial-handshake paths would
-        // die silently — process stays up, no recovery message, agents
-        // wedged.
+        // the same token would just thrash. Bug 2 fix: instead of marking
+        // the connection closed (and letting the consumer process.exit 75
+        // into a systemd restart storm), enter paused mode. The operator
+        // recovers by running `first-tree login <new-token>`; the
+        // credentials-watcher calls `clearPaused()` and a fresh reconnect
+        // re-handshakes with the new token.
         this.authLogger.warn("auth rejected by server");
-        this.closing = true;
-        this.emit("auth:fatal", new Error("Server rejected access token (auth:rejected)"));
+        this.enterPausedMode("auth_rejected", new Error("Server rejected access token (auth:rejected)"));
       }
       this.ws?.close(4401, type);
       return;
@@ -974,10 +1038,46 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
   }
 
+  /**
+   * Enter paused mode (Bug 2): suspend reconnect attempts, keep the
+   * connection object alive so the operator can recover by writing fresh
+   * credentials. Emits both `auth:paused` (preferred) and `auth:fatal` (back-
+   * compat for consumers that haven't migrated yet).
+   */
+  private enterPausedMode(reason: ClientPausedReason, error: Error): void {
+    if (this.pausedReason === reason) {
+      // Already paused for the same reason; still emit so a duplicate auth
+      // rejection during reconnect is observable, but don't kick the
+      // reconnect timer.
+      this.emit("auth:paused", reason, error);
+      this.emit("auth:fatal", error);
+      return;
+    }
+    this.pausedReason = reason;
+    this.wsLogger.warn(
+      { reason, resilienceEvent: "resilience.connection.paused" },
+      "entering auth paused mode — will await fresh credentials",
+    );
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.emit("auth:paused", reason, error);
+    this.emit("auth:fatal", error);
+  }
+
   private scheduleReconnect(): void {
     // Guard against an entry from auth:fatal / disconnect() racing with the
     // close handler — `closing=true` means "no more reconnects", honoured here.
     if (this.closing) return;
+    // Bug 2: paused mode suspends reconnect until clearPaused() fires.
+    if (this.pausedReason !== null) {
+      this.wsLogger.debug(
+        { pausedReason: this.pausedReason },
+        "skipping reconnect — connection is paused",
+      );
+      return;
+    }
     this.reconnectAttempt++;
     this.emit("reconnecting", this.reconnectAttempt);
 
@@ -1051,7 +1151,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       // silence watchdog above is the source of truth — losing a single
       // send is fine.
       try {
-        ws.send(JSON.stringify({ type: "heartbeat" }));
+        const frame: { type: string; pausedReason?: ClientPausedReason } = { type: "heartbeat" };
+        if (this.pausedReason !== null) frame.pausedReason = this.pausedReason;
+        ws.send(JSON.stringify(frame));
         ws.ping();
       } catch {
         // ignore — the silence watchdog above is the source of truth
@@ -1146,12 +1248,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.nextReconnectMinDelayMs = Math.max(this.nextReconnectMinDelayMs, retryAfterMs);
         this.authLogger.warn({ retryAfterMs }, "proactive refresh rate-limited; deferring reconnect");
       } else if (e.name === "AuthRefreshFailedError") {
-        // Refresh token revoked/expired — surface fatal so the consumer
-        // (CLI) can prompt for `connect` instead of looping. Skip the
-        // close-and-reconnect dance since reconnecting would just throw
-        // the same error from the open handler.
-        this.closing = true;
-        this.emit("auth:fatal", e);
+        // Refresh token revoked/expired — Bug 2: enter paused mode instead
+        // of marking the connection closed. Skip the close-and-reconnect
+        // dance; reconnecting would just throw the same error from the open
+        // handler. clearPaused() (driven by the credentials watcher) will
+        // resume.
+        this.enterPausedMode("auth_refresh_failed", e);
         return;
       } else {
         this.authLogger.warn({ err: e }, "proactive refresh failed; falling back to reconnect path");
