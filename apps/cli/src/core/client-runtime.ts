@@ -6,6 +6,7 @@ import {
   ClientConnection,
   createGitMirrorManager,
   createLogger,
+  getChildProcessRegistry,
   type GitMirrorManager,
   getHandlerFactory,
   registerBuiltinHandlers,
@@ -284,6 +285,15 @@ export class ClientRuntime {
     this.updateManager = null;
     await Promise.allSettled(this.agents.map((a) => a.slot.stop()));
     await this.connection.disconnect();
+    // Bug 3: sweep any subprocess we still track (git, npm install) so they
+    // do not stay in our cgroup after the parent exits. AgentSlot.stop has
+    // already drained sessionManager.shutdown which closes Claude SDK
+    // queries, but git / npm spawned out-of-band needs an explicit reap.
+    try {
+      await getChildProcessRegistry().killAll("client-runtime-stop");
+    } catch {
+      // best-effort
+    }
   }
 
   /**

@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { pino } from "../observability/logger.js";
+import { getChildProcessRegistry } from "./child-process-registry.js";
 import { isUnderManagedRoot, killProcessesHoldingPath } from "./worktree-cleanup.js";
 
 const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -319,7 +319,13 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     const baseEnv = env ?? process.env;
     const finalEnv = { GIT_TERMINAL_PROMPT: "0", ...baseEnv, LC_ALL: "C" };
     return await new Promise<{ stdout: string; stderr: string; elapsedMs: number }>((resolveExec, rejectExec) => {
-      const proc = spawn("git", args, {
+      // Bug 3 fix: track every git subprocess in the ChildProcessRegistry so
+      // the lifecycle shutdown hook can kill stragglers if systemd SIGTERMs
+      // us mid-fetch. The existing per-call setTimeout below still owns the
+      // operation timeout; the registry provides a global cleanup tracker.
+      const { child: proc } = getChildProcessRegistry().spawn("git", args, {
+        category: "git",
+        label: `git ${args.join(" ").slice(0, 120)}`,
         cwd: cwd ?? undefined,
         env: finalEnv,
         stdio: ["ignore", "pipe", "pipe"],
