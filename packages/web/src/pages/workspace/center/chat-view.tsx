@@ -84,6 +84,7 @@ import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
+import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
@@ -1331,34 +1332,10 @@ export function ChatView({
     return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }, [cachedMessages, messagesData]);
 
-  // Detect a known gap between the cache range and the server's "last 50"
-  // window: if there's no overlap and the server's oldest fetched message
-  // is strictly newer than the cache's newest, the user was away long
-  // enough that more than 50 messages went past in between, and we have
-  // no way to fill them in until cursor pagination ships. Render a banner
-  // after the message id returned here. Returns null when there's overlap
-  // (the common case) or when either side is empty.
-  const gapAfterMessageId = useMemo<string | null>(() => {
-    const fromCache = cachedMessages ?? [];
-    const fromServer = messagesData?.items ?? [];
-    const firstCached = fromCache[0];
-    const firstServer = fromServer[0];
-    if (!firstCached || !firstServer) return null;
-    const serverIds = new Set(fromServer.map((m) => m.id));
-    for (const cached of fromCache) {
-      if (serverIds.has(cached.id)) return null;
-    }
-    let newestCached = firstCached;
-    for (const m of fromCache) {
-      if (m.createdAt > newestCached.createdAt) newestCached = m;
-    }
-    let oldestServer = firstServer;
-    for (const m of fromServer) {
-      if (m.createdAt < oldestServer.createdAt) oldestServer = m;
-    }
-    if (oldestServer.createdAt <= newestCached.createdAt) return null;
-    return newestCached.id;
-  }, [cachedMessages, messagesData]);
+  const gapAfterMessageId = useMemo<string | null>(
+    () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
+    [cachedMessages, messagesData],
+  );
 
   const items: TimelineItem[] = useMemo(() => {
     const rawEvents = eventsData?.items ?? [];
