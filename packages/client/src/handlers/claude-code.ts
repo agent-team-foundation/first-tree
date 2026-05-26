@@ -15,7 +15,6 @@ import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
 import { deriveRepoLocalPath, SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES } from "@first-tree/shared";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { classify } from "../runtime/error-taxonomy.js";
 import {
   bootstrapWorkspace,
   buildChatSystemPrompt,
@@ -28,6 +27,7 @@ import {
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { classify } from "../runtime/error-taxonomy.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
@@ -58,11 +58,7 @@ export class StreamApiTransientError extends Error {
   }
 }
 
-const STREAM_API_ERROR_PREFIXES = [
-  "API Error:",
-  "Claude API error:",
-  "Anthropic API error:",
-];
+const STREAM_API_ERROR_PREFIXES = ["API Error:", "Claude API error:", "Anthropic API error:"];
 
 const STREAM_API_ERROR_HINTS = [
   "socket connection",
@@ -851,24 +847,24 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     });
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                   } else {
-                  try {
-                    // All enrichment (inReplyTo, mentions, participants
-                    // lookup, transport) lives in ctx.forwardResult so every
-                    // handler shares one code path — see runtime/result-sink.ts.
-                    await sessionCtx.forwardResult(resultText);
-                    sessionCtx.log("Result forwarded to chat");
-                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                  } catch (err) {
-                    const reason = err instanceof Error ? err.message : String(err);
-                    sessionCtx.log(`Failed to forward result: ${reason}`);
-                    const preview = resultText.slice(0, 1500);
-                    const forwardErrMessage = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
-                    sessionCtx.emitEvent({
-                      kind: "error",
-                      payload: { source: "runtime", message: forwardErrMessage },
-                    });
-                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
-                  }
+                    try {
+                      // All enrichment (inReplyTo, mentions, participants
+                      // lookup, transport) lives in ctx.forwardResult so every
+                      // handler shares one code path — see runtime/result-sink.ts.
+                      await sessionCtx.forwardResult(resultText);
+                      sessionCtx.log("Result forwarded to chat");
+                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
+                    } catch (err) {
+                      const reason = err instanceof Error ? err.message : String(err);
+                      sessionCtx.log(`Failed to forward result: ${reason}`);
+                      const preview = resultText.slice(0, 1500);
+                      const forwardErrMessage = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
+                      sessionCtx.emitEvent({
+                        kind: "error",
+                        payload: { source: "runtime", message: forwardErrMessage },
+                      });
+                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                    }
                   }
                 } else {
                   // No result text to forward (edge case) — still close the turn.

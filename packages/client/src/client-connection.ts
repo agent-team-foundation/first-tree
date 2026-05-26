@@ -446,7 +446,10 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (this.pausedReason === null) return;
     const prev = this.pausedReason;
     this.pausedReason = null;
-    this.wsLogger.info({ previousReason: prev, resilienceEvent: "resilience.connection.resumed" }, "auth paused cleared");
+    this.wsLogger.info(
+      { previousReason: prev, resilienceEvent: "resilience.connection.resumed" },
+      "auth paused cleared",
+    );
     this.emit("auth:resumed", prev);
     if (!this.closing && !this.isConnected) {
       this.scheduleReconnect();
@@ -1169,10 +1172,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (this.closing) return;
     // Bug 2: paused mode suspends reconnect until clearPaused() fires.
     if (this.pausedReason !== null) {
-      this.wsLogger.debug(
-        { pausedReason: this.pausedReason },
-        "skipping reconnect — connection is paused",
-      );
+      this.wsLogger.debug({ pausedReason: this.pausedReason }, "skipping reconnect — connection is paused");
       return;
     }
     this.reconnectAttempt++;

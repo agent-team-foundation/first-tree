@@ -15,8 +15,8 @@ import type { AgentConfigCache } from "./agent-config-cache.js";
 import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
-import { type Classification, classify, clampRetryAttempt, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
 import type { SelfFence } from "./doc-snapshots.js";
+import { type Classification, clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
 import type {
   AgentHandler,
   AgentIdentity,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  classify,
   clampRetryAttempt,
+  classify,
   ERROR_KINDS,
   nextRetryDelayMs,
   type RetryStrategy,

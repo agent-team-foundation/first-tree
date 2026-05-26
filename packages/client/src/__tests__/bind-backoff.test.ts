@@ -67,9 +67,7 @@ describe("ClientConnection — bind per-agent backoff (Bug 5)", () => {
 
     await connection.connect();
 
-    await expect(
-      connection.bindAgent("agent-bad", "claude-code", "1.0"),
-    ).rejects.toThrow(/wrong_org/);
+    await expect(connection.bindAgent("agent-bad", "claude-code", "1.0")).rejects.toThrow(/wrong_org/);
 
     expect(rejections).toEqual(["wrong_org"]);
     expect(states[0]?.bindCount).toBe(1);
@@ -90,17 +88,13 @@ describe("ClientConnection — bind per-agent backoff (Bug 5)", () => {
     connection.on("error", () => {});
 
     await connection.connect();
-    await expect(
-      connection.bindAgent("agent-transient", "claude-code", "1.0"),
-    ).rejects.toThrow(/wrong_client/);
+    await expect(connection.bindAgent("agent-transient", "claude-code", "1.0")).rejects.toThrow(/wrong_client/);
 
     // The bookkeeping is internal; the observable side effect is that a
     // subsequent rebind from within the window does NOT spam. We can
     // verify the public `resetBindRetry` clears it for the next call.
     connection.resetBindRetry("agent-transient");
-    await expect(
-      connection.bindAgent("agent-transient", "claude-code", "1.0"),
-    ).rejects.toThrow(/wrong_client/);
+    await expect(connection.bindAgent("agent-transient", "claude-code", "1.0")).rejects.toThrow(/wrong_client/);
 
     await connection.disconnect();
   }, 10_000);

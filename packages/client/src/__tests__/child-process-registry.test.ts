@@ -1,9 +1,6 @@
 import { spawn } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  _resetChildProcessRegistryForTests,
-  getChildProcessRegistry,
-} from "../runtime/child-process-registry.js";
+import { _resetChildProcessRegistryForTests, getChildProcessRegistry } from "../runtime/child-process-registry.js";
 
 const SLEEP_BIN = "/bin/sleep";
 
@@ -48,10 +45,7 @@ describe("ChildProcessRegistry", () => {
     const registry = getChildProcessRegistry();
     // `node` subprocess that traps SIGTERM and stays alive — we use a small
     // inline script so the test does not need extra fixtures.
-    const child = spawn(process.execPath, [
-      "-e",
-      "process.on('SIGTERM', () => {}); setTimeout(() => {}, 60000);",
-    ]);
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => {}, 60000);"]);
     const record = registry.adopt(child, {
       category: "other",
       label: "ignore-sigterm",

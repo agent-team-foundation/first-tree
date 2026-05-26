@@ -91,9 +91,7 @@ class FakeClientUserMismatchError extends Error {
 
 function failingHandler(): AgentHandler {
   return {
-    start: vi
-      .fn()
-      .mockRejectedValue(new FakeClientUserMismatchError("git worktree add failed: branch already in use")),
+    start: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git worktree add failed: branch already in use")),
     resume: vi.fn(),
     inject: vi.fn(),
     suspend: vi.fn().mockResolvedValue(undefined),
@@ -293,9 +291,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const { sdk, sendMessage } = mockSdk();
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
-      resume: vi
-        .fn()
-        .mockRejectedValue(new FakeClientUserMismatchError("git mirror fetch failed: connection refused")),
+      resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git mirror fetch failed: connection refused")),
       inject: vi.fn(),
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),

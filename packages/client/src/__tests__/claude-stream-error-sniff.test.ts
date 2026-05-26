@@ -79,9 +79,7 @@ Hope that helps!`.trim();
   });
 
   it("trims and returns only the first line", () => {
-    const r = detectStreamApiError(
-      "API Error: ETIMEDOUT\nmore lines that should not affect the message",
-    );
+    const r = detectStreamApiError("API Error: ETIMEDOUT\nmore lines that should not affect the message");
     expect(r).not.toBeNull();
     expect(r?.message).toBe("API Error: ETIMEDOUT");
   });

@@ -1,10 +1,7 @@
 import { spawn } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  _resetChildProcessRegistryForTests,
-  getChildProcessRegistry,
-} from "../runtime/child-process-registry.js";
-import { _resetForTests as resetLifecycle, registerShutdownHook, runShutdown } from "../runtime/lifecycle.js";
+import { _resetChildProcessRegistryForTests, getChildProcessRegistry } from "../runtime/child-process-registry.js";
+import { registerShutdownHook, _resetForTests as resetLifecycle, runShutdown } from "../runtime/lifecycle.js";
 
 /**
  * Task 5 — Bug 3 fix: lifecycle.runShutdown sweeps any subprocess tracked by
@@ -60,10 +57,7 @@ describe("lifecycle.runShutdown — child process cleanup (Bug 3)", () => {
 
   it("escalates SIGTERM-ignoring children to SIGKILL within the deadline", async () => {
     const registry = getChildProcessRegistry();
-    const child = spawn(process.execPath, [
-      "-e",
-      "process.on('SIGTERM', () => {}); setTimeout(() => {}, 60000);",
-    ]);
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setTimeout(() => {}, 60000);"]);
     const record = registry.adopt(child, { category: "claude", label: "ignore-sigterm" });
 
     const start = Date.now();

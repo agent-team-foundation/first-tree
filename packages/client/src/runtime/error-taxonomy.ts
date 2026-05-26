@@ -95,7 +95,10 @@ function readErrorShape(err: unknown): ErrorShape {
     return {
       name: typeof anyErr.name === "string" ? anyErr.name : undefined,
       message: typeof anyErr.message === "string" ? anyErr.message : JSON.stringify(err),
-      code: typeof anyErr.code === "string" || typeof anyErr.code === "number" ? (anyErr.code as string | number) : undefined,
+      code:
+        typeof anyErr.code === "string" || typeof anyErr.code === "number"
+          ? (anyErr.code as string | number)
+          : undefined,
       status: typeof anyErr.status === "number" ? anyErr.status : undefined,
       statusCode: typeof anyErr.statusCode === "number" ? anyErr.statusCode : undefined,
       reason: typeof anyErr.reason === "string" ? anyErr.reason : undefined,
@@ -243,7 +246,11 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       message: shape.message ?? "Claude API rate limit",
     };
   }
-  if (shape.name === "InternalServerError" || (statusOf(shape) ?? 0) >= 500 || /overloaded|server error/i.test(shape.message ?? "")) {
+  if (
+    shape.name === "InternalServerError" ||
+    (statusOf(shape) ?? 0) >= 500 ||
+    /overloaded|server error/i.test(shape.message ?? "")
+  ) {
     return {
       kind: ERROR_KINDS.TRANSIENT,
       strategy: TRANSIENT_FAST,

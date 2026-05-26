@@ -23,10 +23,6 @@ export { contextTreeCloneDir, syncAgentContextTree, syncContextTree } from "./ru
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
 export { probeCodexCapability } from "./runtime/capabilities/codex.js";
 export { probeCapabilities } from "./runtime/capabilities/index.js";
-export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
-export { loadRuntimeConfig } from "./runtime/config.js";
-export { Deduplicator } from "./runtime/deduplicator.js";
-export type { SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
 export type {
   AdoptOptions,
   ChildCategory,
@@ -36,9 +32,13 @@ export type {
   RegistrySpawnOptions,
 } from "./runtime/child-process-registry.js";
 export { CHILD_CATEGORIES, getChildProcessRegistry } from "./runtime/child-process-registry.js";
-export type { Classification, ErrorKind, ErrorSource, RetryStrategy } from "./runtime/error-taxonomy.js";
-export { classify, clampRetryAttempt, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
+export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
+export { loadRuntimeConfig } from "./runtime/config.js";
+export { Deduplicator } from "./runtime/deduplicator.js";
+export type { SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
 export { buildMessageDocumentSnapshots } from "./runtime/doc-snapshots.js";
+export type { Classification, ErrorKind, ErrorSource, RetryStrategy } from "./runtime/error-taxonomy.js";
+export { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
 export type { GitMirrorManager, GitMirrorManagerOptions } from "./runtime/git-mirror-manager.js";
 export { createGitMirrorManager, GitMirrorError } from "./runtime/git-mirror-manager.js";
 export type {
