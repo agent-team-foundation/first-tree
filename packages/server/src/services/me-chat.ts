@@ -444,6 +444,7 @@ export async function listMeChats(
   const liveActivityByChat = new Map<string, LiveActivity>();
   const failedByChat = new Map<string, string[]>();
   const pendingByChat = new Map<string, string[]>();
+  const busyByChat = new Map<string, string[]>();
   for (const [chatId, statuses] of statusByChat) {
     const speakers = nonHumanSpeakersByChat.get(chatId);
     // live-dot: freshest activity among non-human SPEAKERS. (Narrowed from the
@@ -452,6 +453,7 @@ export async function listMeChats(
     let freshest: { activity: LiveActivity; startedMs: number } | null = null;
     const failed: string[] = [];
     const pending: string[] = [];
+    const busy: string[] = [];
     for (const s of statuses) {
       const isSpeaker = speakers?.has(s.agentId) ?? false;
       if (isSpeaker && s.activity) {
@@ -459,6 +461,12 @@ export async function listMeChats(
         if (!freshest || startedMs > freshest.startedMs) freshest = { activity: s.activity, startedMs };
       }
       if (isSpeaker && s.main === "failed") failed.push(s.agentId);
+      // busy = speakers with composite `working` (the D-axis truth from
+      // `agent_chat_sessions.runtime_state`). Drives the chat-list activity
+      // indicator authoritatively, so it lights even when a runtime emits
+      // no intermediate session_events (codex no-events case) — the gap
+      // `liveActivity` alone can never cover.
+      if (isSpeaker && s.working) busy.push(s.agentId);
       // pending is NOT speaker-filtered (matches the prior derivePendingQuestions
       // surface: a pending agent that has since left the chat still counts).
       if (s.needsYou) pending.push(s.agentId);
@@ -466,6 +474,7 @@ export async function listMeChats(
     if (freshest) liveActivityByChat.set(chatId, freshest.activity);
     if (failed.length > 0) failedByChat.set(chatId, failed);
     if (pending.length > 0) pendingByChat.set(chatId, pending);
+    if (busy.length > 0) busyByChat.set(chatId, busy);
   }
 
   // First-message lookup for auto-title fallback. Mirrors
@@ -519,6 +528,7 @@ export async function listMeChats(
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
       pendingQuestionAgentIds: pendingByChat.get(r.chat_id) ?? [],
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
+      busyAgentIds: busyByChat.get(r.chat_id) ?? [],
     };
   });
 

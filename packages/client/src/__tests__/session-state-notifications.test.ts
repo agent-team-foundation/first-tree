@@ -1,7 +1,7 @@
-import type { SessionState } from "@first-tree/shared";
+import type { RuntimeState, SessionState } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
+import type { AgentHandler, HandlerFactory, SessionContext } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { silentLogger } from "./_logger-helpers.js";
@@ -44,6 +44,7 @@ function createSessionManager(opts: {
   concurrency?: number;
   log?: pino.Logger;
   onStateChange?: (chatId: string, state: SessionState) => void;
+  onSessionRuntimeChange?: (chatId: string, state: RuntimeState) => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -71,6 +72,7 @@ function createSessionManager(opts: {
     log: opts.log ?? silentLogger(),
     ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     onStateChange: opts.onStateChange,
+    onSessionRuntimeChange: opts.onSessionRuntimeChange,
   });
 }
 
@@ -168,6 +170,58 @@ describe("SessionManager: state notifications", () => {
     // Should not throw
     const sm = createSessionManager({});
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await sm.shutdown();
+  });
+});
+
+describe("SessionManager: state-before-runtime ordering (codex review P2)", () => {
+  // The server's `setSessionRuntime` is active-gated — if `session:state
+  // active` hasn't landed yet, any `session:runtime` for the same
+  // (agent, chat) is dropped. Handlers (codex especially) emit
+  // `setRuntimeState("working")` synchronously from inside handler.start(),
+  // and codex's start() awaits the WHOLE turn before returning. If
+  // SessionManager fired the `active` notification only AFTER start()
+  // returned, the working frame would arrive at the server before the
+  // active row existed and the composite would stay `ready`. This test
+  // pins the fixed order: the `active` notification fires before the
+  // handler returns (so before any setRuntimeState the handler does).
+  it("emits onStateChange('active') BEFORE handler.start (so handler runtime reports land on an active row)", async () => {
+    const emissions: Array<{ kind: "state" | "runtime"; value: string }> = [];
+    let observedActiveBeforeHandlerCompletion = false;
+
+    const handler = createMockHandler({
+      // Codex-style handler: awaits the entire turn. Synchronously reports
+      // working at the top, then idle on the way out, all before start()
+      // returns. The pre-fix SessionManager would have queued both frames
+      // ahead of the `active` notification.
+      start: vi.fn(async (_msg, ctx: SessionContext) => {
+        // Snapshot the state emissions seen so far — if the `active`
+        // notification fired before invoking start, it must already be in
+        // `emissions`.
+        observedActiveBeforeHandlerCompletion = emissions.some((e) => e.kind === "state" && e.value === "active");
+        ctx.setRuntimeState("working");
+        ctx.setRuntimeState("idle");
+        return "session-id-mock";
+      }),
+    });
+
+    const sm = createSessionManager({
+      handler,
+      onStateChange: (_chatId, state) => emissions.push({ kind: "state", value: state }),
+      onSessionRuntimeChange: (_chatId, state) => emissions.push({ kind: "runtime", value: state }),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-codex" }));
+
+    // The snapshot captured at the top of handler.start() must have already
+    // included the `active` state — proving notifySessionState fired BEFORE
+    // we entered the handler.
+    expect(observedActiveBeforeHandlerCompletion).toBe(true);
+
+    // Belt-and-braces: the first emission overall must be the active state
+    // notification (no runtime frame slipped in before it).
+    expect(emissions[0]).toEqual({ kind: "state", value: "active" });
+
     await sm.shutdown();
   });
 });

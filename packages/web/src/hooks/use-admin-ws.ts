@@ -212,6 +212,16 @@ function broadcast(msg: WsMessage) {
       if (agentId && chatId) {
         invalidateSessionPair(latestQc, agentId, chatId);
       }
+    } else if (msg.type === "session:runtime") {
+      // The per-(agent,chat) D-axis authority flipped. Same delivery
+      // contract as `session:state` — when audience-included, the frame
+      // carries the recomputed status to patch in place; otherwise we
+      // fall back to invalidate. ALSO kick `me/chats` so the chat-list
+      // `busyAgentIds` projection refreshes without waiting for the 30s
+      // poll. NOT invalidating `session-events`: a runtime flip does not
+      // mutate the timeline.
+      meChatsInvalidator.invalidate(latestQc);
+      patchOrInvalidateAgentStatus(latestQc, msg);
     } else if (msg.type === "session:event") {
       // `MeChatRow.liveActivity` is derived from the most recent
       // `session_events` row for each chat. The same wire frame produced

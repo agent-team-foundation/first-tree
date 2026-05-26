@@ -6,6 +6,8 @@ import {
   buildAgentChatStatus,
   LIVE_ACTIVITY_STALE_MS,
   type LiveActivity,
+  RUNTIME_STALE_MS,
+  type RuntimeState,
   type ToolCallEventPayload,
 } from "@first-tree/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
@@ -367,57 +369,115 @@ export async function resolveAgentChatStatuses(
 
   const allAgentIds = [...new Set([...unionByChat.values()].flatMap((s) => [...s]))];
 
-  // -- Engagement (C): per-(agent,chat) session state, for the union pairs.
+  // -- Engagement (C) + D-axis runtime: per-(agent,chat) session row.
+  // `runtime_state` / `runtime_state_at` feed `computeWorking` / `computeErrored`
+  // — the per-chat authoritative source replacing the legacy event-proxy
+  // (which only knew "fresh event = working" and missed codex no-events).
   const sessionRows = await db
     .select({
       agentId: agentChatSessions.agentId,
       chatId: agentChatSessions.chatId,
       state: agentChatSessions.state,
+      runtimeState: agentChatSessions.runtimeState,
+      runtimeStateAt: agentChatSessions.runtimeStateAt,
     })
     .from(agentChatSessions)
     .where(and(inArray(agentChatSessions.chatId, chatIds), inArray(agentChatSessions.agentId, allAgentIds)));
-  const sessionState = new Map(sessionRows.map((s) => [pairKey(s.chatId, s.agentId), s.state]));
+  const sessionByPair = new Map(sessionRows.map((s) => [pairKey(s.chatId, s.agentId), s]));
 
-  // -- Reachability (A) + runtime error: per-agent (not per-chat) presence.
+  // -- Reachability (A): per-agent presence. `runtime_state` is still read
+  // for the agent-global double-write path (admin overview / fault
+  // notification) but does NOT contribute to per-(agent,chat) composite
+  // `errored` — that axis is now authoritative per-chat via `computeErrored`.
+  // Leaving the column out of the select would let agent-global error leak
+  // back in if a future change reintroduces the OR-fold; explicitly drop it.
   const presenceRows = await db
     .select({
       agentId: agentPresence.agentId,
       clientId: agentPresence.clientId,
-      runtimeState: agentPresence.runtimeState,
     })
     .from(agentPresence)
     .where(inArray(agentPresence.agentId, allAgentIds));
   const presenceById = new Map(presenceRows.map((p) => [p.agentId, p]));
 
   // -- Activity (D): per-(agent,chat) live activity (+ turnText when asked).
+  //    Pure description: 60s drop here means "5-min-old tool_call is not the
+  //    current activity description", not "agent is not working" (which is
+  //    decided by `computeWorking` above).
   const activityByChat = await deriveActivities(db, chatIds, opts);
 
+  const now = Date.now();
   for (const [chatId, agentSet] of unionByChat) {
     const pendingSet = pendingSetByChat.get(chatId);
     const perAgentActivity = activityByChat.get(chatId);
     const arr: AgentChatStatus[] = [];
     for (const agentId of agentSet) {
-      const state = sessionState.get(pairKey(chatId, agentId));
+      const sess = sessionByPair.get(pairKey(chatId, agentId));
+      const state = sess?.state;
       const p = presenceById.get(agentId);
       const activity = perAgentActivity?.get(agentId) ?? null;
       const engagement: AgentEngagement = state === "active" ? "active" : state === "suspended" ? "suspended" : "none";
+      const working = computeWorking(sess, now);
       arr.push(
         buildAgentChatStatus({
           agentId,
           reachable: p?.clientId != null,
-          // failed = session errored OR runtime error (the reachable gate is
-          // applied by `deriveMainStatus`: unreachable → offline, not failed).
-          errored: state === "errored" || p?.runtimeState === "error",
+          errored: computeErrored(sess, now),
           needsYou: pendingSet?.has(agentId) ?? false,
-          working: activity != null,
+          working,
           engagement,
-          activity,
+          // The activity is a descriptor of in-flight work — carry it only
+          // while working, matching the schema's "null when not working"
+          // contract. Codex no-events case: working=true & activity=null
+          // ⇒ UI shows a generic "Working" with no tool detail.
+          activity: working ? activity : null,
         }),
       );
     }
     out.set(chatId, arr);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// D-axis projection helpers — pure, exported for unit tests.
+//
+// The composite working/errored axes are both fed by the per-chat
+// `agent_chat_sessions.runtime_state` (+ `runtime_state_at` freshness). With
+// all clients upgraded (no old-client fallback), the rules are symmetric and
+// fail-closed: NULL `runtime_state_at` and stale `runtime_state_at` BOTH read
+// as "not working / not errored from runtime axis". `state='errored'` (C-axis
+// lifecycle) still contributes to errored independently of the D-axis.
+// ---------------------------------------------------------------------------
+
+// `runtimeState` is `text` in the DB (no enum constraint at the TS level), so
+// it surfaces as plain `string` from drizzle. Helpers compare to literal
+// values — a row carrying an unrecognised value falls into the fail-closed
+// default (not working, not errored from D-axis), which is the right
+// degradation if a buggy producer ever wrote a junk state.
+type RuntimeSessionRow =
+  | {
+      state: string;
+      runtimeState: string;
+      runtimeStateAt: Date | null;
+    }
+  | undefined;
+
+export function isRuntimeFresh(session: RuntimeSessionRow, now: number): boolean {
+  if (!session || session.state !== "active") return false;
+  if (session.runtimeStateAt == null) return false;
+  return now - session.runtimeStateAt.getTime() <= RUNTIME_STALE_MS;
+}
+
+export function computeWorking(session: RuntimeSessionRow, now: number): boolean {
+  return isRuntimeFresh(session, now) && session?.runtimeState === ("working" satisfies RuntimeState);
+}
+
+export function computeErrored(session: RuntimeSessionRow, now: number): boolean {
+  // C-axis lifecycle errored (handler-start failure) — sticky on the row,
+  // not bound to runtime freshness.
+  if (session?.state === "errored") return true;
+  return isRuntimeFresh(session, now) && session?.runtimeState === ("error" satisfies RuntimeState);
 }
 
 /**

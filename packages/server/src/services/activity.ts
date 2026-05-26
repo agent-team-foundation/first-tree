@@ -1,4 +1,4 @@
-import type { SessionState } from "@first-tree/shared";
+import { RUNTIME_STALE_MS, type RuntimeState, type SessionState } from "@first-tree/shared";
 import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
@@ -105,6 +105,59 @@ export async function upsertSessionState(
 
   if (stateChanged && notifier) {
     notifier.notifySessionStateChange(agentId, chatId, state, organizationId).catch(() => {});
+  }
+}
+
+/**
+ * Persist the per-(agent,chat) D-axis runtime state reported by a client
+ * (`session:runtime` frame plus the ~30s re-affirm). Always bumps
+ * `runtime_state_at` so a long working turn stays fresh; kicks the admin
+ * WS notifier only when the *effective composite status could change* —
+ * i.e. the runtime value changed, OR a same-value report flips the
+ * derivation from stale (or NULL sentinel) to fresh (e.g. a `working` that
+ * had aged out is live again). A fresh same-value re-affirm changes
+ * nothing, so it stays silent (no invalidation spam).
+ *
+ * Only an `active` session is touched: the suspend / evict paths own the
+ * lifecycle, and a runtime report for a non-active (or missing) session
+ * is stale — skip it (the next re-affirm recovers once the session goes
+ * active, covering the startup-order race where a `working` report can
+ * beat the `session:state active` report). Callers MUST invoke this
+ * inside the per-(agent,chat) `chainSessionOp` queue so the read-then-
+ * write is race-free and ordered behind the `session:state` write.
+ */
+export async function setSessionRuntime(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  runtimeState: RuntimeState,
+  organizationId: string,
+  notifier?: Notifier,
+): Promise<void> {
+  const [prev] = await db
+    .select({
+      runtimeState: agentChatSessions.runtimeState,
+      runtimeStateAt: agentChatSessions.runtimeStateAt,
+      state: agentChatSessions.state,
+    })
+    .from(agentChatSessions)
+    .where(and(eq(agentChatSessions.agentId, agentId), eq(agentChatSessions.chatId, chatId)))
+    .limit(1);
+  if (!prev || prev.state !== "active") return;
+
+  await db
+    .update(agentChatSessions)
+    .set({ runtimeState, runtimeStateAt: new Date() })
+    .where(and(eq(agentChatSessions.agentId, agentId), eq(agentChatSessions.chatId, chatId)));
+
+  // Notify when the composite `working` / `errored` could have flipped. Two
+  // conditions: a value change, OR a same-value report that crosses the
+  // fail-closed boundary (NULL sentinel → fresh, OR stale → fresh). A fresh
+  // same-value re-affirm changes nothing, so it stays silent.
+  const valueChanged = prev.runtimeState !== runtimeState;
+  const wasStale = prev.runtimeStateAt == null || Date.now() - prev.runtimeStateAt.getTime() > RUNTIME_STALE_MS;
+  if ((valueChanged || wasStale) && notifier) {
+    notifier.notifySessionRuntime(agentId, chatId, runtimeState, organizationId).catch(() => {});
   }
 }
 

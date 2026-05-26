@@ -466,6 +466,19 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState }));
   }
 
+  /**
+   * Report the per-(agent,chat) D-axis runtime (idle / working / blocked /
+   * error). This is the per-chat counterpart to `reportRuntimeState`'s
+   * agent-global aggregate — the per-chat field is the authoritative source
+   * the server-side composite status reads (working / errored axes), while
+   * the agent-global runtime is double-written and kept around for the
+   * admin overview / fault notification path until that consumer migrates.
+   */
+  reportSessionRuntime(agentId: string, chatId: string, runtimeState: RuntimeState): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "session:runtime", agentId, chatId, runtimeState }));
+  }
+
   reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const sanitized = sanitizeSessionEventForTransport(event);

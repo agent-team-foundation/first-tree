@@ -3,8 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pause } from "lucide-react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { suspendSession } from "../../api/sessions.js";
-import { useNow } from "../../hooks/use-now.js";
-import { clearStaleWorking, viewOf } from "../../lib/agent-status-view.js";
+import { viewOf } from "../../lib/agent-status-view.js";
 import { toneOf } from "../../lib/tones.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { Avatar } from "../avatar.js";
@@ -46,12 +45,11 @@ export function AgentStatusPanel({
     refetchInterval: 30_000, // safety net; the WS invalidation is the live path
   });
   const mounted = useMountedAnchors();
-  // 1s ticker self-clears a stale "working" row at its `activity.staleAt`
-  // (re-deriving `main` locally) rather than waiting for the 30s refetch.
-  const now = useNow(1000);
-  const live = clearStaleWorking(statuses ?? [], now);
+  // Per the per-chat-runtime authority refactor: working is per-chat
+  // freshness stamp the server self-heals from; no local stale-clear ticker
+  // needed. The admin-WS delta pushes the recomputed status down.
 
-  const byAgent = new Map<string, AgentChatStatus>(live.map((s) => [s.agentId, s]));
+  const byAgent = new Map<string, AgentChatStatus>((statuses ?? []).map((s) => [s.agentId, s]));
 
   const ordered =
     order === "priority"

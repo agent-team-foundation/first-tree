@@ -16,10 +16,25 @@ describe("GET /orgs/:orgId/chats — liveActivity wire shape", () => {
   const getApp = useTestApp();
 
   async function setSessionState(db: ReturnType<typeof getApp>["db"], agentId: string, chatId: string, state: string) {
+    // Per #553 rebase: liveActivity rides on composite working; working is
+    // gated by per-chat runtime_state='working' + fresh stamp (the new
+    // authoritative D-axis). Real clients always emit `session:runtime
+    // working` right after `session:state active`; tests mirror that wire
+    // order by seeding both fields together when state='active'. State
+    // transitions to suspended/errored keep their stale runtime — that
+    // matches what the suspend / errored paths look like in production.
     await db.execute(sql`
-      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, updated_at)
-      VALUES (${agentId}, ${chatId}, ${state}, NOW())
-      ON CONFLICT (agent_id, chat_id) DO UPDATE SET state = EXCLUDED.state
+      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, runtime_state, runtime_state_at, updated_at)
+      VALUES (
+        ${agentId}, ${chatId}, ${state},
+        CASE WHEN ${state} = 'active' THEN 'working' ELSE 'idle' END,
+        CASE WHEN ${state} = 'active' THEN NOW() ELSE NULL END,
+        NOW()
+      )
+      ON CONFLICT (agent_id, chat_id) DO UPDATE
+        SET state = EXCLUDED.state,
+            runtime_state = EXCLUDED.runtime_state,
+            runtime_state_at = EXCLUDED.runtime_state_at
     `);
   }
 
@@ -86,6 +101,39 @@ describe("GET /orgs/:orgId/chats — liveActivity wire shape", () => {
     expect(typeof (row?.liveActivity as { startedAt: unknown }).startedAt).toBe("string");
   });
 
+  // Codex-class regression: per-(agent,chat) `runtime_state='working'` MUST
+  // light busyAgentIds even when the runtime emits zero session_events
+  // (codex-only-emits-on-completion case). `liveActivity` alone — the legacy
+  // freshness proxy — would miss this.
+  it("codex no-events: working runtime_state lights busyAgentIds without a liveActivity", async () => {
+    const app = getApp();
+    const alice = await createTestAdmin(app);
+    const peer = await createAgent(app.db, {
+      name: `e2e-codex-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Codex Peer",
+      managerId: alice.memberId,
+      organizationId: alice.organizationId,
+    });
+    const { chatId } = await createMeChat(app.db, alice.humanAgentUuid, alice.organizationId, {
+      participantIds: [peer.uuid],
+    });
+    // session=active + runtime=working stamped fresh — but NO session_events.
+    await setSessionState(app.db, peer.uuid, chatId, "active");
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/chats`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = res.json<{ rows: Array<Record<string, unknown>> }>().rows.find((r) => r.chatId === chatId);
+    expect(row?.busyAgentIds).toEqual([peer.uuid]);
+    // No events emitted yet → no live description; UI renders a generic
+    // "Working" chip from busyAgentIds alone.
+    expect(row?.liveActivity).toBeNull();
+  });
+
   it("idle session → liveActivity null", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);
@@ -149,10 +197,25 @@ describe("cross-user isolation — the original #366 / #367 bug scenario", () =>
   const getApp = useTestApp();
 
   async function setSessionState(db: ReturnType<typeof getApp>["db"], agentId: string, chatId: string, state: string) {
+    // Per #553 rebase: liveActivity rides on composite working; working is
+    // gated by per-chat runtime_state='working' + fresh stamp (the new
+    // authoritative D-axis). Real clients always emit `session:runtime
+    // working` right after `session:state active`; tests mirror that wire
+    // order by seeding both fields together when state='active'. State
+    // transitions to suspended/errored keep their stale runtime — that
+    // matches what the suspend / errored paths look like in production.
     await db.execute(sql`
-      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, updated_at)
-      VALUES (${agentId}, ${chatId}, ${state}, NOW())
-      ON CONFLICT (agent_id, chat_id) DO UPDATE SET state = EXCLUDED.state
+      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, runtime_state, runtime_state_at, updated_at)
+      VALUES (
+        ${agentId}, ${chatId}, ${state},
+        CASE WHEN ${state} = 'active' THEN 'working' ELSE 'idle' END,
+        CASE WHEN ${state} = 'active' THEN NOW() ELSE NULL END,
+        NOW()
+      )
+      ON CONFLICT (agent_id, chat_id) DO UPDATE
+        SET state = EXCLUDED.state,
+            runtime_state = EXCLUDED.runtime_state,
+            runtime_state_at = EXCLUDED.runtime_state_at
     `);
   }
   async function appendEvent(

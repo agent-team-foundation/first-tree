@@ -87,21 +87,34 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
     void dispatchSessionFrame("session:event", payload);
   });
 
+  notifier.onSessionRuntime((payload) => {
+    // Same shape as session:state — a per-(agent,chat) flip whose composite
+    // status the audience patches in place. Audience filter is the same
+    // (status carries narration via the freshly-recomputed activity).
+    void dispatchSessionFrame("session:runtime", payload);
+  });
+
   notifier.onChatMessage(({ chatId }) => {
     void dispatchChatMessage(chatId);
   });
 
   /**
-   * Deliver a session:state / session:event frame. The recomputed agent status
-   * carries the agent's narration (activity.detail / turnText), so it is
-   * attached ONLY for sockets whose viewer can access the chat — NEVER sent
-   * org-wide. Audience members get the enriched frame and patch
-   * `["chat-agent-status", chatId]` in place; every other org socket gets the
-   * bare routing frame (invalidate-only, exactly as before this enrichment).
-   * Computed once per NOTIFY, only while admin sockets are connected.
+   * Deliver a session:state / session:event / session:runtime frame. The
+   * recomputed agent status carries the agent's narration (activity.detail
+   * / turnText), so it is attached ONLY for sockets whose viewer can access
+   * the chat — NEVER sent org-wide. Audience members get the enriched frame
+   * and patch `["chat-agent-status", chatId]` in place; every other org
+   * socket gets the bare routing frame (invalidate-only). Computed once per
+   * NOTIFY, only while admin sockets are connected.
+   *
+   * `session:runtime` rides on the same path as `session:state` because
+   * they are semantically siblings — both signal "a per-(agent,chat)
+   * composite axis flipped", just on different axes (lifecycle vs D-axis
+   * runtime). Sharing the path keeps the web cache reconciliation
+   * deterministic (one in-place patch, no invalidate races).
    */
   async function dispatchSessionFrame(
-    type: "session:state" | "session:event",
+    type: "session:state" | "session:event" | "session:runtime",
     payload: { agentId: string; chatId: string; organizationId: string } & Record<string, unknown>,
   ): Promise<void> {
     if (adminSockets.size === 0) return;
