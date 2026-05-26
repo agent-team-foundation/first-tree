@@ -913,12 +913,23 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // case in particular drops the turn entirely — no result will
             // be forwarded — so without an explicit error event the chat
             // would just go quiet.
-            const preview = errMsg.slice(0, 800);
-            const reason = claudeSessionId
-              ? `Query failed after ${MAX_RETRIES} retries: ${preview}`
-              : `Query failed and no resume id available: ${preview}`;
-            sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message: reason } });
-            sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+            //
+            // Wrap the emits so a broken `onSessionEvent` callback can't
+            // short-circuit the `setRuntimeState("error")` call below —
+            // if that one is skipped the SessionManager keeps the slot
+            // counted as `working` and never reclaims it.
+            try {
+              const preview = errMsg.slice(0, 800);
+              const reason = claudeSessionId
+                ? `Query failed after ${MAX_RETRIES} retries: ${preview}`
+                : `Query failed and no resume id available: ${preview}`;
+              sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message: reason } });
+              sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+            } catch (emitErr) {
+              sessionCtx.log(
+                `Failed to emit retry-exhaustion error event: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
+              );
+            }
             sessionCtx.setRuntimeState("error");
             return;
           }
@@ -939,12 +950,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // Mirror the MAX_RETRIES branch above: leaving runtimeState at
             // `working` would block the SessionManager's idle-suspend grace
             // window from ever firing on this session, so the slot would
-            // never be reclaimed.
-            sessionCtx.emitEvent({
-              kind: "error",
-              payload: { source: "runtime", message: `Auto-resume failed: ${resumeMsg.slice(0, 800)}` },
-            });
-            sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+            // never be reclaimed. Wrap the emits defensively so the
+            // setRuntimeState call still runs if the callback throws.
+            try {
+              sessionCtx.emitEvent({
+                kind: "error",
+                payload: { source: "runtime", message: `Auto-resume failed: ${resumeMsg.slice(0, 800)}` },
+              });
+              sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+            } catch (emitErr) {
+              sessionCtx.log(
+                `Failed to emit auto-resume error event: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
+              );
+            }
             sessionCtx.setRuntimeState("error");
             return;
           }

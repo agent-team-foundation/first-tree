@@ -190,6 +190,35 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
 
     await sm.shutdown();
   });
+
+  it("still cleans up and recovers when onSessionEvent itself throws", async () => {
+    // Defensive contract: a broken event sink (e.g. agent-slot reporting on
+    // a dropped WebSocket) must not strand the failed session locally. The
+    // cleanup that drops the entry from `sessions` runs even when the
+    // emit throws, so the next inbound message routes as a fresh start.
+    const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
+    const failing = failingHandler();
+    const working = workingHandler("session-after-broken-emit");
+    const sm = makeSessionManager({
+      handlers: [failing, working],
+      onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+      onSessionEvent: () => {
+        throw new Error("event sink down");
+      },
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-emit-throw" }));
+    expect(stateChanges).toEqual([{ chatId: "chat-emit-throw", state: "errored" }]);
+
+    // The next dispatch must route through `startNewSession` (no stale entry
+    // left behind by the throwing emit) — verified by the fresh handler's
+    // `start` being called and the state moving back to active.
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-emit-throw" }));
+    expect(working.start).toHaveBeenCalledTimes(1);
+    expect(stateChanges.at(-1)).toEqual({ chatId: "chat-emit-throw", state: "active" });
+
+    await sm.shutdown();
+  });
 });
 
 describe("SessionManager: session-resume failure signalling (F2, resume path)", () => {
