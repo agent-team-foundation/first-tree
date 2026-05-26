@@ -50,7 +50,13 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
-import { GithubEventCardMessage, isGithubEventCardContent } from "../../../components/chat/github-event-card.js";
+import {
+  GITHUB_SYSTEM_SENDER_NAME,
+  GithubEventCardMessage,
+  GithubSystemAvatar,
+  isGithubEventCardContent,
+  isTrustedGithubDispatcherMessage,
+} from "../../../components/chat/github-event-card.js";
 import {
   isQuestionAnswerContent,
   isQuestionContent,
@@ -291,8 +297,18 @@ function TextRow({
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const slugToId = useAgentSlugToIdMap();
-  const senderName = agentNameFn(msg.senderId);
-  const isSelf = myAgentId === msg.senderId;
+  // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
+  // routing / read-receipts / mention-resolution stay consistent, but we
+  // re-attribute the row to a synthetic "GitHub" sender in the UI. The
+  // gate is conjunctive (`source` + `format` + content shape + metadata
+  // marker) because `sendMessageSchema` accepts arbitrary metadata — a
+  // metadata-only check would let any agent spoof a "from GitHub" card by
+  // posting plain text with the marker set. `isSelf` is also overridden
+  // so the recipient does not see their own name color treatment on a
+  // card the dispatcher wrote on their row.
+  const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
+  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
+  const isSelf = !isGithubSystem && myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
   const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
   // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
@@ -396,12 +412,16 @@ function TextRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar
-        name={senderName}
-        imageUrl={agentAvatarFn(msg.senderId)}
-        seed={msg.senderId}
-        colorToken={agentColorTokenFn(msg.senderId)}
-      />
+      {isGithubSystem ? (
+        <GithubSystemAvatar size={20} />
+      ) : (
+        <Avatar
+          name={senderName}
+          imageUrl={agentAvatarFn(msg.senderId)}
+          seed={msg.senderId}
+          colorToken={agentColorTokenFn(msg.senderId)}
+        />
+      )}
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
