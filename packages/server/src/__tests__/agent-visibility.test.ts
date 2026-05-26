@@ -457,8 +457,13 @@ describe("Chat Access Control", () => {
     });
   });
 
-  describe("POST /admin/chats/:chatId/join — manager joins chat", () => {
-    it("manager can join a chat of their managed agent", async () => {
+  describe("POST /chats/:chatId/workspace-join — manager joins chat", () => {
+    // The v1 supervision-check route `POST /chats/:chatId/join` was removed
+    // along with its `joinChat` service. In v2 the manager's relationship to
+    // the chat is materialised as a watcher row by `recomputeChatWatchers`
+    // (run on every speaker write via `addChatParticipants`), and the
+    // `/workspace-join` route gates on "you're already a watcher".
+    it("manager can join a chat of their managed agent (watcher → speaker)", async () => {
       const app = getApp();
       const adminBundle = await authedRequest(app);
       const member = await createMemberAndLogin(app, adminBundle);
@@ -475,18 +480,28 @@ describe("Chat Access Control", () => {
         managerId: member.memberId,
       });
 
-      // Create a chat between the two agents (not including human agent)
+      // Create a chat between the two agents (not including human agent).
+      // `createChat` → `addChatParticipants` already recomputes watchers, so
+      // the member's human agent lands as a watcher row immediately and
+      // `/workspace-join` will accept the promotion.
       const chat = await createChat(app.db, agentA.uuid, {
         type: "group",
         participantIds: [agentB.uuid],
       });
 
-      // Member joins the chat
-      const res = await member.req("POST", `/api/v1/chats/${chat.id}/join`);
-      expect(res.statusCode).toBe(200);
-      const body = res.json<{ participants: Array<{ agentId: string }> }>();
-      const participantIds = body.participants.map((p) => p.agentId);
-      expect(participantIds).toContain(member.agentId);
+      // Member joins the chat.
+      const res = await member.req("POST", `/api/v1/chats/${chat.id}/workspace-join`);
+      expect(res.statusCode).toBe(204);
+
+      // Verify the human agent is now a speaker in the chat.
+      const { chatMembership } = await import("../db/schema/chat-membership.js");
+      const { and: andOp, eq: eqOp } = await import("drizzle-orm");
+      const [row] = await app.db
+        .select({ accessMode: chatMembership.accessMode })
+        .from(chatMembership)
+        .where(andOp(eqOp(chatMembership.chatId, chat.id), eqOp(chatMembership.agentId, member.agentId)))
+        .limit(1);
+      expect(row?.accessMode).toBe("speaker");
     });
 
     it("member cannot join a chat they don't supervise", async () => {
@@ -513,10 +528,10 @@ describe("Chat Access Control", () => {
         participantIds: [agentA2.uuid],
       });
 
-      // Member B tries to join — refused. Under the new requireChatAccess
-      // model the gate returns 404 (not 403) so a non-participant cannot
-      // enumerate chat UUIDs by probing.
-      const res = await memberB.req("POST", `/api/v1/chats/${chat.id}/join`);
+      // Member B tries to join — refused. memberB has no watcher row for
+      // this chat (they manage none of its speakers), so requireChatAccess
+      // returns 404 (probing-protection) before `joinMeChat` is even called.
+      const res = await memberB.req("POST", `/api/v1/chats/${chat.id}/workspace-join`);
       expect(res.statusCode).toBe(404);
     });
   });
