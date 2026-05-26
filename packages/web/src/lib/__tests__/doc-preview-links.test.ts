@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../doc-preview-links.js";
+import {
+  buildFailedDocHref,
+  docPreviewPathFromHref,
+  linkifyMarkdownDocPaths,
+  parseFailedDocHref,
+  wrapFailedDocMentions,
+} from "../doc-preview-links.js";
 
 describe("docPreviewPathFromHref", () => {
   it("accepts markdown paths with `:line[:col]` suffix and strips them", () => {
@@ -60,10 +66,12 @@ describe("linkifyMarkdownDocPaths", () => {
     );
   });
 
-  it("does not touch already-linked paths, inline code, fenced code, HTML tags, or external URLs", () => {
+  it("does not touch already-linked paths, fenced code, HTML tags, or external URLs", () => {
+    // Phase 1: inline code is NOT in this list anymore — see the dedicated
+    // code-span test below. Fenced / HTML / inline-link / domain-shaped are
+    // still hard skips.
     const input = [
       "Already [intro](docs/intro.md)",
-      "Inline `docs/code.md`",
       'HTML <a href="docs/html.md">link</a>',
       "```",
       "docs/fenced.md",
@@ -73,9 +81,29 @@ describe("linkifyMarkdownDocPaths", () => {
     ].join("\n");
     // Even when the snapshot set contains these paths, the scanner skips
     // links / code / HTML, so the source is returned unchanged.
-    expect(
-      linkifyMarkdownDocPaths(input, new Set(["docs/intro.md", "docs/code.md", "docs/fenced.md", "docs/html.md"])),
-    ).toBe(input);
+    expect(linkifyMarkdownDocPaths(input, new Set(["docs/intro.md", "docs/fenced.md", "docs/html.md"]))).toBe(input);
+  });
+
+  it("widens the rewrite to a code-span-wrapped path, preserving the mono-spaced visual", () => {
+    // Legacy (pre-runtime-rewrite) message where the agent wrapped the path
+    // in single backticks. Web's fallback now mirrors the runtime: enclose
+    // the whole `` `…` `` span as the link text so the chip renders as
+    // code-styled monospace AND becomes clickable.
+    expect(linkifyMarkdownDocPaths("see `docs/intro.md` please", new Set(["docs/intro.md"]))).toBe(
+      "see [`docs/intro.md`](docs/intro.md) please",
+    );
+  });
+
+  it("preserves multi-backtick code-span wrappers verbatim in the legacy fallback", () => {
+    expect(linkifyMarkdownDocPaths("see ``the ` token in docs/intro.md`` after", new Set(["docs/intro.md"]))).toBe(
+      "see [``the ` token in docs/intro.md``](docs/intro.md) after",
+    );
+  });
+
+  it("leaves a code-span-wrapped path without a snapshot as plain text", () => {
+    // Same invariant as bare tokens — no dead links. If the path isn't in
+    // `snapshotPaths` the code span stays untouched.
+    expect(linkifyMarkdownDocPaths("see `docs/intro.md` please", new Set())).toBe("see `docs/intro.md` please");
   });
 
   it("returns the source unchanged when no plain markdown paths are present", () => {
@@ -135,5 +163,87 @@ describe("linkifyMarkdownDocPaths", () => {
     ).toBe(
       "self [assistant/design.md](assistant/design.md) and cross [assistant/chat-1/design.md](assistant/chat-1/design.md)",
     );
+  });
+});
+
+describe("buildFailedDocHref / parseFailedDocHref", () => {
+  it("round-trips every well-known reason", () => {
+    for (const reason of [
+      "missing",
+      "out-of-fence",
+      "hidden-segment",
+      "too-large",
+      "budget-exceeded",
+      "unreadable",
+    ] as const) {
+      const href = buildFailedDocHref(reason);
+      expect(parseFailedDocHref(href)).toBe(reason);
+    }
+  });
+
+  it("returns null for hrefs that aren't ours", () => {
+    expect(parseFailedDocHref("docs/intro.md")).toBeNull();
+    expect(parseFailedDocHref("#heading")).toBeNull();
+    expect(parseFailedDocHref("#doc-failed")).toBeNull();
+    expect(parseFailedDocHref("https://example.com/?reason=missing")).toBeNull();
+  });
+
+  it("returns null when the embedded reason isn't a known enum value", () => {
+    // Defensive: a malformed reason renders as plain link, never a crash.
+    expect(parseFailedDocHref("#doc-failed?reason=banana")).toBeNull();
+    expect(parseFailedDocHref("#doc-failed?reason=")).toBeNull();
+  });
+});
+
+describe("wrapFailedDocMentions", () => {
+  it("wraps a bare failed mention into the inert-chip placeholder link", () => {
+    // The wrap pass converts `docs/missing.md` into `[docs/missing.md](#doc-failed?reason=missing)`
+    // so the chat-view's `a` override renders it as a disabled chip — failure
+    // becomes visible instead of silently degrading to plain text.
+    expect(wrapFailedDocMentions("see docs/missing.md please", new Map([["docs/missing.md", "missing"]]))).toBe(
+      "see [docs/missing.md](#doc-failed?reason=missing) please",
+    );
+  });
+
+  it("widens to the whole code span when the failed mention sits inside backticks", () => {
+    // Phase-1 scanner reports the enclosingCodeSpan; the wrap pass uses it to
+    // keep the mono-spaced visual on the disabled chip.
+    expect(wrapFailedDocMentions("see `docs/missing.md` please", new Map([["docs/missing.md", "missing"]]))).toBe(
+      "see [`docs/missing.md`](#doc-failed?reason=missing) please",
+    );
+  });
+
+  it("matches `docs/foo.md:42` to a `docs/foo.md` entry by stripping the line suffix", () => {
+    // Wire format stores the suffix-stripped writtenPath; the wrapper
+    // canonicalises each scan match before lookup so all variants render the
+    // same chip.
+    expect(wrapFailedDocMentions("open docs/missing.md:42 here", new Map([["docs/missing.md", "missing"]]))).toBe(
+      "open [docs/missing.md:42](#doc-failed?reason=missing) here",
+    );
+  });
+
+  it("leaves tokens whose raw isn't in the failed map as plain text", () => {
+    // Co-existing real and failed mentions: the runtime would already have
+    // linkified the real one before this pass runs in chat-view, so here we
+    // verify the wrap pass leaves unmatched bare tokens alone.
+    expect(
+      wrapFailedDocMentions("see docs/intro.md and docs/missing.md", new Map([["docs/missing.md", "missing"]])),
+    ).toBe("see docs/intro.md and [docs/missing.md](#doc-failed?reason=missing)");
+  });
+
+  it("no-ops on an empty failed map", () => {
+    expect(wrapFailedDocMentions("see docs/intro.md", new Map())).toBe("see docs/intro.md");
+  });
+
+  it("emits distinct reasons across multiple failed mentions in one message", () => {
+    expect(
+      wrapFailedDocMentions(
+        "missing docs/a.md and oversize docs/b.md",
+        new Map<string, "missing" | "too-large">([
+          ["docs/a.md", "missing"],
+          ["docs/b.md", "too-large"],
+        ]),
+      ),
+    ).toBe("missing [docs/a.md](#doc-failed?reason=missing) and oversize [docs/b.md](#doc-failed?reason=too-large)");
   });
 });

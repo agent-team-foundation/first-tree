@@ -3,8 +3,12 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   buildWorkspaceDocKey,
+  type DocSnapshotFailReason,
+  type FailedDocMention,
   MAX_DOC_SNAPSHOT_BYTES,
   MAX_DOC_SNAPSHOTS_PER_MESSAGE,
+  MAX_FAILED_DOC_MENTION_RAW_LEN,
+  MAX_FAILED_DOC_MENTIONS_PER_MESSAGE,
   MAX_TOTAL_DOC_SNAPSHOT_BYTES,
   normalizeDocLinkPath,
   type SnapshotDoc,
@@ -117,19 +121,45 @@ type ResolvedOccurrence = DocPathOccurrence & {
   file: string | null;
   /** Rewrite replacement for a cross mention: short `<ownerSlug>/<rel>`. */
   shortForm: string;
+  /** Reason this occurrence failed to snapshot, set when Pass 1 (key
+   *  resolution) OR Pass 2 (read / byte budget) drops the mention. Null /
+   *  undefined when the snapshot succeeded. Bare-source failures populate
+   *  `failedMentions[]` on the wire (inline-source failures stay silent —
+   *  the agent's existing `[label](target)` syntax already implies they
+   *  meant a link, so the click handler just no-ops on a missing snapshot). */
+  failReason?: DocSnapshotFailReason;
 };
 
 export async function buildMessageDocumentSnapshots(
   text: string,
   self: string | SelfFence,
   fence?: WorkspaceFence,
-): Promise<{ docs: SnapshotDoc[]; skipped: number; rewrittenText: string }> {
+): Promise<{
+  docs: SnapshotDoc[];
+  skipped: number;
+  rewrittenText: string;
+  /**
+   * Per-mention failures (BARE-source tokens only, deduped by writtenPath).
+   * Caller embeds this list as `metadata.documentContext.failedMentions` so
+   * web can render an inert "doc chip" at the original token position with a
+   * reason-mapped tooltip. Empty array when every mention either resolved or
+   * was an inline `[label](target)` link (those failures stay silent — the
+   * link still renders, the click handler just no-ops on a missing snapshot).
+   */
+  failedMentions: FailedDocMention[];
+}> {
   const occurrences = collectDocPathOccurrences(text);
-  if (occurrences.length === 0) return { docs: [], skipped: 0, rewrittenText: text };
+  const empty = {
+    docs: [] as SnapshotDoc[],
+    skipped: 0,
+    rewrittenText: text,
+    failedMentions: [] as FailedDocMention[],
+  };
+  if (occurrences.length === 0) return empty;
 
   const selfConfig: SelfFence = typeof self === "string" ? { agentHome: self } : self;
   const roots = await resolveSelfRoots(selfConfig);
-  if (!roots) return { docs: [], skipped: occurrences.length, rewrittenText: text };
+  if (!roots) return { ...empty, skipped: occurrences.length };
 
   const workspacesRootReal = fence ? await safeRealpath(fence.workspacesRoot) : null;
 
@@ -140,6 +170,13 @@ export async function buildMessageDocumentSnapshots(
   //           key.
   //   cross → global key `<ownerSlug>/<chatId>/<rel>` for a file that realpaths
   //           into ANOTHER agent's workspace under the shared common root.
+  //
+  // When BOTH self and cross attempts fail, `classifyOccurrenceFailure`
+  // re-runs the discrimination checks (hidden segment / out-of-fence /
+  // missing) to attach a reason — that reason is what surfaces as the
+  // inert-chip tooltip on web. The classifier is best-effort; a path that
+  // doesn't fit any clean bucket falls back to `missing` (the most common
+  // and user-actionable reason).
   const resolved: ResolvedOccurrence[] = await Promise.all(
     occurrences.map(async (occ): Promise<ResolvedOccurrence> => {
       const selfKey = await canonicalizeWorkspacePath(roots, occ.writtenPath);
@@ -150,7 +187,8 @@ export async function buildMessageDocumentSnapshots(
         const cross = await resolveCrossWorkspaceDoc(workspacesRootReal, fence, occ.writtenPath);
         if (cross) return { ...occ, kind: "cross", key: cross.key, file: cross.file, shortForm: cross.shortForm };
       }
-      return { ...occ, kind: null, key: null, file: null, shortForm: "" };
+      const failReason = await classifyOccurrenceFailure(occ, roots, fence, workspacesRootReal);
+      return { ...occ, kind: null, key: null, file: null, shortForm: "", failReason };
     }),
   );
 
@@ -167,13 +205,28 @@ export async function buildMessageDocumentSnapshots(
     const key = occ.key;
     if (!key || !key.toLowerCase().endsWith(".md")) {
       skipped += 1;
+      // failReason was set in Pass 1 already (or this is the rare "key but
+      // not .md" case — treat as missing for the chip tooltip).
+      if (!occ.failReason) occ.failReason = "missing";
       continue;
     }
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      // Already attempted for an earlier occurrence of the same key. If that
+      // earlier attempt failed, propagate the same reason so every occurrence
+      // of the path shows the same chip status.
+      if (!snapshotted.has(key)) {
+        // Find the prior occurrence's failReason (if any) and adopt it.
+        const prior = resolved.find((o) => o.key === key && o.failReason !== undefined);
+        if (prior?.failReason) occ.failReason = prior.failReason;
+        else if (!occ.failReason) occ.failReason = "missing";
+      }
+      continue;
+    }
     seen.add(key);
 
     if (docs.length >= MAX_DOC_SNAPSHOTS_PER_MESSAGE) {
       skipped += 1;
+      occ.failReason = "budget-exceeded";
       continue;
     }
 
@@ -182,6 +235,9 @@ export async function buildMessageDocumentSnapshots(
     const file = occ.kind === "cross" ? occ.file : await resolveWorkspaceFile(roots.agentHomeReal, key);
     if (!file) {
       skipped += 1;
+      // A successfully canonicalised key whose file disappears at read time
+      // (TOCTOU / race) is effectively missing.
+      occ.failReason = "missing";
       continue;
     }
 
@@ -191,6 +247,7 @@ export async function buildMessageDocumentSnapshots(
       // round-trip just to be rejected below.
       if (buf.byteLength > MAX_DOC_SNAPSHOT_BYTES) {
         skipped += 1;
+        occ.failReason = "too-large";
         continue;
       }
       const content = buf.toString("utf8");
@@ -207,10 +264,12 @@ export async function buildMessageDocumentSnapshots(
       // under. Catch that and skip.
       if (size > MAX_DOC_SNAPSHOT_BYTES) {
         skipped += 1;
+        occ.failReason = "too-large";
         continue;
       }
       if (totalBytes + size > MAX_TOTAL_DOC_SNAPSHOT_BYTES) {
         skipped += 1;
+        occ.failReason = "budget-exceeded";
         continue;
       }
       const sha256 = createHash("sha256").update(content, "utf8").digest("hex");
@@ -219,6 +278,7 @@ export async function buildMessageDocumentSnapshots(
       snapshotted.add(key);
     } catch {
       skipped += 1;
+      occ.failReason = "unreadable";
     }
   }
 
@@ -245,13 +305,156 @@ export async function buildMessageDocumentSnapshots(
       // Point the agent's existing link at the canonical key (no-op when it
       // already is); the label between `[` and `]` is left untouched.
       rewrites.push({ start: occ.start, end: occ.end, replacement: occ.key });
+    } else if (occ.enclosingCodeSpan) {
+      // Code-span-wrapped bare mention: widen the rewrite to the outer ticks
+      // and slice the original code span verbatim into the link text. The
+      // result `[`anything-incl-path`](key)` renders as a code-styled
+      // clickable link (commonmark allows inline code inside link text), so
+      // the agent's mono-spaced visual intent survives while the click target
+      // points at the snapshot. Verbatim slice (instead of synthesising a
+      // canonical display) is what keeps surrounding text inside the same
+      // span — e.g. `` `agent-hub/messaging.md` §218-229 `` — intact when the
+      // §-suffix sits outside the ticks, or when the span itself contains
+      // descriptive prose around the path. Multi-path-in-one-span is a
+      // degenerate case handled defensively below by `applyRewrites`'s
+      // overlap-skip (first match wins; others are dropped silently — their
+      // snapshots are still emitted so metadata stays self-consistent).
+      const visibleText = text.slice(occ.enclosingCodeSpan.start, occ.enclosingCodeSpan.end);
+      rewrites.push({
+        start: occ.enclosingCodeSpan.start,
+        end: occ.enclosingCodeSpan.end,
+        replacement: `[${visibleText}](${occ.key})`,
+      });
     } else {
       const display = occ.kind === "cross" ? occ.shortForm : occ.key;
       rewrites.push({ start: occ.start, end: occ.end, replacement: `[${display}${occ.lineSuffix}](${occ.key})` });
     }
   }
 
-  return { docs, skipped, rewrittenText: applyRewrites(text, rewrites) };
+  // Collect per-mention failures for inert-chip rendering. Only BARE-source
+  // occurrences are surfaced (inline `[label](target)` failures stay silent
+  // — the existing link already shows the agent's intent; the click handler
+  // simply no-ops on a missing snapshot). Dedupe by writtenPath so two
+  // mentions of the same path under `:line` variants collapse to one entry;
+  // the web wrap pass canonicalises each scanned occurrence's raw via
+  // `stripDocPathLineSuffix` before lookup, so a single entry covers all
+  // matching occurrences in the text.
+  const failuresByRaw = new Map<string, DocSnapshotFailReason>();
+  for (const occ of resolved) {
+    if (occ.source !== "bare") continue;
+    if (!occ.failReason) continue;
+    // Drop the line-suffix from the wire key so suffixed variants dedupe.
+    const raw = occ.writtenPath;
+    if (!raw || raw.length > MAX_FAILED_DOC_MENTION_RAW_LEN) continue;
+    if (failuresByRaw.has(raw)) continue;
+    if (failuresByRaw.size >= MAX_FAILED_DOC_MENTIONS_PER_MESSAGE) break;
+    failuresByRaw.set(raw, occ.failReason);
+  }
+  const failedMentions: FailedDocMention[] = [...failuresByRaw.entries()].map(([raw, reason]) => ({ raw, reason }));
+
+  return { docs, skipped, rewrittenText: applyRewrites(text, rewrites), failedMentions };
+}
+
+/**
+ * Best-effort classification of why a doc mention failed to resolve to a
+ * canonical workspace key. Runs ONLY on occurrences that fell through Pass 1
+ * (both self and cross attempts returned null), so the input has already been
+ * rejected by the structural fence — the job here is to bucket the reason
+ * cleanly enough for the user-facing tooltip.
+ *
+ * Buckets are deliberately coarse and ordered by user actionability:
+ *   - hidden-segment: a path segment starts with `.` (`.agent/...`, `.git/...`).
+ *   - out-of-fence:   absolute path realpaths outside agent home AND outside
+ *                     the cross-fence workspaces common root (or under it but
+ *                     in another chat's scope).
+ *   - missing:        the file doesn't exist / isn't a regular `.md` /
+ *                     realpath returned null. Most common case; the most
+ *                     actionable tooltip ("文档不存在" — agent typo'd, file
+ *                     was deleted, etc.).
+ *   - unreadable:     used as a last-resort fallback when realpath succeeded
+ *                     and the path is inside the fence but a later stat
+ *                     somehow threw — the rare permission / I/O failure case.
+ *
+ * `too-large` / `budget-exceeded` / `unreadable` from readFile are NOT
+ * classified here — those are set inline in Pass 2 where they're detected.
+ */
+async function classifyOccurrenceFailure(
+  occ: DocPathOccurrence,
+  roots: ResolvedRoots,
+  fence: WorkspaceFence | undefined,
+  workspacesRootReal: string | null,
+): Promise<DocSnapshotFailReason> {
+  // 1. Static hidden-segment check on the raw written path. Catches the
+  //    common `.agent/secret.md` / `docs/.git/HEAD.md` pattern before any
+  //    filesystem syscall. `.` and `..` segments are filesystem references,
+  //    not hidden dirs — they're escape attempts handled by the out-of-fence
+  //    bucket later, not hidden segments here.
+  const writtenSegs = occ.writtenPath.split(/[\\/]+/).filter((s) => s.length > 0 && s !== "." && s !== "..");
+  if (writtenSegs.some((s) => s.startsWith("."))) return "hidden-segment";
+
+  // 2. Try to realpath the target so the rest of the buckets can lean on a
+  //    concrete inode. Absolute paths go directly; relative paths route
+  //    through `normalizeDocLinkPath` (rejects `.`-segments, `..`-escape)
+  //    then resolve against `docBaseReal`.
+  let real: string | null = null;
+  if (isAbsolute(occ.writtenPath)) {
+    real = await safeRealpath(occ.writtenPath);
+  } else {
+    const normalized = normalizeDocLinkPath(occ.writtenPath);
+    if (!normalized) return "hidden-segment";
+    real = await safeRealpath(resolve(roots.docBaseReal, normalized));
+  }
+  if (!real) return "missing";
+
+  // 3. Hidden segment exposed by the realpath (symlink dropping into
+  //    `.agent/`, `.git/`, etc.). Mirrors the rejection in `resolveWorkspaceFile`.
+  //    Strip both `.` AND `..` — realpath canonicalises away `.`, but
+  //    `relative()` emits leading `..` when the target sits OUTSIDE the home
+  //    (handled by step 4 below). Those aren't hidden dirs, they're escapes.
+  const homeRel = relative(roots.agentHomeReal, real)
+    .split(sep)
+    .filter((s) => s.length > 0 && s !== "." && s !== "..");
+  if (homeRel.some((s) => s.startsWith("."))) return "hidden-segment";
+
+  const homePrefix = roots.agentHomeReal.endsWith(sep) ? roots.agentHomeReal : roots.agentHomeReal + sep;
+  const insideHome = real === roots.agentHomeReal || real.startsWith(homePrefix);
+  if (!insideHome) {
+    // 4. Outside agent home — check the cross fence next.
+    if (workspacesRootReal && fence) {
+      const wsPrefix = workspacesRootReal.endsWith(sep) ? workspacesRootReal : workspacesRootReal + sep;
+      if (real.startsWith(wsPrefix)) {
+        const wsRel = relative(workspacesRootReal, real)
+          .split(sep)
+          .filter((s) => s.length > 0 && s !== "." && s !== "..");
+        if (wsRel.some((s) => s.startsWith("."))) return "hidden-segment";
+        if (wsRel.length < 3) return "out-of-fence";
+        const [ownerSlug, segChatId] = wsRel;
+        if (segChatId !== fence.chatId) return "out-of-fence";
+        // Self workspace via the cross root is treated as self elsewhere; if
+        // we got here, self resolution already failed — treat as missing.
+        if (ownerSlug === fence.selfSlug) return "missing";
+        try {
+          const st = await stat(real);
+          if (!st.isFile()) return "missing";
+        } catch {
+          return "missing";
+        }
+        // Cross fence accepted the realpath but the resolver still dropped it
+        // — something I/O-shaped is amiss. `unreadable` is the closest bucket.
+        return "unreadable";
+      }
+    }
+    return "out-of-fence";
+  }
+
+  // 5. Inside agent home — the file either doesn't exist or isn't a regular file.
+  try {
+    const st = await stat(real);
+    if (!st.isFile()) return "missing";
+  } catch {
+    return "missing";
+  }
+  return "unreadable";
 }
 
 /**
@@ -276,6 +479,15 @@ type DocPathOccurrence = {
    * the target is rewritten to the canonical key (the agent's label is kept).
    */
   source: "bare" | "inline";
+  /**
+   * Outer span (opening tick → closing tick, inclusive) of the inline code
+   * wrapper around a bare token, when the token sits inside one. Pass 3
+   * widens the rewrite to this span so `` `docs/foo.md` `` becomes the
+   * commonmark-legal `` [`docs/foo.md`](docs/foo.md) `` — a code-styled
+   * clickable link instead of dead inline code. Absent for `source: "inline"`
+   * and for unwrapped bare tokens.
+   */
+  enclosingCodeSpan?: { start: number; end: number };
 };
 
 function collectDocPathOccurrences(text: string): DocPathOccurrence[] {
@@ -285,7 +497,15 @@ function collectDocPathOccurrences(text: string): DocPathOccurrence[] {
   }
   for (const m of scanBareDocPathTokens(text)) {
     const writtenPath = stripDocPathLineSuffix(m.raw);
-    out.push({ writtenPath, lineSuffix: m.raw.slice(writtenPath.length), start: m.start, end: m.end, source: "bare" });
+    const entry: DocPathOccurrence = {
+      writtenPath,
+      lineSuffix: m.raw.slice(writtenPath.length),
+      start: m.start,
+      end: m.end,
+      source: "bare",
+    };
+    if (m.enclosingCodeSpan) entry.enclosingCodeSpan = m.enclosingCodeSpan;
+    out.push(entry);
   }
   return out;
 }

@@ -17,6 +17,14 @@ export const MAX_DOC_SNAPSHOT_BYTES = 256 * 1024;
 export const MAX_DOC_SNAPSHOTS_PER_MESSAGE = 5;
 export const MAX_TOTAL_DOC_SNAPSHOT_BYTES = 512 * 1024;
 
+/** Cap on the inert-chip failedMentions list. Existing scanner already caps
+ *  per-message mention count via the BARE_PATH regex on a single text body;
+ *  this is a hard ceiling against pathological inputs. */
+export const MAX_FAILED_DOC_MENTIONS_PER_MESSAGE = 16;
+/** Schema-side raw-token length cap. Generous because absolute paths can be
+ *  long, but bounded so a misbehaving runtime cannot lodge giant strings. */
+export const MAX_FAILED_DOC_MENTION_RAW_LEN = 512;
+
 export const snapshotDocSchema = z.object({
   /**
    * Canonical workspace-relative path — must already be in the form produced
@@ -47,10 +55,50 @@ export const snapshotDocSchema = z.object({
 });
 export type SnapshotDoc = z.infer<typeof snapshotDocSchema>;
 
-const snapshotDocumentContextSchema = z.object({
-  kind: z.literal("snapshot"),
-  docs: z.array(snapshotDocSchema).min(1).max(MAX_DOC_SNAPSHOTS_PER_MESSAGE),
+/**
+ * Why a `.md` mention that LOOKED like a workspace path didn't end up as an
+ * inline snapshot. The web renders a disabled "doc chip" in place of the raw
+ * token + a reason-mapped tooltip so the failure is visible instead of
+ * silently degrading to plain text (and the agent — re-reading its own
+ * message — can see WHY the preview didn't materialise).
+ *
+ * Scanner-static rejections (domain-shaped, fenced code blocks, HTML tag
+ * bodies, reference link definitions) do NOT produce failedMentions — those
+ * tokens are by design not workspace paths. Only mentions that made it to the
+ * runtime resolver AND failed to snapshot are reported.
+ */
+export const docSnapshotFailReasonSchema = z.enum([
+  "missing",
+  "out-of-fence",
+  "hidden-segment",
+  "too-large",
+  "budget-exceeded",
+  "unreadable",
+]);
+export type DocSnapshotFailReason = z.infer<typeof docSnapshotFailReasonSchema>;
+
+export const failedDocMentionSchema = z.object({
+  /** Agent-authored raw token, suffix-stripped to its writtenPath form so two
+   *  occurrences of the same file under `:line` variants dedupe to one entry.
+   *  Web does `stripDocPathLineSuffix(match.raw)` before lookup. */
+  raw: z.string().trim().min(1).max(MAX_FAILED_DOC_MENTION_RAW_LEN),
+  reason: docSnapshotFailReasonSchema,
 });
+export type FailedDocMention = z.infer<typeof failedDocMentionSchema>;
+
+const snapshotDocumentContextSchema = z
+  .object({
+    kind: z.literal("snapshot"),
+    /** Successful snapshots embedded inline. May be empty when ALL mentions
+     *  failed — see the refinement below. */
+    docs: z.array(snapshotDocSchema).max(MAX_DOC_SNAPSHOTS_PER_MESSAGE).default([]),
+    /** Failure roster for inert chip rendering. Optional for backward
+     *  compatibility with the pre-Phase-2 schema where only `docs` existed. */
+    failedMentions: z.array(failedDocMentionSchema).max(MAX_FAILED_DOC_MENTIONS_PER_MESSAGE).optional(),
+  })
+  .refine((d) => d.docs.length > 0 || (d.failedMentions?.length ?? 0) > 0, {
+    message: "snapshot documentContext must include at least one snapshot or one failedMention",
+  });
 
 const pathDocumentContextSchema = z.object({
   kind: z.literal("path"),
