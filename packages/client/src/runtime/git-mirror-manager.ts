@@ -332,10 +332,10 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
       });
       let stdout = "";
       let stderr = "";
-      proc.stdout.on("data", (d) => {
+      proc.stdout?.on("data", (d) => {
         stdout += String(d);
       });
-      proc.stderr.on("data", (d) => {
+      proc.stderr?.on("data", (d) => {
         stderr += String(d);
       });
       const timer = setTimeout(() => {
