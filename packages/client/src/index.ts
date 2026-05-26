@@ -43,6 +43,8 @@ export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
 export { SessionManager } from "./runtime/session-manager.js";
 export { SessionRegistry } from "./runtime/session-registry.js";
+// Skills (slash-command discovery)
+export { discoverClaudeCodeSkills } from "./runtime/skills/index.js";
 export type {
   ExecuteUpdateFn,
   ExecuteUpdateResult,

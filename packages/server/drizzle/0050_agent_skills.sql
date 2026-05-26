@@ -1,0 +1,14 @@
+-- Track agent-reported skills (slash commands) on the agents row.
+--
+-- The CLI daemon scans each agent's runtime skill directories
+-- (~/.claude/skills, <repo>/.claude/skills, plugin skill dirs) and
+-- uploads the discovered descriptors via
+-- `PATCH /api/v1/agents/:uuid/skills`. The web composer reads this list
+-- back via `GET /api/v1/agents/:uuid/skills` to render the `/`-triggered
+-- slash-command popover after the user @mentions the agent.
+--
+-- Stored as a JSONB array of SkillDescriptor objects
+-- ({ name, namespace?, description, source }). Default `[]` keeps every
+-- existing row valid until its owning daemon next checks in — at which
+-- point the column is overwritten in full (no per-skill UPSERT).
+ALTER TABLE "agents" ADD COLUMN "skills" jsonb NOT NULL DEFAULT '[]'::jsonb;

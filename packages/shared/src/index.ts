@@ -585,6 +585,17 @@ export {
   sessionReconcileResultSchema,
 } from "./schemas/session-reconcile.js";
 export {
+  type AgentSkills,
+  agentSkillsSchema,
+  SKILL_SOURCES,
+  type SkillDescriptor,
+  type SkillSource,
+  skillDescriptorSchema,
+  skillSourceSchema,
+  type UpdateAgentSkills,
+  updateAgentSkillsSchema,
+} from "./schemas/skill.js";
+export {
   type OrgStats,
   orgStatsSchema,
   type Stats,

@@ -1,4 +1,9 @@
-import { agentPinnedMessageSchema, rebindAgentSchema, updateAgentSchema } from "@first-tree/shared";
+import {
+  agentPinnedMessageSchema,
+  rebindAgentSchema,
+  updateAgentSchema,
+  updateAgentSkillsSchema,
+} from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, ForbiddenError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireAgentAccess } from "../scope/require-resource.js";
@@ -186,6 +191,30 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { uuid: string } }>("/:uuid/avatar", async (request, reply) => {
     await requireAgentAccess(request, app.db, "manage");
     await agentService.clearAgentAvatarImage(app.db, request.params.uuid);
+    return reply.status(204).send();
+  });
+
+  // ─── Skills (slash-command catalog) ─────────────────────────────────
+  //
+  // GET is `visible`: any chat member with line-of-sight to the agent can
+  // read its skill list to render the slash-command popover after they
+  // `@mention` it. PATCH is `manage`: only the manager's daemon may upload
+  // — the same scope that PATCHes runtime config and capabilities.
+  //
+  // The PATCH body replaces the list in full (snapshot semantics). The
+  // client-side `probeCapabilities()` hashes the local set and skips the
+  // request when nothing changed, so write-amplification is bounded.
+
+  app.get<{ Params: { uuid: string } }>("/:uuid/skills", async (request) => {
+    await requireAgentAccess(request, app.db, "visible");
+    const skills = await agentService.getAgentSkills(app.db, request.params.uuid);
+    return { skills };
+  });
+
+  app.patch<{ Params: { uuid: string } }>("/:uuid/skills", async (request, reply) => {
+    await requireAgentAccess(request, app.db, "manage");
+    const body = updateAgentSkillsSchema.parse(request.body);
+    await agentService.updateAgentSkills(app.db, request.params.uuid, body.skills);
     return reply.status(204).send();
   });
 

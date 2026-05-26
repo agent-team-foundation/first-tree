@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ClientCapabilities, RuntimeProvider } from "@first-tree/shared";
+import type { ClientCapabilities, RuntimeProvider, SkillDescriptor } from "@first-tree/shared";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { cliFetch } from "./cli-fetch.js";
 
@@ -88,5 +88,32 @@ export async function uploadClientCapabilities(opts: {
   });
   if (!res.ok) {
     throw new Error(`hub returned ${res.status} on PATCH /clients/${opts.clientId}/capabilities`);
+  }
+}
+
+/**
+ * Replace the agent's slash-command skill list on the hub. Called once per
+ * managed agent during daemon startup (and on subsequent restarts) after
+ * the local SKILL.md scan. Snapshot semantics: server overwrites the row
+ * with the payload in full, so callers should always upload the complete
+ * scan output, not a diff. Best-effort: a transient failure logs and moves
+ * on; agents still bind, and a subsequent restart retries.
+ */
+export async function uploadAgentSkills(opts: {
+  serverUrl: string;
+  accessToken: string;
+  agentId: string;
+  skills: SkillDescriptor[];
+}): Promise<void> {
+  const res = await cliFetch(`${opts.serverUrl}/api/v1/agents/${encodeURIComponent(opts.agentId)}/skills`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${opts.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ skills: opts.skills }),
+  });
+  if (!res.ok) {
+    throw new Error(`hub returned ${res.status} on PATCH /agents/${opts.agentId}/skills`);
   }
 }

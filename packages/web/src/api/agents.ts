@@ -1,4 +1,4 @@
-import type { Agent, CreateAgent, RebindAgent, UpdateAgent } from "@first-tree/shared";
+import type { Agent, AgentSkills, CreateAgent, RebindAgent, UpdateAgent } from "@first-tree/shared";
 import { ApiError, api, getStoredTokens, withOrg } from "./client.js";
 
 type PaginatedAgents = {
@@ -72,6 +72,16 @@ export function listManagedAgents(): Promise<ManagedAgent[]> {
 
 export function getAgent(uuid: string): Promise<Agent> {
   return api.get<Agent>(`/agents/${encodeURIComponent(uuid)}`);
+}
+
+/**
+ * Read the agent's slash-command catalog. Powers the composer's `/`
+ * popover after the caller `@mentions` the agent. Daemon refreshes this
+ * on startup via `PATCH /agents/:uuid/skills`; web cache is per-agent so
+ * switching `@mention` targets re-uses any already-fetched lists.
+ */
+export function getAgentSkills(uuid: string): Promise<{ skills: AgentSkills }> {
+  return api.get<{ skills: AgentSkills }>(`/agents/${encodeURIComponent(uuid)}/skills`);
 }
 
 export function createAgent(data: CreateAgent): Promise<Agent> {
