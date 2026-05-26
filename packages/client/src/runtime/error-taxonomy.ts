@@ -19,8 +19,6 @@
  * a conservative cap — see {@link UNKNOWN_FALLBACK} for the rationale.
  */
 
-const HOUR_MS = 60 * 60 * 1000;
-
 export const ERROR_KINDS = {
   TRANSIENT: "transient",
   DEGRADED: "degraded",
@@ -357,9 +355,3 @@ export function clampRetryAttempt(attempt: number): number {
   // is still safe but the value is meaningless.
   return Math.min(Math.max(1, Math.floor(attempt)), 30);
 }
-
-/** Re-exported for testing — converting raw bind reason → classification. */
-export const _classifyBindReason = classifyBindReason;
-
-/** Re-exported for testing — predicates the classifier uses internally. */
-export const _internals = { isNetworkErrorShape, readErrorShape, HOUR_MS };

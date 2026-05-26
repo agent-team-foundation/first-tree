@@ -73,7 +73,11 @@ const STREAM_API_ERROR_HINTS = [
   "401",
   "403",
   "429",
-  "5",
+  "5xx",
+  "500",
+  "502",
+  "503",
+  "504",
 ];
 
 /**
@@ -829,6 +833,20 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     sessionCtx.log(
                       `Stream API error detected (${classification.kind}/${classification.reasonCode}): ${sniff.message}`,
                     );
+                    // Design §6.1: emit `resilience.stream.api_error_detected`
+                    // on BOTH transient and permanent paths via the closed-kind
+                    // bridge (encoded into the `error` event message).
+                    sessionCtx.emitEvent({
+                      kind: "error",
+                      payload: {
+                        source: "runtime",
+                        message: `resilience.stream.api_error_detected: ${JSON.stringify({
+                          reasonCode: classification.reasonCode,
+                          kind: classification.kind,
+                          messagePreview: sniff.message.slice(0, 200),
+                        })}`,
+                      },
+                    });
                     if (classification.kind === "transient" && retryCount < MAX_RETRIES) {
                       // Re-throw to drive the outer catch's auto-resume path
                       // with the retry counter and respawnQuery wiring.

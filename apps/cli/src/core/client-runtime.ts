@@ -358,6 +358,19 @@ export class ClientRuntime {
     return this.connection.getPausedReason();
   }
 
+  /**
+   * Forward a typed resilience event into the ClientConnection EventEmitter.
+   * Exposed for command-layer plumbing that fires outside the slot lifecycle
+   * (notably the update path, see {@link createExecuteUpdate}'s
+   * `onUpdateFailed` callback in `update-glue.ts`).
+   */
+  emitConnectionResilienceEvent(
+    event: "resilience.update.failed",
+    payload: { targetVersion: string; retryable: boolean; reasonCode: string },
+  ): void {
+    this.connection.emit(event, payload);
+  }
+
   private aggregateQuietGate(): { activeCount: number; lastActivityMs: number } {
     let activeCount = 0;
     let lastActivityMs = 0;

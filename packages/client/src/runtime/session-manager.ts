@@ -258,6 +258,17 @@ function previousAvailable(entry: SessionEntry): boolean {
   return Boolean(entry.claudeSessionId) || Boolean(entry.retryFromEvicted?.claudeSessionId);
 }
 
+/**
+ * Encode a resilience event into the closed `error` event payload by
+ * prefixing the message with the event name. Future server-side consumers
+ * detect the prefix and re-route; today's web UI just renders the JSON
+ * payload as text — see client-resilience design §6.1 for the "kind: 'error'
+ * + tagged message" bridge. Server-side `sessionEventSchema` stays untouched.
+ */
+export function encodeResilienceMessage(eventName: string, payload: Record<string, unknown>): string {
+  return `${eventName}: ${JSON.stringify(payload)}`;
+}
+
 export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly evictedMappings = new Map<string, { claudeSessionId: string; lastActivity: number }>();
@@ -781,6 +792,27 @@ export class SessionManager {
         },
         "session transient failure — scheduling retry",
       );
+      // Design §6.1: also emit through the SessionContext.emitEvent channel
+      // so future server-side consumers see the signal. The closed kind-union
+      // (sessionEventSchema) can't hold "resilience.session.retry_scheduled"
+      // directly, so we encode it as a structured `error` event with the
+      // resilience tag in the message prefix — see ResiliencePayload helper.
+      try {
+        ctx.emitEvent({
+          kind: "error",
+          payload: {
+            source: "runtime",
+            message: encodeResilienceMessage("resilience.session.retry_scheduled", {
+              attempt: entry.retryAttempt,
+              nextDelayMs: delayMs,
+              reasonCode: classification.reasonCode,
+              phase,
+            }),
+          },
+        });
+      } catch (emitErr) {
+        this.config.log.warn({ chatId, emitErr }, "resilience retry_scheduled emit failed");
+      }
 
       if (entry.retryTimer) clearTimeout(entry.retryTimer);
       entry.retryTimer = setTimeout(() => {
@@ -830,6 +862,22 @@ export class SessionManager {
       },
       "session transient retry — starting attempt",
     );
+    // Design §6.1: emit via SessionContext.emitEvent (post-slot-acquire we
+    // build the real ctx; here we use a lightweight onSessionEvent path).
+    try {
+      this.config.onSessionEvent?.(chatId, {
+        kind: "error",
+        payload: {
+          source: "runtime",
+          message: encodeResilienceMessage("resilience.session.retry_started", {
+            attempt: entry.retryAttempt,
+            reasonCode: entry.lastRetryReason,
+          }),
+        },
+      });
+    } catch (emitErr) {
+      this.config.log.warn({ chatId, emitErr }, "resilience retry_started emit failed");
+    }
 
     // Enforce concurrency limit before claiming the slot. If we cannot, the
     // entry stays in transient-retry state and a future retry / message will
@@ -872,6 +920,7 @@ export class SessionManager {
         const sid = await newHandler.start(message, ctx);
         entry.claudeSessionId = sid;
       }
+      const totalAttempts = entry.retryAttempt;
       entry.retryAttempt = 0;
       entry.retryNextAt = null;
       entry.lastRetryReason = null;
@@ -883,6 +932,19 @@ export class SessionManager {
         },
         "session transient retry succeeded",
       );
+      try {
+        ctx.emitEvent({
+          kind: "error",
+          payload: {
+            source: "runtime",
+            message: encodeResilienceMessage("resilience.session.retry_succeeded", {
+              totalAttempts,
+            }),
+          },
+        });
+      } catch (emitErr) {
+        this.config.log.warn({ chatId, emitErr }, "resilience retry_succeeded emit failed");
+      }
       this.persistRegistry();
     } catch (err) {
       const classification = classify(err, { source: "session" });

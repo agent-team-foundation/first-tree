@@ -83,4 +83,20 @@ Hope that helps!`.trim();
     expect(r).not.toBeNull();
     expect(r?.message).toBe("API Error: ETIMEDOUT");
   });
+
+  // Regression: an earlier version of the HINTS list contained a bare "5"
+  // which would match any text containing the digit 5. Verify the list no
+  // longer flags such cases when the rest of the heuristic is absent.
+  it("does NOT flag short text with the digit 5 but no real hint", () => {
+    const r = detectStreamApiError("API Error: try 5 minutes later");
+    expect(r).toBeNull();
+  });
+
+  // Positive flank: explicit 5xx status codes still match.
+  it("flags explicit 500 / 502 / 503 / 504 status codes", () => {
+    for (const code of ["500", "502", "503", "504"]) {
+      const r = detectStreamApiError(`API Error: server returned ${code}`);
+      expect(r, `expected detection for ${code}`).not.toBeNull();
+    }
+  });
 });

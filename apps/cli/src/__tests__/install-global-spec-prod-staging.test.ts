@@ -50,67 +50,51 @@ const STAGING_MOCK = {
 };
 
 describe("§9 channel-mismatch guard — prod CLI", () => {
-  it(
-    "refuses a staging-shaped version",
-    async () => {
-      vi.resetModules();
-      vi.doMock("../core/channel.js", () => PROD_MOCK);
-      const { installGlobalSpec } = await import("../core/update.js");
-      const result = await installGlobalSpec("0.5.2-staging.42.1");
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.reason).toMatch(/target channel "staging" does not match my channel "prod"/i);
-      }
-    },
-    30_000,
-  );
+  it("refuses a staging-shaped version", async () => {
+    vi.resetModules();
+    vi.doMock("../core/channel.js", () => PROD_MOCK);
+    const { installGlobalSpec } = await import("../core/update.js");
+    const result = await installGlobalSpec("0.5.2-staging.42.1");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/target channel "staging" does not match my channel "prod"/i);
+    }
+  }, 30_000);
 
-  it(
-    "refuses unknown prerelease formats (fail-closed)",
-    async () => {
-      vi.resetModules();
-      vi.doMock("../core/channel.js", () => PROD_MOCK);
-      const { installGlobalSpec } = await import("../core/update.js");
-      for (const spec of ["0.5.2-beta.1", "0.5.2-rc.1", "0.5.2-alpha.42.1"]) {
-        const result = await installGlobalSpec(spec);
-        expect(result.ok, `expected refusal for ${spec}`).toBe(false);
-        if (!result.ok) {
-          expect(result.reason, `reason for ${spec}`).toMatch(/target channel "unknown"/i);
-        }
+  it("refuses unknown prerelease formats (fail-closed)", async () => {
+    vi.resetModules();
+    vi.doMock("../core/channel.js", () => PROD_MOCK);
+    const { installGlobalSpec } = await import("../core/update.js");
+    for (const spec of ["0.5.2-beta.1", "0.5.2-rc.1", "0.5.2-alpha.42.1"]) {
+      const result = await installGlobalSpec(spec);
+      expect(result.ok, `expected refusal for ${spec}`).toBe(false);
+      if (!result.ok) {
+        expect(result.reason, `reason for ${spec}`).toMatch(/target channel "unknown"/i);
       }
-    },
-    30_000,
-  );
+    }
+  }, 30_000);
 });
 
 describe("§9 channel-mismatch guard — staging CLI", () => {
-  it(
-    "refuses a stable prod version",
-    async () => {
-      vi.resetModules();
-      vi.doMock("../core/channel.js", () => STAGING_MOCK);
-      const { installGlobalSpec } = await import("../core/update.js");
-      const result = await installGlobalSpec("0.5.1");
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.reason).toMatch(/target channel "prod" does not match my channel "staging"/i);
-      }
-    },
-    30_000,
-  );
+  it("refuses a stable prod version", async () => {
+    vi.resetModules();
+    vi.doMock("../core/channel.js", () => STAGING_MOCK);
+    const { installGlobalSpec } = await import("../core/update.js");
+    const result = await installGlobalSpec("0.5.1");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/target channel "prod" does not match my channel "staging"/i);
+    }
+  }, 30_000);
 
-  it(
-    "refuses an unknown-channel prerelease",
-    async () => {
-      vi.resetModules();
-      vi.doMock("../core/channel.js", () => STAGING_MOCK);
-      const { installGlobalSpec } = await import("../core/update.js");
-      const result = await installGlobalSpec("0.5.2-rc.1");
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.reason).toMatch(/target channel "unknown" does not match my channel "staging"/i);
-      }
-    },
-    30_000,
-  );
+  it("refuses an unknown-channel prerelease", async () => {
+    vi.resetModules();
+    vi.doMock("../core/channel.js", () => STAGING_MOCK);
+    const { installGlobalSpec } = await import("../core/update.js");
+    const result = await installGlobalSpec("0.5.2-rc.1");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/target channel "unknown" does not match my channel "staging"/i);
+    }
+  }, 30_000);
 });

@@ -171,6 +171,20 @@ type ClientConnectionEvents = {
    */
   "auth:resumed": [previousReason: ClientPausedReason];
   "server:welcome": [welcome: ServerWelcome];
+  // -----------------------------------------------------------------------
+  // Bug-fix observability events (client-resilience design §6.1). Untyped
+  // payload (Record) — consumers cast to a known shape; the contract is
+  // documented in the design doc and stays out of the typed event union so
+  // adding a new event later doesn't ripple through downstream listeners.
+  // -----------------------------------------------------------------------
+  "resilience.connection.paused": [payload: { reason: ClientPausedReason }];
+  "resilience.connection.resumed": [payload: { previousReason: ClientPausedReason }];
+  "resilience.bind.skipped": [
+    payload: { agentId: string; attempts: number; nextAllowedAt: number; lastReasonCode: string | null },
+  ];
+  "resilience.bind.disabled": [payload: { agentId: string; reasonCode: string }];
+  "resilience.bind.recovered": [payload: { agentId: string; totalAttempts: number }];
+  "resilience.update.failed": [payload: { targetVersion: string; retryable: boolean; reasonCode: string }];
 };
 
 /**
@@ -451,6 +465,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       "auth paused cleared",
     );
     this.emit("auth:resumed", prev);
+    this.emit("resilience.connection.resumed", { previousReason: prev });
     if (!this.closing && !this.isConnected) {
       this.scheduleReconnect();
     }
@@ -943,6 +958,10 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
             },
             "bind permanently disabled — operator action required",
           );
+          this.emit("resilience.bind.disabled", {
+            agentId: pending.agentId,
+            reasonCode: classification.reasonCode,
+          });
         }
         this.bindRetryRecords.set(pending.agentId, record);
         this.emit("agent:bind:rejected", reason, pending.agentId);
@@ -1102,8 +1121,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           },
           "bind skipped — within backoff window",
         );
+        this.emit("resilience.bind.skipped", {
+          agentId: desired.agentId,
+          attempts: record.attempts,
+          nextAllowedAt: record.nextAllowedAt,
+          lastReasonCode: record.lastReason,
+        });
         continue;
       }
+      const previousAttempts = record?.attempts ?? 0;
       this.sendBind(desired.agentId, desired.runtimeType, desired.runtimeVersion)
         .then((rebound) => {
           this.bindRetryRecords.delete(rebound.agentId);
@@ -1112,6 +1138,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
             { agentId: rebound.agentId, resilienceEvent: "resilience.bind.recovered" },
             "agent rebind recovered",
           );
+          if (previousAttempts > 0) {
+            this.emit("resilience.bind.recovered", {
+              agentId: rebound.agentId,
+              totalAttempts: previousAttempts,
+            });
+          }
         })
         .catch((err) => {
           this.boundAgents.delete(desired.agentId);
@@ -1151,6 +1183,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       // reconnect timer.
       this.emit("auth:paused", reason, error);
       this.emit("auth:fatal", error);
+      this.emit("resilience.connection.paused", { reason });
       return;
     }
     this.pausedReason = reason;
@@ -1164,6 +1197,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
     this.emit("auth:paused", reason, error);
     this.emit("auth:fatal", error);
+    this.emit("resilience.connection.paused", { reason });
   }
 
   private scheduleReconnect(): void {

@@ -14,44 +14,32 @@ import { describe, expect, it, vi } from "vitest";
 // concurrent test run that import can take >5s on cold caches, so we keep
 // timeouts generous on the import-bearing tests.
 describe("update.installGlobalSpec — input validation", () => {
-  it(
-    "refuses install specs with a leading dash",
-    async () => {
-      const mod = await import("../core/update.js");
-      const res = await mod.installGlobalSpec("--registry=evil");
-      expect(res.ok).toBe(false);
-      if (!res.ok) {
-        expect(res.reason).toMatch(/Refusing to install/i);
-      }
-    },
-    30_000,
-  );
+  it("refuses install specs with a leading dash", async () => {
+    const mod = await import("../core/update.js");
+    const res = await mod.installGlobalSpec("--registry=evil");
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toMatch(/Refusing to install/i);
+    }
+  }, 30_000);
 
-  it(
-    "refuses install specs containing path traversal characters",
-    async () => {
-      const mod = await import("../core/update.js");
-      const res = await mod.installGlobalSpec("..//etc/passwd");
-      expect(res.ok).toBe(false);
-    },
-    30_000,
-  );
+  it("refuses install specs containing path traversal characters", async () => {
+    const mod = await import("../core/update.js");
+    const res = await mod.installGlobalSpec("..//etc/passwd");
+    expect(res.ok).toBe(false);
+  }, 30_000);
 
-  it(
-    "ExecuteUpdateResult.retryable is undefined for safe-spec rejections",
-    async () => {
-      // Safe-spec rejections are operator-action items, not transient state.
-      const mod = await import("../core/update.js");
-      const res = await mod.installGlobalSpec("not safe");
-      expect(res.ok).toBe(false);
-      if (!res.ok) {
-        // retryable/reasonCode are only set for npm-exit failures; argument
-        // validation just sets reason.
-        expect(res.retryable).toBeUndefined();
-      }
-    },
-    30_000,
-  );
+  it("ExecuteUpdateResult.retryable is undefined for safe-spec rejections", async () => {
+    // Safe-spec rejections are operator-action items, not transient state.
+    const mod = await import("../core/update.js");
+    const res = await mod.installGlobalSpec("not safe");
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      // retryable/reasonCode are only set for npm-exit failures; argument
+      // validation just sets reason.
+      expect(res.retryable).toBeUndefined();
+    }
+  }, 30_000);
 });
 
 describe("update.installGlobalLatest", () => {

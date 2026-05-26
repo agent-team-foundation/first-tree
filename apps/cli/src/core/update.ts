@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { classify, getChildProcessRegistry } from "@first-tree/client";
+import { classify, ERROR_KINDS, getChildProcessRegistry } from "@first-tree/client";
 import { inferChannelFromVersion } from "@first-tree/shared/channel";
 import * as semver from "semver";
 import { channelConfig } from "./channel.js";
@@ -255,7 +255,7 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
         ok: false,
         mode: "global",
         reason: message,
-        retryable: classification.kind === "transient",
+        retryable: classification.kind === ERROR_KINDS.TRANSIENT,
         reasonCode: classification.reasonCode,
       });
     });
@@ -277,15 +277,15 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
       }`;
       // Classify against the stderr + code so EBADENGINE, EACCES, 404,
       // ENOTFOUND etc. each route to the right retry policy. Fall back to
-      // signal-based "transient" when we killed it for timeout.
+      // signal-based transient when we killed it for timeout.
       const classification = timedOut
-        ? { kind: "transient", reasonCode: "npm_timeout" as const }
+        ? { kind: ERROR_KINDS.TRANSIENT, reasonCode: "npm_timeout" as const }
         : classify(new Error(reason), { source: "update" });
       resolvePromise({
         ok: false,
         mode: "global",
         reason,
-        retryable: classification.kind === "transient",
+        retryable: classification.kind === ERROR_KINDS.TRANSIENT,
         reasonCode: classification.reasonCode,
       });
     });
