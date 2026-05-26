@@ -63,7 +63,7 @@ export function AgentRoster({
       // No sessions invalidate here: at chat-creation time the
       // agent_chat_sessions row does NOT yet exist (server only writes it
       // after the user sends a first message — see M plan Step 1b in
-      // docs/session-creation-on-first-message.md). The list refresh is
+      // first-tree-context:agent-hub/messaging.md). The list refresh is
       // therefore moved to chat-view's sendMut.onSuccess.
       onSelectChat(agentId, result.id);
     },

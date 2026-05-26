@@ -406,7 +406,7 @@ async function completeOauthFlow(
       const personal = await createPersonalTeam(app.db, {
         userId,
         loginSeed: profile.login,
-        // Per docs/new-user-onboarding-design.md §5.5, default team name is
+        // Per first-tree-context:agent-hub/onboarding.md (was §5.5 in source design), default team name is
         // `${login}'s team` — reads as a collective space, matches Linear's
         // convention. The user can rename in Step 1 of onboarding.
         teamDisplayName: `${profile.login}'s team`,

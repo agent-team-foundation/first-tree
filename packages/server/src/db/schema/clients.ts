@@ -15,7 +15,7 @@ import { users } from "./users.js";
  * authenticated JWT's org claim and never changes thereafter. Re-registering
  * the same clientId under a JWT for a different org is rejected with
  * `CLIENT_ORG_MISMATCH` — the CLI responds by abandoning the local clientId
- * and registering a new one instead (see docs/multi-tenancy-hardening-design.md).
+ * and registering a new one instead (see first-tree-context:agent-hub/multi-tenancy.md).
  */
 export const clients = pgTable(
   "clients",

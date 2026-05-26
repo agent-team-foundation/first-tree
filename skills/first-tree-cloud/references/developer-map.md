@@ -5,8 +5,7 @@
 - `AGENTS.md` — architecture rules, conventions, package map, development workflow.
 - `README.md` — product framing, quick start, top-level documentation links.
 - `docs/cli-reference.md` — public command and environment variable reference.
-- `docs/onboarding-guide.md` — end-to-end onboarding flow.
-- `docs/claim-agent-guide.md` — claim + Feishu binding details.
+- `docs/onboarding-guide.md` — end-to-end onboarding flow, including agent claim + Feishu binding.
 
 ## CLI Source Map
 
@@ -93,7 +92,7 @@ The single-shot `onboard` command was retired in Phase 1A; onboarding is now a s
 1. `commands/login.ts` for token exchange / `--override` flow.
 2. `commands/agent/create.ts` for the Hub-side create + local bind step.
 3. `commands/agent/bind/{bot,user}.ts` for IM bindings.
-4. `docs/onboarding-guide.md` and `docs/claim-agent-guide.md` for user-facing changes.
+4. `docs/onboarding-guide.md` for user-facing changes.
 
 ### Change the background daemon
 

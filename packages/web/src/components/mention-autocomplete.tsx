@@ -8,7 +8,7 @@ import { cn } from "../lib/utils.js";
  * reports back (a) visibility, (b) the currently highlighted candidate,
  * and (c) the final replacement when the user picks one.
  *
- * See docs/agent-naming-design.md §3.5. Intentionally not a rich
+ * See first-tree-context:agent-hub/agent-naming.md §3.5. Intentionally not a rich
  * editor — we match by typing a `@`, then filtering a static list.
  *
  * Matching policy:

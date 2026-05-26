@@ -44,7 +44,7 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
 /**
  * Simplified agent creation dialog for the onboarding flow.
  *
- * Display-name-first layout (see docs/agent-naming-design.md §3.6):
+ * Display-name-first layout (see first-tree-context:agent-hub/agent-naming.md §3.6):
  *   - "Display name" is the primary input at the top (required-feeling, unicode).
  *   - The derived @handle previews under the display name as a quiet
  *     `@my-dev-assistant · permanent · Edit` line. Most users never need to

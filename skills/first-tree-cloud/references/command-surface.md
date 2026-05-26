@@ -190,5 +190,4 @@ Useful when debugging or when a user wants to script around the CLI. All calls a
 ## When to Read Other Docs
 
 - `docs/cli-reference.md` — the canonical public flag/env reference.
-- `docs/onboarding-guide.md` — end-to-end onboarding walkthrough and type-specific notes.
-- `docs/claim-agent-guide.md` — claim + Feishu binding details.
+- `docs/onboarding-guide.md` — end-to-end onboarding walkthrough, type-specific notes, claim + Feishu binding details.

@@ -1057,7 +1057,7 @@ export function ChatView({
       // `active` agent_chat_sessions row, so the new chat now satisfies the
       // listAgentSessions INNER JOIN. Without this invalidate the user would
       // wait up to 10s for the polling refetch. See M plan Step 3 in
-      // docs/session-creation-on-first-message.md.
+      // first-tree-context:agent-hub/messaging.md.
       queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       // Persist the own-send advance to chat-A's read-state row
       // both in the React Query cache and in IndexedDB, keyed by

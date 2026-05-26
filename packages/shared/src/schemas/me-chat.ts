@@ -4,7 +4,7 @@ import { chatSourceSchema, githubEntityTypeSchema } from "./chat-metadata.js";
 
 /**
  * Member-facing chat APIs (`/me/chats*`) for the chat-first workspace.
- * See docs/chat-first-workspace-product-design.md "API Contract".
+ * See first-tree-context:agent-hub/web-console.md "API Contract".
  */
 
 /**

@@ -117,7 +117,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * Stamping NOW() server-side avoids client-clock skew. Idempotent: a
    * second PATCH leaves the original timestamp in place.
    *
-   * See docs/new-user-onboarding-design.md §8.4.
+   * See first-tree-context:agent-hub/onboarding.md §8.4.
    */
   app.patch("/me/onboarding", async (request, reply) => {
     const { userId } = requireUser(request);

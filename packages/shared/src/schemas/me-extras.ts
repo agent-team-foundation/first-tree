@@ -33,7 +33,7 @@ export type CreateOrgFromMe = z.infer<typeof createOrgFromMeSchema>;
 /**
  * Body for `PATCH /me/onboarding`. v1 only mutates `dismissed` — true to
  * hide the onboarding stepper (server stamps `users.onboarding_dismissed_at
- * = NOW()`), false to restore it. See docs/new-user-onboarding-design.md
+ * = NOW()`), false to restore it. See first-tree-context:agent-hub/onboarding.md
  * §8.4.
  */
 export const patchOnboardingSchema = z.object({

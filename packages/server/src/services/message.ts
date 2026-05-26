@@ -567,7 +567,7 @@ async function sendMessageInner(
     // 6. Chat-first workspace projection (append-only, post-fan-out).
     //    Updates chats.last_message_*, increments speaker + watcher mention
     //    counters. New code; no existing path is modified — see
-    //    docs/chat-first-workspace-product-design.md "Risk Constraints".
+    //    first-tree-context:agent-hub/web-console.md "Risk Constraints".
     const previewText = typeof outboundContent === "string" ? outboundContent.trim() : "";
     await applyAfterFanOut(tx, {
       chatId,
