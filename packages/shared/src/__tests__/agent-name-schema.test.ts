@@ -11,7 +11,7 @@ import {
 
 /**
  * Pins the tightened agent-name rules introduced in Phase 1 of the
- * agent-naming refactor (see docs/agent-naming-design.md §3.1). These
+ * agent-naming refactor (see first-tree-context:agent-hub/agent-naming.md §3.1). These
  * constraints align `createAgentSchema` with `MENTION_REGEX` so every
  * valid name can be @-mentioned and CLI-flag-parsed.
  */

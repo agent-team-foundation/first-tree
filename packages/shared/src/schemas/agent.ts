@@ -49,7 +49,7 @@ export const agentStatusSchema = z.enum(["active", "suspended"]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
 /**
- * Agent-name rules (see docs/agent-naming-design.md §3.1):
+ * Agent-name rules (see first-tree-context:agent-hub/agent-naming.md §3.1):
  *   - Lowercase ASCII slug, hyphens + underscores allowed.
  *   - Must start with alphanumeric: `-` / `_` as first char collide with
  *     CLI flag parsing and markdown list syntax.

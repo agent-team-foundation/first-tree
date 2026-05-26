@@ -92,10 +92,10 @@ jobs:
           ACTIONS_FEISHU_TAG: "v1.3.1"
           INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
           INPUT_MESSAGE_TYPE: "post"
-          INPUT_TITLE: Hub 测试环境更新 ✅ 成功
+          INPUT_TITLE: first-tree 测试环境更新 ✅ 成功
           INPUT_CONTENT: |
             部署结果: ✅ 成功
-            环境: Hub 测试环境
+            环境: first-tree 测试环境
             Image: ghcr.io/${{ github.repository }}:${{ github.sha }}
             Commit: ${{ github.sha }}
             Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}

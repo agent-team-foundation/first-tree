@@ -748,7 +748,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       // reconnect with the same clientId would just re-trigger the rejection.
       // The caller (CLI) is expected to surface the mismatch to the user,
       // abandon the local clientId, and start a fresh connection with a new
-      // one. See docs/multi-tenancy-hardening-design.md (B4).
+      // one. See first-tree-context:agent-hub/multi-tenancy.md (B4).
       this.closing = true;
       const err =
         code === "CLIENT_USER_MISMATCH"

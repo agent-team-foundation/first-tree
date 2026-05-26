@@ -224,7 +224,6 @@ jobs:
           # Legitimate residues (allow-listed and filtered out via the trailing
           # `grep -v` pipeline):
           # - docs/migration/**                          : migration tables show old↔new
-          # - docs/development/git-history.md            : merge anchor doc cites legacy repo URL
           # - .github/workflows/ci.yml                   : this file's own regex literals (self-immunity via [f])
           # - packages/server/drizzle/*.sql              : SQL migrations are immutable historical artifacts
           hits=$(grep -rEn \
@@ -234,7 +233,7 @@ jobs:
             --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
             --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
             "[f]irst-tree-hub" packages apps scripts docs skills .github \
-            | grep -v -E '^docs/development/git-history\.md:|^\.github/workflows/ci\.yml:' \
+            | grep -v -E '^\.github/workflows/ci\.yml:' \
             || true)
           if [ -n "$hits" ]; then
             echo "::error::found a 'first-tree-hub' literal outside the documented allow-list — see N-1 in PR-1 description"
@@ -250,9 +249,9 @@ jobs:
           #
           # The `[F]` self-immunity trick keeps this file's own comments
           # (which must spell out the forbidden literal) from tripping the
-          # check. Same allow-list as the broad sweep above; docs/ is also
-          # currently allow-listed until the N-4 design-docs sweep lands —
-          # see PR-1 description "First Tree Hub product-name residues".
+          # check. Same allow-list as the broad sweep above; docs/ stays
+          # excluded because the migration tables and cli-reference may
+          # still mention the three-word form historically.
           hits=$(grep -rEn \
             --exclude-dir=migration \
             --exclude-dir=node_modules \
@@ -261,7 +260,7 @@ jobs:
             --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.cjs' \
             --include='*.json' --include='*.yaml' --include='*.yml' --include='*.md' --include='*.sh' \
             "[F]irst Tree Hub" packages apps scripts docs skills .github \
-            | grep -v -E '^docs/development/git-history\.md:|^\.github/workflows/ci\.yml:' \
+            | grep -v -E '^\.github/workflows/ci\.yml:' \
             || true)
           if [ -n "$hits" ]; then
             echo "::error::found a 'First Tree Hub' three-word product-name literal outside the allow-list — N-3 brand retirement"
