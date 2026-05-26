@@ -139,7 +139,13 @@ describe("validateDocumentContext", () => {
   });
 
   describe("cross-agent provenance (chatScope)", () => {
-    const scope = (slugs: string[]) => ({ chatId: "chat-1", participantSlugs: new Set(slugs) });
+    // Real chat ids are UUIDs (services/chat.ts uses `randomUUID()`). Tests use
+    // canonical UUID-shaped strings so the cross-chat fence (which gates on
+    // `looksLikeChatId`) discriminates correctly — a non-UUID second segment
+    // is treated as a deep self path, NOT a cross-chat attempt.
+    const CHAT_ID = "11111111-1111-4111-8111-111111111111";
+    const OTHER_CHAT_ID = "22222222-2222-4222-8222-222222222222";
+    const scope = (slugs: string[]) => ({ chatId: CHAT_ID, participantSlugs: new Set(slugs) });
 
     it("accepts a cross-agent global key when the owner is a chat participant", () => {
       expect(() =>
@@ -147,7 +153,7 @@ describe("validateDocumentContext", () => {
           {
             documentContext: {
               kind: "snapshot",
-              docs: [snapshotDoc("assistant/chat-1/design.md", "# theirs\n")],
+              docs: [snapshotDoc(`assistant/${CHAT_ID}/design.md`, "# theirs\n")],
             },
           },
           scope(["coder", "assistant"]),
@@ -161,7 +167,7 @@ describe("validateDocumentContext", () => {
           {
             documentContext: {
               kind: "snapshot",
-              docs: [snapshotDoc("intruder/chat-1/secret.md", "# leak\n")],
+              docs: [snapshotDoc(`intruder/${CHAT_ID}/secret.md`, "# leak\n")],
             },
           },
           scope(["coder", "assistant"]),
@@ -184,15 +190,16 @@ describe("validateDocumentContext", () => {
     });
 
     it("rejects a participant-owned global key that names a DIFFERENT chat (chatId fence — P1)", () => {
-      // `assistant` is a participant, so `assistant/other-chat/design.md` is a
-      // cross key shape pointing at another chat's workspace — it must not slip
-      // past the `workspaces/*/<currentChatId>/` fence.
+      // `assistant` is a participant, the second segment is a uuid-shaped
+      // chatId different from `scope.chatId` — this is a cross key shape
+      // pointing at another chat's workspace and must not slip past the
+      // `workspaces/*/<currentChatId>/` fence.
       expect(() =>
         validateDocumentContext(
           {
             documentContext: {
               kind: "snapshot",
-              docs: [snapshotDoc("assistant/other-chat/design.md", "# x\n")],
+              docs: [snapshotDoc(`assistant/${OTHER_CHAT_ID}/design.md`, "# x\n")],
             },
           },
           scope(["coder", "assistant"]),
@@ -216,12 +223,52 @@ describe("validateDocumentContext", () => {
       ).not.toThrow();
     });
 
+    it("treats a participant-named first segment as SELF when the second segment is not uuid-shaped", () => {
+      // Worktree-fence regression guard: a single-repo agent whose source-repo
+      // `localPath` happens to coincide with another participant's slug emits
+      // promoted self keys like `assistant/docs/intro.md` for relative
+      // mentions. Without the `looksLikeChatId` discriminator, the
+      // participant-owned-different-chat branch would reject these as a
+      // cross-chat leak — but `docs` is not a uuid, so no real chat can be
+      // named `docs` and the leak path is structurally impossible. Treat the
+      // key as a deep self path and let it through.
+      expect(() =>
+        validateDocumentContext(
+          {
+            documentContext: {
+              kind: "snapshot",
+              docs: [snapshotDoc("assistant/docs/intro.md", "# self with colliding prefix\n")],
+            },
+          },
+          scope(["coder", "assistant"]),
+        ),
+      ).not.toThrow();
+    });
+
+    it("allows a worktree self key whose first segment is not a participant slug", () => {
+      // The wide self-fence emits agent-home-relative keys for files outside
+      // the source repo (e.g. on-demand `git worktree add`). When the first
+      // segment is `worktrees` and no participant is named `worktrees`, the
+      // path is straightforward self — never trips the cross check.
+      expect(() =>
+        validateDocumentContext(
+          {
+            documentContext: {
+              kind: "snapshot",
+              docs: [snapshotDoc("worktrees/553-fix/docs/design.md", "# worktree doc\n")],
+            },
+          },
+          scope(["coder", "assistant"]),
+        ),
+      ).not.toThrow();
+    });
+
     it("skips the provenance check entirely when no chatScope is supplied (back-compat)", () => {
       expect(() =>
         validateDocumentContext({
           documentContext: {
             kind: "snapshot",
-            docs: [snapshotDoc("intruder/chat-1/secret.md", "# leak\n")],
+            docs: [snapshotDoc(`intruder/${CHAT_ID}/secret.md`, "# leak\n")],
           },
         }),
       ).not.toThrow();
