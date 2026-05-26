@@ -6,8 +6,6 @@ import {
   extractMentions,
   type MentionParticipant,
   parseWorkspaceDocKey,
-  type QuestionAnswerMessageContent,
-  type QuestionMessageContent,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -69,12 +67,6 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
-import {
-  isQuestionAnswerContent,
-  isQuestionContent,
-  QuestionMessage,
-  type QuestionStatus,
-} from "../../../components/chat/question-message.js";
 import { WorkingBubble } from "../../../components/chat/working-bubble.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
@@ -688,118 +680,6 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
     <span className="text-label" style={{ color: "var(--fg-4)" }}>
       …
     </span>
-  );
-}
-
-function QuestionMessageRow({
-  msg,
-  chatId,
-  content,
-  answer,
-  status,
-  agentNameFn,
-  agentAvatarFn,
-  agentColorTokenFn,
-}: {
-  msg: MessageWithDelivery;
-  chatId: string;
-  content: QuestionMessageContent;
-  answer: QuestionAnswerMessageContent | null;
-  status: QuestionStatus;
-  agentNameFn: (id: string) => string;
-  agentAvatarFn: (id: string) => string | null;
-  agentColorTokenFn: (id: string) => string | null;
-}) {
-  const senderName = agentNameFn(msg.senderId);
-  return (
-    <div
-      className="grid"
-      data-message-id={msg.id}
-      // Anchors for the compose status bar's jump-to-timeline. The boolean
-      // flag drives the legacy "scroll to latest pending" path; the agent one
-      // lets the rail locate *this* agent's pending question by id.
-      data-pending-question={status === "pending" ? "true" : undefined}
-      data-pending-question-agent={status === "pending" ? msg.senderId : undefined}
-      style={{
-        gridTemplateColumns: "var(--sp-5) 1fr",
-        columnGap: 8,
-        padding: "var(--sp-1_5) 0",
-      }}
-    >
-      <Avatar
-        name={senderName}
-        imageUrl={agentAvatarFn(msg.senderId)}
-        seed={msg.senderId}
-        colorToken={agentColorTokenFn(msg.senderId)}
-      />
-      <div className="min-w-0 flex flex-col" style={{ gap: "var(--sp-1)" }}>
-        <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono text-body font-semibold" style={{ color: "var(--accent)" }}>
-            {senderName}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            {formatClockTime(msg.createdAt)}
-          </span>
-        </div>
-        <QuestionMessage chatId={chatId} questionMessageId={msg.id} content={content} answer={answer} status={status} />
-      </div>
-    </div>
-  );
-}
-
-/** Compact recap row for `format=question_answer`. Mirrors the style of a
- *  user text reply but flagged so it's clear this came from the answer card. */
-function QuestionAnswerRow({
-  msg,
-  agentNameFn,
-  agentAvatarFn,
-  agentColorTokenFn,
-}: {
-  msg: MessageWithDelivery;
-  agentNameFn: (id: string) => string;
-  agentAvatarFn: (id: string) => string | null;
-  agentColorTokenFn: (id: string) => string | null;
-}) {
-  const parsed = isQuestionAnswerContent(msg.content) ? msg.content : null;
-  const senderName = agentNameFn(msg.senderId);
-  const summary = parsed
-    ? Object.entries(parsed.answers)
-        .map(([q, a]) => `${q.replace(/\s+\?$/u, "?")}: ${a}`)
-        .join(" · ")
-    : "(answer)";
-  return (
-    <div
-      className="grid"
-      data-message-id={msg.id}
-      style={{
-        gridTemplateColumns: "var(--sp-5) 1fr",
-        columnGap: 8,
-        padding: "var(--sp-1_5) 0",
-      }}
-    >
-      <Avatar
-        name={senderName}
-        imageUrl={agentAvatarFn(msg.senderId)}
-        seed={msg.senderId}
-        colorToken={agentColorTokenFn(msg.senderId)}
-      />
-      <div className="min-w-0">
-        <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono text-body font-semibold" style={{ color: "var(--fg)" }}>
-            {senderName}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            {formatClockTime(msg.createdAt)}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-            answered question
-          </span>
-        </div>
-        <div className="text-body" style={{ color: "var(--fg-2)", marginTop: 2 }}>
-          {summary}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1516,31 +1396,6 @@ export function ChatView({
     flushBucket();
     return grouped;
   }, [mergedMessages, eventsData]);
-
-  /**
-   * For every `format=question` message we render, we need the matching
-   * `question_answer` (when one has landed). Build a (correlationId →
-   * answer-content) lookup once per messages refresh — there's no separate
-   * pending-status endpoint yet, so the presence of the answer message is
-   * the canonical "answered" signal. v1 collapses superseded into pending
-   * since we don't have a WS-pushed supersede signal yet (commit 6).
-   */
-  // Build the lookup from mergedMessages (cache ∪ server), not just
-  // messagesData. Otherwise a cached question_answer that has aged out of
-  // the server's "last 50" window would be invisible to this lookup —
-  // its matching question would render as `pending` even though the
-  // answer is right there in the timeline (cached). Caught in PR 286
-  // review by Codex / yuezengwu.
-  const answersByCorrelationId = useMemo(() => {
-    const map = new Map<string, QuestionAnswerMessageContent>();
-    for (const m of mergedMessages) {
-      if (m.format !== "question_answer") continue;
-      if (isQuestionAnswerContent(m.content)) {
-        map.set(m.content.correlationId, m.content);
-      }
-    }
-    return map;
-  }, [mergedMessages]);
 
   const itemCount = items.length;
 
@@ -2571,44 +2426,16 @@ export function ChatView({
                       }
                     } else {
                       const msg = item.data;
-                      if (msg.format === "question" && isQuestionContent(msg.content)) {
-                        const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
-                        const status: QuestionStatus = answer ? "answered" : "pending";
-                        node = (
-                          <QuestionMessageRow
-                            key={item.key}
-                            msg={msg}
-                            chatId={chatId}
-                            content={msg.content}
-                            answer={answer}
-                            status={status}
-                            agentNameFn={chatScopedAgentName}
-                            agentAvatarFn={agentAvatar}
-                            agentColorTokenFn={agentColorToken}
-                          />
-                        );
-                      } else if (msg.format === "question_answer") {
-                        node = (
-                          <QuestionAnswerRow
-                            key={item.key}
-                            msg={msg}
-                            agentNameFn={chatScopedAgentName}
-                            agentAvatarFn={agentAvatar}
-                            agentColorTokenFn={agentColorToken}
-                          />
-                        );
-                      } else {
-                        node = (
-                          <TextRow
-                            key={item.key}
-                            msg={msg}
-                            myAgentId={myAgentId}
-                            agentNameFn={chatScopedAgentName}
-                            agentAvatarFn={agentAvatar}
-                            agentColorTokenFn={agentColorToken}
-                          />
-                        );
-                      }
+                      node = (
+                        <TextRow
+                          key={item.key}
+                          msg={msg}
+                          myAgentId={myAgentId}
+                          agentNameFn={chatScopedAgentName}
+                          agentAvatarFn={agentAvatar}
+                          agentColorTokenFn={agentColorToken}
+                        />
+                      );
                     }
                     // Insert the gap banner immediately after the last cached
                     // message when there's a known break between cache and the

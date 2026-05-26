@@ -8,14 +8,12 @@ import { z } from "zod";
  * loop / egress diagnostics can join on it.
  *
  *   - "web"     — Hub web UI (POST /chats/:id/messages from a browser
- *                 session; includes AskUserQuestion answers submitted via
- *                 the web UI).
+ *                 session).
  *   - "cli"     — Agent's `first-tree` CLI (`chat send` / `chat invite`
  *                 / etc.).
  *   - "api"     — Agent SDK direct API call (incl. result-sink auto-forward,
- *                 in-process tool integrations, AskUserQuestion publish);
- *                 the catch-all for client runtime-initiated writes that
- *                 aren't typed via the CLI.
+ *                 in-process tool integrations); the catch-all for client
+ *                 runtime-initiated writes that aren't typed via the CLI.
  *   - "feishu"  — Inbound message bridged from a Feishu adapter.
  *   - "github"  — Inbound message bridged from a GitHub webhook.
  *
@@ -41,21 +39,9 @@ export const MESSAGE_FORMATS = {
   CARD: "card",
   REFERENCE: "reference",
   FILE: "file",
-  /** Agent → user structured ask-user prompt. Content shape: QuestionMessageContent (see schemas/question.ts). */
-  QUESTION: "question",
-  /** User → agent answer to a prior question. Content shape: QuestionAnswerMessageContent (see schemas/question.ts). */
-  QUESTION_ANSWER: "question_answer",
 } as const;
 
-export const messageFormatSchema = z.enum([
-  "text",
-  "markdown",
-  "card",
-  "reference",
-  "file",
-  "question",
-  "question_answer",
-]);
+export const messageFormatSchema = z.enum(["text", "markdown", "card", "reference", "file"]);
 export type MessageFormat = z.infer<typeof messageFormatSchema>;
 
 /**
@@ -64,12 +50,11 @@ export type MessageFormat = z.infer<typeof messageFormatSchema>;
  * happening so it can pick the right enforcement profile.
  *
  *   - `"agent-final-text"`: handler-initiated forward of an agent's final
- *     reply text (today: `runtime/result-sink.ts`) OR an `AskUserQuestion`
- *     payload posted via the canUseTool bridge. Both should land in chat
- *     history so human observers in the web UI can see what the agent is
- *     doing, but neither should wake other agents and neither should be
- *     subject to the group-chat `@mention required` guard — they are not
- *     a user-typed group broadcast. v1 §四 改造 4 (b) bypass channel.
+ *     reply text (today: `runtime/result-sink.ts`). Lands in chat history
+ *     so human observers in the web UI can see what the agent is doing,
+ *     but does not wake other agents and is not subject to the group-chat
+ *     `@mention required` guard — it is not a user-typed group broadcast.
+ *     v1 §四 改造 4 (b) bypass channel.
  *
  * Default-`undefined` means a regular agent-initiated send (CLI `chat send`,
  * adapter, etc.) and goes through the normal enforcement profile.
