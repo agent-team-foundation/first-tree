@@ -44,7 +44,7 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
-import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, CallerNotSpeakerError, ForbiddenError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
 import { resolveAgentChatStatuses } from "./agent-chat-status.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
@@ -671,11 +671,11 @@ export async function addMeChatParticipants(
     throw new BadRequestError("At least one participant required");
   }
   // Probing-protection 404: chat-in-caller-org. The invite service raises
-  // `ForbiddenError` when the caller isn't a speaker; the web wire wants
-  // both that failure mode AND chat-not-in-our-org to surface as NotFound,
-  // so we pre-check the org boundary here. `assertChatVisibleInOrgOrNotFound`
-  // lives next to the invite service so the assertion travels with the
-  // service whose error semantics it adjusts.
+  // `CallerNotSpeakerError` when the caller isn't a speaker; the web wire
+  // wants both that failure mode AND chat-not-in-our-org to surface as
+  // NotFound, so we pre-check the org boundary here.
+  // `assertChatVisibleInOrgOrNotFound` lives next to the invite service so
+  // the assertion travels with the service whose error semantics it adjusts.
   await assertChatVisibleInOrgOrNotFound(db, chatId, callerOrganizationId);
 
   try {
@@ -688,11 +688,14 @@ export async function addMeChatParticipants(
       errorOnAlreadySpeaker: false,
     });
   } catch (err) {
-    // The invite service surfaces "caller is not a speaker" as
-    // `ForbiddenError`. The web wire prefers `NotFoundError` to avoid
-    // leaking chat existence to non-members — collapse the two failure
-    // modes (chat-in-other-org, caller-not-speaker) into a single 404.
-    if (err instanceof ForbiddenError && /not a speaker/i.test(err.message)) {
+    // The invite service surfaces "caller is not a speaker" as a typed
+    // `CallerNotSpeakerError` (subclass of `ForbiddenError`). The web wire
+    // prefers `NotFoundError` to avoid leaking chat existence to non-members
+    // — collapse the two failure modes (chat-in-other-org, caller-not-speaker)
+    // into a single 404. Matching on the error class instead of the message
+    // string means renaming the underlying error text can't silently regress
+    // this remap into a 403 leak.
+    if (err instanceof CallerNotSpeakerError) {
       throw new NotFoundError(`Chat "${chatId}" not found`);
     }
     throw err;
@@ -781,14 +784,15 @@ export async function markMeChatUnread(
 export async function joinMeChat(db: Database, chatId: string, humanAgentId: string): Promise<void> {
   const membership = await resolveChatMembership(db, chatId, humanAgentId);
   ensureCanJoin(membership);
+  // `joinAsParticipant` encloses the post-commit `invalidateChatAudience`
+  // call so any future caller automatically gets the cache-coherency step.
   await joinAsParticipant(db, chatId, humanAgentId);
-  invalidateChatAudience(chatId);
 }
 
 export async function leaveMeChat(db: Database, chatId: string, humanAgentId: string): Promise<MeChatLeaveResponse> {
-  const result = await leaveAsParticipant(db, chatId, humanAgentId);
-  invalidateChatAudience(chatId);
-  return result;
+  // `leaveAsParticipant` encloses the post-commit `invalidateChatAudience`
+  // call — same canonical-bundle pattern as join.
+  return leaveAsParticipant(db, chatId, humanAgentId);
 }
 
 // ---------------------------------------------------------------------------

@@ -132,9 +132,22 @@ export async function addChatParticipants(
 ): Promise<void> {
   if (participants.length === 0) return;
 
-  // Confirm the chat exists. We no longer SELECT `chats.type` — it's locked
-  // to 'group' and never read for membership decisions.
-  const [chat] = await tx.select({ id: chats.id }).from(chats).where(eq(chats.id, chatId)).limit(1);
+  // Confirm the chat exists AND lock the chats row for the duration of the
+  // tx. We no longer SELECT `chats.type` — it's locked to 'group' and never
+  // read for membership decisions.
+  //
+  // Why FOR UPDATE on the parent chats row: two concurrent invites of the
+  // same brand-new agent X would otherwise both SELECT an empty
+  // `chat_membership` row for X (line below), both classify X as `brandNew`,
+  // and both fire `backfillSilentContextForNewParticipants` — duplicating
+  // the silent inbox rows. A FOR UPDATE on `chat_membership` itself can't
+  // help because brand-new agents have no row to lock. Locking the chats
+  // row serialises any speaker write into this chat, so the second tx sees
+  // the first one's INSERT after the lock releases and reclassifies X as
+  // `alreadySpeaker`. Cost: speaker writes into the same chat are
+  // chat-level serialised, which is acceptable — invite throughput is
+  // operator-paced, not message-paced.
+  const [chat] = await tx.select({ id: chats.id }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1);
   if (!chat) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
   }

@@ -29,9 +29,12 @@
  *   - return shape (Layer 3 chooses what to read back, if anything)
  *
  * Hard-wired contract here:
- *   - caller MUST be a chat speaker (else ForbiddenError) — the only
- *     authorisation gate; no admin override path (admins use the same
- *     chat-membership rows as everyone else).
+ *   - caller MUST be a chat speaker (else `CallerNotSpeakerError`, a
+ *     subclass of `ForbiddenError`) — the only authorisation gate; no admin
+ *     override path (admins use the same chat-membership rows as everyone
+ *     else). Web shells match on the subclass to remap into 404
+ *     probing-protection; do NOT downgrade the throw site to a plain
+ *     `ForbiddenError` without updating those callers in lockstep.
  *   - every target must exist (else BadRequestError listing the missing
  *     ids).
  *   - every target must be in the chat's organization (else BadRequestError).
@@ -50,7 +53,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, CallerNotSpeakerError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { applyMembershipWrite } from "./participant-mode.js";
 
 export type InviteParticipantsArgs = {
@@ -116,7 +119,7 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
     )
     .limit(1);
   if (!callerRow) {
-    throw new ForbiddenError(`Caller "${callerAgentId}" is not a speaker of chat "${chatId}"`);
+    throw new CallerNotSpeakerError(callerAgentId, chatId);
   }
   const callerMemberId = callerRow.ownerMemberId;
 

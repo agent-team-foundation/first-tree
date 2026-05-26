@@ -33,6 +33,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { addChatParticipants, recomputeChatWatchers } from "./participant-mode.js";
 
 // Re-export so historical callers that reach for
@@ -116,9 +117,16 @@ export type JoinResult = {
  * Caller is expected to have verified the user is authorised to join
  * (admin override OR an existing watcher row); this helper does not
  * gate on visibility.
+ *
+ * Tx boundary: opens its own transaction (the `JoinResult` shape needs to
+ * report whether a fresh row was inserted, which we compute from a SELECT
+ * inside the tx). Audience-cache invalidation is enclosed here — after the
+ * tx commits, `invalidateChatAudience` runs so the next `chat:message`
+ * dispatch reflects the new speaker without waiting for the TTL window.
+ * Callers do NOT need to call `invalidateChatAudience` themselves.
  */
 export async function joinAsParticipant(db: Database, chatId: string, humanAgentId: string): Promise<JoinResult> {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select({ accessMode: chatMembership.accessMode })
       .from(chatMembership)
@@ -126,7 +134,7 @@ export async function joinAsParticipant(db: Database, chatId: string, humanAgent
       .limit(1);
 
     if (existing?.accessMode === "speaker") {
-      return { chatId, inserted: false, carried: null };
+      return { chatId, inserted: false, carried: null, mutated: false };
     }
 
     // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
@@ -143,8 +151,17 @@ export async function joinAsParticipant(db: Database, chatId: string, humanAgent
       upgradeWatcherToSpeaker: true,
     });
 
-    return { chatId, inserted: !existing, carried: null };
+    return { chatId, inserted: !existing, carried: null, mutated: true };
   });
+
+  // Enclosed post-commit step: drop the cached audience for this chat so the
+  // newly-promoted speaker starts receiving `chat:message` pushes
+  // immediately. Skipped on the no-op path (already a speaker) to avoid
+  // pointlessly busting the cache.
+  if (result.mutated) {
+    invalidateChatAudience(chatId);
+  }
+  return { chatId: result.chatId, inserted: result.inserted, carried: result.carried };
 }
 
 export type LeaveResult = {
@@ -163,9 +180,15 @@ export type LeaveResult = {
  *      - If no  → DELETE the chat_membership row entirely.
  *   3. `chat_user_state` row (if any) is preserved either way per
  *      §11.4 default — read state is remembered for re-add.
+ *
+ * Tx boundary: opens its own transaction. Audience-cache invalidation is
+ * enclosed here — after the tx commits, `invalidateChatAudience` runs so
+ * subsequent `chat:message` dispatches stop pushing to the (now-departed)
+ * speaker's WS connection. Callers do NOT need to call
+ * `invalidateChatAudience` themselves.
  */
 export async function leaveAsParticipant(db: Database, chatId: string, humanAgentId: string): Promise<LeaveResult> {
-  return db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx): Promise<LeaveResult> => {
     const [existing] = await tx
       .select({ accessMode: chatMembership.accessMode })
       .from(chatMembership)
@@ -219,6 +242,14 @@ export async function leaveAsParticipant(db: Database, chatId: string, humanAgen
       .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)));
     return { chatId, membershipKind: "watching" };
   });
+
+  // Enclosed post-commit step: drop the cached audience for this chat so
+  // the dispatcher stops pushing `chat:message` to the WS connection of
+  // the user who just left. Always runs — every leave path here actually
+  // mutates the row (the not-a-speaker case throws before reaching this
+  // point), unlike `joinAsParticipant`'s already-a-speaker fast path.
+  invalidateChatAudience(chatId);
+  return outcome;
 }
 
 // ---------------------------------------------------------------------------

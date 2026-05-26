@@ -564,10 +564,12 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
  * rule that recompute is only for set rebuild — never on a transition
  * path (review #228 issue #2). The returned participant list is fetched
  * after the tx commits, matching the admin route's existing contract.
+ *
+ * `leaveAsParticipant` itself runs the post-commit `invalidateChatAudience`,
+ * so this shell doesn't need to.
  */
 export async function leaveChat(db: Database, chatId: string, humanAgentId: string) {
   await leaveAsParticipant(db, chatId, humanAgentId);
-  invalidateChatAudience(chatId);
   return db
     .select()
     .from(chatMembership)
