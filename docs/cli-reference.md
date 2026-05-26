@@ -133,7 +133,7 @@ and runs `daemon start`, the WebSocket handshake refuses with code
 After override, `daemon start` reconnects without further prompts. The
 `--override` flag is the explicit consent — a typo cannot strip the
 previous owner's machine because the verb must be requested by name. See
-[docs/decouple-client-from-identity-design-zh.md §4.4](decouple-client-from-identity-design-zh.md).
+[`agent-hub/claim-agent.md`](https://github.com/agent-team-foundation/first-tree-context/blob/main/agent-hub/claim-agent.md) and [`agent-hub/client-identity-binding.md`](https://github.com/agent-team-foundation/first-tree-context/blob/main/agent-hub/client-identity-binding.md).
 
 ### Manual service operations
 

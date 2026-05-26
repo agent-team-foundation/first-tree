@@ -6,7 +6,7 @@ machine. Most of us run prod (`first-tree`) or staging
 alive by systemd / launchd. The in-tree dev build must coexist with
 both without touching their state.
 
-The multi-env split (see [`MIGRATION.md`](../MIGRATION.md) Phase 2)
+The multi-env split (see [`MIGRATION.md`](../../MIGRATION.md) Phase 2)
 makes this trivial: every channel has its own bin name, default home,
 and service unit. Running `scripts/dev-install.sh` installs the dev
 channel (`first-tree-dev` / `~/.first-tree-dev/` /
@@ -63,7 +63,7 @@ three home dirs. No cross-contamination.
 publish). All downstream identifiers — npm package name, bin name,
 default home, default server URL, service unit, launchd label — derive
 from this single value via `getChannelConfig` in
-[`packages/shared/src/channel/`](../packages/shared/src/channel/index.ts).
+[`packages/shared/src/channel/`](../../packages/shared/src/channel/index.ts).
 
 `apps/cli/src/core/channel-env.ts` runs as the very first import in the
 CLI entry. It sets `process.env.FIRST_TREE_HOME` from the channel's
@@ -81,7 +81,7 @@ always carries the dev shape (`name: "first-tree-dev"`, bin
 
 `UpdateManager` keeps polling the server for a target version. The
 client-side guard in
-[`apps/cli/src/core/update.ts`](../apps/cli/src/core/update.ts) refuses
+[`apps/cli/src/core/update.ts`](../../apps/cli/src/core/update.ts) refuses
 to install a version whose channel does not match this binary's
 channel — `inferChannelFromVersion("0.5.2-staging.42.1") === "staging"`,
 so a prod CLI told to install that target logs an error and skips.
@@ -145,4 +145,4 @@ If you ran `scripts/dev-cli.sh` before this PR, your dev data lives at
 `~/.first-tree-dev/` on first run — no manual step required.
 
 Prod / staging migration (replacing the old single-package install) is
-documented in [`MIGRATION.md`](../MIGRATION.md) Phase 2.
+documented in [`MIGRATION.md`](../../MIGRATION.md) Phase 2.
