@@ -342,7 +342,7 @@ calls `daemon status` internally and adds server/auth/agent rows.
 ## config
 
 Read and write this machine's `client.yaml`. The file lives at
-`~/.first-tree/hub/config/client.yaml` (or the staging/dev channel's
+`~/.first-tree/config/client.yaml` (or the staging/dev channel's
 equivalent — see [docs/development/local-dev-isolation.md](development/local-dev-isolation.md)).
 
 ```bash
@@ -543,7 +543,7 @@ See [observability.md](observability.md) for the full config reference, backend 
 ## Directory layout (CLI home)
 
 ```
-~/.first-tree/hub/                                 # FIRST_TREE_HOME default for the prod channel
+~/.first-tree/                                     # FIRST_TREE_HOME default for the prod channel
 ├── config/
 │   ├── client.yaml                                # this machine's client config (server.url, client.id)
 │   ├── credentials.json                           # access + refresh JWT (mode 0600)
@@ -559,7 +559,7 @@ See [observability.md](observability.md) for the full config reference, backend 
 └── logs/                                          # daemon stderr / stdout (macOS)
 ```
 
-When `FIRST_TREE_HOME` is set, replace `~/.first-tree/hub/` with that location. Staging and dev channels use `~/.first-tree-staging/` and `~/.first-tree-dev/` respectively.
+When `FIRST_TREE_HOME` is set, replace `~/.first-tree/` with that location. Staging and dev channels use `~/.first-tree-staging/` and `~/.first-tree-dev/` respectively as their channel-default home.
 
 ## Config resolution order
 
@@ -567,7 +567,7 @@ Priority from high to low:
 
 1. CLI arguments
 2. Environment variables (`FIRST_TREE_*`)
-3. Config files (`~/.first-tree/hub/config/client.yaml`)
+3. Config files (`~/.first-tree/config/client.yaml`, or the staging/dev channel's equivalent)
 4. Built-in defaults
 
 ## Verification after upgrade
