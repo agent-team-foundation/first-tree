@@ -8,6 +8,7 @@ import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { NotFoundError } from "../errors.js";
 import { stampAgentResource, stampChatResource, stampOrgScope } from "../observability/request-context.js";
+import { selectAgentRowWithRuntime } from "../services/agent.js";
 import { requireUser } from "./require-user.js";
 import type { OrgScope } from "./types.js";
 
@@ -38,6 +39,14 @@ type AgentRow = {
   runtimeProvider: string;
   metadata: Record<string, unknown>;
   source: string | null;
+  /**
+   * Runtime-A business state from `agent_presence.runtime_state`. NULL when
+   * the agent has no presence row yet (never bound a runtime client). Used
+   * by management surfaces to derive reachability (online/offline) without
+   * relying on the legacy `presenceStatus` column. Loaded via the shared
+   * `selectAgentRowWithRuntime` projection (services/agent.ts).
+   */
+  runtimeState: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -93,7 +102,7 @@ export async function requireAgentAccess(
   const { userId } = requireUser(request);
   const { uuid } = request.params;
 
-  const [agent] = await db.select().from(agents).where(eq(agents.uuid, uuid)).limit(1);
+  const agent = await selectAgentRowWithRuntime(db, uuid);
   if (!agent || agent.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }

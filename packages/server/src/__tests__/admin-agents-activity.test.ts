@@ -124,28 +124,6 @@ describe("GET /admin/agents/activity org scoping", () => {
     });
     expect(res.statusCode).toBe(403);
   });
-
-  // Every row carries `presenceStatus`, the two-state reachability column
-  // pulled from `agent_presence.status`. Management-page consumers
-  // (Computers bound-agent lists, Team / Settings via the same RuntimeAgent
-  // DTO going forward) need this to render Online/Offline without
-  // cross-referencing the agents endpoint.
-  it("includes presenceStatus on every agent row", async () => {
-    const { app, alice, agentA } = await setup();
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/activity`,
-      headers: { authorization: `Bearer ${alice.accessToken}` },
-    });
-    expect(res.statusCode).toBe(200);
-    const agents = res.json<{ agents: Array<{ agentId: string; presenceStatus: string }> }>().agents;
-    expect(agents.length).toBeGreaterThan(0);
-    for (const row of agents) {
-      expect(["online", "offline"]).toContain(row.presenceStatus);
-    }
-    const aRow = agents.find((a) => a.agentId === agentA.uuid);
-    expect(aRow?.presenceStatus).toBeDefined();
-  });
 });
 
 /**

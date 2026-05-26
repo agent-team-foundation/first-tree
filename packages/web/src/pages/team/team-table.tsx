@@ -11,7 +11,7 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../../components/ui/dense-table.js";
-import { PresenceChip } from "../../components/ui/presence-chip.js";
+import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
 import { formatDay } from "../../lib/utils.js";
 
@@ -490,7 +490,7 @@ function AgentRowView({
         </div>
       </DenseTableCell>
       <DenseTableCell style={sectionCellStyle(isLast)}>
-        <PresenceChip status={agent.presenceStatus} />
+        <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
       </DenseTableCell>
       <DenseTableCell className="mono text-caption" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
         {formatDay(agent.createdAt)}

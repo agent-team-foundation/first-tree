@@ -1,4 +1,4 @@
-import type { ClientCapabilities, PresenceStatus } from "@first-tree/shared";
+import type { ClientCapabilities } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 export type AgentType = "human" | "personal_assistant" | "autonomous_agent";
@@ -8,13 +8,6 @@ export type RuntimeAgent = {
   clientId: string | null;
   runtimeType: string | null;
   runtimeState: string | null;
-  /**
-   * Reachability (online / offline) sourced from `agent_presence.status`.
-   * `runtimeState` above remains the chat-level business state — this is
-   * the two-state answer management surfaces ask for ("can I act on this
-   * agent right now?").
-   */
-  presenceStatus: PresenceStatus;
   activeSessions: number | null;
   totalSessions: number | null;
   runtimeUpdatedAt: string | null;

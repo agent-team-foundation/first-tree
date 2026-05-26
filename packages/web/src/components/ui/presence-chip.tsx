@@ -13,6 +13,22 @@ const LABELS: Record<PresenceStatus, string> = {
 };
 
 /**
+ * Derive reachability ("online" / "offline") from the `runtime_state` field
+ * carried on agent DTOs. `runtime_state` is the M1+ authority for "is this
+ * agent running" (see `packages/server/src/db/schema/agent-presence.ts`): a
+ * non-null value means a runtime client has bound and is reporting state.
+ *
+ * Why not exclude `"error"`: in production the writers in
+ * `services/presence.ts` only flip `runtime_state` back to NULL on unbind /
+ * stale-cleanup. A runtime in `"error"` is still bound and the management
+ * surface still has something to act on, so we keep it reachable — distinct
+ * from `<StateChip>` which shows the underlying business state.
+ */
+export function runtimeStateToPresence(runtimeState: string | null | undefined): PresenceStatus {
+  return runtimeState != null ? "online" : "offline";
+}
+
+/**
  * Resolve incoming `status` to a concrete `{ label, color }` view. Exported
  * so unit tests (and any future consumer that wants the same vocabulary
  * without the chip's DOM) can drive the same normalization. `null` /

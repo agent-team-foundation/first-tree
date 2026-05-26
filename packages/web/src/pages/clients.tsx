@@ -31,7 +31,7 @@ import {
   DenseTableRow,
 } from "../components/ui/dense-table.js";
 import { PageHeader } from "../components/ui/page-header.js";
-import { PresenceChip } from "../components/ui/presence-chip.js";
+import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
 import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
@@ -327,7 +327,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   getClientAgents(confirmDisconnect.id).map((a) => (
                     <li key={a.agentId} className="text-body flex items-center gap-2">
                       <span className="font-medium">{agentName(a.agentId)}</span>
-                      <PresenceChip status={a.presenceStatus} />
+                      <PresenceChip status={runtimeStateToPresence(a.runtimeState)} />
                     </li>
                   ))
                 )}
@@ -810,7 +810,7 @@ function ClientRow({
                       <span className="font-medium" style={{ minWidth: 140 }}>
                         {agentName(a.agentId)}
                       </span>
-                      <PresenceChip status={a.presenceStatus} />
+                      <PresenceChip status={runtimeStateToPresence(a.runtimeState)} />
                       {a.activeSessions !== null && (
                         <span className="mono tnum text-caption" style={{ color: "var(--fg-3)" }}>
                           {a.activeSessions} / {a.totalSessions ?? 0} sessions

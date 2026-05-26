@@ -28,7 +28,7 @@ import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./
 import { Button } from "./../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
-import { PresenceChip } from "./../components/ui/presence-chip.js";
+import { PresenceChip, runtimeStateToPresence } from "./../components/ui/presence-chip.js";
 import { humanizeAgentType, humanizeVisibility } from "./../lib/agent-labels.js";
 import { cn, formatDate } from "./../lib/utils.js";
 import { canManageAgentDetail } from "./agent-detail/access.js";
@@ -365,15 +365,15 @@ export function AgentDetailPage() {
   const isUnclaimed = !isHuman && clientStatusQuery.isSuccess && !clientStatus?.clientId;
   // `isUnclaimed` is the binding-identity question ("does this agent have a
   // computer at all"). `isOffline` is the reachability question, sourced
-  // from the agent's `presenceStatus` (the authoritative two-state column),
-  // but qualified with `clientStatus?.clientId` so unclaimed agents don't
-  // double-count as "offline" — we surface those separately.
-  const isOffline = !isHuman && agent.presenceStatus === "offline" && !!clientStatus?.clientId;
+  // from `runtime_state` (the M1+ authority — null means no runtime is
+  // reporting), qualified with `clientStatus?.clientId` so unclaimed agents
+  // don't double-count as "offline" (we surface those separately).
+  const isOffline = !isHuman && agent.runtimeState == null && !!clientStatus?.clientId;
   const testAction = getAgentTestActionState({
     agentStatus: agent.status,
     clientStatus,
     clientStatusLoading: clientStatusInitialLoading,
-    presenceStatus: agent.presenceStatus,
+    runtimeState: agent.runtimeState,
     testPending: testMutation.isPending,
   });
 
@@ -483,7 +483,7 @@ export function AgentDetailPage() {
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <PresenceChip status={agent.presenceStatus} />
+            <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
             {activeSessions > 0 && (
               <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
                 {activeSessions} active

@@ -16,12 +16,6 @@ export async function orgActivityRoutes(app: FastifyInstance): Promise<void> {
         clientId: a.clientId,
         runtimeType: a.runtimeType,
         runtimeState: a.runtimeState,
-        // Reachability vocabulary for management surfaces (Team / Settings /
-        // Computers). `agent_presence.status` is the authoritative two-state
-        // online/offline column; `runtimeState` continues to carry the
-        // chat-level business state (working/blocked/etc) that surfaces like
-        // the workspace roster consume.
-        presenceStatus: a.status ?? "offline",
         activeSessions: a.activeSessions,
         totalSessions: a.totalSessions,
         runtimeUpdatedAt: a.runtimeUpdatedAt?.toISOString() ?? null,

@@ -1,4 +1,3 @@
-import type { PresenceStatus } from "@first-tree/shared";
 import type { HubClient } from "../../api/activity.js";
 import type { ClientStatusInfo } from "../../api/agent-config.js";
 
@@ -11,7 +10,7 @@ export function getAgentTestActionState(input: {
   agentStatus: string;
   clientStatus: ClientStatusInfo | undefined;
   clientStatusLoading: boolean;
-  presenceStatus: PresenceStatus | null | undefined;
+  runtimeState: string | null | undefined;
   testPending: boolean;
 }): AgentTestActionState {
   if (input.agentStatus !== "active") {
@@ -23,12 +22,12 @@ export function getAgentTestActionState(input: {
   if (!input.clientStatus?.clientId) {
     return { disabled: true, title: "Bind a computer before testing this agent." };
   }
-  // Reachability authority is `agent_presence.status`, surfaced as
-  // `presenceStatus`. `clientStatus.online` is the underlying computer state;
-  // a bound but unreachable agent (computer offline, stale heartbeat, etc.)
-  // flips presenceStatus to "offline", so checking it here is the single
-  // source of truth.
-  if (input.presenceStatus !== "online") {
+  // Reachability authority is `agent_presence.runtime_state` (M1+):
+  // NULL means no runtime is reporting and the agent can't accept a test
+  // message regardless of what `clientStatus.online` says about the
+  // physical computer underneath. See `services/presence.ts` writers —
+  // unbind / stale-cleanup clear `runtime_state` back to NULL.
+  if (input.runtimeState == null) {
     return { disabled: true, title: "The bound computer is offline." };
   }
   if (input.testPending) {

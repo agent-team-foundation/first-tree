@@ -8,7 +8,7 @@ describe("agent detail action state", () => {
         agentStatus: "active",
         clientStatus: undefined,
         clientStatusLoading: true,
-        presenceStatus: "offline",
+        runtimeState: null,
         testPending: false,
       }),
     ).toMatchObject({ disabled: true, title: "Checking the bound computer before testing." });
@@ -18,7 +18,7 @@ describe("agent detail action state", () => {
         agentStatus: "active",
         clientStatus: { online: true, clientId: null, offlineSince: null },
         clientStatusLoading: false,
-        presenceStatus: "online",
+        runtimeState: "idle",
         testPending: false,
       }),
     ).toMatchObject({ disabled: true, title: "Bind a computer before testing this agent." });
@@ -28,7 +28,7 @@ describe("agent detail action state", () => {
         agentStatus: "active",
         clientStatus: { online: false, clientId: "client-1", offlineSince: "2026-05-13T10:00:00.000Z" },
         clientStatusLoading: false,
-        presenceStatus: "offline",
+        runtimeState: null,
         testPending: false,
       }),
     ).toMatchObject({ disabled: true, title: "The bound computer is offline." });
@@ -38,27 +38,42 @@ describe("agent detail action state", () => {
         agentStatus: "active",
         clientStatus: { online: true, clientId: "client-1", offlineSince: null },
         clientStatusLoading: false,
-        presenceStatus: "online",
+        runtimeState: "idle",
         testPending: false,
       }),
     ).toMatchObject({ disabled: false });
   });
 
-  // Reachability source-of-truth: even if the bound computer reports
-  // `clientStatus.online: true`, a stale `agent_presence.status` would
-  // (correctly) say the agent itself can't be reached, and the Test action
-  // must respect that — the runtime might have crashed without dragging the
-  // computer offline.
-  it("blocks Test when presenceStatus says offline despite clientStatus.online", () => {
+  // Reachability source-of-truth: even if `clientStatus.online === true`,
+  // a runtime that crashed (presence row's `runtime_state` cleared to NULL)
+  // means the agent itself can't be reached. The Test action must respect
+  // that — the runtime can die without dragging the computer offline.
+  it("blocks Test when runtimeState is null despite clientStatus.online", () => {
     expect(
       getAgentTestActionState({
         agentStatus: "active",
         clientStatus: { online: true, clientId: "client-1", offlineSince: null },
         clientStatusLoading: false,
-        presenceStatus: "offline",
+        runtimeState: null,
         testPending: false,
       }),
     ).toMatchObject({ disabled: true, title: "The bound computer is offline." });
+  });
+
+  // A runtime in `"error"` is still bound and reporting (just badly) —
+  // we keep it reachable for the Test gate so an operator can use Test
+  // to retry. Distinct from `<StateChip>` which renders the business
+  // state itself.
+  it("allows Test when runtimeState is 'error'", () => {
+    expect(
+      getAgentTestActionState({
+        agentStatus: "active",
+        clientStatus: { online: true, clientId: "client-1", offlineSince: null },
+        clientStatusLoading: false,
+        runtimeState: "error",
+        testPending: false,
+      }),
+    ).toMatchObject({ disabled: false });
   });
 
   it("uses the same connected-client rule for bindability and row state", () => {
