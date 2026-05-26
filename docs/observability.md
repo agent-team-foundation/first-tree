@@ -1,6 +1,6 @@
 # Observability
 
-First Tree Hub ships a vendor-neutral observability stack built on pino
+first-tree ships a vendor-neutral observability stack built on pino
 (logs) and OpenTelemetry (traces). Tracing is **off by default** — configure
 an OTLP endpoint to enable it.
 
@@ -8,8 +8,9 @@ an OTLP endpoint to enable it.
 
 ### Logs only (default, zero config)
 
-No setup required. Hub emits structured logs to stdout in a human-readable
-format during development, and as NDJSON in production (`NODE_ENV=production`).
+No setup required. The server emits structured logs to stdout in a
+human-readable format during development, and as NDJSON in production
+(`NODE_ENV=production`).
 
 ### Logs + traces
 
@@ -56,12 +57,12 @@ in the startup log.
 
 A common deployment pattern is to point **all** environments (dev, staging,
 prod, …) at the **same** Logfire / Honeycomb / … project, and rely on the
-UI's filter/group features to tell them apart. Hub supports this out of the
-box — no need to maintain multiple projects or tokens.
+UI's filter/group features to tell them apart. The server supports this
+out of the box — no need to maintain multiple projects or tokens.
 
 ### How it works
 
-Every span Hub emits carries three OTel resource attributes that trace
+Every span the server emits carries three OTel resource attributes that trace
 backends treat as first-class:
 
 | Attribute | Value | Configured by |
@@ -111,7 +112,7 @@ simpler to operate and makes cross-environment comparisons trivial.
 
 ### Multi-replica deployment
 
-When you scale out to multiple Hub instances behind a load balancer, each
+When you scale out to multiple server instances behind a load balancer, each
 process gets its own `service.instance.id` at startup. To drill into a
 specific replica in your trace backend, filter by that attribute — this is
 how you answer "which replica is spiking latency" without manual tagging.
@@ -307,7 +308,7 @@ Sampling is `ParentBased(TraceIdRatioBased(sampleRate))` — inbound
   Fixing this requires persisting W3C `traceparent` on inbox rows and is
   tracked as tech debt until multi-replica deployment makes it necessary.
 - **No client-side tracing.** Client (`@first-tree/client`) emits logs
-  only. Agent-side work is observed indirectly via Hub-side spans
+  only. Agent-side work is observed indirectly via server-side spans
   (`ws.connection`, `ws.message`, inbox attrs).
 - **No PG span.** PostgreSQL queries are not wrapped in spans — for query
   performance investigation, PostgreSQL's own `log_min_duration_statement` +

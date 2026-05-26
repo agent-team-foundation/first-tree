@@ -10,7 +10,7 @@ Use the right channel for the kind of help you need:
 - Security-sensitive reports:
   follow [SECURITY.md](./SECURITY.md) instead of opening a detailed public issue.
 
-## What Helps Maintainers Most
+## What helps maintainers most
 
 When reporting a problem, include:
 
@@ -18,10 +18,5 @@ When reporting a problem, include:
 - whether you are on the published package or a source checkout
 - the relevant version or commit
 - the exact output or failure mode
-- whether the issue is about `tree`, `github scan`, `hub`, or docs
-
-## Maintainer Note
-
-This repository is in the middle of a port-back from the old main branch into a
-new workspace layout. Reports that clearly separate "proposal mismatch",
-"missing ported behavior", and "runtime regression" are especially helpful.
+- which surface the issue is about (`tree`, `github scan`, agent / chat
+  collaboration, web console, or docs)

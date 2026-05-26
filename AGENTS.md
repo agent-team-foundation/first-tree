@@ -1,18 +1,12 @@
 # AGENTS.md
 
-**First Tree** — unified CLI and infrastructure for Agent Teams. v1.0.0 merges
-the former `first-tree-hub` (collaboration infra) and `first-tree@0.4.x`
-(Context Tree + GitHub Scan) into one repo. Monorepo: Server + Client + Command
-+ Shared + Web + GitHub Scan.
+**first-tree** — the unified CLI and infrastructure for agent teams.
+A pnpm monorepo: Server + Client + Command + Shared + Web + GitHub Scan.
 
-```
-First Tree ≠ Agents themselves (LLM agent logic lives elsewhere)
-First Tree ≠ Orchestration framework
-First Tree IS:
-  - Hub      → agent identity, messaging, IM bridging, admin dashboard (Server + Client + Web)
-  - Tree     → Context Tree onboarding, validation, ownership, automation (CLI tree namespace)
-  - Scan     → GitHub notification daemon (CLI github scan namespace)
-```
+What first-tree is NOT:
+
+- not an LLM agent itself (agent logic lives elsewhere)
+- not an orchestration framework
 
 ## Tech Stack
 
@@ -46,7 +40,7 @@ pnpm --filter @first-tree/server db:migrate    # Apply migrations
 
 ## HTTP Routes & JWT Scope
 
-If your work touches HTTP routes, JWT auth, scope helpers, or anything multi-org — read [docs/http-path-conventions.md](docs/http-path-conventions.md) first. It's the single source of truth for route naming, JWT shape, and middleware choice.
+If your work touches HTTP routes, JWT auth, scope helpers, or anything multi-org — read [docs/development/http-path-conventions.md](docs/development/http-path-conventions.md) first. It's the single source of truth for route naming, JWT shape, and middleware choice.
 
 ## Local Testing Isolation
 
@@ -58,12 +52,14 @@ first-tree-dev login <connect-token>      # token from http://127.0.0.1:8000/cli
 first-tree-dev daemon status
 ```
 
-Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/local-dev-isolation.md](docs/local-dev-isolation.md).
+Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/development/local-dev-isolation.md](docs/development/local-dev-isolation.md).
 
-## Repo-Local Skill
+## Repo-Local Skills
 
-- Use `skills/first-tree-cloud/SKILL.md` as the source-of-truth skill for hub (cloud / collaboration) flows (login, daemon, agent, chat, org, config). Use `skills/first-tree/SKILL.md` for Context Tree flows. Use `skills/first-tree-github-scan/` for GitHub Scan daemon work.
-- `.agents/skills/first-tree-cloud/` and `.claude/skills/first-tree-cloud/` are symlinks to `skills/first-tree-cloud/`. No sync step is needed. The other repo-local skills (`first-tree`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`) live under `skills/` and follow the same convention.
+- `skills/first-tree-cloud/SKILL.md` — collaboration flows (login, daemon, agent, chat, org, config).
+- `skills/first-tree/SKILL.md` — Context Tree flows.
+- `skills/first-tree-github-scan/` — GitHub Scan daemon work.
+- `.agents/skills/first-tree-cloud/` and `.claude/skills/first-tree-cloud/` are symlinks to `skills/first-tree-cloud/`. No sync step needed. Other repo-local skills (`first-tree`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`) follow the same convention.
 
 ## Monorepo Structure
 
@@ -73,8 +69,8 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 - `packages/web/` — `@first-tree/web` — React admin dashboard (private, bundled)
 - `packages/github-scan/` — `@first-tree/github-scan` — GitHub notification daemon + inbox runtime
 - `apps/cli/` — `first-tree` — Unified CLI (**published**, the consumer-facing tarball; binaries `first-tree` and `ft`)
-- `docs/` — [cli-reference.md](docs/cli-reference.md), [claim-agent-guide.md](docs/claim-agent-guide.md), [migration/](docs/migration/), [development/git-history.md](docs/development/git-history.md)
-- `skills/` — repo-local skill payloads (`first-tree`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`)
+- `docs/` — [quickstart.md](docs/quickstart.md), [onboarding-guide.md](docs/onboarding-guide.md), [cli-reference.md](docs/cli-reference.md), [observability.md](docs/observability.md), [migration/](docs/migration/), [development/](docs/development/), [troubleshooting/](docs/troubleshooting/)
+- `skills/` — repo-local skill payloads (`first-tree`, `first-tree-cloud`, `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`, `first-tree-onboarding`)
 
 ## Architecture Rules
 
@@ -84,11 +80,11 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 **PostgreSQL only:** No Redis / MQ. PG covers storage, queuing (SKIP LOCKED), and notifications (LISTEN/NOTIFY).
 
-**Unified user-JWT auth:** Single user JWT (issued by `first-tree login <token>`, stored at `<channel-home>/config/credentials.json` — `~/.first-tree/` for prod, `~/.first-tree-staging/` for staging, `~/.first-tree-dev/` for dev; see [docs/local-dev-isolation.md](docs/local-dev-isolation.md)) authorizes both Web/Admin API and every agent the user manages on the Client WebSocket. JWT shape, route classification, and middleware choice live in [docs/http-path-conventions.md](docs/http-path-conventions.md) — this section covers only the runtime *binding* facts not in that spec. Agents bind via `agents.client_id` + a server-pushed `agent:pinned` frame; **R-RUN** is re-evaluated at every `agent:bind` against the live `agents → manager → user` join (cross-org under one user is allowed; revoked memberships refuse the bind immediately). Switching user requires `first-tree login <token> --override`, which atomically transfers `clients.user_id` and unpins the previous owner's agents. Per-agent `aghub_*` tokens retired by migration `0020`. Background: [docs/decouple-client-from-identity-design-zh.md](docs/decouple-client-from-identity-design-zh.md) (client-from-identity decoupling) and [proposals/hub-strip-jwt-ambient-scope.20260508.md](../first-tree-context/proposals/hub-strip-jwt-ambient-scope.20260508.md) (JWT-scope strip + route refactor).
+**Unified user-JWT auth:** A single user JWT (issued by `first-tree login <token>`, stored at `<channel-home>/config/credentials.json` — `~/.first-tree/` for prod, `~/.first-tree-staging/` for staging, `~/.first-tree-dev/` for dev; see [docs/development/local-dev-isolation.md](docs/development/local-dev-isolation.md)) authorizes both Web/Admin API calls and every agent the user manages on the client WebSocket. JWT shape, route classification, and middleware choice live in [docs/development/http-path-conventions.md](docs/development/http-path-conventions.md) — this section covers only the runtime *binding* facts not in that spec. Agents bind via `agents.client_id` + a server-pushed `agent:pinned` frame; **R-RUN** is re-evaluated at every `agent:bind` against the live `agents → manager → user` join (cross-org under one user is allowed; revoked memberships refuse the bind immediately). Switching user requires `first-tree login <token> --override`, which atomically transfers `clients.user_id` and unpins the previous owner's agents. Per-agent `aghub_*` tokens were retired by migration `0020`.
 
-**Inbox is the Server/Client boundary:** Server writes to Inbox (fan-out on write), Client pulls / receives WebSocket notifications. At-least-once delivery; Client is responsible for deduplication.
+**Inbox is the Server/Client boundary:** Server writes to Inbox (fan-out on write); Client pulls / receives WebSocket notifications. At-least-once delivery; Client deduplicates.
 
-**Agent identity is managed by Hub:** Agents are created, updated, suspended, and deleted via Admin API. Agent profile (markdown self-description) is stored in the `agents.profile` column. Context Tree integration is optional — when configured, Client injects organizational context (AGENT.md, root NODE.md) into agent workspaces at startup.
+**Agent identity is managed by the server:** Agents are created, updated, suspended, and deleted via the Admin API. Agent profile (markdown self-description) is stored in the `agents.profile` column. Context Tree integration is optional — when configured, Client injects organizational context (AGENT.md, root NODE.md) into agent workspaces at startup.
 
 **Adapter 1:1 identity binding:** External IM users (Feishu/Slack) map to human agents. Adapter credentials are AES-256-GCM encrypted at the application layer. PG NOTIFY triggers adapter config hot-reload.
 

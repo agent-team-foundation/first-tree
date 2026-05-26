@@ -135,8 +135,8 @@ own `latest` dist-tag, no per-server channel selection needed).
 
 ## Phase 1A — commands tree restructure + env rename (PR #502)
 
-**Affects**: everyone on a Hub CLI from before this change, and every
-production deployment of the Hub server.
+**Affects**: everyone on a `first-tree` CLI from before this change, and
+every production deployment of the `first-tree` server.
 
 **Why**: pre-merge snapshot for the `first-tree` ↔ `first-tree` repo
 consolidation (Phase 2 + 3). The CLI command surface and env names are
@@ -186,10 +186,10 @@ that changed.
 | `first-tree client start` | `first-tree daemon start` | `daemon start` is **fail-closed** when no credentials exist — it exits 1 with a `NO_CREDENTIALS` error pointing at `login` instead of dropping into the interactive prompt path the old `client start` had. |
 | `first-tree client stop` | `first-tree daemon stop` | — |
 | `first-tree client restart` | `first-tree daemon restart` | — |
-| `first-tree client status` | `first-tree daemon status` *or* top-level `first-tree status` | `daemon status` is the local service view; the top-level `status` is the cross-subsystem overview (CLI version + service + hub + auth + agents). |
+| `first-tree client status` | `first-tree daemon status` *or* top-level `first-tree status` | `daemon status` is the local service view; the top-level `status` is the cross-subsystem overview (CLI version + service + server + auth + agents). |
 | `first-tree client doctor` | `first-tree daemon doctor` *or* top-level `first-tree doctor` | Same split as `status`. |
 | `first-tree client config show/set/get` | `first-tree config show/set/get` | Promoted out of the `client` namespace; flags / dot-notation unchanged. |
-| `first-tree client list` | (removed) | The Hub web admin's *Computers* tab is now the canonical surface. |
+| `first-tree client list` | (removed) | The web console's *Computers* tab is now the canonical surface. |
 | `first-tree client disconnect <clientId>` | (removed) | Same — *Computers* tab → Disconnect. |
 | `first-tree onboard [...]` | (sequence: `login` + `agent create` + optional `agent bind bot|user` + `daemon start`) | Each verb fails / recovers independently. See `docs/onboarding-guide.md` for the full sequence. |
 | New: `first-tree logout [--purge]` | — | Symmetric to `login`. Stops the daemon + deletes `credentials.json`. `--purge` also deletes `client.yaml`. |
@@ -298,12 +298,12 @@ followed by `login <token>`:
 
 ```bash
 # CLI side — should all be green:
-first-tree status                 # CLI version + service + hub + auth + agents
+first-tree status                 # CLI version + service + server + auth + agents
 first-tree daemon doctor          # service + agent configs + WS reachability
 first-tree --help                 # 5 top-level verbs + 7 namespaces
 
 # Server side — usual health check:
-curl -sf https://<hub-public-url>/healthz | jq
+curl -sf https://<server-public-url>/healthz | jq
 ```
 
 If `daemon doctor` reports "service installed, inactive" persistently
