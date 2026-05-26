@@ -103,8 +103,8 @@ describe("shouldEnterOnboarding", () => {
   it("redirects a user with a computer but no agent (create_agent)", () => {
     expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent" })).toBe(true);
   });
-  it("does NOT bounce a server-completed user (protects existing users on deploy; kickoff is resumed via Settings)", () => {
-    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed" })).toBe(false);
+  it("bounces a server-completed-but-unfinished user so they resume the Context Tree kickoff", () => {
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed" })).toBe(true);
   });
   it("does not redirect before /me loads", () => {
     expect(shouldEnterOnboarding({ ...base, meLoaded: false })).toBe(false);
@@ -115,8 +115,14 @@ describe("shouldEnterOnboarding", () => {
   it("does not redirect a dismissed user (they chose to hide it)", () => {
     expect(shouldEnterOnboarding({ ...base, onboardingDismissedAt: "2026-05-22T00:00:00Z" })).toBe(false);
   });
-  it("does not redirect a completed user", () => {
-    expect(shouldEnterOnboarding({ ...base, onboardingCompletedAt: "2026-05-22T00:00:00Z" })).toBe(false);
+  it("does not redirect a terminally-finished user (completed step + completed_at set)", () => {
+    expect(
+      shouldEnterOnboarding({
+        ...base,
+        onboardingStep: "completed",
+        onboardingCompletedAt: "2026-05-22T00:00:00Z",
+      }),
+    ).toBe(false);
   });
 });
 
