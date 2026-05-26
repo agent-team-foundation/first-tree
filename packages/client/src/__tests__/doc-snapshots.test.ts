@@ -237,10 +237,7 @@ describe("buildMessageDocumentSnapshots — explicit-link rewrite (self / Case A
     // failure reason is "outside the workspace", not "hidden directory". The
     // chip tooltip would otherwise mis-attribute the cause and confuse the
     // agent (Codex review round 1 P3).
-    const { docs, failedMentions } = await buildMessageDocumentSnapshots(
-      "see ../outside.md please",
-      root,
-    );
+    const { docs, failedMentions } = await buildMessageDocumentSnapshots("see ../outside.md please", root);
 
     expect(docs).toEqual([]);
     expect(failedMentions).toEqual([{ raw: "../outside.md", reason: "out-of-fence" }]);

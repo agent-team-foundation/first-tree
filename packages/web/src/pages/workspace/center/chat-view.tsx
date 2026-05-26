@@ -363,19 +363,20 @@ function TextRow({
       a({ href, children, ...props }) {
         // Inert chip for runtime-reported snapshot failures: the magic
         // `#doc-failed?reason=…` href is emitted by `wrapFailedDocMentions`
-        // around tokens the runtime couldn't snapshot. Render a disabled
-        // mono-spaced span (no `<a>`, no navigation) with a reason-mapped
-        // tooltip so the failure is visible instead of silently degrading to
-        // plain text. `void props` keeps the unused-vars rule happy without
-        // splattering anchor-only attributes onto a non-anchor element.
-        if (typeof href === "string") {
+        // around tokens the runtime couldn't snapshot. Gate detection on
+        // (a) the message actually carrying failedMentions metadata, so a
+        // user-typed `[anything](#doc-failed?reason=missing)` in a web-source
+        // message cannot spoof a system-rendered failure chip (round-2
+        // review), and (b) the href parsing successfully to a known reason
+        // — anything else falls through to the regular `<a>` rendering and
+        // click-to-preview path. `void props` keeps the unused-vars rule
+        // happy without splattering anchor-only attributes onto a non-anchor.
+        if (typeof href === "string" && failedDocMentions && failedDocMentions.size > 0) {
           const failedReason = parseFailedDocHref(href);
           if (failedReason) {
             void props;
             return (
               <span
-                role="img"
-                aria-label={`${failedDocReasonTooltip(failedReason)}: ${textOfChildren(children)}`}
                 title={failedDocReasonTooltip(failedReason)}
                 data-doc-failed-reason={failedReason}
                 style={{
@@ -465,7 +466,18 @@ function TextRow({
         );
       },
     }),
-    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams, slugToId],
+    [
+      docBasePath,
+      docSnapshots,
+      failedDocMentions,
+      msg.chatId,
+      msg.id,
+      msg.senderId,
+      queryClient,
+      searchParams,
+      setSearchParams,
+      slugToId,
+    ],
   );
 
   return (
@@ -609,15 +621,6 @@ function failedDocReasonTooltip(reason: DocSnapshotFailReason): string {
     case "unreadable":
       return "无法读取该文档";
   }
-}
-
-/** Flatten react-markdown's children prop (array of strings + nodes) into a
- *  short text label for the inert chip's accessible name. Best effort — falls
- *  back to an empty string when the children are non-text nodes. */
-function textOfChildren(children: ReactNode): string {
-  if (typeof children === "string") return children;
-  if (Array.isArray(children)) return children.map((c) => (typeof c === "string" ? c : "")).join("");
-  return "";
 }
 
 export function docSnapshotQueryKey(chatId: string, messageId: string, path: string): readonly unknown[] {

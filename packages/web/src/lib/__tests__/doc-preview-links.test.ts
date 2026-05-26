@@ -246,4 +246,17 @@ describe("wrapFailedDocMentions", () => {
       ),
     ).toBe("missing [docs/a.md](#doc-failed?reason=missing) and oversize [docs/b.md](#doc-failed?reason=too-large)");
   });
+
+  it("emits a link text containing `[` and `]` that CommonMark still parses correctly (regression)", () => {
+    // An agent code-span that contains BOTH brackets AND a path produces
+    // `[`see [v2] docs/foo.md`](docs/foo.md)`. Round-2 review flagged this as
+    // potential malformed markdown; CommonMark §6.3 + §6.6 explicitly allow
+    // brackets inside code spans within link text — verified via the
+    // mdast-util-from-markdown parser. This test pins the output shape so a
+    // future refactor that "fixes" the verbatim slice doesn't quietly break
+    // this perfectly valid input.
+    expect(
+      wrapFailedDocMentions("see `before [v2] docs/missing.md after`", new Map([["docs/missing.md", "missing"]])),
+    ).toBe("see [`before [v2] docs/missing.md after`](#doc-failed?reason=missing)");
+  });
 });
