@@ -1,3 +1,4 @@
+import { useAuth } from "../../../auth/auth-context.js";
 import { DRAFT_CHAT_ID } from "../conversations/index.js";
 import { NewChatDraft } from "../conversations/new-chat-draft.js";
 import { ChatByIdView } from "./chat-by-id.js";
@@ -22,8 +23,17 @@ export function CenterPanel({
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
 }) {
+  const { organizationId } = useAuth();
+
   if (selectedChatId === DRAFT_CHAT_ID) {
-    return <NewChatDraft onCreated={onSelectChat} />;
+    // `key={organizationId}` resets all of NewChatDraft's local state when
+    // the user switches orgs while a draft is open — chips, draft text,
+    // pending images, and crucially the `knownAgents` accumulator (which
+    // resolves @-name → uuid for `extractMentions`). Without this remount,
+    // a uuid from the previous org could stay in the cache and silently
+    // resolve a new-org `@bob` to a stranger; the server then 4xxs the
+    // chat create with a confusing visibility error.
+    return <NewChatDraft key={organizationId ?? "no-org"} onCreated={onSelectChat} />;
   }
 
   if (selectedChatId) {

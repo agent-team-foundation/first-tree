@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { gitRepoSchema } from "./agent-runtime-config.js";
+import { paginationQuerySchema } from "./common.js";
 import { presenceStatusSchema } from "./presence.js";
 import { runtimeProviderSchema } from "./runtime-provider.js";
 
@@ -256,3 +257,24 @@ export const agentPinnedMessageSchema = z.object({
   runtimeProvider: runtimeProviderSchema,
 });
 export type AgentPinnedMessage = z.infer<typeof agentPinnedMessageSchema>;
+
+/**
+ * Query string accepted by `GET /orgs/:orgId/agents` — pagination + the
+ * agent-type filter + an optional substring search.
+ *
+ * `query` powers the participant picker's server-side search so orgs with
+ * more than `limit` (100) visible agents can still reach agents past the
+ * first page (issue 494). The cap on `limit` is unchanged; `query` is the
+ * other dimension along which the picker narrows the result set.
+ *
+ * Trimming happens at the schema level so a whitespace-only input behaves
+ * the same as an omitted param (no filtering) instead of erroring out —
+ * the service treats an empty string as "no search". 60 chars is generous
+ * for slug + display name without giving the ILIKE predicate an unbounded
+ * input.
+ */
+export const listAgentsQuerySchema = paginationQuerySchema.extend({
+  type: agentTypeSchema.optional(),
+  query: z.string().trim().max(60).optional(),
+});
+export type ListAgentsQuery = z.infer<typeof listAgentsQuerySchema>;

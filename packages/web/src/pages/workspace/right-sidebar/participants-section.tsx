@@ -4,7 +4,6 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentStatusPanel } from "../../../components/chat/agent-status-panel.js";
-import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
 
 /**
  * Participants section — full chat membership (humans + agents). Agent rows
@@ -27,8 +26,6 @@ export function ParticipantsSection({
   participants,
   participantsLoading,
   managedByMe,
-  addParticipantsCandidates,
-  agentIdentity,
   onAdded,
   readOnly,
 }: {
@@ -36,10 +33,6 @@ export function ParticipantsSection({
   participants: ChatParticipantDetail[];
   participantsLoading: boolean;
   managedByMe: Map<string, boolean>;
-  addParticipantsCandidates: MentionCandidate[];
-  agentIdentity: (
-    uuid: string | null | undefined,
-  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
   onAdded: () => void;
   readOnly: boolean;
 }) {
@@ -94,9 +87,7 @@ export function ParticipantsSection({
           <AddParticipantDropdown
             variant="inline"
             chatId={chatId}
-            candidates={addParticipantsCandidates}
             participantIds={participants.map((p) => p.agentId)}
-            agentIdentity={agentIdentity}
             onAdded={onAdded}
           />
         </div>

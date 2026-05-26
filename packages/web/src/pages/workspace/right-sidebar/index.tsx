@@ -1,6 +1,5 @@
 import type { ChatParticipantDetail } from "@first-tree/shared";
 import { X } from "lucide-react";
-import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
 import { GitHubSection } from "./github-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 
@@ -28,8 +27,6 @@ export function ChatRightSidebar({
   participants,
   participantsLoading,
   managedByMe,
-  addParticipantsCandidates,
-  agentIdentity,
   onAdded,
   onClose,
   readOnly,
@@ -38,13 +35,6 @@ export function ChatRightSidebar({
   participants: ChatParticipantDetail[];
   participantsLoading: boolean;
   managedByMe: Map<string, boolean>;
-  addParticipantsCandidates: MentionCandidate[];
-  agentIdentity: (uuid: string | null | undefined) => {
-    name: string | null;
-    displayName: string;
-    avatarImageUrl: string | null;
-    avatarColorToken: string | null;
-  } | null;
   onAdded: () => void;
   onClose: () => void;
   /** Watcher mode: hide write surfaces. Currently gates the inline
@@ -91,8 +81,6 @@ export function ChatRightSidebar({
           participants={participants}
           participantsLoading={participantsLoading}
           managedByMe={managedByMe}
-          addParticipantsCandidates={addParticipantsCandidates}
-          agentIdentity={agentIdentity}
           onAdded={onAdded}
           readOnly={readOnly}
         />
