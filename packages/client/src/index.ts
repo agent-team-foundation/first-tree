@@ -6,6 +6,7 @@ export type {
 } from "./client-connection.js";
 export { ClientConnection, ClientOrgMismatchError, ClientUserMismatchError } from "./client-connection.js";
 // Handlers
+export { detectStreamApiError, StreamApiTransientError } from "./handlers/claude-code.js";
 export { registerBuiltinHandlers } from "./handlers/index.js";
 export {
   applyClientLoggerConfig,

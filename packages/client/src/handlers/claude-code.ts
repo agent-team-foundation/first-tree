@@ -15,6 +15,7 @@ import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
 import { deriveRepoLocalPath, SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES } from "@first-tree/shared";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
+import { classify } from "../runtime/error-taxonomy.js";
 import {
   bootstrapWorkspace,
   buildChatSystemPrompt,
@@ -43,6 +44,74 @@ import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
+
+/**
+ * Bug 6: thrown by `consumeOutput` when an SDK "success" result message
+ * actually contains an API error string (e.g. "API Error: socket
+ * connection was closed unexpectedly"). The catch block treats this like
+ * any other transient stream failure and respawns the query.
+ */
+export class StreamApiTransientError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StreamApiTransientError";
+  }
+}
+
+const STREAM_API_ERROR_PREFIXES = [
+  "API Error:",
+  "Claude API error:",
+  "Anthropic API error:",
+];
+
+const STREAM_API_ERROR_HINTS = [
+  "socket connection",
+  "fetch failed",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "timeout",
+  "overloaded",
+  "rate limit",
+  "Unauthorized",
+  "Forbidden",
+  "401",
+  "403",
+  "429",
+  "5",
+];
+
+/**
+ * Bug 6: detect when a Claude SDK `result.success` payload is in fact an
+ * internal SDK error string forwarded as the model reply. The heuristic is
+ * deliberately conservative — three constraints together — so we don't
+ * mistake a user message that happens to discuss "API Error" for a real
+ * failure:
+ *
+ *   1. The text MUST start with one of {@link STREAM_API_ERROR_PREFIXES}.
+ *   2. The full payload MUST be under 500 chars (real model replies that
+ *      mention "API Error:" as topic content are almost always longer
+ *      than a single one-line dump from the SDK).
+ *   3. The text MUST include at least one technical hint from
+ *      {@link STREAM_API_ERROR_HINTS} (socket / fetch / status code etc.)
+ *      so a short tutorial like `"API Error: how to handle them"` doesn't
+ *      qualify.
+ *
+ * Returns the captured one-line message when all three match; `null`
+ * otherwise.
+ */
+export function detectStreamApiError(text: string): { message: string } | null {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length >= 500) return null;
+  const hasPrefix = STREAM_API_ERROR_PREFIXES.some((p) => trimmed.startsWith(p));
+  if (!hasPrefix) return null;
+  const lower = trimmed.toLowerCase();
+  const hasHint = STREAM_API_ERROR_HINTS.some((h) => lower.includes(h.toLowerCase()));
+  if (!hasHint) return null;
+  // Take only the first line so multi-line error dumps stay readable in logs.
+  const firstLine = trimmed.split("\n")[0] ?? trimmed;
+  return { message: firstLine };
+}
 
 const TOOL_RESULT_PREVIEW_LIMIT = 400;
 const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
@@ -754,6 +823,34 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 // snapshot of what would have been sent.
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
+                  // Bug 6: SDK sometimes packages its own catch'd API error
+                  // as a `result.subtype === "success"` payload. Sniff
+                  // before forwarding so the user does not see raw "API
+                  // Error: socket closed" text as a model reply.
+                  const sniff = detectStreamApiError(resultText);
+                  if (sniff) {
+                    const classification = classify(new Error(sniff.message), { source: "stream" });
+                    sessionCtx.log(
+                      `Stream API error detected (${classification.kind}/${classification.reasonCode}): ${sniff.message}`,
+                    );
+                    if (classification.kind === "transient" && retryCount < MAX_RETRIES) {
+                      // Re-throw to drive the outer catch's auto-resume path
+                      // with the retry counter and respawnQuery wiring.
+                      throw new StreamApiTransientError(sniff.message);
+                    }
+                    // Permanent (401/403) OR retries exhausted: surface to
+                    // chat as an error event so the user sees what happened.
+                    // Skip forwardResult so the raw "API Error" text never
+                    // appears as a model reply in the timeline.
+                    sessionCtx.emitEvent({
+                      kind: "error",
+                      payload: {
+                        source: "sdk",
+                        message: `Claude API error (${classification.reasonCode}): ${sniff.message}`,
+                      },
+                    });
+                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                  } else {
                   try {
                     // All enrichment (inReplyTo, mentions, participants
                     // lookup, transport) lives in ctx.forwardResult so every
@@ -771,6 +868,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       payload: { source: "runtime", message: forwardErrMessage },
                     });
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                  }
                   }
                 } else {
                   // No result text to forward (edge case) — still close the turn.
