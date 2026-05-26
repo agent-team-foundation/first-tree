@@ -587,6 +587,7 @@ export {
 export {
   type AgentSkills,
   agentSkillsSchema,
+  SKILL_NAME_REGEX,
   SKILL_SOURCES,
   type SkillDescriptor,
   type SkillSource,

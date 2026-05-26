@@ -202,8 +202,11 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   // — the same scope that PATCHes runtime config and capabilities.
   //
   // The PATCH body replaces the list in full (snapshot semantics). The
-  // client-side `probeCapabilities()` hashes the local set and skips the
-  // request when nothing changed, so write-amplification is bounded.
+  // daemon uploads the full payload once per restart (see
+  // `apps/cli/src/commands/daemon/start.ts`) — no per-skill diff, no
+  // content-hash short-circuit yet. Restart cadence is low enough that
+  // write-amplification hasn't shown up; a hash check belongs on the
+  // client side if it ever does.
 
   app.get<{ Params: { uuid: string } }>("/:uuid/skills", async (request) => {
     await requireAgentAccess(request, app.db, "visible");

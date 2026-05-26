@@ -385,7 +385,11 @@ export function SlashCommandPopover({
               role="option"
               aria-selected={active}
               data-slash-index={i}
-              title={label}
+              // Hover discloses the full description — the visible subtitle
+              // truncates at 110 chars, so long Claude Code skills (some are
+              // multi-paragraph) need a way to reveal the rest without
+              // committing the pick first.
+              title={description}
               onMouseDown={(e) => {
                 e.preventDefault();
                 onPick(item);

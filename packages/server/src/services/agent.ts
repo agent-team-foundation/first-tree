@@ -1118,9 +1118,11 @@ export async function getAgentSkills(db: Database, uuid: string): Promise<AgentS
 }
 
 /**
- * Replace the agent's full skill list. Daemon uploads the entire snapshot
- * on every check-in (after a content-hash short-circuit on the client side
- * to avoid no-op writes); we never merge per-skill.
+ * Replace the agent's full skill list. The daemon uploads the entire
+ * snapshot on every restart — no per-skill merge, no diff. Phase 1 keeps
+ * this unconditional (users restart daemons rarely); a future revision
+ * may persist the last-uploaded content hash in the agent's local yaml
+ * to skip no-op PATCHes if write-amplification ever shows up.
  */
 export async function updateAgentSkills(db: Database, uuid: string, skills: AgentSkills): Promise<void> {
   const result = await db
