@@ -15,6 +15,7 @@ import type { AgentConfigCache } from "./agent-config-cache.js";
 import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
+import { type Classification, classify, clampRetryAttempt, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
 import type { SelfFence } from "./doc-snapshots.js";
 import type {
   AgentHandler,
@@ -35,6 +36,30 @@ type SessionEntry = {
   lastActivity: number;
   /** In-flight suspend promise; awaited before resume to avoid race conditions. */
   suspending: Promise<void> | null;
+  /**
+   * Transient-retry bookkeeping (Bug 1 fix). When handler.start / handler.resume
+   * throws a classified-transient error we schedule a retry instead of
+   * deleting the entry. A pending timer is tracked here so an arriving user
+   * message can trigger an immediate retry (cancelling the timer) and shutdown
+   * can clear it.
+   */
+  retryAttempt: number;
+  retryNextAt: number | null;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Last classified-transient failure, kept so a manually-triggered retry
+   * (from an incoming user message) can re-use the same reasonCode for
+   * structured logging.
+   */
+  lastRetryReason: string | null;
+  /** Original message used to bootstrap this session, replayed on retry. */
+  startMessage: SessionMessage | null;
+  /**
+   * When we entered transient-retry mode this is set to the evicted mapping
+   * captured at startNewSession time. Lets a retry re-use the same resume
+   * path (handler.resume) instead of regressing to handler.start.
+   */
+  retryFromEvicted: { claudeSessionId: string; lastActivity: number } | null;
 };
 
 type PendingMessage = {
@@ -225,6 +250,14 @@ function jitteredReaffirmDelay(): number {
   return RUNTIME_REAFFIRM_BASE_MS + offset;
 }
 
+function buildEmptySessionMessage(chatId: string): SessionMessage {
+  return { id: "", chatId, senderId: "", format: "text", content: "", metadata: {} };
+}
+
+function previousAvailable(entry: SessionEntry): boolean {
+  return Boolean(entry.claudeSessionId) || Boolean(entry.retryFromEvicted?.claudeSessionId);
+}
+
 export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly evictedMappings = new Map<string, { claudeSessionId: string; lastActivity: number }>();
@@ -352,6 +385,10 @@ export class SessionManager {
       if (!session && !hadMapping) return;
 
       this.config.log.info({ chatId }, "terminate command received");
+      if (session?.retryTimer) {
+        clearTimeout(session.retryTimer);
+        session.retryTimer = null;
+      }
       if (session?.status === "active") {
         this._activeCount--;
         await session.handler.shutdown().catch(() => {});
@@ -400,6 +437,15 @@ export class SessionManager {
     if (this.runtimeReaffirmTimer) {
       clearTimeout(this.runtimeReaffirmTimer);
       this.runtimeReaffirmTimer = null;
+    }
+
+    // Cancel any pending transient-retry timers — shutdown must not leave
+    // setTimeouts armed that fire after the manager is gone.
+    for (const session of this.sessions.values()) {
+      if (session.retryTimer) {
+        clearTimeout(session.retryTimer);
+        session.retryTimer = null;
+      }
     }
 
     const shutdowns = [...this.sessions.values()].map((s) =>
@@ -487,6 +533,20 @@ export class SessionManager {
 
     const existing = this.sessions.get(chatId);
 
+    // Transient retry path: an earlier handler.start / handler.resume failed
+    // with a classified-transient error and we kept the entry around. A new
+    // user message is a strong signal the user is waiting — replace the
+    // stored startMessage so the retry uses the fresher content, then either
+    // fire an immediate retry (if a timer is still armed) or queue normally.
+    if (existing && existing.retryAttempt > 0) {
+      // ACK the entry now so the inbox doesn't redeliver it while the retry
+      // is running.
+      await this.ackEntry(entryId, chatId);
+      existing.startMessage = message;
+      this.triggerImmediateRetry(chatId);
+      return;
+    }
+
     if (existing) {
       switch (existing.status) {
         case "active":
@@ -547,6 +607,12 @@ export class SessionManager {
       status: "active",
       lastActivity: Date.now(),
       suspending: null,
+      retryAttempt: 0,
+      retryNextAt: null,
+      retryTimer: null,
+      lastRetryReason: null,
+      startMessage: message,
+      retryFromEvicted: evicted ?? null,
     };
 
     this.sessions.set(chatId, entry);
@@ -579,52 +645,22 @@ export class SessionManager {
       }
       this.persistRegistry();
     } catch (err) {
-      // Pre-fix this catch only logged and torn local state down. The
-      // server's `agent_chat_sessions.state` stayed `active`, no chat
-      // message was emitted, and the agent looked silently failed to
-      // every observer. F2 (chat-participant-mode-fix-design.md §3.3)
-      // signals the failure two ways: structured log (existing), and a
-      // `session:state=errored` to the server (so admin/UI see it).
-      // A user-visible signal goes out as a structured `error` session
-      // event (rendered by the web ErrorRow), not as a plain text
-      // message — otherwise it's indistinguishable from a normal agent
-      // reply in the timeline.
-      const errMsg = err instanceof Error ? err.message : String(err);
       const phase: "start" | "resume" = evicted ? "resume" : "start";
-      this.config.log.error({ chatId, err, phase }, "session start/resume failed");
-
-      // 1) Server-side state. notifySessionState dedupes against the last
-      //    reported value, so even if we somehow already reported "active"
-      //    for this chat, this `errored` transition will go through.
-      this.notifySessionState(chatId, "errored");
-
-      // 2) User-visible structured error event. Truncate to 800 chars so
-      //    we don't leak full stderr (which may include FS paths or git
-      //    internals) into the chat timeline; the full error is in the
-      //    structured log. The web `ErrorRow` renders these with distinct
-      //    error styling and a "session start/resume failed" header.
-      //
-      //    Wrap in try/catch so a broken `onSessionEvent` callback
-      //    (e.g. agent-slot reporting fails because the WS just dropped)
-      //    can't shortcut the local cleanup that follows — leaving the
-      //    chat in a half-torn-down state would block the next inbound
-      //    message from routing as a clean fresh-start.
-      try {
-        const preview = errMsg.slice(0, 800);
-        ctx.emitEvent({
-          kind: "error",
-          payload: { source: "runtime", message: `Session ${phase} failed: ${preview}` },
-        });
-      } catch (emitErr) {
-        this.config.log.warn({ chatId, emitErr }, "session error event emit failed");
+      const classification = classify(err, { source: "session" });
+      const handled = this.handleSessionFailure({
+        entry,
+        ctx,
+        err,
+        phase,
+        classification,
+      });
+      if (!handled) {
+        // Permanent / degraded failure: tear down (legacy F2 path).
+        this.sessions.delete(chatId);
+        this.sessionRuntimeStates.delete(chatId);
+        this.recomputeRuntimeState();
+        this._activeCount--;
       }
-
-      // 3) Existing local cleanup. The follow-up message routes as a fresh
-      //    start once the entry is gone.
-      this.sessions.delete(chatId);
-      this.sessionRuntimeStates.delete(chatId);
-      this.recomputeRuntimeState();
-      this._activeCount--;
     }
   }
 
@@ -679,35 +715,207 @@ export class SessionManager {
       this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
     } catch (err) {
-      // Mirror `startNewSession`'s F2 contract (design §3.3): a resume that
-      // throws is not the same shape as a suspend (the entry is unusable,
-      // not just idle), so leaving `status = "suspended"` would lie to the
-      // server and let the broken entry persist locally. Notify `errored`,
-      // emit a chat-visible error event, then drop the entry so the next
-      // inbound message routes through `startNewSession` for a clean restart.
-      const errMsg = err instanceof Error ? err.message : String(err);
-      this.config.log.error({ chatId: entry.chatId, err }, "resume failed");
-
-      this.notifySessionState(entry.chatId, "errored");
-
-      // Same defensive wrap as `startNewSession`: a throwing emit callback
-      // must not skip the local cleanup that follows, or the broken entry
-      // gets stranded and blocks future resume attempts.
-      try {
-        const preview = errMsg.slice(0, 800);
-        ctx.emitEvent({
-          kind: "error",
-          payload: { source: "runtime", message: `Session resume failed: ${preview}` },
-        });
-      } catch (emitErr) {
-        this.config.log.warn({ chatId: entry.chatId, emitErr }, "session error event emit failed");
+      const classification = classify(err, { source: "session" });
+      const handled = this.handleSessionFailure({
+        entry,
+        ctx,
+        err,
+        phase: "resume",
+        classification,
+      });
+      if (!handled) {
+        this.sessions.delete(entry.chatId);
+        this.sessionRuntimeStates.delete(entry.chatId);
+        this.recomputeRuntimeState();
+        this._activeCount--;
       }
-
-      this.sessions.delete(entry.chatId);
-      this.sessionRuntimeStates.delete(entry.chatId);
-      this.recomputeRuntimeState();
-      this._activeCount--;
     }
+  }
+
+  /**
+   * Decide what to do when handler.start / handler.resume rejects. Returns
+   * `true` when the failure was handled as a transient retry (entry kept,
+   * timer armed); `false` when the caller should run the permanent-failure
+   * teardown.
+   *
+   * Bug 1 fix (client-resilience-design §5.1): transient errors keep the
+   * entry around with an exponential-backoff retry. Permanent / degraded
+   * errors fall through to the legacy F2 teardown path.
+   */
+  private handleSessionFailure(args: {
+    entry: SessionEntry;
+    ctx: SessionContext;
+    err: unknown;
+    phase: "start" | "resume";
+    classification: Classification;
+  }): boolean {
+    const { entry, ctx, err, phase, classification } = args;
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const chatId = entry.chatId;
+
+    this.config.log.error(
+      { chatId, err, phase, kind: classification.kind, reasonCode: classification.reasonCode },
+      "session start/resume failed",
+    );
+
+    if (classification.kind === ERROR_KINDS.TRANSIENT) {
+      entry.retryAttempt = clampRetryAttempt(entry.retryAttempt + 1);
+      entry.lastRetryReason = classification.reasonCode;
+      const delayMs = nextRetryDelayMs(classification.strategy, entry.retryAttempt);
+      entry.retryNextAt = Date.now() + delayMs;
+      // Drop the active slot now so other chats can use it during the
+      // backoff window — the retry will re-acquire when it runs.
+      this._activeCount--;
+      entry.status = "suspended";
+      this.sessionRuntimeStates.delete(chatId);
+      this.recomputeRuntimeState();
+
+      this.config.log.info(
+        {
+          chatId,
+          attempt: entry.retryAttempt,
+          nextDelayMs: delayMs,
+          reasonCode: classification.reasonCode,
+          phase,
+          resilienceEvent: "resilience.session.retry_scheduled",
+        },
+        "session transient failure — scheduling retry",
+      );
+
+      if (entry.retryTimer) clearTimeout(entry.retryTimer);
+      entry.retryTimer = setTimeout(() => {
+        entry.retryTimer = null;
+        this.runRetry(chatId).catch((retryErr) => {
+          this.config.log.warn({ chatId, retryErr }, "session retry failed");
+        });
+      }, delayMs);
+      return true;
+    }
+
+    // Permanent / degraded — legacy F2 signalling (server state + structured
+    // error event), then let caller tear down.
+    this.notifySessionState(chatId, "errored");
+    try {
+      const preview = errMsg.slice(0, 800);
+      ctx.emitEvent({
+        kind: "error",
+        payload: {
+          source: "runtime",
+          message: `Session ${phase} failed: ${preview}`,
+        },
+      });
+    } catch (emitErr) {
+      this.config.log.warn({ chatId, emitErr }, "session error event emit failed");
+    }
+    return false;
+  }
+
+  /**
+   * Re-attempt a session that previously hit a transient failure. Called by
+   * the retry timer and by user-triggered immediate retry (see
+   * `triggerImmediateRetry`). Re-builds the handler — the old one may have
+   * had its SDK transport torn down.
+   */
+  private async runRetry(chatId: string): Promise<void> {
+    const entry = this.sessions.get(chatId);
+    if (!entry) return;
+    if (entry.status === "active") return; // racing inject already revived it
+
+    this.config.log.info(
+      {
+        chatId,
+        attempt: entry.retryAttempt,
+        reasonCode: entry.lastRetryReason,
+        resilienceEvent: "resilience.session.retry_started",
+      },
+      "session transient retry — starting attempt",
+    );
+
+    // Enforce concurrency limit before claiming the slot. If we cannot, the
+    // entry stays in transient-retry state and a future retry / message will
+    // try again.
+    if (!this.acquireActiveSlot(chatId, entry.startMessage ?? buildEmptySessionMessage(chatId), undefined)) {
+      // Couldn't get a slot — re-arm the timer with a short delay.
+      const nextDelay = 5_000;
+      entry.retryNextAt = Date.now() + nextDelay;
+      entry.retryTimer = setTimeout(() => {
+        entry.retryTimer = null;
+        this.runRetry(chatId).catch((err) => {
+          this.config.log.warn({ chatId, err }, "session retry rearm failed");
+        });
+      }, nextDelay);
+      return;
+    }
+
+    entry.status = "active";
+    this._activeCount++;
+    entry.lastActivity = Date.now();
+
+    // Fresh handler — the old one may have closed its SDK transport.
+    const handlerCfg = this.config.agentConfigCache
+      ? { ...this.config.handlerConfig, agentConfigCache: this.config.agentConfigCache }
+      : this.config.handlerConfig;
+    const newHandler = this.config.handlerFactory(handlerCfg);
+    entry.handler = newHandler;
+    const ctx = this.buildSessionContext(chatId);
+
+    this.notifySessionState(chatId, "active");
+    try {
+      const resumeMessage = entry.startMessage ?? null;
+      const previousSessionId = entry.claudeSessionId || entry.retryFromEvicted?.claudeSessionId || "";
+      if (previousSessionId) {
+        const sid = await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx);
+        entry.claudeSessionId = sid;
+      } else {
+        // No resume key yet — fall back to fresh start.
+        const message = resumeMessage ?? buildEmptySessionMessage(chatId);
+        const sid = await newHandler.start(message, ctx);
+        entry.claudeSessionId = sid;
+      }
+      entry.retryAttempt = 0;
+      entry.retryNextAt = null;
+      entry.lastRetryReason = null;
+      this.config.log.info(
+        {
+          chatId,
+          sessionId: entry.claudeSessionId,
+          resilienceEvent: "resilience.session.retry_succeeded",
+        },
+        "session transient retry succeeded",
+      );
+      this.persistRegistry();
+    } catch (err) {
+      const classification = classify(err, { source: "session" });
+      const handled = this.handleSessionFailure({
+        entry,
+        ctx,
+        err,
+        phase: previousAvailable(entry) ? "resume" : "start",
+        classification,
+      });
+      if (!handled) {
+        this.sessions.delete(chatId);
+        this.sessionRuntimeStates.delete(chatId);
+        this.recomputeRuntimeState();
+        this._activeCount--;
+      }
+    }
+  }
+
+  /**
+   * Cancel any pending retry timer and re-run the retry now. Used when a new
+   * user message arrives for a chat in transient-retry mode — the message is
+   * a strong signal that the user is waiting, so don't make them sit through
+   * the rest of the backoff window.
+   */
+  private triggerImmediateRetry(chatId: string): void {
+    const entry = this.sessions.get(chatId);
+    if (!entry || entry.retryAttempt === 0) return;
+    if (entry.retryTimer) {
+      clearTimeout(entry.retryTimer);
+      entry.retryTimer = null;
+    }
+    void this.runRetry(chatId);
   }
 
   /**

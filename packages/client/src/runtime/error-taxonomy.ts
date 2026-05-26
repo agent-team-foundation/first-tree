@@ -211,6 +211,27 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
     };
   }
 
+  // -- Permanent shapes by error class --------------------------------------
+  // Check class names FIRST so they win over loose substring heuristics
+  // (e.g. "fetch failed" in an unrelated message accidentally classifying a
+  // permanent identity error as transient network).
+  if (shape.name === "ClientUserMismatchError" || shape.name === "ClientOrgMismatchError") {
+    return {
+      kind: ERROR_KINDS.PERMANENT,
+      strategy: NONE,
+      reasonCode: "client_identity_mismatch",
+      message: shape.message ?? "Client identity mismatch",
+    };
+  }
+  if (shape.name === "AuthRefreshFailedError") {
+    return {
+      kind: ERROR_KINDS.PERMANENT,
+      strategy: NONE,
+      reasonCode: "auth_refresh_failed",
+      message: shape.message ?? "Refresh token rejected",
+    };
+  }
+
   // -- Anthropic SDK / stream errors ---------------------------------------
   // RateLimitError (429) — name is contributed by the SDK; substrings are
   // fallbacks for proxied / wrapped errors that drop the class identity.
@@ -250,24 +271,6 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       strategy: TRANSIENT_FAST,
       reasonCode: "network_error",
       message: shape.message ?? "Network error",
-    };
-  }
-
-  // -- Permanent shapes by error class --------------------------------------
-  if (shape.name === "ClientUserMismatchError" || shape.name === "ClientOrgMismatchError") {
-    return {
-      kind: ERROR_KINDS.PERMANENT,
-      strategy: NONE,
-      reasonCode: "client_identity_mismatch",
-      message: shape.message ?? "Client identity mismatch",
-    };
-  }
-  if (shape.name === "AuthRefreshFailedError") {
-    return {
-      kind: ERROR_KINDS.PERMANENT,
-      strategy: NONE,
-      reasonCode: "auth_refresh_failed",
-      message: shape.message ?? "Refresh token rejected",
     };
   }
 
