@@ -13,19 +13,19 @@ external IM integration, then `daemon start` to bring everything online.
 - **Node.js** ≥ 22.16 (24 recommended).
 - **The CLI** — `npm install -g first-tree && first-tree --version`.
 - **A connect token** — generated from the web console's *Computers → New
-  Connection* dialog. The token's `iss` claim carries the hub URL, so the
-  CLI does not need a server flag.
-- **A server you can reach** — either a SaaS hub or a locally running
-  server.
+  Connection* dialog. The token's `iss` claim carries the server URL, so
+  the CLI does not need a server flag.
+- **A server you can reach** — either the hosted SaaS or a locally
+  running server.
 
 ## End-to-end flow
 
 ```bash
-# 1. Sign this machine into the hub. Persists credentials and installs
-#    the background daemon on macOS / Linux.
+# 1. Sign this machine in. Persists credentials and installs the
+#    background daemon on macOS / Linux.
 first-tree login <connect-token>
 
-# 2. Create the agent record on the hub and bind it to this client.
+# 2. Create the agent record on the server and bind it to this client.
 #    The same JWT signs every request — no per-agent token.
 first-tree agent create alice \
   --type human \
@@ -77,8 +77,8 @@ first-tree agent add --agent-id <agent-uuid>
 first-tree agent list
 ```
 
-The local config directory is keyed by the agent's canonical name on the
-hub — there is no separate "local alias" to invent.
+The local config directory is keyed by the agent's canonical server-side
+name — there is no separate "local alias" to invent.
 
 ## Inspecting and recovering
 
@@ -88,7 +88,7 @@ hub — there is no separate "local alias" to invent.
 | Daemon readiness check | `first-tree daemon doctor` |
 | Cross-subsystem readiness check | `first-tree doctor` |
 | List local agent bindings | `first-tree agent list` |
-| List every agent you manage on the hub | `first-tree agent list --remote` |
+| List every agent you manage on the server | `first-tree agent list --remote` |
 | Take over a machine bound to another user | `first-tree login <token> --override` |
 | Send a chat message | `first-tree chat send <agent-name> "message"` |
 | List chats | `first-tree chat list` |
@@ -113,7 +113,7 @@ retained as a read-only debug endpoint.
 | Variable | Purpose |
 |---|---|
 | `FIRST_TREE_HOME` | Override config/data home directory (default: `~/.first-tree/hub`) |
-| `FIRST_TREE_SERVER_URL` | Hub server URL (alternative to the token's `iss` claim) |
+| `FIRST_TREE_SERVER_URL` | Server URL (alternative to the token's `iss` claim) |
 
 Feishu credentials (`--app-id` / `--app-secret`) are only needed when
 binding a Feishu bot via `agent bind bot`.

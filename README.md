@@ -51,7 +51,7 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - `packages/e2e/` — black-box e2e harness (`@first-tree/e2e`)
 - `skills/` — per-skill markdown payloads (`first-tree`, `first-tree-cloud`,
   `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`,
-  `first-tree-onboarding`)
+  `first-tree-onboarding`, `github-scan`)
 
 ## Documentation
 

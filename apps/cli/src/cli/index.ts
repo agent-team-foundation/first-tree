@@ -28,7 +28,7 @@ const program = new Command();
 
 program
   .name(channelConfig.binName)
-  .description("First Tree — Context Tree, GitHub Scan, and Hub agent collaboration in one CLI")
+  .description("First Tree — Context Tree, GitHub Scan, and agent collaboration in one CLI")
   .version(COMMAND_VERSION)
   .option("--json", "emit only machine-readable JSON on stdout; silence human status lines on stderr")
   .option("--verbose", "raise log level to debug (overrides FIRST_TREE_LOG_LEVEL)")

@@ -19,7 +19,7 @@ already have.
 | staging | `npm i -g first-tree-staging` | `first-tree-staging` / `fts` | `~/.first-tree-staging/` | `first-tree-staging.service` |
 | prod | `npm i -g first-tree` | `first-tree` / `ft` | `~/.first-tree/` | `first-tree.service` |
 
-Each install registers as a separate `clientId` on whichever hub it
+Each install registers as a separate `clientId` on whichever server it
 connects to (dev → local server, staging → `dev.cloud.first-tree.ai`,
 prod → `cloud.first-tree.ai`), so server-side state stays cleanly
 partitioned too.
@@ -30,7 +30,7 @@ partitioned too.
 # from repo root, first-time use
 ./scripts/dev-install.sh
 
-# Start your local hub server (any way you like — e.g. `pnpm --filter @first-tree/server dev`)
+# Start your local server (any way you like — e.g. `pnpm --filter @first-tree/server dev`)
 
 first-tree-dev login <connect-token>   # token from http://127.0.0.1:8000/clients
 first-tree-dev daemon status
@@ -110,7 +110,7 @@ first-tree-staging login <staging-token>
 
 ## What `dev-install.sh` does NOT isolate
 
-- The PostgreSQL database. Hub server uses one shared DB by default. If
+- The PostgreSQL database. The server uses one shared DB by default. If
   you also run an in-tree server (`pnpm --filter @first-tree/server dev`),
   use a separate DB URL via `FIRST_TREE_DATABASE_URL`.
 - Global npm packages. If you have both staging and prod installed,
