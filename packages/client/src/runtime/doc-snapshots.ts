@@ -90,7 +90,7 @@ export type SelfFence = {
    *  for pre-#506 chats. Absolute paths must realpath inside this; snapshot
    *  keys are emitted relative to this root. */
   agentHome: string;
-  /** Single declared source-repo `localPath` — e.g. "first-tree-hub". Set when
+  /** Single declared source-repo `localPath` — e.g. `"first-tree"`. Set when
    *  `payload.gitRepos.length === 1` and its localPath is non-empty. */
   singleRepoLocalPath?: string;
 };
