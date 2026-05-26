@@ -115,7 +115,7 @@ describe("conversation-list source tags", () => {
     );
 
     // Default (no source param) returns all four.
-    const all = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const all = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
@@ -124,7 +124,7 @@ describe("conversation-list source tags", () => {
 
     // manual: must NOT leak github / feishu chats — that was the regression
     // risk when this filter was first wired.
-    const manualOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const manualOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
@@ -135,7 +135,7 @@ describe("conversation-list source tags", () => {
     // origin collapses PR + Issue into a single `github` bucket — the
     // per-entity granularity now rides on `row.entityType` for the
     // leading-icon renderer, not on the filter dimension.
-    const githubOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const githubOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
@@ -150,7 +150,7 @@ describe("conversation-list source tags", () => {
     expect(prRow?.entityType).toBe("pull_request");
     expect(issueRow?.entityType).toBe("issue");
 
-    const feishuOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const feishuOnly = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
@@ -247,7 +247,7 @@ describe("conversation-list source tags", () => {
     expect(counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
     expect(counts.manual).toEqual({ chatCount: 0, unreadChatCount: 0 });
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
@@ -288,7 +288,7 @@ describe("conversation-list source tags", () => {
       { chatId: issueUnread, agentId: admin.humanAgentUuid, unreadMentionCount: 1 },
     ]);
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "unread",
       engagement: "active",
@@ -335,7 +335,7 @@ describe("conversation-list source tags", () => {
     expect(archivedCounts.counts.github).toEqual({ chatCount: 1, unreadChatCount: 0 });
 
     // Sanity: the list query mirrors the same engagement view.
-    const archivedList = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const archivedList = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "archived",
@@ -402,7 +402,7 @@ describe("conversation-list source tags", () => {
     // Filtering by origin AND `watching=true` surfaces the watcher row.
     // Phase B lifted `watching` out of the filter enum into an
     // independent boolean — the two now compose freely.
-    const watchingPr = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const watchingPr = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",

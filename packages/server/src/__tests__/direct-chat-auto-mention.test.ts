@@ -37,9 +37,14 @@ import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 describe("direct-chat auto-mention for chat-list unread counter", () => {
   const getApp = useTestApp();
 
-  async function loadUnread(chatId: string, agentUuid: string, organizationId: string): Promise<number> {
+  async function loadUnread(
+    chatId: string,
+    agentUuid: string,
+    memberId: string,
+    organizationId: string,
+  ): Promise<number> {
     const app = getApp();
-    const { rows } = await listMeChats(app.db, agentUuid, organizationId, {
+    const { rows } = await listMeChats(app.db, agentUuid, memberId, organizationId, {
       limit: 10,
       filter: "all",
       engagement: "all",
@@ -87,7 +92,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       content: "hi, no explicit @ here",
     });
 
-    expect(await loadUnread(chatId, peer.agent.uuid, peer.organizationId)).toBeGreaterThanOrEqual(1);
+    expect(await loadUnread(chatId, peer.agent.uuid, peer.memberId, peer.organizationId)).toBeGreaterThanOrEqual(1);
   });
 
   it("agent → human DM: human's unread counter bumps on plain text", async () => {
@@ -104,7 +109,9 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       content: "ack",
     });
 
-    expect(await loadUnread(chatId, admin.humanAgentUuid, admin.organizationId)).toBeGreaterThanOrEqual(1);
+    expect(await loadUnread(chatId, admin.humanAgentUuid, admin.memberId, admin.organizationId)).toBeGreaterThanOrEqual(
+      1,
+    );
   });
 
   it("agent ↔ agent DM: counter bumps AND inbox wakes the peer (v2 1:1 implicit wake)", async () => {
@@ -128,7 +135,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
     });
 
     // Counter side unchanged.
-    expect(await loadUnread(chat.id, a2.uuid, a1.organizationId)).toBeGreaterThanOrEqual(1);
+    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBeGreaterThanOrEqual(1);
 
     // Inbox side: 1:1 implicit wake fires → exactly one notify=true row.
     expect(await notifyInboxRows(chat.id, a2.uuid)).toHaveLength(1);
@@ -174,7 +181,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       content: `@${peer.agent.name}`,
     });
 
-    expect(await loadUnread(chatId, peer.agent.uuid, peer.organizationId)).toBe(0);
+    expect(await loadUnread(chatId, peer.agent.uuid, peer.memberId, peer.organizationId)).toBe(0);
   });
 
   it("group chat: plain text still produces zero counter bumps (no auto-mention)", async () => {
@@ -194,7 +201,7 @@ describe("direct-chat auto-mention for chat-list unread counter", () => {
       content: "anyone around",
     });
 
-    expect(await loadUnread(chat.id, a2.uuid, a1.organizationId)).toBe(0);
-    expect(await loadUnread(chat.id, a3.uuid, a1.organizationId)).toBe(0);
+    expect(await loadUnread(chat.id, a2.uuid, a1.memberId, a1.organizationId)).toBe(0);
+    expect(await loadUnread(chat.id, a3.uuid, a1.memberId, a1.organizationId)).toBe(0);
   });
 });

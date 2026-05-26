@@ -56,9 +56,9 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
     `);
   }
 
-  async function rowFor(chatId: string, viewerAgentId: string, organizationId: string) {
+  async function rowFor(chatId: string, viewerAgentId: string, viewerMemberId: string, organizationId: string) {
     const app = getApp();
-    const { rows } = await listMeChats(app.db, viewerAgentId, organizationId, {
+    const { rows } = await listMeChats(app.db, viewerAgentId, viewerMemberId, organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
@@ -73,7 +73,7 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
     const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [peer.agent.uuid],
     });
-    const row = await rowFor(chatId, admin.humanAgentUuid, admin.organizationId);
+    const row = await rowFor(chatId, admin.humanAgentUuid, admin.memberId, admin.organizationId);
     expect(row?.liveActivity).toBeNull();
   });
 
@@ -90,7 +90,7 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
       args: {},
       status: "pending",
     });
-    const row = await rowFor(chatId, admin.humanAgentUuid, admin.organizationId);
+    const row = await rowFor(chatId, admin.humanAgentUuid, admin.memberId, admin.organizationId);
     expect(row?.liveActivity).toMatchObject({
       agentId: peer.agent.uuid,
       kind: "tool_call",
@@ -107,14 +107,18 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
       participantIds: [a.agent.uuid],
     });
     await appendEvent(a.agent.uuid, chatA, "thinking", {});
-    expect((await rowFor(chatA, admin.humanAgentUuid, admin.organizationId))?.liveActivity?.label).toBe("Thinking");
+    expect((await rowFor(chatA, admin.humanAgentUuid, admin.memberId, admin.organizationId))?.liveActivity?.label).toBe(
+      "Thinking",
+    );
 
     const b = await createTestAgent(app, { name: `la-write-${crypto.randomUUID().slice(0, 6)}` });
     const { chatId: chatB } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
       participantIds: [b.agent.uuid],
     });
     await appendEvent(b.agent.uuid, chatB, "assistant_text", { text: "hello" });
-    expect((await rowFor(chatB, admin.humanAgentUuid, admin.organizationId))?.liveActivity?.label).toBe("Writing");
+    expect((await rowFor(chatB, admin.humanAgentUuid, admin.memberId, admin.organizationId))?.liveActivity?.label).toBe(
+      "Writing",
+    );
   });
 
   it("turn_end as the newest event → null (turn is over)", async () => {
@@ -126,7 +130,7 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
     });
     await appendEvent(peer.agent.uuid, chatId, "tool_call", { toolUseId: "t1", name: "Read", args: {}, status: "ok" });
     await appendEvent(peer.agent.uuid, chatId, "turn_end", { status: "success" });
-    const row = await rowFor(chatId, admin.humanAgentUuid, admin.organizationId);
+    const row = await rowFor(chatId, admin.humanAgentUuid, admin.memberId, admin.organizationId);
     expect(row?.liveActivity).toBeNull();
   });
 
@@ -138,7 +142,7 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
       participantIds: [peer.agent.uuid],
     });
     await appendEvent(peer.agent.uuid, chatId, "error", { source: "runtime", message: "boom" });
-    const row = await rowFor(chatId, admin.humanAgentUuid, admin.organizationId);
+    const row = await rowFor(chatId, admin.humanAgentUuid, admin.memberId, admin.organizationId);
     expect(row?.liveActivity).toBeNull();
   });
 
@@ -157,7 +161,7 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
       { toolUseId: "t1", name: "Read", args: {}, status: "pending" },
       oldTs,
     );
-    const row = await rowFor(chatId, admin.humanAgentUuid, admin.organizationId);
+    const row = await rowFor(chatId, admin.humanAgentUuid, admin.memberId, admin.organizationId);
     expect(row?.liveActivity).toBeNull();
   });
 });

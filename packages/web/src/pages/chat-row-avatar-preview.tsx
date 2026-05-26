@@ -39,6 +39,7 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
+    chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? false,
   };
 }
 
