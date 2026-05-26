@@ -8,7 +8,7 @@ import { type CurrentRunHandle, readCredentialsOrThrow, readCurrentHandle } from
 import { authedJson } from "../framework/server-driver/http.js";
 
 /**
- * CLI chat-send e2e — covers the user-facing `first-tree-hub chat send`
+ * CLI chat-send e2e — covers the user-facing `first-tree chat send`
  * surface end-to-end against a real spawned dist CLI process, not just an
  * HTTP test against the underlying route.
  *
@@ -25,7 +25,7 @@ import { authedJson } from "../framework/server-driver/http.js";
  *      the CLI's `resolveLocalAgent` knows the fixture human agent as the
  *      sender. (`credentials.ts` only plants credentials.json + client.yaml;
  *      `agents/` is the per-agent registration the operator would normally
- *      add via `first-tree-hub agent add` after `connect`.)
+ *      add via `first-tree agent add` after `connect`.)
  *   3. Create a 2-party chat with [human, recipient] via the public API
  *      and pass its id as `FIRST_TREE_CHAT_ID` — the CLI's new
  *      group-chat-only model (PR #465) requires the sender's "current

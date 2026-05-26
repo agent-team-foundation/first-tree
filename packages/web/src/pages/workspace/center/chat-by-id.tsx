@@ -36,7 +36,15 @@ function pickPrimaryAgent(participants: { agentId: string; type: string }[], myA
   return nonSelf[0]?.agentId ?? null;
 }
 
-export function ChatByIdView({ chatId }: { chatId: string }) {
+export function ChatByIdView({
+  chatId,
+  narrow,
+  onShowConversations,
+}: {
+  chatId: string;
+  narrow: boolean;
+  onShowConversations: (() => void) | null;
+}) {
   const queryClient = useQueryClient();
   const { agentId: myAgentId } = useAuth();
 
@@ -140,9 +148,11 @@ export function ChatByIdView({ chatId }: { chatId: string }) {
           joining: joinMut.isPending,
           error: joinMut.isError ? (joinMut.error instanceof Error ? joinMut.error.message : "Failed to join") : null,
         }}
+        narrow={narrow}
+        onShowConversations={onShowConversations}
       />
     );
   }
 
-  return <ChatView agentId={primaryAgent} chatId={chatId} />;
+  return <ChatView agentId={primaryAgent} chatId={chatId} narrow={narrow} onShowConversations={onShowConversations} />;
 }

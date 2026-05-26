@@ -345,6 +345,9 @@ describe("supersede hooks", () => {
 
     const result = await claimClient(app.db, admin.clientId, newOwner.userId);
     expect(result.unpinnedAgentIds).toContain(peerAgent.uuid);
+    // The affected chat flows back so the route can fire a post-commit
+    // needs-you refresh (this path emits no session:state change).
+    expect(result.supersededChatIds).toContain(chatId);
 
     const [row] = await app.db.select().from(pendingQuestions).where(eq(pendingQuestions.id, correlationId)).limit(1);
     expect(row?.status).toBe("superseded");
@@ -353,7 +356,7 @@ describe("supersede hooks", () => {
 });
 
 /**
- * Regression: github.com/agent-team-foundation/first-tree-hub#404 — when a
+ * Regression: github.com/agent-team-foundation/first-tree#404 — when a
  * `direct → group` upgrade re-grades the asker to `mention_only` AFTER the
  * question is posted, the `format=question_answer` fan-out used to set
  * `notify=false` for the asker (structured content carries no @<name>

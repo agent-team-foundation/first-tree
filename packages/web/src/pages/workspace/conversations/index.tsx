@@ -1,18 +1,18 @@
-import type { ChatEngagementView, ChatSource, MeChatRow } from "@first-tree/shared";
+import { type ChatEngagementView, type ChatSource, type MeChatRow, RUNTIME_STALE_MS } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { ActivityDots } from "../../../components/chat/activity-dots.js";
 import { ChatRowAvatar } from "../../../components/chat/chat-row-avatar.js";
 import { SourceIcon } from "../../../components/chat/source-icon.js";
-import { WorkingChip } from "../../../components/chat/working-chip.js";
 import { Popover } from "../../../components/ui/popover.js";
 import { SegmentedControl } from "../../../components/ui/segmented-control.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
 import { FilterPopover, originLabel } from "./filter-popover.js";
-import { type GroupMode, groupRows } from "./group-rows.js";
+import { type GroupMode, groupRows, rowIsFailed, rowNeedsYou, splitAttentionRows } from "./group-rows.js";
 import { RowEngagementMenu } from "./row-engagement-menu.js";
 
 /**
@@ -96,6 +96,7 @@ export function ConversationList({
   onClearFilters,
   group,
   onGroupChange,
+  width = 320,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
@@ -106,6 +107,11 @@ export function ConversationList({
   onUnreadChange: (next: boolean) => void;
   watching: boolean;
   onWatchingChange: (next: boolean) => void;
+  /** Override the default 20rem aside width. Used by `WorkspacePage`'s
+   *  narrow-viewport overlay branch to cap to `min(88vw, 20rem)` so the
+   *  inner aside doesn't overflow the wrapper on phones narrower than
+   *  ~23rem logical (e.g. compact Android handsets). */
+  width?: number | string;
   /**
    * Multi-select origin filter. Phase B's filter popover (forthcoming
    * in the next commit) will mount its checkbox group against this
@@ -130,7 +136,17 @@ export function ConversationList({
   onGroupChange: (next: GroupMode) => void;
 }) {
   const { agentId: selfAgentId } = useAuth();
-  const [extraPages, setExtraPages] = useState<MeChatRow[]>([]);
+  // Pages loaded via `Load more` carry a `fetchedAt` timestamp so the busy
+  // dot can be aged out on those rows. The parent useQuery refetches every
+  // 30s and re-discovers stale `runtime_state_at` for the first page, but
+  // extraPages bypass react-query entirely — without this stamp, a row from
+  // an older page whose agent crashed mid-turn would keep flashing busy
+  // forever. The render path drops busyAgentIds on rows from pages older
+  // than RUNTIME_STALE_MS (60s) plus one refetchInterval (30s) — total
+  // worst-case stuck-busy window ~90s on these rows, vs ≤60s for the first
+  // page that refetches directly. No UX disruption from the user's
+  // loaded position.
+  const [extraPages, setExtraPages] = useState<Array<{ fetchedAt: number; rows: MeChatRow[] }>>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
   // Per-bucket collapse override. Absence in the map means "use the
@@ -150,7 +166,7 @@ export function ConversationList({
   const originParam = origin.length > 0 ? [...origin] : undefined;
   const withParam = participants.length > 0 ? [...participants] : undefined;
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, dataUpdatedAt } = useQuery({
     // `origin` / `with` are arrays — react-query needs a stable key
     // signature, so we serialise them into the query key the same way
     // the wire does. Empty array collapses to `null` so an unchanged
@@ -172,7 +188,17 @@ export function ConversationList({
         origin: originParam,
         with: withParam,
       }),
-    refetchInterval: 15_000,
+    // Bounded refetch is the safety floor for the per-chat composite
+    // signals projected onto each row: `busyAgentIds` lights the chat-list
+    // dot for the working / codex-no-events case, and the only way the
+    // dot self-heals after a client crash is for a fresh `listMeChats`
+    // to discover `runtime_state_at` aged past `RUNTIME_STALE_MS` (60s)
+    // — the server emits no notification when staleness is reached
+    // passively. Without this interval the dot would stay lit forever
+    // until some unrelated invalidation. 30s matches the
+    // `chat-agent-status` query, so the first-page stuck-busy window is
+    // bounded by RUNTIME_STALE_MS (60s) + one refetch (30s) ≈ 90s upper.
+    refetchInterval: 30_000,
   });
 
   const resetExtras = (): void => {
@@ -202,7 +228,31 @@ export function ConversationList({
   }, [filter, engagement, watching, originKey, participantsKey]);
 
   const baseRows = data?.rows ?? [];
-  const allRows = useMemo(() => [...baseRows, ...extraPages], [baseRows, extraPages]);
+  // Render-time staleness sieve for extraPages: any row whose page was
+  // fetched > RUNTIME_STALE_MS (60s) ago has its `busyAgentIds` blanked.
+  // The check tracks the server's fail-closed window but the recompute
+  // cadence is bounded by react-query's refetchInterval (30s), so the
+  // real upper bound is `RUNTIME_STALE_MS + refetchInterval` ≈ 90s on
+  // extraPage rows specifically (vs ≤60s on the first page, which
+  // refetches directly). `dataUpdatedAt` (set on every successful
+  // refetch, even when content is structurally identical) is the time
+  // anchor — `baseRows` identity can stay stable across refetches when
+  // structural sharing kicks in, so depending on it alone would leave
+  // a memo that never re-evaluates `Date.now()` and an old extraPage
+  // row could keep flashing busy forever. Rationale: see the comment on
+  // the `extraPages` declaration.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dataUpdatedAt is the time-tick that drives stale recomputation; not a value read
+  const allRows = useMemo(() => {
+    const now = Date.now();
+    const expanded: MeChatRow[] = [];
+    for (const page of extraPages) {
+      const stale = now - page.fetchedAt > RUNTIME_STALE_MS;
+      for (const row of page.rows) {
+        expanded.push(stale && row.busyAgentIds.length > 0 ? { ...row, busyAgentIds: [] } : row);
+      }
+    }
+    return [...baseRows, ...expanded];
+  }, [baseRows, extraPages, dataUpdatedAt]);
 
   // Buckets are recomputed whenever the rows or group mode change.
   // Day-rollover (a chat that was "Today" at 23:59 should drift into
@@ -213,7 +263,19 @@ export function ConversationList({
   // (e.g. an inactive tab the browser throttles) won't see the bucket
   // shift until the next refetch lands; that's an acceptable degree
   // of staleness for a presentational concern.
-  const buckets = useMemo(() => groupRows(allRows, group), [allRows, group]);
+  // Hoist attention chats (failed + needs-you) into a pinned section at the top
+  // WITHOUT touching cursor pagination or reordering the main list: partition
+  // them out, group the rest as usual, then prepend a synthetic "Needs
+  // attention" bucket (failed pinned above needs-you). A chat appears in
+  // exactly one place (pinned OR its normal group), never both.
+  const buckets = useMemo(() => {
+    const { attention, rest } = splitAttentionRows(allRows);
+    if (attention.length === 0) return groupRows(allRows, group);
+    return [
+      { key: "needs-attention", label: "Needs attention", rows: attention, defaultCollapsed: false },
+      ...groupRows(rest, group),
+    ];
+  }, [allRows, group]);
 
   // Track the cursor for follow-up page loads. Mirrored from the latest
   // base-query response: any background refetch resets `nextCursor` so the
@@ -239,7 +301,7 @@ export function ConversationList({
         with: withParam,
         cursor,
       });
-      setExtraPages((prev) => [...prev, ...next.rows]);
+      setExtraPages((prev) => [...prev, { fetchedAt: Date.now(), rows: next.rows }]);
       setNextCursor(next.nextCursor);
     } catch (err) {
       setMoreError(err instanceof Error ? err.message : "Failed to load more");
@@ -299,7 +361,7 @@ export function ConversationList({
     <aside
       className="shrink-0 flex flex-col overflow-hidden"
       style={{
-        width: 320,
+        width,
         background: "var(--bg-raised)",
         borderRight: "var(--hairline) solid var(--border)",
       }}
@@ -568,6 +630,8 @@ export function ConversationList({
                   // the duplicate; the em-dash placeholder picks up below.
                   const subtitle = rawSubtitle && rawSubtitle !== row.title ? rawSubtitle : "";
                   const hasUnread = row.unreadMentionCount > 0;
+                  const failed = rowIsFailed(row);
+                  const needsYou = rowNeedsYou(row);
                   return (
                     <div
                       key={row.chatId}
@@ -585,7 +649,15 @@ export function ConversationList({
                           padding: "var(--sp-2) var(--sp-3)",
                           gap: "var(--sp-2_5)",
                           background: isSelected ? "var(--bg-active)" : "transparent",
-                          borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--accent)" : "transparent"}`,
+                          borderLeft: `var(--hairline-bold) solid ${
+                            isSelected
+                              ? "var(--accent)"
+                              : failed
+                                ? "var(--state-error)"
+                                : needsYou
+                                  ? "var(--state-blocked)"
+                                  : "transparent"
+                          }`,
                         }}
                       >
                         <ChatRowAvatar
@@ -593,8 +665,9 @@ export function ConversationList({
                           type={row.type}
                           participants={row.participants}
                           selfAgentId={selfAgentId ?? ""}
-                          engagedAgentIds={row.engagedAgentIds}
                           unreadCount={row.unreadMentionCount}
+                          needsYou={needsYou}
+                          failed={failed}
                         />
                         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
                           <div className="flex items-center" style={{ gap: 6 }}>
@@ -617,13 +690,22 @@ export function ConversationList({
                               {row.title}
                             </span>
                             {(() => {
-                              const slot = row.liveActivity ? (
-                                <WorkingChip activity={row.liveActivity} />
-                              ) : row.lastMessageAt ? (
-                                <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-                                  {formatRowTime(row.lastMessageAt)}
-                                </span>
-                              ) : null;
+                              // `busyAgentIds` is the authoritative D-axis
+                              // "is anyone working in this chat" signal — it
+                              // lights the activity dots even when the
+                              // runtime emits no intermediate
+                              // `session_events` (codex tools that only
+                              // report on turn completion), which the legacy
+                              // `liveActivity` freshness proxy alone would
+                              // miss.
+                              const slot =
+                                row.busyAgentIds.length > 0 ? (
+                                  <ActivityDots />
+                                ) : row.lastMessageAt ? (
+                                  <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                                    {formatRowTime(row.lastMessageAt)}
+                                  </span>
+                                ) : null;
                               return slot ? (
                                 <span className="shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0">
                                   {slot}

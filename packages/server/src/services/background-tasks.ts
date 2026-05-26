@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
 import type { AdapterManager } from "./adapter-manager.js";
+import * as chatArchiveService from "./chat-archive.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
 import type { KaelRuntime } from "./kael-runtime.js";
@@ -24,6 +25,7 @@ export function createBackgroundTasks(
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let adapterOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let kaelOutboundTimer: ReturnType<typeof setInterval> | null = null;
+  let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -92,6 +94,28 @@ export function createBackgroundTasks(
         }, 5_000);
       }
 
+      // Chat auto-archive sweeper — cadence comes from runtime config so
+      // ops can tune (or zero-disable) without touching code. See
+      // services/chat-archive.ts for the two routes and their idle
+      // thresholds (defaults: 1h for chats with GitHub mappings, 12h
+      // otherwise).
+      const archiveSweepSeconds = app.config.runtime.archiveSweepIntervalSeconds;
+      if (archiveSweepSeconds > 0) {
+        archiveSweepTimer = setInterval(async () => {
+          try {
+            const stats = await chatArchiveService.sweepChatArchive(app.db, {
+              mappedIdleSeconds: app.config.runtime.archiveMappedIdleSeconds,
+              unmappedIdleSeconds: app.config.runtime.archiveUnmappedIdleSeconds,
+            });
+            if (stats.mappedRowsArchived > 0 || stats.unmappedRowsArchived > 0) {
+              log.info(stats, "chat auto-archive sweep flipped rows to archived");
+            }
+          } catch (err) {
+            log.error({ err }, "chat auto-archive sweep failed");
+          }
+        }, archiveSweepSeconds * 1000);
+      }
+
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
@@ -124,6 +148,10 @@ export function createBackgroundTasks(
       if (kaelOutboundTimer) {
         clearInterval(kaelOutboundTimer);
         kaelOutboundTimer = null;
+      }
+      if (archiveSweepTimer) {
+        clearInterval(archiveSweepTimer);
+        archiveSweepTimer = null;
       }
     },
   };

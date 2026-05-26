@@ -1,0 +1,36 @@
+import { describe, expect, it } from "vitest";
+import { anchorKey, isJumpable } from "../use-mounted-anchors.js";
+
+// `useMountedAnchors` itself is a DOM/MutationObserver hook (not exercisable in
+// the node vitest env), but the gate every jump affordance keys off is the pure
+// `isJumpable` — that's what these cover, so the "clickable iff mounted anchor"
+// contract (incl. the needs-you Reply) can't silently regress to a no-op.
+
+describe("anchorKey", () => {
+  it("joins main and agentId with a colon", () => {
+    expect(anchorKey("working", "a1")).toBe("working:a1");
+    expect(anchorKey("needs_you", "a2")).toBe("needs_you:a2");
+    expect(anchorKey("failed", "a3")).toBe("failed:a3");
+  });
+});
+
+describe("isJumpable — jump affordance gates on a mounted anchor", () => {
+  const mounted = new Set([
+    anchorKey("working", "atlas"),
+    anchorKey("needs_you", "beacon"),
+    anchorKey("failed", "cypher"),
+  ]);
+
+  it("true when this agent's anchor for that status is mounted", () => {
+    expect(isJumpable(mounted, "working", "atlas")).toBe(true);
+    expect(isJumpable(mounted, "needs_you", "beacon")).toBe(true); // → rail text + Reply both clickable
+    expect(isJumpable(mounted, "failed", "cypher")).toBe(true);
+  });
+
+  it("false when the anchor isn't mounted — so nothing becomes a clickable no-op", () => {
+    expect(isJumpable(mounted, "working", "beacon")).toBe(false); // right agent, wrong status
+    expect(isJumpable(mounted, "failed", "atlas")).toBe(false); // wrong status for this agent
+    expect(isJumpable(mounted, "needs_you", "delta")).toBe(false); // not loaded → Reply not rendered clickable
+    expect(isJumpable(new Set(), "working", "atlas")).toBe(false); // nothing mounted yet
+  });
+});

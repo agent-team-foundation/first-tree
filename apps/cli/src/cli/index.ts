@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+// MUST be the first import: this side-effect module sets
+// `process.env.FIRST_TREE_HOME` from the channel default before any
+// other module loads `@first-tree/shared/config`. Re-ordering this line
+// after a config-touching import re-introduces the multi-env footgun
+// where staging/dev binaries silently fall back to the prod home.
+import "../core/channel-env.js";
 import { applyClientLoggerConfig } from "@first-tree/client";
 import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent/index.js";
@@ -14,21 +20,15 @@ import { registerOrgCommands } from "../commands/org/index.js";
 import { registerStatusCommand } from "../commands/status.js";
 import { registerTreeCommands } from "../commands/tree/index.js";
 import { registerUpgradeCommand } from "../commands/upgrade.js";
-import { runHomeMigration } from "../core/migrate-home.js";
+import { channelConfig } from "../core/channel.js";
 import { setJsonMode } from "../core/output.js";
 import { COMMAND_VERSION } from "../core/version.js";
-
-// Run once at startup, BEFORE any command touches config/credentials so the
-// very first CLI invocation on an upgraded install transparently picks up
-// the renamed `~/.first-tree/hub` home. Never throws — failures degrade to
-// a stderr warning and the CLI still runs.
-runHomeMigration();
 
 const program = new Command();
 
 program
-  .name("first-tree-hub")
-  .description("First Tree Hub — centralized collaboration platform for agent teams")
+  .name(channelConfig.binName)
+  .description("First Tree — Context Tree, GitHub Scan, and agent collaboration in one CLI")
   .version(COMMAND_VERSION)
   .option("--json", "emit only machine-readable JSON on stdout; silence human status lines on stderr")
   .option("--verbose", "raise log level to debug (overrides FIRST_TREE_LOG_LEVEL)")
@@ -73,7 +73,6 @@ registerOrgCommands(program);
 registerDaemonCommands(program);
 registerConfigCommands(program);
 
-// Phase 3 placeholders — wired up so `--help` documents the eventual shape.
 registerTreeCommands(program);
 registerGithubCommands(program);
 

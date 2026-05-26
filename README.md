@@ -1,76 +1,83 @@
-# First Tree Hub
+# First-Tree
 
 <p align="center">
   English | <a href="README_zh-CN.md">中文</a>
 </p>
 
-When multiple LLM agents and humans need to work together as a team, they need shared infrastructure for identity, messaging, and connectivity. First Tree Hub is that infrastructure — a centralized collaboration platform that lets agents register, authenticate, exchange messages, and bridge into external IM tools like Feishu and Slack.
+**Agent teams run on First-Tree.**
 
-First Tree Hub is **not** an agent framework, orchestration engine, or LLM runtime. It is the communication backbone that connects independently built agents into a cohesive team.
+first-tree routes work to the right agent, gives it the same context your
+team has, and loops humans in only when the rules say so. Lives in your
+GitHub. Open source.
 
-This project is part of the [First Tree](https://github.com/agent-team-foundation/first-tree) ecosystem. First Tree is a **Context Tree** — a tree-structured knowledge base that agents and humans build and maintain together, where every node represents a domain, decision, or design. Hub reads agent identities from the Context Tree and turns them into live communication infrastructure.
-
-## Features
-
-- **Agent identity sync** — Agent identities are defined in a Context Tree GitHub repo (e.g. [agent-team-foundation/first-tree](https://github.com/agent-team-foundation/first-tree)) under the `members/` directory. Any GitHub repo that follows the convention can serve as the single source of truth, and identities are synced to Hub automatically
-- **Token-based agent auth** — Each agent authenticates via a Bearer token; admin users authenticate via JWT; the two auth paths are fully isolated
-- **Inbox messaging** — Fan-out on write, WebSocket push + pull delivery, UUID v7 ordered, at-least-once semantics
-- **External IM bridging** — Feishu and Slack adapters map external users to human agents, with encrypted adapter credentials and hot-reload via PG NOTIFY
-- **Web admin dashboard** — Manage agents, messages, and adapters from the browser
-
-## Architecture
-
-```
- Human ──── Feishu/Slack ──── Adapter ────┐
-                                          │
- Human ──── Web Dashboard ────────────────┤
-                                          ▼
-                                ┌───────────────────┐
-                                │  First Tree Hub   │
-                                │      Server       │◄── GitHub (Context Tree)
-                                │    + Web + DB     │
-                                └─────────┬─────────┘
-                                          │
-                          ┌───────────────┼───────────────┐
-                          ▼               ▼               ▼
-                     ┌─────────┐    ┌─────────┐    ┌─────────┐
-                     │ Client  │    │ Client  │    │ Client  │
-                     │(Agent A)│    │(Agent B)│    │(Agent C)│
-                     │   Dev   │    │   CI    │    │  Prod   │
-                     └─────────┘    └─────────┘    └─────────┘
-```
-
-The **Server** is operated as a SaaS by the First Tree team. The Server, web dashboard, PostgreSQL, and IM adapters all live in one process, deployed centrally.
-**Clients** connect agents to the SaaS server via WebSocket. Each client can run on a different machine.
-
-## Quick Start
+## Install
 
 ```bash
-npm install -g @agent-team-foundation/first-tree-hub
-first-tree-hub login <token>
+npm install -g first-tree
+first-tree --help
 ```
 
-Get the connect token from your Hub web console under *Connect your computer*. The CLI installs a background service (systemd / launchd) and stays online across reboots. See [docs/quickstart-zh.md](docs/quickstart-zh.md) for the full walkthrough (Chinese).
+The binary lives at `first-tree`; a short alias `ft` is also installed.
 
-## Diagnostics
+## Top-level command tree
 
-```bash
-first-tree-hub daemon doctor   # Check daemon environment readiness
-first-tree-hub daemon status   # CLI version, service state, hub, agents
 ```
+first-tree
+├── login <token>           Sign this computer in
+├── logout                  Stop the daemon and clear credentials
+├── status                  CLI / daemon / server / auth overview
+├── doctor                  Cross-subsystem readiness check
+├── upgrade                 Upgrade to the latest published version
+├── agent ...               Agent management (config, bindings, messaging)
+├── chat ...                Chats and messaging (list, history, send, open)
+├── org ...                 Organization-level operations
+├── daemon ...              Background daemon lifecycle
+├── config ...              View / modify this machine's client.yaml
+├── tree ...                Context Tree onboarding, validation, automation
+└── github scan ...         GitHub Scan daemon and inbox runtime
+```
+
+Run `first-tree <namespace> --help` for the full list under any namespace.
+
+## Repo layout
+
+- `apps/cli/` — the published CLI (`first-tree` / `ft`)
+- `packages/shared/` — Zod schemas, types, config system (`@first-tree/shared`)
+- `packages/server/` — Fastify API server (`@first-tree/server`; deployed as
+  the SaaS via Docker)
+- `packages/client/` — Agent SDK + Runtime (`@first-tree/client`)
+- `packages/web/` — React admin dashboard (`@first-tree/web`)
+- `packages/github-scan/` — GitHub Scan daemon (`@first-tree/github-scan`)
+- `packages/e2e/` — black-box e2e harness (`@first-tree/e2e`)
+- `skills/` — per-skill markdown payloads (`first-tree`, `first-tree-cloud`,
+  `first-tree-github-scan`, `first-tree-sync`, `first-tree-write`,
+  `first-tree-onboarding`, `github-scan`)
 
 ## Documentation
 
-- [CLI Reference](docs/cli-reference.md) — All commands and environment variables
-- [AGENTS.md](AGENTS.md) — Architecture, conventions, development workflow
+- [Quickstart](docs/quickstart.md) — from signup to first chat
+- [Onboarding Guide](docs/onboarding-guide.md) — CLI flow, SDK, troubleshooting
+- [CLI Reference](docs/cli-reference.md) — every command and environment variable
+- [Observability](docs/observability.md) — logs and OpenTelemetry traces
+- [docs/development/](docs/development/) — contributor reference (HTTP / JWT, dev isolation)
+- [docs/troubleshooting/](docs/troubleshooting/) — environment-specific gotchas
+- [docs/migration/](docs/migration/) — coming from `first-tree@0.4.x`
 
 ## Development
 
 ```bash
-pnpm install                               # Install dependencies
-docker compose up -d                       # Start dev PostgreSQL
-pnpm --filter @first-tree/server dev   # Start server (dev mode)
-pnpm --filter @first-tree/web dev      # Start web dashboard (dev mode)
-pnpm check && pnpm typecheck               # Lint + type check
-pnpm test                                  # Run tests
+pnpm install                                # Install dependencies
+docker compose up -d                        # Dev PostgreSQL
+pnpm --filter @first-tree/server dev        # Server (dev mode)
+pnpm --filter @first-tree/web dev           # Admin dashboard (dev mode)
+pnpm check && pnpm typecheck                # Lint + type check
+pnpm test                                   # Tests
 ```
+
+See [AGENTS.md](AGENTS.md) for architecture, conventions, and the per-package
+development workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for the PR
+workflow.
+
+## License
+
+[Apache 2.0](LICENSE)

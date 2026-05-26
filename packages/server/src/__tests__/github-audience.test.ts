@@ -112,8 +112,8 @@ describe("identifyActor", () => {
     const id = await identifyActor(
       app.db,
       admin.organizationId,
-      { githubLogin: "First-Tree-Hub[bot]", isBot: true },
-      "first-tree-hub",
+      { githubLogin: "First-Tree[bot]", isBot: true },
+      "first-tree",
     );
     expect(id).toEqual({ kind: "our-app-bot" });
   });
@@ -125,7 +125,7 @@ describe("identifyActor", () => {
       app.db,
       admin.organizationId,
       { githubLogin: "dependabot[bot]", isBot: true },
-      "first-tree-hub",
+      "first-tree",
     );
     expect(id).toEqual({ kind: "external" });
   });
@@ -133,12 +133,7 @@ describe("identifyActor", () => {
   it("returns external when appSlug is null even for bot senders", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const id = await identifyActor(
-      app.db,
-      admin.organizationId,
-      { githubLogin: "first-tree-hub[bot]", isBot: true },
-      null,
-    );
+    const id = await identifyActor(app.db, admin.organizationId, { githubLogin: "first-tree[bot]", isBot: true }, null);
     expect(id).toEqual({ kind: "external" });
   });
 
@@ -156,7 +151,7 @@ describe("identifyActor", () => {
       app.db,
       admin.organizationId,
       { githubLogin: row.name.toUpperCase(), isBot: false },
-      "first-tree-hub",
+      "first-tree",
     );
     expect(id).toEqual({ kind: "agent", agentId });
   });
@@ -168,7 +163,7 @@ describe("identifyActor", () => {
       app.db,
       admin.organizationId,
       { githubLogin: "stranger", isBot: false },
-      "first-tree-hub",
+      "first-tree",
     );
     expect(id).toEqual({ kind: "external" });
   });
@@ -210,7 +205,7 @@ describe("resolveAudience", () => {
         actorLogin: "outsider",
         kind: "synchronized",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([
@@ -251,7 +246,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "review_requested" }],
         kind: "review_requested",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([
@@ -301,11 +296,132 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
     expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.chatId).toBe(chatId);
+  });
+
+  it("collapses subscribed rows by human (sibling mappings on same chat → one audience target)", async () => {
+    // Once `resolveTargetChat` step (a.5) lands sibling mapping rows
+    // (same chat, different delegate under the same human), naive subscribed
+    // expansion would post the same card to the chat N times. Subscribed
+    // dedup collapses by humanAgentId; sibling rows always share chatId by
+    // construction, so we keep the earliest bound_at row as the
+    // representative.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateOriginal = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-original-${randomUUID().slice(0, 6)}`,
+    });
+    const delegateSibling = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-sibling-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `eve-${randomUUID().slice(0, 6)}`,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+
+    // Original row first (earlier bound_at), then sibling — simulates the
+    // (a.5) write order. We do not control bound_at directly; the default
+    // `now()` clock + serial insert order suffices because the assertions
+    // only require the representative to be one of the two rows sharing
+    // chatId, and both point at the same chat.
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegateOriginal,
+      entityType: "issue",
+      entityKey: "owner/repo#301",
+      chatId,
+    });
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegateSibling,
+      entityType: "issue",
+      entityKey: "owner/repo#301",
+      chatId,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#301",
+        actorLogin: "outsider",
+        kind: "commented",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.humanAgentId).toBe(human);
+    expect(audience[0]?.chatId).toBe(chatId);
+  });
+
+  it("dedups involves by human even when the existing mapping uses a different delegate", async () => {
+    // Regression for the assignee-creates-new-chat bug. The chat-binding was
+    // written under (human, delegateA) when the agent first created the
+    // entity. A later assign webhook arrives with involves=[human]; the human
+    // is configured with delegateMention=delegateB. Audience must dedup by
+    // human alone so the involves path does NOT add a sibling `kind: "new"`
+    // row — the entity is already routed to the existing chat.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+    });
+    const delegateB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-b-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `dave-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegateB,
+    });
+    const chatId = await seedChat(app, admin.organizationId, human);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: human,
+      delegateId: delegateA,
+      entityType: "issue",
+      entityKey: "owner/repo#202",
+      chatId,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "issue",
+        entityKey: "owner/repo#202",
+        actorLogin: "outsider",
+        involves: [{ githubLogin: humanName, reason: "assigned" }],
+        kind: "assigned",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.delegateAgentId).toBe(delegateA);
     expect(audience[0]?.chatId).toBe(chatId);
   });
 
@@ -347,11 +463,11 @@ describe("resolveAudience", () => {
         orgId: admin.organizationId,
         entityType: "pull_request",
         entityKey: "owner/repo#103",
-        actorLogin: "first-tree-hub[bot]",
+        actorLogin: "first-tree[bot]",
         actorIsBot: true,
         kind: "synchronized",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -381,12 +497,12 @@ describe("resolveAudience", () => {
         orgId: admin.organizationId,
         entityType: "pull_request",
         entityKey: "owner/repo#104",
-        actorLogin: "first-tree-hub[bot]",
+        actorLogin: "first-tree[bot]",
         actorIsBot: true,
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -447,7 +563,7 @@ describe("resolveAudience", () => {
         actorLogin: humanRow?.name ?? "",
         kind: "synchronized",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
     expect(audience).toHaveLength(1);
     expect(audience[0]?.humanAgentId).toBe(otherHuman);
@@ -484,7 +600,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -542,7 +658,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -576,7 +692,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanInactiveName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -602,7 +718,7 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -649,7 +765,7 @@ describe("resolveAudience", () => {
         ],
         kind: "opened",
       }),
-      "first-tree-hub",
+      "first-tree",
     );
 
     expect(audience).toHaveLength(2);

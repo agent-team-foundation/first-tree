@@ -132,7 +132,8 @@ describe("Connect token carries iss claim", () => {
       token: string;
       command: string;
       bootstrapCommand: string;
-      npmSpec: string;
+      npmSpec: string | null;
+      binName: string;
     }>();
 
     // Decode the JWT payload (not verifying signature — it's our own key)
@@ -143,13 +144,14 @@ describe("Connect token carries iss claim", () => {
     expect(decoded.type).toBe("connect");
     expect(decoded.iss).toMatch(/^https?:\/\//);
 
-    expect(body.command).toBe(`first-tree-hub login ${body.token}`);
-    // `bootstrapCommand` combines the channel-resolved `npm install -g` line
-    // with the login command, so web onboarding renders a single copy-paste
-    // block that lands the user on the version this Hub actually advertises.
-    // Default test config runs channel=latest, so the npm spec stays bare.
-    expect(body.npmSpec).toBe("@agent-team-foundation/first-tree-hub");
-    expect(body.bootstrapCommand).toBe(`npm install -g ${body.npmSpec}\n${body.command}`);
+    // Default test config runs channel=dev (server default) — dev has no
+    // published package, so npmSpec is null and bootstrapCommand collapses
+    // to just the login line. binName follows the channel: dev →
+    // first-tree-dev.
+    expect(body.binName).toBe("first-tree-dev");
+    expect(body.command).toBe(`first-tree-dev login ${body.token}`);
+    expect(body.npmSpec).toBeNull();
+    expect(body.bootstrapCommand).toBe(body.command);
   });
 });
 

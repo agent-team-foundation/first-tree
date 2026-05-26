@@ -1,9 +1,14 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { clientConfigSchema, DEFAULT_CONFIG_DIR, resolveConfigReadonly } from "@first-tree/shared/config";
+import { clientConfigSchema, defaultConfigDir, resolveConfigReadonly } from "@first-tree/shared/config";
 import { cliFetch } from "./cli-fetch.js";
 
-const CREDENTIALS_PATH = join(DEFAULT_CONFIG_DIR, "credentials.json");
+// Function rather than top-level const: a `const = join(defaultConfigDir(), …)`
+// would lock at module load — same bundle eval-order foot-gun that
+// motivated function-izing the resolver. See `channel-env.ts` history note.
+function credentialsPath(): string {
+  return join(defaultConfigDir(), "credentials.json");
+}
 
 type StoredCredentials = {
   accessToken: string;
@@ -31,7 +36,7 @@ export function resolveServerUrl(flagValue?: string): string {
   throw new Error(
     "Server URL not configured.\n" +
       "  Provide via: --server <url>, FIRST_TREE_SERVER_URL env var, or\n" +
-      "  first-tree-hub config set server.url <url>",
+      "  first-tree config set server.url <url>",
   );
 }
 
@@ -39,13 +44,13 @@ export function resolveServerUrl(flagValue?: string): string {
  * Resolve the current member access JWT from persisted credentials.
  *
  * Unified-user-token milestone: the CLI has a single credential store and a
- * single onboarding path (`first-tree-hub login <token>`). Callers without
+ * single onboarding path (`first-tree login <token>`). Callers without
  * a credentials.json get a clear error pointing at `login <token>`.
  */
 export function resolveAccessToken(): string {
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error("No credentials found. Run `first-tree-hub login <token>` to sign in.");
+    throw new Error("No credentials found. Run `first-tree login <token>` to sign in.");
   }
   return creds.accessToken;
 }
@@ -134,7 +139,7 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
   const minValidityMs = opts?.minValidityMs ?? DEFAULT_MIN_VALIDITY_MS;
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error("No credentials found. Run `first-tree-hub login <token>` to sign in.");
+    throw new Error("No credentials found. Run `first-tree login <token>` to sign in.");
   }
 
   if (!isTokenStale(creds.accessToken, minValidityMs)) {
@@ -155,7 +160,7 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
 
     if (res.status === 401) {
       throw new AuthRefreshFailedError(
-        "Refresh token rejected by server. Re-run `first-tree-hub login <token>` " +
+        "Refresh token rejected by server. Re-run `first-tree login <token>` " +
           "(get a fresh token from the Web Computers page → New Connection).",
       );
     }
@@ -213,12 +218,12 @@ function isTokenStale(token: string, minValidityMs: number): boolean {
  * (see auth service comment), so atomicity at the file level is enough.
  */
 export function saveCredentials(creds: StoredCredentials): void {
-  const dir = dirname(CREDENTIALS_PATH);
+  const dir = dirname(credentialsPath());
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmp = `${CREDENTIALS_PATH}.tmp.${process.pid}`;
+  const tmp = `${credentialsPath()}.tmp.${process.pid}`;
   try {
     writeFileSync(tmp, JSON.stringify(creds, null, 2), { mode: 0o600 });
-    renameSync(tmp, CREDENTIALS_PATH);
+    renameSync(tmp, credentialsPath());
   } catch (err) {
     // Best-effort cleanup so a failed write doesn't leave behind orphan
     // temp files. Swallow the unlink error — the original failure is what
@@ -237,7 +242,7 @@ export function saveCredentials(creds: StoredCredentials): void {
  */
 export function loadCredentials(): StoredCredentials | null {
   try {
-    const raw = JSON.parse(readFileSync(CREDENTIALS_PATH, "utf-8")) as unknown;
+    const raw = JSON.parse(readFileSync(credentialsPath(), "utf-8")) as unknown;
     const data = raw as StoredCredentials;
     if (data.accessToken && data.refreshToken && data.serverUrl) return data;
     return null;
@@ -250,7 +255,7 @@ export function loadCredentials(): StoredCredentials | null {
  * Write agent config (agentId + runtime) to disk.
  */
 export function saveAgentConfig(agentName: string, agentId: string, runtime: string): string {
-  const agentDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
+  const agentDir = join(defaultConfigDir(), "agents", agentName);
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   writeFileSync(join(agentDir, "agent.yaml"), `agentId: "${agentId}"\nruntime: ${runtime}\n`, { mode: 0o600 });
   return agentDir;

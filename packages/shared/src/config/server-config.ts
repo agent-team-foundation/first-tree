@@ -1,12 +1,27 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
-import { DEFAULT_DATA_DIR } from "./resolver.js";
+import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
 
 export const serverConfigSchema = defineConfig({
+  /**
+   * Which release channel this server speaks to. Single switch that drives
+   * every CLI-facing identifier emitted by the server:
+   *   - `prod`    → tells web/CLI to install `first-tree`           (bin `first-tree`)
+   *   - `staging` → tells web/CLI to install `first-tree-staging`   (bin `first-tree-staging`)
+   *   - `dev`     → no npm package; bootstrap commands skip `npm install -g`
+   *
+   * Set via `FIRST_TREE_CHANNEL` in the deployment env. Default `dev` makes
+   * `pnpm --filter @first-tree/server dev` Just Work on a developer machine.
+   *
+   * See `packages/shared/src/channel/` for the full identity table.
+   */
+  channel: field(z.enum(["dev", "staging", "prod"]).default("dev"), {
+    env: "FIRST_TREE_CHANNEL",
+  }),
   database: {
     url: field(z.string(), {
       env: "FIRST_TREE_DATABASE_URL",
@@ -27,7 +42,7 @@ export const serverConfigSchema = defineConfig({
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HOST" }),
     /**
      * Public-facing URL of this Hub server. Required in production — used to:
-     *   1. Stamp the `iss` claim on connect tokens so `first-tree-hub login`
+     *   1. Stamp the `iss` claim on connect tokens so `first-tree login`
      *      can derive the hub URL with no extra arg.
      *   2. Build invite-link URLs surfaced to admins.
      *   3. Construct the OAuth callback URL the GitHub app redirects back to.
@@ -38,9 +53,17 @@ export const serverConfigSchema = defineConfig({
     publicUrl: field(z.string().optional(), { env: "FIRST_TREE_PUBLIC_URL" }),
   },
   workspace: {
-    root: field(z.string().default(join(DEFAULT_DATA_DIR, "workspaces")), {
-      env: "FIRST_TREE_WORKSPACES_ROOT",
-    }),
+    // Lazy default (function form): zod's `.default(value)` evaluates
+    // `value` at schema-definition time, which would module-load-bake
+    // `defaultDataDir()` against whatever `FIRST_TREE_HOME` happened to
+    // be set when this file first loaded. `.default(() => ...)`
+    // evaluates per parse instead, so the env is read at config-init
+    // time — see `__tests__/no-toplevel-default-home-const.test.ts`
+    // for the corresponding regression guard.
+    root: field(
+      z.string().default(() => join(defaultDataDir(), "workspaces")),
+      { env: "FIRST_TREE_WORKSPACES_ROOT" },
+    ),
   },
   secrets: {
     jwtSecret: field(z.string(), {
@@ -191,7 +214,7 @@ export const serverConfigSchema = defineConfig({
      *
      * The WS data plane is the only delivery path on this server build. The
      * legacy `new_message` doorbell + HTTP poll fallback was removed in
-     * `@agent-team-foundation/first-tree-hub@0.14.3`. Clients older than
+     * `first-tree@0.14.3`. Clients older than
      * 0.10.4 (before the WS push data plane was introduced) are no longer
      * supported; clients in 0.10.4 ~ 0.14.2 continue to work because they
      * read `server:welcome.capabilities.wsInboxDeliver` to skip their own
@@ -253,7 +276,7 @@ export const serverConfigSchema = defineConfig({
        */
       headers: field(z.string().default(""), { env: "FIRST_TREE_OTEL_HEADERS", secret: true }),
       exporter: field(z.enum(["otlp-http", "otlp-grpc"]).default("otlp-http")),
-      serviceName: field(z.string().default("first-tree-hub")),
+      serviceName: field(z.string().default("first-tree")),
       /**
        * Deployment environment label. Emitted as the OTel resource attribute
        * `deployment.environment.name` — trace backends (Logfire, Honeycomb, …)
@@ -285,29 +308,29 @@ export const serverConfigSchema = defineConfig({
    * Command-package version advertisement. The server broadcasts a version
    * string to every Client via `server:welcome` so clients can detect drift
    * and self-update. We resolve the value at runtime by polling the npm
-   * registry for the configured channel's current `dist-tag` —
-   * decoupling "what version clients should run" from the server's own
-   * build/deploy cadence (otherwise prod auto-update silently stalls
-   * whenever the server image lags behind a fresh CLI publish).
+   * registry for the configured channel's `latest` dist-tag — decoupling
+   * "what version clients should run" from the server's own build/deploy
+   * cadence (otherwise prod auto-update silently stalls whenever the
+   * server image lags behind a fresh CLI publish).
    *
-   * - `channel`: which npm `dist-tag` to track. Staging deployments set
-   *   `alpha` so clients automatically follow CI's preview builds; prod stays
-   *   on `latest`.
+   * Multi-env: each channel (prod / staging) ships as its own npm package
+   * with its own `latest` dist-tag, so the per-channel selection happens
+   * via the top-level `channel` field above — there is no separate
+   * `update.channel` knob anymore. dev servers (channel=dev) skip the
+   * poll entirely (no published package to poll).
+   *
    * - `commandVersion`: bootstrap fallback used until the first successful
    *   poll, and the cache value when the registry is unreachable.
    *   Docker images inject `apps/cli/package.json.version` at build
    *   time via the `COMMAND_VERSION` build-arg.
    * - `pollIntervalMinutes`: refresh cadence. 60 minutes is the safe default
-   *   for both prod (slow stable cadence) and staging (frequent alpha
-   *   publishes still get picked up within an hour). Tune lower on staging
-   *   for tighter alpha rollout.
+   *   for both prod (slow stable cadence) and staging (frequent publishes
+   *   still get picked up within an hour). Tune lower on staging for
+   *   tighter rollout.
    * - `registryUrl`: lets corp deployments point at a Verdaccio/Artifactory
    *   mirror with the same dist-tags.
    */
   update: {
-    channel: field(z.enum(["latest", "alpha"]).default("latest"), {
-      env: "FIRST_TREE_UPDATE_CHANNEL",
-    }),
     commandVersion: field(z.string().optional(), {
       env: "FIRST_TREE_COMMAND_VERSION",
     }),
@@ -337,6 +360,45 @@ export const serverConfigSchema = defineConfig({
     presenceCleanupSeconds: field(z.coerce.number().int().positive().default(60), {
       env: "FIRST_TREE_PRESENCE_CLEANUP_SECONDS",
     }),
+    /**
+     * Chat auto-archive sweeper cadence. Set to 0 to disable the sweeper
+     * (useful in tests and one-off CLI runs). Default 300s (5 min) sits
+     * comfortably below the smallest idle threshold (1h) so worst-case
+     * archive latency is bounded by the threshold plus one tick.
+     */
+    archiveSweepIntervalSeconds: field(z.coerce.number().int().nonnegative().default(300), {
+      env: "FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS",
+    }),
+    /**
+     * Idle threshold for chats bound to GitHub PRs/Issues. Once every
+     * bound entity is closed/merged AND the chat has been silent this
+     * long, the sweeper flips every mapped human's view to `archived`.
+     */
+    archiveMappedIdleSeconds: field(
+      z.coerce
+        .number()
+        .int()
+        .positive()
+        .default(60 * 60),
+      {
+        env: "FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS",
+      },
+    ),
+    /**
+     * Idle threshold for chats with no GitHub mapping. Per (chat, user) —
+     * users with unread mentions are skipped; users without an unread
+     * stay archived after this much silence.
+     */
+    archiveUnmappedIdleSeconds: field(
+      z.coerce
+        .number()
+        .int()
+        .positive()
+        .default(12 * 60 * 60),
+      {
+        env: "FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS",
+      },
+    ),
     /**
      * Optional outbound webhook URL — if set, every notification is
      * fire-and-forget POSTed here in JSON. Replaces the prior DB-backed

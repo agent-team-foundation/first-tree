@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree Sync"
+  short_description: "Audit tree and code drift safely"
+  default_prompt: "Use $first-tree-sync to audit drift between merged code and the Context Tree and tell me which findings need action."

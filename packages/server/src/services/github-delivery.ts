@@ -14,6 +14,14 @@ export type DeliveryStats = {
   delivered: number;
   /** Number of fresh chats created (involved-new path). */
   newChats: number;
+  /**
+   * Number of audience targets whose delivery threw and was caught by the
+   * per-target guard. These targets did NOT receive a card; the webhook
+   * has already been claimed in `processed_events`, so GitHub will not
+   * retry. Surfaced in the response + metric so a regression in single-
+   * target reliability becomes observable instead of silent.
+   */
+  failed: number;
 };
 
 /**
@@ -35,7 +43,7 @@ export async function deliverNormalizedEvent(
   event: NormalizedEvent,
   audience: AudienceTarget[],
 ): Promise<DeliveryStats> {
-  const stats: DeliveryStats = { delivered: 0, newChats: 0 };
+  const stats: DeliveryStats = { delivered: 0, newChats: 0, failed: 0 };
 
   for (const target of audience) {
     try {
@@ -63,30 +71,69 @@ export async function deliverNormalizedEvent(
 
       const card = buildCard(event, target);
       const mentionedUser = card.mentionedUser ?? undefined;
-      const { message, recipients } = await sendMessage(app.db, resolved.chatId, target.humanAgentId, {
-        format: "card",
-        content: card,
-        source: "github",
-        metadata: {
+      // The audience row resolved a specific (human, delegate) pair as the
+      // structural target of this event. Address the delegate explicitly so
+      // a bound chat that has been expanded to ≥3 speakers still wakes the
+      // agent — without this, card-format messages produce no mentionSet
+      // and the multi-speaker fan-out collapses to notify=false for
+      // everyone. Same pattern as `question_answer` (see SendMessageOptions
+      // `addressedToAgentIds`).
+      const { message, recipients } = await sendMessage(
+        app.db,
+        resolved.chatId,
+        target.humanAgentId,
+        {
+          format: "card",
+          content: card,
           source: "github",
-          event: event.rawEventType,
-          action: event.rawAction,
-          entityType: event.entity.type,
-          entityKey: event.entity.key,
-          reason: card.reason,
-          ...(mentionedUser ? { mentionedUser } : {}),
+          metadata: {
+            source: "github",
+            event: event.rawEventType,
+            action: event.rawAction,
+            entityType: event.entity.type,
+            entityKey: event.entity.key,
+            reason: card.reason,
+            // Tells the web UI to render this card with a synthetic
+            // "GitHub" sender (icon + name) in place of the human-agent
+            // row whose id we still store as `senderId`. Keeping the DB
+            // senderId as the human agent preserves multi-speaker
+            // fan-out / read-receipts / mention-resolution; only the
+            // visual attribution shifts. Scoped to GitHub cards so an
+            // arbitrary client cannot impersonate other sources.
+            systemSender: "github",
+            ...(mentionedUser ? { mentionedUser } : {}),
+          },
         },
-      });
+        {
+          addressedToAgentIds: [target.delegateAgentId],
+          // Opt in to writing `metadata.systemSender` — the message service
+          // strips that key from every other caller (web / agent SDK POST)
+          // so HTTP boundaries cannot impersonate the GitHub sender in the
+          // chat UI. This is the one trusted-internal path.
+          allowSystemSender: true,
+        },
+      );
       notifyRecipients(app.notifier, recipients, message.id);
       stats.delivered += 1;
     } catch (err) {
+      stats.failed += 1;
+      // Per-target failures are isolated so one bad target doesn't poison
+      // the audience, but the webhook is already claimed in
+      // `processed_events` — GitHub will not retry. Emit a structured
+      // metric line so a regression in single-target reliability is
+      // observable in logs (and dashboardable by the operator) instead
+      // of being silently swallowed by `continue`. See #507.
       log.error(
         {
           err,
+          metric: "github_delivery_failed_total",
+          errorClass: err instanceof Error ? err.name : "Unknown",
           humanAgent: target.humanAgentId,
           delegateAgent: target.delegateAgentId,
           entityType: event.entity.type,
           entityKey: event.entity.key,
+          eventType: event.rawEventType,
+          action: event.rawAction,
         },
         "failed to deliver normalized github event to target",
       );

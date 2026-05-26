@@ -10,7 +10,7 @@ import { z } from "zod";
  *   - "web"     — Hub web UI (POST /chats/:id/messages from a browser
  *                 session; includes AskUserQuestion answers submitted via
  *                 the web UI).
- *   - "cli"     — Agent's `first-tree-hub` CLI (`chat send` / `chat invite`
+ *   - "cli"     — Agent's `first-tree` CLI (`chat send` / `chat invite`
  *                 / etc.).
  *   - "api"     — Agent SDK direct API call (incl. result-sink auto-forward,
  *                 in-process tool integrations, AskUserQuestion publish);

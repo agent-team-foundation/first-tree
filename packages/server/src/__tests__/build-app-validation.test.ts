@@ -12,9 +12,10 @@ import type { Config } from "../config.js";
  * path so a config typo trips the assertion before listen() returns.
  */
 const baseConfig: Config = {
+  channel: "dev",
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
-  workspace: { root: "/tmp/first-tree-hub-test-workspaces" },
+  workspace: { root: "/tmp/first-tree-test-workspaces" },
   secrets: {
     jwtSecret: "test-jwt-secret-key-for-vitest",
     encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -27,10 +28,12 @@ const baseConfig: Config = {
     maxRetryCount: 3,
     pollingIntervalSeconds: 5,
     presenceCleanupSeconds: 60,
+    archiveSweepIntervalSeconds: 0,
+    archiveMappedIdleSeconds: 60 * 60,
+    archiveUnmappedIdleSeconds: 12 * 60 * 60,
     notificationWebhookUrl: undefined,
   },
   update: {
-    channel: "latest",
     commandVersion: "test.version",
     pollIntervalMinutes: 1440,
     registryUrl: "https://localhost.invalid",

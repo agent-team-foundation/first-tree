@@ -181,7 +181,6 @@ describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI integrate contract", () => 
       identity,
       contextTreePath: treePath,
       serverUrl: "https://hub.example.com",
-      chatId: "chat-1234",
     });
 
     // bootstrap should have produced the .agent layout the agent reads first.

@@ -38,6 +38,21 @@ export class ForbiddenError extends AppError {
   }
 }
 
+/**
+ * Thrown by `inviteParticipantsToChat` when the caller is not currently a
+ * speaker of the target chat. Subtypes `ForbiddenError` so existing 403
+ * mapping still fires, but exposes a stable identity that callers can match
+ * with `instanceof` instead of regex-sniffing the message — used by the web
+ * `addMeChatParticipants` shell to remap into a probing-protection 404.
+ */
+export class CallerNotSpeakerError extends ForbiddenError {
+  readonly code = "CALLER_NOT_SPEAKER";
+  constructor(callerAgentId: string, chatId: string, attrs?: AppErrorAttrs) {
+    super(`Caller "${callerAgentId}" is not a speaker of chat "${chatId}"`, attrs);
+    this.name = "CallerNotSpeakerError";
+  }
+}
+
 export class ConflictError extends AppError {
   constructor(message = "Conflict", attrs?: AppErrorAttrs) {
     super(409, message, attrs);
@@ -71,7 +86,7 @@ export class ClientOrgMismatchError extends AppError {
 /**
  * Thrown when a client.yaml is presented with a JWT whose user_id does not
  * match the row's owner. The CLI responds by guiding the operator through
- * `first-tree-hub login <token> --override` to take over ownership, which
+ * `first-tree login <token> --override` to take over ownership, which
  * unpins the previous owner's agents from this machine.
  */
 export class ClientUserMismatchError extends AppError {

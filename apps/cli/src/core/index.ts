@@ -38,8 +38,6 @@ export { bindFeishuBot, bindFeishuUser } from "./feishu.js";
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";
 export { createApiNameResolver, migrateLocalAgentDirs } from "./migrate-agent-dirs.js";
-// Legacy home auto-migration (pre-v0.9 `~/.first-tree-hub` → `~/.first-tree/hub`)
-export { runHomeMigration } from "./migrate-home.js";
 // Onboard
 export {
   formatCheckReport,
@@ -57,7 +55,6 @@ export { reconcileLocalRuntimeProviders, uploadClientCapabilities } from "./runt
 // Background service install (launchd / systemd --user)
 export type { ServiceInfo, ServiceOpResult, ServiceState } from "./service-install.js";
 export {
-  deriveServiceSuffix,
   getClientServiceStatus,
   installClientService,
   isServiceSupported,

@@ -3,7 +3,7 @@ import { FirstTreeHubSDK, SdkError } from "@first-tree/client";
 import {
   agentConfigSchema,
   clientConfigSchema,
-  DEFAULT_CONFIG_DIR,
+  defaultConfigDir,
   loadAgents,
   resolveConfigReadonly,
 } from "@first-tree/shared/config";
@@ -37,7 +37,7 @@ export function resolveLocalAgent(
   agentName?: string,
   extraHint?: { ambiguous?: string; envMismatch?: string },
 ): ResolvedAgentConfig {
-  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+  const agentsDir = join(defaultConfigDir(), "agents");
   const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
   const resolution = resolveSenderName({
@@ -50,7 +50,7 @@ export function resolveLocalAgent(
   if (resolution.kind === "ok") {
     resolvedName = resolution.name;
   } else if (resolution.kind === "none") {
-    fail("MISSING_AGENT", "No agent configured. Run `first-tree-hub agent add` first.", 2);
+    fail("MISSING_AGENT", "No agent configured. Run `first-tree agent add` first.", 2);
   } else if (resolution.kind === "envMismatch") {
     const hint = extraHint?.envMismatch ?? "Pick one explicitly with `--agent <senderName>`.";
     fail(
@@ -120,7 +120,7 @@ export function readClientId(): string {
   };
   const id = cfg.client?.id;
   if (typeof id !== "string" || id.length === 0) {
-    fail("MISSING_CLIENT_ID", "No client.id found in client.yaml. Run `first-tree-hub login <token>` first.", 2);
+    fail("MISSING_CLIENT_ID", "No client.id found in client.yaml. Run `first-tree login <token>` first.", 2);
   }
   return id;
 }

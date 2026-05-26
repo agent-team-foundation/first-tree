@@ -1,7 +1,7 @@
 import { CLI_USER_AGENT } from "./version.js";
 
 /**
- * Drop-in `fetch` wrapper that stamps `User-Agent: first-tree-hub-cli/<version> (<platform> <arch>)`
+ * Drop-in `fetch` wrapper that stamps `User-Agent: first-tree-cli/<version> (<platform> <arch>)`
  * on every request.
  *
  * Issue #246: every CLI-originated HTTP request must carry a stable

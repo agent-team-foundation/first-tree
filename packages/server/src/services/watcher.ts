@@ -10,13 +10,14 @@
  *
  * Two distinct kinds of operation live here:
  *
- *   1. Set rebuilds (`recompute*`). Idempotent set-based
- *      recomputations driven by lifecycle events (chat created,
- *      participant added/removed, member status flipped, agent
- *      rebind, etc.). Strict invariant: ONLY INSERT or DELETE rows
- *      where access_mode = 'watcher'. NEVER UPDATE any row with
- *      access_mode = 'speaker' — the user's own join/leave decision
- *      must not be overwritten by ops paths.
+ *   1. Per-agent / per-member recompute fan-out
+ *      (`recomputeWatchersForAgent`, `recomputeWatchersForMember`).
+ *      These translate an agent-rebind or member-status flip into a
+ *      set of chat-scoped recomputes. The underlying chat-scoped
+ *      operation `recomputeChatWatchers` itself lives in
+ *      `participant-mode.ts` next to the speaker writer that owns
+ *      the derivation invariant; we re-export it from here so
+ *      historical callers keep working.
  *
  *   2. Speaker ↔ watcher transitions (`joinAsParticipant`,
  *      `leaveAsParticipant`). Single-table UPDATE on
@@ -24,12 +25,6 @@
  *      the (chat, agent) pair are not touched. Per §11.4 default,
  *      a fully-detached user keeps their `chat_user_state` row
  *      (read state remembered for re-add).
- *
- * File name preserved across the refactor for diff readability; may
- * be renamed in a follow-up. Public function names preserved too —
- * `recomputeChatWatchers` still describes what it does (recomputes
- * the watcher rows), so the rename to `recomputeChatMembership`
- * would obscure rather than clarify.
  */
 
 import { and, eq, ne, sql } from "drizzle-orm";
@@ -38,7 +33,14 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
-import { addChatParticipants } from "./participant-mode.js";
+import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { addChatParticipants, recomputeChatWatchers } from "./participant-mode.js";
+
+// Re-export so historical callers that reach for
+// `watcher.ts::recomputeChatWatchers` keep compiling. The canonical home
+// for this function is now `participant-mode.ts` — anchored next to the
+// speaker writer whose write triggers the derivation.
+export { recomputeChatWatchers };
 
 /**
  * Structural DB type that accepts both the top-level `Database` and a
@@ -48,72 +50,10 @@ import { addChatParticipants } from "./participant-mode.js";
 type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
 
 // ---------------------------------------------------------------------------
-// Recompute helpers — set rebuilds. Idempotent. Touch ONLY watcher rows.
+// Per-agent / per-member recompute fan-out. Translate an event that touches
+// one agent (rebind) or one member (status flip) into the right set of
+// chat-scoped recomputes.
 // ---------------------------------------------------------------------------
-
-/**
- * Recompute watcher rows for ONE chat. For every active member who:
- *   - manages a non-human agent that speaks in the chat, AND
- *   - whose own human agent is NOT a speaker in the chat
- * a `(chat_id, member.agent_id)` watcher row is upserted.
- *
- * Strict invariant: only writes rows with access_mode = 'watcher';
- * never updates or deletes any access_mode = 'speaker' row. The
- * ON CONFLICT DO NOTHING clause guarantees that if a (chat, agent)
- * row already exists as a speaker (the manager joined as a real
- * participant themselves), we leave it alone.
- *
- * Watchers whose anchoring condition no longer holds (manager left,
- * the managed agent was removed from the chat, the manager joined as
- * a speaker themselves) are deleted — also gated on access_mode =
- * 'watcher'.
- *
- * Idempotent: safe to call multiple times for the same chat.
- */
-export async function recomputeChatWatchers(db: DbLike, chatId: string): Promise<void> {
-  // Insert the desired set of watcher rows; speaker rows are
-  // preserved by the ON CONFLICT clause + the NOT EXISTS guard in
-  // the SELECT.
-  await db.execute(sql`
-    INSERT INTO chat_membership
-      (chat_id, agent_id, role, access_mode, mode, source, joined_at)
-    SELECT DISTINCT cm.chat_id, m.agent_id, 'member', 'watcher', 'full', 'auto_manager', now()
-      FROM chat_membership cm
-      JOIN agents  a ON a.uuid = cm.agent_id
-      JOIN members m ON m.id   = a.manager_id
-     WHERE cm.chat_id = ${chatId}
-       AND cm.access_mode = 'speaker'
-       AND m.status = 'active'
-       AND a.type   <> 'human'
-       AND NOT EXISTS (
-         SELECT 1 FROM chat_membership cm2
-          WHERE cm2.chat_id  = cm.chat_id
-            AND cm2.agent_id = m.agent_id
-       )
-    ON CONFLICT (chat_id, agent_id) DO NOTHING
-  `);
-
-  // Drop watcher rows whose anchoring condition no longer holds.
-  // Speaker rows are protected by the access_mode = 'watcher'
-  // clause — they will never be touched here regardless of join
-  // shape.
-  await db.execute(sql`
-    DELETE FROM chat_membership cm
-     WHERE cm.chat_id = ${chatId}
-       AND cm.access_mode = 'watcher'
-       AND NOT EXISTS (
-         SELECT 1
-           FROM chat_membership speakers
-           JOIN agents  a ON a.uuid = speakers.agent_id
-           JOIN members m ON m.id   = a.manager_id
-          WHERE speakers.chat_id     = cm.chat_id
-            AND speakers.access_mode = 'speaker'
-            AND m.agent_id           = cm.agent_id
-            AND m.status             = 'active'
-            AND a.type              <> 'human'
-       )
-  `);
-}
 
 /**
  * Recompute watcher rows touching ONE agent across all chats it
@@ -177,9 +117,16 @@ export type JoinResult = {
  * Caller is expected to have verified the user is authorised to join
  * (admin override OR an existing watcher row); this helper does not
  * gate on visibility.
+ *
+ * Tx boundary: opens its own transaction (the `JoinResult` shape needs to
+ * report whether a fresh row was inserted, which we compute from a SELECT
+ * inside the tx). Audience-cache invalidation is enclosed here — after the
+ * tx commits, `invalidateChatAudience` runs so the next `chat:message`
+ * dispatch reflects the new speaker without waiting for the TTL window.
+ * Callers do NOT need to call `invalidateChatAudience` themselves.
  */
 export async function joinAsParticipant(db: Database, chatId: string, humanAgentId: string): Promise<JoinResult> {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select({ accessMode: chatMembership.accessMode })
       .from(chatMembership)
@@ -187,13 +134,13 @@ export async function joinAsParticipant(db: Database, chatId: string, humanAgent
       .limit(1);
 
     if (existing?.accessMode === "speaker") {
-      return { chatId, inserted: false, carried: null };
+      return { chatId, inserted: false, carried: null, mutated: false };
     }
 
     // v2: no chat-type flip needed — `chats.type` is locked to 'group' and
     // `chat_membership.mode` is decision-inert. Just upsert the speaker row.
     //
-    // `/me/chats/:id/join` admits only the manager's human agent.
+    // `/chats/:chatId/workspace-join` admits only the manager's human agent.
     // `assertHuman: true` makes a non-human caller surface as a 400 rather
     // than silently inserting.
     // `upgradeWatcherToSpeaker` promotes a pre-existing watcher row in
@@ -204,8 +151,17 @@ export async function joinAsParticipant(db: Database, chatId: string, humanAgent
       upgradeWatcherToSpeaker: true,
     });
 
-    return { chatId, inserted: !existing, carried: null };
+    return { chatId, inserted: !existing, carried: null, mutated: true };
   });
+
+  // Enclosed post-commit step: drop the cached audience for this chat so the
+  // newly-promoted speaker starts receiving `chat:message` pushes
+  // immediately. Skipped on the no-op path (already a speaker) to avoid
+  // pointlessly busting the cache.
+  if (result.mutated) {
+    invalidateChatAudience(chatId);
+  }
+  return { chatId: result.chatId, inserted: result.inserted, carried: result.carried };
 }
 
 export type LeaveResult = {
@@ -224,9 +180,15 @@ export type LeaveResult = {
  *      - If no  → DELETE the chat_membership row entirely.
  *   3. `chat_user_state` row (if any) is preserved either way per
  *      §11.4 default — read state is remembered for re-add.
+ *
+ * Tx boundary: opens its own transaction. Audience-cache invalidation is
+ * enclosed here — after the tx commits, `invalidateChatAudience` runs so
+ * subsequent `chat:message` dispatches stop pushing to the (now-departed)
+ * speaker's WS connection. Callers do NOT need to call
+ * `invalidateChatAudience` themselves.
  */
 export async function leaveAsParticipant(db: Database, chatId: string, humanAgentId: string): Promise<LeaveResult> {
-  return db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx): Promise<LeaveResult> => {
     const [existing] = await tx
       .select({ accessMode: chatMembership.accessMode })
       .from(chatMembership)
@@ -280,6 +242,14 @@ export async function leaveAsParticipant(db: Database, chatId: string, humanAgen
       .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.agentId, humanAgentId)));
     return { chatId, membershipKind: "watching" };
   });
+
+  // Enclosed post-commit step: drop the cached audience for this chat so
+  // the dispatcher stops pushing `chat:message` to the WS connection of
+  // the user who just left. Always runs — every leave path here actually
+  // mutates the row (the not-a-speaker case throws before reaching this
+  // point), unlike `joinAsParticipant`'s already-a-speaker fast path.
+  invalidateChatAudience(chatId);
+  return outcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +261,7 @@ export async function leaveAsParticipant(db: Database, chatId: string, humanAgen
  * Returns one of: 'participant' (speaker), 'watching' (watcher),
  * or null (no row).
  *
- * Used by `/me/chats/:chatId/join` to refuse a join when the user
+ * Used by `/chats/:chatId/workspace-join` to refuse a join when the user
  * has neither a watcher row nor a participant row, and isn't
  * otherwise authorised (admin in the chat's org).
  */
@@ -310,7 +280,7 @@ export async function resolveChatMembership(
 }
 
 /**
- * Used by `/me/chats/:chatId/join`. Throw 409 if already a speaker
+ * Used by `/chats/:chatId/workspace-join`. Throw 409 if already a speaker
  * (no work to do) and 403 if no row at all (admin override is
  * resolved at the route layer; this helper only reports the membership
  * state).

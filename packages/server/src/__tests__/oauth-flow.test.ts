@@ -43,7 +43,7 @@ describe("GitHub OAuth onboarding flow", () => {
     const orgRow = orgs[0];
     if (!orgRow) throw new Error("expected default org row");
     // Default team display name is `${login}'s team` — collective-space
-    // reading per docs/new-user-onboarding-design.md §5.5; user can rename
+    // reading per first-tree-context:agent-hub/onboarding.md (was §5.5 in source design); user can rename
     // in onboarding Step 1.
     expect(orgRow.displayName).toBe("octocat's team");
 

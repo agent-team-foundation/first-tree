@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   documentContextSchema,
+  looksLikeChatId,
   MAX_DOC_SNAPSHOT_BYTES,
   MAX_TOTAL_DOC_SNAPSHOT_BYTES,
   parseWorkspaceDocKey,
@@ -66,12 +67,23 @@ export function validateDocumentContext(
               "doc_snapshot.owner_slug": key.agentSlug,
             });
           }
-        } else if (ownerIsParticipant) {
+        } else if (ownerIsParticipant && looksLikeChatId(key.chatId)) {
           // Owner-shaped global key naming a DIFFERENT chat. A participant-owned
           // key whose chat segment isn't this chat would pull another chat's
           // private workspace doc past the `workspaces/*/<currentChatId>/` fence
-          // — reject it (review P1). A deep SELF path whose first segment isn't
-          // a participant slug (e.g. `docs/api/design.md`) is left alone.
+          // — reject it (review P1).
+          //
+          // The `looksLikeChatId` gate disambiguates a real cross-chat attempt
+          // (`<participant>/<some-uuid>/<rel>`) from a deep SELF path whose
+          // first segment HAPPENS to be a participant slug. After the
+          // worktree-fence widening (this PR), a single-repo agent emits
+          // promoted self keys shaped `<localPath>/<rel>` (e.g.
+          // `assistant/docs/intro.md`); without the uuid check, those would be
+          // rejected here whenever `<localPath>` collides with a participant
+          // name, breaking otherwise valid sends. chatIds are minted by
+          // `createChat` as canonical UUIDs (services/chat.ts), so any
+          // non-uuid second segment cannot reference a real chat — the leak
+          // protection is meaningless in that branch.
           throw new BadRequestError("Document snapshot references another chat's agent workspace", {
             "doc_snapshot.path": doc.path,
             "doc_snapshot.owner_slug": key.agentSlug,

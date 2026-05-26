@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@agent-team-foundation/first-tree-hub": "workspace:*",
+    "first-tree-dev": "workspace:*",
     "@first-tree/shared": "workspace:*",
     "@anthropic-ai/claude-agent-sdk": "^0.2.84",
     "@first-tree/server": "workspace:*",

@@ -3,8 +3,8 @@ import { ClientOrgMismatchError } from "@first-tree/client";
 import {
   agentConfigSchema,
   clientConfigSchema,
-  DEFAULT_CONFIG_DIR,
-  DEFAULT_DATA_DIR,
+  defaultConfigDir,
+  defaultDataDir,
   initConfig,
   loadAgents,
   resetConfig,
@@ -86,7 +86,7 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 }
 
 /**
- * `first-tree-hub login <token>` — single entry point. The connect token's
+ * `first-tree login <token>` — single entry point. The connect token's
  * `iss` claim carries the hub URL so prod / staging / local environments are
  * tagged at issuance and the operator can never accidentally cross-target.
  *
@@ -137,7 +137,7 @@ export function registerLoginCommand(program: Command): void {
 
         const tokens = await exchangeToken(url, token);
 
-        const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
+        const clientConfigPath = join(defaultConfigDir(), "client.yaml");
         setConfigValue(clientConfigPath, "server.url", url);
         print.line(`\n  ✓ Hub: ${url}\n`);
 
@@ -175,7 +175,7 @@ export function registerLoginCommand(program: Command): void {
 
         if (options.start === false) {
           print.line("  (--no-start) credentials written; daemon not launched.\n");
-          print.line("  Run `first-tree-hub daemon start` when ready, or re-run `login` without `--no-start`.\n\n");
+          print.line("  Run `first-tree daemon start` when ready, or re-run `login` without `--no-start`.\n\n");
           return;
         }
 
@@ -184,12 +184,12 @@ export function registerLoginCommand(program: Command): void {
         // `daemon start` afterward.
         print.line(`  Background service not supported on ${process.platform}; running inline.\n`);
 
-        const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+        const agentsDir = join(defaultConfigDir(), "agents");
         try {
           await migrateLocalAgentDirs({
             agentsDir,
-            workspacesDir: join(DEFAULT_DATA_DIR, "workspaces"),
-            sessionsDir: join(DEFAULT_DATA_DIR, "sessions"),
+            workspacesDir: join(defaultDataDir(), "workspaces"),
+            sessionsDir: join(defaultDataDir(), "sessions"),
             resolver: createApiNameResolver(config.server.url, () => ensureFreshAccessToken()),
           });
         } catch (err) {
@@ -227,8 +227,8 @@ export function registerLoginCommand(program: Command): void {
         if (error instanceof ClientOrgMismatchError) {
           await handleClientOrgMismatch(error, {
             managed: false,
-            configDir: DEFAULT_CONFIG_DIR,
-            rerunCommand: "first-tree-hub login <token>",
+            configDir: defaultConfigDir(),
+            rerunCommand: "first-tree login <token>",
           });
         }
         const msg = error instanceof Error ? error.message : String(error);

@@ -1,45 +1,24 @@
 /**
- * Onboarding-related browser-side flags.
+ * Onboarding-related browser-side flags (sessionStorage).
  *
- * - `joinPath` (sessionStorage): set by the OAuth-complete page and the
- *   invite-accept handler. Drives the OnboardingView greeting copy
- *   ("Welcome — you've joined {team}." vs "Welcome to First Tree Hub.").
- *   Cleared by AuthContext once the user's onboardingStep reaches `completed`.
- * - `draft` (sessionStorage): keeps the inline onboarding form stable while
- *   the user navigates between app tabs before creating their first agent.
+ * - `joinPath`: set by the OAuth-complete page and the invite-accept handler;
+ *   cleared by AuthContext once onboardingStep reaches `completed`. Its former
+ *   reader — the retired inline onboarding greeting — is gone, so it's
+ *   currently write-only: re-wire it into the new invitee welcome copy, or drop
+ *   it along with its writers/clearer.
+ * - `agentUuid`: the agent created mid-flow, so the kickoff step resolves the
+ *   right agent on a re-visit.
  */
-
-import type { AgentVisibility } from "@first-tree/shared";
 
 const JOIN_PATH_KEY = "onboarding:joinPath";
-const DRAFT_KEY_PREFIX = "onboarding:draft";
-const STEP1_CONFIRMED_KEY = "onboarding:step1Confirmed";
-
-/**
- * Per-tab Step 1 acknowledgement. Server can't distinguish "team
- * auto-created at OAuth, user hasn't confirmed yet" from "team
- * confirmed days ago" — onboardingStep is `"connect"` in both. The
- * `OnboardingView` body resolver and the `OnboardingStepper`
- * active-step inference both read this so the stepper visuals match
- * the body that's rendering.
- */
-export function readStep1Confirmed(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.sessionStorage.getItem(STEP1_CONFIRMED_KEY) === "1";
-}
-export function writeStep1Confirmed(value: boolean): void {
-  if (typeof window === "undefined") return;
-  if (value) window.sessionStorage.setItem(STEP1_CONFIRMED_KEY, "1");
-  else window.sessionStorage.removeItem(STEP1_CONFIRMED_KEY);
-}
 
 const ONBOARDING_AGENT_UUID_KEY = "onboarding:agentUuid";
 
 /**
- * UUID of the agent created in Step 2. Step 3's [Yes, set it up] handler
- * uses this to start the chat against the right agent on a re-visit
- * (where `listManagedAgents` order is unspecified). Per-tab — fine for
- * the same-session continuation case the design targets.
+ * UUID of the agent created during onboarding. The kickoff step uses it to
+ * start the first chat against the right agent on a re-visit (where
+ * `listManagedAgents` order is unspecified). Per-tab — fine for the
+ * same-session continuation case the design targets.
  */
 export function readOnboardingAgentUuid(): string | null {
   if (typeof window === "undefined") return null;
@@ -52,33 +31,14 @@ export function writeOnboardingAgentUuid(uuid: string | null): void {
 }
 
 export type OnboardingJoinPath = "solo" | "invite";
-export type OnboardingDraft = {
-  displayName: string;
-  selectedRuntime: string | null;
-  connectToken: string | null;
-  connectTokenExpiresAt: number | null;
-  /**
-   * Selected agent visibility for the Step 2 sub-step. `null` for drafts
-   * written before this field existed — readers should fall back to the
-   * step's own default ("organization") in that case.
-   */
-  visibility: AgentVisibility | null;
-};
 
 /**
- * Mark the join path so the next dashboard mount can pick context-aware
- * copy. Idempotent — overwriting is fine.
+ * Mark the join path so a future surface can pick context-aware welcome copy.
+ * Idempotent — overwriting is fine. (Currently write-only; see file header.)
  */
 export function markOnboardingResume(joinPath: OnboardingJoinPath): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(JOIN_PATH_KEY, joinPath);
-}
-
-/** Read the previously marked join path, or null if absent / invalid. */
-export function readOnboardingJoinPath(): OnboardingJoinPath | null {
-  if (typeof window === "undefined") return null;
-  const v = window.sessionStorage.getItem(JOIN_PATH_KEY);
-  return v === "solo" || v === "invite" ? v : null;
 }
 
 /**
@@ -91,64 +51,11 @@ export function clearOnboardingJoinPath(): void {
   window.sessionStorage.removeItem(JOIN_PATH_KEY);
 }
 
-export function onboardingDraftScope(organizationId: string | null, memberId: string | null): string {
-  return `${organizationId ?? "unknown-org"}:${memberId ?? "unknown-member"}`;
-}
-
-function onboardingDraftKey(scope: string): string {
-  return `${DRAFT_KEY_PREFIX}:${scope}`;
-}
-
-function parseOnboardingDraft(value: unknown): OnboardingDraft | null {
-  if (!value || typeof value !== "object") return null;
-  if (!("displayName" in value) || typeof value.displayName !== "string") return null;
-  const selectedRuntime = "selectedRuntime" in value ? value.selectedRuntime : null;
-  if (selectedRuntime !== null && typeof selectedRuntime !== "string") return null;
-  const connectToken = "connectToken" in value ? value.connectToken : null;
-  if (connectToken !== null && typeof connectToken !== "string") return null;
-  const connectTokenExpiresAt = "connectTokenExpiresAt" in value ? value.connectTokenExpiresAt : null;
-  if (connectTokenExpiresAt !== null && typeof connectTokenExpiresAt !== "number") return null;
-  // Tolerate drafts written before the visibility field existed: treat
-  // anything that isn't a known literal as `null`, never reject the whole
-  // draft. Step 2 falls back to its own default when this is null.
-  const rawVisibility = "visibility" in value ? value.visibility : null;
-  const visibility = rawVisibility === "private" || rawVisibility === "organization" ? rawVisibility : null;
-  return {
-    displayName: value.displayName,
-    selectedRuntime,
-    connectToken,
-    connectTokenExpiresAt,
-    visibility,
-  };
-}
-
-export function readOnboardingDraft(scope: string): OnboardingDraft | null {
-  if (typeof window === "undefined") return null;
-  const raw = window.sessionStorage.getItem(onboardingDraftKey(scope));
-  if (!raw) return null;
-  try {
-    return parseOnboardingDraft(JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-
-export function writeOnboardingDraft(scope: string, draft: OnboardingDraft): void {
-  if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(onboardingDraftKey(scope), JSON.stringify(draft));
-}
-
-export function clearOnboardingDraft(scope: string): void {
-  if (typeof window === "undefined") return;
-  window.sessionStorage.removeItem(onboardingDraftKey(scope));
-}
-
 /**
  * Drop every `onboarding:*` sessionStorage key. Called on logout so a
- * subsequent login (e.g. after a dev DB reset) doesn't inherit stale
- * Step 1/3 confirmations, agent UUID, return-chat hint, or scoped drafts
- * from the prior identity. Iterates the namespace so future flags added
- * with the same prefix are covered automatically.
+ * subsequent login (e.g. after a dev DB reset) doesn't inherit a stale agent
+ * UUID or join-path hint from the prior identity. Iterates the namespace so
+ * future flags added with the same prefix are covered automatically.
  */
 export function clearOnboardingSessionFlags(): void {
   if (typeof window === "undefined") return;

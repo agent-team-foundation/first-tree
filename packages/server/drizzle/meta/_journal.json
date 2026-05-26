@@ -342,7 +342,21 @@
       "idx": 48,
       "version": "7",
       "when": 1779926400000,
-      "tag": "0048_collapse_agent_type",
+      "tag": "0048_github_entity_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1780272000000,
+      "tag": "0049_agent_chat_session_runtime_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1780358400000,
+      "tag": "0050_collapse_agent_type",
       "breakpoints": true
     }
   ]

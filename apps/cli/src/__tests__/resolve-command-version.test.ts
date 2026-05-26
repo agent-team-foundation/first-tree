@@ -3,9 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { channelConfig } from "../core/channel.js";
 import { resolveCommandVersion } from "../core/version.js";
 
-const PACKAGE_NAME = "@agent-team-foundation/first-tree-hub";
+// Walk target = channelConfig.packageName ?? binName. In the source tree
+// (CHANNEL=dev) this is "first-tree-dev"; after CI rewrites for prod /
+// staging it becomes "first-tree" / "first-tree-staging".
+const PACKAGE_NAME = channelConfig.packageName ?? channelConfig.binName;
 
 describe("resolveCommandVersion", () => {
   let root: string;

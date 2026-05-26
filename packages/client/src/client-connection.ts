@@ -120,7 +120,7 @@ type ClientConnectionEvents = {
    * Server announced that an agent has been pinned to this client (either
    * created with `clientId` or bound via PATCH NULL → ID). Consumers can use
    * this to auto-register the agent locally without a manual
-   * `first-tree-hub agent add`.
+   * `first-tree agent add`.
    */
   "agent:pinned": [message: AgentPinnedMessage];
   "session:command": [command: SessionCommand];
@@ -130,7 +130,7 @@ type ClientConnectionEvents = {
    * Unrecoverable auth failure — the credential provider rejected with an
    * `AuthRefreshFailedError` (refresh token expired/revoked). The connection
    * has stopped trying to reconnect; the consumer should surface a recovery
-   * prompt to the operator (re-run `first-tree-hub login <token>`) and
+   * prompt to the operator (re-run `first-tree login <token>`) and
    * usually exit so a supervisor can back off instead of looping at 1 Hz.
    */
   "auth:fatal": [error: Error];
@@ -155,7 +155,7 @@ export class ClientOrgMismatchError extends Error {
  * Thrown when the server refuses `client:register` because the local
  * client.yaml is owned by a different user. The CLI detects this via
  * `instanceof` and guides the operator to run
- * `first-tree-hub login <token> --override` to take ownership (which unpins
+ * `first-tree login <token> --override` to take ownership (which unpins
  * the previous owner's agents from this machine). See decouple-client-from-
  * identity §4.4.
  */
@@ -227,6 +227,35 @@ function decodeJwtExp(token: string): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Bash stdout reaches handlers as `string` via Buffer.toString('utf8'), so a
+ * tool whose output is binary (e.g. `gh api .../actions/runs/<id>/logs`
+ * returns a ZIP archive) lands in `resultPreview` peppered with U+FFFD
+ * replacements and embedded NULs. PostgreSQL JSONB rejects NUL outright, which
+ * used to drop the entire session event server-side; a forest of `(replacement chars)` would
+ * also be useless to the UI. Replace such previews with a placeholder so the
+ * event still persists and the timeline shows the call happened.
+ */
+const REPLACEMENT_CHAR_BINARY_THRESHOLD = 8;
+
+function looksBinary(s: string): boolean {
+  if (s.includes("\u0000")) return true;
+  return (s.match(/\uFFFD/g)?.length ?? 0) > REPLACEMENT_CHAR_BINARY_THRESHOLD;
+}
+
+export function sanitizeSessionEventForTransport(event: SessionEvent): SessionEvent {
+  if (event.kind !== "tool_call") return event;
+  const preview = event.payload.resultPreview;
+  if (preview === undefined || !looksBinary(preview)) return event;
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      resultPreview: `[binary content, ${preview.length} chars elided]`,
+    },
+  };
 }
 
 /**
@@ -437,9 +466,23 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState }));
   }
 
+  /**
+   * Report the per-(agent,chat) D-axis runtime (idle / working / blocked /
+   * error). This is the per-chat counterpart to `reportRuntimeState`'s
+   * agent-global aggregate — the per-chat field is the authoritative source
+   * the server-side composite status reads (working / errored axes), while
+   * the agent-global runtime is double-written and kept around for the
+   * admin overview / fault notification path until that consumer migrates.
+   */
+  reportSessionRuntime(agentId: string, chatId: string, runtimeState: RuntimeState): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "session:runtime", agentId, chatId, runtimeState }));
+  }
+
   reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event }));
+    const sanitized = sanitizeSessionEventForTransport(event);
+    this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event: sanitized }));
   }
 
   /** Ask the server which of the supplied chatIds the client should drop. */
@@ -554,7 +597,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           this.authLogger.error({ err }, "failed to obtain access token");
           // Refresh token expired / revoked is unrecoverable from inside the
           // process — no amount of retrying will succeed without the
-          // operator running `first-tree-hub login <new-token>`. Mark the
+          // operator running `first-tree login <new-token>`. Mark the
           // connection closed so `ws.on("close")` doesn't reschedule, and
           // surface an `auth:fatal` event so the consumer (typically the
           // CLI) can print a recovery prompt and exit, letting systemd /
@@ -718,7 +761,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       // reconnect with the same clientId would just re-trigger the rejection.
       // The caller (CLI) is expected to surface the mismatch to the user,
       // abandon the local clientId, and start a fresh connection with a new
-      // one. See docs/multi-tenancy-hardening-design.md (B4).
+      // one. See first-tree-context:agent-hub/multi-tenancy.md (B4).
       this.closing = true;
       const err =
         code === "CLIENT_USER_MISMATCH"

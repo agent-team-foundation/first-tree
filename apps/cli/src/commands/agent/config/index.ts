@@ -8,9 +8,9 @@ import { registerAgentConfigSetModelCommand } from "./set-model.js";
 import { registerAgentConfigShowCommand } from "./show.js";
 
 /**
- * `first-tree-hub agent config ...` — admin-API-backed runtime configuration
+ * `first-tree agent config ...` — admin-API-backed runtime configuration
  * (model / prompt / MCP / env / repos / dry-run). Mounted under the parent
- * `agent` namespace so the surface stays `first-tree-hub agent config <verb>`.
+ * `agent` namespace so the surface stays `first-tree agent config <verb>`.
  */
 export function registerAgentConfigCommands(parent: Command): void {
   const config = parent.command("config").description("Manage agent runtime configuration (Step 8)");

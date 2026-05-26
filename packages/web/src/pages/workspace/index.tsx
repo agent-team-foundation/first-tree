@@ -1,10 +1,12 @@
 import { CHAT_SOURCES, type ChatEngagementView, type ChatSource, chatEngagementViewSchema } from "@first-tree/shared";
-import { useCallback, useEffect } from "react";
-import { useSearchParams } from "react-router";
+import { useCallback, useEffect, useState } from "react";
+import { Navigate, useSearchParams } from "react-router";
+import { useAuth } from "../../auth/auth-context.js";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
+import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
+import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { CenterPanel } from "./center/index.js";
-import { OnboardingStepper } from "./center/onboarding-stepper.js";
 import { type GroupMode, parseGroupMode } from "./conversations/group-rows.js";
 import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
 
@@ -95,6 +97,7 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt } = useAuth();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const legacySource = searchParams.get("source");
@@ -105,6 +108,30 @@ export function WorkspacePage() {
   const group = parseGroupMode(searchParams.get("group"));
 
   useAdminWs();
+
+  // Viewport-driven layout: at `narrow` (<768) the conversation list
+  // collapses out of the inline three-pane shell and becomes a summon-able
+  // overlay anchored to the workspace's left edge. State is plain React
+  // (not URL) so the back button still navigates chats, not drawer state.
+  const viewport = useWorkspaceViewport();
+  const isNarrow = viewport === "narrow";
+  const [convOverlayOpen, setConvOverlayOpen] = useState(false);
+  // When the viewport widens back out, drop the overlay flag so we don't
+  // re-show the rail in two places once it returns to inline rendering.
+  useEffect(() => {
+    if (!isNarrow) setConvOverlayOpen(false);
+  }, [isNarrow]);
+  // Esc closes the conversation-list overlay — parallels the existing
+  // Esc handler ChatView uses for its right-rail overlay, so both
+  // overlays behave the same for keyboard users.
+  useEffect(() => {
+    if (!convOverlayOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConvOverlayOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [convOverlayOpen]);
 
   // One-shot legacy redirects, all batched into a single setSearchParams so
   // they don't race on stale `searchParams` snapshots. Each branch returns
@@ -147,6 +174,10 @@ export function WorkspacePage() {
       next.set("c", chatId);
       clearDocPreviewParams(next);
       setSearchParams(next);
+      // Auto-dismiss the conversation-list overlay on narrow viewports —
+      // the user picked a chat, they want the chat view, not the rail.
+      // No-op on `md`/`xl` where the rail renders inline.
+      setConvOverlayOpen(false);
     },
     [searchParams, setSearchParams],
   );
@@ -208,35 +239,106 @@ export function WorkspacePage() {
     setSearchParams(nextParamsForClearFilters(searchParams), { replace: true });
   }, [searchParams, setSearchParams]);
 
+  // Users who haven't finished setup go through the standalone /onboarding
+  // flow — including the server-`completed`-but-no-kickoff case. Only
+  // terminally completed or dismissed users fall through to the normal
+  // workspace; the old inline center-panel onboarding has been retired.
+  if (shouldEnterOnboarding({ meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt })) {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  // Pick the width prop based on what role the rail is playing:
+  //   - narrow + no chat → full-bleed (100% of the wrapper) so the list
+  //     covers the whole screen as the main view.
+  //   - narrow + overlay → fluid cap so the inner aside doesn't overflow
+  //     the wrapper on phones narrower than ~23rem logical (same pattern
+  //     ChatRightSidebar uses for its overlay variant).
+  //   - otherwise (inline rail on md/xl) → leave undefined, default 20rem.
+  const conversationListWidth = !isNarrow
+    ? undefined
+    : !selectedChatId
+      ? "100%"
+      : convOverlayOpen
+        ? "min(88vw, 20rem)"
+        : undefined;
+  const conversationList = (
+    <ConversationList
+      selectedChatId={selectedChatId}
+      onSelectChat={selectChat}
+      onNewChat={openDraft}
+      engagement={engagement}
+      onEngagementChange={setEngagement}
+      unread={unread}
+      onUnreadChange={setUnread}
+      watching={watching}
+      onWatchingChange={setWatching}
+      origin={origin}
+      onOriginChange={setOrigin}
+      participants={participants}
+      onParticipantsChange={setParticipants}
+      onClearFilters={clearFilters}
+      group={group}
+      onGroupChange={setGroup}
+      width={conversationListWidth}
+    />
+  );
+
+  // Narrow + no selection: the conversation list IS the main view, not an
+  // overlay. Avoids trapping the user on NoChatView with no way back to
+  // their chats (the inline rail is hidden, the hamburger only renders
+  // inside ChatView). Same component reused, just stretched full-bleed.
+  if (isNarrow && !selectedChatId) {
+    return (
+      <div className="flex flex-1 overflow-hidden">
+        <div className="flex-1 flex">{conversationList}</div>
+        <DocPreviewDrawer />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-1 overflow-hidden">
-      <ConversationList
-        selectedChatId={selectedChatId}
-        onSelectChat={selectChat}
-        onNewChat={openDraft}
-        engagement={engagement}
-        onEngagementChange={setEngagement}
-        unread={unread}
-        onUnreadChange={setUnread}
-        watching={watching}
-        onWatchingChange={setWatching}
-        origin={origin}
-        onOriginChange={setOrigin}
-        participants={participants}
-        onParticipantsChange={setParticipants}
-        onClearFilters={clearFilters}
-        group={group}
-        onGroupChange={setGroup}
-      />
+    <div className="flex flex-1 overflow-hidden relative">
+      {/* Inline rail at `md`/`xl`. On `narrow` the rail collapses out
+          of the row and gets summoned as an overlay (below). */}
+      {isNarrow ? null : conversationList}
 
       <main className="flex-1 flex flex-col overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>
-        {/* Stepper sits above CenterPanel only, not above the rail
-            (docs/new-user-onboarding-design.md §4.1). It self-renders
-            nothing when the user has dismissed onboarding. */}
-        <OnboardingStepper />
-        <CenterPanel selectedChatId={selectedChatId} onSelectChat={selectChat} />
+        <CenterPanel
+          selectedChatId={selectedChatId}
+          onSelectChat={selectChat}
+          narrow={isNarrow}
+          onShowConversations={isNarrow ? () => setConvOverlayOpen(true) : null}
+        />
       </main>
       <DocPreviewDrawer />
+
+      {/* Conversation-list overlay (narrow viewports only). Same
+          component rendered above for inline mode — just wrapped in an
+          absolute-positioned shell with a scrim. The rail itself is a
+          shrink-0 20rem-wide aside; we cap to `min(88vw, 20rem)` so it
+          doesn't bleed past the screen edge on phones narrower than
+          ~23rem logical. Scrim click closes; selecting a chat also
+          closes (see `selectChat` above). */}
+      {isNarrow && convOverlayOpen ? (
+        <>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setConvOverlayOpen(false)}
+            className="absolute inset-0 z-20"
+            style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
+          />
+          <div
+            className="absolute top-0 bottom-0 left-0 z-30 flex"
+            style={{
+              maxWidth: "min(88vw, 20rem)",
+              boxShadow: "var(--shadow-md)",
+            }}
+          >
+            {conversationList}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

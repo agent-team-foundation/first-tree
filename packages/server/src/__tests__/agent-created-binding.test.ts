@@ -8,8 +8,10 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
+import { organizations } from "../db/schema/organizations.js";
 import { maybeBindGithubEntityFromToolCall, resolveTargetChat } from "../services/github-entity-chat.js";
 import { appendEvent } from "../services/session-event.js";
+import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -547,6 +549,65 @@ describe("appendEvent → agent_created binding hook", () => {
       .select()
       .from(githubEntityChatMappings)
       .where(eq(githubEntityChatMappings.chatId, orphanChatId));
+    expect(rows).toHaveLength(0);
+  });
+
+  // M2 (#508): defense-in-depth. createChat enforces same-org participants,
+  // but grandfathered cross-org chat_membership rows or admin-override paths
+  // can sneak through. If a reporter agent from org A finds itself in a chat
+  // owned by org B, writing the binding under org B would orphan it from
+  // org A's installation webhooks (audience scopes by org). The binding
+  // must be refused rather than written silently under the wrong org.
+  it("refuses agent_created binding when reporter.org !== chat.org", async () => {
+    const app = getApp();
+    const orgA = await createTestAdmin(app);
+
+    // Seed a second organization directly — `createTestAdmin` always
+    // resolves to the "default" org, so we can't get two distinct orgs
+    // from it. The second org just needs a row that satisfies the
+    // chats.organization_id FK.
+    const orgBId = uuidv7();
+    const orgBName = `org-b-${randomUUID().slice(0, 6)}`;
+    await app.db.insert(organizations).values({ id: orgBId, name: orgBName, displayName: orgBName });
+
+    // Delegate belongs to org A; chat is owned by org B; reporter is added
+    // to the chat's membership via direct insert (bypassing the createChat
+    // same-org validation that would normally block this in v2).
+    const delegateA = await seedAgent(app, {
+      orgId: orgA.organizationId,
+      memberId: orgA.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+      type: "agent",
+    });
+    const humanB = await seedAgent(app, {
+      orgId: orgBId,
+      memberId: orgA.memberId, // member FK doesn't strictly need to match the org here for the test
+      name: `human-b-${randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+    const chatBId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatBId,
+      organizationId: orgBId,
+      type: "group",
+      metadata: {},
+    });
+    await app.db.insert(chatMembership).values([
+      { chatId: chatBId, agentId: humanB, role: "owner", accessMode: "speaker" },
+      { chatId: chatBId, agentId: delegateA, role: "member", accessMode: "speaker" },
+    ]);
+
+    await maybeBindGithubEntityFromToolCall(
+      app.db,
+      delegateA,
+      chatBId,
+      prCreatePayload("https://github.com/owner/repo/pull/950"),
+    );
+
+    const rows = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#950"));
     expect(rows).toHaveLength(0);
   });
 });

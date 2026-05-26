@@ -1,8 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
-import { DEFAULT_HOME_DIR } from "@first-tree/shared/config";
+import { dirname, isAbsolute, join } from "node:path";
+import { defaultHome } from "@first-tree/shared/config";
+import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
 
 export type ServiceState = "active" | "inactive" | "not-installed" | "unknown";
@@ -69,52 +70,72 @@ export type ServiceInfo = {
 /** Result of a start / stop / restart call against the service manager. */
 export type ServiceOpResult = { ok: true; detail?: string } | { ok: false; reason: string };
 
-/**
- * Map a `FIRST_TREE_HOME` basename to the suffix appended to the
- * service manager's unit name / label.
- *
- * Why this exists: `FIRST_TREE_HOME` already isolates config /
- * credentials / workspace under a separate home dir, but until now the
- * systemd unit name and launchd label were hard-coded — so a developer
- * running with an isolated home would still rewrite the same
- * `first-tree-hub-client.service` unit file as the prod install. This
- * derivation closes that loop: dev homes get their own unit name and
- * coexist with prod.
- *
- * Rule:
- *   - "hub" → ""        (default home; preserves the existing prod
- *                        unit name `first-tree-hub-client.service` for
- *                        every machine already in the field)
- *   - "hub-<x>" → "<x>" ("hub-test" → "test", giving
- *                        `first-tree-hub-client-test.service`)
- *   - anything else → the basename verbatim (a custom home like
- *                     "~/.first-tree/foo" yields suffix "foo")
- *
- * Empty / falsy basenames defensively fall back to the default — we
- * never want to silently drop a user's intent into prod's unit name.
- */
-export function deriveServiceSuffix(homeBasename: string): string {
-  if (!homeBasename) return "";
-  if (homeBasename === "hub") return "";
-  if (homeBasename.startsWith("hub-")) {
-    const stripped = homeBasename.slice("hub-".length);
-    // Edge: a literal trailing "-" (basename === "hub-") would strip to ""
-    // and silently fall back to the prod unit name. The whole point of the
-    // suffix is that a non-default home gets its own unit, so degrade to
-    // using the basename verbatim instead — yields `…-hub-.service`, ugly
-    // but unambiguous.
-    return stripped || homeBasename;
-  }
-  return homeBasename;
+// Service identifiers derived from the binary's channel — see
+// `packages/shared/src/channel/`. Every channel (dev / staging / prod)
+// owns its own unit name / launchd label, so multiple daemons coexist
+// without colliding on the same `first-tree-client.service`.
+const SYSTEMD_UNIT = channelConfig.serviceUnitFile;
+const LAUNCHD_LABEL = channelConfig.launchdLabel;
+// `SyslogIdentifier` is the bare service name without `.service`. The
+// launchd label uses the same identifier convention (bare name), so we
+// reuse it for both.
+const SYSLOG_IDENT = channelConfig.launchdLabel;
+
+// Function rather than const: see `channel-env.ts` history note. A
+// top-level `const = join(defaultHome(), ...)` would lock at module
+// load, re-introducing the bundle eval-order foot-gun that motivated
+// the resolver's function-based redesign.
+function logDir(): string {
+  return join(defaultHome(), "logs");
 }
 
-const SERVICE_SUFFIX = deriveServiceSuffix(basename(DEFAULT_HOME_DIR));
-const LAUNCHD_LABEL = SERVICE_SUFFIX ? `dev.first-tree-hub.client.${SERVICE_SUFFIX}` : "dev.first-tree-hub.client";
-const SYSTEMD_UNIT = SERVICE_SUFFIX
-  ? `first-tree-hub-client-${SERVICE_SUFFIX}.service`
-  : "first-tree-hub-client.service";
-const SYSLOG_IDENT = SERVICE_SUFFIX ? `first-tree-hub-client-${SERVICE_SUFFIX}` : "first-tree-hub-client";
-const LOG_DIR = join(DEFAULT_HOME_DIR, "logs");
+const PROXY_ENV_KEYS = [
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+] as const;
+
+/**
+ * Pick proxy env vars out of `env` (default `process.env`). Returns the subset
+ * that are present and non-empty, preserving case.
+ *
+ * Threaded into the unit / plist templates so a daemon started by launchd /
+ * systemd inherits the same proxy reachability the user's interactive shell
+ * already has. Without this, `git fetch` inside the daemon-spawned agent
+ * runtime can't route through the user's local proxy (Surge, Clash, mihomo,
+ * corporate proxy …) and fails with `SSL_ERROR_SYSCALL` whenever direct
+ * egress to github.com is blocked.
+ *
+ * Both lower- and upper-case keys are scanned because libcurl, git, OpenSSL,
+ * the JVM, and various Windows tools each prefer different cases. Pass through
+ * whatever the user set rather than guess.
+ *
+ * `refresh-unit` (called by the supervisor on auto-update) safely re-runs
+ * this: the supervisor inherits its env from the launchd plist it was started
+ * with, so once these vars land in the plist on first install they stay in
+ * the supervisor's env and the next refresh-rendered plist matches → no drift,
+ * no clobber.
+ *
+ * Security note: if a proxy URL embeds credentials (e.g.
+ * `http://user:pass@host:port`), those credentials land in the rendered
+ * plist / systemd unit on disk (mode 0o644 for plist, default file perms
+ * for systemd user units — both group- and world-readable). Exposure level
+ * matches `.zshrc` if the user originally `export`ed the URL there, but
+ * operators relying on credential-bearing proxy URLs should be aware.
+ */
+export function collectProxyEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of PROXY_ENV_KEYS) {
+    const value = env[key];
+    if (value && value.length > 0) out[key] = value;
+  }
+  return out;
+}
 
 type ResolvedBinary = { kind: "bin"; program: string } | { kind: "node"; program: string; args: string[] };
 
@@ -136,32 +157,31 @@ function whichBin(name: string): string | null {
 /**
  * Resolve how the service should launch the CLI.
  *
- * Two regimes:
+ * Multi-env world: every channel has its own bin name (`first-tree` /
+ * `first-tree-staging` / `first-tree-dev`), so a PATH lookup against
+ * `channelConfig.binName` cannot collide with another channel's install.
  *
- *   ① Prod (default home, empty service suffix) — prefer the installed
- *      `first-tree-hub` bin on PATH (usually a shim under /usr/local/bin
- *      or ~/.npm-global/bin). Using the shim means an `npm i -g … @latest`
- *      atomically swaps the binary the unit launches, no unit rewrite
- *      needed.
+ *   ① bin found on PATH — use the installed shim. For npm-installed
+ *      packages (prod, staging) the shim is usually under /usr/local/bin
+ *      or ~/.npm-global/bin; for dev it's typically a symlink under
+ *      ~/.local/bin pointing at the in-tree dist. Either way, using the
+ *      shim means a re-install / re-link atomically swaps the binary
+ *      without rewriting the unit file.
  *
- *   ② Dev / isolated (non-empty suffix from a custom FIRST_TREE_HOME)
- *      — pin to the running interpreter + script path. This skips the
- *      PATH lookup, which would otherwise resolve `first-tree-hub` to
- *      the operator's prod global install — making the dev unit silently
- *      run prod code against a dev home (i.e., the whole isolation story
- *      collapses with no error message). Pinning execPath+argv[1] forces
- *      the dev unit to launch the dev build that just installed it.
+ *   ② bin NOT on PATH — pin to the running interpreter + script. Common
+ *      for dev when `~/.local/bin` is not in the install-time shell's
+ *      PATH. `process.argv[1]` is the .mjs file the user just ran (via
+ *      symlink or absolute path), so this guarantees the service launches
+ *      the same binary the operator invoked.
  */
-export function resolveCliInvocation(serviceSuffix: string = SERVICE_SUFFIX): ResolvedBinary {
-  if (serviceSuffix === "") {
-    const bin = whichBin("first-tree-hub");
-    if (bin && isAbsolute(bin)) {
-      try {
-        // Resolve symlinks so launchd records a stable path.
-        return { kind: "bin", program: realpathSync(bin) };
-      } catch {
-        return { kind: "bin", program: bin };
-      }
+export function resolveCliInvocation(): ResolvedBinary {
+  const bin = whichBin(channelConfig.binName);
+  if (bin && isAbsolute(bin)) {
+    try {
+      // Resolve symlinks so launchd records a stable path.
+      return { kind: "bin", program: realpathSync(bin) };
+    } catch {
+      return { kind: "bin", program: bin };
     }
   }
 
@@ -174,7 +194,7 @@ export function resolveCliInvocation(serviceSuffix: string = SERVICE_SUFFIX): Re
 }
 
 function ensureLogDir(): void {
-  mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(logDir(), { recursive: true, mode: 0o700 });
 }
 
 // ── launchd (macOS) ─────────────────────────────────────────────────
@@ -183,7 +203,7 @@ function launchdPlistPath(): string {
   return join(homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 }
 
-function renderPlist(invocation: ResolvedBinary): string {
+export function renderPlist(invocation: ResolvedBinary, proxyEnv: Record<string, string> = collectProxyEnv()): string {
   const programArgs: string[] =
     invocation.kind === "bin"
       ? [invocation.program, "daemon", "start", "--no-interactive"]
@@ -195,16 +215,22 @@ function renderPlist(invocation: ResolvedBinary): string {
   // the client's own logger writes a rotating NDJSON file at `client.log`
   // via FIRST_TREE_SERVICE_MODE. Naming these `.stdout.log` / `.stderr.log`
   // keeps that role explicit for anyone inspecting the logs dir.
-  const stdoutFallback = join(LOG_DIR, "client.stdout.log");
-  const stderrFallback = join(LOG_DIR, "client.stderr.log");
+  const stdoutFallback = join(logDir(), "client.stdout.log");
+  const stderrFallback = join(logDir(), "client.stderr.log");
 
-  // Mirror the systemd-side fix: dev installs (non-empty suffix) need
-  // FIRST_TREE_HOME baked into the launched env, otherwise launchd
-  // strips the user's shell env on `bootstrap` and the process falls
-  // back to the default home → silently reads prod's client.yaml.
-  const homeEnvXml = SERVICE_SUFFIX
-    ? `\n    <key>FIRST_TREE_HOME</key>\n    <string>${escapeXml(DEFAULT_HOME_DIR)}</string>`
-    : "";
+  // Always pin FIRST_TREE_HOME into the plist. launchd strips the user's
+  // shell env on `bootstrap`, so without this line the daemon falls back
+  // to the channel's default home — usually the right answer, but ANY
+  // env override the operator was using (e.g. `FIRST_TREE_HOME=/tmp/foo`
+  // for a one-off test) silently disappears at service-install time and
+  // their data ends up split between two homes. Embedding the resolved
+  // home eliminates that drift.
+  const homeEnvXml = `\n    <key>FIRST_TREE_HOME</key>\n    <string>${escapeXml(defaultHome())}</string>`;
+
+  // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
+  const proxyEnvXml = Object.entries(proxyEnv)
+    .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
+    .join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
@@ -221,7 +247,7 @@ ${argsXml}
     <key>PATH</key>
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     <key>FIRST_TREE_SERVICE_MODE</key>
-    <string>1</string>${homeEnvXml}
+    <string>1</string>${homeEnvXml}${proxyEnvXml}
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -297,6 +323,14 @@ function waitForLabelEvicted(target: string, label: string, timeoutMs: number): 
 }
 
 function installLaunchd(): ServiceInfo {
+  // Legacy unit auto-cleanup deliberately not done here. Pre-multi-env,
+  // every channel's "legacy" was the prod-era `dev.first-tree.client`
+  // label, and an `install` from any channel would have ripped down
+  // whatever the user had running under that name — including a
+  // PARALLEL install (e.g. installing dev while staging was still
+  // mid-migration to multi-env). MIGRATION.md Phase 2 documents the
+  // operator-driven `launchctl bootout` step instead; safer to make
+  // the user type it once than to wipe a peer install silently.
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const plistPath = launchdPlistPath();
@@ -345,7 +379,7 @@ function installLaunchd(): ServiceInfo {
     throw new Error(
       `launchctl bootstrap failed: ${lastBootstrapErr.stderr || `exit ${lastBootstrapErr.code ?? "unknown"}`}\n` +
         `    Command: launchctl bootstrap ${target} ${plistPath}\n` +
-        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree-hub login <token>\`.`,
+        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree login <token>\`.`,
     );
   }
 
@@ -360,7 +394,7 @@ function installLaunchd(): ServiceInfo {
     platform: "launchd",
     label: LAUNCHD_LABEL,
     unitPath: plistPath,
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state,
     pid,
     detail,
@@ -379,7 +413,7 @@ function uninstallLaunchd(): ServiceInfo {
     platform: "launchd",
     label: LAUNCHD_LABEL,
     unitPath: plistPath,
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state: "not-installed",
   };
 }
@@ -391,22 +425,27 @@ function systemdUnitPath(): string {
   return join(xdg, "systemd", "user", SYSTEMD_UNIT);
 }
 
-function renderSystemdUnit(invocation: ResolvedBinary): string {
+export function renderSystemdUnit(
+  invocation: ResolvedBinary,
+  proxyEnv: Record<string, string> = collectProxyEnv(),
+): string {
   const execStart: string =
     invocation.kind === "bin"
       ? `${shellQuote(invocation.program)} daemon start --no-interactive`
       : `${shellQuote(invocation.program)} ${invocation.args.map(shellQuote).join(" ")} daemon start --no-interactive`;
 
-  // Pin FIRST_TREE_HOME into the unit when this install is itself
-  // running with a non-default home. Without this line, systemd's launched
-  // process inherits only the user manager's env, FIRST_TREE_HOME is
-  // unset, and the process silently falls back to the default `~/.first-tree/hub`
-  // — i.e. a "dev" unit ends up reading prod's client.yaml. The
-  // home-derived suffix gives us isolated unit names; this gives the
-  // launched process the matching home so the isolation actually holds.
-  // Prod (suffix === "") deliberately omits the line so existing
-  // installed units don't churn unnecessarily.
-  const homeEnv = SERVICE_SUFFIX ? `Environment=FIRST_TREE_HOME=${shellQuote(DEFAULT_HOME_DIR)}\n` : "";
+  // Always pin FIRST_TREE_HOME into the unit. Without this line, systemd's
+  // launched process inherits only the user manager's env — FIRST_TREE_HOME
+  // is unset and the process falls back to the channel default. Usually
+  // identical to what the operator wants, but ANY env override (one-off
+  // `FIRST_TREE_HOME=/tmp/foo` test) silently disappears when the unit
+  // gets installed. Embedding the resolved home eliminates that drift.
+  const homeEnv = `Environment=FIRST_TREE_HOME=${shellQuote(defaultHome())}\n`;
+
+  // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
+  const proxyEnvLines = Object.entries(proxyEnv)
+    .map(([k, v]) => `Environment=${k}=${shellQuote(v)}\n`)
+    .join("");
 
   // Restart policy split:
   //   - on-failure  → operator-issued `systemctl stop` (clean exit 0) really stops.
@@ -415,12 +454,12 @@ function renderSystemdUnit(invocation: ResolvedBinary): string {
   //     UpdateManager exits 75 after `npm i -g`, systemd sees it as a
   //     "must restart" signal and brings up the new binary.
   // StartLimit* caps a crash storm (10 failures in 5 min → systemd holds back).
-  // Logs go through journald — `journalctl --user -u first-tree-hub-client` is
+  // Logs go through journald — `journalctl --user -u first-tree-client` is
   // the documented surface. The client itself still writes its rotating NDJSON
   // to client.log when FIRST_TREE_SERVICE_MODE=1; journald only catches
   // bare stdout/stderr (crashes, third-party spam).
   return `[Unit]
-Description=First Tree Hub Client
+Description=First Tree Client
 StartLimitIntervalSec=300
 StartLimitBurst=10
 
@@ -439,7 +478,7 @@ StandardError=journal
 SyslogIdentifier=${SYSLOG_IDENT}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=FIRST_TREE_SERVICE_MODE=1
-${homeEnv}[Install]
+${homeEnv}${proxyEnvLines}[Install]
 WantedBy=default.target
 `;
 }
@@ -506,6 +545,12 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
 }
 
 function installSystemd(): ServiceInfo {
+  // Legacy unit auto-cleanup deliberately not done here — same reason
+  // as `installLaunchd` above. A blanket `disable --now` + `rm` of
+  // `first-tree-client.service` / `first-tree-client-dev.service` /
+  // etc. would silently wipe a peer staging/prod install that the
+  // operator hasn't migrated yet. MIGRATION.md Phase 2 documents the
+  // operator-driven `systemctl --user stop` + `rm` snippet instead.
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const unitPath = systemdUnitPath();
@@ -534,7 +579,7 @@ function installSystemd(): ServiceInfo {
   if (!enableRes.ok) {
     throw new Error(
       `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
-        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree-hub login <token>\`.`,
+        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree login <token>\`.`,
     );
   }
 
@@ -543,7 +588,7 @@ function installSystemd(): ServiceInfo {
     platform: "systemd",
     label: SYSTEMD_UNIT,
     unitPath,
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state,
     pid,
     detail,
@@ -569,7 +614,7 @@ function uninstallSystemd(): ServiceInfo {
     platform: "systemd",
     label: SYSTEMD_UNIT,
     unitPath,
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state: "not-installed",
   };
 }
@@ -591,7 +636,7 @@ export function installClientService(): ServiceInfo {
   if (process.platform === "linux") return installSystemd();
   throw new Error(
     `Background service install is not supported on ${process.platform}. ` +
-      "Run `first-tree-hub daemon start` manually to keep the computer online.",
+      "Run `first-tree daemon start` manually to keep the computer online.",
   );
 }
 
@@ -651,7 +696,7 @@ export function getClientServiceStatus(): ServiceInfo {
       platform: "launchd",
       label: LAUNCHD_LABEL,
       unitPath: launchdPlistPath(),
-      logDir: LOG_DIR,
+      logDir: logDir(),
       state,
       pid,
       detail,
@@ -663,7 +708,7 @@ export function getClientServiceStatus(): ServiceInfo {
       platform: "systemd",
       label: SYSTEMD_UNIT,
       unitPath: systemdUnitPath(),
-      logDir: LOG_DIR,
+      logDir: logDir(),
       state,
       pid,
       detail,
@@ -673,7 +718,7 @@ export function getClientServiceStatus(): ServiceInfo {
     platform: "unsupported",
     label: "",
     unitPath: "",
-    logDir: LOG_DIR,
+    logDir: logDir(),
     state: "not-installed",
     detail: `platform ${process.platform} not supported`,
   };

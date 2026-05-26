@@ -1,6 +1,6 @@
 import { documentContextSchema } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
-import { buildMessageDocumentSnapshots } from "./doc-snapshots.js";
+import { buildMessageDocumentSnapshots, type SelfFence } from "./doc-snapshots.js";
 import type { AgentIdentity } from "./handler.js";
 
 /**
@@ -22,7 +22,7 @@ import type { AgentIdentity } from "./handler.js";
  * text always woke the trigger sender, so a courteous "thanks / got it"
  * reply kept the conversation alive forever. Final text now reaches the
  * chat for **human observers** only; to make another agent take action,
- * the agent must explicitly call `first-tree-hub chat send <name>` (see
+ * the agent must explicitly call `first-tree chat send <name>` (see
  * the "Communication Rules" section in `tools.md`).
  *
  * Content-level `@<name>` resolution (extracting tokens and cross-validating
@@ -46,11 +46,19 @@ export type ResultSinkDeps = {
   clearTrigger: () => void;
   log: (msg: string) => void;
   /**
-   * Optional repo-local base path for markdown document links emitted by the
-   * handler. When present, web preview resolves `docs/foo.md` inside that
-   * worktree instead of the per-chat workspace root.
+   * Resolved self-fence for snapshot capture. `agentHome` is the wide
+   * containment boundary for absolute paths — covers the predeclared source
+   * repo, the agent's on-demand `worktrees/<task>/` checkouts, and anything
+   * else the agent writes inside its home. `singleRepoLocalPath` (optional)
+   * enables relative-path promotion so `docs/foo.md` and the absolute form
+   * `<agentHome>/<localPath>/docs/foo.md` share one canonical key. Absent →
+   * no snapshotting (legacy / test path).
+   *
+   * Returned via a callback (not a static field) because the agent's git-repo
+   * config can refresh mid-session; the runtime exposes the latest payload via
+   * its config cache.
    */
-  getDocumentBasePath?: () => Promise<string | null>;
+  getSelfFence?: () => Promise<SelfFence | null>;
   /**
    * Shared `workspaces/` common root (parent of every `<agentSlug>/<chatId>`).
    * Set alongside `selfSlug` to enable cross-agent doc snapshots: an absolute
@@ -74,8 +82,8 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
   async function prepareOutbound(text: string): Promise<{ content: string; metadata?: Record<string, unknown> }> {
     const metadata: Record<string, unknown> = {};
     let content = text;
-    const documentBasePath = await deps.getDocumentBasePath?.();
-    if (documentBasePath) {
+    const selfFence = await deps.getSelfFence?.();
+    if (selfFence) {
       // Embed the inline-snapshot variant only. This is the cloud-friendly
       // form: web gets the bytes straight from the message, no second server
       // round-trip and no dependency on the server having access to the
@@ -97,7 +105,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
           deps.workspacesRoot && deps.selfSlug
             ? { workspacesRoot: deps.workspacesRoot, chatId: deps.chatId, selfSlug: deps.selfSlug }
             : undefined;
-        const { docs, skipped, rewrittenText } = await buildMessageDocumentSnapshots(text, documentBasePath, fence);
+        const { docs, skipped, rewrittenText } = await buildMessageDocumentSnapshots(text, selfFence, fence);
         // Validate BEFORE committing the rewritten body: `rewrittenText`
         // contains explicit `[display](key)` links that only make sense paired
         // with their snapshots. If schema validation throws, the catch must
@@ -121,7 +129,7 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     // v1 §四 改造 4: the trigger-sender mention auto-injection that used to
     // live here was deleted to break the agent ↔ agent echo loop. Final
     // text reaches the chat for human observers only; agent-to-agent
-    // wake-ups now require an explicit `first-tree-hub chat send <name>`.
+    // wake-ups now require an explicit `first-tree chat send <name>`.
 
     return { content, metadata: Object.keys(metadata).length > 0 ? metadata : undefined };
   }

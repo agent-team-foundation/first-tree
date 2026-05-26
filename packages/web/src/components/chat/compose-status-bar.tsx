@@ -1,0 +1,347 @@
+import {
+  type AgentChatStatus,
+  type ChatParticipantDetail,
+  compareMainStatus,
+  type LiveActivity,
+} from "@first-tree/shared";
+import { useQuery } from "@tanstack/react-query";
+import { ChevronDown, CornerDownLeft } from "lucide-react";
+import { useEffect, useState } from "react";
+import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
+import { viewOf } from "../../lib/agent-status-view.js";
+import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
+import { StatusGlyph } from "../ui/status-glyph.js";
+import { TimelineJumpButton } from "./timeline-jump-button.js";
+import { formatElapsed } from "./working-chip.js";
+
+/**
+ * ComposeStatusBar — a light inline rail just above the composer that reads out
+ * *what's happening in this chat right now*. Not a roster (that's the sidebar's
+ * AgentStatusPanel); not the timeline's WorkingBubble (which scrolls away).
+ * No box / no fill — it reads as part of the composer, with one faint hairline.
+ *
+ * Single line = lead + N:
+ *   - lead = the highest-priority active agent (failed > needs-you > working;
+ *     within working, the most-recently-active, held ~4s so working agents
+ *     don't swap faces too fast — but an alert preempts immediately).
+ *   - lead shows `[coloured dot] <name> · <detail>`: working → "Using Bash ·
+ *     npm test · 12s" (live), needs-you → "needs reply" + [Reply], failed →
+ *     "failed". The leading mark is always the state's coloured dot (no
+ *     ⏸/⚠/?/!).
+ *   - `+N` (others active) and a chevron expand a light multi-row list of every
+ *     active agent (≤ ~5 visible, then internal scroll).
+ *   - All quiet → the whole rail is hidden.
+ *
+ * Click zones: the lead/row text → jump to that agent's timeline anchor;
+ * `Reply ↩` (needs-you only) → jump + focus the question card's own answer
+ * input; +N / chevron → expand. Data is the shared /agent-status query
+ * (React-Query-deduped, admin-WS-live, ~1s-throttled).
+ */
+const ATTENTION: ReadonlySet<string> = new Set(["needs_you", "failed", "working"]);
+const TICK_INTERVAL_MS = 1000;
+const LEAD_HOLD_MS = 4000;
+const EXPANDED_MAX_HEIGHT = 180;
+/** Visual cap (in pixels) for the assistant-text reply preview, so it reads as a
+ *  glance (one clause) on the rail instead of sprawling across the wide composer;
+ *  CSS `truncate` adds the ellipsis. Roughly 30 CJK / 55 latin chars at the
+ *  caption font size. */
+const ASSISTANT_PREVIEW_MAX_WIDTH = 300;
+
+function isAlert(s: AgentChatStatus): boolean {
+  return s.main === "needs_you" || s.main === "failed";
+}
+
+function activityStartedMs(s: AgentChatStatus): number {
+  return s.activity ? new Date(s.activity.startedAt).getTime() : 0;
+}
+
+/**
+ * The agents worth raising the bar for — needs-you / failed / working — sorted
+ * highest-attention first. ready / paused / offline are filtered out. Exported
+ * for tests.
+ */
+export function selectAttention(statuses: AgentChatStatus[]): AgentChatStatus[] {
+  return statuses.filter((s) => ATTENTION.has(s.main)).sort((a, b) => compareMainStatus(a.main, b.main));
+}
+
+/**
+ * Pick the rail's lead with anti-flicker, given the previously-held lead.
+ * Pure & exported for tests.
+ *
+ * Rules: an alert (failed / needs-you) preempts immediately. Among working
+ * agents the most-recently-active is the candidate, but if the current lead is
+ * still working it's held until `holdMs` has elapsed (so working agents don't
+ * swap faces every tick). Returns the new held lead (`{ agentId, since }`), or
+ * null when nothing is active.
+ */
+export function pickLead(
+  current: { agentId: string; since: number } | null,
+  now: number,
+  alerts: AgentChatStatus[],
+  working: AgentChatStatus[],
+  holdMs: number,
+): { agentId: string; since: number } | null {
+  const alert = alerts[0];
+  if (alert) return { agentId: alert.agentId, since: now };
+  const mostRecent = [...working].sort((a, b) => activityStartedMs(b) - activityStartedMs(a))[0];
+  if (!mostRecent) return null; // nothing working
+  const heldStillWorking = current !== null && working.some((w) => w.agentId === current.agentId);
+  if (heldStillWorking && now - current.since < holdMs) return current; // hold the current face
+  return { agentId: mostRecent.agentId, since: now };
+}
+
+/** [Reply ↩]: scroll to the agent's question card AND focus its own answer
+ *  input — the structured AskUserQuestion is answered inside the card, not the
+ *  main composer. Falls back to the first focusable element in the card. */
+function scrollToQuestionAnswer(agentId: string): void {
+  const els = document.querySelectorAll<HTMLElement>(`[data-pending-question-agent="${agentId}"]`);
+  const card = els[els.length - 1];
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  // Prefer the free-text answer field; only fall back to the first option /
+  // focusable when there's no textarea (option buttons render before it in DOM
+  // order, so a plain "first focusable" would skip the textarea). preventScroll
+  // so focusing doesn't fight the smooth scroll above.
+  const target =
+    card.querySelector<HTMLElement>("textarea, input") ??
+    card.querySelector<HTMLElement>('button, [tabindex]:not([tabindex="-1"])');
+  target?.focus({ preventScroll: true });
+}
+
+/** Live wall-clock elapsed since `startedAt`, re-rendering each second. */
+function useLiveElapsed(startedAt: string | null): string | null {
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    const id = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  if (!startedAt) return null;
+  return formatElapsed(now - new Date(startedAt).getTime());
+}
+
+export function ComposeStatusBar({
+  chatId,
+  agents,
+}: {
+  chatId: string;
+  /** Non-human agent participants (for name lookup). */
+  agents: ChatParticipantDetail[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
+  const { data: statuses } = useQuery({
+    queryKey: chatAgentStatusQueryKey(chatId),
+    queryFn: () => fetchChatAgentStatuses(chatId),
+    refetchInterval: 30_000,
+  });
+  const mounted = useMountedAnchors();
+
+  // Per the per-chat-runtime authority refactor: working is now per-chat
+  // (runtime_state + freshness stamp) and pushed via admin-WS delta, so the
+  // local stale-clear ticker that used to live here is gone — the server
+  // self-heals after RUNTIME_STALE_MS and pushes the delta down.
+  // Re-pick the lead whenever the status set changes, and once more after
+  // the hold could expire so a steadily most-recent agent can take over
+  // even with no new data. pickLead is pure; the timer just lets the hold
+  // lapse.
+  useEffect(() => {
+    const attention = selectAttention(statuses ?? []);
+    const alerts = attention.filter(isAlert);
+    const working = attention.filter((s) => s.main === "working");
+    const repick = () => setLead((prev) => pickLead(prev, Date.now(), alerts, working, LEAD_HOLD_MS));
+    repick();
+    const t = setTimeout(repick, LEAD_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [statuses]);
+
+  const attention = selectAttention(statuses ?? []);
+  if (attention.length === 0) return null; // all quiet → hidden
+
+  // Resolve the held lead to a live row; fall back to the top of `attention`
+  // before the effect has settled (or if the held agent just dropped out).
+  const leadRow = (lead && attention.find((s) => s.agentId === lead.agentId)) ?? attention[0];
+  if (!leadRow) return null; // unreachable (attention is non-empty) — narrows the type
+  const others = attention.filter((s) => s.agentId !== leadRow.agentId);
+
+  return (
+    <div
+      className="fade-in flex flex-col"
+      style={{
+        marginBottom: "var(--sp-1)",
+        paddingBottom: "var(--sp-1)",
+        gap: "var(--sp-1)",
+        borderBottom: "var(--hairline) solid var(--border-faint)",
+      }}
+    >
+      <div className="flex items-center" style={{ gap: "var(--sp-1_5)" }}>
+        <RailRow status={leadRow} nameOf={nameFor(agents)} mounted={mounted} />
+        {others.length > 0 ? (
+          <button
+            type="button"
+            aria-label={expanded ? "Collapse activity" : "Expand activity"}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((v) => !v)}
+            className="text-caption inline-flex shrink-0 items-center"
+            style={{
+              gap: "var(--sp-1)",
+              border: 0,
+              background: "transparent",
+              padding: 0,
+              cursor: "pointer",
+              color: "var(--fg-4)",
+            }}
+          >
+            +{others.length}
+            <ChevronDown
+              className="h-3.5 w-3.5"
+              style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 150ms ease" }}
+            />
+          </button>
+        ) : null}
+      </div>
+
+      {expanded && others.length > 0 ? (
+        <div
+          className="flex flex-col"
+          style={{ gap: "var(--sp-1)", maxHeight: EXPANDED_MAX_HEIGHT, overflowY: "auto" }}
+        >
+          {attention.map((s) => (
+            <RailRow key={s.agentId} status={s} nameOf={nameFor(agents)} mounted={mounted} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function nameFor(agents: ChatParticipantDetail[]) {
+  return (id: string) => agents.find((a) => a.agentId === id)?.displayName ?? id.slice(0, 8);
+}
+
+/** One rail line: a clickable text region (→ jump to timeline) plus, for
+ *  needs-you, a [Reply] action. The two are separate targets so a jump click
+ *  never lands on Reply. */
+function RailRow({
+  status,
+  nameOf,
+  mounted,
+}: {
+  status: AgentChatStatus;
+  nameOf: (id: string) => string;
+  mounted: ReadonlySet<string>;
+}) {
+  const view = viewOf(status.main);
+  const jumpable = isJumpable(mounted, status.main, status.agentId);
+  return (
+    <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
+      <TimelineJumpButton
+        agentId={status.agentId}
+        main={status.main}
+        anchored={jumpable}
+        ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
+        className="flex-1 text-caption"
+        style={{ color: view.colorVar }}
+      >
+        <StatusGlyph colorVar={view.colorVar} shape={view.shape} pulse={view.pulse} size={8} ariaLabel={view.label} />
+        <span className="shrink-0">{nameOf(status.agentId)}</span>
+        <Sep />
+        <LeadDetail status={status} />
+      </TimelineJumpButton>
+      {/* Reply ↩ only when the question card is actually mounted — otherwise it
+          would be a clickable no-op, same gate as the row text. */}
+      {status.main === "needs_you" && jumpable ? (
+        <button
+          type="button"
+          onClick={() => scrollToQuestionAnswer(status.agentId)}
+          className="text-caption inline-flex shrink-0 items-center transition-opacity hover:opacity-70"
+          style={{
+            gap: 2,
+            border: 0,
+            background: "transparent",
+            padding: 0,
+            cursor: "pointer",
+            color: "var(--state-blocked)",
+          }}
+        >
+          Reply
+          <CornerDownLeft className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** The detail after the name: a short reason (needs-you / failed) or the live
+ *  activity (working). */
+function LeadDetail({ status }: { status: AgentChatStatus }) {
+  if (status.main === "needs_you") return <span className="truncate">needs reply</span>;
+  if (status.main === "failed") return <span className="truncate">failed</span>;
+  return <WorkingDetail activity={status.activity} />;
+}
+
+/** working detail: `Using Bash · npm test · 12s` (live ticker). */
+function WorkingDetail({ activity }: { activity: LiveActivity | null }) {
+  const elapsed = useLiveElapsed(activity?.startedAt ?? null);
+  if (!activity) return <span className="truncate">Working</span>;
+  return (
+    <span className="inline-flex min-w-0 items-center" style={{ gap: 4 }}>
+      <ActivityText activity={activity} />
+      {elapsed ? (
+        <>
+          <Sep />
+          <span className="mono shrink-0" style={{ color: "var(--fg-4)" }}>
+            {elapsed}
+          </span>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+/** The current turn's running narration (`turnText`, sticky across tool calls)
+ *  when present; else "Thinking", the latest assistant reply preview (falling
+ *  back to "Writing"), or "Using <tool> · <arg>" (sans word + mono tool/arg).
+ *  The narration / reply previews are truncated server-side and width-capped
+ *  here so they read as a glance. */
+function ActivityText({ activity }: { activity: LiveActivity }) {
+  // Sticky narration: the current turn's running reply text takes precedence
+  // over the tool_call / thinking indicator, so a tool call fired right after a
+  // sentence doesn't bury what the agent is saying.
+  if (activity.turnText)
+    return (
+      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
+        {activity.turnText}
+      </span>
+    );
+  if (activity.kind === "thinking") return <span className="truncate">Thinking</span>;
+  if (activity.kind === "assistant_text")
+    return (
+      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
+        {activity.detail ?? "Writing"}
+      </span>
+    );
+  return (
+    <span className="inline-flex min-w-0 items-center" style={{ gap: 4 }}>
+      <span className="shrink-0">Using</span>
+      <span className="mono shrink-0">{activity.label}</span>
+      {activity.detail ? (
+        <>
+          <Sep />
+          <span className="mono truncate" style={{ color: "var(--fg-4)" }}>
+            {activity.detail}
+          </span>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+/** Muted "·" segment separator. */
+function Sep() {
+  return (
+    <span aria-hidden="true" className="shrink-0" style={{ color: "var(--fg-4)" }}>
+      ·
+    </span>
+  );
+}

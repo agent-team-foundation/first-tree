@@ -29,7 +29,6 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
       },
       contextTreePath: null,
       serverUrl: "http://hub.test",
-      chatId: "chat-1",
     });
 
     expect(existsSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER))).toBe(true);
@@ -49,7 +48,6 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
       },
       contextTreePath: null,
       serverUrl: "http://hub.test",
-      chatId: "chat-1",
       briefing: { format: "agents-md", content: "# Hello\n\nFollow your team's playbook.\n" },
     });
 
@@ -74,7 +72,6 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
       },
       contextTreePath: null,
       serverUrl: "http://hub.test",
-      chatId: "chat-1",
     });
 
     expect(existsSync(join(workspacePath, "AGENTS.md"))).toBe(false);

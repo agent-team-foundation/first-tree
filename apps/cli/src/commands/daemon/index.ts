@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { registerDaemonDoctorCommand } from "./doctor.js";
+import { registerDaemonHomeInfoCommand } from "./home-info.js";
 import { registerDaemonRefreshUnitCommand } from "./refresh-unit.js";
 import { registerDaemonRestartCommand } from "./restart.js";
 import { registerDaemonStartCommand } from "./start.js";
@@ -19,4 +20,7 @@ export function registerDaemonCommands(program: Command): void {
   // after a self-install to refresh the unit file with the new binary's
   // templates before exit(75).
   registerDaemonRefreshUnitCommand(daemon);
+  // Hidden — post-bundle test probe; emits resolved channel identity +
+  // home paths as JSON. See `apps/cli/src/__tests__/post-bundle-channel-home.test.ts`.
+  registerDaemonHomeInfoCommand(daemon);
 }

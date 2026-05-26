@@ -46,14 +46,22 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
     staleTime: 60_000,
   });
 
-  // Poll the agent row every 2s while the modal is open and the agent is
-  // still unbound. React-query stops fetching the moment the component
-  // unmounts.
+  // Poll the agent row every 5s while the modal is open and the agent is
+  // still unbound. Originally 2s, but that produces 30 RPM per open modal;
+  // the bind is gated on the user running a CLI command on another machine
+  // (single-digit-seconds task), so a 5s cadence still feels live without
+  // the request-storm. A proper push-driven path requires a new admin WS
+  // frame for `agent:pinned` (today it's only routed to the Client SDK).
+  // `refetchIntervalInBackground: false` skips ticks when the tab is
+  // backgrounded — the modal can't make progress anyway without a foreground
+  // CLI invocation, and the inevitable `refetchOnWindowFocus` will catch up
+  // when the user comes back.
   const agentQuery = useQuery({
     queryKey: ["agent-poll", agent.uuid],
     queryFn: () => getAgent(agent.uuid),
     enabled: open && !agent.clientId,
-    refetchInterval: 2000,
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {
@@ -63,22 +71,31 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
     }
   }, [agentQuery.data, onBound]);
 
-  // Assemble the Last-step one-liner entirely on the web side so the server
-  // stays out of UI-shaped concerns (it only returns the raw `connect <token>`
-  // invocation). The three segments, in order:
-  //   1. `npm install -g` — bootstrap the CLI for users who've never run it
-  //   2. `agent add`      — pure local file write,no auth/network;the
-  //                          resulting `agent.yaml` is what the runtime picks
-  //                          up on first load
-  //   3. `connect <token>` — computer-level auth + launchd/systemd service;
-  //                          runtime's first `loadAgents` already sees the
-  //                          agent written in step 2,no watcher race
+  // Assemble the Last-step one-liner from the channel-aware fields the
+  // server returns. The three segments, in order:
+  //   1. `npm install -g <pkg>` — bootstrap the CLI for users who've
+  //                                never run it. SKIPPED for dev servers
+  //                                (npmSpec=null) since dev installs from
+  //                                source via scripts/dev-install.sh.
+  //   2. `<bin> agent add`      — pure local file write, no auth/network;
+  //                                the resulting `agent.yaml` is what the
+  //                                runtime picks up on first load.
+  //   3. `<bin> login <token>`  — computer-level auth + launchd/systemd
+  //                                service; runtime's first `loadAgents`
+  //                                already sees the agent written in step
+  //                                2, no watcher race.
   const baseCommand = tokenQuery.data?.command ?? "";
+  const npmSpec = tokenQuery.data?.npmSpec ?? null;
+  const binName = tokenQuery.data?.binName ?? "";
   const command =
-    baseCommand && agent.name
-      ? `npm install -g @agent-team-foundation/first-tree-hub && ` +
-        `first-tree-hub agent add ${shellQuote(agent.name)} --agent-id ${agent.uuid} && ` +
-        baseCommand
+    baseCommand && agent.name && binName
+      ? [
+          npmSpec ? `npm install -g ${npmSpec}` : null,
+          `${binName} agent add ${shellQuote(agent.name)} --agent-id ${agent.uuid}`,
+          baseCommand,
+        ]
+          .filter((part): part is string => part !== null)
+          .join(" && ")
       : baseCommand;
 
   function handleCopy() {
@@ -96,8 +113,8 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
         </DialogHeader>
         <div className="space-y-4">
           <p className="text-body text-muted-foreground">
-            Open a terminal on your computer and run this command. It installs the First Tree Hub CLI, signs your
-            computer in, and keeps it online in the background.
+            Open a terminal on your computer and run this command. It installs the First Tree CLI, signs your computer
+            in, and keeps it online in the background.
           </p>
           <div className="flex items-start gap-2 rounded-md border border-border bg-muted p-3">
             <code className="flex-1 text-caption font-mono break-all select-all">

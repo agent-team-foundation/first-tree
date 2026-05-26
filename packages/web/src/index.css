@@ -371,13 +371,14 @@
 
 /* ============================================================================
    Marketing surface — pins the public landing page to the first-tree.ai
-   palette regardless of the dashboard's light/dark toggle. First Tree Hub
-   is a sub-product of first-tree, so the marketing entry point should
-   always read as the parent brand: near-black canvas + cool-light text +
-   the shared green accent. Scoped to `.landing-marketing` so the dashboard
-   chrome (when an authenticated user happens to land on a marketing-styled
-   route) is untouched. Same `--bg` / `--fg` variable names — every
-   component utility (bg-background, text-foreground, etc.) inherits.
+   palette regardless of the dashboard's light/dark toggle. The cloud /
+   collaboration layer (formerly first-tree-hub) is part of First Tree, so
+   the marketing entry point should always read as the parent brand:
+   near-black canvas + cool-light text + the shared green accent. Scoped to
+   `.landing-marketing` so the dashboard chrome (when an authenticated user
+   happens to land on a marketing-styled route) is untouched. Same `--bg`
+   / `--fg` variable names — every component utility (bg-background,
+   text-foreground, etc.) inherits.
    ============================================================================ */
 .landing-marketing {
   /* Surface — hex equivalents shown as comments for first-tree.ai parity. */
@@ -530,11 +531,6 @@
     opacity: 0;
   }
 }
-@keyframes dash-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -595,19 +591,6 @@
   }
 }
 
-/* Chat-row avatar working ring — steady breathe to signal "agent is
-   responding now" without the urgency of a flash. opacity-only so the
-   animation stays GPU-cheap on long conversation lists. */
-@keyframes chat-row-avatar-working-breathe {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 @keyframes context-live-halo-breathe {
   0%,
   100% {
@@ -630,12 +613,29 @@
   }
 }
 
-.chat-row-avatar__working-ring {
-  animation: chat-row-avatar-working-breathe 1.6s ease-in-out infinite;
+/* Chat-row activity dots ("•••") — the list time-slot indicator for "an
+   agent is producing output now". Three working-blue dots do a staggered
+   typing-style wave (translateY bounce, per-dot animation-delay set inline)
+   so it reads as clearly "alive" at scan distance. The opacity floor stays
+   high (0.5) so the dots never fade out; ~1.3s cycle. */
+@keyframes chat-row-activity-dot {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+.chat-row-activity-dot {
+  animation: chat-row-activity-dot 1.3s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-row-avatar__working-ring {
+  .chat-row-activity-dot {
     animation: none;
+    transform: none;
     opacity: 1;
   }
 }
@@ -662,6 +662,35 @@
     animation: none;
     opacity: 1;
     transform: none;
+  }
+}
+
+/* ── Canonical agent-status pulses (agent-status-ui §9.3) ──────────────
+   working / needs-you breathe the dot body's own opacity — no concentric
+   ring — so every status point keeps an identical footprint and a long
+   roster column stays aligned. opacity-led → GPU-cheap. working breathes a
+   touch faster (reads "alive"); needs-you slower (a calm "waiting for you",
+   not an alarm). reduced-motion falls back to a solid dot. */
+@keyframes status-dot-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.agent-status-pulse--working {
+  animation: status-dot-breathe 1.4s ease-in-out infinite;
+}
+.agent-status-pulse--needs-you {
+  animation: status-dot-breathe 1.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-status-pulse--working,
+  .agent-status-pulse--needs-you {
+    animation: none;
+    opacity: 1;
   }
 }
 
@@ -1265,4 +1294,93 @@
 /* Dense table row hover — used by DenseTableRow[data-interactive] */
 tr[data-interactive]:hover {
   background: var(--bg-hover);
+}
+
+/* ── Onboarding "Show me how" guides ─────────────────────────────────────
+   Progressive-disclosure visual help for the highest-friction steps
+   (connect a computer, connect code). Default-collapsed so confident users
+   aren't slowed; the only motion is a blinking terminal caret + a chevron
+   rotation, both stilled under reduced-motion. */
+.onboarding-show-me-how > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.onboarding-show-me-how > summary::-webkit-details-marker {
+  display: none;
+}
+.onboarding-disclosure-chevron {
+  transition: transform 160ms ease;
+}
+.onboarding-show-me-how[open] .onboarding-disclosure-chevron {
+  transform: rotate(90deg);
+}
+@keyframes onboarding-caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.onboarding-guide-caret {
+  animation: onboarding-caret-blink 1.1s step-end infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-guide-caret {
+    animation: none;
+    opacity: 1;
+  }
+  .onboarding-disclosure-chevron {
+    transition: none;
+  }
+  /* Step-to-step fade (shared `.fade-in`) is decorative — hold it still. */
+  .onboarding-shell-step.fade-in {
+    animation: none;
+  }
+}
+
+/* Custom radio/checkbox cards hide the real input with `.sr-only` and render
+   a surrogate box; without this, keyboard focus lands on an invisible
+   control. Surface a visible ring on the label when its input is focused. */
+.onboarding-choice:focus-within {
+  outline: var(--hairline) solid var(--accent-ring);
+  outline-offset: var(--sp-0_5);
+}
+
+/* Repo picker "open on GitHub" affordance: quiet by default, revealed on row
+   hover/focus so a long list stays uncluttered. On touch (no hover) it stays
+   visible so it remains reachable. */
+@media (hover: hover) {
+  .onboarding-choice .repo-open {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .onboarding-choice:hover .repo-open,
+  .onboarding-choice:focus-within .repo-open {
+    opacity: 1;
+  }
+}
+
+/* Breathing dots for the "creating teammate" / "getting started" waits. The
+   animation lives here (not inline) so reduced-motion can override it. */
+.onboarding-working-dot {
+  animation: heartbeat-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-working-dot {
+    animation: none;
+  }
+}
+
+/* Hide the third-party hearback-widget feedback FAB on narrow viewports.
+   Matches the workspace's `narrow` breakpoint (use-viewport.ts) — at <48rem
+   the chrome collapses to tabs-only and the bottom-right bubble would
+   overlap the composer / sit on top of the home-indicator zone. The widget
+   element is injected at the end of <body> by widget.js (see index.html). */
+@media (max-width: 47.999rem) {
+  hearback-widget {
+    display: none;
+  }
 }

@@ -3,7 +3,7 @@ import { installClientService, isServiceSupported, isServiceUnitDriftDetected } 
 import { print } from "../../core/output.js";
 
 /**
- * `first-tree-hub daemon refresh-unit` (hidden) — rewrite the launchd plist /
+ * `first-tree daemon refresh-unit` (hidden) — rewrite the launchd plist /
  * systemd unit using the **current binary's** templates, without restarting
  * the daemon, but ONLY if the on-disk unit actually differs from what the
  * current binary would write.
@@ -27,8 +27,8 @@ import { print } from "../../core/output.js";
  *
  * Hidden because it's an internal supervisor-cooperation interface, not a
  * day-to-day user command. End users get the same effect — and more —
- * from `first-tree-hub login <token>` (which also re-authenticates) or
- * `first-tree-hub upgrade` (which also installs the npm package).
+ * from `first-tree login <token>` (which also re-authenticates) or
+ * `first-tree upgrade` (which also installs the npm package).
  */
 export function registerDaemonRefreshUnitCommand(daemon: Command): void {
   daemon

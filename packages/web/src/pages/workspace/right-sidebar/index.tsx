@@ -1,6 +1,5 @@
 import type { ChatParticipantDetail } from "@first-tree/shared";
 import { X } from "lucide-react";
-import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
 import { GitHubSection } from "./github-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 
@@ -28,35 +27,31 @@ export function ChatRightSidebar({
   participants,
   participantsLoading,
   managedByMe,
-  addParticipantsCandidates,
-  agentIdentity,
   onAdded,
   onClose,
   readOnly,
+  width = 320,
 }: {
   chatId: string;
   participants: ChatParticipantDetail[];
   participantsLoading: boolean;
   managedByMe: Map<string, boolean>;
-  addParticipantsCandidates: MentionCandidate[];
-  agentIdentity: (uuid: string | null | undefined) => {
-    name: string | null;
-    displayName: string;
-    avatarImageUrl: string | null;
-    avatarColorToken: string | null;
-  } | null;
   onAdded: () => void;
   onClose: () => void;
   /** Watcher mode: hide write surfaces. Currently gates the inline
    *  "Add participant" affordance inside ParticipantsSection. */
   readOnly: boolean;
+  /** Override the default 20rem width. Used by the narrow-viewport
+   *  overlay branch in `ChatView` to cap to `min(88vw, 20rem)` so
+   *  the rail doesn't overflow a ~23rem logical viewport. */
+  width?: number | string;
 }) {
   return (
     <aside
       aria-label="Chat details"
       className="relative flex shrink-0 flex-col overflow-hidden animate-in fade-in slide-in-from-right-4 duration-150"
       style={{
-        width: 320,
+        width,
         background: "var(--bg-raised)",
         borderLeft: "var(--hairline) solid var(--border)",
       }}
@@ -91,8 +86,6 @@ export function ChatRightSidebar({
           participants={participants}
           participantsLoading={participantsLoading}
           managedByMe={managedByMe}
-          addParticipantsCandidates={addParticipantsCandidates}
-          agentIdentity={agentIdentity}
           onAdded={onAdded}
           readOnly={readOnly}
         />

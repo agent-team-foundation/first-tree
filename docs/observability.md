@@ -1,6 +1,6 @@
 # Observability
 
-First Tree Hub ships a vendor-neutral observability stack built on pino
+first-tree ships a vendor-neutral observability stack built on pino
 (logs) and OpenTelemetry (traces). Tracing is **off by default** — configure
 an OTLP endpoint to enable it.
 
@@ -8,8 +8,9 @@ an OTLP endpoint to enable it.
 
 ### Logs only (default, zero config)
 
-No setup required. Hub emits structured logs to stdout in a human-readable
-format during development, and as NDJSON in production (`NODE_ENV=production`).
+No setup required. The server emits structured logs to stdout in a
+human-readable format during development, and as NDJSON in production
+(`NODE_ENV=production`).
 
 ### Logs + traces
 
@@ -23,7 +24,7 @@ observability:
     endpoint: https://<your-otlp-endpoint>/v1/traces
     headers:
       Authorization: "Bearer <write-token>"
-    serviceName: first-tree-hub
+    serviceName: first-tree
     environment: production
     sampleRate: 1.0
 ```
@@ -48,7 +49,7 @@ in the startup log.
 | `observability.tracing.endpoint` | `FIRST_TREE_OTEL_ENDPOINT` | `""` (disabled) | OTLP/HTTP traces URL |
 | `observability.tracing.headers` | `FIRST_TREE_OTEL_HEADERS` | `""` | `key1=val1,key2=val2` format |
 | `observability.tracing.exporter` | — | `otlp-http` | `otlp-http` or `otlp-grpc` |
-| `observability.tracing.serviceName` | — | `first-tree-hub` | Shown in trace backends |
+| `observability.tracing.serviceName` | — | `first-tree` | Shown in trace backends |
 | `observability.tracing.environment` | — | `development` | `deployment.environment.name` OTel attr |
 | `observability.tracing.sampleRate` | — | `1.0` | `0.0–1.0`, ratio applied at root |
 
@@ -56,17 +57,17 @@ in the startup log.
 
 A common deployment pattern is to point **all** environments (dev, staging,
 prod, …) at the **same** Logfire / Honeycomb / … project, and rely on the
-UI's filter/group features to tell them apart. Hub supports this out of the
-box — no need to maintain multiple projects or tokens.
+UI's filter/group features to tell them apart. The server supports this
+out of the box — no need to maintain multiple projects or tokens.
 
 ### How it works
 
-Every span Hub emits carries three OTel resource attributes that trace
+Every span the server emits carries three OTel resource attributes that trace
 backends treat as first-class:
 
 | Attribute | Value | Configured by |
 |---|---|---|
-| `service.name` | `first-tree-hub` (customizable) | `observability.tracing.serviceName` |
+| `service.name` | `first-tree` (customizable) | `observability.tracing.serviceName` |
 | `deployment.environment.name` | `development` / `staging` / `production` / … | `observability.tracing.environment` or `FIRST_TREE_OTEL_ENVIRONMENT` |
 | `service.instance.id` | `srv_<8-char-hex>` — unique per process | auto-generated at startup |
 
@@ -81,7 +82,7 @@ docker run \
   -e FIRST_TREE_OTEL_HEADERS="Authorization=Bearer <token>" \
   -e FIRST_TREE_OTEL_ENVIRONMENT=production \
   -e FIRST_TREE_DATABASE_URL=... \
-  ghcr.io/agent-team-foundation/first-tree-hub:latest
+  ghcr.io/agent-team-foundation/first-tree:latest
 ```
 
 Swap `production` → `staging` for the staging instance; same token, different
@@ -111,7 +112,7 @@ simpler to operate and makes cross-environment comparisons trivial.
 
 ### Multi-replica deployment
 
-When you scale out to multiple Hub instances behind a load balancer, each
+When you scale out to multiple server instances behind a load balancer, each
 process gets its own `service.instance.id` at startup. To drill into a
 specific replica in your trace backend, filter by that attribute — this is
 how you answer "which replica is spiking latency" without manual tagging.
@@ -189,7 +190,7 @@ log.info({ entryId }, "inbox: entry expired");
 
 ### What these rules do NOT cover
 
-- **CLI status output** (`first-tree-hub` connect / client banners,
+- **CLI status output** (`first-tree` connect / client banners,
   `status(...)` helpers) is a different channel — it's interactive,
   user-facing, and can use formatting / localized strings. It does *not*
   go through pino.
@@ -275,7 +276,7 @@ docker run \
   -e FIRST_TREE_LOG_LEVEL=debug \
   -e FIRST_TREE_OTEL_ENDPOINT=https://... \
   -e FIRST_TREE_OTEL_HEADERS="Authorization=Bearer ..." \
-  ghcr.io/agent-team-foundation/first-tree-hub:latest
+  ghcr.io/agent-team-foundation/first-tree:latest
 ```
 
 ## Sampling guidance
@@ -307,7 +308,7 @@ Sampling is `ParentBased(TraceIdRatioBased(sampleRate))` — inbound
   Fixing this requires persisting W3C `traceparent` on inbox rows and is
   tracked as tech debt until multi-replica deployment makes it necessary.
 - **No client-side tracing.** Client (`@first-tree/client`) emits logs
-  only. Agent-side work is observed indirectly via Hub-side spans
+  only. Agent-side work is observed indirectly via server-side spans
   (`ws.connection`, `ws.message`, inbox attrs).
 - **No PG span.** PostgreSQL queries are not wrapped in spans — for query
   performance investigation, PostgreSQL's own `log_min_duration_statement` +

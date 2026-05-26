@@ -1,23 +1,29 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
 
 /**
- * Version of the consumer-facing `@agent-team-foundation/first-tree-hub`
- * package. Read once at module load so the CLI, client runtime, and server
- * bootstrap all quote the same string.
+ * Version of the consumer-facing CLI package. Read once at module load so
+ * the CLI, client runtime, and server bootstrap all quote the same string.
  *
- * Path-based lookups (`require("../../package.json")`) do not survive the
- * tsdown bundle: the source lives at `src/core/version.ts` but every
- * emitted chunk lands in `dist/` — shifting the relative depth by one and
- * pointing at `packages/package.json` instead of our own manifest (the
- * v0.9.1 "Cannot find module ../../package.json" crash). Walk up from this
- * module's URL and accept the first `package.json` whose `name` matches, so
- * dev runs (`tsx src/cli/index.ts`) and the published bundle
- * (`dist/cli/index.mjs`) both resolve the same file.
+ * Multi-env: every channel has its own package.json `name` —
+ *   - prod    → "first-tree"
+ *   - staging → "first-tree-staging"
+ *   - dev     → "first-tree-dev" (source-tree manifest; never published)
+ *
+ * Walking up the module tree finds whichever manifest matches THIS channel's
+ * name, so dev runs (`tsx src/cli/index.ts`), the published prod bundle
+ * (`dist/cli/index.mjs` from `first-tree@latest`), and the published
+ * staging bundle (`first-tree-staging@latest`) all resolve their own file.
+ *
+ * `packageName ?? binName`: dev channel sets `packageName=null` (not
+ * published) but its bin name and source-tree manifest name both equal
+ * `"first-tree-dev"`. Falling back to binName covers that case without
+ * baking a fourth identifier.
  */
-const PACKAGE_NAME = "@agent-team-foundation/first-tree-hub";
+const PACKAGE_NAME = channelConfig.packageName ?? channelConfig.binName;
 
 /**
  * Sentinel returned when the walker exhausts every parent directory without
@@ -56,7 +62,7 @@ export function resolveCommandVersion(moduleUrl: string = import.meta.url): stri
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") {
         const message = err instanceof Error ? err.message : String(err);
-        print.line(`[first-tree-hub] warning: could not read ${dir}/package.json: ${message}\n`);
+        print.line(`[first-tree] warning: could not read ${dir}/package.json: ${message}\n`);
       }
     }
     const parent = dirname(dir);
@@ -75,4 +81,4 @@ export const COMMAND_VERSION: string = resolveCommandVersion();
  * backends — see issue #246. The format follows RFC 7231 §5.5.3 conventions
  * (`product/version (comment)`).
  */
-export const CLI_USER_AGENT = `first-tree-hub-cli/${COMMAND_VERSION} (${process.platform} ${process.arch})`;
+export const CLI_USER_AGENT = `first-tree-cli/${COMMAND_VERSION} (${process.platform} ${process.arch})`;

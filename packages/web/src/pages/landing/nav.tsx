@@ -24,7 +24,7 @@ export function LandingNav() {
       <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-6">
         <Link
           to="/"
-          aria-label="First Tree Hub home"
+          aria-label="First Tree home"
           className="flex items-center gap-2 rounded-[var(--radius-input)] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           <FirstTreeLogo width={18} height={20} />

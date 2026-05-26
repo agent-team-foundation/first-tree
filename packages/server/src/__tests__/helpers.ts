@@ -84,6 +84,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     contextTreeSnapshotMax: 10000,
   };
   const config: Config = {
+    channel: "dev",
     database: {
       url: process.env.DATABASE_URL ?? "",
       provider: "external",
@@ -94,7 +95,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       publicUrl: undefined,
     },
     workspace: {
-      root: "/tmp/first-tree-hub-test-workspaces",
+      root: "/tmp/first-tree-test-workspaces",
     },
     secrets: {
       jwtSecret: process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest",
@@ -133,12 +134,17 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       maxRetryCount: 3,
       pollingIntervalSeconds: 5,
       presenceCleanupSeconds: 60,
+      // Disabled by default in tests — suites that exercise the sweeper
+      // call it explicitly via `sweepChatArchive`, so the background
+      // timer would only add nondeterminism.
+      archiveSweepIntervalSeconds: 0,
+      archiveMappedIdleSeconds: 60 * 60,
+      archiveUnmappedIdleSeconds: 12 * 60 * 60,
       notificationWebhookUrl: undefined,
     },
     update: {
       // Pin a deterministic version so welcome-frame tests can assert
       // exact equality without coupling to the in-tree package.json.
-      channel: "latest",
       commandVersion: "test.version",
       // Long enough that the timer never fires inside a test run — we
       // call `refresh()` manually when a test needs a forced poll.

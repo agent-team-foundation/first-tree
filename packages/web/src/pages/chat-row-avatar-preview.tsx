@@ -35,8 +35,10 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     unreadMentionCount: overrides.unreadMentionCount ?? 0,
     canReply: overrides.canReply ?? true,
     engagementStatus: overrides.engagementStatus ?? "active",
-    engagedAgentIds: overrides.engagedAgentIds ?? [],
     liveActivity: overrides.liveActivity ?? null,
+    pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
+    failedAgentIds: overrides.failedAgentIds ?? [],
+    busyAgentIds: overrides.busyAgentIds ?? [],
   };
 }
 
@@ -73,7 +75,6 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       title: "kael",
       participants: [KAEL],
-      engagedAgentIds: [KAEL.agentId],
       lastMessagePreview: "Analyzing logs from the last 24h…",
     }),
   },
@@ -109,7 +110,6 @@ const VARIANTS: Array<{ name: string; row: MeChatRow; subtitle?: string }> = [
     row: row({
       title: "kael",
       participants: [KAEL],
-      engagedAgentIds: [KAEL.agentId],
       unreadMentionCount: 3,
       lastMessagePreview: "Pulling the next batch now.",
     }),
@@ -271,8 +271,9 @@ function PreviewCard({ name, row }: { name: string; row: MeChatRow }) {
           type={row.type}
           participants={row.participants}
           selfAgentId={SELF_ID}
-          engagedAgentIds={row.engagedAgentIds}
           unreadCount={row.unreadMentionCount}
+          needsYou={row.pendingQuestionAgentIds.length > 0}
+          failed={row.failedAgentIds.length > 0}
         />
         <div className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
           <div className="flex items-baseline" style={{ gap: 6 }}>

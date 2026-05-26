@@ -3,11 +3,36 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { pino } from "../observability/logger.js";
+import { isUnderManagedRoot, killProcessesHoldingPath } from "./worktree-cleanup.js";
 
 const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 
 const FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const SESSION_BRANCH_PREFIX = "hub-session";
+
+/**
+ * Backoff schedule for retrying a remote-talking git op (`fetch`,
+ * `remote set-head --auto`) on a transient network-layer failure. Each entry
+ * is the wait BEFORE the next attempt, so this lays out 4 attempts total
+ * (1 initial + 3 retries) with a worst-case sleep budget of ~5s **per
+ * protocol attempt**.
+ *
+ * Per-call totals depend on whether the helper chains a primary + fallback:
+ *   - `fetchOrigin` ≤ 5s sleep budget: the SSH fallback only fires when
+ *     the primary's terminal failure is credential-shaped, which a transient
+ *     stderr will never be. So a transient-only failure burns ~5s.
+ *   - `setHeadAuto` ≤ 10s sleep budget: the fallback fires on ANY terminal
+ *     primary failure, so a doubly-transient run burns ~5s + ~5s ≈ 10s.
+ *
+ * Tuned for the operator-visible case of session start/resume hitting a
+ * proxy / VPN that flips a rule, restarts a TUN, or drops a TLS handshake
+ * mid-flight. The user's own manual workaround in those cases is "@-mention
+ * the agent again 2 seconds later" — this is that, automated.
+ *
+ * Per-step jitter (up to 25% of the delay) prevents thundering-herd retries
+ * when several agents resume in lockstep against the same flaky proxy.
+ */
+const NETWORK_RETRY_DELAYS_MS: readonly number[] = [500, 1500, 3000];
 
 /**
  * Per-URL bare mirror manager.
@@ -43,6 +68,21 @@ export type GitMirrorManagerOptions = {
   dataDir: string;
   cloneTimeoutMs?: number;
   log?: pino.Logger;
+  /**
+   * Paths under which Hub owns the directory tree end-to-end (typically
+   * `<dataDir>/workspaces`). When a worktree target sits inside one of these
+   * roots and a stale non-managed leftover is found at session start, the
+   * manager auto-recovers — kill any process still holding the path, `rm -rf`
+   * the leftover, then proceed with the normal `git worktree add` flow.
+   *
+   * Targets OUTSIDE every managed root still fail loud with D13: those are
+   * operator-supplied paths and we refuse to silently delete user data.
+   *
+   * Omit to disable self-healing (current D13-always-throws behaviour). The
+   * production runtimes always pass the workspaces root; tests opt in
+   * explicitly to exercise the recovery path.
+   */
+  hubManagedRoots?: readonly string[];
 };
 
 export interface GitMirrorManager {
@@ -215,6 +255,24 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   const cloneTimeoutMs =
     opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
   const log = opts.log;
+  const resolvedDataDir = resolve(opts.dataDir);
+  const hubManagedRoots = (opts.hubManagedRoots ?? []).map((p) => resolve(p));
+  // Fail loud at construction if any managed root would let the self-heal
+  // branch escape `<dataDir>`. Without this guard a misconfigured caller
+  // (`hubManagedRoots: ["/"]`, `[os.homedir()]`, etc.) would weaponise the
+  // `createWorktree` rm -rf path against arbitrary host paths. Strict subdir:
+  // the root itself MUST sit inside `dataDir` and MUST NOT equal `dataDir`
+  // (so we never grant "the whole hub data dir is fair game").
+  //
+  // Aggregate every bad root into one error so an operator who misconfigured
+  // multiple entries sees the whole picture on their first startup attempt
+  // instead of grinding through one-fix-then-restart cycles.
+  const badRoots = hubManagedRoots.filter((root) => !isUnderManagedRoot(root, [resolvedDataDir]));
+  if (badRoots.length > 0) {
+    throw new GitMirrorError(
+      `hubManagedRoots contains ${badRoots.length} entr${badRoots.length === 1 ? "y" : "ies"} not strictly inside dataDir "${resolvedDataDir}" — refusing to construct manager (would let self-heal rm -rf escape the hub data dir): ${badRoots.map((p) => `"${p}"`).join(", ")}`,
+    );
+  }
 
   // Per-URL serial queue. Prevents concurrent ensureMirror / fetchMirror /
   // gcMirrors for the same URL from racing on the same directory.
@@ -251,8 +309,15 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     // shells it would block the request indefinitely instead of failing fast
     // (defeating the ssh-fallback path below). Callers can still override by
     // passing an `env` that sets `GIT_TERMINAL_PROMPT` explicitly.
+    // Force `LC_ALL=C` so git/ssh stderr stays in English regardless of the
+    // caller's locale — the credential-shape and transient-network heuristics
+    // below match against stderr substrings, and a localized message would
+    // silently break classification (and the protocol-fallback decision that
+    // hangs off it). Placed after the spread so it overrides any inherited
+    // LC_ALL from `process.env`; `GIT_TERMINAL_PROMPT` stays before the spread
+    // so tests can opt back into prompting if they need to.
     const baseEnv = env ?? process.env;
-    const finalEnv = { GIT_TERMINAL_PROMPT: "0", ...baseEnv };
+    const finalEnv = { GIT_TERMINAL_PROMPT: "0", ...baseEnv, LC_ALL: "C" };
     return await new Promise<{ stdout: string; stderr: string; elapsedMs: number }>((resolveExec, rejectExec) => {
       const proc = spawn("git", args, {
         cwd: cwd ?? undefined,
@@ -293,6 +358,24 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     }
   }
 
+  async function gitWithNetworkRetry(
+    args: string[],
+    cwd: string | null,
+    timeoutMs: number,
+    opLabel: string,
+  ): Promise<{ stdout: string; stderr: string; elapsedMs: number }> {
+    return retryOnTransientNetwork(() => git(args, cwd, timeoutMs), {
+      delaysMs: NETWORK_RETRY_DELAYS_MS,
+      isRetryable: isLikelyTransientNetworkError,
+      onRetry: ({ attempt, nextDelayMs, message }) => {
+        log?.warn(
+          { op: opLabel, attempt, nextDelayMs, stderr: message.slice(0, 512) },
+          "git remote op hit transient network error — retrying",
+        );
+      },
+    });
+  }
+
   /**
    * `git fetch --prune origin` with one-shot bidirectional protocol fallback.
    *
@@ -330,15 +413,34 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
    * here: callers that need origin/HEAD already get a clear
    * `GitMirrorError("Cannot resolve default branch …")` if both attempts fail.
    */
+  /**
+   * Worst-case sleep budget: ~10s (primary ~5s + fallback ~5s). Unlike
+   * `fetchOrigin`, which gates fallback on a credential-shaped terminal
+   * error, `setHeadAuto` always falls through on any primary failure, so
+   * a doubly-transient run pays both retry budgets. Per-call 30s timeout
+   * still caps each individual git invocation.
+   */
   async function setHeadAuto(mirrorPath: string, originUrl: string): Promise<boolean> {
-    if (await gitOk(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000)) return true;
+    try {
+      await gitWithNetworkRetry(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000, "set-head:primary");
+      return true;
+    } catch {
+      // Primary attempt failed terminally (after any transient retries). Fall
+      // through to the SSH-side rewrite — same fallback rules as fetchOrigin.
+    }
     const direction = pickFallbackDirection(originUrl);
     if (!direction) return false;
-    return await gitOk(
-      ["-c", `url.${direction.peerBase}.insteadOf=${direction.originBase}`, "remote", "set-head", "origin", "--auto"],
-      mirrorPath,
-      30_000,
-    );
+    try {
+      await gitWithNetworkRetry(
+        ["-c", `url.${direction.peerBase}.insteadOf=${direction.originBase}`, "remote", "set-head", "origin", "--auto"],
+        mirrorPath,
+        30_000,
+        "set-head:fallback",
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function readOriginUrl(mirrorPath: string): Promise<string | null> {
@@ -356,7 +458,12 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   ): Promise<{ elapsedMs: number; usedFallback: boolean }> {
     const direction = pickFallbackDirection(originUrl);
     try {
-      const { elapsedMs } = await git(["fetch", "--prune", "origin"], mirrorPath, cloneTimeoutMs);
+      const { elapsedMs } = await gitWithNetworkRetry(
+        ["fetch", "--prune", "origin"],
+        mirrorPath,
+        cloneTimeoutMs,
+        "fetch:primary",
+      );
       return { elapsedMs, usedFallback: false };
     } catch (primaryErr) {
       const primaryMessage = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
@@ -373,10 +480,11 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         "fetch failed with credential-shaped error; retrying with peer-protocol insteadOf rewrite",
       );
       try {
-        const { elapsedMs } = await git(
+        const { elapsedMs } = await gitWithNetworkRetry(
           ["-c", `url.${direction.peerBase}.insteadOf=${direction.originBase}`, "fetch", "--prune", "origin"],
           mirrorPath,
           cloneTimeoutMs,
+          "fetch:fallback",
         );
         log?.info({ gitUrl: originUrl, toProtocol: direction.toProtocol }, "protocol-fallback fetch succeeded");
         return { elapsedMs, usedFallback: true };
@@ -584,18 +692,52 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         const branchName = deriveSessionBranchName(sessionKey, agentName, url);
 
         // D13: target path must be free OR a Hub-managed worktree we can reuse.
+        // Self-heal exception: when the path sits inside a hub-managed root the
+        // leftover is almost always an orphaned dev-server cache (vite/.vite,
+        // node_modules/.cache, etc) re-written by a daemonised child that
+        // outlived the previous session — see worktree-cleanup.ts header for
+        // the full incident. Kill any process still holding it, rm -rf, and
+        // fall through to the normal `git worktree add` path.
         if (existsSync(absTarget) && !isHubManagedWorktree(absTarget)) {
-          log?.warn(
-            {
-              gitUrl: url,
-              targetPath: absTarget,
-              occupantKind: classifyOccupant(absTarget),
-            },
-            "worktree create conflict",
-          );
-          throw new GitMirrorWorktreeConflictError(
-            `Worktree target "${absTarget}" is already occupied by ${classifyOccupant(absTarget)} — aborting (D13)`,
-          );
+          const occupantKind = classifyOccupant(absTarget);
+          if (hubManagedRoots.length > 0 && isUnderManagedRoot(absTarget, hubManagedRoots)) {
+            log?.warn(
+              {
+                gitUrl: url,
+                targetPath: absTarget,
+                occupantKind,
+                hubManagedRoots,
+              },
+              "worktree target occupied inside hub-managed root — auto-recovering (kill holders + rm -rf)",
+            );
+            await killProcessesHoldingPath(absTarget, log);
+            try {
+              rmSync(absTarget, { recursive: true, force: true });
+            } catch (err) {
+              throw new GitMirrorWorktreeConflictError(
+                `Worktree target "${absTarget}" cleanup failed after killing holders: ${
+                  err instanceof Error ? err.message : String(err)
+                } (D13)`,
+              );
+            }
+            if (existsSync(absTarget)) {
+              throw new GitMirrorWorktreeConflictError(
+                `Worktree target "${absTarget}" still occupied after auto-recovery — aborting (D13)`,
+              );
+            }
+          } else {
+            log?.warn(
+              {
+                gitUrl: url,
+                targetPath: absTarget,
+                occupantKind,
+              },
+              "worktree create conflict",
+            );
+            throw new GitMirrorWorktreeConflictError(
+              `Worktree target "${absTarget}" is already occupied by ${occupantKind} — aborting (D13)`,
+            );
+          }
         }
 
         // Crash-recovery matrix + cross-process race recovery, wrapped in a
@@ -673,6 +815,16 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
       return withUrlLock(url, async () => {
         const absTarget = resolve(path);
         const mirror = mirrorDir(url);
+        // Kill any daemonised child the previous session left behind (vite,
+        // esbuild, test watcher, ...) BEFORE we try to rmdir. Without this the
+        // child keeps writing under `absTarget`, which both makes
+        // `git worktree remove` flaky AND repopulates the directory between
+        // the rm and the next session's `worktree add` — exactly the D13
+        // failure mode this commit fixes. Gated by `hubManagedRoots` so we
+        // never signal processes whose cwd happens to be an operator path.
+        if (hubManagedRoots.length > 0 && isUnderManagedRoot(absTarget, hubManagedRoots) && existsSync(absTarget)) {
+          await killProcessesHoldingPath(absTarget, log);
+        }
         if (!isBareRepo(mirror)) {
           // Mirror was already GC'd; just rm the orphan dir if it exists.
           if (existsSync(absTarget)) rmSync(absTarget, { recursive: true, force: true });
@@ -867,11 +1019,20 @@ export function isLikelyHttpsAuthFailure(message: string): boolean {
  * Heuristic for SSH-side credential failures (no key on disk, key not
  * accepted by remote, agent has nothing usable, host key mismatch).
  *
- * Negative space (intentionally NOT matched): SSH-level network errors
- * (`Could not resolve hostname`, `Connection refused`, `Connection timed out`).
- * Those are network reachability issues — switching to HTTPS won't help
- * unless the network policy specifically blocks port 22, which is rare
- * enough that we'd rather surface the original error than guess.
+ * Negative space (intentionally NOT matched):
+ *   - SSH-level network errors (`Could not resolve hostname`,
+ *     `Connection refused`, `Connection timed out`). Those are reachability
+ *     issues — switching to HTTPS won't help unless the network policy
+ *     specifically blocks port 22, which is rare enough that we'd rather
+ *     surface the original error than guess.
+ *   - `fatal: Could not read from remote repository.` on its own. Git
+ *     appends that line to *every* SSH transport failure regardless of
+ *     cause (auth reject, timeout, DNS, refused, …), so it carries no
+ *     classification signal — matching it would re-classify network errors
+ *     as auth failures and trigger a noisy HTTPS retry that fails again on
+ *     SSH-only hosts. The real auth fingerprints below (`Permission denied`,
+ *     `Host key verification failed`, host-key/algorithm negotiation) are
+ *     specific enough on their own.
  *
  * Exported for unit testing.
  */
@@ -884,7 +1045,6 @@ export function isLikelySshAuthFailure(message: string): boolean {
   // forms only occur in ssh auth failure context.
   return (
     /Permission denied\s*(?:\(|,)/i.test(message) ||
-    /Could not read from remote repository/i.test(message) ||
     /Host key verification failed/i.test(message) ||
     /no matching host key type/i.test(message) ||
     /no mutual signature algorithm/i.test(message)
@@ -899,6 +1059,89 @@ export function isLikelySshAuthFailure(message: string): boolean {
  */
 export function isLikelyAuthFailure(message: string): boolean {
   return isLikelyHttpsAuthFailure(message) || isLikelySshAuthFailure(message);
+}
+
+/**
+ * Heuristic for transient network-layer failures emitted by `git` over
+ * HTTPS or SSH. These are the failure modes a brief proxy/VPN hiccup, TLS
+ * handshake blip, or peer connection reset produces mid-fetch — exactly
+ * what `SSL_connect: SSL_ERROR_SYSCALL` looks like when Surge / Clash
+ * swaps a rule mid-flight, what `early EOF` looks like when an HTTP/2
+ * stream is reset, and what `Connection refused` looks like when a local
+ * proxy listener restarts.
+ *
+ * Used by the `gitWithNetworkRetry` wrapper around `fetch` and
+ * `remote set-head --auto` to absorb the kind of hiccup that today
+ * surfaces as `Session start/resume failed (…)` in chat and only goes
+ * away when the operator manually @-mentions the agent again two seconds
+ * later.
+ *
+ * Negative space (intentionally NOT matched):
+ *   - credential failures — handled by the protocol-fallback path; retrying
+ *     in the same protocol won't help.
+ *   - `Repository not found`, `couldn't find remote ref` — deterministic
+ *     content errors; a 500ms retry won't fix them.
+ *   - `SSL certificate problem` — TLS trust failures; retrying won't help
+ *     and silently masking them would hide a real misconfiguration.
+ *   - `git … timed out after Xms` — our own per-call timeout. The op was
+ *     making progress (or wasn't); either way another full timeout window
+ *     is the wrong response.
+ *
+ * On localhost-proxy specifically (the common case for this codebase),
+ * `ECONNREFUSED` IS a transient signal — when Surge / Clash bounces the
+ * listener, the next attempt sees the same listener back up within
+ * seconds. This is why we diverge from the SDK's `doFetch` policy (which
+ * does NOT retry `ECONNREFUSED` because there the peer is the remote hub).
+ *
+ * Exported for unit testing.
+ */
+export function isLikelyTransientNetworkError(message: string): boolean {
+  if (!message) return false;
+  // Don't shadow a credential failure: switching to SSH is the right move
+  // for those, retrying the same protocol is not.
+  if (isLikelyHttpsAuthFailure(message) || isLikelySshAuthFailure(message)) return false;
+  // Don't shadow a TLS trust failure: those are deterministic misconfigurations
+  // (custom intercepting cert chain, expired cert, missing CA bundle, …) that
+  // a 5s retry budget won't fix. Burning the budget AND emitting transient-
+  // warning log lines for a deterministic failure would also mislead operators
+  // diagnosing a real cert problem. Matches both the user-friendly form
+  // (`SSL certificate problem: …`) and the raw OpenSSL form
+  // (`error:…:SSL routines::certificate verify failed`).
+  if (
+    /SSL certificate problem/i.test(message) ||
+    /server certificate verification failed/i.test(message) ||
+    /certificate verify failed/i.test(message) ||
+    /self.signed certificate/i.test(message) ||
+    /unable to get local issuer certificate/i.test(message) ||
+    /certificate has expired/i.test(message)
+  )
+    return false;
+  return (
+    /SSL_ERROR_SYSCALL/i.test(message) ||
+    // OpenSSL's transient "the peer closed mid-stream" signal. Matches the
+    // raw form (`error:…:SSL routines::unexpected eof while reading`) emitted
+    // when github.com's edge resets the TLS connection mid-fetch. Narrowly
+    // scoped to the exact phrase to avoid re-introducing the broad
+    // `SSL routines` match that swept up cert verify failures.
+    /unexpected eof while reading/i.test(message) ||
+    /TLS handshake|gnutls_handshake|gnutls\s+recv\s+error/i.test(message) ||
+    /\bConnection reset(?:\s+by\s+peer)?\b/i.test(message) ||
+    /\bConnection refused\b/i.test(message) ||
+    /\bConnection timed out\b/i.test(message) ||
+    /\bOperation timed out\b/i.test(message) ||
+    /\bNetwork is unreachable\b/i.test(message) ||
+    /Could not resolve host(?:name)?/i.test(message) ||
+    /Temporary failure in name resolution/i.test(message) ||
+    /\bRPC failed\b/i.test(message) ||
+    /\bearly EOF\b/i.test(message) ||
+    /the remote end hung up unexpectedly/i.test(message) ||
+    /transfer closed with outstanding read data remaining/i.test(message) ||
+    /HTTP\/2 stream\s+\d+\s+was\s+(?:not\s+)?(?:reset|closed)/i.test(message) ||
+    /HTTP\/2 stream was reset/i.test(message) ||
+    /unexpected disconnect while reading sideband packet/i.test(message) ||
+    /fetch-pack: unexpected disconnect/i.test(message) ||
+    /\bsend-pack:\s+unexpected\s+disconnect\b/i.test(message)
+  );
 }
 
 /**
@@ -1047,4 +1290,53 @@ function pickFallbackDirection(originUrl: string): FallbackDirection | null {
 function truncate(text: string, max = 512): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}…[truncated]`;
+}
+
+/**
+ * Run `op` once, and on a `isRetryable`-classified failure replay it on the
+ * given backoff schedule. Non-retryable failures propagate to the caller
+ * immediately — those won't be cured by waiting and silently retrying would
+ * mask real bugs and exhaust the retry budget.
+ *
+ * Per-attempt timeouts (when `op` enforces one of its own) are NOT reset
+ * across attempts: each attempt gets its own full budget. Right policy for
+ * `git fetch` where a slow but progressing transfer on attempt N+1 should
+ * not be aborted because attempt N ate part of a shared budget.
+ *
+ * Exported so unit tests can drive the retry policy with a mock `op`
+ * instead of standing up a real flaky network. Module-scope so the helper
+ * stays pure and side-effect-free.
+ */
+export async function retryOnTransientNetwork<T>(
+  op: (attempt: number) => Promise<T>,
+  options: {
+    delaysMs: readonly number[];
+    isRetryable: (message: string) => boolean;
+    onRetry?: (info: { attempt: number; nextDelayMs: number; message: string }) => void;
+  },
+): Promise<T> {
+  const { delaysMs, isRetryable, onRetry } = options;
+  const maxAttempts = delaysMs.length + 1;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await op(attempt);
+    } catch (err) {
+      lastErr = err;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!isRetryable(message)) throw err;
+      if (attempt === maxAttempts) throw err;
+      // `delaysMs.length === maxAttempts - 1`, so `attempt - 1` is in range
+      // for every iteration that reaches this line. The explicit guard keeps
+      // TS strict happy without resorting to a non-null assertion.
+      const baseDelay = delaysMs[attempt - 1];
+      if (baseDelay === undefined) throw err;
+      const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(baseDelay / 4)));
+      const delayMs = baseDelay + jitter;
+      onRetry?.({ attempt, nextDelayMs: delayMs, message });
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  // Unreachable — the loop always either returns or throws by `maxAttempts`.
+  throw lastErr;
 }

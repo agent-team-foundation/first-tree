@@ -1,0 +1,486 @@
+name: npm Publish
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Prod publish — triggered by a `vX.Y.Z` git tag. Source-tree
+  # package.json carries name=`first-tree-dev` (dev identity); this job
+  # rewrites name/bin/build-info.ts to the prod shape before publishing
+  # `first-tree@<tag>` with dist-tag `latest`. The rewrite happens only
+  # in the CI runner's ephemeral workspace — main is never mutated.
+  # ─────────────────────────────────────────────────────────────────────
+  publish-command-prod:
+    name: Publish Command Prod
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI_DATABASE_URL: postgres://test:test@localhost:5432/test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: "pnpm"
+
+      - name: Ensure trusted publishing npm version
+        run: npm install -g npm@^11.5.1
+
+      - name: Validate stable release tag
+        id: release
+        working-directory: apps/cli
+        env:
+          SOURCE_PACKAGE_NAME: "first-tree-dev"
+          TARGET_PACKAGE_NAME: "first-tree"
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            echo "::error::Stable npm releases must run from a git tag, got ref type '$GITHUB_REF_TYPE'."
+            exit 1
+          fi
+
+          TAG_NAME="$GITHUB_REF_NAME"
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Stable npm release tags must match vX.Y.Z, got '$TAG_NAME'."
+            exit 1
+          fi
+
+          PACKAGE_JSON_NAME=$(node -p "require('./package.json').name")
+          if [[ "$PACKAGE_JSON_NAME" != "$SOURCE_PACKAGE_NAME" ]]; then
+            echo "::error::Unexpected source package name: $PACKAGE_JSON_NAME (expected $SOURCE_PACKAGE_NAME)"
+            exit 1
+          fi
+
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${TAG_NAME#v}"
+          if [[ "$PACKAGE_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::Tag $TAG_NAME does not match apps/cli/package.json version $PACKAGE_VERSION."
+            exit 1
+          fi
+
+          if [[ ! "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Package version must be a stable semver version, got '$PACKAGE_VERSION'."
+            exit 1
+          fi
+
+          git fetch --no-tags origin +main:refs/remotes/origin/main
+          TAG_COMMIT=$(git rev-parse "${TAG_NAME}^{commit}")
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "::error::Tag $TAG_NAME points to commit $TAG_COMMIT, which is not on origin/main."
+            exit 1
+          fi
+
+          VIEW_ERROR=$(mktemp)
+          trap 'rm -f "$VIEW_ERROR"' EXIT
+          if npm view "${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION}" version > /dev/null 2> "$VIEW_ERROR"; then
+            echo "::error::${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION} is already published to npm; refusing to republish."
+            exit 1
+          elif grep -q "E404" "$VIEW_ERROR"; then
+            echo "package_name=$TARGET_PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+            echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+            echo "Publishing ${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION} with npm dist-tag 'latest'."
+          else
+            echo "::error::Failed to check npm registry for ${TARGET_PACKAGE_NAME}@${PACKAGE_VERSION}."
+            cat "$VIEW_ERROR" >&2
+            exit 1
+          fi
+
+      - name: Rewrite package.json + build-info.ts for prod
+        working-directory: apps/cli
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          pkg.name = "first-tree";
+          pkg.bin = {
+            "first-tree": "./dist/cli/index.mjs",
+            "ft": "./dist/cli/index.mjs",
+          };
+          fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+          fs.writeFileSync(
+            "src/build-info.ts",
+            'import type { ChannelName } from "@first-tree/shared/channel";\n' +
+              'export const CHANNEL: ChannelName = "prod";\n',
+          );
+          NODE
+          echo "✓ Rewrote apps/cli/package.json + src/build-info.ts for prod publish"
+
+      - name: Verify CHANNEL was rewritten
+        working-directory: apps/cli
+        run: |
+          if ! grep -q 'CHANNEL: ChannelName = "prod"' src/build-info.ts; then
+            echo "::error::build-info.ts CHANNEL rewrite failed (expected 'prod')."
+            cat src/build-info.ts
+            exit 1
+          fi
+
+      # lockfile may drift because pkg.name changed; --no-frozen-lockfile
+      # lets pnpm re-resolve. Source-tree lockfile is unaffected.
+      - run: pnpm install --no-frozen-lockfile
+
+      - run: pnpm check
+
+      - run: pnpm build
+
+      - run: pnpm typecheck
+
+      - name: Publish to npm
+        working-directory: apps/cli
+        run: npm publish --tag latest --access public
+
+      - name: Send feishu message
+        if: always()
+        env:
+          ACTIONS_FEISHU_TAG: "v1.3.1"
+          INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
+          INPUT_MESSAGE_TYPE: "post"
+          INPUT_TITLE: ${{ job.status == 'success' && 'npm prod publish ✅ 成功' || 'npm prod publish ❌ 失败' }}
+          INPUT_CONTENT: |
+            发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
+            Package: ${{ steps.release.outputs.package_name || 'first-tree' }}
+            Version: ${{ steps.release.outputs.package_version || 'unresolved' }}
+            Install: npm install -g first-tree@latest
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "${INPUT_WEBHOOK:-}" ]]; then
+            echo "::warning::RELEASE_BOT_URL is not configured; skipping Feishu notification."
+            exit 0
+          fi
+
+          if ! wget -q "https://github.com/xiachufang/actions-feishu/releases/download/${ACTIONS_FEISHU_TAG}/linux-amd64-actions-feishu.tar.gz"; then
+            echo "::warning::Failed to download actions-feishu."
+            exit 0
+          fi
+          if ! tar zxf linux-amd64-actions-feishu.tar.gz feishu; then
+            echo "::warning::Failed to extract actions-feishu."
+            exit 0
+          fi
+          if ! ./feishu; then
+            echo "::warning::Failed to send Feishu notification."
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Staging publish — triggered after every successful CI on main.
+  # Publishes `first-tree-staging@<X.Y.(Z+1)-staging.<run>.<attempt>>`
+  # with dist-tag `latest`. Each staging release semver-ranks BELOW the
+  # next stable prod release, so server-driven update on a prod CLI
+  # never picks up a staging build (the channel guard in update.ts is
+  # the belt; this version ordering is the suspenders).
+  # ─────────────────────────────────────────────────────────────────────
+  publish-command-staging:
+    name: Publish Command Staging
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure trusted publishing npm version
+        run: npm install -g npm@^11.5.1
+
+      - name: Resolve staging version
+        id: version
+        working-directory: apps/cli
+        env:
+          SOURCE_PACKAGE_NAME: "first-tree-dev"
+          TARGET_PACKAGE_NAME: "first-tree-staging"
+        run: |
+          PACKAGE_JSON_NAME=$(node -p "require('./package.json').name")
+          if [[ "$PACKAGE_JSON_NAME" != "$SOURCE_PACKAGE_NAME" ]]; then
+            echo "::error::Unexpected source package name: $PACKAGE_JSON_NAME (expected $SOURCE_PACKAGE_NAME)"
+            exit 1
+          fi
+
+          BASE_VERSION=$(node -p "require('./package.json').version")
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Base version must be a stable semver version, got $BASE_VERSION"
+            exit 1
+          fi
+
+          # Bump base to the next patch BEFORE attaching the staging pre-
+          # release tag. SemVer ranks `X.Y.Z-staging.*` *lower* than
+          # `X.Y.Z`, so naming a staging build after the same base as the
+          # last stable would publish versions that auto-update treats as
+          # older than what's already installed (the "Server advertises
+          # 0.5.1-staging.X, running 0.5.1 (ahead)" symptom). Aligning the
+          # base with next-patch makes `0.5.2-staging.X > 0.5.1` and gives
+          # staging its intended "preview of the upcoming release"
+          # semantics.
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          STAGING_VERSION="${NEXT_VERSION}-staging.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "base_version=$BASE_VERSION"
+            echo "next_version=$NEXT_VERSION"
+            echo "staging_version=$STAGING_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+          VIEW_ERROR=$(mktemp)
+          if npm view "${TARGET_PACKAGE_NAME}@${STAGING_VERSION}" version > /dev/null 2> "$VIEW_ERROR"; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Staging version already exists: ${TARGET_PACKAGE_NAME}@${STAGING_VERSION}; skipping publish"
+          elif grep -q "E404" "$VIEW_ERROR"; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Publishing staging version: ${TARGET_PACKAGE_NAME}@${STAGING_VERSION}"
+          else
+            echo "::error::Failed to check npm registry for ${TARGET_PACKAGE_NAME}@${STAGING_VERSION}"
+            cat "$VIEW_ERROR" >&2
+            exit 1
+          fi
+
+      - if: steps.version.outputs.publish == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Rewrite package.json + build-info.ts for staging
+        if: steps.version.outputs.publish == 'true'
+        working-directory: apps/cli
+        env:
+          STAGING_VERSION: ${{ steps.version.outputs.staging_version }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          pkg.name = "first-tree-staging";
+          pkg.version = process.env.STAGING_VERSION;
+          pkg.bin = {
+            "first-tree-staging": "./dist/cli/index.mjs",
+            "fts": "./dist/cli/index.mjs",
+          };
+          fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
+          fs.writeFileSync(
+            "src/build-info.ts",
+            'import type { ChannelName } from "@first-tree/shared/channel";\n' +
+              'export const CHANNEL: ChannelName = "staging";\n',
+          );
+          NODE
+          echo "✓ Rewrote apps/cli/package.json + src/build-info.ts for staging publish"
+
+      - name: Verify CHANNEL was rewritten
+        if: steps.version.outputs.publish == 'true'
+        working-directory: apps/cli
+        run: |
+          if ! grep -q 'CHANNEL: ChannelName = "staging"' src/build-info.ts; then
+            echo "::error::build-info.ts CHANNEL rewrite failed (expected 'staging')."
+            cat src/build-info.ts
+            exit 1
+          fi
+
+      # lockfile drifts after the name rewrite; let pnpm re-resolve in
+      # the ephemeral runner workspace.
+      - if: steps.version.outputs.publish == 'true'
+        run: pnpm install --no-frozen-lockfile
+
+      - if: steps.version.outputs.publish == 'true'
+        run: pnpm build
+
+      - name: Publish to npm
+        if: steps.version.outputs.publish == 'true'
+        working-directory: apps/cli
+        run: npm publish --tag latest --access public
+
+      - name: Send feishu message
+        if: ${{ failure() || steps.version.outputs.publish == 'true' }}
+        env:
+          ACTIONS_FEISHU_TAG: "v1.3.1"
+          INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
+          INPUT_MESSAGE_TYPE: "post"
+          INPUT_TITLE: ${{ job.status == 'success' && 'npm staging publish ✅ 成功' || 'npm staging publish ❌ 失败' }}
+          INPUT_CONTENT: |
+            发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
+            Package: first-tree-staging
+            Version: ${{ steps.version.outputs.staging_version || 'unresolved' }}
+            Install: npm install -g first-tree-staging@latest
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "${INPUT_WEBHOOK:-}" ]]; then
+            echo "::warning::RELEASE_BOT_URL is not configured; skipping Feishu notification."
+            exit 0
+          fi
+
+          if ! wget -q "https://github.com/xiachufang/actions-feishu/releases/download/${ACTIONS_FEISHU_TAG}/linux-amd64-actions-feishu.tar.gz"; then
+            echo "::warning::Failed to download actions-feishu."
+            exit 0
+          fi
+          if ! tar zxf linux-amd64-actions-feishu.tar.gz feishu; then
+            echo "::warning::Failed to extract actions-feishu."
+            exit 0
+          fi
+          if ! ./feishu; then
+            echo "::warning::Failed to send Feishu notification."
+          fi
+
+  publish-shared:
+    name: Publish Shared Alpha
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure trusted publishing npm version
+        run: npm install -g npm@^11.5.1
+
+      - name: Resolve alpha version
+        id: version
+        working-directory: packages/shared
+        env:
+          PACKAGE_NAME: "@first-tree/shared"
+        run: |
+          BASE_VERSION=$(node -p "require('./package.json').version")
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Base version must be a stable semver version, got $BASE_VERSION"
+            exit 1
+          fi
+
+          # Bump base to the next patch BEFORE attaching the alpha pre-release
+          # tag. SemVer ranks `X.Y.Z-alpha.*` *lower* than `X.Y.Z`, so naming
+          # an alpha after the same base as the last stable would publish
+          # versions that auto-update treats as older than what's already
+          # installed (the "Server advertises 0.14.7-alpha.X, running 0.14.7
+          # (ahead)" symptom). Aligning the base with next-patch makes
+          # `0.14.8-alpha.X > 0.14.7` and gives alpha its intended "preview
+          # of the upcoming release" semantics. The split into MAJOR/MINOR/
+          # PATCH is safe because the regex above already guaranteed three
+          # numeric components.
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+          NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          ALPHA_VERSION="${NEXT_VERSION}-alpha.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "base_version=$BASE_VERSION"
+            echo "next_version=$NEXT_VERSION"
+            echo "alpha_version=$ALPHA_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+          IS_PRIVATE=$(node -p "require('./package.json').private === true ? 'true' : 'false'")
+          if [[ "$IS_PRIVATE" == "true" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "private=true" >> "$GITHUB_OUTPUT"
+            echo "${PACKAGE_NAME} is private; skipping npm publish"
+            exit 0
+          fi
+
+          VIEW_ERROR=$(mktemp)
+          if npm view "${PACKAGE_NAME}@${ALPHA_VERSION}" version > /dev/null 2> "$VIEW_ERROR"; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Alpha version already exists: ${PACKAGE_NAME}@${ALPHA_VERSION}; skipping publish"
+          elif grep -q "E404" "$VIEW_ERROR"; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Publishing alpha version: ${PACKAGE_NAME}@${ALPHA_VERSION}"
+          else
+            echo "::error::Failed to check npm registry for ${PACKAGE_NAME}@${ALPHA_VERSION}"
+            cat "$VIEW_ERROR" >&2
+            exit 1
+          fi
+
+      - if: steps.version.outputs.publish == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Set alpha package version
+        if: steps.version.outputs.publish == 'true'
+        working-directory: packages/shared
+        env:
+          ALPHA_VERSION: ${{ steps.version.outputs.alpha_version }}
+          PACKAGE_NAME: "@first-tree/shared"
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const packagePath = "package.json";
+          const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+          if (pkg.name !== process.env.PACKAGE_NAME) {
+            throw new Error(`Unexpected package name: ${pkg.name}`);
+          }
+          pkg.version = process.env.ALPHA_VERSION;
+          fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
+          echo "Set ${PACKAGE_NAME} version to ${ALPHA_VERSION}"
+
+      - if: steps.version.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.version.outputs.publish == 'true'
+        run: pnpm build
+
+      - name: Publish to npm
+        if: steps.version.outputs.publish == 'true'
+        working-directory: packages/shared
+        run: npm publish --tag alpha --access public
+
+      - name: Send feishu message
+        if: ${{ failure() || steps.version.outputs.publish == 'true' }}
+        env:
+          ACTIONS_FEISHU_TAG: "v1.3.1"
+          INPUT_WEBHOOK: ${{ secrets.RELEASE_BOT_URL }}
+          INPUT_MESSAGE_TYPE: "post"
+          INPUT_TITLE: ${{ job.status == 'success' && 'npm alpha publish ✅ 成功' || 'npm alpha publish ❌ 失败' }}
+          INPUT_CONTENT: |
+            发布结果: ${{ job.status == 'success' && '✅ 成功' || '❌ 失败' }}
+            Package: @first-tree/shared
+            Version: ${{ steps.version.outputs.alpha_version || 'unresolved' }}
+            Install: npm install @first-tree/shared@alpha
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "${INPUT_WEBHOOK:-}" ]]; then
+            echo "::warning::RELEASE_BOT_URL is not configured; skipping Feishu notification."
+            exit 0
+          fi
+
+          if ! wget -q "https://github.com/xiachufang/actions-feishu/releases/download/${ACTIONS_FEISHU_TAG}/linux-amd64-actions-feishu.tar.gz"; then
+            echo "::warning::Failed to download actions-feishu."
+            exit 0
+          fi
+          if ! tar zxf linux-amd64-actions-feishu.tar.gz feishu; then
+            echo "::warning::Failed to extract actions-feishu."
+            exit 0
+          fi
+          if ! ./feishu; then
+            echo "::warning::Failed to send Feishu notification."
+          fi

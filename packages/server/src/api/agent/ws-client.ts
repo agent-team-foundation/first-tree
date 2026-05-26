@@ -10,6 +10,7 @@ import {
   runtimeStateMessageSchema,
   sessionEventMessageSchema,
   sessionReconcileRequestSchema,
+  sessionRuntimeMessageSchema,
   sessionStateMessageSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
@@ -498,7 +499,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // Backfill `agent:pinned` for any agent already bound to this
               // client at registration time. Without this, an admin who pins an
               // agent while the client is offline would still need a manual
-              // `first-tree-hub agent add` after restart — the realtime push in
+              // `first-tree agent add` after restart — the realtime push in
               // admin/agents.ts only fires for live sockets. The client dedupes
               // on agentId, so re-firing on every reconnect is safe.
               try {
@@ -692,14 +693,71 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               const boundAgentInfo = boundAgents.get(agentId);
               if (!boundAgentInfo) return;
-              await activityService.upsertSessionState(
-                app.db,
-                agentId,
-                payloadResult.data.chatId,
-                payloadResult.data.state,
-                boundAgentInfo.organizationId,
-                notifier,
-              );
+              // Run on the per-(agent,chat) FIFO so a `session:runtime`
+              // frame (which only writes to an `active` row) can't be
+              // reordered ahead of the `session:state active` that
+              // creates / activates that row. The op MUST catch internally
+              // (mirroring `session:event`): a thrown upsert would
+              // otherwise reject the queued promise with no handler (the
+              // chain only consumes the prior op's rejection when a
+              // *next* op is enqueued), surfacing as an unhandled
+              // rejection.
+              await chainSessionOp(agentId, payloadResult.data.chatId, async () => {
+                try {
+                  await activityService.upsertSessionState(
+                    app.db,
+                    agentId,
+                    payloadResult.data.chatId,
+                    payloadResult.data.state,
+                    boundAgentInfo.organizationId,
+                    notifier,
+                  );
+                } catch (err) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "error",
+                      message: `Failed to persist session state: ${err instanceof Error ? err.message : String(err)}`,
+                    }),
+                  );
+                }
+              });
+            } else if (type === "session:runtime") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
+
+              const payloadResult = sessionRuntimeMessageSchema.safeParse(msg);
+              if (!payloadResult.success) {
+                socket.send(JSON.stringify({ type: "error", message: "Malformed session:runtime frame" }));
+                return;
+              }
+              const boundInfo = boundAgents.get(agentId);
+              if (!boundInfo) return;
+              const { chatId, runtimeState } = payloadResult.data;
+              // Same per-(agent,chat) FIFO as session:state / session:event —
+              // setSessionRuntime gates on `state='active'`, so the upstream
+              // state write must drain first.
+              await chainSessionOp(agentId, chatId, async () => {
+                try {
+                  await activityService.setSessionRuntime(
+                    app.db,
+                    agentId,
+                    chatId,
+                    runtimeState,
+                    boundInfo.organizationId,
+                    notifier,
+                  );
+                } catch (err) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "error",
+                      message: `Failed to persist session runtime: ${err instanceof Error ? err.message : String(err)}`,
+                    }),
+                  );
+                }
+              });
             } else if (type === "session:reconcile") {
               const agentId = parsed.data.agentId;
               if (!agentId || !boundAgents.has(agentId)) {

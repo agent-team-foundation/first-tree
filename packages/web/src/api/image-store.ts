@@ -9,7 +9,7 @@
  * the sender's device + on each online agent client, never on the server).
  */
 
-const DB_NAME = "first-tree-hub-images";
+const DB_NAME = "first-tree-images";
 const DB_VERSION = 1;
 const STORE = "images";
 

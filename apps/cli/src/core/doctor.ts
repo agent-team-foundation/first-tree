@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   agentConfigSchema,
   clientConfigSchema,
-  DEFAULT_CONFIG_DIR,
+  defaultConfigDir,
   loadAgents,
   resolveConfigReadonly,
 } from "@first-tree/shared/config";
@@ -56,11 +56,11 @@ export function checkNodeVersion(): CheckResult {
 // ---------------------------------------------------------------------------
 
 export function checkClientConfig(): CheckResult {
-  const hasFile = existsSync(join(DEFAULT_CONFIG_DIR, "client.yaml"));
+  const hasFile = existsSync(join(defaultConfigDir(), "client.yaml"));
   const hasEnv = !!process.env.FIRST_TREE_SERVER_URL;
 
   if (hasFile && hasEnv) return { label: "Config", ok: true, detail: "config file + env vars" };
-  if (hasFile) return { label: "Config", ok: true, detail: join(DEFAULT_CONFIG_DIR, "client.yaml") };
+  if (hasFile) return { label: "Config", ok: true, detail: join(defaultConfigDir(), "client.yaml") };
   if (hasEnv) return { label: "Config", ok: true, detail: "via environment variables" };
   return { label: "Config", ok: false, detail: "no config file or env vars found" };
 }
@@ -84,7 +84,7 @@ export async function checkServerReachable(): Promise<CheckResult> {
 }
 
 export function checkAgentConfigs(): CheckResult {
-  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+  const agentsDir = join(defaultConfigDir(), "agents");
   if (!existsSync(agentsDir)) {
     return {
       label: "Agents",
@@ -137,7 +137,7 @@ export async function reconcileAgentConfigs(opts: {
   /** Override for tests; defaults to `$FIRST_TREE_HOME/config/agents`. */
   agentsDir?: string;
 }): Promise<CheckResult> {
-  const agentsDir = opts.agentsDir ?? join(DEFAULT_CONFIG_DIR, "agents");
+  const agentsDir = opts.agentsDir ?? join(defaultConfigDir(), "agents");
 
   // Count local alias dirs ourselves — `loadAgents` is fail-fast on
   // malformed yaml, and one bad dir would mask the entire alias set.
@@ -193,7 +193,7 @@ export async function reconcileAgentConfigs(opts: {
     detail:
       `${localCount} configured locally, ${pinnedCount} pinned to this client; ` +
       `${stale.length} stale: ${staleSummary}${truncated} — ` +
-      "run `first-tree-hub agent prune` to clean up",
+      "run `first-tree agent prune` to clean up",
   };
 }
 
@@ -223,7 +223,7 @@ export function checkBackgroundService(): CheckResult {
   return {
     label: "Background service",
     ok: false,
-    detail: "not installed — re-run `first-tree-hub login <token>` to install",
+    detail: "not installed — re-run `first-tree login <token>` to install",
   };
 }
 

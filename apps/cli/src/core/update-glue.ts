@@ -2,8 +2,9 @@ import { spawnSync } from "node:child_process";
 import type { ExecuteUpdateFn, UpdatePromptFn } from "@first-tree/client";
 import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
+import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
-import { detectInstallMode, installGlobalSpec } from "./update.js";
+import { detectInstallMode, installGlobalSpec, PACKAGE_NAME } from "./update.js";
 import { isLoopGuarded, recordUpdateAttempt } from "./update-state.js";
 
 /** Reserved exit code that means "clean self-restart, service manager please bring me back". */
@@ -16,7 +17,7 @@ export const promptUpdate: UpdatePromptFn = async ({ currentVersion, targetVersi
   // at. "Server recommends" (rather than "bundled with") because the version
   // now comes from the server's npm-registry poll for the configured
   // channel, not from the server image build.
-  const message = `A newer First Tree Hub client is available.\n  You: ${currentVersion}\n  Server recommends: ${targetVersion}\n  Will install: ${targetVersion}\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
+  const message = `A newer First Tree client is available.\n  You: ${currentVersion}\n  Server recommends: ${targetVersion}\n  Will install: ${targetVersion}\n  Updating will restart the client and briefly interrupt any active sessions.\n  Update now?`;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
@@ -61,8 +62,9 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       return { installed: false };
     }
     if (mode === "npx") {
+      const installHint = PACKAGE_NAME ?? channelConfig.binName;
       print.line(
-        "  [update] Cannot self-update — not launched from a global npm install.\n  Run `npm i -g @agent-team-foundation/first-tree-hub` manually.\n",
+        `  [update] Cannot self-update — not launched from a global npm install.\n  Run \`npm i -g ${installHint}\` manually.\n`,
       );
       return { installed: false };
     }
@@ -88,11 +90,12 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
     // dashboard interprets `at` (currently: "when did this client first
     // get stuck on $target").
     if (isLoopGuarded(targetVersion)) {
+      const installHint = PACKAGE_NAME ?? channelConfig.binName;
       print.line(
         `  [update] Refusing to retry ${targetVersion} — a previous attempt completed without\n` +
           "           advancing the on-disk version. The most likely cause is npm's `latest`\n" +
           "           dist-tag resolving to the same version this client is already running.\n" +
-          "           Operator action: manually run `npm install -g @agent-team-foundation/first-tree-hub@latest`,\n" +
+          `           Operator action: manually run \`npm install -g ${installHint}@latest\`,\n` +
           "           then restart the service.\n",
       );
       return { installed: true };
@@ -100,11 +103,12 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
 
     // Auto-update installs the *exact* version the server advertised in
     // `server:welcome.serverCommandVersion`. Using `@latest` here would
-    // mis-resolve once the server starts advertising alpha builds (alpha
-    // lives on a different dist-tag), and even on the stable track it could
-    // race to a different version than the one drift-check approved. The
-    // server is the authoritative source of "what should this client run".
-    print.line(`  [update] Running \`npm install -g @agent-team-foundation/first-tree-hub@${targetVersion}\`...\n`);
+    // race to a different version than the one drift-check approved.
+    // The server is the authoritative source of "what should this client
+    // run"; channelConfig.packageName guarantees we install against this
+    // binary's own package (prod / staging), never crossing channels.
+    const pkgSpec = PACKAGE_NAME ?? channelConfig.binName;
+    print.line(`  [update] Running \`npm install -g ${pkgSpec}@${targetVersion}\`...\n`);
     const result = await installGlobalSpec(targetVersion);
     if (!result.ok) {
       print.line(`  [update] Install failed: ${result.reason}\n`);
@@ -176,22 +180,22 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
       //
       // Best-effort: failure logs and falls through to exit-75 anyway
       // (matches `commands/upgrade.ts`'s "warn and continue" stance — the
-      // operator can recover with `first-tree-hub logout && login` if the
+      // operator can recover with `first-tree logout && login` if the
       // unit ends up stale).
       refreshServiceUnit();
       print.line(`  [update] Installed ${installedLabel}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
       process.exit(SELF_RESTART_EXIT_CODE);
     }
     print.line(
-      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`first-tree-hub daemon start\`) to pick up the new version.\n`,
+      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`${channelConfig.binName} daemon start\`) to pick up the new version.\n`,
     );
     return { installed: true };
   };
 }
 
 /**
- * Spawn the newly-installed `first-tree-hub` binary (now on PATH at
- * `/usr/local/bin/first-tree-hub` or the equivalent global location) to
+ * Spawn the newly-installed `first-tree` binary (now on PATH at
+ * `/usr/local/bin/first-tree` or the equivalent global location) to
  * rewrite the service unit using its OWN templates.
  *
  * Why a subprocess: this whole function runs inside the OLD daemon process,
@@ -210,8 +214,15 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
  * `bootstrap`, both of which routinely take 10-30s under load.
  */
 function refreshServiceUnit(): void {
+  // Spawn the channel's own bin name (prod → `first-tree`, staging →
+  // `first-tree-staging`, dev → `first-tree-dev`). Crossing channels here
+  // would either ENOENT (the other bin isn't installed) or, worse,
+  // silently rewrite the wrong service unit with the wrong channel's
+  // templates.
+  const bin = channelConfig.binName;
+  const recovery = `\`${bin} logout && ${bin} login <token>\``;
   try {
-    const res = spawnSync("first-tree-hub", ["daemon", "refresh-unit"], {
+    const res = spawnSync(bin, ["daemon", "refresh-unit"], {
       stdio: ["ignore", "inherit", "inherit"],
       timeout: 45_000,
       // Sanitize FIRST_TREE_SERVICE_MODE so the child doesn't think it's
@@ -224,14 +235,14 @@ function refreshServiceUnit(): void {
       print.line(
         `  [update] warning: 'daemon refresh-unit' exited with status ${res.status ?? "unknown"} ` +
           `(signal=${res.signal ?? "none"}). If the supervisor restart fails after exit ${SELF_RESTART_EXIT_CODE}, ` +
-          "recover with `first-tree-hub logout && first-tree-hub login <token>`.\n",
+          `recover with ${recovery}.\n`,
       );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     print.line(
       `  [update] warning: could not spawn 'daemon refresh-unit': ${msg}. If the supervisor restart fails, ` +
-        "recover with `first-tree-hub logout && first-tree-hub login <token>`.\n",
+        `recover with ${recovery}.\n`,
     );
   }
 }

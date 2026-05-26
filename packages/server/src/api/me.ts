@@ -5,6 +5,7 @@ import {
   onboardingEventSchema,
   patchOnboardingSchema,
 } from "@first-tree/shared";
+import { getChannelConfig } from "@first-tree/shared/channel";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
@@ -18,7 +19,6 @@ import { listAgentsManagedByUser } from "../services/access-control.js";
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
-import { COMMAND_PACKAGE_NAME } from "../services/command-version-poller.js";
 import { decryptValue, encryptValue } from "../services/crypto.js";
 import { GithubAppApiError, refreshAppUserToken } from "../services/github-app.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
@@ -117,7 +117,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * Stamping NOW() server-side avoids client-clock skew. Idempotent: a
    * second PATCH leaves the original timestamp in place.
    *
-   * See docs/new-user-onboarding-design.md §8.4.
+   * See first-tree-context:agent-hub/onboarding.md §8.4.
    */
   app.patch("/me/onboarding", async (request, reply) => {
     const { userId } = requireUser(request);
@@ -334,19 +334,31 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         app.config.auth,
         issuer,
       );
-      // Channel-aware npm spec. Web onboarding renders the returned
-      // `bootstrapCommand` directly so a fresh-machine install lands on
-      // the version this Hub actually advertises — without it, staging
-      // (channel=alpha) users `npm i -g …` land on stable, then watch
-      // auto-update yank them up to alpha 30s later (which used to be
-      // exactly the cross-edge scenario that bricked their service
-      // unit). `latest` is npm's default dist-tag so we keep the bare
-      // spec for prod; only non-latest channels get the `@<tag>` suffix.
-      const channel = app.config.update.channel;
-      const npmSpec = channel === "latest" ? COMMAND_PACKAGE_NAME : `${COMMAND_PACKAGE_NAME}@${channel}`;
-      const command = `first-tree-hub login ${token}`;
+      // Channel-aware npm spec + bin name. Web onboarding renders the
+      // returned `bootstrapCommand` / `binName` directly so a fresh-machine
+      // install lands on the right package without web needing to know
+      // about channels.
+      //
+      // Multi-env: each channel is its own npm package, so the spec is
+      // always the bare package name (no `@<dist-tag>` suffix — each
+      // package has exactly one `latest`). dev servers have
+      // `packageName=null`: the bootstrap line skips the `npm install -g`
+      // step entirely because the operator builds from source.
+      const ch = getChannelConfig(app.config.channel);
+      const command = `${ch.binName} login ${token}`;
+      if (ch.packageName === null) {
+        return {
+          token,
+          expiresIn,
+          command,
+          bootstrapCommand: command,
+          npmSpec: null,
+          binName: ch.binName,
+        };
+      }
+      const npmSpec = ch.packageName;
       const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
-      return { token, expiresIn, command, bootstrapCommand, npmSpec };
+      return { token, expiresIn, command, bootstrapCommand, npmSpec, binName: ch.binName };
     },
   );
 

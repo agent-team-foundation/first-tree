@@ -15,7 +15,7 @@ import {
   defaultRuntimeConfigPayload,
   isReservedAgentName,
 } from "@first-tree/shared";
-import { and, count, desc, eq, lt, ne } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
@@ -249,7 +249,7 @@ async function resolveAgentClient(
   if (!client.userId) {
     throw new BadRequestError(
       `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
-        "`first-tree-hub login <token>` on that machine before pinning an agent to it.",
+        "`first-tree login <token>` on that machine before pinning an agent to it.",
     );
   }
   if (client.userId !== manager.userId) {
@@ -326,7 +326,7 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
   if (!row) {
     throw new BadRequestError(
       `Cannot create agent in organization "${orgId}" — no admin member exists. ` +
-        "Create an admin member first (see `first-tree-hub agent create`).",
+        "Create an admin member first (see `first-tree agent create`).",
     );
   }
   return row.id;
@@ -535,13 +535,40 @@ export async function checkAgentNameAvailability(
   return existing ? { available: false, reason: "taken" } : { available: true };
 }
 
-export async function getAgent(db: Database, uuid: string) {
-  const [agent] = await db
-    .select()
+/**
+ * Reusable projection for single-agent reads + mutation responses: every
+ * column on `agents` plus `agent_presence.runtimeState` (the M1+ authority
+ * for "is this agent running"; NULL when the agent has no presence row
+ * yet, i.e. never bound a runtime client).
+ *
+ * Threading this through `getAgent`, `requireAgentAccess`, and every
+ * mutation service is what keeps `runtimeState` on the wire across all
+ * single-agent endpoints — see PR #571 review: the previous shape lost
+ * the field on `GET /:uuid` and every PATCH/rebind/suspend/reactivate
+ * response, which made management surfaces (Team / Settings) read a
+ * fictitious "offline" state.
+ *
+ * Returns `null` when no row exists (the caller decides whether that's a
+ * 404 or an internal invariant violation post-update).
+ */
+export async function selectAgentRowWithRuntime(db: Database, uuid: string): Promise<AgentRowWithRuntime | null> {
+  const [row] = await db
+    .select({
+      ...getTableColumns(agents),
+      runtimeState: agentPresence.runtimeState,
+    })
     .from(agents)
-    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .where(eq(agents.uuid, uuid))
     .limit(1);
-  if (!agent) {
+  return row ?? null;
+}
+
+export type AgentRowWithRuntime = typeof agents.$inferSelect & { runtimeState: string | null };
+
+export async function getAgent(db: Database, uuid: string): Promise<AgentRowWithRuntime> {
+  const agent = await selectAgentRowWithRuntime(db, uuid);
+  if (!agent || agent.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
   return agent;
@@ -669,6 +696,13 @@ export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: n
 /**
  * List agents visible to a specific member.
  * Uses agentVisibilityCondition from access-control (same rules for all roles).
+ *
+ * `query`, when set, narrows the result set to rows whose `name` or
+ * `displayName` matches the term as a case-insensitive substring. Used by
+ * the web participant picker so orgs above the `limit` cap (100) can still
+ * surface agents past the first page (issue 494). The visibility predicate
+ * still wraps the search, so private agents owned by other members never
+ * leak through a `?query=` lookup.
  */
 export async function listAgentsForMember(
   db: Database,
@@ -676,11 +710,41 @@ export async function listAgentsForMember(
   limit: number,
   cursor?: string,
   type?: string,
+  query?: string,
 ) {
   // agentVisibilityCondition already includes org + status + visibility filtering
   const conditions = [agentVisibilityCondition(scope.organizationId, scope.memberId)];
   if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
   if (type) conditions.push(eq(agents.type, type));
+  if (query) {
+    // Whitespace-split into AND-of-keyword matches: each token must appear
+    // as a substring in `name` OR `displayName`. Lets a user search
+    // "Picker 110" and reach `picker-agent-110` (the literal substring
+    // "Picker 110" doesn't appear in either field, but each token alone
+    // does). Single-token input behaves identically to the prior contains
+    // semantics.
+    //
+    // Drizzle escapes the bound value, but we still need to neutralise the
+    // ILIKE wildcards (`%`, `_`) inside the user-supplied substring so a
+    // search for "10%_off" matches that literal text instead of acting as
+    // a wildcard pattern.
+    //
+    // Performance: each token compiles to two leading-wildcard `ILIKE`
+    // predicates, which Postgres can't use a btree index for and always
+    // run as a sequential scan over the visibility-filtered subset. Fine
+    // for the few-thousand-agents-per-org orders of magnitude we live in
+    // today; if a single org grows past ~50k agents and the picker latency
+    // starts biting, the right next step is `pg_trgm` + a GIN index on
+    // both columns (`USING gin (name gin_trgm_ops)` + likewise on
+    // `display_name`). That belongs in a follow-up — not worth the
+    // extension dependency until the measured pain shows up.
+    for (const token of query.split(/\s+/).filter((t) => t.length > 0)) {
+      const escaped = token.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+      const pattern = `%${escaped}%`;
+      const match = or(ilike(agents.name, pattern), ilike(agents.displayName, pattern));
+      if (match) conditions.push(match);
+    }
+  }
 
   const where = and(...conditions);
 
@@ -818,7 +882,11 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   if (data.managerId !== undefined && data.managerId !== agent.managerId) {
     await recomputeWatchersForAgent(db, agent.uuid);
   }
-  return updated;
+  // Re-fetch via the unified projection so the wire response carries
+  // `runtimeState` like every other single-agent endpoint.
+  const refreshed = await selectAgentRowWithRuntime(db, agent.uuid);
+  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+  return refreshed;
 }
 
 /**
@@ -864,7 +932,9 @@ export async function rebindAgent(db: Database, uuid: string, data: RebindAgent)
     .returning();
 
   if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
-  return updated;
+  const refreshed = await selectAgentRowWithRuntime(db, uuid);
+  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+  return refreshed;
 }
 
 /**
@@ -890,7 +960,9 @@ export async function reactivateAgent(db: Database, uuid: string) {
     .returning();
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
-  return agent;
+  const refreshed = await selectAgentRowWithRuntime(db, uuid);
+  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+  return refreshed;
 }
 
 /**
@@ -908,7 +980,9 @@ export async function suspendAgent(db: Database, uuid: string) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
 
-  return agent;
+  const refreshed = await selectAgentRowWithRuntime(db, uuid);
+  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
+  return refreshed;
 }
 
 /**

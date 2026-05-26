@@ -14,7 +14,7 @@ export function registerDaemonDoctorCommand(daemon: Command): void {
     .command("doctor")
     .description("Check daemon environment readiness (node, config, server, WS, agents, service)")
     .action(async () => {
-      print.line("\n  First Tree Hub Daemon Doctor\n\n");
+      print.line("\n  First Tree Daemon Doctor\n\n");
       const results = await runDaemonChecks();
       printResults(results);
     });

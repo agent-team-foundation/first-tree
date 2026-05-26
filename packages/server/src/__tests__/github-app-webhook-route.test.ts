@@ -325,7 +325,7 @@ describe("POST /webhooks/github-app", () => {
     expect(issueMappings).toEqual([]);
   });
 
-  it("pull_request.closed (merged=true) → auto-archives bound chats without delivering a message", async () => {
+  it("pull_request.closed (merged=true) → syncs entity_state to 'merged' without delivering a message", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100030;
@@ -372,18 +372,138 @@ describe("POST /webhooks/github-app", () => {
     // normalize still drops pull_request.closed → no audience/deliver run.
     expect(res.json().handled).toBe(false);
 
-    const [stateRow] = await app.db
-      .select({ engagementStatus: chatUserState.engagementStatus })
+    // Merge no longer flips engagement on the spot — the chat-archive
+    // sweeper does that after the idle window. The webhook's job is just
+    // to persist the upstream PR state.
+    const stateRows = await app.db
+      .select()
       .from(chatUserState)
-      .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, human)))
+      .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, human)));
+    expect(stateRows).toHaveLength(0);
+
+    const [mappingRow] = await app.db
+      .select({
+        entityState: githubEntityChatMappings.entityState,
+        entityStateUpdatedAt: githubEntityChatMappings.entityStateUpdatedAt,
+      })
+      .from(githubEntityChatMappings)
+      .where(and(eq(githubEntityChatMappings.chatId, chatId), eq(githubEntityChatMappings.entityKey, "owner/repo#820")))
       .limit(1);
-    expect(stateRow?.engagementStatus).toBe("archived");
+    expect(mappingRow?.entityState).toBe("merged");
+    expect(mappingRow?.entityStateUpdatedAt).not.toBeNull();
 
     const sent = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
     expect(sent).toHaveLength(0);
   });
 
-  it("pull_request.closed without merge does not archive", async () => {
+  it("pull_request.reopened → flips entity_state back to 'open'", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100032;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    // Mapping was previously settled (merged) — reopened must un-settle it.
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#822",
+      chatId,
+      boundVia: "direct",
+      entityState: "merged",
+    });
+
+    const res = await postWebhook(app, "pull_request", {
+      action: "reopened",
+      pull_request: {
+        number: 822,
+        title: "Reopened PR",
+        html_url: "https://github.com/owner/repo/pull/822",
+        body: "",
+        merged: false,
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "reopener", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    const [mappingRow] = await app.db
+      .select({ entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(and(eq(githubEntityChatMappings.chatId, chatId), eq(githubEntityChatMappings.entityKey, "owner/repo#822")))
+      .limit(1);
+    expect(mappingRow?.entityState).toBe("open");
+  });
+
+  it("issues.closed → syncs entity_state to 'closed' on the issue mapping", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100033;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "issue",
+      entityKey: "owner/repo#900",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const res = await postWebhook(app, "issues", {
+      action: "closed",
+      issue: {
+        number: 900,
+        title: "Stale issue",
+        html_url: "https://github.com/owner/repo/issues/900",
+        body: "",
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "closer", type: "User" },
+      installation: { id: installationId },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    const [mappingRow] = await app.db
+      .select({ entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(and(eq(githubEntityChatMappings.chatId, chatId), eq(githubEntityChatMappings.entityKey, "owner/repo#900")))
+      .limit(1);
+    expect(mappingRow?.entityState).toBe("closed");
+  });
+
+  it("pull_request.closed without merge → entity_state 'closed' and no engagement flip", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100031;
@@ -434,6 +554,65 @@ describe("POST /webhooks/github-app", () => {
       .from(chatUserState)
       .where(and(eq(chatUserState.chatId, chatId), eq(chatUserState.agentId, human)));
     expect(stateRows).toHaveLength(0);
+
+    const [mappingRow] = await app.db
+      .select({ entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(and(eq(githubEntityChatMappings.chatId, chatId), eq(githubEntityChatMappings.entityKey, "owner/repo#821")))
+      .limit(1);
+    expect(mappingRow?.entityState).toBe("closed");
+  });
+
+  // M1 (#507): audience-empty must distinguish "no involves at all" from
+  // "had involves but resolved to zero agents" — the latter usually means
+  // a mentioned GitHub login has no `delegateMention`-configured agent in
+  // this org, which is a potential mis-configuration worth surfacing.
+  it("audience empty with no involves returns reason=audience_empty_no_involves", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100030;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    const res = await postWebhook(app, "issues", {
+      action: "opened",
+      issue: {
+        number: 10,
+        title: "no involves",
+        html_url: "https://github.com/owner/repo/issues/10",
+        body: "",
+        assignees: [],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, audience: 0, reason: "audience_empty_no_involves" });
+  });
+
+  it("audience empty with involves returns reason=audience_empty_with_involves", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100031;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+
+    // Assignee whose GitHub login has no matching agent in this org →
+    // involves resolves to an empty audience (mis-config signal).
+    const res = await postWebhook(app, "issues", {
+      action: "opened",
+      issue: {
+        number: 11,
+        title: "with involves but unknown login",
+        html_url: "https://github.com/owner/repo/issues/11",
+        body: "",
+        assignees: [{ login: "nobody-here", type: "User" }],
+      },
+      repository: { full_name: "owner/repo" },
+      sender: { login: "external", type: "User" },
+      installation: { id: installationId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, audience: 0, reason: "audience_empty_with_involves" });
   });
 
   it("duplicate delivery (same x-github-delivery) is deduped on the second call", async () => {

@@ -16,7 +16,8 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { agentAvatarImageUrl } from "../services/agent.js";
-import { ensureParticipant, joinChat, leaveChat } from "../services/chat.js";
+import { getChatAgentStatuses } from "../services/agent-chat-status.js";
+import { ensureParticipant, leaveChat } from "../services/chat.js";
 import { findInstallationByOrg } from "../services/github-app-installations.js";
 import { mintContextTreeInstallationToken } from "../services/github-app-token.js";
 import { resolveChatGithubEntity } from "../services/github-entity-live.js";
@@ -129,6 +130,18 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
       })),
     };
+  });
+
+  /**
+   * Composite per-agent status for this chat's non-human speakers — the
+   * server-authoritative aggregation (reachability + session + live activity
+   * + needs-you) that the right-sidebar AgentRow and the compose status bar
+   * consume. Access is the standard chat-visibility gate; the response set
+   * depends only on the chat, not the caller's role.
+   */
+  app.get<{ Params: { chatId: string } }>("/:chatId/agent-status", async (request) => {
+    const { chat } = await requireChatAccess(request, app.db);
+    return getChatAgentStatuses(app.db, chat.id);
   });
 
   /**
@@ -276,20 +289,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.post<{ Params: { chatId: string } }>("/:chatId/join", async (request, reply) => {
-    const { scope } = await requireChatAccess(request, app.db);
-    const participants = await joinChat(app.db, request.params.chatId, scope.memberId, scope.humanAgentId);
-    return reply.status(200).send({
-      chatId: request.params.chatId,
-      participants: participants.map((p) => ({
-        agentId: p.agentId,
-        role: p.role,
-        // v2: wire `mode` field is decision-inert. Project the constant.
-        mode: WIRE_RECIPIENT_MODE,
-        joinedAt: p.joinedAt.toISOString(),
-      })),
-    });
-  });
+  // `POST /:chatId/join` (v1 supervision-check join) was removed alongside
+  // its `chat.ts::joinChat` service — the v2 watcher-based path
+  // `POST /:chatId/workspace-join` (below, see also
+  // `me-chat.ts::joinMeChat`) supersedes it and is the only "manager joins
+  // chat" route the web / CLI actually call.
 
   app.post<{ Params: { chatId: string } }>("/:chatId/leave", async (request, reply) => {
     const { scope } = await requireChatAccess(request, app.db);

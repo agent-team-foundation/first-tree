@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { listAgentSessions } from "../../../api/sessions.js";
-import { StateChip } from "../../../components/ui/state-chip.js";
+import { AgentStatusChip } from "../../../components/ui/agent-status-chip.js";
+import { sessionStateToMain } from "../../../lib/agent-status-view.js";
 import { formatRelative, KV, KVRow, SectionLabel } from "./_shared.js";
 import { AgentContext } from "./agent-context.js";
 
@@ -8,7 +9,6 @@ export function SessionContext({ agentId, chatId }: { agentId: string; chatId: s
   const { data: session } = useQuery({
     queryKey: ["session", agentId, chatId],
     queryFn: () => listAgentSessions(agentId).then((sessions) => sessions.find((s) => s.chatId === chatId) ?? null),
-    refetchInterval: 5_000,
   });
 
   return (
@@ -23,13 +23,14 @@ export function SessionContext({ agentId, chatId }: { agentId: string; chatId: s
         <SectionLabel>Session</SectionLabel>
         <KV>
           <KVRow label="state">
-            {/* Use the per-(agent, chat) session.state lifecycle (active /
-                suspended / errored / evicted). The pre-fix fallback chained
-                `session.runtimeState`, which is the agent-global runtime
-                state — for this chat's session it was the wrong axis and
-                would surface "working" while the agent was actually busy
-                in a different chat. */}
-            <StateChip state={session?.state ?? null} />
+            {/* Render the per-(agent, chat) session.state lifecycle (active /
+                suspended / errored / evicted) through the composite vocabulary.
+                Previously this fed session.state straight into StateChip, which
+                only understands the runtime-A vocabulary (idle/working/blocked/
+                error/offline) — the two enums don't overlap, so every live
+                session silently collapsed to "Offline" (F3). `sessionStateToMain`
+                bridges C → composite main; AgentStatusChip renders it. */}
+            <AgentStatusChip main={sessionStateToMain(session?.state ?? null)} />
           </KVRow>
           <KVRow label="chat">
             <span className="mono text-body">{chatId.slice(0, 12)}</span>

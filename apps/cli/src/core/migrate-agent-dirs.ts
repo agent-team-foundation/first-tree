@@ -5,7 +5,7 @@ import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
 
 /**
- * Phase 3 of the agent-naming refactor (docs/agent-naming-design.md §3.4 + §4):
+ * Phase 3 of the agent-naming refactor (first-tree-context:agent-hub/agent-naming.md §3.4 + §4):
  * reconcile every local agent directory name with the server-authoritative
  * `agent.name` slug. The free-form local alias concept is gone — the Hub is
  * the only namespace authority — so on every client startup we walk the
@@ -284,7 +284,7 @@ export async function migrateLocalAgentDirs(opts: {
       if (orphanSessions.length > 0) parts.push(`sessions: ${orphanSessions.join(", ")}`);
       print.status(
         "",
-        `orphaned local state detected (${parts.join("; ")}). Run \`first-tree-hub agent workspace clean\` to reclaim disk.`,
+        `orphaned local state detected (${parts.join("; ")}). Run \`first-tree agent workspace clean\` to reclaim disk.`,
       );
     }
   } catch {

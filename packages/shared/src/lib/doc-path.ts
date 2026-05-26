@@ -115,3 +115,30 @@ export function parseWorkspaceDocKey(key: string): { agentSlug: string; chatId: 
   if (!agentSlug || !chatId || rel.length === 0) return null;
   return { agentSlug, chatId, rel };
 }
+
+/**
+ * Heuristic: does this string have the shape of a Hub chat id?
+ *
+ * Chats are minted with `randomUUID()` (services/chat.ts), so a real chatId is
+ * always a 36-char canonical UUID — `xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx`
+ * where M is the version nibble and N is the variant nibble. We accept any
+ * canonical UUID (v1-v7) so the check stays correct if the project rotates
+ * the version field in the future.
+ *
+ * Why this matters: {@link parseWorkspaceDocKey} is structurally ambiguous —
+ * a 3+ segment self path (`<localPath>/docs/foo.md`, `worktrees/<task>/x.md`)
+ * also splits cleanly into `agentSlug / chatId / rel`. Callers that need to
+ * distinguish "real cross-agent global key" from "deep self path that happens
+ * to start with a participant slug" use this check: only when the second
+ * segment IS a uuid-shaped chatId is the path treated as a cross key (see
+ * server `validateDocumentContext` cross-chat fence). Without this, a
+ * single-repo agent whose source-repo `localPath` collides with another
+ * participant's slug (e.g. both literally `assistant`) would have every
+ * relative `docs/x.md` rejected as a cross-chat leak — codex-review P2 on
+ * the worktree-fence-widening PR.
+ */
+const CHAT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function looksLikeChatId(s: string): boolean {
+  return CHAT_ID_RE.test(s);
+}

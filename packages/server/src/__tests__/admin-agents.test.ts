@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
+import { bindAgent, unbindAgent } from "../services/presence.js";
 import { uuidv7 } from "../uuid.js";
 import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -42,6 +43,75 @@ describe("Admin Agents API", () => {
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().uuid).toBe(agent.uuid);
     expect(getRes.json().inboxId).toBe(`inbox_${agent.uuid}`);
+  });
+
+  // Single-agent GET carries `runtimeState` from the unified
+  // `selectAgentRowWithRuntime` projection. Management surfaces (Team /
+  // Settings) derive reachability from this (`<PresenceChip status={
+  // runtimeStateToPresence(agent.runtimeState) }>`), so an unbound agent
+  // must surface `null` and a bound one must surface `"idle"`. PR #571
+  // first cut shipped without this projection — agent-detail rendered a
+  // permanent "Offline" because the field was undefined on the wire.
+  it("GET /agents/:uuid carries runtimeState (null unbound, 'idle' bound)", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+
+    const agent = await createAgent(app.db, {
+      name: `runtime-state-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+
+    // Unbound (no agent_presence row) → runtimeState should be null
+    const beforeBind = await req("GET", `/api/v1/agents/${agent.uuid}`);
+    expect(beforeBind.statusCode).toBe(200);
+    expect(beforeBind.json().runtimeState).toBeNull();
+
+    // Bound via the runtime → flipped to "idle"
+    await bindAgent(app.db, agent.uuid, {
+      clientId: ctx.clientId,
+      instanceId: `inst-${crypto.randomUUID().slice(0, 6)}`,
+      runtimeType: "claude-code",
+    });
+    const afterBind = await req("GET", `/api/v1/agents/${agent.uuid}`);
+    expect(afterBind.statusCode).toBe(200);
+    expect(afterBind.json().runtimeState).toBe("idle");
+
+    // Unbind → back to null
+    await unbindAgent(app.db, agent.uuid);
+    const afterUnbind = await req("GET", `/api/v1/agents/${agent.uuid}`);
+    expect(afterUnbind.statusCode).toBe(200);
+    expect(afterUnbind.json().runtimeState).toBeNull();
+  });
+
+  // Regression guard for the mutation-response path. PR #571 review
+  // (yuezengwu second-pass) flagged that fixing only `requireAgentAccess`
+  // would still leave PATCH / suspend / reactivate / rebind responses
+  // without `runtimeState`, because those serialize the mutation's
+  // `.returning()` row rather than `requireAgentAccess`'s. The fix
+  // routes every mutation service through `selectAgentRowWithRuntime`
+  // after the UPDATE.
+  it("PATCH /agents/:uuid response carries runtimeState from the unified projection", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+
+    const agent = await createAgent(app.db, {
+      name: `patch-runtime-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    await bindAgent(app.db, agent.uuid, {
+      clientId: ctx.clientId,
+      instanceId: `inst-${crypto.randomUUID().slice(0, 6)}`,
+      runtimeType: "claude-code",
+    });
+
+    const res = await req("PATCH", `/api/v1/agents/${agent.uuid}`, { displayName: "Renamed" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().displayName).toBe("Renamed");
+    expect(res.json().runtimeState).toBe("idle");
   });
 
   it("lists agents with pagination", async () => {

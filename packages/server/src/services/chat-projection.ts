@@ -21,7 +21,7 @@
  *      so admin WS sockets can translate it into a `chat:message` frame.
  *      Failure is swallowed — durable persistence is the correctness path.
  *
- * Strict invariants (see docs/chat-first-workspace-product-design.md
+ * Strict invariants (see first-tree-context:agent-hub/web-console.md
  * "Risk Constraints"):
  *   - This module appends ONLY. Never edits existing fan-out / inbox /
  *     mention-extraction code.

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { gitRepoSchema } from "./agent-runtime-config.js";
-import { presenceStatusSchema } from "./presence.js";
+import { paginationQuerySchema } from "./common.js";
+import { presenceStatusSchema, runtimeStateSchema } from "./presence.js";
 import { runtimeProviderSchema } from "./runtime-provider.js";
 
 export const AGENT_TYPES = {
@@ -47,7 +48,7 @@ export const agentStatusSchema = z.enum(["active", "suspended"]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
 /**
- * Agent-name rules (see docs/agent-naming-design.md §3.1):
+ * Agent-name rules (see first-tree-context:agent-hub/agent-naming.md §3.1):
  *   - Lowercase ASCII slug, hyphens + underscores allowed.
  *   - Must start with alphanumeric: `-` / `_` as first char collide with
  *     CLI flag parsing and markdown list syntax.
@@ -219,6 +220,14 @@ export const agentSchema = z.object({
    */
   avatarImageUrl: z.string().nullable(),
   presenceStatus: presenceStatusSchema.optional(),
+  /**
+   * Runtime-A business state from `agent_presence.runtime_state` (the M1+
+   * authority for "is this agent running"; NULL when not bound). Carried on
+   * single-agent reads + mutations so management surfaces can derive
+   * reachability (`runtimeState != null` ⟺ reachable) without depending on
+   * the legacy `presenceStatus` column.
+   */
+  runtimeState: runtimeStateSchema.nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -234,7 +243,7 @@ export type ContextTreeInfo = z.infer<typeof contextTreeInfoSchema>;
  * Server → client WebSocket frame announcing that an agent has just been
  * pinned to the connected client (either created with `clientId` or bound via
  * PATCH NULL → ID). The client can auto-register a local config from this so
- * the operator doesn't have to run `first-tree-hub agent add` manually.
+ * the operator doesn't have to run `first-tree agent add` manually.
  */
 export const agentPinnedMessageSchema = z.object({
   type: z.literal("agent:pinned"),
@@ -255,3 +264,24 @@ export const agentPinnedMessageSchema = z.object({
   runtimeProvider: runtimeProviderSchema,
 });
 export type AgentPinnedMessage = z.infer<typeof agentPinnedMessageSchema>;
+
+/**
+ * Query string accepted by `GET /orgs/:orgId/agents` — pagination + the
+ * agent-type filter + an optional substring search.
+ *
+ * `query` powers the participant picker's server-side search so orgs with
+ * more than `limit` (100) visible agents can still reach agents past the
+ * first page (issue 494). The cap on `limit` is unchanged; `query` is the
+ * other dimension along which the picker narrows the result set.
+ *
+ * Trimming happens at the schema level so a whitespace-only input behaves
+ * the same as an omitted param (no filtering) instead of erroring out —
+ * the service treats an empty string as "no search". 60 chars is generous
+ * for slug + display name without giving the ILIKE predicate an unbounded
+ * input.
+ */
+export const listAgentsQuerySchema = paginationQuerySchema.extend({
+  type: agentTypeSchema.optional(),
+  query: z.string().trim().max(60).optional(),
+});
+export type ListAgentsQuery = z.infer<typeof listAgentsQuerySchema>;

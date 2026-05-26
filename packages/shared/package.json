@@ -3,11 +3,11 @@
   "private": true,
   "version": "0.2.3",
   "type": "module",
-  "description": "First Tree Hub shared schemas, types, and configuration (internal to the monorepo)",
+  "description": "First Tree shared schemas, types, and configuration (internal to the monorepo)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/agent-team-foundation/first-tree-hub.git",
+    "url": "https://github.com/agent-team-foundation/first-tree.git",
     "directory": "packages/shared"
   },
   "exports": {
@@ -19,13 +19,17 @@
       "types": "./src/config/index.ts",
       "import": "./dist/config/index.mjs"
     },
+    "./channel": {
+      "types": "./src/channel/index.ts",
+      "import": "./dist/channel/index.mjs"
+    },
     "./observability": {
       "types": "./src/observability/index.ts",
       "import": "./dist/observability/index.mjs"
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/config/index.ts src/observability/index.ts --format esm --dts",
+    "build": "tsdown src/index.ts src/config/index.ts src/channel/index.ts src/observability/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },

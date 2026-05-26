@@ -18,6 +18,7 @@
 
 import { useState } from "react";
 import { asToolCallPayload, type SessionEventRow } from "../../api/sessions.js";
+import { StatusGlyph } from "../ui/status-glyph.js";
 
 type WorkingBubbleProps = {
   /**
@@ -61,7 +62,6 @@ function ToolCallLine({ event }: { event: SessionEventRow }) {
   if (!payload) return null;
   const isErr = payload.status === "error";
   const isPending = payload.status === "pending";
-  const color = isErr ? "var(--state-error)" : isPending ? "var(--state-blocked)" : "var(--fg-3)";
   const verb = isErr ? "failed" : isPending ? "using" : "used";
   return (
     <div
@@ -73,20 +73,12 @@ function ToolCallLine({ event }: { event: SessionEventRow }) {
       }}
     >
       {isPending ? (
-        <span
-          aria-hidden
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            background: color,
-            animation: "heartbeat-pulse 1.2s ease-in-out infinite",
-            flexShrink: 0,
-            marginTop: 5,
-          }}
-        />
+        // In-progress: the shared working atom (blue dot + canonical pulse, §9.1).
+        <span style={{ marginTop: 5, display: "inline-flex", flexShrink: 0 }}>
+          <StatusGlyph colorVar="var(--state-working)" shape="dot" pulse="working" size={6} />
+        </span>
       ) : (
-        <span aria-hidden style={{ color, flexShrink: 0 }}>
+        <span aria-hidden style={{ color: isErr ? "var(--state-error)" : "var(--fg-3)", flexShrink: 0 }}>
           {isErr ? "⚠" : "↳"}
         </span>
       )}
@@ -144,17 +136,8 @@ function ThinkingLine({ event }: { event: SessionEventRow }) {
         color: "var(--fg-3)",
       }}
     >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: "var(--accent)",
-          animation: "heartbeat-pulse 1.2s ease-in-out infinite",
-          flexShrink: 0,
-        }}
-      />
+      {/* In-progress: the shared working atom (blue dot + canonical pulse, §9.1). */}
+      <StatusGlyph colorVar="var(--state-working)" shape="dot" pulse="working" size={6} />
       <span style={{ color: "var(--fg-3)" }}>thinking…</span>
       <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
         {formatClockTime(event.createdAt)}
@@ -194,7 +177,9 @@ export function WorkingBubble({ events, defaultOpen }: WorkingBubbleProps) {
   const { toolCalls, thinkings, elapsedSec } = summarize(events);
 
   return (
-    <div>
+    // Anchor for the compose rail's jump-to-timeline (working → this agent's
+    // in-progress turn). Best-effort: the bubble unmounts when the turn ends.
+    <div data-working-agent={latest.agentId}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -231,7 +216,9 @@ export function WorkingBubble({ events, defaultOpen }: WorkingBubbleProps) {
 
       {open ? (
         <div>
-          {events.map((e) => (
+          {/* The latest event is already rendered as the head row above, so
+              the expanded history excludes it to avoid rendering it twice. */}
+          {events.slice(0, -1).map((e) => (
             <div key={e.id}>{renderLine(e)}</div>
           ))}
           <div

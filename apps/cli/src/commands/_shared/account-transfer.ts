@@ -89,7 +89,7 @@ export async function cleanupStaleAliasesAfterClaim(opts: {
           }).catch(() => false);
 
     if (!approved) {
-      print.line("  Skipped. Run `first-tree-hub agent prune` later to clean up.\n");
+      print.line("  Skipped. Run `first-tree agent prune` later to clean up.\n");
       return;
     }
 
@@ -110,6 +110,6 @@ export async function cleanupStaleAliasesAfterClaim(opts: {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     print.line(`  (Could not check for stale aliases: ${msg.slice(0, 100)})\n`);
-    print.line("  Run `first-tree-hub agent prune` after reconnecting.\n");
+    print.line("  Run `first-tree agent prune` after reconnecting.\n");
   }
 }

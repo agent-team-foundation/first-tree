@@ -8,7 +8,7 @@ import { cn } from "../lib/utils.js";
  * reports back (a) visibility, (b) the currently highlighted candidate,
  * and (c) the final replacement when the user picks one.
  *
- * See docs/agent-naming-design.md §3.5. Intentionally not a rich
+ * See first-tree-context:agent-hub/agent-naming.md §3.5. Intentionally not a rich
  * editor — we match by typing a `@`, then filtering a static list.
  *
  * Matching policy:
@@ -31,9 +31,10 @@ export type MentionCandidate = {
   /** True iff the caller's member is this agent's `managerId`. Drives
    *  participant-picker grouping (mine first, then teammates') and the
    *  empty-query branch of mention autocomplete so the user's own agents
-   *  always surface first. Populated from `/activity` (server-derived);
-   *  callers that can't determine it should pass `false` rather than
-   *  omitting — there's no "unknown" state. */
+   *  always surface first. Derived client-side by callers from the
+   *  agent row's `managerId` against the caller's `memberId` (see
+   *  `useAuth`); callers that can't determine it should pass `false`
+   *  rather than omitting — there's no "unknown" state. */
   managedByMe: boolean;
 };
 
@@ -179,15 +180,66 @@ export function groupAndSortCandidates(candidates: MentionCandidate[]): Array<Me
 }
 
 /**
+ * Two-section picker layout used by both `AddParticipantDropdown` and
+ * the new-chat `ParticipantChips` picker:
+ *
+ *   head    = mine-first / others (with internal divider) over `addable`
+ *   tail    = already-in-chat agents, alphabetical, separator above
+ *   items   = head + (optional separator + tail)
+ *   selectable = the addable rows in head order, divider stripped
+ *
+ * Critical invariant: `selectable` is derived from `headItems` (the
+ * grouped + sorted view, NOT the caller's raw `addable` array). The
+ * dropdown renders rows by walking `items`; the keyboard highlight +
+ * Enter commit walks `selectable`. Pre-issue-494 the picker derived
+ * `selectable` straight from `addable` (server `desc(createdAt)`
+ * order), so the visible highlight could drift from the row actually
+ * committed on Enter — a wrong-recipient hazard the third Codex / human
+ * review of PR 556 caught before merge. Going through `headItems` is
+ * the fix and the reason this lives in shared code: two pickers,
+ * one invariant.
+ *
+ * Already-in rows do NOT enter `selectable`. They render as display-
+ * only ✓ markers (the caller paints them differently); arrow / Enter
+ * skip past them.
+ */
+export function buildPickerSections(
+  addable: MentionCandidate[],
+  alreadyIn: MentionCandidate[],
+): {
+  items: Array<MentionCandidate | CandidateDivider>;
+  selectable: MentionCandidate[];
+} {
+  const headItems = groupAndSortCandidates(addable);
+  const selectable = headItems.filter((it): it is MentionCandidate => !("divider" in it));
+  const items =
+    alreadyIn.length === 0
+      ? headItems
+      : ([...headItems, { divider: true } as CandidateDivider, ...alreadyIn] as Array<
+          MentionCandidate | CandidateDivider
+        >);
+  return { items, selectable };
+}
+
+/**
  * Rank candidates against a lowercased query. Empty query returns every
  * candidate sorted my-managed-first, then alphabetically within each
  * group, so the popover surfaces the caller's own agents immediately
  * after typing `@`. With a query, matches are scored by match position
- * (name prefix > displayName prefix > displayName contains) and ties
- * are still broken alphabetically — managedByMe is intentionally NOT a
- * scoring signal once the user has typed something, because at that
- * point they're targeting a specific name and we shouldn't reorder
- * matches under them.
+ * (name prefix > displayName prefix > displayName contains > name
+ * contains) and ties are still broken alphabetically — managedByMe is
+ * intentionally NOT a scoring signal once the user has typed something,
+ * because at that point they're targeting a specific name and we
+ * shouldn't reorder matches under them.
+ *
+ * Name-substring (score 3) is the fallback added in issue 494 — without
+ * it, typing `@agent-110` against a slug like `picker-agent-110` would
+ * return nothing (name not a prefix, displayName "Picker Agent 110"
+ * doesn't contain the literal "agent-110" with hyphen), and the
+ * autocomplete would feel broken relative to the `[+]` picker (which
+ * does substring on the same field). Substring is the floor, not the
+ * ceiling: prefix-on-name still wins so an exact-prefix match floats to
+ * the top.
  */
 export function rankCandidates(candidates: MentionCandidate[], query: string): MentionCandidate[] {
   if (!query) {
@@ -207,6 +259,7 @@ export function rankCandidates(candidates: MentionCandidate[], query: string): M
     if (lowerName.startsWith(query)) score = 0;
     else if (lowerDisplay.startsWith(query)) score = 1;
     else if (lowerDisplay.includes(query)) score = 2;
+    else if (lowerName.includes(query)) score = 3;
     if (score !== Infinity) scored.push({ c, score });
   }
   scored.sort((a, b) => a.score - b.score || (a.c.displayName ?? "").localeCompare(b.c.displayName ?? ""));

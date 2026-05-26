@@ -6,7 +6,6 @@ import { useNavigate, useSearchParams } from "react-router";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
 import { getAdapterStatuses } from "../api/adapter-status.js";
 import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
-import { listAgents } from "../api/agents.js";
 import { Button } from "../components/ui/button.js";
 import { DenseBadge } from "../components/ui/dense-badge.js";
 import {
@@ -18,9 +17,10 @@ import {
   DenseTableRow,
 } from "../components/ui/dense-table.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
+import { PresenceChip } from "../components/ui/presence-chip.js";
 import { Section } from "../components/ui/section.js";
-import { StateDot } from "../components/ui/state-dot.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
+import { useOrgAgents } from "../lib/use-org-agents.js";
 import { formatDate } from "../lib/utils.js";
 import { BindingFormDialog, type BindingFormSubmit } from "./binding-form.js";
 
@@ -55,13 +55,9 @@ export function BindingsPage() {
 
   // We need the full agent list for two reasons: (1) the "+ Bot binding" /
   // "+ User binding" pickers, and (2) the filter chip at the top of the page.
-  // Cached for 30s in the same query-key shape as `useAgentNameMap` so they
-  // share the request.
-  const agentsQuery = useQuery({
-    queryKey: ["agents", "name-map"],
-    queryFn: () => listAgents({ limit: 100 }),
-    staleTime: 30_000,
-  });
+  // Shared with `useAgentNameMap` (and the chat picker) via `useOrgAgents`
+  // so all three surfaces hit one cache and one HTTP fetch per refetch tick.
+  const agentsQuery = useOrgAgents();
   const allAgents = agentsQuery.data?.items ?? [];
 
   // Status lookup: fast O(1) check whether an adapter row's bot is online.
@@ -264,12 +260,18 @@ export function BindingsPage() {
         count={adapters.length}
         action={
           <div className="inline-flex items-center gap-3">
-            <span className="inline-flex items-center gap-3 text-caption">
-              <span className="inline-flex items-center gap-1" style={{ color: "var(--state-idle)" }}>
-                <StateDot state="idle" size={6} /> {onlineBots} online
+            <span className="inline-flex items-center gap-3">
+              <span className="inline-flex items-center gap-1">
+                <PresenceChip status="online" />
+                <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+                  {onlineBots}
+                </span>
               </span>
-              <span className="inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
-                <StateDot state="offline" size={6} /> {offlineBots} offline
+              <span className="inline-flex items-center gap-1">
+                <PresenceChip status="offline" />
+                <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+                  {offlineBots}
+                </span>
               </span>
             </span>
             <Button size="xs" variant="outline" onClick={() => openCreate("bot")}>
@@ -311,10 +313,7 @@ export function BindingsPage() {
                       </DenseBadge>
                     </DenseTableCell>
                     <DenseTableCell>
-                      <span className="inline-flex items-center gap-1.5 text-label">
-                        <StateDot state={connected ? "idle" : "offline"} size={7} />
-                        <span style={{ color: "var(--fg-3)" }}>{connected ? "Online" : "Offline"}</span>
-                      </span>
+                      <PresenceChip status={connected ? "online" : "offline"} />
                     </DenseTableCell>
                     <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                       {formatDate(a.createdAt)}

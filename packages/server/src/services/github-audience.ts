@@ -124,6 +124,7 @@ export async function resolveAudience(
       humanAgentId: githubEntityChatMappings.humanAgentId,
       delegateAgentId: githubEntityChatMappings.delegateAgentId,
       chatId: githubEntityChatMappings.chatId,
+      boundAt: githubEntityChatMappings.boundAt,
     })
     .from(githubEntityChatMappings)
     .where(
@@ -134,7 +135,22 @@ export async function resolveAudience(
       ),
     );
 
-  const subscribed: AudienceTarget[] = subscribedRows.map((row) => ({
+  // Dedup subscribed rows by `humanAgentId` (keep earliest `bound_at`).
+  // After `resolveTargetChat` step (a.5) lands, the same `(human, entity)`
+  // pair can have multiple mapping rows pointing at the *same* chat (one
+  // per delegate that ever drove an event for this entity under this
+  // human). Without this dedup the audience loops the same chatId N times
+  // and `deliverNormalizedEvent` posts N identical cards. Sibling rows are
+  // guaranteed to share `chatId` because (a.5) always inserts using the
+  // human-scoped lookup's `chatId`, so collapsing them is loss-free.
+  const earliestByHuman = new Map<string, (typeof subscribedRows)[number]>();
+  for (const row of subscribedRows) {
+    const current = earliestByHuman.get(row.humanAgentId);
+    if (!current || row.boundAt < current.boundAt) {
+      earliestByHuman.set(row.humanAgentId, row);
+    }
+  }
+  const subscribed: AudienceTarget[] = [...earliestByHuman.values()].map((row) => ({
     humanAgentId: row.humanAgentId,
     delegateAgentId: row.delegateAgentId,
     kind: "existing",
@@ -143,7 +159,15 @@ export async function resolveAudience(
     involveLogin: null,
   }));
 
-  const subscribedKeys = new Set(subscribed.map((s) => `${s.humanAgentId} ${s.delegateAgentId}`));
+  // Dedup involved candidates by `humanAgentId` only — once any (human, *,
+  // entity) mapping exists, the entity is already routed to that human's
+  // chat and the involves-driven path must NOT fork a sibling chat just
+  // because the candidate's `delegateMention` differs from the delegate
+  // recorded on the existing mapping. The downstream resolver still applies
+  // a human-scoped fallback (see `resolveTargetChat` step a.5), so even if
+  // a race lets a `kind: "new"` row through with a different delegate, the
+  // chat is reused — this dedup is the first line of defence.
+  const subscribedHumanIds = new Set(subscribed.map((s) => s.humanAgentId));
 
   const involved: AudienceTarget[] = [];
   if (event.involves.length > 0) {
@@ -190,8 +214,7 @@ export async function resolveAudience(
       if (c.status !== "active" || !c.delegateMention || !c.name) continue;
       const verdict = evaluateDelegateTarget(delegateById.get(c.delegateMention), organizationId);
       if (verdict !== "ok") continue;
-      const key = `${c.id} ${c.delegateMention}`;
-      if (subscribedKeys.has(key)) continue;
+      if (subscribedHumanIds.has(c.id)) continue;
       const candidateLogin = c.name.toLowerCase();
       const reason = reasonByLogin.get(candidateLogin);
       if (!reason) continue;

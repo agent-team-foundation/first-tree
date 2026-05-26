@@ -104,7 +104,25 @@ export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }>
 export type ConnectTokenResponse = {
   token: string;
   expiresIn: number;
+  /** `<binName> login <token>` — channel-aware bin name. */
   command: string;
+  /**
+   * Full bootstrap line: `npm install -g <pkg>\n<binName> login <token>`
+   * for prod/staging; just `<binName> login <token>` for dev (no
+   * published package).
+   */
+  bootstrapCommand: string;
+  /**
+   * Bare npm package name. `null` for dev (no published package — UI
+   * suppresses the `npm install -g` step).
+   */
+  npmSpec: string | null;
+  /**
+   * Bin name to invoke after install — `first-tree` / `first-tree-staging`
+   * / `first-tree-dev` depending on this Hub's channel. Use instead of
+   * hardcoded `"first-tree"` strings in command-line UX.
+   */
+  binName: string;
 };
 
 export function generateConnectToken(): Promise<ConnectTokenResponse> {

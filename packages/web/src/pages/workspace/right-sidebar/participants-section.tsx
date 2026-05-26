@@ -3,12 +3,12 @@ import { useMemo } from "react";
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
-import type { MentionCandidate } from "../../../components/mention-autocomplete.js";
-import { AgentRow } from "./agent-row.js";
+import { AgentStatusPanel } from "../../../components/chat/agent-status-panel.js";
 
 /**
- * Participants section — full chat membership (humans + agents). Per-row
- * Suspend lives on AgentRow when the caller can manage that agent.
+ * Participants section — full chat membership (humans + agents). Agent rows
+ * render through <AgentStatusPanel> (one /chats/:id/agent-status call drives
+ * every agent's composite status + per-row Pause when the caller can manage).
  * Humans render a simplified row (no session state, no actions in v1 —
  * Remove / Change role are deferred to a future iteration alongside the
  * missing backend routes for member-side participant removal).
@@ -26,8 +26,6 @@ export function ParticipantsSection({
   participants,
   participantsLoading,
   managedByMe,
-  addParticipantsCandidates,
-  agentIdentity,
   onAdded,
   readOnly,
 }: {
@@ -35,10 +33,6 @@ export function ParticipantsSection({
   participants: ChatParticipantDetail[];
   participantsLoading: boolean;
   managedByMe: Map<string, boolean>;
-  addParticipantsCandidates: MentionCandidate[];
-  agentIdentity: (
-    uuid: string | null | undefined,
-  ) => { name: string | null; displayName: string; avatarImageUrl: string | null } | null;
   onAdded: () => void;
   readOnly: boolean;
 }) {
@@ -73,18 +67,18 @@ export function ParticipantsSection({
             No participants yet.
           </div>
         ) : (
-          sorted.map((p) =>
-            p.type === "human" ? (
-              <HumanRow key={p.agentId} participant={p} />
-            ) : (
-              <AgentRow
-                key={p.agentId}
-                chatId={chatId}
-                participant={p}
-                canSuspend={isAdmin || (managedByMe.get(p.agentId) ?? false)}
-              />
-            ),
-          )
+          <>
+            {sorted
+              .filter((p) => p.type === "human")
+              .map((p) => (
+                <HumanRow key={p.agentId} participant={p} />
+              ))}
+            <AgentStatusPanel
+              chatId={chatId}
+              agents={sorted.filter((p) => p.type !== "human")}
+              canManage={(id) => isAdmin || (managedByMe.get(id) ?? false)}
+            />
+          </>
         )}
       </div>
 
@@ -93,9 +87,7 @@ export function ParticipantsSection({
           <AddParticipantDropdown
             variant="inline"
             chatId={chatId}
-            candidates={addParticipantsCandidates}
             participantIds={participants.map((p) => p.agentId)}
-            agentIdentity={agentIdentity}
             onAdded={onAdded}
           />
         </div>

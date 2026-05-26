@@ -1,20 +1,22 @@
 /**
- * Two bootstrap-message variants Step 3 IntroBody dispatches based on the
- * user's "do you already have a tree?" choice. Prose, not shell recipes —
- * the agent has the first-tree skill (and the source repos, materialised
- * via `gitRepos`) ready in its workspace, so the message just describes
- * the goal and references the CLI surfaces by name. The skill knows the
- * concrete commands.
+ * The two kickoff bootstrap messages the onboarding "Your Context Tree" step
+ * sends to a freshly-created agent, chosen by the user's "new vs existing tree"
+ * choice. Prose, not shell recipes: the agent has the first-tree onboarding
+ * skill in its workspace, and that skill owns the concrete flow (bind → draft
+ * real tree content → verify → open PRs). These messages only state the goal +
+ * the source repos (and, for the existing path, the tree URL) and defer the
+ * mechanics to that skill, so they don't drift as the CLI / skill evolve.
  *
- * Path A (existing tree) skips Hub bookkeeping at the end — the web
- * frontend best-effort PUTs the URL into the org's `context_tree`
- * settings namespace before sending the chat (non-fatal — agent still
- * proceeds if the PUT fails). Path B (new tree) tells the agent to call
- * back into the first-tree-hub CLI to record the freshly created URL.
+ * Two paths:
+ *   - existing tree (buildBindBootstrap): the frontend has already best-effort
+ *     PUT the URL into the org's `context_tree` settings before sending, so the
+ *     message doesn't ask the agent to record it on the Hub again.
+ *   - new tree (buildCreateBootstrap): the URL doesn't exist yet, so the message
+ *     asks the agent to record the freshly-created tree URL on the Hub — the one
+ *     bit the local skill doesn't own — so future teammates' agents can find it.
  *
- * Single source of truth: only Step 3 IntroBody currently sends these.
- * If a future surface needs the same prompts, hoist these builders to
- * `packages/shared` so both import the same strings.
+ * Single source of truth: only the kickoff step sends these. If a future surface
+ * needs the same prompts, hoist these builders to `packages/shared`.
  */
 
 export const FIRST_TREE_REFERENCE_URL = "https://github.com/agent-team-foundation/first-tree";
@@ -28,14 +30,13 @@ function formatSourceList(sourceUrls: readonly string[]): string[] {
 
 export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: string): string {
   const sourceLines = formatSourceList(sourceUrls);
-  const opener =
-    sourceUrls.length === 1
-      ? "Bind my source repo to an existing context-tree."
-      : "Bind my source repos to an existing context-tree.";
-  const skillLine =
-    sourceUrls.length === 1
-      ? "Your workspace already has the source repo cloned in a subdirectory; the first-tree skill will locate it. Use the first-tree CLI to install the skill in the source repo and write the binding metadata pointing at the existing tree, then open a PR back to the source with those changes. Walk me through the PR when it's up."
-      : "Your workspace already has each source repo cloned in its own subdirectory; the first-tree skill will locate them. For every source repo, use the first-tree CLI to install the skill and write the binding metadata pointing at the existing tree, then open a PR back to that source repo. Walk me through each PR as it goes up.";
+  const single = sourceUrls.length === 1;
+  const opener = single
+    ? "Set up First Tree for my source repo, binding it to our team's existing Context Tree."
+    : "Set up First Tree for my source repos, binding them to our team's existing Context Tree.";
+  const skillLine = single
+    ? "Onboard it end to end with the first-tree onboarding flow: bind the repo to that existing tree, then open a PR back to the source with the binding. Show me the diff before it's pushed, and walk me through the PR."
+    : "Onboard them end to end with the first-tree onboarding flow: bind every repo to that existing tree, then open a PR back to each source with its binding. Show me the diffs before they're pushed, and walk me through each PR.";
   return [
     opener,
     "",
@@ -50,14 +51,16 @@ export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: strin
 
 export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
   const sourceLines = formatSourceList(sourceUrls);
-  const opener =
-    sourceUrls.length === 1
-      ? "Create a brand-new context-tree for my source repo."
-      : "Create a brand-new context-tree for my source repos.";
-  const skillLine =
-    sourceUrls.length === 1
-      ? "Your workspace already has the source repo cloned in a subdirectory; the first-tree skill will locate it. Use the first-tree CLI to install the skill in the source, scaffold a sibling tree directory, and write the binding metadata. Then push that new tree directory up to GitHub as a sibling repo under the same owner as the source, and open a PR back to the source with the skill + binding files."
-      : "Your workspace already has each source repo cloned in its own subdirectory; the first-tree skill will locate them. Scaffold ONE shared tree directory that all the source repos bind to. For every source repo, install the first-tree skill and write the binding metadata pointing at that shared tree. Push the new tree directory up to GitHub as its own repo — if all the source repos share a single GitHub owner, host the tree under that owner; otherwise ask me which owner to use before pushing. Then open a PR back to each source repo with its skill + binding files.";
+  const single = sourceUrls.length === 1;
+  const opener = single
+    ? "Set up First Tree for my source repo and create a brand-new Context Tree for it."
+    : "Set up First Tree for my source repos and create one shared Context Tree they all bind to.";
+  const skillLine = single
+    ? "Onboard it end to end with the first-tree onboarding flow: bind the repo to a new Context Tree, and — this part matters most — draft real starting content for the tree from what's actually in the repo, not placeholders. Host the new tree as its own GitHub repo under the same owner as the source."
+    : "Onboard them end to end with the first-tree onboarding flow: bind every repo to one new shared Context Tree, and — this part matters most — draft real starting content for the tree from what's actually in the repos, not placeholders. Host the new tree as its own GitHub repo under the owner the sources share (ask me which owner if they don't share one).";
+  const walkthrough = single
+    ? "Show me the diffs before anything is pushed, and walk me through what got created — the tree repo, its content, and the PR."
+    : "Show me the diffs before anything is pushed, and walk me through what got created — the tree repo, its content, and each PR.";
   return [
     opener,
     "",
@@ -65,9 +68,9 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
     "",
     skillLine,
     "",
-    "Once you know the URL of the new tree repo, use the first-tree-hub CLI's `org bind-tree` command to record it on the Hub so future agents in this team can find it.",
+    "Once the tree repo is up on GitHub, record its URL on the Hub with the first-tree CLI so future teammates' agents can find it.",
     "",
-    "When everything is up, walk me through what was created — which directory, which repo, which PRs.",
+    walkthrough,
     "",
     `Reference: ${FIRST_TREE_REFERENCE_URL}`,
   ].join("\n");

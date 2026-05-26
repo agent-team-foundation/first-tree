@@ -43,11 +43,17 @@ import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
 /**
  * GitHub sign-in surface. All routes are public (no member JWT required).
  *
- * Single flow post-D3 cutover: the GitHub App authorize URL drives both
- * sign-in and install (D1). Returning users with an existing install
- * skip the install dialog and just get `code + state`; first-time
- * installers get `code + state + installation_id`. The legacy OAuth-App
- * path that lived alongside this until D3 has been removed.
+ * `/start` uses the GitHub App **authorize** URL — this is identity only
+ * (sign-in / re-auth). For a user who already has the App installed the
+ * callback may also carry an `installation_id`, but for a user who has NOT
+ * installed it the authorize URL never surfaces the install dialog and
+ * never returns an `installation_id` (codex P1-1; see
+ * `services/github-app.ts`). So sign-in must not be relied on to install
+ * the App. The reliable install entry is `installations/new`, exposed at
+ * `GET /orgs/:orgId/github-app-installation/install-url` and surfaced both
+ * in onboarding's "Connect your code" step and Settings → GitHub. After
+ * that dialog GitHub redirects back here with `code + state +
+ * installation_id`, which the callback verifies and binds.
  *
  * `dev-callback` bypasses GitHub entirely; gated to non-production.
  *
@@ -400,7 +406,7 @@ async function completeOauthFlow(
       const personal = await createPersonalTeam(app.db, {
         userId,
         loginSeed: profile.login,
-        // Per docs/new-user-onboarding-design.md §5.5, default team name is
+        // Per first-tree-context:agent-hub/onboarding.md (was §5.5 in source design), default team name is
         // `${login}'s team` — reads as a collective space, matches Linear's
         // convention. The user can rename in Step 1 of onboarding.
         teamDisplayName: `${profile.login}'s team`,

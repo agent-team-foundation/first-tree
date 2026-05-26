@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { extractMentions, type SendMessage, scanMentionTokens } from "@first-tree/shared";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -9,12 +8,31 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
+import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext } from "./doc-snapshots.js";
 import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from "./questions.js";
 
 const log = createLogger("message");
+
+/**
+ * Metadata keys reserved for trusted-internal write paths. Stripped from
+ * untrusted-caller input (any send that doesn't opt in) so an HTTP POST
+ * cannot smuggle a UI-trust marker into a regular message — see the
+ * `allowSystemSender` field on `SendMessageOptions` for the threat model.
+ *
+ * Returns the same reference when nothing is stripped, so the common case
+ * (no reserved keys present) does not allocate.
+ */
+function stripUntrustedMetadataKeys(
+  meta: Record<string, unknown>,
+  options: SendMessageOptions,
+): Record<string, unknown> {
+  if (options.allowSystemSender || !("systemSender" in meta)) return meta;
+  const { systemSender: _drop, ...rest } = meta;
+  return rest;
+}
 
 export type SendMessageResult = {
   message: typeof messages.$inferSelect;
@@ -89,6 +107,20 @@ export type SendMessageOptions = {
    * when no explicit declaration was made.
    */
   extractMentionsFromContent?: boolean;
+  /**
+   * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
+   * uses that key to re-attribute a row to a synthetic "GitHub" sender
+   * (avatar + name override) instead of the row's actual `senderId`. To
+   * prevent a non-dispatcher caller (HTTP POST from web / agent SDK) from
+   * smuggling the same marker into an ordinary message — which would let
+   * an arbitrary agent post a phishing message that renders as if from
+   * GitHub — the service unconditionally strips the key from
+   * `data.metadata` when this option is not set. Only
+   * `github-delivery.deliverNormalizedEvent` is expected to set this to
+   * `true`. Defense-in-depth alongside the conjunctive UI trust gate in
+   * `github-event-card.tsx#isTrustedGithubDispatcherMessage`.
+   */
+  allowSystemSender?: boolean;
 };
 
 export async function sendMessage(
@@ -198,7 +230,7 @@ async function sendMessageInner(
     //     where the typed message is the sole source of routing intent.
     //     Agent / programmatic callers leave this off so a narrative
     //     `@<peer>` in content never silently wakes anyone.
-    const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+    const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
     // Server-side bottom-line on `metadata.documentContext`: shape via shared
     // schema + byte budgets and sha256 calibration. Snapshot content arrives
     // from a trusted runtime, but server still has to verify so a client bug
@@ -234,7 +266,7 @@ async function sendMessageInner(
       throw new BadRequestError(
         `Cannot route to "${sample}" — they are not a participant of this chat. ` +
           "Add them first:\n" +
-          `  first-tree-hub chat invite ${sample}\n` +
+          `  first-tree chat invite ${sample}\n` +
           "Then retry your send. Or ask a human in this chat to add them.",
       );
     }
@@ -327,7 +359,7 @@ async function sendMessageInner(
       if (recipientMentions.length === 0) {
         throw new BadRequestError(
           "Sending to a group chat requires an explicit @mention. " +
-            "Use `first-tree-hub chat send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
+            "Use `first-tree chat send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
         );
       }
     }
@@ -369,7 +401,7 @@ async function sendMessageInner(
           throw new BadRequestError(
             `Cannot @-mention "${sample}" — they are not a participant of this chat. ` +
               "Add them first:\n" +
-              `  first-tree-hub chat invite ${sample}\n` +
+              `  first-tree chat invite ${sample}\n` +
               "Then retry your send. Or ask a human in this chat to add them.",
           );
         }
@@ -442,7 +474,13 @@ async function sendMessageInner(
     const projectionMentions: string[] = isSilentSend ? [] : dmAutoProjection;
 
     // 3. Store the message (with merged metadata + normalised content).
-    const messageId = randomUUID();
+    // UUID v7 per the "UUID v7 as Message ID" architecture rule in
+    // CLAUDE.md — time-ordered so message id lex order matches creation
+    // order. randomUUID() (v4) was the pre-existing implementation; the
+    // mismatch was caught when the web client's "new messages" divider
+    // relied on lex ordering to find newer-than-anchor messages and
+    // silently dropped some (PR #286, rev 8).
+    const messageId = uuidv7();
     const [msg] = await tx
       .insert(messages)
       .values({
@@ -529,7 +567,7 @@ async function sendMessageInner(
     // 6. Chat-first workspace projection (append-only, post-fan-out).
     //    Updates chats.last_message_*, increments speaker + watcher mention
     //    counters. New code; no existing path is modified — see
-    //    docs/chat-first-workspace-product-design.md "Risk Constraints".
+    //    first-tree-context:agent-hub/web-console.md "Risk Constraints".
     const previewText = typeof outboundContent === "string" ? outboundContent.trim() : "";
     await applyAfterFanOut(tx, {
       chatId,
