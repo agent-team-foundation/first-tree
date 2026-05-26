@@ -9,8 +9,27 @@ import {
   type QuestionMessageContent,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, MoreHorizontal, Paperclip, X } from "lucide-react";
-import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  AtSign,
+  Check,
+  ExternalLink,
+  Eye,
+  MessageSquare,
+  MoreHorizontal,
+  Paperclip,
+  X,
+} from "lucide-react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { listAgents } from "../../../api/agents.js";
@@ -793,7 +812,36 @@ export function ChatView({
   }, [hasDocPreview, showSidebar]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  /**
+   * Timeline scroll behaviour — "smart stick-to-bottom" (Slack / Discord
+   * pattern). Three goals:
+   *   1. Opening a chat lands you at the latest content, including any
+   *      in-progress `tool_call`s emitted after the last forwarded message.
+   *   2. Reading history is preserved across chat switches — if you scrolled
+   *      up in chat A, swapped to chat B, then came back, you return to where
+   *      you left off (per-chat scrollTop, session-scoped).
+   *   3. New events only auto-scroll when you're already glued to the bottom;
+   *      otherwise we don't yank you away from the line you're reading.
+   *
+   * `isAtBottomRef` mirrors `isAtBottom` for use inside ResizeObserver /
+   * scroll handlers without re-binding effects on every state change.
+   * `scrollStateByChatRef` is a session-only Map<chatId, {scrollTop, isAtBottom}>
+   * — a hard refresh resets all chats back to "first visit → land at bottom".
+   * `prevChatIdRef` lets the layout effect distinguish "chat switched" from
+   * "same chat, items grew" so the latter doesn't clobber a restored scrollTop.
+   */
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollStateByChatRef = useRef<Map<string, { scrollTop: number; isAtBottom: boolean }>>(new Map());
+  const isAtBottomRef = useRef(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const prevChatIdRef = useRef<string | null>(null);
+  /**
+   * "At the bottom" tolerance in pixels. Anything within this distance of
+   * the scrollHeight floor counts as glued to the bottom — covers the
+   * sub-pixel rounding browsers introduce after `scrollHeight` updates and
+   * the few-pixel jitter from images / markdown finalising their layout.
+   */
+  const AT_BOTTOM_THRESHOLD_PX = 50;
 
   // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
   // visible lines). Same hook as the new-chat composer for a consistent
@@ -1211,11 +1259,96 @@ export function ChatView({
   }, [messagesData]);
 
   const itemCount = items.length;
+
+  /**
+   * Track user scroll position. We persist `(scrollTop, isAtBottom)` per chat
+   * so coming back to a chat restores the line you were reading. `passive`
+   * because the listener never calls preventDefault — lets the browser keep
+   * scrolling on the compositor thread.
+   */
   useEffect(() => {
-    if (itemCount > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const atBottom = distanceFromBottom <= AT_BOTTOM_THRESHOLD_PX;
+      isAtBottomRef.current = atBottom;
+      setIsAtBottom(atBottom);
+      scrollStateByChatRef.current.set(chatId, { scrollTop: container.scrollTop, isAtBottom: atBottom });
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, [chatId]);
+
+  /**
+   * Anchor the scroll position synchronously on every commit. `useLayoutEffect`
+   * (not `useEffect`) runs before paint so the user never sees a frame at the
+   * wrong scrollTop.
+   *
+   * Two distinct cases:
+   *   - Chat switched: wait until `itemCount > 0` (data has landed), then
+   *     restore the saved scrollTop, or land at the bottom for first-visit /
+   *     for chats whose last-known state was "at the bottom" (so we follow
+   *     the new floor and pick up any messages that arrived while away).
+   *   - Same chat, items grew: only follow the floor if the user was already
+   *     glued there. Otherwise stay put — never yank the viewport away from
+   *     a line they're reading.
+   *
+   * `prevChatIdRef` updates only after we've actually consumed the switch,
+   * so the loading-state-then-data-arrives path doesn't misclassify the
+   * second commit as a same-chat update.
+   */
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const isChatSwitch = prevChatIdRef.current !== chatId;
+    if (isChatSwitch) {
+      if (itemCount === 0) return;
+      prevChatIdRef.current = chatId;
+      const saved = scrollStateByChatRef.current.get(chatId);
+      if (!saved || saved.isAtBottom) {
+        container.scrollTop = container.scrollHeight;
+        isAtBottomRef.current = true;
+        setIsAtBottom(true);
+      } else {
+        container.scrollTop = saved.scrollTop;
+        const distanceFromBottom = container.scrollHeight - saved.scrollTop - container.clientHeight;
+        const atBottom = distanceFromBottom <= AT_BOTTOM_THRESHOLD_PX;
+        isAtBottomRef.current = atBottom;
+        setIsAtBottom(atBottom);
+      }
+    } else if (isAtBottomRef.current && itemCount > 0) {
+      container.scrollTop = container.scrollHeight;
     }
-  }, [itemCount]);
+  }, [chatId, itemCount]);
+
+  /**
+   * Async content (images, markdown, tool_call payloads) frequently lays out
+   * a frame or two after the React commit. The layout effect above runs once
+   * per commit and won't catch those subsequent height jumps — so we observe
+   * the inner content size and re-pin to the bottom when the user is glued
+   * there. Setting `scrollTop = scrollHeight` is a no-op when already
+   * pinned, so this is cheap.
+   */
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const inner = container.firstElementChild;
+    if (!(inner instanceof HTMLElement)) return;
+    const observer = new ResizeObserver(() => {
+      if (isAtBottomRef.current) {
+        container.scrollTop = container.scrollHeight;
+      }
+    });
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+  }, []);
 
   /**
    * Chat-scoped identity index. The chat detail endpoint resolves each
@@ -1760,94 +1893,138 @@ export function ChatView({
           Reading column inside is capped via `maxWidth` and centered to
           align with the composer below into one vertical thread. Side
           padding (sp-6) prevents content from kissing the panel border on
-          narrow viewports. */}
-          <div className="flex-1 overflow-y-auto relative" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
-            <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-              {itemCount === 0 && (
-                <div
-                  className="flex flex-col items-center text-body"
-                  style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
-                >
-                  <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
-                  {readOnly ? "No messages yet" : "Send a message to start the conversation"}
-                </div>
-              )}
-              <div className="flex flex-col" style={{ gap: 4 }}>
-                {items.map((item) => {
-                  if (item.kind === "workgroup") {
-                    // Default to folded while chatDetail is still loading — opening
-                    // a group chat's bubble for one frame and then folding it after
-                    // chatDetail resolves is worse than under-opening direct chats
-                    // by the same one-frame window.
-                    return (
-                      <WorkingBubble key={item.key} events={item.events} defaultOpen={chatDetail?.type === "direct"} />
-                    );
-                  }
-                  if (item.kind === "event") {
-                    const ev = item.data;
-                    switch (ev.kind) {
-                      case "assistant_text":
-                        return (
-                          <AssistantTextRow
-                            key={item.key}
-                            event={ev}
-                            agentId={agentId}
-                            agentNameFn={chatScopedAgentName}
-                            agentAvatarFn={agentAvatar}
-                            agentColorTokenFn={agentColorToken}
-                          />
-                        );
-                      case "error":
-                        return <ErrorRow key={item.key} event={ev} />;
-                      default:
-                        // tool_call / thinking are folded into the workgroup above;
-                        // turn_end is filtered upstream; anything else is dropped.
-                        return null;
+          narrow viewports.
+
+          Outer `relative flex flex-col` wraps the scroll viewport so the
+          stick-to-bottom floating action button can be `absolute`-positioned
+          against the viewport rectangle without scrolling along with the
+          timeline content. */}
+          <div className="flex-1 relative flex flex-col overflow-hidden">
+            <div
+              ref={scrollContainerRef}
+              className="flex-1 overflow-y-auto"
+              style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
+            >
+              <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+                {itemCount === 0 && (
+                  <div
+                    className="flex flex-col items-center text-body"
+                    style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
+                  >
+                    <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
+                    {readOnly ? "No messages yet" : "Send a message to start the conversation"}
+                  </div>
+                )}
+                <div className="flex flex-col" style={{ gap: 4 }}>
+                  {items.map((item) => {
+                    if (item.kind === "workgroup") {
+                      // Default to folded while chatDetail is still loading — opening
+                      // a group chat's bubble for one frame and then folding it after
+                      // chatDetail resolves is worse than under-opening direct chats
+                      // by the same one-frame window.
+                      return (
+                        <WorkingBubble
+                          key={item.key}
+                          events={item.events}
+                          defaultOpen={chatDetail?.type === "direct"}
+                        />
+                      );
                     }
-                  }
-                  const msg = item.data;
-                  if (msg.format === "question" && isQuestionContent(msg.content)) {
-                    const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
-                    const status: QuestionStatus = answer ? "answered" : "pending";
+                    if (item.kind === "event") {
+                      const ev = item.data;
+                      switch (ev.kind) {
+                        case "assistant_text":
+                          return (
+                            <AssistantTextRow
+                              key={item.key}
+                              event={ev}
+                              agentId={agentId}
+                              agentNameFn={chatScopedAgentName}
+                              agentAvatarFn={agentAvatar}
+                              agentColorTokenFn={agentColorToken}
+                            />
+                          );
+                        case "error":
+                          return <ErrorRow key={item.key} event={ev} />;
+                        default:
+                          // tool_call / thinking are folded into the workgroup above;
+                          // turn_end is filtered upstream; anything else is dropped.
+                          return null;
+                      }
+                    }
+                    const msg = item.data;
+                    if (msg.format === "question" && isQuestionContent(msg.content)) {
+                      const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
+                      const status: QuestionStatus = answer ? "answered" : "pending";
+                      return (
+                        <QuestionMessageRow
+                          key={item.key}
+                          msg={msg}
+                          chatId={chatId}
+                          content={msg.content}
+                          answer={answer}
+                          status={status}
+                          agentNameFn={chatScopedAgentName}
+                          agentAvatarFn={agentAvatar}
+                          agentColorTokenFn={agentColorToken}
+                        />
+                      );
+                    }
+                    if (msg.format === "question_answer") {
+                      return (
+                        <QuestionAnswerRow
+                          key={item.key}
+                          msg={msg}
+                          agentNameFn={chatScopedAgentName}
+                          agentAvatarFn={agentAvatar}
+                          agentColorTokenFn={agentColorToken}
+                        />
+                      );
+                    }
                     return (
-                      <QuestionMessageRow
+                      <TextRow
                         key={item.key}
                         msg={msg}
-                        chatId={chatId}
-                        content={msg.content}
-                        answer={answer}
-                        status={status}
+                        myAgentId={myAgentId}
                         agentNameFn={chatScopedAgentName}
                         agentAvatarFn={agentAvatar}
                         agentColorTokenFn={agentColorToken}
                       />
                     );
-                  }
-                  if (msg.format === "question_answer") {
-                    return (
-                      <QuestionAnswerRow
-                        key={item.key}
-                        msg={msg}
-                        agentNameFn={chatScopedAgentName}
-                        agentAvatarFn={agentAvatar}
-                        agentColorTokenFn={agentColorToken}
-                      />
-                    );
-                  }
-                  return (
-                    <TextRow
-                      key={item.key}
-                      msg={msg}
-                      myAgentId={myAgentId}
-                      agentNameFn={chatScopedAgentName}
-                      agentAvatarFn={agentAvatar}
-                      agentColorTokenFn={agentColorToken}
-                    />
-                  );
-                })}
+                  })}
+                </div>
               </div>
-              <div ref={messagesEndRef} />
             </div>
+            {/* Stick-to-bottom FAB. Sits in the timeline's positioning
+            wrapper (not inside the scrolling container), so it floats over
+            the viewport's bottom-right corner instead of scrolling with
+            content. Visible only when the reader has detached from the
+            floor; clicking glues us back. */}
+            {!isAtBottom && (
+              <button
+                type="button"
+                onClick={scrollToBottom}
+                aria-label="Scroll to latest"
+                title="Scroll to latest"
+                className="inline-flex items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                style={{
+                  position: "absolute",
+                  right: "var(--sp-6)",
+                  bottom: "var(--sp-3)",
+                  width: 32,
+                  height: 32,
+                  borderRadius: 999,
+                  background: "var(--bg-raised)",
+                  border: "var(--hairline) solid var(--border)",
+                  color: "var(--fg-2)",
+                  boxShadow: "var(--shadow-md)",
+                  cursor: "pointer",
+                  zIndex: 5,
+                }}
+              >
+                <ArrowDown size={16} strokeWidth={2.25} />
+              </button>
+            )}
           </div>
 
           {/* Input. Outer band keeps full-width border-top + side padding so
