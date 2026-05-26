@@ -37,7 +37,7 @@ import {
   type MeChatSourceCounts,
   type MeChatUnreadResponse,
 } from "@first-tree/shared";
-import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -442,25 +442,34 @@ export async function listMeChats(
   // (only the compose status bar does). Each signal is projected below.
   const statusByChat = await resolveAgentChatStatuses(db, chatIds, { withTurnText: false });
 
-  // Manager-scope: agent UUIDs the caller manages
+  // Manager-scope: non-human agent UUIDs the caller manages
   // (`agents.manager_id = caller.member_id`). Drives the "mine" narrowing on
   // the `failedAgentIds` / `pendingQuestionAgentIds` projections below — so a
   // watcher (or peer speaker) is no longer pinned into "Needs attention" by
-  // someone else's broken / waiting agent. The caller's own human agent has
-  // `manager_id = caller.member_id` (self-managed); harmless because human
-  // agents never produce failed sessions or pending questions.
+  // someone else's broken / waiting agent.
+  //
+  // The `ne(type, 'human')` guard excludes the caller's own human agent (which
+  // is self-managed, `manager_id = caller.member_id` per `createTestAdmin` /
+  // `createMember`). Today the downstream projection is safe regardless —
+  // `resolveAgentChatStatuses` already filters non-human, so a human agent in
+  // this set never reaches the loop. The guard is defensive: if a future
+  // change ever surfaces human statuses (e.g. an "adapter offline" signal),
+  // we don't want the caller's own human agent's main accidentally flowing
+  // into `failedAgentIds`. Belt-and-braces flagged in PR #579 review.
   //
   // One indexed read via `idx_agents_manager`. Filtering by `manager_id` alone
-  // is sufficient — `members.id` is unique per (user, org) so any agent whose
-  // manager is `callerMemberId` is necessarily in the caller's org. An extra
-  // `organization_id` clause was deliberately removed: in the (rare) case where
-  // the create-time invariant `agents.organization_id == manager.organization_id`
-  // was broken by a buggy admin path, an extra clause would silently drop a
-  // legitimate "mine" agent from attention. The read-side trusts the invariant;
-  // the write-side is where it should be enforced.
+  // (no `organization_id` clause) is sufficient — `members.id` is unique per
+  // (user, org) so any agent whose manager is `callerMemberId` is necessarily
+  // in the caller's org. An extra `organization_id` clause would silently drop
+  // a legitimate "mine" agent in the (rare) case where the create-time
+  // invariant `agents.organization_id == manager.organization_id` was broken
+  // by a buggy admin path. Read-side trusts the invariant; write-side guards.
   //
   // See docs/development/needs-attention-scoping.20260526.md.
-  const managedRows = await db.select({ uuid: agents.uuid }).from(agents).where(eq(agents.managerId, callerMemberId));
+  const managedRows = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(eq(agents.managerId, callerMemberId), ne(agents.type, "human")));
   const managedAgentIds = new Set(managedRows.map((r) => r.uuid));
 
   const liveActivityByChat = new Map<string, LiveActivity>();
