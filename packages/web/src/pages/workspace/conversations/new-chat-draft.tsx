@@ -1,6 +1,6 @@
 import { type Agent, extractMentions, type MentionParticipant } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Check, Paperclip, Plus, X } from "lucide-react";
+import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readFileAsBase64, sendChatMessage, sendFileMessage } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
@@ -59,7 +59,17 @@ import { cn } from "../../../lib/utils.js";
  * (a non-empty body or ≥1 image).
  */
 
-export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => void }) {
+export function NewChatDraft({
+  onCreated,
+  onShowConversations = null,
+}: {
+  onCreated: (chatId: string) => void;
+  /** Non-null only in narrow-viewport mode — renders a hamburger in the
+   *  top-left corner that summons the conversation-list overlay. Without
+   *  it, narrow users who land on a draft URL have no path back to their
+   *  chats (the inline rail is collapsed). */
+  onShowConversations?: (() => void) | null;
+}) {
   const queryClient = useQueryClient();
   const { agentId: myAgentId, memberId: myMemberId } = useAuth();
   const agentIdentity = useAgentIdentityMap();
@@ -413,7 +423,32 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: "var(--bg-base)" }}>
+    <div className="flex-1 flex flex-col overflow-hidden relative" style={{ background: "var(--bg-base)" }}>
+      {/* Narrow-viewport summon: parallels the hamburger in chat-view's
+          header. Anchored absolutely so we don't disturb the existing
+          centred composer layout. */}
+      {onShowConversations ? (
+        <button
+          type="button"
+          onClick={onShowConversations}
+          aria-label="Show conversations"
+          title="Show conversations"
+          className="absolute z-10 inline-flex items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+          style={{
+            top: "var(--sp-2)",
+            left: "var(--sp-2)",
+            width: 28,
+            height: 28,
+            border: 0,
+            background: "transparent",
+            borderRadius: "var(--radius-input)",
+            color: "var(--fg-3)",
+            cursor: "pointer",
+          }}
+        >
+          <Menu size={16} strokeWidth={2.25} />
+        </button>
+      ) : null}
       <div className="flex-1 flex flex-col items-center justify-center" style={{ padding: "var(--sp-6)" }}>
         <div style={{ width: "100%", maxWidth: "clamp(55rem, 75%, 70rem)" }}>
           <p className="text-title" style={{ color: "var(--fg)", textAlign: "center", marginBottom: "var(--sp-5)" }}>

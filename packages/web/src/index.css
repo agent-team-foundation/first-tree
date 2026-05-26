@@ -1373,3 +1373,14 @@ tr[data-interactive]:hover {
     animation: none;
   }
 }
+
+/* Hide the third-party hearback-widget feedback FAB on narrow viewports.
+   Matches the workspace's `narrow` breakpoint (use-viewport.ts) — at <48rem
+   the chrome collapses to tabs-only and the bottom-right bubble would
+   overlap the composer / sit on top of the home-indicator zone. The widget
+   element is injected at the end of <body> by widget.js (see index.html). */
+@media (max-width: 47.999rem) {
+  hearback-widget {
+    display: none;
+  }
+}
