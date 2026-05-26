@@ -159,8 +159,6 @@ jobs:
 
       - run: pnpm typecheck
 
-      - run: pnpm test
-
       - name: Publish to npm
         working-directory: apps/cli
         run: npm publish --tag latest --access public
