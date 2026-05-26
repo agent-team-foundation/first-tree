@@ -665,8 +665,11 @@ describe("GitMirrorManager — SSH auth failure heuristic (isLikelySshAuthFailur
     "git@github.com: Permission denied (publickey).",
     "Permission denied, please try again.",
     "Permission denied (publickey,password,keyboard-interactive).",
-    "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
-    "Host key verification failed.\nfatal: Could not read from remote repository.",
+    // Real multi-line stderr: host-key reject still classifies as auth
+    // (matched by `Host key verification failed`, not by the trailing
+    // `Could not read from remote repository` line — that line on its own
+    // is no longer a signal).
+    "Host key verification failed.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
     "Unable to negotiate with 1.2.3.4 port 22: no matching host key type found.",
     "Unable to negotiate: no mutual signature algorithm",
   ])("matches SSH credential-shaped error: %s", (msg) => {
@@ -679,6 +682,18 @@ describe("GitMirrorManager — SSH auth failure heuristic (isLikelySshAuthFailur
     "ssh: connect to host github.com port 22: Connection timed out",
     "ssh: Could not resolve hostname github.com: Name or service not known",
     "fatal: couldn't find remote ref refs/heads/missing",
+    // `fatal: Could not read from remote repository.` on its own is not an
+    // auth signal — git appends it to every SSH transport failure, including
+    // network ones. Matching it would re-classify the multi-line network
+    // cases below as auth failures and trigger a useless HTTPS retry.
+    "fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
+    // Real multi-line stderr observed when port 22 is blocked / GitHub SSH
+    // is briefly unreachable. The `Connection timed out` (or refused / DNS)
+    // line carries the real cause; the `Could not read from remote` tail
+    // is git's generic post-failure boilerplate, not an auth fingerprint.
+    "ssh: connect to host github.com port 22: Connection timed out\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
+    "ssh: connect to host github.com port 22: Connection refused\nfatal: Could not read from remote repository.",
+    "ssh: Could not resolve hostname github.com: Name or service not known\nfatal: Could not read from remote repository.",
     // HTTPS-side failures — should NOT be misclassified as SSH.
     "fatal: Authentication failed for 'https://github.com/foo/bar.git/'",
     "fatal: could not read Username for 'https://github.com'",
@@ -707,6 +722,13 @@ describe("GitMirrorManager — transient network error heuristic (isLikelyTransi
     "GnuTLS recv error (-110): The TLS connection was non-properly terminated.",
     "transfer closed with outstanding read data remaining",
     "ssh: connect to host github.com port 22: Network is unreachable",
+    // Multi-line SSH transport timeout (port 22 blocked or briefly
+    // unreachable). Real chat-reported failure shape. Used to be hidden
+    // behind the over-broad SSH auth heuristic (`Could not read from
+    // remote repository` matched as auth, suppressing transient retry);
+    // now flows through this path so the next attempt sees the network
+    // recover instead of surfacing as a `Session resume failed` to chat.
+    "ssh: connect to host github.com port 22: Connection timed out\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
     // Raw OpenSSL form for a TLS connection the peer closed mid-stream —
     // distinct from `SSL_ERROR_SYSCALL` and distinct from the cert-verify
     // failures (negative case below). Narrow pattern by design.

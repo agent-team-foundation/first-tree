@@ -309,8 +309,15 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     // shells it would block the request indefinitely instead of failing fast
     // (defeating the ssh-fallback path below). Callers can still override by
     // passing an `env` that sets `GIT_TERMINAL_PROMPT` explicitly.
+    // Force `LC_ALL=C` so git/ssh stderr stays in English regardless of the
+    // caller's locale — the credential-shape and transient-network heuristics
+    // below match against stderr substrings, and a localized message would
+    // silently break classification (and the protocol-fallback decision that
+    // hangs off it). Placed after the spread so it overrides any inherited
+    // LC_ALL from `process.env`; `GIT_TERMINAL_PROMPT` stays before the spread
+    // so tests can opt back into prompting if they need to.
     const baseEnv = env ?? process.env;
-    const finalEnv = { GIT_TERMINAL_PROMPT: "0", ...baseEnv };
+    const finalEnv = { GIT_TERMINAL_PROMPT: "0", ...baseEnv, LC_ALL: "C" };
     return await new Promise<{ stdout: string; stderr: string; elapsedMs: number }>((resolveExec, rejectExec) => {
       const proc = spawn("git", args, {
         cwd: cwd ?? undefined,
@@ -1012,11 +1019,20 @@ export function isLikelyHttpsAuthFailure(message: string): boolean {
  * Heuristic for SSH-side credential failures (no key on disk, key not
  * accepted by remote, agent has nothing usable, host key mismatch).
  *
- * Negative space (intentionally NOT matched): SSH-level network errors
- * (`Could not resolve hostname`, `Connection refused`, `Connection timed out`).
- * Those are network reachability issues — switching to HTTPS won't help
- * unless the network policy specifically blocks port 22, which is rare
- * enough that we'd rather surface the original error than guess.
+ * Negative space (intentionally NOT matched):
+ *   - SSH-level network errors (`Could not resolve hostname`,
+ *     `Connection refused`, `Connection timed out`). Those are reachability
+ *     issues — switching to HTTPS won't help unless the network policy
+ *     specifically blocks port 22, which is rare enough that we'd rather
+ *     surface the original error than guess.
+ *   - `fatal: Could not read from remote repository.` on its own. Git
+ *     appends that line to *every* SSH transport failure regardless of
+ *     cause (auth reject, timeout, DNS, refused, …), so it carries no
+ *     classification signal — matching it would re-classify network errors
+ *     as auth failures and trigger a noisy HTTPS retry that fails again on
+ *     SSH-only hosts. The real auth fingerprints below (`Permission denied`,
+ *     `Host key verification failed`, host-key/algorithm negotiation) are
+ *     specific enough on their own.
  *
  * Exported for unit testing.
  */
@@ -1029,7 +1045,6 @@ export function isLikelySshAuthFailure(message: string): boolean {
   // forms only occur in ssh auth failure context.
   return (
     /Permission denied\s*(?:\(|,)/i.test(message) ||
-    /Could not read from remote repository/i.test(message) ||
     /Host key verification failed/i.test(message) ||
     /no matching host key type/i.test(message) ||
     /no mutual signature algorithm/i.test(message)
