@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
+import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
@@ -25,8 +26,25 @@ export function Layout() {
   // own width.
   const isSettings = location.pathname.startsWith("/settings");
 
+  // Top-bar progressive collapse: at `md` (768–1279) drop the right controls
+  // (cmdk / theme / user); at `narrow` (<768) also drop the brand cluster.
+  // The four nav tabs always survive — that's the minimum viable header.
+  const viewport = useWorkspaceViewport();
+  const dropControls = viewport !== "xl";
+  const dropBrand = viewport === "narrow";
+  const headerColumns = dropBrand ? "1fr" : dropControls ? "1fr auto" : "1fr auto 1fr";
+
   return (
-    <div className="flex flex-col overflow-hidden" style={{ height: "100vh", background: "var(--bg)" }}>
+    <div
+      className="flex flex-col overflow-hidden"
+      // Double height declaration: `100vh` ships first as the universal
+      // fallback; `100dvh` overrides where supported (iOS 15.4+, Chrome
+      // 108+) so the chrome stays in sync with the dynamically-resized
+      // viewport when iOS Safari's URL bar / home indicator hides on
+      // scroll. Without the dvh, the composer slips behind the toolbar
+      // on phones.
+      style={{ height: "100vh", minHeight: "100dvh", background: "var(--bg)" }}
+    >
       {/* Top bar */}
       <header
         className="relative shrink-0 grid items-center"
@@ -35,7 +53,10 @@ export function Layout() {
           // 1fr auto 1fr keeps the centre column (tabs) anchored to the
           // page midpoint regardless of how the brand cluster grows. The
           // disconnect chip can appear/disappear without shifting tabs.
-          gridTemplateColumns: "1fr auto 1fr",
+          // When the right controls collapse (md/narrow) we drop to
+          // `1fr auto`; when the brand also collapses (narrow) we go to
+          // a single column so the tabs anchor to the left edge.
+          gridTemplateColumns: headerColumns,
           gap: "var(--sp-3)",
           padding: "0 var(--sp-3)",
           borderBottom: "var(--hairline) solid var(--border)",
@@ -43,19 +64,31 @@ export function Layout() {
         }}
       >
         {/* Brand cluster: logo + name welded together, then the optional chip. */}
-        <div className="flex items-center" style={{ gap: "var(--sp-3_5)", justifySelf: "start", minWidth: 0 }}>
-          <span className="flex items-center" style={{ gap: 10, flexShrink: 0 }}>
-            <FirstTreeLogo width={16} height={18} style={{ color: "var(--fg)" }} />
-            {/* Brand uses the `text-title` token (16 / 600 / -0.2 letter-spacing). */}
-            <span className="text-title" style={{ color: "var(--fg)" }}>
-              First Tree
+        {dropBrand ? null : (
+          <div className="flex items-center" style={{ gap: "var(--sp-3_5)", justifySelf: "start", minWidth: 0 }}>
+            <span className="flex items-center" style={{ gap: 10, flexShrink: 0 }}>
+              <FirstTreeLogo width={16} height={18} style={{ color: "var(--fg)" }} />
+              {/* Brand uses the `text-title` token (16 / 600 / -0.2 letter-spacing). */}
+              <span className="text-title" style={{ color: "var(--fg)" }}>
+                First Tree
+              </span>
             </span>
-          </span>
-          <DisconnectChip />
-        </div>
+            <DisconnectChip />
+          </div>
+        )}
 
         {/* Tabs */}
-        <nav className="flex" style={{ gap: 2, pointerEvents: "none", justifySelf: "center" }}>
+        <nav
+          className="flex"
+          style={{
+            gap: 2,
+            pointerEvents: "none",
+            // On `narrow` the header has a single column and tabs become
+            // its sole content — anchor to the start so they don't push
+            // off the right edge.
+            justifySelf: dropBrand ? "start" : "center",
+          }}
+        >
           {navTabs.map((tab) => (
             <NavLink
               key={tab.to}
@@ -84,51 +117,53 @@ export function Layout() {
           ))}
         </nav>
 
-        {/* Right controls */}
-        <div className="flex items-center" style={{ gap: 6, justifySelf: "end" }}>
-          <button
-            type="button"
-            onClick={() => setPaletteOpen(true)}
-            aria-label="Open command palette"
-            className="inline-flex items-center transition-colors text-body"
-            style={{
-              gap: 8,
-              padding: "var(--sp-1) var(--sp-3)",
-              minWidth: 200,
-              color: "var(--fg-3)",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: "var(--radius-input)",
-              background: "var(--bg-sunken)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = "var(--fg)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = "var(--fg-3)";
-            }}
-          >
-            <Search className="h-4 w-4" />
-            <span>Jump to…</span>
-          </button>
-          <span
-            style={{
-              width: 1,
-              height: 18,
-              background: "var(--border)",
-              margin: "0 var(--sp-1)",
-            }}
-          />
-          <ThemeToggle />
-          <span
-            style={{
-              width: 1,
-              height: 18,
-              background: "var(--border)",
-              margin: "0 var(--sp-1)",
-            }}
-          />
-          <UserMenu />
-        </div>
+        {/* Right controls — collapse at `md` and below. */}
+        {dropControls ? null : (
+          <div className="flex items-center" style={{ gap: 6, justifySelf: "end" }}>
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              aria-label="Open command palette"
+              className="inline-flex items-center transition-colors text-body"
+              style={{
+                gap: 8,
+                padding: "var(--sp-1) var(--sp-3)",
+                minWidth: 200,
+                color: "var(--fg-3)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-input)",
+                background: "var(--bg-sunken)",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = "var(--fg)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = "var(--fg-3)";
+              }}
+            >
+              <Search className="h-4 w-4" />
+              <span>Jump to…</span>
+            </button>
+            <span
+              style={{
+                width: 1,
+                height: 18,
+                background: "var(--border)",
+                margin: "0 var(--sp-1)",
+              }}
+            />
+            <ThemeToggle />
+            <span
+              style={{
+                width: 1,
+                height: 18,
+                background: "var(--border)",
+                margin: "0 var(--sp-1)",
+              }}
+            />
+            <UserMenu />
+          </div>
+        )}
       </header>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />

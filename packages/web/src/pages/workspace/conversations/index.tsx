@@ -96,6 +96,7 @@ export function ConversationList({
   onClearFilters,
   group,
   onGroupChange,
+  width = 320,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
@@ -106,6 +107,11 @@ export function ConversationList({
   onUnreadChange: (next: boolean) => void;
   watching: boolean;
   onWatchingChange: (next: boolean) => void;
+  /** Override the default 20rem aside width. Used by `WorkspacePage`'s
+   *  narrow-viewport overlay branch to cap to `min(88vw, 20rem)` so the
+   *  inner aside doesn't overflow the wrapper on phones narrower than
+   *  ~23rem logical (e.g. compact Android handsets). */
+  width?: number | string;
   /**
    * Multi-select origin filter. Phase B's filter popover (forthcoming
    * in the next commit) will mount its checkbox group against this
@@ -355,7 +361,7 @@ export function ConversationList({
     <aside
       className="shrink-0 flex flex-col overflow-hidden"
       style={{
-        width: 320,
+        width,
         background: "var(--bg-raised)",
         borderRight: "var(--hairline) solid var(--border)",
       }}

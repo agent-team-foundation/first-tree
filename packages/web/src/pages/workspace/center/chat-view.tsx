@@ -9,7 +9,18 @@ import {
   type QuestionMessageContent,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, AtSign, Check, ExternalLink, Eye, MessageSquare, MoreHorizontal, Paperclip, X } from "lucide-react";
+import {
+  ArrowUp,
+  AtSign,
+  Check,
+  ExternalLink,
+  Eye,
+  Menu,
+  MessageSquare,
+  MoreHorizontal,
+  Paperclip,
+  X,
+} from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -727,6 +738,8 @@ export function ChatView({
   readOnly = false,
   titleFallback,
   joinAction,
+  narrow = false,
+  onShowConversations = null,
 }: {
   agentId: string;
   chatId: string;
@@ -745,6 +758,15 @@ export function ChatView({
     joining: boolean;
     error: string | null;
   };
+  /** Workspace shell is in narrow-viewport mode (<768). Two effects:
+   *  (1) `onShowConversations` is non-null, so we render a hamburger in
+   *  the chat header; (2) the right rail, when shown, renders as an
+   *  absolute-positioned overlay over the chat instead of an inline
+   *  shrink-0 column — at 375 px logical there isn't room for both. */
+  narrow?: boolean;
+  /** Non-null only in narrow mode. Invoking it summons the conversation-
+   *  list overlay (which lives in `WorkspacePage`). */
+  onShowConversations?: (() => void) | null;
 }) {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2060,8 +2082,11 @@ export function ChatView({
           Putting the header inside the left column makes its reading-
           column centre share the same base as timeline/composer, so the
           title's left edge naturally aligns with the message avatars
-          regardless of whether the right rail is open. */}
-      <div className="flex-1 flex overflow-hidden">
+          regardless of whether the right rail is open. `relative` is the
+          anchor for the narrow-viewport overlay variants of the right
+          rail and its scrim — no effect on wider viewports where both
+          render as inline siblings. */}
+      <div className="flex-1 flex overflow-hidden relative">
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           {/* Chat header — content centred in a reading column that's now
           measured against the left column rather than the full panel.
@@ -2097,6 +2122,31 @@ export function ChatView({
                 gap: 10,
               }}
             >
+              {/* Narrow-viewport summon: header lost the brand cluster and
+                  the conversation list collapsed out of the inline shell.
+                  This hamburger is the only way to get back to the chat
+                  list, so it sits at the very left of the chat header
+                  (i.e. the visible left edge of the workspace). */}
+              {onShowConversations ? (
+                <button
+                  type="button"
+                  onClick={onShowConversations}
+                  aria-label="Show conversations"
+                  title="Show conversations"
+                  className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                  style={{
+                    width: 28,
+                    height: 28,
+                    border: 0,
+                    background: "transparent",
+                    borderRadius: "var(--radius-input)",
+                    color: "var(--fg-3)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Menu size={16} strokeWidth={2.25} />
+                </button>
+              ) : null}
               {/* Identity — title is the sole click-to-rename affordance
               (Slack / Linear pattern). The hover-only ✏️ pencil was
               dropped after the title itself became clickable: two
@@ -2471,11 +2521,13 @@ export function ChatView({
           Composer card inside is capped via `maxWidth` and centered, so it
           aligns vertically with the timeline column above — eye tracks
           from last message into textarea without a horizontal jump
-          (Slack / ChatGPT / Linear DM all do this). */}
+          (Slack / ChatGPT / Linear DM all do this). On phones, the
+          bottom padding extends past `env(safe-area-inset-bottom)` so
+          the home-indicator doesn't overlap the send button. */}
           <div
             className="shrink-0"
             style={{
-              padding: "var(--sp-2_5) var(--sp-6) var(--sp-3)",
+              padding: "var(--sp-2_5) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
             }}
           >
             <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
@@ -2820,15 +2872,43 @@ export function ChatView({
           </div>
         </div>
         {showSidebar ? (
-          <ChatRightSidebar
-            chatId={chatId}
-            participants={chatDetail?.participants ?? []}
-            participantsLoading={chatDetailLoading}
-            managedByMe={managedByMeMap}
-            onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-            onClose={() => setShowSidebar(false)}
-            readOnly={readOnly}
-          />
+          narrow ? (
+            // Narrow viewport: rail floats over the chat instead of
+            // pushing it aside. A scrim catches outside-clicks for
+            // dismissal — Esc still works via the existing key handler
+            // bound earlier in this component.
+            <>
+              <button
+                type="button"
+                aria-label="Dismiss"
+                onClick={() => setShowSidebar(false)}
+                className="absolute inset-0 z-20"
+                style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
+              />
+              <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
+                <ChatRightSidebar
+                  chatId={chatId}
+                  participants={chatDetail?.participants ?? []}
+                  participantsLoading={chatDetailLoading}
+                  managedByMe={managedByMeMap}
+                  onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                  onClose={() => setShowSidebar(false)}
+                  readOnly={readOnly}
+                  width="min(88vw, 20rem)"
+                />
+              </div>
+            </>
+          ) : (
+            <ChatRightSidebar
+              chatId={chatId}
+              participants={chatDetail?.participants ?? []}
+              participantsLoading={chatDetailLoading}
+              managedByMe={managedByMeMap}
+              onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+              onClose={() => setShowSidebar(false)}
+              readOnly={readOnly}
+            />
+          )
         ) : null}
       </div>
     </div>

@@ -19,9 +19,19 @@ import { NoChatView } from "./no-chat-view.js";
 export function CenterPanel({
   selectedChatId,
   onSelectChat,
+  narrow,
+  onShowConversations,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
+  /** True when the workspace shell is in narrow-viewport mode (<768).
+   *  Propagated to `ChatView` so it can swap the right rail to an
+   *  overlay and surface the conv-list summon button. */
+  narrow: boolean;
+  /** Non-null only in narrow mode — invoking this opens the
+   *  conversation-list overlay. ChatView renders a hamburger button
+   *  in its header when provided. */
+  onShowConversations: (() => void) | null;
 }) {
   const { organizationId } = useAuth();
 
@@ -33,11 +43,17 @@ export function CenterPanel({
     // a uuid from the previous org could stay in the cache and silently
     // resolve a new-org `@bob` to a stranger; the server then 4xxs the
     // chat create with a confusing visibility error.
-    return <NewChatDraft key={organizationId ?? "no-org"} onCreated={onSelectChat} />;
+    return (
+      <NewChatDraft
+        key={organizationId ?? "no-org"}
+        onCreated={onSelectChat}
+        onShowConversations={onShowConversations}
+      />
+    );
   }
 
   if (selectedChatId) {
-    return <ChatByIdView chatId={selectedChatId} />;
+    return <ChatByIdView chatId={selectedChatId} narrow={narrow} onShowConversations={onShowConversations} />;
   }
 
   return <NoChatView onNewChat={() => onSelectChat(DRAFT_CHAT_ID)} />;
