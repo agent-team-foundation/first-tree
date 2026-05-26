@@ -8,7 +8,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, CornerDownLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
-import { viewOf } from "../../lib/agent-status-view.js";
+import { useNow } from "../../hooks/use-now.js";
+import { clearStaleWorking, viewOf } from "../../lib/agent-status-view.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
@@ -38,6 +39,9 @@ import { formatElapsed } from "./working-chip.js";
  * (React-Query-deduped, admin-WS-live, ~1s-throttled).
  */
 const ATTENTION: ReadonlySet<string> = new Set(["needs_you", "failed", "working"]);
+/** Stable empty default so `clearStaleWorking(statuses ?? EMPTY_STATUSES, now)`
+ *  keeps a stable array ref across ticks while the query is still loading. */
+const EMPTY_STATUSES: AgentChatStatus[] = [];
 const TICK_INTERVAL_MS = 1000;
 const LEAD_HOLD_MS = 4000;
 const EXPANDED_MAX_HEIGHT = 180;
@@ -130,28 +134,34 @@ export function ComposeStatusBar({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
-  const { data: statuses, dataUpdatedAt } = useQuery({
+  const { data: statuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000,
   });
   const mounted = useMountedAnchors();
+  // 1s ticker self-clears a "working" lead whose activity has gone stale (no new
+  // event past `staleAt`) — re-deriving `main` locally so the bar drops it at
+  // expiry instead of waiting for the 30s refetch. `clearStaleWorking` returns
+  // the same array ref when nothing is stale, so this is render-cheap.
+  const now = useNow(TICK_INTERVAL_MS);
+  const liveStatuses = clearStaleWorking(statuses ?? EMPTY_STATUSES, now);
 
-  // Re-pick the lead on every data update, and once more after the hold could
-  // expire (so a steadily most-recent agent can take over even with no new
-  // data). pickLead is pure; the timer just lets the hold lapse.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: statuses is keyed by dataUpdatedAt
+  // Re-pick the lead whenever the (stale-cleared) status set changes, and once
+  // more after the hold could expire so a steadily most-recent agent can take
+  // over even with no new data. pickLead is pure; the timer just lets the hold
+  // lapse.
   useEffect(() => {
-    const attention = selectAttention(statuses ?? []);
+    const attention = selectAttention(liveStatuses);
     const alerts = attention.filter(isAlert);
     const working = attention.filter((s) => s.main === "working");
     const repick = () => setLead((prev) => pickLead(prev, Date.now(), alerts, working, LEAD_HOLD_MS));
     repick();
     const t = setTimeout(repick, LEAD_HOLD_MS);
     return () => clearTimeout(t);
-  }, [dataUpdatedAt]);
+  }, [liveStatuses]);
 
-  const attention = selectAttention(statuses ?? []);
+  const attention = selectAttention(liveStatuses);
   if (attention.length === 0) return null; // all quiet → hidden
 
   // Resolve the held lead to a live row; fall back to the top of `attention`
@@ -295,11 +305,21 @@ function WorkingDetail({ activity }: { activity: LiveActivity | null }) {
   );
 }
 
-/** "Thinking" (sans), the assistant reply preview ("…what the agent is saying",
- *  falling back to "Writing" when the block is empty), or "Using <tool> · <arg>"
- *  (sans word + mono tool/arg). Both previews are already truncated server-side;
- *  the reply preview is additionally width-capped so it reads as a glance. */
+/** The current turn's running narration (`turnText`, sticky across tool calls)
+ *  when present; else "Thinking", the latest assistant reply preview (falling
+ *  back to "Writing"), or "Using <tool> · <arg>" (sans word + mono tool/arg).
+ *  The narration / reply previews are truncated server-side and width-capped
+ *  here so they read as a glance. */
 function ActivityText({ activity }: { activity: LiveActivity }) {
+  // Sticky narration: the current turn's running reply text takes precedence
+  // over the tool_call / thinking indicator, so a tool call fired right after a
+  // sentence doesn't bury what the agent is saying.
+  if (activity.turnText)
+    return (
+      <span className="truncate" style={{ maxWidth: ASSISTANT_PREVIEW_MAX_WIDTH }}>
+        {activity.turnText}
+      </span>
+    );
   if (activity.kind === "thinking") return <span className="truncate">Thinking</span>;
   if (activity.kind === "assistant_text")
     return (

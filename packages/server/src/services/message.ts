@@ -16,6 +16,24 @@ import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from ".
 
 const log = createLogger("message");
 
+/**
+ * Metadata keys reserved for trusted-internal write paths. Stripped from
+ * untrusted-caller input (any send that doesn't opt in) so an HTTP POST
+ * cannot smuggle a UI-trust marker into a regular message — see the
+ * `allowSystemSender` field on `SendMessageOptions` for the threat model.
+ *
+ * Returns the same reference when nothing is stripped, so the common case
+ * (no reserved keys present) does not allocate.
+ */
+function stripUntrustedMetadataKeys(
+  meta: Record<string, unknown>,
+  options: SendMessageOptions,
+): Record<string, unknown> {
+  if (options.allowSystemSender || !("systemSender" in meta)) return meta;
+  const { systemSender: _drop, ...rest } = meta;
+  return rest;
+}
+
 export type SendMessageResult = {
   message: typeof messages.$inferSelect;
   /** Inbox IDs that received this message (for notification). */
@@ -89,6 +107,20 @@ export type SendMessageOptions = {
    * when no explicit declaration was made.
    */
   extractMentionsFromContent?: boolean;
+  /**
+   * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
+   * uses that key to re-attribute a row to a synthetic "GitHub" sender
+   * (avatar + name override) instead of the row's actual `senderId`. To
+   * prevent a non-dispatcher caller (HTTP POST from web / agent SDK) from
+   * smuggling the same marker into an ordinary message — which would let
+   * an arbitrary agent post a phishing message that renders as if from
+   * GitHub — the service unconditionally strips the key from
+   * `data.metadata` when this option is not set. Only
+   * `github-delivery.deliverNormalizedEvent` is expected to set this to
+   * `true`. Defense-in-depth alongside the conjunctive UI trust gate in
+   * `github-event-card.tsx#isTrustedGithubDispatcherMessage`.
+   */
+  allowSystemSender?: boolean;
 };
 
 export async function sendMessage(
@@ -198,7 +230,7 @@ async function sendMessageInner(
     //     where the typed message is the sole source of routing intent.
     //     Agent / programmatic callers leave this off so a narrative
     //     `@<peer>` in content never silently wakes anyone.
-    const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+    const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
     // Server-side bottom-line on `metadata.documentContext`: shape via shared
     // schema + byte budgets and sha256 calibration. Snapshot content arrives
     // from a trusted runtime, but server still has to verify so a client bug

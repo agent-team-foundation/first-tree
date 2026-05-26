@@ -1,10 +1,11 @@
 import { CHAT_SOURCES, type ChatEngagementView, type ChatSource, chatEngagementViewSchema } from "@first-tree/shared";
 import { useCallback, useEffect } from "react";
-import { useSearchParams } from "react-router";
+import { Navigate, useSearchParams } from "react-router";
+import { useAuth } from "../../auth/auth-context.js";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
+import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { CenterPanel } from "./center/index.js";
-import { OnboardingStepper } from "./center/onboarding-stepper.js";
 import { type GroupMode, parseGroupMode } from "./conversations/group-rows.js";
 import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
 
@@ -95,6 +96,7 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt } = useAuth();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const legacySource = searchParams.get("source");
@@ -208,6 +210,14 @@ export function WorkspacePage() {
     setSearchParams(nextParamsForClearFilters(searchParams), { replace: true });
   }, [searchParams, setSearchParams]);
 
+  // Users who haven't finished setup go through the standalone /onboarding
+  // flow — including the server-`completed`-but-no-kickoff case. Only
+  // terminally completed or dismissed users fall through to the normal
+  // workspace; the old inline center-panel onboarding has been retired.
+  if (shouldEnterOnboarding({ meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt })) {
+    return <Navigate to="/onboarding" replace />;
+  }
+
   return (
     <div className="flex flex-1 overflow-hidden">
       <ConversationList
@@ -230,10 +240,6 @@ export function WorkspacePage() {
       />
 
       <main className="flex-1 flex flex-col overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>
-        {/* Stepper sits above CenterPanel only, not above the rail
-            (docs/new-user-onboarding-design.md §4.1). It self-renders
-            nothing when the user has dismissed onboarding. */}
-        <OnboardingStepper />
         <CenterPanel selectedChatId={selectedChatId} onSelectChat={selectChat} />
       </main>
       <DocPreviewDrawer />

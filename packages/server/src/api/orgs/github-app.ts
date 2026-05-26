@@ -24,12 +24,32 @@ import { buildCookie } from "../auth/oauth-cookie.js";
 
 /**
  * Where the post-install OAuth callback lands the user once the install
- * dialog is done — back on the Settings → GitHub panel so it can
+ * dialog is done. Default: back on the Settings → GitHub panel so it can
  * re-render with the now-bound installation. The callback resolves the
  * actual destination from the signed state JWT, not from a query param,
  * so this is tamper-proof.
  */
 const POST_INSTALL_NEXT = "/settings/github";
+
+/**
+ * Internal paths the install flow is allowed to return to. The onboarding
+ * flow surfaces the App-install CTA too (the only reliable `installations/new`
+ * entry), and wants the user back in setup rather than dumped on Settings.
+ * Allowlisted — never reflect a caller-supplied path verbatim into the
+ * signed redirect, so a crafted `?next=` can't become an open redirect.
+ */
+export const ALLOWED_POST_INSTALL_NEXT: ReadonlySet<string> = new Set([POST_INSTALL_NEXT, "/onboarding"]);
+
+/**
+ * Resolve the post-install redirect destination from a caller-supplied
+ * `?next=`. Anything not on the allowlist falls back to the Settings
+ * default — the value is baked into the signed OAuth state and honored by
+ * the callback without re-validation, so it must never reflect an arbitrary
+ * path (open-redirect / phishing surface). Exported for unit testing.
+ */
+export function resolvePostInstallNext(requested: string | undefined): string {
+  return requested && ALLOWED_POST_INSTALL_NEXT.has(requested) ? requested : POST_INSTALL_NEXT;
+}
 
 /**
  * Class B — `/api/v1/orgs/:orgId/github-app-installation`.
@@ -102,7 +122,7 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // GitHub shows the install dialog, the user picks repos, GitHub
   // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`,
   // and the callback verifies the state cookie + binds the install.
-  app.get<{ Params: { orgId: string } }>("/install-url", async (request, reply) => {
+  app.get<{ Params: { orgId: string }; Querystring: { next?: string } }>("/install-url", async (request, reply) => {
     // Admin-gated: the resolved scope is the org the install binds to.
     const scope = await requireOrgAdmin(request, app.db);
     const appCfg = app.config.oauth?.githubApp;
@@ -121,9 +141,13 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
     // primary org (codex P1-3) — an admin in org B installing the App must
     // end up bound to org B. The callback re-checks the caller is still an
     // admin of that org before honoring it.
-    const { token, nonce } = await signOAuthState(app.config.secrets.jwtSecret, POST_INSTALL_NEXT, {
-      targetOrganizationId: scope.organizationId,
-    });
+    const { token, nonce } = await signOAuthState(
+      app.config.secrets.jwtSecret,
+      resolvePostInstallNext(request.query.next),
+      {
+        targetOrganizationId: scope.organizationId,
+      },
+    );
     reply.header(
       "Set-Cookie",
       buildCookie({

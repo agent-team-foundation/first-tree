@@ -20,8 +20,6 @@ import { randomUUID } from "node:crypto";
 import {
   type AddMeChatParticipants,
   AGENT_VISIBILITY,
-  ASSISTANT_TEXT_PREVIEW_MAX,
-  type AssistantTextEventPayload,
   CHAT_ENGAGEMENT_STATUSES,
   type ChatEngagementStatus,
   type ChatEngagementView,
@@ -29,7 +27,6 @@ import {
   type CreateMeChat,
   GITHUB_ENTITY_TYPES,
   type GithubEntityType,
-  LIVE_ACTIVITY_STALE_MS,
   type ListMeChatSourceCountsQuery,
   type ListMeChatsQuery,
   type ListMeChatsResponse,
@@ -39,20 +36,17 @@ import {
   type MeChatRow,
   type MeChatSourceCounts,
   type MeChatUnreadResponse,
-  type ToolCallEventPayload,
 } from "@first-tree/shared";
-import { and, eq, inArray, isNotNull, ne, or, type SQL, sql } from "drizzle-orm";
+import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
-import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
-import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
-import { pendingQuestions } from "../db/schema/pending-questions.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { agentAvatarImageUrl } from "./agent.js";
+import { resolveAgentChatStatuses } from "./agent-chat-status.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { addChatParticipants } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
@@ -399,18 +393,9 @@ export async function listMeChats(
 
   const chatIds = pageRaw.map((r) => r.chat_id);
 
-  // Lookup participants (speakers only — watchers do not appear in
-  // the conversation row's participant chip list). The leftJoin to
-  // `agent_chat_sessions` is keyed on BOTH (agent_id, chat_id) so each
-  // row sees the session state for *this* chat — never another chat the
-  // same agent happens to speak in. PK on agent_chat_sessions is
-  // (agent_id, chat_id), so the join is a row-by-row PK lookup with no
-  // extra index needed.
-  //
-  // The previous implementation joined `agent_presence.runtime_state`
-  // (agent-global). That made `workingAgentIds` light up on every chat
-  // an agent participated in whenever it worked in any one of them —
-  // the cross-chat false-positive #366 self-described as "Option A".
+  // Lookup participants (speakers only — watchers do not appear in the
+  // conversation row's participant chip list). Drives the participant chips
+  // AND the per-chat non-human speaker set the status projections filter on.
   const participantRows = await db
     .select({
       chatId: chatMembership.chatId,
@@ -419,18 +404,15 @@ export async function listMeChats(
       type: agents.type,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
-      sessionState: agentChatSessions.state,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .leftJoin(
-      agentChatSessions,
-      and(eq(agentChatSessions.agentId, chatMembership.agentId), eq(agentChatSessions.chatId, chatMembership.chatId)),
-    )
     .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker")));
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
-  const engagedByChat = new Map<string, string[]>();
+  // Per-chat non-human speaker set — the filter for the failed / live-dot
+  // projections below (pending is intentionally NOT speaker-filtered).
+  const nonHumanSpeakersByChat = new Map<string, Set<string>>();
   for (const p of participantRows) {
     const list = participantsByChat.get(p.chatId) ?? [];
     list.push({
@@ -448,33 +430,48 @@ export async function listMeChats(
       avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt),
     });
     participantsByChat.set(p.chatId, list);
-    if (p.sessionState === "active") {
-      const engaged = engagedByChat.get(p.chatId) ?? [];
-      engaged.push(p.agentId);
-      engagedByChat.set(p.chatId, engaged);
+    if (p.type !== "human") {
+      let s = nonHumanSpeakersByChat.get(p.chatId);
+      if (!s) {
+        s = new Set();
+        nonHumanSpeakersByChat.set(p.chatId, s);
+      }
+      s.add(p.agentId);
     }
   }
 
-  // Live activity — derived from each chat's latest `session_events` row.
-  // One LATERAL JOIN seeks the latest event per (agent, chat) pair via
-  // the unique index `uq_session_events_chat_seq (agent_id, chat_id,
-  // seq)`. See `deriveLiveActivity` for the query shape and the index
-  // notes. Stale events (older than `LIVE_ACTIVITY_STALE_MS`) and
-  // turn-terminal kinds (`turn_end`, `error`) are filtered out at
-  // derivation time so the wire payload already represents "is
-  // currently working".
-  const liveActivityByChat = await deriveLiveActivity(db, chatIds);
+  // One producer for every per-(agent,chat) status signal this list needs
+  // (live-dot / failed / needs-you), shared with `GET /chats/:id/agent-status`.
+  // `withTurnText: false` — the chat-list never renders the turn narration
+  // (only the compose status bar does). Each signal is projected below.
+  const statusByChat = await resolveAgentChatStatuses(db, chatIds, { withTurnText: false });
 
-  // needs-you — per-chat set of agents with a pending AskUserQuestion. One
-  // indexed lookup on `pending_questions (chat_id, status)`. The authority
-  // is the server-side `pending_questions` table (not a client-side
-  // message scan), so superseded/answered questions are correctly excluded.
-  const pendingByChat = await derivePendingQuestions(db, chatIds);
-
-  // failed — per-chat set of agents whose composite status is `failed`
-  // (reachable + session errored OR runtime error). Mirrors the chat-list
-  // needs-you signal so the list can pin failed chats above needs-you.
-  const failedByChat = await deriveFailedAgents(db, chatIds);
+  const liveActivityByChat = new Map<string, LiveActivity>();
+  const failedByChat = new Map<string, string[]>();
+  const pendingByChat = new Map<string, string[]>();
+  for (const [chatId, statuses] of statusByChat) {
+    const speakers = nonHumanSpeakersByChat.get(chatId);
+    // live-dot: freshest activity among non-human SPEAKERS. (Narrowed from the
+    // old session-holder source — drops stray dots from agents that left the
+    // chat, and never lights for a human predictive-active session.)
+    let freshest: { activity: LiveActivity; startedMs: number } | null = null;
+    const failed: string[] = [];
+    const pending: string[] = [];
+    for (const s of statuses) {
+      const isSpeaker = speakers?.has(s.agentId) ?? false;
+      if (isSpeaker && s.activity) {
+        const startedMs = new Date(s.activity.startedAt).getTime();
+        if (!freshest || startedMs > freshest.startedMs) freshest = { activity: s.activity, startedMs };
+      }
+      if (isSpeaker && s.main === "failed") failed.push(s.agentId);
+      // pending is NOT speaker-filtered (matches the prior derivePendingQuestions
+      // surface: a pending agent that has since left the chat still counts).
+      if (s.needsYou) pending.push(s.agentId);
+    }
+    if (freshest) liveActivityByChat.set(chatId, freshest.activity);
+    if (failed.length > 0) failedByChat.set(chatId, failed);
+    if (pending.length > 0) pendingByChat.set(chatId, pending);
+  }
 
   // First-message lookup for auto-title fallback. Mirrors
   // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
@@ -524,7 +521,6 @@ export async function listMeChats(
       unreadMentionCount: r.unread_mention_count,
       canReply: isSpeaker,
       engagementStatus: r.engagement_status,
-      engagedAgentIds: engagedByChat.get(r.chat_id) ?? [],
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
       pendingQuestionAgentIds: pendingByChat.get(r.chat_id) ?? [],
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
@@ -532,250 +528,6 @@ export async function listMeChats(
   });
 
   return { rows, nextCursor };
-}
-
-/**
- * Per-chat set of agent ids with a PENDING question (`pending_questions`
- * status = 'pending'), grouped chatId → agentId[]. Chats with no pending
- * question are absent from the map (caller treats absence as []). One
- * indexed read via `idx_pending_questions_chat_status`.
- */
-export async function derivePendingQuestions(db: Database, chatIds: string[]): Promise<Map<string, string[]>> {
-  if (chatIds.length === 0) return new Map();
-  const rows = await db
-    .select({ chatId: pendingQuestions.chatId, agentId: pendingQuestions.agentId })
-    .from(pendingQuestions)
-    .where(and(inArray(pendingQuestions.chatId, chatIds), eq(pendingQuestions.status, "pending")));
-  // Dedupe per chat: one agent may have several pending questions in the
-  // same chat, but the field is "agents with a pending question" (a set), so
-  // a future count / "+N" must not over-count.
-  const sets = new Map<string, Set<string>>();
-  for (const row of rows) {
-    const set = sets.get(row.chatId);
-    if (set) set.add(row.agentId);
-    else sets.set(row.chatId, new Set([row.agentId]));
-  }
-  const out = new Map<string, string[]>();
-  for (const [chatId, set] of sets) out.set(chatId, [...set]);
-  return out;
-}
-
-/**
- * Per-chat set of non-human speaker agents whose composite status is `failed`,
- * grouped chatId → agentId[]. `failed` = reachable (`agent_presence.client_id`
- * not null) AND (per-(agent,chat) session `errored` OR global runtime `error`)
- * — the exact `errored` input `getChatAgentStatuses` folds into `failed`
- * (agent-chat-status.ts:78). The reachable gate matters: an unreachable
- * errored agent is `offline` (higher priority), not `failed`, so the chat-list
- * pin stays consistent with the right sidebar. Chats with no failed agent are
- * absent from the map (caller treats absence as []).
- */
-export async function deriveFailedAgents(db: Database, chatIds: string[]): Promise<Map<string, string[]>> {
-  if (chatIds.length === 0) return new Map();
-  const rows = await db
-    .select({ chatId: chatMembership.chatId, agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .leftJoin(
-      agentChatSessions,
-      and(eq(agentChatSessions.chatId, chatMembership.chatId), eq(agentChatSessions.agentId, chatMembership.agentId)),
-    )
-    .leftJoin(agentPresence, eq(agentPresence.agentId, chatMembership.agentId))
-    .where(
-      and(
-        inArray(chatMembership.chatId, chatIds),
-        eq(chatMembership.accessMode, "speaker"),
-        ne(agents.type, "human"),
-        isNotNull(agentPresence.clientId),
-        or(eq(agentChatSessions.state, "errored"), eq(agentPresence.runtimeState, "error")),
-      ),
-    );
-  // Dedupe per chat: an agent could match on both session-errored and
-  // runtime-error; the field is "agents that are failed" (a set).
-  const sets = new Map<string, Set<string>>();
-  for (const row of rows) {
-    const set = sets.get(row.chatId);
-    if (set) set.add(row.agentId);
-    else sets.set(row.chatId, new Set([row.agentId]));
-  }
-  const out = new Map<string, string[]>();
-  for (const [chatId, set] of sets) out.set(chatId, [...set]);
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Live activity derivation
-// ---------------------------------------------------------------------------
-
-/**
- * Per-chat live activity, derived from the most recent `session_events` row.
- *
- * Returns a chatId → LiveActivity map; chats with no activity (or where the
- * latest event is terminal / stale) are absent from the map (caller treats
- * absence as null).
- */
-export async function deriveLiveActivity(db: Database, chatIds: string[]): Promise<Map<string, LiveActivity>> {
-  if (chatIds.length === 0) return new Map();
-
-  // Per-pair seek via LATERAL: `agent_chat_sessions` is the (agent_id,
-  // chat_id) directory (PK = the same pair). For each pair we look up
-  // *the* newest event via the unique index `uq_session_events_chat_seq
-  // (agent_id, chat_id, seq)` — a backward index scan with `LIMIT 1`
-  // costs one B-tree descent per pair, independent of how many events
-  // the pair has accumulated.
-  //
-  // The naive shape `SELECT DISTINCT ON ... FROM session_events WHERE
-  // chat_id = ANY(?)` (see PR #378 review thread) cannot use either
-  // index as a seek because both lead with `agent_id`; it degrades to a
-  // full scan + sort. The LATERAL form is independent of session_events
-  // table size and stays cheap as the table grows.
-  //
-  // `state <> 'evicted'` is defensive — evicted sessions trigger
-  // `clearEvents` so they shouldn't have rows, but a half-completed
-  // eviction would otherwise surface stale chips here.
-  // `IN (${sql.join(...)})` rather than `= ANY($1::text[])` because
-  // postgres-js binds `string[]` as a flat string when the driver-level
-  // type hint resolves to `text[]`, which PG rejects (`malformed array
-  // literal`). Inlining each value as its own placeholder is equivalent
-  // shape-wise and sidesteps the binding mismatch.
-  const chatIdInClause = sql.join(
-    chatIds.map((id) => sql`${id}`),
-    sql`, `,
-  );
-  const rawRows = (await db.execute(sql`
-    SELECT acs.agent_id        AS agent_id,
-           acs.chat_id         AS chat_id,
-           e.kind              AS kind,
-           e.payload           AS payload,
-           e.created_at        AS created_at
-      FROM agent_chat_sessions acs
-      CROSS JOIN LATERAL (
-        SELECT kind, payload, created_at, seq
-          FROM session_events se
-         WHERE se.agent_id = acs.agent_id
-           AND se.chat_id  = acs.chat_id
-         ORDER BY se.seq DESC
-         LIMIT 1
-      ) e
-     WHERE acs.chat_id IN (${chatIdInClause})
-       AND acs.state <> 'evicted'
-  `)) as unknown as Array<{
-    agent_id: string;
-    chat_id: string;
-    kind: string;
-    payload: unknown;
-    created_at: Date | string;
-  }>;
-  const rows = rawRows.map((r) => ({
-    agent_id: r.agent_id,
-    chat_id: r.chat_id,
-    kind: r.kind,
-    payload: r.payload,
-    created_at: r.created_at,
-  }));
-
-  const now = Date.now();
-  const byChat = new Map<string, { activity: LiveActivity; createdAtMs: number }>();
-  for (const row of rows) {
-    const activity = toLiveActivity(row);
-    if (!activity) continue;
-    const createdAtMs = new Date(row.created_at).getTime();
-    if (now - createdAtMs > LIVE_ACTIVITY_STALE_MS) continue;
-    // Multiple agents may produce events for the same chat — keep the
-    // freshest one. DISTINCT ON already collapses per (agent, chat) pair;
-    // here we collapse across agents within the same chat.
-    const existing = byChat.get(row.chat_id);
-    if (!existing || createdAtMs > existing.createdAtMs) {
-      byChat.set(row.chat_id, { activity, createdAtMs });
-    }
-  }
-
-  const out = new Map<string, LiveActivity>();
-  for (const [chatId, { activity }] of byChat) out.set(chatId, activity);
-  return out;
-}
-
-/** Max length of the tool-arg preview surfaced in `LiveActivity.detail`. */
-const ARG_PREVIEW_MAX = 32;
-
-/**
- * Best-effort short preview of a tool call's args, for the compose status bar's
- * `Using Bash · npm test` detail. Picks a meaningful field for common tools
- * (command / path / query / …), else stringifies; whitespace-collapsed and
- * truncated to {@link ARG_PREVIEW_MAX}. Returns undefined when there's nothing
- * useful to show. Exported for unit testing.
- */
-export function previewToolArgs(args: unknown): string | undefined {
-  let raw: string | undefined;
-  if (typeof args === "string") {
-    raw = args;
-  } else if (args && typeof args === "object") {
-    const o = args as Record<string, unknown>;
-    // Only fields that hold an *argument value* the user would recognise. NOT
-    // `description` (that's a tool's self-description, not what it's running);
-    // the JSON.stringify fallback below covers tools with no recognised field.
-    const pick = o.command ?? o.cmd ?? o.file_path ?? o.path ?? o.pattern ?? o.query ?? o.url;
-    if (typeof pick === "string") raw = pick;
-    else if (Object.keys(o).length > 0) raw = JSON.stringify(o); // empty {} → no detail
-  }
-  if (!raw) return undefined;
-  const oneLine = raw.replace(/\s+/g, " ").trim();
-  if (oneLine.length === 0) return undefined;
-  return oneLine.length > ARG_PREVIEW_MAX ? `${oneLine.slice(0, ARG_PREVIEW_MAX - 1)}…` : oneLine;
-}
-
-/**
- * One-line preview of an assistant text block for the compose status bar's
- * liveness detail. Whitespace-collapsed and hard-capped to
- * {@link ASSISTANT_TEXT_PREVIEW_MAX} — no trailing "…" is added, since the
- * rail's CSS owns the visible ellipsis. Returns undefined for an empty /
- * whitespace-only block so the status bar falls back to the static "Writing".
- * Exported for unit testing.
- */
-export function previewAssistantText(text: unknown): string | undefined {
-  if (typeof text !== "string") return undefined;
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  if (oneLine.length === 0) return undefined;
-  return oneLine.slice(0, ASSISTANT_TEXT_PREVIEW_MAX);
-}
-
-/**
- * Translate a `session_events` row into a `LiveActivity`, or null when the
- * kind is terminal (`turn_end` / `error`) or unrecognised. Pure & exported
- * for unit testing.
- */
-export function toLiveActivity(row: {
-  agent_id: string;
-  chat_id: string;
-  kind: string;
-  payload: unknown;
-  created_at: Date | string;
-}): LiveActivity | null {
-  const startedAt = new Date(row.created_at).toISOString();
-  switch (row.kind) {
-    case "tool_call": {
-      const payload = (row.payload ?? {}) as Partial<ToolCallEventPayload>;
-      const label = typeof payload.name === "string" && payload.name.length > 0 ? payload.name : "Tool";
-      const detail = previewToolArgs(payload.args);
-      return { agentId: row.agent_id, kind: "tool_call", label, startedAt, ...(detail ? { detail } : {}) };
-    }
-    case "thinking":
-      return { agentId: row.agent_id, kind: "thinking", label: "Thinking", startedAt };
-    case "assistant_text": {
-      const payload = (row.payload ?? {}) as Partial<AssistantTextEventPayload>;
-      const detail = previewAssistantText(payload.text);
-      return {
-        agentId: row.agent_id,
-        kind: "assistant_text",
-        label: "Writing",
-        startedAt,
-        ...(detail ? { detail } : {}),
-      };
-    }
-    default:
-      // turn_end / error / unknown → no live indicator
-      return null;
-  }
 }
 
 /**

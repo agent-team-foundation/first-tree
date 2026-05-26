@@ -546,11 +546,21 @@ export class SessionManager {
       //    internals) into the chat timeline; the full error is in the
       //    structured log. The web `ErrorRow` renders these with distinct
       //    error styling and a "session start/resume failed" header.
-      const preview = errMsg.slice(0, 800);
-      ctx.emitEvent({
-        kind: "error",
-        payload: { source: "runtime", message: `Session ${phase} failed: ${preview}` },
-      });
+      //
+      //    Wrap in try/catch so a broken `onSessionEvent` callback
+      //    (e.g. agent-slot reporting fails because the WS just dropped)
+      //    can't shortcut the local cleanup that follows — leaving the
+      //    chat in a half-torn-down state would block the next inbound
+      //    message from routing as a clean fresh-start.
+      try {
+        const preview = errMsg.slice(0, 800);
+        ctx.emitEvent({
+          kind: "error",
+          payload: { source: "runtime", message: `Session ${phase} failed: ${preview}` },
+        });
+      } catch (emitErr) {
+        this.config.log.warn({ chatId, emitErr }, "session error event emit failed");
+      }
 
       // 3) Existing local cleanup. The follow-up message routes as a fresh
       //    start once the entry is gone.
@@ -619,11 +629,18 @@ export class SessionManager {
 
       this.notifySessionState(entry.chatId, "errored");
 
-      const preview = errMsg.slice(0, 800);
-      ctx.emitEvent({
-        kind: "error",
-        payload: { source: "runtime", message: `Session resume failed: ${preview}` },
-      });
+      // Same defensive wrap as `startNewSession`: a throwing emit callback
+      // must not skip the local cleanup that follows, or the broken entry
+      // gets stranded and blocks future resume attempts.
+      try {
+        const preview = errMsg.slice(0, 800);
+        ctx.emitEvent({
+          kind: "error",
+          payload: { source: "runtime", message: `Session resume failed: ${preview}` },
+        });
+      } catch (emitErr) {
+        this.config.log.warn({ chatId: entry.chatId, emitErr }, "session error event emit failed");
+      }
 
       this.sessions.delete(entry.chatId);
       this.sessionRuntimeStates.delete(entry.chatId);

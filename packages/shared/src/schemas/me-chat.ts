@@ -150,6 +150,26 @@ export const liveActivitySchema = z.object({
    * thinking.
    */
   detail: z.string().optional(),
+  /**
+   * The current turn's latest `assistant_text`, one-line preview (collapsed +
+   * capped to {@link ASSISTANT_TEXT_PREVIEW_MAX}). Distinct from `detail`,
+   * which describes the *latest event*: `turnText` is the agent's running
+   * narration for the whole turn, so a `tool_call` fired immediately after a
+   * sentence does not bury what the agent is saying. Populated only by the
+   * per-agent status path (`/agent-status`, `withTurnText`) and rendered only
+   * by the compose status bar's sticky lead; absent on the chat-list
+   * `liveActivity`, and absent when the turn has produced no prose yet.
+   */
+  turnText: z.string().optional(),
+  /**
+   * ISO timestamp at which this activity goes stale (= `startedAt` +
+   * `LIVE_ACTIVITY_STALE_MS`). The server already drops stale activities at
+   * read time; this lets a live surface's 1s ticker clear a lingering
+   * "working" chip precisely at expiry — re-deriving `main` once `now > staleAt`
+   * — instead of waiting for the next refetch. Optional for version skew:
+   * clients fall back to `startedAt + LIVE_ACTIVITY_STALE_MS` when absent.
+   */
+  staleAt: z.string().optional(),
 });
 export type LiveActivity = z.infer<typeof liveActivitySchema>;
 
@@ -214,17 +234,6 @@ export const meChatRowSchema = z.object({
   unreadMentionCount: z.number().int(),
   canReply: z.boolean(),
   engagementStatus: chatEngagementStatusSchema,
-  /**
-   * Speakers in this chat with an active per-(agent,chat) session
-   * (`agent_chat_sessions.state === 'active'`). Drives the breathing ring
-   * around the avatar — "session online, can be reached". Per-pair signal,
-   * not affected by the agent's activity in other chats. Independent of
-   * `liveActivity` (which is the live "working right now" signal).
-   *
-   * Always returned, possibly empty. No schema migration required: derived
-   * at query time from the existing `agent_chat_sessions` table.
-   */
-  engagedAgentIds: z.array(z.string()),
   /**
    * Live "working right now" signal derived from the latest `session_events`
    * row for this chat. Null when:

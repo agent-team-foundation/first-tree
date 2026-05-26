@@ -50,7 +50,13 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
-import { GithubEventCardMessage, isGithubEventCardContent } from "../../../components/chat/github-event-card.js";
+import {
+  GITHUB_SYSTEM_SENDER_NAME,
+  GithubEventCardMessage,
+  GithubSystemAvatar,
+  isGithubEventCardContent,
+  isTrustedGithubDispatcherMessage,
+} from "../../../components/chat/github-event-card.js";
 import {
   isQuestionAnswerContent,
   isQuestionContent,
@@ -78,6 +84,7 @@ import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
+import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
@@ -291,8 +298,18 @@ function TextRow({
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const slugToId = useAgentSlugToIdMap();
-  const senderName = agentNameFn(msg.senderId);
-  const isSelf = myAgentId === msg.senderId;
+  // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
+  // routing / read-receipts / mention-resolution stay consistent, but we
+  // re-attribute the row to a synthetic "GitHub" sender in the UI. The
+  // gate is conjunctive (`source` + `format` + content shape + metadata
+  // marker) because `sendMessageSchema` accepts arbitrary metadata — a
+  // metadata-only check would let any agent spoof a "from GitHub" card by
+  // posting plain text with the marker set. `isSelf` is also overridden
+  // so the recipient does not see their own name color treatment on a
+  // card the dispatcher wrote on their row.
+  const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
+  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
+  const isSelf = !isGithubSystem && myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
   const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
   // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
@@ -396,12 +413,16 @@ function TextRow({
         padding: "var(--sp-1_5) 0",
       }}
     >
-      <Avatar
-        name={senderName}
-        imageUrl={agentAvatarFn(msg.senderId)}
-        seed={msg.senderId}
-        colorToken={agentColorTokenFn(msg.senderId)}
-      />
+      {isGithubSystem ? (
+        <GithubSystemAvatar size={20} />
+      ) : (
+        <Avatar
+          name={senderName}
+          imageUrl={agentAvatarFn(msg.senderId)}
+          seed={msg.senderId}
+          colorToken={agentColorTokenFn(msg.senderId)}
+        />
+      )}
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
@@ -1311,34 +1332,10 @@ export function ChatView({
     return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }, [cachedMessages, messagesData]);
 
-  // Detect a known gap between the cache range and the server's "last 50"
-  // window: if there's no overlap and the server's oldest fetched message
-  // is strictly newer than the cache's newest, the user was away long
-  // enough that more than 50 messages went past in between, and we have
-  // no way to fill them in until cursor pagination ships. Render a banner
-  // after the message id returned here. Returns null when there's overlap
-  // (the common case) or when either side is empty.
-  const gapAfterMessageId = useMemo<string | null>(() => {
-    const fromCache = cachedMessages ?? [];
-    const fromServer = messagesData?.items ?? [];
-    const firstCached = fromCache[0];
-    const firstServer = fromServer[0];
-    if (!firstCached || !firstServer) return null;
-    const serverIds = new Set(fromServer.map((m) => m.id));
-    for (const cached of fromCache) {
-      if (serverIds.has(cached.id)) return null;
-    }
-    let newestCached = firstCached;
-    for (const m of fromCache) {
-      if (m.createdAt > newestCached.createdAt) newestCached = m;
-    }
-    let oldestServer = firstServer;
-    for (const m of fromServer) {
-      if (m.createdAt < oldestServer.createdAt) oldestServer = m;
-    }
-    if (oldestServer.createdAt <= newestCached.createdAt) return null;
-    return newestCached.id;
-  }, [cachedMessages, messagesData]);
+  const gapAfterMessageId = useMemo<string | null>(
+    () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
+    [cachedMessages, messagesData],
+  );
 
   const items: TimelineItem[] = useMemo(() => {
     const rawEvents = eventsData?.items ?? [];

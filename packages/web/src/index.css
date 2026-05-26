@@ -1295,3 +1295,81 @@
 tr[data-interactive]:hover {
   background: var(--bg-hover);
 }
+
+/* ── Onboarding "Show me how" guides ─────────────────────────────────────
+   Progressive-disclosure visual help for the highest-friction steps
+   (connect a computer, connect code). Default-collapsed so confident users
+   aren't slowed; the only motion is a blinking terminal caret + a chevron
+   rotation, both stilled under reduced-motion. */
+.onboarding-show-me-how > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.onboarding-show-me-how > summary::-webkit-details-marker {
+  display: none;
+}
+.onboarding-disclosure-chevron {
+  transition: transform 160ms ease;
+}
+.onboarding-show-me-how[open] .onboarding-disclosure-chevron {
+  transform: rotate(90deg);
+}
+@keyframes onboarding-caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.onboarding-guide-caret {
+  animation: onboarding-caret-blink 1.1s step-end infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-guide-caret {
+    animation: none;
+    opacity: 1;
+  }
+  .onboarding-disclosure-chevron {
+    transition: none;
+  }
+  /* Step-to-step fade (shared `.fade-in`) is decorative — hold it still. */
+  .onboarding-shell-step.fade-in {
+    animation: none;
+  }
+}
+
+/* Custom radio/checkbox cards hide the real input with `.sr-only` and render
+   a surrogate box; without this, keyboard focus lands on an invisible
+   control. Surface a visible ring on the label when its input is focused. */
+.onboarding-choice:focus-within {
+  outline: var(--hairline) solid var(--accent-ring);
+  outline-offset: var(--sp-0_5);
+}
+
+/* Repo picker "open on GitHub" affordance: quiet by default, revealed on row
+   hover/focus so a long list stays uncluttered. On touch (no hover) it stays
+   visible so it remains reachable. */
+@media (hover: hover) {
+  .onboarding-choice .repo-open {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .onboarding-choice:hover .repo-open,
+  .onboarding-choice:focus-within .repo-open {
+    opacity: 1;
+  }
+}
+
+/* Breathing dots for the "creating teammate" / "getting started" waits. The
+   animation lives here (not inline) so reduced-motion can override it. */
+.onboarding-working-dot {
+  animation: heartbeat-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-working-dot {
+    animation: none;
+  }
+}
