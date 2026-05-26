@@ -1,4 +1,4 @@
-import type { SessionState } from "@first-tree/shared";
+import { RUNTIME_STALE_MS, type RuntimeState, type SessionState } from "@first-tree/shared";
 import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
@@ -105,6 +105,92 @@ export async function upsertSessionState(
 
   if (stateChanged && notifier) {
     notifier.notifySessionStateChange(agentId, chatId, state, organizationId).catch(() => {});
+  }
+}
+
+/**
+ * Persist the per-(agent,chat) D-axis runtime state reported by a client
+ * (`session:runtime` frame plus the ~20s re-affirm). Always bumps
+ * `runtime_state_at` so a long working turn stays fresh; kicks the admin
+ * WS notifier only when the *effective composite status could change* —
+ * i.e. the runtime value changed, OR a same-value report flips the
+ * derivation from stale (or NULL sentinel) to fresh (e.g. a `working` that
+ * had aged out is live again). A fresh same-value re-affirm changes
+ * nothing, so it stays silent (no invalidation spam).
+ *
+ * Only an `active` session is touched (enforced atomically in the UPDATE
+ * `WHERE` clause): the suspend / evict paths own the lifecycle, and a
+ * runtime report for a non-active (or missing) session is stale — skip it
+ * (the next re-affirm recovers once the session goes active, covering the
+ * startup-order race where a `working` report can beat the `session:state
+ * active` report).
+ *
+ * Implementation: a single conditional `UPDATE ... WHERE state='active'
+ * RETURNING (prev runtime_state, prev runtime_state_at)`, using the SQL
+ * `agent_chat_sessions.runtime_state AS prev_runtime_state` self-reference
+ * to read the row's value before the SET assignment lands. This shaves a
+ * round-trip vs SELECT-then-UPDATE, makes the active-gate race-free at the
+ * SQL level (no longer relying solely on the per-(agent,chat) chainSessionOp
+ * + single-client-per-agent invariants), and removes the "future caller
+ * forgot to chainSessionOp" footgun flagged in the codex review.
+ */
+export async function setSessionRuntime(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  runtimeState: RuntimeState,
+  organizationId: string,
+  notifier?: Notifier,
+): Promise<void> {
+  // CTE captures the previous row before the UPDATE; the UPDATE's WHERE
+  // additionally enforces `state='active'` so an inactive / missing row
+  // matches nothing and RETURNING is empty. The active gate is now a SQL
+  // invariant rather than a TS check on the chainSessionOp-serialised
+  // SELECT-then-UPDATE pair. `NOW()` (server clock) is the timestamp
+  // source so we don't marshal a Date through postgres-js's raw-execute
+  // path (which can't bind Date params).
+  const rows = (await db.execute(sql`
+    WITH prev AS (
+      SELECT runtime_state    AS prev_runtime_state,
+             runtime_state_at AS prev_runtime_state_at
+        FROM agent_chat_sessions
+       WHERE agent_id = ${agentId} AND chat_id = ${chatId}
+    )
+    UPDATE agent_chat_sessions
+       SET runtime_state    = ${runtimeState},
+           runtime_state_at = NOW()
+      FROM prev
+     WHERE agent_chat_sessions.agent_id = ${agentId}
+       AND agent_chat_sessions.chat_id  = ${chatId}
+       AND agent_chat_sessions.state    = 'active'
+    RETURNING prev.prev_runtime_state, prev.prev_runtime_state_at
+  `)) as unknown as Array<{ prev_runtime_state: string | null; prev_runtime_state_at: Date | string | null }>;
+
+  // No row returned = WHERE didn't match (row missing or not active). Either
+  // way the runtime report is stale; nothing to notify. This replaces the
+  // pre-CTE explicit `if (!prev || prev.state !== 'active') return`.
+  const row = rows[0];
+  if (!row) return;
+
+  // postgres-js surfaces RETURNING timestamp columns as `Date` instances on
+  // typed queries, but raw `db.execute(sql\`…\`)` surfaces them as strings
+  // — coerce defensively so the freshness comparison is on a stable type.
+  const prevRuntimeState = row.prev_runtime_state;
+  const prevRuntimeStateAt =
+    row.prev_runtime_state_at == null
+      ? null
+      : row.prev_runtime_state_at instanceof Date
+        ? row.prev_runtime_state_at
+        : new Date(row.prev_runtime_state_at);
+
+  // Notify when the composite `working` / `errored` could have flipped:
+  // a value change, OR a same-value report that crosses the fail-closed
+  // boundary (NULL sentinel → fresh, OR stale → fresh). A fresh same-value
+  // re-affirm changes nothing, so it stays silent.
+  const valueChanged = prevRuntimeState !== runtimeState;
+  const wasStale = prevRuntimeStateAt == null || Date.now() - prevRuntimeStateAt.getTime() > RUNTIME_STALE_MS;
+  if ((valueChanged || wasStale) && notifier) {
+    notifier.notifySessionRuntime(agentId, chatId, runtimeState, organizationId).catch(() => {});
   }
 }
 

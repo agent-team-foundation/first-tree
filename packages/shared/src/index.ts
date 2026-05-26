@@ -125,6 +125,7 @@ export {
   type DeriveMainStatusInput,
   deriveMainStatus,
   MAIN_STATUS_PRIORITY,
+  RUNTIME_STALE_MS,
 } from "./schemas/agent-status.js";
 export {
   type ConnectTokenExchange,
@@ -513,8 +514,10 @@ export {
   runtimeStateMessageSchema,
   runtimeStateSchema,
   SESSION_STATES,
+  type SessionRuntimeMessage,
   type SessionState,
   type SessionStateMessage,
+  sessionRuntimeMessageSchema,
   sessionStateMessageSchema,
   sessionStateSchema,
 } from "./schemas/presence.js";

@@ -59,6 +59,7 @@ function createSessionManager(opts: {
   concurrency?: number;
   log?: pino.Logger;
   onRuntimeStateChange?: (state: "idle" | "working" | "blocked" | "error") => void;
+  onSessionRuntimeChange?: (chatId: string, state: "idle" | "working" | "blocked" | "error") => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -86,6 +87,7 @@ function createSessionManager(opts: {
     log: opts.log ?? silentLogger(),
     ackEntry: opts.ackEntry ?? mockAckEntry(),
     onRuntimeStateChange: opts.onRuntimeStateChange,
+    onSessionRuntimeChange: opts.onSessionRuntimeChange,
   });
 }
 
@@ -338,6 +340,102 @@ describe("SessionManager: getAggregateRuntimeState()", () => {
     expect(sm.getAggregateRuntimeState()).toBe("idle");
 
     await sm.shutdown();
+  });
+});
+
+describe("SessionManager: per-(agent,chat) runtime callback (#553 rebase)", () => {
+  it("fires onSessionRuntimeChange with the chatId whenever a session reports runtime", async () => {
+    const events: Array<{ chatId: string; state: string }> = [];
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_msg, ctx) {
+        capturedCtx = ctx;
+        return "s1";
+      },
+    });
+
+    const sm = createSessionManager({
+      handler,
+      onSessionRuntimeChange: (chatId, state) => events.push({ chatId, state }),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    defined(capturedCtx, "ctx").setRuntimeState("working");
+    defined(capturedCtx, "ctx").setRuntimeState("idle");
+
+    // dispatch flow itself sets working before handler.start (the inject→working
+    // grace-window fix). We only care that the explicit setRuntimeState calls
+    // emitted with the right chatId.
+    const forChatA = events.filter((e) => e.chatId === "chat-a").map((e) => e.state);
+    expect(forChatA).toContain("working");
+    expect(forChatA).toContain("idle");
+
+    await sm.shutdown();
+  });
+
+  it("getSessionRuntimeStates returns ACTIVE sessions only, defaulting to idle when unrecorded", async () => {
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_msg, ctx) {
+        capturedCtx = ctx;
+        return "s-a";
+      },
+    });
+
+    const sm = createSessionManager({ handler, onSessionRuntimeChange: () => {} });
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    defined(capturedCtx, "ctx").setRuntimeState("working");
+
+    const snap = sm.getSessionRuntimeStates();
+    expect(snap).toEqual([{ chatId: "chat-a", runtimeState: "working" }]);
+
+    await sm.shutdown();
+  });
+
+  it("re-affirm timer re-emits working / blocked / error, skips idle", async () => {
+    vi.useFakeTimers();
+    try {
+      const seen: Array<{ chatId: string; state: string }> = [];
+      const contexts: SessionContext[] = [];
+      const factory: HandlerFactory = () =>
+        createMockHandler({
+          async start(_msg, ctx) {
+            contexts.push(ctx);
+            return `s-${contexts.length}`;
+          },
+        });
+
+      const sm = createSessionManager({
+        handlerFactory: factory,
+        onSessionRuntimeChange: (chatId, state) => seen.push({ chatId, state }),
+        session: { idle_timeout: 3600, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-w" }));
+      await sm.dispatch(mockEntry({ id: 2, chatId: "chat-i" }));
+      defined(contexts[0], "ctx0").setRuntimeState("working");
+      defined(contexts[1], "ctx1").setRuntimeState("idle");
+
+      // Drain the initial callback noise so the assertion below targets
+      // only re-affirm output.
+      seen.length = 0;
+
+      // Reaffirm base = 20s + ±20% jitter — 60s straddles the upper bound
+      // (24s) twice so at least one fire is guaranteed even at max jitter.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const reaffirms = seen.filter((e) => e.chatId === "chat-w" || e.chatId === "chat-i");
+      const workingReaffirms = reaffirms.filter((e) => e.chatId === "chat-w" && e.state === "working");
+      const idleReaffirms = reaffirms.filter((e) => e.chatId === "chat-i");
+      expect(workingReaffirms.length).toBeGreaterThanOrEqual(1);
+      // idle sessions must NEVER show up on the reaffirm channel — that's
+      // pure wire noise (server's fail-closed default already handles it).
+      expect(idleReaffirms).toHaveLength(0);
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

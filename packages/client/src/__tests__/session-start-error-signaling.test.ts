@@ -109,7 +109,16 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-fail" }));
 
-    expect(stateChanges).toEqual([{ chatId: "chat-fail", state: "errored" }]);
+    // `active` reports BEFORE handler.start (per the runtime-truth fix:
+    // server-side `setSessionRuntime` is active-gated, so any runtime frame
+    // a handler emits during start() needs the active row to exist first).
+    // On a start failure the `errored` transition then overrides it. Both
+    // notifications go through — the `lastReportedStates` dedupe only
+    // suppresses same-state repeats.
+    expect(stateChanges).toEqual([
+      { chatId: "chat-fail", state: "active" },
+      { chatId: "chat-fail", state: "errored" },
+    ]);
 
     await sm.shutdown();
   });
@@ -175,9 +184,13 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
     });
 
-    // First dispatch: fails.
+    // First dispatch: fails. Now reports `active` (pre-start) then `errored`
+    // (catch path) per the runtime-truth ordering fix.
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-recover" }));
-    expect(stateChanges).toEqual([{ chatId: "chat-recover", state: "errored" }]);
+    expect(stateChanges).toEqual([
+      { chatId: "chat-recover", state: "active" },
+      { chatId: "chat-recover", state: "errored" },
+    ]);
 
     // Second dispatch: routes as a fresh start (no `existing` entry).
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recover" }));
@@ -208,7 +221,10 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-emit-throw" }));
-    expect(stateChanges).toEqual([{ chatId: "chat-emit-throw", state: "errored" }]);
+    expect(stateChanges).toEqual([
+      { chatId: "chat-emit-throw", state: "active" },
+      { chatId: "chat-emit-throw", state: "errored" },
+    ]);
 
     // The next dispatch must route through `startNewSession` (no stale entry
     // left behind by the throwing emit) — verified by the fresh handler's

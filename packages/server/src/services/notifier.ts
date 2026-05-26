@@ -7,6 +7,13 @@ const SESSION_STATE_CHANNEL = "session_state_changes";
 const SESSION_EVENT_CHANNEL = "session_event_changes";
 const RUNTIME_STATE_CHANNEL = "runtime_state_changes";
 /**
+ * Per-(agent,chat) D-axis runtime change. Carries
+ * `<agentId>:<chatId>:<state>:<organizationId>`. Distinct from
+ * `RUNTIME_STATE_CHANNEL`, which carries the lossy agent-global aggregate
+ * the per-chat composite cannot consume safely (#366).
+ */
+const SESSION_RUNTIME_CHANNEL = "session_runtime_changes";
+/**
  * Chat-first workspace cross-process kick. Carries `<chatId>:<messageId>`.
  * Lets admin WS sockets translate every chat message (speaker AND watcher
  * audience) into a `chat:message` frame, without being coupled to the
@@ -36,6 +43,19 @@ export type SessionEventChangeHandler = (payload: {
   organizationId: string;
 }) => void;
 export type RuntimeStateChangeHandler = (payload: { agentId: string; state: string; organizationId: string }) => void;
+/**
+ * Per-(agent,chat) runtime change — fired when a client reports the D-axis
+ * runtime state for a specific chat (`session:runtime` frame or its ~30s
+ * re-affirm). Lets admin WS consumers compute the composite delta in
+ * realtime instead of waiting for the 30s poll. Same routing-only payload
+ * shape as the session-state channel.
+ */
+export type SessionRuntimeChangeHandler = (payload: {
+  agentId: string;
+  chatId: string;
+  state: string;
+  organizationId: string;
+}) => void;
 export type ChatMessageChangeHandler = (payload: { chatId: string; messageId: string }) => void;
 
 /**
@@ -68,6 +88,8 @@ export type Notifier = {
   notifySessionEvent(agentId: string, chatId: string, kind: string, organizationId: string): Promise<void>;
   /** Notify that an agent runtime state has changed (idle/working/error/…). Payload is org-scoped so admin consumers can filter. */
   notifyRuntimeStateChange(agentId: string, state: string, organizationId: string): Promise<void>;
+  /** Notify that the per-(agent,chat) D-axis runtime state changed. */
+  notifySessionRuntime(agentId: string, chatId: string, state: string, organizationId: string): Promise<void>;
   /** Chat-first workspace: kick admin WS sockets to invalidate ["me","chats"] and the timeline of `chatId`. */
   notifyChatMessage(chatId: string, messageId: string): Promise<void>;
   /**
@@ -86,6 +108,8 @@ export type Notifier = {
   onSessionEvent(handler: SessionEventChangeHandler): void;
   /** Register a handler for runtime state change notifications */
   onRuntimeStateChange(handler: RuntimeStateChangeHandler): void;
+  /** Register a per-(agent,chat) runtime change handler. */
+  onSessionRuntime(handler: SessionRuntimeChangeHandler): void;
   /** Register a handler for chat:message change notifications. */
   onChatMessage(handler: ChatMessageChangeHandler): void;
   /** Start listening for PG notifications */
@@ -100,12 +124,14 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const sessionStateChangeHandlers: SessionStateChangeHandler[] = [];
   const sessionEventHandlers: SessionEventChangeHandler[] = [];
   const runtimeStateChangeHandlers: RuntimeStateChangeHandler[] = [];
+  const sessionRuntimeHandlers: SessionRuntimeChangeHandler[] = [];
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
   let unlistenSessionEventFn: (() => Promise<void>) | null = null;
   let unlistenRuntimeStateFn: (() => Promise<void>) | null = null;
+  let unlistenSessionRuntimeFn: (() => Promise<void>) | null = null;
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
@@ -195,6 +221,16 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifySessionRuntime(agentId: string, chatId: string, state: string, organizationId: string) {
+      try {
+        // `<agentId>:<chatId>:<state>:<organizationId>` — same shape as the
+        // session-state channel so the listen-side split is reused verbatim.
+        await listenClient`SELECT pg_notify(${SESSION_RUNTIME_CHANNEL}, ${`${agentId}:${chatId}:${state}:${organizationId}`})`;
+      } catch {
+        // fire-and-forget — admin UI's 30s agent-status poll re-syncs.
+      }
+    },
+
     async notifyChatMessage(chatId: string, messageId: string) {
       try {
         await listenClient`SELECT pg_notify(${CHAT_MESSAGE_CHANNEL}, ${`${chatId}:${messageId}`})`;
@@ -237,6 +273,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onRuntimeStateChange(handler: RuntimeStateChangeHandler) {
       runtimeStateChangeHandlers.push(handler);
+    },
+
+    onSessionRuntime(handler: SessionRuntimeChangeHandler) {
+      sessionRuntimeHandlers.push(handler);
     },
 
     onChatMessage(handler: ChatMessageChangeHandler) {
@@ -301,6 +341,30 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       });
       unlistenSessionEventFn = sessionEventResult.unlisten;
 
+      const sessionRuntimeResult = await listenClient.listen(SESSION_RUNTIME_CHANNEL, (payload) => {
+        if (payload) {
+          // payload format: "agentId:chatId:state:organizationId" — mirrors
+          // the session-state channel split.
+          const firstSep = payload.indexOf(":");
+          const secondSep = payload.indexOf(":", firstSep + 1);
+          const thirdSep = payload.indexOf(":", secondSep + 1);
+          if (firstSep > 0 && secondSep > firstSep && thirdSep > secondSep) {
+            const agentId = payload.slice(0, firstSep);
+            const chatId = payload.slice(firstSep + 1, secondSep);
+            const state = payload.slice(secondSep + 1, thirdSep);
+            const organizationId = payload.slice(thirdSep + 1);
+            for (const handler of sessionRuntimeHandlers) {
+              try {
+                handler({ agentId, chatId, state, organizationId });
+              } catch {
+                // swallow — handler errors must not poison fan-out
+              }
+            }
+          }
+        }
+      });
+      unlistenSessionRuntimeFn = sessionRuntimeResult.unlisten;
+
       const runtimeStateResult = await listenClient.listen(RUNTIME_STATE_CHANNEL, (payload) => {
         if (payload) {
           // payload format: "agentId:state:organizationId"
@@ -357,6 +421,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenRuntimeStateFn) {
         await unlistenRuntimeStateFn();
         unlistenRuntimeStateFn = null;
+      }
+      if (unlistenSessionRuntimeFn) {
+        await unlistenSessionRuntimeFn();
+        unlistenSessionRuntimeFn = null;
       }
       if (unlistenChatMessageFn) {
         await unlistenChatMessageFn();

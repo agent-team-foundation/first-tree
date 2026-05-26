@@ -1,4 +1,4 @@
-import type { ChatEngagementView, ChatSource, MeChatRow } from "@first-tree/shared";
+import { type ChatEngagementView, type ChatSource, type MeChatRow, RUNTIME_STALE_MS } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -130,7 +130,17 @@ export function ConversationList({
   onGroupChange: (next: GroupMode) => void;
 }) {
   const { agentId: selfAgentId } = useAuth();
-  const [extraPages, setExtraPages] = useState<MeChatRow[]>([]);
+  // Pages loaded via `Load more` carry a `fetchedAt` timestamp so the busy
+  // dot can be aged out on those rows. The parent useQuery refetches every
+  // 30s and re-discovers stale `runtime_state_at` for the first page, but
+  // extraPages bypass react-query entirely — without this stamp, a row from
+  // an older page whose agent crashed mid-turn would keep flashing busy
+  // forever. The render path drops busyAgentIds on rows from pages older
+  // than RUNTIME_STALE_MS (60s) plus one refetchInterval (30s) — total
+  // worst-case stuck-busy window ~90s on these rows, vs ≤60s for the first
+  // page that refetches directly. No UX disruption from the user's
+  // loaded position.
+  const [extraPages, setExtraPages] = useState<Array<{ fetchedAt: number; rows: MeChatRow[] }>>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string | null>(null);
   // Per-bucket collapse override. Absence in the map means "use the
@@ -150,7 +160,7 @@ export function ConversationList({
   const originParam = origin.length > 0 ? [...origin] : undefined;
   const withParam = participants.length > 0 ? [...participants] : undefined;
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, dataUpdatedAt } = useQuery({
     // `origin` / `with` are arrays — react-query needs a stable key
     // signature, so we serialise them into the query key the same way
     // the wire does. Empty array collapses to `null` so an unchanged
@@ -172,6 +182,17 @@ export function ConversationList({
         origin: originParam,
         with: withParam,
       }),
+    // Bounded refetch is the safety floor for the per-chat composite
+    // signals projected onto each row: `busyAgentIds` lights the chat-list
+    // dot for the working / codex-no-events case, and the only way the
+    // dot self-heals after a client crash is for a fresh `listMeChats`
+    // to discover `runtime_state_at` aged past `RUNTIME_STALE_MS` (60s)
+    // — the server emits no notification when staleness is reached
+    // passively. Without this interval the dot would stay lit forever
+    // until some unrelated invalidation. 30s matches the
+    // `chat-agent-status` query, so the first-page stuck-busy window is
+    // bounded by RUNTIME_STALE_MS (60s) + one refetch (30s) ≈ 90s upper.
+    refetchInterval: 30_000,
   });
 
   const resetExtras = (): void => {
@@ -201,7 +222,31 @@ export function ConversationList({
   }, [filter, engagement, watching, originKey, participantsKey]);
 
   const baseRows = data?.rows ?? [];
-  const allRows = useMemo(() => [...baseRows, ...extraPages], [baseRows, extraPages]);
+  // Render-time staleness sieve for extraPages: any row whose page was
+  // fetched > RUNTIME_STALE_MS (60s) ago has its `busyAgentIds` blanked.
+  // The check tracks the server's fail-closed window but the recompute
+  // cadence is bounded by react-query's refetchInterval (30s), so the
+  // real upper bound is `RUNTIME_STALE_MS + refetchInterval` ≈ 90s on
+  // extraPage rows specifically (vs ≤60s on the first page, which
+  // refetches directly). `dataUpdatedAt` (set on every successful
+  // refetch, even when content is structurally identical) is the time
+  // anchor — `baseRows` identity can stay stable across refetches when
+  // structural sharing kicks in, so depending on it alone would leave
+  // a memo that never re-evaluates `Date.now()` and an old extraPage
+  // row could keep flashing busy forever. Rationale: see the comment on
+  // the `extraPages` declaration.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dataUpdatedAt is the time-tick that drives stale recomputation; not a value read
+  const allRows = useMemo(() => {
+    const now = Date.now();
+    const expanded: MeChatRow[] = [];
+    for (const page of extraPages) {
+      const stale = now - page.fetchedAt > RUNTIME_STALE_MS;
+      for (const row of page.rows) {
+        expanded.push(stale && row.busyAgentIds.length > 0 ? { ...row, busyAgentIds: [] } : row);
+      }
+    }
+    return [...baseRows, ...expanded];
+  }, [baseRows, extraPages, dataUpdatedAt]);
 
   // Buckets are recomputed whenever the rows or group mode change.
   // Day-rollover (a chat that was "Today" at 23:59 should drift into
@@ -250,7 +295,7 @@ export function ConversationList({
         with: withParam,
         cursor,
       });
-      setExtraPages((prev) => [...prev, ...next.rows]);
+      setExtraPages((prev) => [...prev, { fetchedAt: Date.now(), rows: next.rows }]);
       setNextCursor(next.nextCursor);
     } catch (err) {
       setMoreError(err instanceof Error ? err.message : "Failed to load more");
@@ -639,13 +684,22 @@ export function ConversationList({
                               {row.title}
                             </span>
                             {(() => {
-                              const slot = row.liveActivity ? (
-                                <ActivityDots />
-                              ) : row.lastMessageAt ? (
-                                <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-                                  {formatRowTime(row.lastMessageAt)}
-                                </span>
-                              ) : null;
+                              // `busyAgentIds` is the authoritative D-axis
+                              // "is anyone working in this chat" signal — it
+                              // lights the activity dots even when the
+                              // runtime emits no intermediate
+                              // `session_events` (codex tools that only
+                              // report on turn completion), which the legacy
+                              // `liveActivity` freshness proxy alone would
+                              // miss.
+                              const slot =
+                                row.busyAgentIds.length > 0 ? (
+                                  <ActivityDots />
+                                ) : row.lastMessageAt ? (
+                                  <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                                    {formatRowTime(row.lastMessageAt)}
+                                  </span>
+                                ) : null;
                               return slot ? (
                                 <span className="shrink-0 transition-opacity group-hover:opacity-0 group-has-aria-expanded:opacity-0">
                                   {slot}

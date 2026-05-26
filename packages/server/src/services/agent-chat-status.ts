@@ -6,6 +6,8 @@ import {
   buildAgentChatStatus,
   LIVE_ACTIVITY_STALE_MS,
   type LiveActivity,
+  RUNTIME_STALE_MS,
+  type RuntimeState,
   type ToolCallEventPayload,
 } from "@first-tree/shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
@@ -367,18 +369,34 @@ export async function resolveAgentChatStatuses(
 
   const allAgentIds = [...new Set([...unionByChat.values()].flatMap((s) => [...s]))];
 
-  // -- Engagement (C): per-(agent,chat) session state, for the union pairs.
+  // -- Engagement (C) + D-axis runtime: per-(agent,chat) session row.
+  // `runtime_state` / `runtime_state_at` feed `computeWorking` / `computeErrored`
+  // — the per-chat authoritative source replacing the legacy event-proxy
+  // (which only knew "fresh event = working" and missed codex no-events).
   const sessionRows = await db
     .select({
       agentId: agentChatSessions.agentId,
       chatId: agentChatSessions.chatId,
       state: agentChatSessions.state,
+      runtimeState: agentChatSessions.runtimeState,
+      runtimeStateAt: agentChatSessions.runtimeStateAt,
     })
     .from(agentChatSessions)
     .where(and(inArray(agentChatSessions.chatId, chatIds), inArray(agentChatSessions.agentId, allAgentIds)));
-  const sessionState = new Map(sessionRows.map((s) => [pairKey(s.chatId, s.agentId), s.state]));
+  const sessionByPair = new Map(sessionRows.map((s) => [pairKey(s.chatId, s.agentId), s]));
 
-  // -- Reachability (A) + runtime error: per-agent (not per-chat) presence.
+  // -- Reachability (A) + legacy presence runtime (for the old-client
+  //    fallback path only — see `computeWorking` / `computeErrored`).
+  //    For agents whose client has already reported per-chat runtime at
+  //    least once (`runtime_state_at IS NOT NULL`), `presence.runtimeState`
+  //    is NOT consumed by composite working / errored — the per-chat path
+  //    is authoritative and the reverse-#366 leak stays closed. For agents
+  //    that have never reported (NULL stamp = old client in the upgrade
+  //    window) we fall back to the legacy `session_events` freshness proxy
+  //    for working AND the legacy `presence.runtimeState === 'error'`
+  //    OR-fold for errored, for one release cycle. Matches the approved
+  //    spec (proposals/hub-agent-status-working-freshness.20260525.md
+  //    §6.1 §10).
   const presenceRows = await db
     .select({
       agentId: agentPresence.agentId,
@@ -390,34 +408,136 @@ export async function resolveAgentChatStatuses(
   const presenceById = new Map(presenceRows.map((p) => [p.agentId, p]));
 
   // -- Activity (D): per-(agent,chat) live activity (+ turnText when asked).
+  //    Pure description: 60s drop here means "5-min-old tool_call is not the
+  //    current activity description", not "agent is not working" (which is
+  //    decided by `computeWorking` above).
   const activityByChat = await deriveActivities(db, chatIds, opts);
 
+  const now = Date.now();
   for (const [chatId, agentSet] of unionByChat) {
     const pendingSet = pendingSetByChat.get(chatId);
     const perAgentActivity = activityByChat.get(chatId);
     const arr: AgentChatStatus[] = [];
     for (const agentId of agentSet) {
-      const state = sessionState.get(pairKey(chatId, agentId));
+      const sess = sessionByPair.get(pairKey(chatId, agentId));
+      const state = sess?.state;
       const p = presenceById.get(agentId);
       const activity = perAgentActivity?.get(agentId) ?? null;
       const engagement: AgentEngagement = state === "active" ? "active" : state === "suspended" ? "suspended" : "none";
+      const working = computeWorking(sess, activity, now);
       arr.push(
         buildAgentChatStatus({
           agentId,
           reachable: p?.clientId != null,
-          // failed = session errored OR runtime error (the reachable gate is
-          // applied by `deriveMainStatus`: unreachable → offline, not failed).
-          errored: state === "errored" || p?.runtimeState === "error",
+          errored: computeErrored(sess, p?.runtimeState ?? null, now),
           needsYou: pendingSet?.has(agentId) ?? false,
-          working: activity != null,
+          working,
           engagement,
-          activity,
+          // The activity is a descriptor of in-flight work — carry it only
+          // while working, matching the schema's "null when not working"
+          // contract. Codex no-events case (new-client authoritative path):
+          // working=true & activity=null ⇒ UI shows a generic "Working"
+          // with no tool detail.
+          //
+          // Transient inversion to note for posterity (non-blocking; matches
+          // the spec's "activity is description-only when working"): a
+          // `session:event` recompute that races marginally ahead of its
+          // corresponding `session:runtime working` (different paths — events
+          // aren't in chainSessionOp) briefly emits activity=null; the next
+          // runtime frame self-heals.
+          activity: working ? activity : null,
         }),
       );
     }
     out.set(chatId, arr);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// D-axis projection helpers — pure, exported for unit tests.
+//
+// The composite working / errored axes are fed by the per-chat
+// `agent_chat_sessions.runtime_state` (+ `runtime_state_at` freshness) for
+// NEW clients (any client that has reported `session:runtime` at least once
+// for this pair — `runtime_state_at IS NOT NULL`). For OLD clients in the
+// upgrade window (NULL stamp, never reported) we fall back to the legacy
+// signals for one release cycle:
+//   - working: the latest non-terminal `session_events` row within
+//     LIVE_ACTIVITY_STALE_MS (the pre-PR proxy).
+//   - errored: the agent-global `presence.runtime_state === 'error'`
+//     OR-fold (the pre-PR behaviour — yes, this still has the reverse-#366
+//     cross-chat leak for old clients, but that's the existing prod
+//     behaviour, not a new regression — and it self-closes the moment the
+//     client upgrades and starts reporting per-chat).
+// `state === 'errored'` (C-axis lifecycle) always contributes to errored
+// independently of the D-axis on both paths.
+//
+// Spec reference: proposals/hub-agent-status-working-freshness.20260525.md
+// §6.1 §10 ("保留旧 client 兼容兜底一个发布周期").
+// ---------------------------------------------------------------------------
+
+// `runtimeState` is `text` in the DB (no enum constraint at the TS level), so
+// it surfaces as plain `string` from drizzle. Helpers compare to literal
+// values — a row carrying an unrecognised value falls into the fail-closed
+// default (not working, not errored from D-axis), which is the right
+// degradation if a buggy producer ever wrote a junk state.
+type RuntimeSessionRow =
+  | {
+      state: string;
+      runtimeState: string;
+      runtimeStateAt: Date | null;
+    }
+  | undefined;
+
+/**
+ * True iff the new-client authoritative path applies — session is active and
+ * the client has reported per-chat runtime within the freshness window.
+ * Returns false for old clients (NULL stamp), stale stamps, and non-active
+ * sessions; the caller should fall back to legacy signals on false-with-
+ * NULL-stamp and treat false-with-stale-stamp as fail-closed.
+ */
+export function isRuntimeFresh(session: RuntimeSessionRow, now: number): boolean {
+  if (!session || session.state !== "active") return false;
+  if (session.runtimeStateAt == null) return false;
+  return now - session.runtimeStateAt.getTime() <= RUNTIME_STALE_MS;
+}
+
+/**
+ * Authoritative path: active session + fresh `runtime_state === 'working'`.
+ * Old-client fallback (NULL stamp on an active session): the presence of
+ * any fresh non-terminal `session_events` row (= `activity != null`), which
+ * is exactly what the pre-PR producer used. Old-client fallback for a
+ * stale stamp is intentionally NOT applied — once a client has reported
+ * per-chat runtime at least once we stay on the new path and let the
+ * freshness window decide (so `RUNTIME_STALE_MS` cannot regress for an
+ * upgraded client just because of a transient disconnect).
+ */
+export function computeWorking(session: RuntimeSessionRow, activity: LiveActivity | null, now: number): boolean {
+  if (!session || session.state !== "active") return false;
+  if (session.runtimeStateAt == null) {
+    // Old client (one release cycle): legacy event-proxy fallback.
+    return activity != null;
+  }
+  return isRuntimeFresh(session, now) && session.runtimeState === ("working" satisfies RuntimeState);
+}
+
+/**
+ * Authoritative path: C-axis `state === 'errored'` always contributes; the
+ * D-axis 'error' axis contributes when active + fresh. Old-client fallback
+ * (NULL stamp on an active session): legacy `presence.runtime_state ===
+ * 'error'` OR-fold, which is pre-PR behaviour (still has the reverse-#366
+ * cross-chat leak for old clients; that's the existing prod regression
+ * envelope and self-closes when the client upgrades). Spec §6.1 §10.
+ */
+export function computeErrored(session: RuntimeSessionRow, presenceRuntimeState: string | null, now: number): boolean {
+  if (session?.state === "errored") return true;
+  if (!session || session.state !== "active") return false;
+  if (session.runtimeStateAt == null) {
+    // Old client (one release cycle): legacy agent-global error fallback.
+    return presenceRuntimeState === "error";
+  }
+  return isRuntimeFresh(session, now) && session.runtimeState === ("error" satisfies RuntimeState);
 }
 
 /**

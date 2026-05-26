@@ -17,10 +17,22 @@ describe("listMeChats: liveActivity derivation from session_events", () => {
    */
   async function ensureSession(agentId: string, chatId: string, state = "active"): Promise<void> {
     const app = getApp();
+    // Per #553 rebase: liveActivity on the chat-list rides on the
+    // composite `working` axis (`activity` is carried only when working).
+    // Real clients send `session:runtime working` shortly after a turn
+    // begins (the per-chat D-axis truth). Seed `runtime_state='working'`
+    // + fresh stamp here so tests that ASSERT a non-null liveActivity
+    // model the real wire order; tests that expect null liveActivity
+    // (turn_end / stale / quiet) still work because `working` is
+    // additionally gated by event freshness via the `activity != null`
+    // branch.
     await app.db.execute(sql`
-      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, updated_at)
-      VALUES (${agentId}, ${chatId}, ${state}, NOW())
-      ON CONFLICT (agent_id, chat_id) DO UPDATE SET state = EXCLUDED.state
+      INSERT INTO agent_chat_sessions (agent_id, chat_id, state, runtime_state, runtime_state_at, updated_at)
+      VALUES (${agentId}, ${chatId}, ${state}, 'working', NOW(), NOW())
+      ON CONFLICT (agent_id, chat_id) DO UPDATE
+        SET state = EXCLUDED.state,
+            runtime_state = EXCLUDED.runtime_state,
+            runtime_state_at = EXCLUDED.runtime_state_at
     `);
   }
 

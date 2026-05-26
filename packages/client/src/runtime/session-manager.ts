@@ -184,6 +184,16 @@ type SessionManagerConfig = {
   onRuntimeStateChange?: (state: RuntimeState) => void;
   /** Callback when a session emits a structured event (tool_call / error). */
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
+  /**
+   * Callback when a session's per-(agent,chat) runtime state changes (the
+   * D-axis: idle / working / blocked / error). Distinct from
+   * `onRuntimeStateChange`, which reports the lossy agent-global aggregate;
+   * this carries the chatId so the server can persist the D-axis at
+   * per-chat granularity. Also fired on the periodic re-affirm for
+   * working / blocked / error sessions so a long turn keeps the
+   * server-side freshness stamp current.
+   */
+  onSessionRuntimeChange?: (chatId: string, state: RuntimeState) => void;
 };
 
 /**
@@ -198,6 +208,23 @@ type SessionManagerConfig = {
  */
 /** Maximum number of evicted session mappings to retain for resume recovery. */
 const MAX_EVICTED_MAPPINGS = 500;
+
+/**
+ * Base interval for re-affirming per-(agent,chat) runtime so the server-side
+ * `runtime_state_at` stays inside its freshness window during a long turn.
+ * Kept at 1/3 of the server's `RUNTIME_STALE_MS` (60 s) so a single dropped
+ * frame doesn't let a live turn flap to idle — matches the approved spec
+ * (proposals/hub-agent-status-working-freshness.20260525.md §6.1 §10). The
+ * actual fire time is jittered ±20 % around this base to prevent
+ * thundering-herd alignment across hundreds of clients restarting at once.
+ */
+const RUNTIME_REAFFIRM_BASE_MS = 20_000;
+const RUNTIME_REAFFIRM_JITTER_RATIO = 0.2;
+
+function jitteredReaffirmDelay(): number {
+  const offset = (Math.random() * 2 - 1) * RUNTIME_REAFFIRM_BASE_MS * RUNTIME_REAFFIRM_JITTER_RATIO;
+  return RUNTIME_REAFFIRM_BASE_MS + offset;
+}
 
 export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
@@ -218,12 +245,27 @@ export class SessionManager {
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
   private lastReportedRuntimeState: RuntimeState | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
+  private runtimeReaffirmTimer: ReturnType<typeof setTimeout> | null = null;
   private _activeCount = 0;
 
   constructor(config: SessionManagerConfig) {
     this.config = config;
     this.registry = config.registryPath ? new SessionRegistry(config.registryPath) : null;
     this.idleTimer = setInterval(() => this.evictIdle(), 10_000);
+    // Independent of `evictIdle` (which early-continues on freshly-active
+    // sessions): re-affirm working / blocked / error sessions so the
+    // server-side `runtime_state_at` stays inside the freshness window.
+    // Jittered setTimeout (rearmed each tick) instead of setInterval so
+    // many clients don't align on the same instant.
+    if (config.onSessionRuntimeChange) {
+      const armReaffirm = () => {
+        this.runtimeReaffirmTimer = setTimeout(() => {
+          this.reaffirmRuntimeStates();
+          armReaffirm();
+        }, jitteredReaffirmDelay());
+      };
+      armReaffirm();
+    }
 
     // Load persisted sessions (all start as suspended)
     this.loadPersistedSessions();
@@ -388,6 +430,10 @@ export class SessionManager {
       clearInterval(this.idleTimer);
       this.idleTimer = null;
     }
+    if (this.runtimeReaffirmTimer) {
+      clearTimeout(this.runtimeReaffirmTimer);
+      this.runtimeReaffirmTimer = null;
+    }
 
     const shutdowns = [...this.sessions.values()].map((s) =>
       s.status === "active" ? s.handler.shutdown() : Promise.resolve(),
@@ -540,6 +586,20 @@ export class SessionManager {
     this._activeCount++;
     if (evicted) this.evictedMappings.delete(chatId);
 
+    // Report `active` BEFORE invoking handler.start / handler.resume. Handlers
+    // can call `ctx.setRuntimeState("working")` synchronously inside start()
+    // (claude-code does; codex always does — its handler awaits the whole
+    // turn before returning, so the initial working AND final idle reports
+    // both fire from inside start()). Those `session:runtime` frames are
+    // active-gated on the server, so they would be dropped if the
+    // `session:state active` write hadn't landed yet — leaving the composite
+    // stuck at `ready` until a reaffirm (or never, for short turns). The
+    // server's `upsertSessionState` short-circuits same-state reports, and
+    // `notifySessionState` here additionally dedupes against the last
+    // reported value, so doing it before AND after is harmless if a future
+    // refactor adds a second site. Failure path replaces this `active` with
+    // `errored` in the catch below (different state → goes through).
+    this.notifySessionState(chatId, "active");
     try {
       if (evicted) {
         const sessionId = await handler.resume(message, evicted.claudeSessionId, ctx);
@@ -551,7 +611,6 @@ export class SessionManager {
         this.config.log.info({ chatId, sessionId }, "session created");
       }
       this.persistRegistry();
-      this.notifySessionState(chatId, "active");
     } catch (err) {
       // Pre-fix this catch only logged and torn local state down. The
       // server's `agent_chat_sessions.state` stayed `active`, no chat
@@ -633,6 +692,11 @@ export class SessionManager {
     this._activeCount++;
     entry.lastActivity = Date.now();
 
+    // Same rationale as `startNewSession`: report `active` BEFORE invoking
+    // the handler so any synchronous `ctx.setRuntimeState("working")` inside
+    // handler.resume() lands on a server row that is already active-gated.
+    // Failure path overrides with `errored` in the catch below.
+    this.notifySessionState(entry.chatId, "active");
     try {
       // Mirror the pattern in `startNewSession` (line 449): the handler may
       // return a DIFFERENT sessionId than the one passed in — e.g. when the
@@ -647,7 +711,6 @@ export class SessionManager {
       entry.claudeSessionId = resumedSessionId;
       this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
-      this.notifySessionState(entry.chatId, "active");
     } catch (err) {
       // Mirror `startNewSession`'s F2 contract (design §3.3): a resume that
       // throws is not the same shape as a suspend (the entry is unusable,
@@ -1031,7 +1094,48 @@ export class SessionManager {
     const session = this.sessions.get(chatId);
     if (!session || session.status !== "active") return;
     this.sessionRuntimeStates.set(chatId, state);
+    // Per-chat D-axis report: the authoritative source the server-side
+    // composite reads. Fire before recomputing the agent-global aggregate
+    // so a single state change drops one frame on each wire (the per-chat
+    // and the agent-global one), in that order — making it harmless if
+    // either consumer races the other.
+    this.config.onSessionRuntimeChange?.(chatId, state);
     this.recomputeRuntimeState();
+  }
+
+  /**
+   * Re-affirm working / blocked / error sessions so the server-side
+   * freshness stamp doesn't lapse mid-turn. Reports only — does NOT
+   * touch `lastActivity` (that governs idle eviction and must not be
+   * reset by a liveness ping). `idle` is deliberately omitted: the
+   * server treats it as the fail-closed default after the stale window
+   * expires, so re-affirming idle is pure wire noise.
+   */
+  private reaffirmRuntimeStates(): void {
+    if (!this.config.onSessionRuntimeChange) return;
+    for (const [chatId, session] of this.sessions) {
+      if (session.status !== "active") continue;
+      const state = this.sessionRuntimeStates.get(chatId);
+      if (state === "working" || state === "blocked" || state === "error") {
+        this.config.onSessionRuntimeChange(chatId, state);
+      }
+    }
+  }
+
+  /**
+   * Per-chat runtime snapshot for `fullStateSync` after reconnect. Lets
+   * the agent-slot re-report the *real* per-chat runtime on a network
+   * reconnect — a session mid-turn reports `working` rather than blanket-
+   * idling. Only `status === 'active'` sessions are returned; a session
+   * with no recorded runtime defaults to `idle`.
+   */
+  getSessionRuntimeStates(): Array<{ chatId: string; runtimeState: RuntimeState }> {
+    const out: Array<{ chatId: string; runtimeState: RuntimeState }> = [];
+    for (const [chatId, session] of this.sessions) {
+      if (session.status !== "active") continue;
+      out.push({ chatId, runtimeState: this.sessionRuntimeStates.get(chatId) ?? "idle" });
+    }
+    return out;
   }
 
   /** Aggregate per-session runtime states: error > blocked > working > idle. */

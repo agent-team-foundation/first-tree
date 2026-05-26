@@ -1,10 +1,36 @@
+import { RUNTIME_STALE_MS } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
-import { upsertSessionState } from "../services/activity.js";
+import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
+import { setSessionRuntime, upsertSessionState } from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import type { Notifier } from "../services/notifier.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 import { readPresence, seedPresence } from "./session-state-helpers.js";
+
+function makeNotifier(): Notifier {
+  return {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    notify: vi.fn(async () => {}),
+    notifyConfigChange: vi.fn(async () => {}),
+    notifySessionStateChange: vi.fn(async () => {}),
+    notifyRuntimeStateChange: vi.fn(async () => {}),
+    notifySessionRuntime: vi.fn(async () => {}),
+    notifyChatMessage: vi.fn(async () => {}),
+    notifySessionEvent: vi.fn(async () => {}),
+    pushFrameToInbox: vi.fn(async () => 0),
+    onConfigChange: vi.fn(),
+    onSessionStateChange: vi.fn(),
+    onSessionEvent: vi.fn(),
+    onRuntimeStateChange: vi.fn(),
+    onSessionRuntime: vi.fn(),
+    onChatMessage: vi.fn(),
+    start: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+  } satisfies Notifier;
+}
 
 describe("upsertSessionState — touchPresenceLastSeen option", () => {
   const getApp = useTestApp();
@@ -114,6 +140,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       notifyConfigChange: vi.fn(async () => {}),
       notifySessionStateChange: vi.fn(async () => {}),
       notifyRuntimeStateChange: vi.fn(async () => {}),
+      notifySessionRuntime: vi.fn(async () => {}),
       notifyChatMessage: vi.fn(async () => {}),
       notifySessionEvent: vi.fn(async () => {}),
       pushFrameToInbox: vi.fn(async () => 0),
@@ -121,6 +148,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       onSessionStateChange: vi.fn(),
       onSessionEvent: vi.fn(),
       onRuntimeStateChange: vi.fn(),
+      onSessionRuntime: vi.fn(),
       onChatMessage: vi.fn(),
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
@@ -150,6 +178,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       notifyConfigChange: vi.fn(async () => {}),
       notifySessionStateChange: vi.fn(async () => {}),
       notifyRuntimeStateChange: vi.fn(async () => {}),
+      notifySessionRuntime: vi.fn(async () => {}),
       notifyChatMessage: vi.fn(async () => {}),
       notifySessionEvent: vi.fn(async () => {}),
       pushFrameToInbox: vi.fn(async () => 0),
@@ -157,6 +186,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       onSessionStateChange: vi.fn(),
       onSessionEvent: vi.fn(),
       onRuntimeStateChange: vi.fn(),
+      onSessionRuntime: vi.fn(),
       onChatMessage: vi.fn(),
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
@@ -171,5 +201,127 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       "suspended",
       admin.organizationId,
     );
+  });
+});
+
+describe("setSessionRuntime — per-(agent,chat) D-axis writer", () => {
+  const getApp = useTestApp();
+
+  async function setupActive() {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `sr-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `sr-target-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Session runtime target",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [agent.uuid],
+    });
+    // Bring the session row into existence + state='active' (default
+    // runtime_state='idle', runtime_state_at=NULL — the transient sentinel).
+    await upsertSessionState(app.db, agent.uuid, chat.id, "active", admin.organizationId);
+    return { app, admin, agent, chat };
+  }
+
+  async function readRuntime(app: Awaited<ReturnType<typeof setupActive>>["app"], agentId: string, chatId: string) {
+    const [row] = await app.db
+      .select({
+        runtimeState: agentChatSessions.runtimeState,
+        runtimeStateAt: agentChatSessions.runtimeStateAt,
+      })
+      .from(agentChatSessions)
+      .where(and(eq(agentChatSessions.agentId, agentId), eq(agentChatSessions.chatId, chatId)))
+      .limit(1);
+    return row ?? null;
+  }
+
+  it("idle → working: bumps row, stamps runtime_state_at, notifies", async () => {
+    const { app, admin, agent, chat } = await setupActive();
+    const notifier = makeNotifier();
+
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier);
+
+    const row = await readRuntime(app, agent.uuid, chat.id);
+    expect(row?.runtimeState).toBe("working");
+    expect(row?.runtimeStateAt).toBeInstanceOf(Date);
+    expect(notifier.notifySessionRuntime).toHaveBeenCalledTimes(1);
+    expect(notifier.notifySessionRuntime).toHaveBeenCalledWith(agent.uuid, chat.id, "working", admin.organizationId);
+  });
+
+  it("fresh same-value re-affirm: bumps timestamp but does NOT notify", async () => {
+    const { app, admin, agent, chat } = await setupActive();
+    const notifier = makeNotifier();
+    // First call: NULL → working (notifies — boundary crossing).
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier);
+    const firstAt = (await readRuntime(app, agent.uuid, chat.id))?.runtimeStateAt?.getTime() ?? 0;
+    vi.mocked(notifier.notifySessionRuntime).mockClear();
+    // Yield to the event loop so the second timestamp is strictly later.
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Second call: working → working, fresh (re-affirm). MUST NOT notify.
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier);
+
+    const secondAt = (await readRuntime(app, agent.uuid, chat.id))?.runtimeStateAt?.getTime() ?? 0;
+    expect(secondAt).toBeGreaterThan(firstAt);
+    expect(notifier.notifySessionRuntime).not.toHaveBeenCalled();
+  });
+
+  it("stale same-value report: bumps timestamp AND notifies (crosses fail-closed boundary)", async () => {
+    const { app, admin, agent, chat } = await setupActive();
+    const notifier = makeNotifier();
+    // Seed a stale `working` directly to simulate a long-silent gap (real
+    // clients refresh every ~30s, server stale window is 90s; here we
+    // forcibly age the row past the cutoff).
+    const oldAt = new Date(Date.now() - RUNTIME_STALE_MS - 5_000);
+    await app.db
+      .update(agentChatSessions)
+      .set({ runtimeState: "working", runtimeStateAt: oldAt })
+      .where(and(eq(agentChatSessions.agentId, agent.uuid), eq(agentChatSessions.chatId, chat.id)));
+
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier);
+
+    const row = await readRuntime(app, agent.uuid, chat.id);
+    expect(row?.runtimeStateAt?.getTime()).toBeGreaterThan(oldAt.getTime());
+    expect(notifier.notifySessionRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("non-active session: skips write and skips notify", async () => {
+    const { app, admin, agent, chat } = await setupActive();
+    // Move row to suspended — runtime reports for non-active sessions are stale.
+    await upsertSessionState(app.db, agent.uuid, chat.id, "suspended", admin.organizationId);
+    const notifier = makeNotifier();
+
+    await setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier);
+
+    const row = await readRuntime(app, agent.uuid, chat.id);
+    expect(row?.runtimeState).toBe("idle"); // untouched
+    expect(row?.runtimeStateAt).toBeNull();
+    expect(notifier.notifySessionRuntime).not.toHaveBeenCalled();
+  });
+
+  it("missing session row: no write, no notify, no throw", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `sr-miss-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `sr-miss-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Missing session target",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [agent.uuid],
+    });
+    const notifier = makeNotifier();
+
+    await expect(
+      setSessionRuntime(app.db, agent.uuid, chat.id, "working", admin.organizationId, notifier),
+    ).resolves.toBeUndefined();
+    expect(notifier.notifySessionRuntime).not.toHaveBeenCalled();
   });
 });
