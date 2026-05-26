@@ -184,11 +184,20 @@ export function groupAndSortCandidates(candidates: MentionCandidate[]): Array<Me
  * candidate sorted my-managed-first, then alphabetically within each
  * group, so the popover surfaces the caller's own agents immediately
  * after typing `@`. With a query, matches are scored by match position
- * (name prefix > displayName prefix > displayName contains) and ties
- * are still broken alphabetically — managedByMe is intentionally NOT a
- * scoring signal once the user has typed something, because at that
- * point they're targeting a specific name and we shouldn't reorder
- * matches under them.
+ * (name prefix > displayName prefix > displayName contains > name
+ * contains) and ties are still broken alphabetically — managedByMe is
+ * intentionally NOT a scoring signal once the user has typed something,
+ * because at that point they're targeting a specific name and we
+ * shouldn't reorder matches under them.
+ *
+ * Name-substring (score 3) is the fallback added in issue 494 — without
+ * it, typing `@agent-110` against a slug like `picker-agent-110` would
+ * return nothing (name not a prefix, displayName "Picker Agent 110"
+ * doesn't contain the literal "agent-110" with hyphen), and the
+ * autocomplete would feel broken relative to the `[+]` picker (which
+ * does substring on the same field). Substring is the floor, not the
+ * ceiling: prefix-on-name still wins so an exact-prefix match floats to
+ * the top.
  */
 export function rankCandidates(candidates: MentionCandidate[], query: string): MentionCandidate[] {
   if (!query) {
@@ -208,6 +217,7 @@ export function rankCandidates(candidates: MentionCandidate[], query: string): M
     if (lowerName.startsWith(query)) score = 0;
     else if (lowerDisplay.startsWith(query)) score = 1;
     else if (lowerDisplay.includes(query)) score = 2;
+    else if (lowerName.includes(query)) score = 3;
     if (score !== Infinity) scored.push({ c, score });
   }
   scored.sort((a, b) => a.score - b.score || (a.c.displayName ?? "").localeCompare(b.c.displayName ?? ""));

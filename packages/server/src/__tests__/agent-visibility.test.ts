@@ -210,6 +210,48 @@ describe("Agent Visibility", () => {
       expect(names).not.toContain("query-cheetah");
     });
 
+    it("whitespace-splits the query into AND-of-keyword matches against name + displayName", async () => {
+      // The user-perceived failure this protects: a search for "Picker
+      // 110" should reach an agent named `picker-agent-110` even though
+      // the literal substring "Picker 110" (with a space) appears in
+      // neither `name` nor `displayName`. Each token alone does, so the
+      // AND-of-OR semantics light it up.
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+
+      await seedAgent(app, { name: "picker-agent-110", type: "autonomous_agent", displayName: "Picker Agent 110" });
+      await seedAgent(app, { name: "picker-agent-220", type: "autonomous_agent", displayName: "Picker Agent 220" });
+      // Match by displayName cross-field: token "blue" only appears here,
+      // token "110" only in the `name` of an unrelated row above. AND-of-
+      // tokens means "blue 110" should match nothing.
+      await seedAgent(app, { name: "blue-team-bot", type: "autonomous_agent", displayName: "Blue Team Bot" });
+
+      const orgId = admin.organizationId;
+
+      // Multi-token, ordering-agnostic — both arrangements should match.
+      for (const q of ["Picker 110", "110 picker"]) {
+        const res = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent(q)}`);
+        expect(res.statusCode, `query="${q}" should succeed`).toBe(200);
+        const names = res.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+        expect(names, `query="${q}" must hit picker-agent-110`).toContain("picker-agent-110");
+        expect(names, `query="${q}" must not hit picker-agent-220`).not.toContain("picker-agent-220");
+      }
+
+      // Cross-token AND must fail when no single row contains both tokens
+      // across either column.
+      const noMatch = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("blue 110")}`);
+      expect(noMatch.statusCode).toBe(200);
+      const noMatchNames = noMatch.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+      expect(noMatchNames).not.toContain("picker-agent-110");
+      expect(noMatchNames).not.toContain("blue-team-bot");
+
+      // Cross-column AND still works: "Bot" in displayName, "blue" in name.
+      const crossCol = await adminReq("GET", `/api/v1/orgs/${orgId}/agents?query=${encodeURIComponent("blue bot")}`);
+      expect(crossCol.statusCode).toBe(200);
+      const crossColNames = crossCol.json<{ items: Array<{ name: string }> }>().items.map((a) => a.name);
+      expect(crossColNames).toContain("blue-team-bot");
+    });
+
     it("respects visibility — does not surface other members' private agents", async () => {
       const app = getApp();
       const adminBundle = await authedRequest(app);

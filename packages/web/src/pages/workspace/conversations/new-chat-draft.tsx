@@ -1,6 +1,6 @@
 import { type Agent, extractMentions, type MentionParticipant } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
+import { ArrowUp, Check, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readFileAsBase64, sendChatMessage, sendFileMessage } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
@@ -194,13 +194,14 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
   // wrong-recipient hazard Codex flagged on PR 556.
   const pickerStale = pickerSearch.trim() !== debouncedPickerSearch.trim() || pickerFetching;
 
-  /** Rows fed to the `[+]` chip-picker dropdown — server-search hits,
-   *  minus chips already on the row and minus self / suspended / no-slug. */
+  /** Rows fed to the `[+]` chip-picker dropdown — server-search hits
+   *  minus self / suspended / no-slug. Chips already on the row are NOT
+   *  filtered out here; the picker renders them with a ✓ instead so a
+   *  search for an already-added agent confirms rather than reads as
+   *  "no match" (operator confusion during PR 556 manual test). */
   const pickerCandidates = useMemo<MentionCandidate[]>(() => {
-    const chipSet = new Set(chips);
     const out: MentionCandidate[] = [];
     for (const a of pickerSearchPage?.items ?? []) {
-      if (chipSet.has(a.uuid)) continue;
       if (myAgentId && a.uuid === myAgentId) continue;
       if (!a.name) continue;
       if (a.status === "suspended") continue;
@@ -212,7 +213,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
       });
     }
     return out;
-  }, [pickerSearchPage?.items, chips, myAgentId, myMemberId]);
+  }, [pickerSearchPage?.items, myAgentId, myMemberId]);
 
   /** Candidates exposed to `useMentionAutocomplete` — union of the
    *  trigger-driven search hits and the running `knownAgents` map.
@@ -688,12 +689,33 @@ function ParticipantChips({
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [highlight, setHighlight] = useState(0);
-  // Mine-first / others grouping + divider, sorted alphabetically within
-  // each group. `selectable` strips the divider so keyboard navigation
-  // walks only commit-able rows.
-  const items = useMemo(() => groupAndSortCandidates(pickerCandidates), [pickerCandidates]);
-  const selectable = useMemo(() => items.filter((it): it is MentionCandidate => !("divider" in it)), [items]);
-  const ambiguous = useMemo(() => ambiguousDisplayNames(pickerCandidates), [pickerCandidates]);
+
+  // Bucket the picker hits into addable (not yet a chip) and already-in
+  // (matched the query but is already on the chip row). Showing already-
+  // in rows with a ✓ instead of dropping them prevents the operator-
+  // confusing "I just added them — why does my search now say no match?"
+  // failure mode found in PR 556 testing.
+  const chipSet = useMemo(() => new Set(chips), [chips]);
+  const addable = useMemo(() => pickerCandidates.filter((c) => !chipSet.has(c.agentId)), [pickerCandidates, chipSet]);
+  const alreadyIn = useMemo(
+    () =>
+      pickerCandidates
+        .filter((c) => chipSet.has(c.agentId))
+        .sort((a, b) => (a.displayName ?? a.name ?? "").localeCompare(b.displayName ?? b.name ?? "")),
+    [pickerCandidates, chipSet],
+  );
+  // Mine-first / others grouping + divider on the addable section, then
+  // the already-in section at the bottom under its own divider.
+  // `selectable` is the addable subset — keyboard navigation + Enter only
+  // walk it; already-in rows are display-only.
+  const items = useMemo(() => {
+    const head = groupAndSortCandidates(addable);
+    if (alreadyIn.length === 0) return head;
+    const tail: Array<MentionCandidate | { divider: true }> = [{ divider: true }, ...alreadyIn];
+    return [...head, ...tail];
+  }, [addable, alreadyIn]);
+  const selectable = useMemo(() => addable, [addable]);
+  const ambiguous = useMemo(() => ambiguousDisplayNames([...addable, ...alreadyIn]), [addable, alreadyIn]);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -729,7 +751,7 @@ function ParticipantChips({
   };
 
   const emptyHint = (() => {
-    if (selectable.length > 0) return null;
+    if (addable.length > 0 || alreadyIn.length > 0) return null;
     // `pickerStale` covers both the in-flight fetch and the
     // debounce-pending window where no fetch has fired yet but the
     // displayed list is already known to be out of date.
@@ -848,12 +870,17 @@ function ParticipantChips({
                 </div>
               ) : (
                 (() => {
-                  let idx = -1;
+                  // `addableIdx` walks only addable rows so the keyboard
+                  // highlight lines up with `selectable`. Already-in rows
+                  // skip the counter (display-only ✓).
+                  let addableIdx = -1;
+                  let dividerIdx = 0;
                   return items.map((item) => {
                     if ("divider" in item) {
+                      dividerIdx += 1;
                       return (
                         <div
-                          key="__divider"
+                          key={`__divider-${dividerIdx}`}
                           role="presentation"
                           style={{
                             height: "var(--hairline)",
@@ -863,8 +890,30 @@ function ParticipantChips({
                         />
                       );
                     }
-                    idx += 1;
-                    const myIdx = idx;
+                    const isInChips = chipSet.has(item.agentId);
+                    if (isInChips) {
+                      return (
+                        <div
+                          key={item.agentId}
+                          role="presentation"
+                          title={item.name ? `@${item.name} — already in this draft` : "Already in this draft"}
+                          className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                          style={{
+                            background: "transparent",
+                            color: "var(--fg-3)",
+                            cursor: "default",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                            <MentionLabel candidate={item} ambiguous={ambiguous} />
+                          </span>
+                          <Check className="h-3.5 w-3.5 shrink-0" aria-label="Already in draft" />
+                        </div>
+                      );
+                    }
+                    addableIdx += 1;
+                    const myIdx = addableIdx;
                     const active = myIdx === highlight;
                     return (
                       <button

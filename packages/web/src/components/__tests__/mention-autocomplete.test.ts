@@ -232,6 +232,34 @@ describe("rankCandidates", () => {
     expect(result.map((c) => c.agentId)).toEqual(["z", "y", "x"]);
   });
 
+  it("non-empty query: name-contains is the lowest-tier fallback (issue 494)", () => {
+    // Mirrors the user-perceived gap: typing `@agent-110` against a slug
+    // `picker-agent-110` returned nothing pre-fix, because none of the
+    // three prior tiers matched (name doesn't start with "agent-110";
+    // displayName "Picker Agent 110" has a space, not a hyphen, so the
+    // contains check on displayName also fails). Name-substring now
+    // catches it.
+    const input = [
+      cand({ agentId: "noise", name: "unrelated", displayName: "Nothing" }),
+      cand({ agentId: "picker-110", name: "picker-agent-110", displayName: "Picker Agent 110" }),
+      cand({ agentId: "picker-220", name: "picker-agent-220", displayName: "Picker Agent 220" }),
+    ];
+    const result = rankCandidates(input, "agent-110");
+    expect(result.map((c) => c.agentId)).toEqual(["picker-110"]);
+  });
+
+  it("non-empty query: prefix-on-name still outranks the new name-contains tier", () => {
+    // Don't regress the prefix-first ordering — `agent` as a query
+    // should still float a slug starting with "agent" above an unrelated
+    // slug that merely contains "agent" mid-token.
+    const input = [
+      cand({ agentId: "mid", name: "test-agent-99", displayName: "X" }), // name contains
+      cand({ agentId: "pfx", name: "agent-1", displayName: "Y" }), // name prefix — winner
+    ];
+    const result = rankCandidates(input, "agent");
+    expect(result.map((c) => c.agentId)[0]).toBe("pfx");
+  });
+
   it("empty query: caps the popover at 8 entries even when more match", () => {
     const input = Array.from({ length: 12 }, (_, i) =>
       cand({ agentId: `agent-${i.toString().padStart(2, "0")}`, managedByMe: i < 3 }),

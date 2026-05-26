@@ -686,14 +686,23 @@ export async function listAgentsForMember(
   if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
   if (type) conditions.push(eq(agents.type, type));
   if (query) {
+    // Whitespace-split into AND-of-keyword matches: each token must appear
+    // as a substring in `name` OR `displayName`. Lets a user search
+    // "Picker 110" and reach `picker-agent-110` (the literal substring
+    // "Picker 110" doesn't appear in either field, but each token alone
+    // does). Single-token input behaves identically to the prior contains
+    // semantics.
+    //
     // Drizzle escapes the bound value, but we still need to neutralise the
     // ILIKE wildcards (`%`, `_`) inside the user-supplied substring so a
     // search for "10%_off" matches that literal text instead of acting as
     // a wildcard pattern.
-    const escaped = query.replace(/[\\%_]/g, (ch) => `\\${ch}`);
-    const pattern = `%${escaped}%`;
-    const match = or(ilike(agents.name, pattern), ilike(agents.displayName, pattern));
-    if (match) conditions.push(match);
+    for (const token of query.split(/\s+/).filter((t) => t.length > 0)) {
+      const escaped = token.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+      const pattern = `%${escaped}%`;
+      const match = or(ilike(agents.name, pattern), ilike(agents.displayName, pattern));
+      if (match) conditions.push(match);
+    }
   }
 
   const where = and(...conditions);

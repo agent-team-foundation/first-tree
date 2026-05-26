@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { Loader2, Plus, UserPlus } from "lucide-react";
+import { Check, Loader2, Plus, UserPlus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { addMeChatParticipants } from "../api/me-chats.js";
 import { useAuth } from "../auth/auth-context.js";
@@ -113,17 +113,34 @@ export function AddParticipantDropdown({
     },
   });
 
-  const outsideCandidates = useMemo(
-    () => candidates.filter((c) => !participantIds.includes(c.agentId)),
-    [candidates, participantIds],
+  // Bucket search hits into addable (not yet in chat) and already-in
+  // (matched the query but is a current participant). Showing the
+  // already-in rows with a ✓ instead of dropping them prevents the
+  // "Picker Agent 110 was just added — why does my search now say 'no
+  // match'?" confusion the operator hit during PR 556 testing.
+  const participantSet = useMemo(() => new Set(participantIds), [participantIds]);
+  const addable = useMemo(() => candidates.filter((c) => !participantSet.has(c.agentId)), [candidates, participantSet]);
+  const alreadyIn = useMemo(
+    () =>
+      candidates
+        .filter((c) => participantSet.has(c.agentId))
+        .sort((a, b) => (a.displayName ?? a.name ?? "").localeCompare(b.displayName ?? b.name ?? "")),
+    [candidates, participantSet],
   );
 
-  // Unified appearance: mine-first / others grouping with a divider.
-  // `items` carries the divider marker; `selectable` is the divider-free
-  // list that keyboard navigation walks.
-  const items = useMemo(() => groupAndSortCandidates(outsideCandidates), [outsideCandidates]);
-  const selectable = useMemo(() => items.filter((it): it is MentionCandidate => !("divider" in it)), [items]);
-  const ambiguous = useMemo(() => ambiguousDisplayNames(outsideCandidates), [outsideCandidates]);
+  // Unified appearance: mine-first / others grouping with a divider, then
+  // the already-in section at the bottom under its own divider. `items`
+  // carries the divider markers; `selectable` is the divider-free list of
+  // ADDABLE rows that keyboard navigation + Enter operate on (already-in
+  // rows are display-only).
+  const items = useMemo(() => {
+    const head = groupAndSortCandidates(addable);
+    if (alreadyIn.length === 0) return head;
+    const tail: Array<MentionCandidate | { divider: true }> = [{ divider: true }, ...alreadyIn];
+    return [...head, ...tail];
+  }, [addable, alreadyIn]);
+  const selectable = useMemo(() => addable, [addable]);
+  const ambiguous = useMemo(() => ambiguousDisplayNames([...addable, ...alreadyIn]), [addable, alreadyIn]);
 
   // Search input is always visible — orgs above the org-list 100-row cap
   // need it to reach agents past page 1, and small orgs get a fast
@@ -186,15 +203,18 @@ export function AddParticipantDropdown({
   const label = addMut.isPending ? "Adding…" : "Add";
 
   /**
-   * Empty-state hint surfaced under the search input when the visible
-   * candidate list is empty. We distinguish:
+   * Empty-state hint surfaced under the search input when the rendered
+   * list (addable + already-in) is empty. We distinguish:
    *   - mid-fetch: don't promise "no matches" — let the user wait
    *   - search has a non-empty term: explicit "no match" for it
    *   - search is empty: rare ("no agents to add"), means every other
    *     visible agent in the org is already a participant
+   * When the only hits are already-in rows we keep the hint null and
+   * just render the ✓ section, so the user sees confirmation rather
+   * than a confusing "no match".
    */
   const emptyHint = (() => {
-    if (selectable.length > 0) return null;
+    if (addable.length > 0 || alreadyIn.length > 0) return null;
     // `searchStale` covers both the in-flight fetch and the
     // debounce-pending window where no fetch has fired yet but the
     // displayed list is already known to be out of date.
@@ -312,12 +332,18 @@ export function AddParticipantDropdown({
               </div>
             ) : (
               (() => {
-                let idx = -1;
+                // `addableIdx` counts only addable rows so the keyboard
+                // highlight index lines up with `selectable` (which the
+                // Enter handler indexes). Already-in rows are display-only
+                // and skip this counter.
+                let addableIdx = -1;
+                let dividerIdx = 0;
                 return items.map((it) => {
                   if ("divider" in it) {
+                    dividerIdx += 1;
                     return (
                       <div
-                        key="__divider"
+                        key={`__divider-${dividerIdx}`}
                         role="presentation"
                         style={{
                           height: "var(--hairline)",
@@ -327,11 +353,35 @@ export function AddParticipantDropdown({
                       />
                     );
                   }
-                  idx += 1;
-                  const myIdx = idx;
-                  const active = myIdx === highlight;
+                  const isInChat = participantSet.has(it.agentId);
                   const fallback = it.displayName ?? it.name ?? it.agentId.slice(0, 8);
                   const avatarSrc = avatarById.get(it.agentId) ?? null;
+                  if (isInChat) {
+                    return (
+                      <div
+                        key={it.agentId}
+                        role="presentation"
+                        title={it.name ? `@${it.name} — already in this chat` : "Already in this chat"}
+                        className="flex w-full items-center text-left"
+                        style={{
+                          gap: "var(--sp-2_5)",
+                          padding: "var(--sp-1_75) var(--sp-2)",
+                          background: "transparent",
+                          color: "var(--fg-3)",
+                          cursor: "default",
+                        }}
+                      >
+                        <RealAvatar src={avatarSrc} name={fallback} seed={it.agentId} size={28} />
+                        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                          <MentionLabel candidate={it} ambiguous={ambiguous} />
+                        </span>
+                        <Check className="h-3.5 w-3.5 shrink-0" aria-label="Already in chat" />
+                      </div>
+                    );
+                  }
+                  addableIdx += 1;
+                  const myIdx = addableIdx;
+                  const active = myIdx === highlight;
                   return (
                     <button
                       key={it.agentId}
