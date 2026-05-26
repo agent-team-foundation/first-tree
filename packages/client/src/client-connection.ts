@@ -18,8 +18,21 @@ import {
 } from "@first-tree/shared";
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
+import { classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
 import { writeImage } from "./runtime/image-store.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
+
+/**
+ * Per-agent bind retry bookkeeping (Bug 5). A failed `agent:bind` no longer
+ * retries on every reconnect; instead each agent gets its own
+ * exponential-backoff window and degraded reasons (org_mismatch,
+ * unknown_agent) flip to permanent skip.
+ */
+type BindRetryRecord = {
+  attempts: number;
+  nextAllowedAt: number;
+  lastReason: string | null;
+};
 
 export type ClientConnectionConfig = {
   serverUrl: string;
@@ -373,6 +386,14 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   >();
 
   /**
+   * Bug 5: per-agent bind retry state. Keyed by agentId. A successful
+   * `agent:bound` clears the entry; a `bind:rejected` updates it according
+   * to the error taxonomy (transient → exponential next attempt; degraded /
+   * permanent → never).
+   */
+  private readonly bindRetryRecords = new Map<string, BindRetryRecord>();
+
+  /**
    * In-flight image writes from recent `image_payload` frames. `image_payload`
    * arrives on the WS just before `inbox:deliver` for the same message, but
    * the EventEmitter dispatch is sync — so without gating, the deliver
@@ -510,6 +531,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
 
     this.desiredBindings.set(agentId, { agentId, runtimeType, runtimeVersion });
+    // Bug 5: an explicit bindAgent call is operator intent — clear any
+    // backoff so this attempt isn't silently skipped.
+    this.bindRetryRecords.delete(agentId);
     return this.sendBind(agentId, runtimeType, runtimeVersion);
   }
 
@@ -893,6 +917,31 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const pending = ref ? this.pendingBinds.get(ref) : undefined;
       if (ref && pending) {
         this.pendingBinds.delete(ref);
+        // Bug 5: classify the reason and update the per-agent retry record.
+        // Transient → exponential backoff; degraded/permanent → never retry.
+        const classification = classify({ reason }, { source: "bind" });
+        const record = this.bindRetryRecords.get(pending.agentId) ?? {
+          attempts: 0,
+          nextAllowedAt: 0,
+          lastReason: null,
+        };
+        record.attempts += 1;
+        record.lastReason = classification.reasonCode;
+        if (classification.kind === ERROR_KINDS.TRANSIENT) {
+          record.nextAllowedAt = Date.now() + nextRetryDelayMs(classification.strategy, record.attempts);
+        } else {
+          record.nextAllowedAt = Number.MAX_SAFE_INTEGER;
+          this.wsLogger.warn(
+            {
+              agentId: pending.agentId,
+              reason,
+              reasonCode: classification.reasonCode,
+              resilienceEvent: "resilience.bind.disabled",
+            },
+            "bind permanently disabled — operator action required",
+          );
+        }
+        this.bindRetryRecords.set(pending.agentId, record);
         this.emit("agent:bind:rejected", reason, pending.agentId);
         pending.reject(new Error(`agent:bind rejected (${reason})`));
       }
@@ -909,6 +958,10 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "agent:pinned") {
       const parsed = agentPinnedMessageSchema.safeParse(msg);
       if (parsed.success) {
+        // Bug 5: a fresh pin from the server is operator intent — clear any
+        // existing bind backoff so the next rebindAgents attempt picks the
+        // agent up immediately instead of sitting inside its window.
+        this.bindRetryRecords.delete(parsed.data.agentId);
         this.emit("agent:pinned", parsed.data);
       }
       return;
@@ -1022,19 +1075,63 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
   }
 
-  /** Re-bind all agents after reconnection. */
+  /**
+   * Re-bind all agents after reconnection. Bug 5: each agent has its own
+   * per-rejection backoff window, so a single bad agent does not spam the
+   * server or our logs on every reconnect. Agents that exhausted their
+   * window are skipped; logs note them at debug level.
+   */
   private rebindAgents(): void {
     this.emit("reconnected");
+    const now = Date.now();
     for (const desired of this.desiredBindings.values()) {
+      const record = this.bindRetryRecords.get(desired.agentId);
+      if (record && record.nextAllowedAt > now) {
+        // Within backoff window — skip but emit a structured event so the
+        // operator / future web surface can see how many agents are paused.
+        this.wsLogger.debug(
+          {
+            agentId: desired.agentId,
+            attempts: record.attempts,
+            nextAllowedAt: record.nextAllowedAt,
+            lastReason: record.lastReason,
+            resilienceEvent: "resilience.bind.skipped",
+          },
+          "bind skipped — within backoff window",
+        );
+        continue;
+      }
       this.sendBind(desired.agentId, desired.runtimeType, desired.runtimeVersion)
         .then((rebound) => {
+          this.bindRetryRecords.delete(rebound.agentId);
           this.boundAgents.set(rebound.agentId, rebound);
+          this.wsLogger.info(
+            { agentId: rebound.agentId, resilienceEvent: "resilience.bind.recovered" },
+            "agent rebind recovered",
+          );
         })
         .catch((err) => {
           this.boundAgents.delete(desired.agentId);
+          // The `agent:bind:rejected` handler already updated the retry
+          // record + emitted any structured event. We still drop the
+          // unbound notification so listeners see the agent went away.
           this.emit("agent:unbound", desired.agentId);
-          this.emit("error", err instanceof Error ? err : new Error(String(err)));
+          this.wsLogger.debug(
+            { agentId: desired.agentId, err: err instanceof Error ? err.message : String(err) },
+            "rebind attempt rejected",
+          );
         });
+    }
+  }
+
+  /**
+   * Clear the per-agent bind backoff so the next reconnect retries this
+   * agent immediately. Called from `bindAgent` (operator just asked to bind
+   * a specific agent) and exposed for higher-level recovery flows.
+   */
+  resetBindRetry(agentId: string): void {
+    if (this.bindRetryRecords.delete(agentId)) {
+      this.wsLogger.info({ agentId }, "bind retry record cleared");
     }
   }
 
