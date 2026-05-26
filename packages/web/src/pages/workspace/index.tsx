@@ -121,6 +121,17 @@ export function WorkspacePage() {
   useEffect(() => {
     if (!isNarrow) setConvOverlayOpen(false);
   }, [isNarrow]);
+  // Esc closes the conversation-list overlay — parallels the existing
+  // Esc handler ChatView uses for its right-rail overlay, so both
+  // overlays behave the same for keyboard users.
+  useEffect(() => {
+    if (!convOverlayOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConvOverlayOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [convOverlayOpen]);
 
   // One-shot legacy redirects, all batched into a single setSearchParams so
   // they don't race on stale `searchParams` snapshots. Each branch returns
@@ -236,6 +247,20 @@ export function WorkspacePage() {
     return <Navigate to="/onboarding" replace />;
   }
 
+  // Pick the width prop based on what role the rail is playing:
+  //   - narrow + no chat → full-bleed (100% of the wrapper) so the list
+  //     covers the whole screen as the main view.
+  //   - narrow + overlay → fluid cap so the inner aside doesn't overflow
+  //     the wrapper on phones narrower than ~23rem logical (same pattern
+  //     ChatRightSidebar uses for its overlay variant).
+  //   - otherwise (inline rail on md/xl) → leave undefined, default 20rem.
+  const conversationListWidth = !isNarrow
+    ? undefined
+    : !selectedChatId
+      ? "100%"
+      : convOverlayOpen
+        ? "min(88vw, 20rem)"
+        : undefined;
   const conversationList = (
     <ConversationList
       selectedChatId={selectedChatId}
@@ -254,6 +279,7 @@ export function WorkspacePage() {
       onClearFilters={clearFilters}
       group={group}
       onGroupChange={setGroup}
+      width={conversationListWidth}
     />
   );
 
