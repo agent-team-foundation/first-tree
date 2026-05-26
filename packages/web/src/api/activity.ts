@@ -1,7 +1,7 @@
-import type { AgentType, AgentVisibility, ClientCapabilities } from "@first-tree/shared";
+import type { AgentType, ClientCapabilities } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
-export type { AgentType, AgentVisibility };
+export type { AgentType };
 
 export type RuntimeAgent = {
   agentId: string;
@@ -12,10 +12,6 @@ export type RuntimeAgent = {
   totalSessions: number | null;
   runtimeUpdatedAt: string | null;
   type: AgentType | null;
-  /** Post-type-merge: surfaces the pre-merge `personal_assistant` vs.
-   *  `autonomous_agent` distinction so the new-chat default-seed picker
-   *  can still prefer the personal-assistant when there's no MRU signal. */
-  visibility: AgentVisibility | null;
   /** True iff the caller's member is the agent's `managerId`. Server-derived;
    *  the client never receives raw `managerId`. Used by the workspace
    *  new-chat view to seed the default chip from agents the caller

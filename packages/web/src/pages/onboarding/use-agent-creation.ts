@@ -20,8 +20,8 @@ export type CreateAgentArgs = {
 };
 
 /**
- * Creates the first agent (an unbound `agent` with `visibility=private`) and
- * waits for it to come online on the connected computer.
+ * Creates the first agent (an unbound `agent` with caller-supplied
+ * `visibility`) and waits for it to come online on the connected computer.
  *
  * Same two-phase shape the legacy Step2Body used: POST `/agents`, then poll
  * `client-status` until the runtime reports online (or a 30s timeout). The

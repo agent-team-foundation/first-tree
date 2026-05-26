@@ -1498,7 +1498,7 @@ function generateStableClaudeMd(workspacePath: string, identity: AgentIdentity, 
   const contextDir = join(workspacePath, ".agent", "context");
 
   // --- Identity ---
-  // Post-type-merge (migration 0048): pre-merge `personal_assistant` and
+  // Post-type-merge (migration 0050): pre-merge `personal_assistant` and
   // `autonomous_agent` collapsed into a single `agent` row. The "personal
   // assistant" vs. "autonomous bot" framing is now carried by
   // `agents.visibility` (private → personal assistant, organization →

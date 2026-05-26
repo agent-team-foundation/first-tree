@@ -265,7 +265,6 @@ export async function listAgentsWithRuntime(db: Database, scope?: OrgScope) {
       totalSessions: agentPresence.totalSessions,
       runtimeUpdatedAt: agentPresence.runtimeUpdatedAt,
       type: agents.type,
-      visibility: agents.visibility,
       managerId: agents.managerId,
     })
     .from(agentPresence)

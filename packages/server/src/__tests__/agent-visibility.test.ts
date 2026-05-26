@@ -474,6 +474,7 @@ describe("Agent Visibility", () => {
       const myAgent = await seedAgent(app, {
         name: "patch-my",
         type: "agent",
+        visibility: "private",
         managerId: member.memberId,
       });
 
@@ -598,6 +599,7 @@ describe("Chat Access Control", () => {
       const assistant = await seedAgent(app, {
         name: "chat-pa",
         type: "agent",
+        visibility: "private",
         managerId: member.memberId,
       });
 
@@ -628,11 +630,13 @@ describe("Chat Access Control", () => {
       const assistantA = await seedAgent(app, {
         name: "chat-a-pa",
         type: "agent",
+        visibility: "private",
         managerId: memberA.memberId,
       });
       const assistantB = await seedAgent(app, {
         name: "chat-b-pa",
         type: "agent",
+        visibility: "private",
         managerId: memberB.memberId,
       });
 
@@ -672,11 +676,13 @@ describe("Chat Access Control", () => {
       const agentA = await seedAgent(app, {
         name: "join-a",
         type: "agent",
+        visibility: "private",
         managerId: member.memberId,
       });
       const agentB = await seedAgent(app, {
         name: "join-b",
         type: "agent",
+        visibility: "private",
         managerId: member.memberId,
       });
 
@@ -714,11 +720,13 @@ describe("Chat Access Control", () => {
       const agentA = await seedAgent(app, {
         name: "nojoin-a",
         type: "agent",
+        visibility: "private",
         managerId: memberA.memberId,
       });
       const agentA2 = await seedAgent(app, {
         name: "nojoin-a2",
         type: "agent",
+        visibility: "private",
         managerId: memberA.memberId,
       });
 
@@ -745,6 +753,7 @@ describe("Chat Access Control", () => {
       const assistant = await seedAgent(app, {
         name: "leave-pa",
         type: "agent",
+        visibility: "private",
         managerId: member.memberId,
       });
 
@@ -771,6 +780,7 @@ describe("Chat Access Control", () => {
       const assistant = await seedAgent(app, {
         name: "leave-other-pa",
         type: "agent",
+        visibility: "private",
         managerId: memberA.memberId,
       });
 
@@ -795,6 +805,7 @@ describe("Chat Access Control", () => {
       const assistant = await seedAgent(app, {
         name: "detail-pa",
         type: "agent",
+        visibility: "private",
         managerId: memberA.memberId,
       });
 
@@ -818,6 +829,7 @@ describe("Chat Access Control", () => {
       const assistant = await seedAgent(app, {
         name: "msg-pa",
         type: "agent",
+        visibility: "private",
         managerId: memberA.memberId,
       });
 
@@ -841,6 +853,7 @@ describe("Chat Access Control", () => {
       const assistant = await seedAgent(app, {
         name: "send-pa",
         type: "agent",
+        visibility: "private",
         managerId: memberA.memberId,
       });
 

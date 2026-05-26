@@ -40,7 +40,7 @@ function generateClaudeMd(
   const sections: string[] = [];
   const contextDir = join(workspacePath, ".agent", "context");
 
-  // Identity — post-type-merge (migration 0048): the "personal assistant"
+  // Identity — post-type-merge (migration 0050): the "personal assistant"
   // vs "autonomous bot" framing is carried by `visibility` (private →
   // personal assistant, organization → autonomous bot). MUST mirror the
   // real `generateClaudeMd` branching in `handlers/claude-code.ts`.
@@ -93,7 +93,7 @@ function generateClaudeMd(
 }
 
 describe("CLAUDE.md generation", () => {
-  // Post-type-merge (migration 0048): the "personal assistant" framing is
+  // Post-type-merge (migration 0050): the "personal assistant" framing is
   // now carried by `visibility=private`; an `agent` row with
   // `visibility=organization` renders as an autonomous bot instead.
   it("generates personal-assistant template when visibility is private", () => {
