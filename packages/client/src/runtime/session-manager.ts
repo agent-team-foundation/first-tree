@@ -776,6 +776,17 @@ export class SessionManager {
       entry.retryNextAt = Date.now() + delayMs;
       // Drop the active slot now so other chats can use it during the
       // backoff window — the retry will re-acquire when it runs.
+      //
+      // Note: we flip `entry.status` to "suspended" locally but DELIBERATELY
+      // skip `notifySessionState(chatId, "suspended")` here. `runRetry` will
+      // re-report `active` within `delayMs` (capped at 5min), and bouncing
+      // the server-side state through `active → suspended → active` on every
+      // transient blip would only generate UI churn (chat presence chip
+      // flickering, server-side state-change events firing twice per retry)
+      // without giving operators new information. The `resilience.session.
+      // retry_scheduled` event emitted just below is the canonical signal
+      // for "we're in the backoff window". Server-side `agent_chat_sessions.
+      // state` therefore stays `active` for the entire retry window.
       this._activeCount--;
       entry.status = "suspended";
       this.sessionRuntimeStates.delete(chatId);
