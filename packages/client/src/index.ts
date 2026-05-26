@@ -26,6 +26,8 @@ export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtim
 export { loadRuntimeConfig } from "./runtime/config.js";
 export { Deduplicator } from "./runtime/deduplicator.js";
 export type { SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
+export type { Classification, ErrorKind, ErrorSource, RetryStrategy } from "./runtime/error-taxonomy.js";
+export { classify, clampRetryAttempt, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
 export { buildMessageDocumentSnapshots } from "./runtime/doc-snapshots.js";
 export type { GitMirrorManager, GitMirrorManagerOptions } from "./runtime/git-mirror-manager.js";
 export { createGitMirrorManager, GitMirrorError } from "./runtime/git-mirror-manager.js";
