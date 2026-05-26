@@ -80,12 +80,12 @@ export function AgentDetailPage() {
     queryKey: ["agent", uuid],
     queryFn: () => getAgent(uuid),
     enabled: !!uuid,
-    // The header `<PresenceChip>` and the Test-action gate both read
-    // `agent.presenceStatus` off this query. No admin-WS frame invalidates
-    // `["agent"]` today, so without polling an agent that goes offline /
-    // reconnects while the page stays open would keep showing the cached
-    // value. Match the 10s cadence the legacy `/activity` poll used before
-    // this surface migrated off it.
+    // The header `<PresenceChip>` and the Test-action gate both derive
+    // from `agent.runtimeState` off this query. No admin-WS frame
+    // invalidates `["agent"]` today, so without polling an agent that
+    // goes offline / reconnects while the page stays open would keep
+    // showing the cached value. Match the 10s cadence the legacy
+    // `/activity` poll used before this surface migrated off it.
     refetchInterval: 10_000,
   });
   const canManageAgent = canManageAgentDetail(agentQuery.data, memberId, role);

@@ -118,8 +118,8 @@ export function TeamPage() {
   const agentsQuery = useQuery({
     queryKey: ["agents", "team-page", isAdmin ? "admin" : "member"],
     queryFn: () => fetchAllAgents((params) => (isAdmin ? listAllAgents(params) : listAgents(params))),
-    // Reachability (the Status column's `<PresenceChip>`) reads
-    // `agent.presenceStatus` off this list. No admin-WS frame invalidates
+    // Reachability (the Status column's `<PresenceChip>`) is derived from
+    // `agent.runtimeState` off this list. No admin-WS frame invalidates
     // `["agents"]` today, so without polling an agent that flips between
     // online and offline while the Team tab stays open would keep showing
     // the stale value until the user refocuses or remounts. Match the 10s
