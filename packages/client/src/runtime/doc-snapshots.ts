@@ -401,7 +401,13 @@ async function classifyOccurrenceFailure(
     real = await safeRealpath(occ.writtenPath);
   } else {
     const normalized = normalizeDocLinkPath(occ.writtenPath);
-    if (!normalized) return "hidden-segment";
+    if (!normalized) {
+      // Step 1 already cleared hidden segments; a null here is the parent-
+      // traversal escape (`../outside.md`) — bucket as out-of-fence so the
+      // chip tooltip says "not in the workspace" instead of mis-attributing
+      // to a hidden directory. (Codex review P3.)
+      return "out-of-fence";
+    }
     real = await safeRealpath(resolve(roots.docBaseReal, normalized));
   }
   if (!real) return "missing";

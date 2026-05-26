@@ -232,6 +232,20 @@ describe("buildMessageDocumentSnapshots — explicit-link rewrite (self / Case A
     expect(failedMentions).toEqual([{ raw: ".agent/secret.md", reason: "hidden-segment" }]);
   });
 
+  it("classifies a relative `..` escape as out-of-fence, not hidden-segment", async () => {
+    // Parent-traversal mentions (`../outside.md`) cannot snapshot — but the
+    // failure reason is "outside the workspace", not "hidden directory". The
+    // chip tooltip would otherwise mis-attribute the cause and confuse the
+    // agent (Codex review round 1 P3).
+    const { docs, failedMentions } = await buildMessageDocumentSnapshots(
+      "see ../outside.md please",
+      root,
+    );
+
+    expect(docs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: "../outside.md", reason: "out-of-fence" }]);
+  });
+
   it("dedupes failedMentions by writtenPath across multiple raw variants", async () => {
     // Two occurrences of the same canonical path under different `:line`
     // suffixes collapse to ONE failedMentions entry on the wire. Web's wrap
