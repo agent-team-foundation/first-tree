@@ -3,7 +3,7 @@
 A walkthrough that takes a brand-new account from signup to a working
 chat with your first agent.
 
-## 1. Open the hub
+## 1. Open the web console
 
 <https://first-tree.ai>
 
@@ -11,9 +11,9 @@ Sign in with GitHub. A personal team is auto-created for you on first
 sign-in; you confirm or rename it in the first-run onboarding stepper.
 
 > **Self-hosting?** Replace the URL above with your own deployment. The
-> rest of this guide is identical — every connect token carries its hub
-> URL in its `iss` claim, so the CLI follows the token rather than a
-> baked-in server name.
+> rest of this guide is identical — every connect token carries its
+> server URL in its `iss` claim, so the CLI follows the token rather
+> than a baked-in server name.
 
 ## 2. Install the CLI
 
@@ -36,9 +36,9 @@ first-tree login <connect-token>
 
 `first-tree login`:
 
-- Decodes the token's `iss` claim to derive the hub URL. **No `--server`
-  flag needed**, and switching to a different hub only requires a new
-  token, not a new command.
+- Decodes the token's `iss` claim to derive the server URL. **No
+  `--server` flag needed**, and switching to a different server only
+  requires a new token, not a new command.
 - Persists the member JWT (access + refresh) at
   `~/.first-tree/hub/config/credentials.json` (mode `0600`).
 - Writes `server.url` and a fresh `client.id` to

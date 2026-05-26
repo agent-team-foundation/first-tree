@@ -47,7 +47,7 @@ first-tree
 - `packages/web/` — React 管理后台（`@first-tree/web`）
 - `packages/github-scan/` — GitHub Scan daemon（`@first-tree/github-scan`）
 - `packages/e2e/` — 黑盒 e2e 测试框架（`@first-tree/e2e`）
-- `skills/` — 单 skill 的 markdown payload（`first-tree`、`first-tree-cloud`、`first-tree-github-scan`、`first-tree-sync`、`first-tree-write`、`first-tree-onboarding`）
+- `skills/` — 单 skill 的 markdown payload（`first-tree`、`first-tree-cloud`、`first-tree-github-scan`、`first-tree-sync`、`first-tree-write`、`first-tree-onboarding`、`github-scan`）
 
 ## 文档
 
