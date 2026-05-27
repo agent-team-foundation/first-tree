@@ -2,7 +2,7 @@ import { type ChildProcess, execSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalizeRepoUrl,
@@ -93,6 +93,42 @@ function processIsAlive(pid: number): boolean {
     // Any other error (e.g. EPERM) implies the pid exists but we can't signal
     // — count as alive to avoid false-negative assertions.
     return true;
+  }
+}
+
+async function waitForProcessExit(proc: ChildProcess, pid: number, timeoutMs = 2_000): Promise<boolean> {
+  if (!processIsAlive(pid)) return true;
+  if (proc.exitCode !== null || proc.signalCode !== null) return !processIsAlive(pid);
+
+  await new Promise<void>((resolveWait) => {
+    const timer = setTimeout(resolveWait, timeoutMs);
+    proc.once("exit", () => {
+      clearTimeout(timer);
+      resolveWait();
+    });
+  });
+
+  return !processIsAlive(pid);
+}
+
+async function withFakeLsofPid(pid: number, run: () => Promise<void>): Promise<void> {
+  const binDir = mkdtempSync(join(tmpdir(), "ftt-fake-lsof-"));
+  const oldPath = process.env.PATH;
+  writeFileSync(join(binDir, "lsof"), `#!/bin/sh\nprintf 'p${pid}\\n'\n`, {
+    encoding: "utf-8",
+    mode: 0o755,
+  });
+  process.env.PATH = [binDir, oldPath].filter(Boolean).join(delimiter);
+
+  try {
+    await run();
+  } finally {
+    if (oldPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = oldPath;
+    }
+    rmSync(binDir, { recursive: true, force: true });
   }
 }
 
@@ -283,18 +319,18 @@ describe("GitMirrorManager — lifecycle", () => {
     expect(processIsAlive(child.pid)).toBe(true);
 
     try {
-      const created = await m.createWorktree({
-        url: fixtureUrl,
-        targetPath: target,
-        sessionKey: "chat-Y",
-        agentName: "agent-x",
+      await withFakeLsofPid(child.pid, async () => {
+        const created = await m.createWorktree({
+          url: fixtureUrl,
+          targetPath: target,
+          sessionKey: "chat-Y",
+          agentName: "agent-x",
+        });
+        expect(created.worktreePath).toBe(target);
       });
-      expect(created.worktreePath).toBe(target);
       expect(existsSync(join(target, "README.md"))).toBe(true);
       expect(existsSync(join(target, "leftover.txt"))).toBe(false);
-      // Give the kernel a beat to mark the pid as zombie/reaped.
-      await new Promise((r) => setTimeout(r, 100));
-      expect(processIsAlive(child.pid)).toBe(false);
+      expect(await waitForProcessExit(child.proc, child.pid)).toBe(true);
     } finally {
       // Belt-and-braces in case the recovery path didn't kill it.
       try {
@@ -328,10 +364,11 @@ describe("GitMirrorManager — lifecycle", () => {
     expect(processIsAlive(child.pid)).toBe(true);
 
     try {
-      await m.removeWorktree({ url: fixtureUrl, path: target, branchName });
+      await withFakeLsofPid(child.pid, async () => {
+        await m.removeWorktree({ url: fixtureUrl, path: target, branchName });
+      });
       expect(existsSync(target)).toBe(false);
-      await new Promise((r) => setTimeout(r, 100));
-      expect(processIsAlive(child.pid)).toBe(false);
+      expect(await waitForProcessExit(child.proc, child.pid)).toBe(true);
     } finally {
       try {
         process.kill(child.pid, "SIGKILL");
