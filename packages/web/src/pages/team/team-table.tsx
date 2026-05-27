@@ -1,6 +1,6 @@
 import type { Agent } from "@first-tree/shared";
 import { Bot, Lock, type LucideIcon, User, Users } from "lucide-react";
-import { type CSSProperties, useState } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 import { AgentChip } from "../../components/agent-chip.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../../components/ui/dense-table.js";
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
+import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { formatDay } from "../../lib/utils.js";
 
 export type { RowAction };
@@ -86,7 +87,16 @@ type Props = {
   getAgentActions: (row: AgentRow) => RowAction[];
 };
 
-const COLUMNS = [
+type ColumnKey = "name" | "delegate" | "manager" | "runtime" | "status" | "created" | "actions";
+
+type Column = {
+  key: ColumnKey;
+  label: string;
+  /** Omit to let the column flex (used by the narrow-mode Name column). */
+  width?: number;
+};
+
+const COLUMNS_WIDE: Column[] = [
   // Column widths sum to ~870 so the table renders without horizontal
   // compression inside the shared 960 page canvas (960 − 48 layout padding
   // − 40 page padding ≈ 872 content width). Every populated cell already
@@ -113,7 +123,20 @@ const COLUMNS = [
   { key: "status", label: "Status", width: 88 },
   { key: "created", label: "Created", width: 88 },
   { key: "actions", label: "", width: 44 },
-] as const;
+];
+
+// Narrow-viewport layout: only Name + Status + actions render as columns.
+// The Manager / Runtime / Created / Delegate signals fold into the Name
+// cell's secondary line so the table fits one screen without horizontal
+// scrolling. Status keeps its own column because PresenceChip is the most
+// scanned signal in the agent roster and the chip's pill width is hostile
+// to wrap inside the Name cell. Total width budget: ~88 (Status) + 44
+// (actions) + Name (flex) ≈ fits the narrowest phone with room to spare.
+const COLUMNS_NARROW: Column[] = [
+  { key: "name", label: "Name" },
+  { key: "status", label: "Status", width: 72 },
+  { key: "actions", label: "", width: 36 },
+];
 
 function sectionCellStyle(isLast: boolean, style?: CSSProperties): CSSProperties | undefined {
   if (!isLast) return style;
@@ -121,17 +144,27 @@ function sectionCellStyle(isLast: boolean, style?: CSSProperties): CSSProperties
 }
 
 export function TeamTable({ groups, clientHostMap, onAgentClick, getHumanActions, getAgentActions }: Props) {
+  const viewport = useWorkspaceViewport();
+  const isNarrow = viewport === "narrow";
+  const columns = isNarrow ? COLUMNS_NARROW : COLUMNS_WIDE;
   return (
-    <DenseTable className="table-fixed">
+    // Narrow drops `table-fixed`: with only Name + Status + Actions we let
+    // the Name column flex to fill the remaining width (Status/Actions are
+    // fixed via td-level `width`). Wide keeps `table-fixed` so the 7-column
+    // canvas balances by the declared widths as before.
+    <DenseTable className={isNarrow ? undefined : "table-fixed"}>
       <DenseTableHeader>
         <DenseTableRow>
-          {COLUMNS.map((col) => (
+          {columns.map((col) => (
             <DenseTableHead
               key={col.key}
               // The first column (Name) also shifts to `sp-6` left padding
               // so the column header sits in the same vertical alignment
               // line as the section title text and the row name text.
-              style={{ width: col.width, ...(col.key === "name" ? { paddingLeft: "var(--sp-6)" } : null) }}
+              style={{
+                width: col.width,
+                ...(col.key === "name" ? { paddingLeft: "var(--sp-6)" } : null),
+              }}
               aria-hidden={col.key === "actions"}
             >
               {col.label}
@@ -143,6 +176,8 @@ export function TeamTable({ groups, clientHostMap, onAgentClick, getHumanActions
         <GroupBody
           key={group.key}
           group={group}
+          columns={columns}
+          isNarrow={isNarrow}
           clientHostMap={clientHostMap}
           onAgentClick={onAgentClick}
           getHumanActions={getHumanActions}
@@ -155,12 +190,16 @@ export function TeamTable({ groups, clientHostMap, onAgentClick, getHumanActions
 
 function GroupBody({
   group,
+  columns,
+  isNarrow,
   clientHostMap,
   onAgentClick,
   getHumanActions,
   getAgentActions,
 }: {
   group: TeamGroup;
+  columns: Column[];
+  isNarrow: boolean;
   clientHostMap: Map<string, string>;
   onAgentClick: (uuid: string) => void;
   getHumanActions: (row: HumanRow) => RowAction[];
@@ -170,11 +209,11 @@ function GroupBody({
 
   return (
     <DenseTableBody>
-      <GroupHeaderRow group={group} open={open} onToggle={() => setOpen((v) => !v)} />
+      <GroupHeaderRow group={group} columnCount={columns.length} open={open} onToggle={() => setOpen((v) => !v)} />
       {open && group.rows.length === 0 && group.emptyMessage && (
         <DenseTableRow>
           <DenseTableCell
-            colSpan={COLUMNS.length}
+            colSpan={columns.length}
             style={{
               color: "var(--fg-4)",
               textAlign: "left",
@@ -190,7 +229,13 @@ function GroupBody({
         group.rows.map((row, index) => {
           const isLast = index === group.rows.length - 1;
           return row.kind === "human" ? (
-            <HumanRowView key={`h:${row.id}`} row={row} actions={getHumanActions(row)} isLast={isLast} />
+            <HumanRowView
+              key={`h:${row.id}`}
+              row={row}
+              actions={getHumanActions(row)}
+              isLast={isLast}
+              isNarrow={isNarrow}
+            />
           ) : (
             <AgentRowView
               key={`a:${row.agent.uuid}`}
@@ -199,6 +244,7 @@ function GroupBody({
               actions={getAgentActions(row)}
               onClick={() => onAgentClick(row.agent.uuid)}
               isLast={isLast}
+              isNarrow={isNarrow}
             />
           );
         })}
@@ -230,7 +276,17 @@ function sectionIcon(key: string): LucideIcon | null {
   }
 }
 
-function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boolean; onToggle: () => void }) {
+function GroupHeaderRow({
+  group,
+  columnCount,
+  open,
+  onToggle,
+}: {
+  group: TeamGroup;
+  columnCount: number;
+  open: boolean;
+  onToggle: () => void;
+}) {
   const Icon = sectionIcon(group.key);
   // Alignment contract (must hold across all 4 sections):
   //   - Section icon at cell X=0 ("hangs out" as section marker).
@@ -288,7 +344,7 @@ function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boo
   return (
     <DenseTableRow>
       <td
-        colSpan={COLUMNS.length}
+        colSpan={columnCount}
         style={{
           // Section header sits at the table's left edge (padding-left: 0);
           // its icon (sp-4 wide) + gap (sp-2) puts the section TITLE TEXT
@@ -330,7 +386,44 @@ function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boo
   );
 }
 
-function HumanRowView({ row, actions, isLast }: { row: HumanRow; actions: RowAction[]; isLast: boolean }) {
+function HumanRowView({
+  row,
+  actions,
+  isLast,
+  isNarrow,
+}: {
+  row: HumanRow;
+  actions: RowAction[];
+  isLast: boolean;
+  isNarrow: boolean;
+}) {
+  if (isNarrow) {
+    // Narrow Name cell folds the delegate signal into a secondary line —
+    // either the resolved delegate identity or the inline "Set delegate →"
+    // CTA (still only clickable when the viewer is self or admin). Status
+    // column stays empty for humans (they have no PresenceChip), matching
+    // the desktop "—" placement so the chip alignment in agent rows below
+    // doesn't shift.
+    return (
+      <DenseTableRow>
+        <DenseTableCell style={sectionCellStyle(isLast, { paddingLeft: "var(--sp-6)" })}>
+          <NameCell
+            displayName={row.displayName}
+            handle={`@${row.username}`}
+            selfTag={row.isSelf}
+            extra={<HumanDelegateInline row={row} />}
+          />
+        </DenseTableCell>
+        <DenseTableCell className="text-label" style={sectionCellStyle(isLast, { color: "var(--fg-4)" })}>
+          —
+        </DenseTableCell>
+        <DenseTableCell style={sectionCellStyle(isLast, { padding: 0, textAlign: "right" })}>
+          <RowActionsMenu actions={actions} ariaLabel={`Actions for ${row.displayName}`} />
+        </DenseTableCell>
+      </DenseTableRow>
+    );
+  }
+
   return (
     <DenseTableRow>
       <DenseTableCell style={sectionCellStyle(isLast, { paddingLeft: "var(--sp-6)" })}>
@@ -355,6 +448,62 @@ function HumanRowView({ row, actions, isLast }: { row: HumanRow; actions: RowAct
         <RowActionsMenu actions={actions} ariaLabel={`Actions for ${row.displayName}`} />
       </DenseTableCell>
     </DenseTableRow>
+  );
+}
+
+/**
+ * Narrow-mode delegate slot inside the Name cell's secondary line. The
+ * verbose chip+tooltip treatment from the desktop Delegate column would
+ * dwarf the single-line caption row at this density, so we render plain
+ * text with a discrete "→ change" affordance trailing it. Same edit
+ * permissions as the desktop cell (self or admin) — non-editable viewers
+ * just see the resolved name.
+ */
+function HumanDelegateInline({ row }: { row: HumanRow }) {
+  if (!row.delegate) {
+    if (!row.canEditDelegate) return null;
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          row.onEditDelegate();
+        }}
+        className="text-caption hover:underline"
+        style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--accent-dim)" }}
+      >
+        Set delegate →
+      </button>
+    );
+  }
+  const label = row.delegate.name ? `@${row.delegate.name}` : row.delegate.displayName;
+  if (!row.canEditDelegate) {
+    return (
+      <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+        Delegate: {label}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        row.onEditDelegate();
+      }}
+      className="text-caption hover:underline"
+      style={{
+        background: "transparent",
+        border: 0,
+        padding: 0,
+        cursor: "pointer",
+        color: "var(--fg-3)",
+        textAlign: "left",
+      }}
+      title="Change delegate"
+    >
+      Delegate: <span style={{ color: "var(--fg-2)" }}>{label}</span>
+    </button>
   );
 }
 
@@ -440,14 +589,56 @@ function AgentRowView({
   actions,
   onClick,
   isLast,
+  isNarrow,
 }: {
   row: AgentRow;
   clientHost: string | null;
   actions: RowAction[];
   onClick: () => void;
   isLast: boolean;
+  isNarrow: boolean;
 }) {
   const { agent, managerLabel, isOwnedBySelf, showVisibilityChip } = row;
+
+  if (isNarrow) {
+    // Narrow Name cell folds Manager · Runs-on · Created into a single
+    // dot-separated caption line so the row still answers "who built it /
+    // where does it run / how old is it" without a 7-column scroll. Order
+    // chosen by scan priority: manager (governance), then runtime+host
+    // (operational), then created (least urgent).
+    const meta = buildAgentMeta({
+      managerLabel,
+      isOwnedBySelf,
+      runtime: agent.runtimeProvider,
+      clientHost,
+      createdAt: agent.createdAt,
+    });
+    return (
+      <DenseTableRow interactive onClick={onClick}>
+        <DenseTableCell style={sectionCellStyle(isLast, { paddingLeft: "var(--sp-6)" })}>
+          <NameCell
+            displayName={agent.displayName}
+            handle={agent.name ? `@${agent.name}` : null}
+            visibility={showVisibilityChip ? agent.visibility : null}
+            extra={
+              <span className="block text-caption truncate" style={{ color: "var(--fg-4)" }} title={meta}>
+                {meta}
+              </span>
+            }
+          />
+        </DenseTableCell>
+        <DenseTableCell style={sectionCellStyle(isLast)}>
+          <PresenceChip status={runtimeStateToPresence(agent.runtimeState)} />
+        </DenseTableCell>
+        <DenseTableCell
+          style={sectionCellStyle(isLast, { padding: 0, textAlign: "right" })}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <RowActionsMenu actions={actions} ariaLabel={`Actions for ${agent.displayName}`} />
+        </DenseTableCell>
+      </DenseTableRow>
+    );
+  }
 
   return (
     <DenseTableRow interactive onClick={onClick}>
@@ -505,11 +696,28 @@ function AgentRowView({
   );
 }
 
+function buildAgentMeta(args: {
+  managerLabel: string | null;
+  isOwnedBySelf: boolean;
+  runtime: string;
+  clientHost: string | null;
+  createdAt: string;
+}): string {
+  const parts: string[] = [];
+  if (args.managerLabel) {
+    parts.push(args.isOwnedBySelf ? `${args.managerLabel} (you)` : args.managerLabel);
+  }
+  parts.push(args.clientHost ? `${args.runtime} @ ${args.clientHost}` : args.runtime);
+  parts.push(formatDay(args.createdAt));
+  return parts.join(" · ");
+}
+
 function NameCell({
   displayName,
   handle,
   selfTag,
   visibility,
+  extra,
 }: {
   displayName: string;
   handle: string | null;
@@ -521,6 +729,13 @@ function NameCell({
    * the section title already encodes the visibility.
    */
   visibility?: Agent["visibility"] | null;
+  /**
+   * Extra caption line rendered below the handle (or below the display
+   * name if no handle). Used in narrow-viewport mode to fold the columns
+   * that got cut (Manager / Runs on / Created / Delegate) into a single
+   * secondary line so the row stays one screen wide.
+   */
+  extra?: ReactNode;
 }) {
   return (
     <div className="min-w-0">
@@ -540,6 +755,7 @@ function NameCell({
           {handle}
         </div>
       )}
+      {extra && <div className="min-w-0">{extra}</div>}
     </div>
   );
 }

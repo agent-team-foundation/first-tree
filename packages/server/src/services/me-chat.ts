@@ -325,6 +325,15 @@ export async function listMeChats(
   // postgres-js returns timestamptz as ISO strings when bound through
   // a raw sql template; coerce below so the response uses ISO
   // strings consistently.
+  //
+  // The `chat_has_explicit_mention_to_me` correlated subquery scans the
+  // caller's unread window (`m.created_at > last_read_at`) for any message
+  // whose `metadata.mentions` JSONB array contains the caller's
+  // human-agent uuid. Distinguishes explicit `@<me>` from the v1 1-on-1
+  // implicit DM auto-mention (services/message.ts:282 `dmAutoProjection`),
+  // which bumps `unread_mention_count` for the red dot but never writes
+  // the recipient into `metadata.mentions`. Uses the existing
+  // `idx_messages_chat_time` for the chat+window scan.
   const rawRows = (await db.execute(sql`
     SELECT
       c.id                  AS chat_id,
@@ -339,7 +348,13 @@ export async function listMeChats(
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
       COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
       ${chatSourceSqlExpression} AS source,
-      c.metadata->>'entityType' AS entity_type
+      c.metadata->>'entityType' AS entity_type,
+      EXISTS (
+        SELECT 1 FROM messages m
+         WHERE m.chat_id = c.id
+           AND m.created_at > COALESCE(cus.last_read_at, '-infinity'::timestamptz)
+           AND m.metadata -> 'mentions' @> jsonb_build_array(${humanAgentId}::text)
+      ) AS chat_has_explicit_mention_to_me
       FROM chats c
       JOIN chat_membership cm
         ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
@@ -373,6 +388,7 @@ export async function listMeChats(
     engagement_status: ChatEngagementStatus;
     source: ChatSource;
     entity_type: string | null;
+    chat_has_explicit_mention_to_me: boolean;
   }>;
 
   const toDate = (v: Date | string | null): Date | null => {
@@ -576,6 +592,7 @@ export async function listMeChats(
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
       busyAgentIds: busyByChat.get(r.chat_id) ?? [],
       chatHasOpenQuestion: hasOpenQuestionByChat.get(r.chat_id) ?? false,
+      chatHasExplicitMentionToMe: r.chat_has_explicit_mention_to_me,
     };
   });
 
