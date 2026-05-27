@@ -1,6 +1,6 @@
 import { type ChildProcess, execSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,9 +11,12 @@ import {
   GitMirrorAuthError,
   GitMirrorError,
   type GitMirrorManager,
+  GitMirrorTimeoutError,
   GitMirrorWorktreeConflictError,
   hashUrl,
   httpsToSshBaseRewrite,
+  isConfigLockError,
+  isLikelyAuthFailure,
   isLikelyHttpsAuthFailure,
   isLikelySshAuthFailure,
   isLikelyTransientNetworkError,
@@ -52,6 +55,39 @@ function makeManager(): GitMirrorManager {
     dataDir: mkdtempSync(join(tmpdir(), "ftt-mgr-")),
     cloneTimeoutMs: 30_000,
   });
+}
+
+function makeLogSpies() {
+  const spies = { warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
+  return {
+    spies,
+    log: spies as unknown as Parameters<typeof createGitMirrorManager>[0]["log"],
+  };
+}
+
+type GitMirrorManagerCoverage = {
+  gitWithNetworkRetry(
+    args: string[],
+    cwd: string | null,
+    timeoutMs: number,
+    opLabel: string,
+  ): Promise<{ stdout: string; stderr: string; elapsedMs: number }>;
+  setHeadAuto(mirrorPath: string, originUrl: string): Promise<boolean>;
+  readOriginUrl(mirrorPath: string): Promise<string | null>;
+  fetchOrigin(mirrorPath: string, originUrl: string): Promise<{ elapsedMs: number; usedFallback: boolean }>;
+  assertMirrorConfig(mirrorPath: string, url: string): Promise<{ migrated: boolean }>;
+  resolveBase(mirrorPath: string, ref: string | undefined): Promise<string>;
+};
+
+function coverageOf(manager: GitMirrorManager): GitMirrorManagerCoverage {
+  return (manager as unknown as { __coverage: GitMirrorManagerCoverage }).__coverage;
+}
+
+function createFakeBareMirror(dataDir: string, url: string): string {
+  const mirrorPath = join(dataDir, "git-mirrors", hashUrl(url));
+  mkdirSync(join(mirrorPath, "objects"), { recursive: true });
+  writeFileSync(join(mirrorPath, "HEAD"), "ref: refs/heads/main\n");
+  return mirrorPath;
 }
 
 function gitIn(cwd: string, args: string): string {
@@ -132,6 +168,26 @@ async function withFakeLsofPid(pid: number, run: () => Promise<void>): Promise<v
   }
 }
 
+async function withFakePath(files: Record<string, string>, run: () => Promise<void>): Promise<void> {
+  const binDir = mkdtempSync(join(tmpdir(), "ftt-fake-path-"));
+  const oldPath = process.env.PATH;
+  for (const [name, body] of Object.entries(files)) {
+    writeFileSync(join(binDir, name), body, { encoding: "utf-8", mode: 0o755 });
+  }
+  process.env.PATH = binDir;
+
+  try {
+    await run();
+  } finally {
+    if (oldPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = oldPath;
+    }
+    rmSync(binDir, { recursive: true, force: true });
+  }
+}
+
 function tryGitIn(cwd: string, args: string): { ok: boolean; stdout: string } {
   try {
     return {
@@ -155,6 +211,22 @@ describe("GitMirrorManager — lifecycle", () => {
     const second = await m.ensureMirror(fixtureUrl);
     expect(second.cloned).toBe(false);
     expect(second.mirrorPath).toBe(first.mirrorPath);
+  });
+
+  it("ensureMirror logs a fresh mirror bootstrap when a logger is configured", async () => {
+    const { spies, log } = makeLogSpies();
+    const m = createGitMirrorManager({
+      dataDir: mkdtempSync(join(tmpdir(), "ftt-ensure-log-")),
+      cloneTimeoutMs: 30_000,
+      log,
+    });
+
+    await m.ensureMirror(fixtureUrl);
+
+    expect(spies.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ gitUrl: fixtureUrl, cloned: true }),
+      "mirror ensured",
+    );
   });
 
   it("ensureMirror configures the mirror with remote-tracking fetch refspec (no mirror flag)", async () => {
@@ -183,6 +255,44 @@ describe("GitMirrorManager — lifecycle", () => {
     expect(existsSync(join(target, "README.md"))).toBe(true);
   });
 
+  it("createWorktree accepts an explicit commit SHA ref", async () => {
+    const m = makeManager();
+    await m.ensureMirror(fixtureUrl);
+    const target = join(workRoot, "wt-explicit-sha");
+    const result = await m.createWorktree({
+      url: fixtureUrl,
+      ref: initialMainSha,
+      targetPath: target,
+      sessionKey: "chat-sha",
+      agentName: "agent-x",
+    });
+
+    expect(result.headCommit).toBe(initialMainSha);
+    expect(gitIn(target, "rev-parse HEAD")).toBe(initialMainSha);
+  });
+
+  it("throws when creating or fetching without a mirror", async () => {
+    const m = makeManager();
+    await expect(
+      m.createWorktree({
+        url: fixtureUrl,
+        targetPath: join(workRoot, "missing-mirror-wt"),
+        sessionKey: "missing",
+        agentName: "agent-x",
+      }),
+    ).rejects.toThrow(`Cannot create worktree — no mirror exists for "${fixtureUrl}"`);
+    await expect(m.fetchMirror(fixtureUrl)).rejects.toThrow(`Cannot fetch — no mirror exists for "${fixtureUrl}"`);
+  });
+
+  it("gcMirrors no-ops when the mirror root does not exist and skips non-bare entries", async () => {
+    const m = makeManager();
+    expect(await m.gcMirrors(new Set())).toEqual({ removed: [] });
+
+    mkdirSync(join(m.mirrorsRoot, "not-a-bare-repo"), { recursive: true });
+    expect(await m.gcMirrors(new Set())).toEqual({ removed: [] });
+    expect(existsSync(join(m.mirrorsRoot, "not-a-bare-repo"))).toBe(true);
+  });
+
   it("different session keys produce disjoint branches on the same mirror", async () => {
     const m = makeManager();
     await m.ensureMirror(fixtureUrl);
@@ -194,6 +304,27 @@ describe("GitMirrorManager — lifecycle", () => {
     writeFileSync(join(a, "scratch.txt"), "in A only");
     expect(existsSync(join(a, "scratch.txt"))).toBe(true);
     expect(existsSync(join(b, "scratch.txt"))).toBe(false);
+  });
+
+  it("reuses an already-attached worktree for the same session branch", async () => {
+    const m = makeManager();
+    await m.ensureMirror(fixtureUrl);
+    const target = join(workRoot, "reuse-same-session");
+    const first = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: target,
+      sessionKey: "reuse-chat",
+      agentName: "agent-x",
+    });
+    const second = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: target,
+      sessionKey: "reuse-chat",
+      agentName: "agent-x",
+    });
+
+    expect(second.branchName).toBe(first.branchName);
+    expect(second.headCommit).toBe(first.headCommit);
   });
 
   it("(sameSessionKey, differentAgents) produces disjoint branches — fixes group-chat collision", async () => {
@@ -241,6 +372,55 @@ describe("GitMirrorManager — lifecycle", () => {
     expect(existsSync(join(occupied, "user-data.txt"))).toBe(true);
   });
 
+  it("createWorktree classifies file and special-file D13 occupants and logs conflicts", async () => {
+    const { spies, log } = makeLogSpies();
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-d13-kind-"));
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, log });
+    await m.ensureMirror(fixtureUrl);
+
+    const occupiedFile = join(workRoot, "occupied-file");
+    writeFileSync(occupiedFile, "important");
+    await expect(
+      m.createWorktree({ url: fixtureUrl, targetPath: occupiedFile, sessionKey: "chat-file", agentName: "agent-x" }),
+    ).rejects.toThrow("occupied by file");
+
+    const occupiedGitRepo = join(workRoot, "occupied-git-repo");
+    mkdirSync(join(occupiedGitRepo, ".git"), { recursive: true });
+    await expect(
+      m.createWorktree({
+        url: fixtureUrl,
+        targetPath: occupiedGitRepo,
+        sessionKey: "chat-git-repo",
+        agentName: "agent-x",
+      }),
+    ).rejects.toThrow("occupied by git-repo");
+
+    const occupiedFifo = join(workRoot, "occupied-fifo");
+    execSync(`mkfifo "${occupiedFifo}"`);
+    try {
+      await expect(
+        m.createWorktree({ url: fixtureUrl, targetPath: occupiedFifo, sessionKey: "chat-fifo", agentName: "agent-x" }),
+      ).rejects.toThrow("occupied by other");
+    } finally {
+      rmSync(occupiedFifo, { force: true });
+    }
+
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPath: occupiedFile, occupantKind: "file" }),
+      "worktree create conflict",
+    );
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPath: occupiedGitRepo, occupantKind: "git-repo" }),
+      "worktree create conflict",
+    );
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPath: occupiedFifo, occupantKind: "other" }),
+      "worktree create conflict",
+    );
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("createWorktree auto-recovers when a leftover sits in a hub-managed root", async () => {
     // Reproduces the production incident: previous session left a directory
     // tree at the worktree target (typical cause: orphaned vite/.vite dep
@@ -273,6 +453,50 @@ describe("GitMirrorManager — lifecycle", () => {
     expect(existsSync(join(target, "packages"))).toBe(false);
 
     rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("createWorktree logs hub-managed leftover auto-recovery", async () => {
+    const { spies, log } = makeLogSpies();
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-heal-log-"));
+    const managedRoot = join(dataDir, "workspaces");
+    mkdirSync(managedRoot, { recursive: true });
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot], log });
+    await m.ensureMirror(fixtureUrl);
+
+    const target = join(managedRoot, "agent-x", "chat-log", "agent-worktree");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "leftover.txt"), "cache");
+
+    await m.createWorktree({ url: fixtureUrl, targetPath: target, sessionKey: "chat-log", agentName: "agent-x" });
+
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPath: target, occupantKind: "directory", hubManagedRoots: [managedRoot] }),
+      "worktree target occupied inside hub-managed root — auto-recovering (kill holders + rm -rf)",
+    );
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("createWorktree fails loudly when hub-managed leftover cleanup cannot remove the target", async () => {
+    if (process.getuid?.() === 0) return;
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-heal-rm-fail-"));
+    const managedRoot = join(dataDir, "workspaces");
+    const lockedParent = join(managedRoot, "locked");
+    const target = join(lockedParent, "agent-worktree");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "leftover.txt"), "cache");
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, hubManagedRoots: [managedRoot] });
+    await m.ensureMirror(fixtureUrl);
+
+    chmodSync(lockedParent, 0o555);
+    try {
+      await expect(
+        m.createWorktree({ url: fixtureUrl, targetPath: target, sessionKey: "chat-rm-fail", agentName: "agent-x" }),
+      ).rejects.toThrow("cleanup failed after killing holders");
+    } finally {
+      chmodSync(lockedParent, 0o755);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it("createWorktree still throws D13 for occupants outside every managed root", async () => {
@@ -395,6 +619,97 @@ describe("GitMirrorManager — lifecycle", () => {
     expect(tryGitIn(mirrorPath, `rev-parse --verify --quiet refs/heads/${branchName}`).ok).toBe(false);
   });
 
+  it("removeWorktree removes orphan directories when the mirror is already gone", async () => {
+    const m = makeManager();
+    const orphan = join(workRoot, "orphan-no-mirror");
+    mkdirSync(orphan, { recursive: true });
+    writeFileSync(join(orphan, "leftover.txt"), "orphan");
+
+    await m.removeWorktree({ url: fixtureUrl, path: orphan, branchName: "hub-session-orphan" });
+
+    expect(existsSync(orphan)).toBe(false);
+  });
+
+  it("removeWorktree prunes stale bookkeeping when the path is already gone", async () => {
+    const m = makeManager();
+    await m.ensureMirror(fixtureUrl);
+    const target = join(workRoot, "remove-already-gone");
+    const { branchName } = await m.createWorktree({
+      url: fixtureUrl,
+      targetPath: target,
+      sessionKey: "remove-gone",
+      agentName: "agent-x",
+    });
+    rmSync(target, { recursive: true, force: true });
+
+    await m.removeWorktree({ url: fixtureUrl, path: target, branchName });
+
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("removeWorktree removes an orphan dir when git worktree remove cannot", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-remove-orphan-"));
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000 });
+    createFakeBareMirror(dataDir, fixtureUrl);
+    const target = join(workRoot, "remove-orphan-dir");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "orphan.txt"), "leftover");
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *"worktree remove"*) exit 1 ;;
+  *"rev-parse --verify"*) exit 1 ;;
+  *) exit 0 ;;
+esac
+`,
+      },
+      async () => {
+        await m.removeWorktree({ url: fixtureUrl, path: target, branchName: "hub-session-orphan" });
+      },
+    );
+
+    expect(existsSync(target)).toBe(false);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("removeWorktree logs when branch deletion fails", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-remove-branch-fail-"));
+    const log = { warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
+    const m = createGitMirrorManager({
+      dataDir,
+      cloneTimeoutMs: 30_000,
+      log: log as unknown as Parameters<typeof createGitMirrorManager>[0]["log"],
+    });
+    createFakeBareMirror(dataDir, fixtureUrl);
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *"rev-parse --verify"*) exit 0 ;;
+  *"branch -D"*) exit 1 ;;
+  *) exit 0 ;;
+esac
+`,
+      },
+      async () => {
+        await m.removeWorktree({
+          url: fixtureUrl,
+          path: join(workRoot, "missing-remove-path"),
+          branchName: "hub-session-leak",
+        });
+      },
+    );
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ branchName: "hub-session-leak" }),
+      "branch -D failed during removeWorktree — config segment will leak until next gcOrphanSessionBranches",
+    );
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("gcMirrors removes mirrors not in the referenced set", async () => {
     const m = makeManager();
     await m.ensureMirror(fixtureUrl);
@@ -443,6 +758,103 @@ describe("GitMirrorManager — lifecycle", () => {
     const m = makeManager();
     const result = await m.gcOrphanSessionBranches();
     expect(result).toEqual({ scanned: 0, deleted: 0, failed: 0 });
+  });
+
+  it("gcOrphanSessionBranches skips non-bare entries under the mirrors root", async () => {
+    const m = makeManager();
+    mkdirSync(join(m.mirrorsRoot, "not-bare"), { recursive: true });
+
+    const result = await m.gcOrphanSessionBranches();
+
+    expect(result).toEqual({ scanned: 0, deleted: 0, failed: 0 });
+  });
+
+  it("gcOrphanSessionBranches skips a mirror when worktree listing fails", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-gc-worktree-list-fail-"));
+    const { spies, log } = makeLogSpies();
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, log });
+    createFakeBareMirror(dataDir, fixtureUrl);
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *"worktree list"*) exit 2 ;;
+  *) exit 0 ;;
+esac
+`,
+      },
+      async () => {
+        await expect(m.gcOrphanSessionBranches()).resolves.toEqual({ scanned: 0, deleted: 0, failed: 0 });
+      },
+    );
+
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ mirror: hashUrl(fixtureUrl) }),
+      "gcOrphanSessionBranches: worktree list failed — skipping mirror",
+    );
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("gcOrphanSessionBranches skips a mirror when branch listing fails", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-gc-branch-list-fail-"));
+    const { spies, log } = makeLogSpies();
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, log });
+    createFakeBareMirror(dataDir, fixtureUrl);
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *"worktree list"*) exit 0 ;;
+  *"for-each-ref"*) exit 2 ;;
+  *) exit 0 ;;
+esac
+`,
+      },
+      async () => {
+        await expect(m.gcOrphanSessionBranches()).resolves.toEqual({ scanned: 0, deleted: 0, failed: 0 });
+      },
+    );
+
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ mirror: hashUrl(fixtureUrl) }),
+      "gcOrphanSessionBranches: branch listing failed — skipping mirror",
+    );
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("gcOrphanSessionBranches counts a failed orphan branch deletion", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-gc-delete-fail-"));
+    const { spies, log } = makeLogSpies();
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, log });
+    createFakeBareMirror(dataDir, fixtureUrl);
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *"worktree list"*) exit 0 ;;
+  *"for-each-ref"*) echo "hub-session-orphan-aaaaaaaa"; exit 0 ;;
+  *"branch -D"*) exit 1 ;;
+  *) exit 0 ;;
+esac
+`,
+      },
+      async () => {
+        await expect(m.gcOrphanSessionBranches()).resolves.toEqual({ scanned: 1, deleted: 0, failed: 1 });
+      },
+    );
+
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ mirror: hashUrl(fixtureUrl), branch: "hub-session-orphan-aaaaaaaa" }),
+      "gcOrphanSessionBranches: branch -D failed",
+    );
+    expect(spies.info).toHaveBeenCalledWith(
+      { scanned: 1, deleted: 0, failed: 1 },
+      "gcOrphanSessionBranches: swept orphan session branches",
+    );
+    rmSync(dataDir, { recursive: true, force: true });
   });
 });
 
@@ -528,6 +940,396 @@ describe("GitMirrorManager — migration from legacy mirror config", () => {
     // Second call is a no-op (idempotent).
     await m.ensureMirror(fixtureUrl);
     expect(gitIn(legacyPath, "config --get remote.origin.fetch")).toBe("+refs/heads/*:refs/remotes/origin/*");
+  });
+});
+
+describe("GitMirrorManager — git process failures", () => {
+  it("classifies config lock errors only for GitMirrorError instances", () => {
+    expect(isConfigLockError(new Error("could not lock config file"))).toBe(false);
+    expect(isConfigLockError(new GitMirrorError("error: could not lock config file config.lock"))).toBe(true);
+  });
+
+  it("surfaces git subprocess timeouts and cleans the partial mirror", async () => {
+    await withFakePath(
+      {
+        git: "#!/bin/sh\n/bin/sleep 5\n",
+      },
+      async () => {
+        const dataDir = mkdtempSync(join(tmpdir(), "ftt-timeout-"));
+        const { spies, log } = makeLogSpies();
+        const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 5, log });
+
+        await expect(m.ensureMirror(fixtureUrl)).rejects.toBeInstanceOf(GitMirrorTimeoutError);
+        expect(existsSync(m.mirrorsRoot)).toBe(true);
+        expect(readdirSync(m.mirrorsRoot)).toHaveLength(0);
+        expect(spies.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ gitUrl: fixtureUrl, timeoutMs: 5, elapsedMs: 5 }),
+          "mirror clone timeout",
+        );
+      },
+    );
+  });
+
+  it("surfaces git spawn errors when git is not on PATH", async () => {
+    await withFakePath({}, async () => {
+      const m = createGitMirrorManager({ dataDir: mkdtempSync(join(tmpdir(), "ftt-no-git-")), cloneTimeoutMs: 30_000 });
+      await expect(m.ensureMirror(fixtureUrl)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("uses the clone timeout from FIRST_TREE_GIT_CLONE_TIMEOUT_MS when no option is provided", async () => {
+    const oldTimeout = process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS;
+    process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS = "5";
+    try {
+      await withFakePath(
+        {
+          git: "#!/bin/sh\n/bin/sleep 5\n",
+        },
+        async () => {
+          const m = createGitMirrorManager({ dataDir: mkdtempSync(join(tmpdir(), "ftt-env-timeout-")) });
+          await expect(m.ensureMirror(fixtureUrl)).rejects.toBeInstanceOf(GitMirrorTimeoutError);
+        },
+      );
+    } finally {
+      if (oldTimeout === undefined) {
+        delete process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS;
+      } else {
+        process.env.FIRST_TREE_GIT_CLONE_TIMEOUT_MS = oldTimeout;
+      }
+    }
+  });
+
+  it("fetchMirror logs auth, timeout, and generic git failure categories", async () => {
+    const authUrl = "https://github.com/acme/auth-fail.git";
+    const authDataDir = mkdtempSync(join(tmpdir(), "ftt-fetch-auth-log-"));
+    const authLog = makeLogSpies();
+    const authManager = createGitMirrorManager({ dataDir: authDataDir, cloneTimeoutMs: 30_000, log: authLog.log });
+    createFakeBareMirror(authDataDir, authUrl);
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *insteadOf*) echo "git@github.com: Permission denied (publickey)." >&2; exit 128 ;;
+  *"fetch --prune origin"*) echo "fatal: Authentication failed for 'https://github.com/acme/auth-fail.git/'" >&2; exit 128 ;;
+  *) exit 0 ;;
+esac
+`,
+      },
+      async () => {
+        await expect(authManager.fetchMirror(authUrl)).rejects.toBeInstanceOf(GitMirrorAuthError);
+      },
+    );
+    expect(authLog.spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ gitUrl: authUrl, errorCode: "auth-failed" }),
+      "mirror fetch failed",
+    );
+
+    const timeoutUrl = "https://github.com/acme/timeout.git";
+    const timeoutDataDir = mkdtempSync(join(tmpdir(), "ftt-fetch-timeout-log-"));
+    const timeoutLog = makeLogSpies();
+    const timeoutManager = createGitMirrorManager({ dataDir: timeoutDataDir, cloneTimeoutMs: 5, log: timeoutLog.log });
+    createFakeBareMirror(timeoutDataDir, timeoutUrl);
+    await withFakePath(
+      {
+        git: "#!/bin/sh\n/bin/sleep 5\n",
+      },
+      async () => {
+        await expect(timeoutManager.fetchMirror(timeoutUrl)).rejects.toBeInstanceOf(GitMirrorTimeoutError);
+      },
+    );
+    expect(timeoutLog.spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ gitUrl: timeoutUrl, errorCode: "timeout" }),
+      "mirror fetch failed",
+    );
+
+    const gitFailUrl = "https://github.com/acme/git-fail.git";
+    const gitFailDataDir = mkdtempSync(join(tmpdir(), "ftt-fetch-git-log-"));
+    const gitFailLog = makeLogSpies();
+    const gitFailManager = createGitMirrorManager({
+      dataDir: gitFailDataDir,
+      cloneTimeoutMs: 30_000,
+      log: gitFailLog.log,
+    });
+    createFakeBareMirror(gitFailDataDir, gitFailUrl);
+    await withFakePath(
+      {
+        git: '#!/bin/sh\necho "fatal: repository not found" >&2\nexit 128\n',
+      },
+      async () => {
+        await expect(gitFailManager.fetchMirror(gitFailUrl)).rejects.toBeInstanceOf(GitMirrorError);
+      },
+    );
+    expect(gitFailLog.spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ gitUrl: gitFailUrl, errorCode: "git-failed" }),
+      "mirror fetch failed",
+    );
+
+    const spawnFailUrl = "https://github.com/acme/spawn-fail.git";
+    const spawnFailDataDir = mkdtempSync(join(tmpdir(), "ftt-fetch-spawn-log-"));
+    const spawnFailLog = makeLogSpies();
+    const spawnFailManager = createGitMirrorManager({
+      dataDir: spawnFailDataDir,
+      cloneTimeoutMs: 30_000,
+      log: spawnFailLog.log,
+    });
+    createFakeBareMirror(spawnFailDataDir, spawnFailUrl);
+    await withFakePath({}, async () => {
+      await expect(spawnFailManager.fetchMirror(spawnFailUrl)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+    expect(spawnFailLog.spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ gitUrl: spawnFailUrl, errorCode: "unknown" }),
+      "mirror fetch failed",
+    );
+
+    rmSync(authDataDir, { recursive: true, force: true });
+    rmSync(timeoutDataDir, { recursive: true, force: true });
+    rmSync(gitFailDataDir, { recursive: true, force: true });
+    rmSync(spawnFailDataDir, { recursive: true, force: true });
+  });
+});
+
+describe("GitMirrorManager — private git helper coverage", () => {
+  it("runs gitWithNetworkRetry onRetry logging for transient git stderr", async () => {
+    const counter = join(mkdtempSync(join(tmpdir(), "ftt-git-retry-")), "count");
+    const log = { warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+count_file="${counter}"
+count=$(/bin/cat "$count_file" 2>/dev/null || echo 0)
+count=$((count + 1))
+echo "$count" > "$count_file"
+if [ "$count" = "1" ]; then
+  echo "fatal: unable to access 'https://github.com/x/y/': LibreSSL SSL_connect: SSL_ERROR_SYSCALL" >&2
+  exit 128
+fi
+echo ok
+`,
+      },
+      async () => {
+        const m = createGitMirrorManager({
+          dataDir: mkdtempSync(join(tmpdir(), "ftt-helper-retry-")),
+          cloneTimeoutMs: 30_000,
+          log: log as unknown as Parameters<typeof createGitMirrorManager>[0]["log"],
+        });
+
+        const out = await coverageOf(m).gitWithNetworkRetry(["fetch"], null, 30_000, "helper-test");
+
+        expect(out.stdout.trim()).toBe("ok");
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ op: "helper-test", attempt: 1 }),
+          "git remote op hit transient network error — retrying",
+        );
+      },
+    );
+  });
+
+  it("drives setHeadAuto primary failure, no-direction, fallback success, and fallback failure paths", async () => {
+    const m = makeManager();
+    const helper = coverageOf(m);
+    const fakeMirror = mkdtempSync(join(tmpdir(), "ftt-helper-head-"));
+
+    await withFakePath(
+      {
+        git: "#!/bin/sh\nexit 1\n",
+      },
+      async () => {
+        expect(await helper.setHeadAuto(fakeMirror, "file:///tmp/repo.git")).toBe(false);
+      },
+    );
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *insteadOf*) exit 0 ;;
+  *) echo primary failed >&2; exit 1 ;;
+esac
+`,
+      },
+      async () => {
+        expect(await helper.setHeadAuto(fakeMirror, "https://github.com/acme/repo.git")).toBe(true);
+      },
+    );
+
+    await withFakePath(
+      {
+        git: "#!/bin/sh\necho set-head failed >&2\nexit 1\n",
+      },
+      async () => {
+        expect(await helper.setHeadAuto(fakeMirror, "git@github.com:acme/repo.git")).toBe(false);
+      },
+    );
+  });
+
+  it("drives fetchOrigin protocol fallback success and auth failure with truncated stderr", async () => {
+    const { spies, log } = makeLogSpies();
+    const m = createGitMirrorManager({
+      dataDir: mkdtempSync(join(tmpdir(), "ftt-helper-fetch-manager-")),
+      cloneTimeoutMs: 30_000,
+      log,
+    });
+    const helper = coverageOf(m);
+    const fakeMirror = mkdtempSync(join(tmpdir(), "ftt-helper-fetch-"));
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *insteadOf*) echo fallback-ok; exit 0 ;;
+  *) echo "fatal: Authentication failed for 'https://github.com/acme/repo.git/'" >&2; exit 128 ;;
+esac
+`,
+      },
+      async () => {
+        const result = await helper.fetchOrigin(fakeMirror, "https://github.com/acme/repo.git");
+        expect(result.usedFallback).toBe(true);
+      },
+    );
+    expect(spies.info).toHaveBeenCalledWith(
+      expect.objectContaining({ gitUrl: "https://github.com/acme/repo.git", fromProtocol: "https", toProtocol: "ssh" }),
+      "fetch failed with credential-shaped error; retrying with peer-protocol insteadOf rewrite",
+    );
+    expect(spies.info).toHaveBeenCalledWith(
+      { gitUrl: "https://github.com/acme/repo.git", toProtocol: "ssh" },
+      "protocol-fallback fetch succeeded",
+    );
+
+    const longPrimary = `fatal: Authentication failed ${"p".repeat(700)}`;
+    const longFallback = `git@github.com: Permission denied (publickey). ${"s".repeat(700)}`;
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *insteadOf*) echo "${longFallback}" >&2; exit 128 ;;
+  *) echo "${longPrimary}" >&2; exit 128 ;;
+esac
+`,
+      },
+      async () => {
+        await expect(helper.fetchOrigin(fakeMirror, "https://github.com/acme/repo.git")).rejects.toThrow(
+          /\[truncated\]/,
+        );
+      },
+    );
+  });
+
+  it("drives fetchOrigin short auth errors and disabled fallback directions", async () => {
+    const m = makeManager();
+    const helper = coverageOf(m);
+    const fakeMirror = mkdtempSync(join(tmpdir(), "ftt-helper-fetch-short-"));
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *insteadOf*) echo "git@github.com: Permission denied (publickey)." >&2; exit 128 ;;
+  *) echo "fatal: Authentication failed for 'https://github.com/acme/repo.git/'" >&2; exit 128 ;;
+esac
+`,
+      },
+      async () => {
+        await expect(helper.fetchOrigin(fakeMirror, "https://github.com/acme/repo.git")).rejects.toThrow(
+          /HTTPS attempt failed: git fetch/,
+        );
+      },
+    );
+
+    await withFakePath(
+      {
+        git: '#!/bin/sh\necho "Permission denied (publickey)." >&2\nexit 128\n',
+      },
+      async () => {
+        await expect(helper.fetchOrigin(fakeMirror, "ssh://git@github.com:2222/acme/repo.git")).rejects.toBeInstanceOf(
+          GitMirrorError,
+        );
+      },
+    );
+  });
+
+  it("repairs missing and mismatched mirror config through assertMirrorConfig", async () => {
+    const { spies, log } = makeLogSpies();
+    const m = createGitMirrorManager({
+      dataDir: mkdtempSync(join(tmpdir(), "ftt-helper-config-manager-")),
+      cloneTimeoutMs: 30_000,
+      log,
+    });
+    const helper = coverageOf(m);
+    const bareWithoutRemote = mkdtempSync(join(tmpdir(), "ftt-bare-without-remote-"));
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *"config --get remote.origin.url"*) exit 1 ;;
+  *"config --get-all remote.origin.fetch"*) exit 1 ;;
+  *"config --get remote.origin.mirror"*) exit 1 ;;
+  *"remote add origin"*) exit 0 ;;
+  *"fetch --prune origin"*) exit 0 ;;
+  *"remote set-head origin --auto"*) exit 0 ;;
+  *) exit 0 ;;
+esac
+`,
+      },
+      async () => {
+        await expect(helper.readOriginUrl(bareWithoutRemote)).resolves.toBeNull();
+        await expect(helper.assertMirrorConfig(bareWithoutRemote, fixtureUrl)).resolves.toEqual({ migrated: true });
+      },
+    );
+    expect(spies.info).toHaveBeenCalledWith({ gitUrl: fixtureUrl }, "mirror config migrated");
+
+    const emptyOriginMirror = mkdtempSync(join(tmpdir(), "ftt-empty-origin-"));
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *"config --get remote.origin.url"*) exit 0 ;;
+  *) exit 1 ;;
+esac
+`,
+      },
+      async () => {
+        await expect(helper.readOriginUrl(emptyOriginMirror)).resolves.toBeNull();
+      },
+    );
+
+    const { mirrorPath } = await m.ensureMirror(fixtureUrl);
+    await expect(helper.readOriginUrl(mirrorPath)).resolves.toBe(fixtureUrl);
+    execSync("git remote set-url origin file:///tmp/wrong-upstream.git", { cwd: mirrorPath });
+    await expect(helper.assertMirrorConfig(mirrorPath, fixtureUrl)).resolves.toEqual({ migrated: true });
+    expect(gitIn(mirrorPath, "config --get remote.origin.url")).toBe(fixtureUrl);
+  });
+
+  it("covers resolveBase missing default branch and last-resort ref paths", async () => {
+    const m = makeManager();
+    const helper = coverageOf(m);
+    const { mirrorPath } = await m.ensureMirror(fixtureUrl);
+
+    await expect(helper.resolveBase(mirrorPath, "main")).resolves.toBe("refs/remotes/origin/main");
+    await expect(helper.resolveBase(mirrorPath, "missing-local-ref")).resolves.toBe("missing-local-ref");
+
+    rmSync(join(mirrorPath, "refs", "remotes", "origin", "HEAD"), { force: true });
+    execSync("git remote remove origin", { cwd: mirrorPath });
+    await expect(helper.resolveBase(mirrorPath, undefined)).rejects.toThrow("Cannot resolve default branch");
+  });
+
+  it("logs origin/HEAD self-healing during default base resolution", async () => {
+    const { spies, log } = makeLogSpies();
+    const m = createGitMirrorManager({
+      dataDir: mkdtempSync(join(tmpdir(), "ftt-helper-resolve-log-")),
+      cloneTimeoutMs: 30_000,
+      log,
+    });
+    const helper = coverageOf(m);
+    const { mirrorPath } = await m.ensureMirror(fixtureUrl);
+    rmSync(join(mirrorPath, "refs", "remotes", "origin", "HEAD"), { force: true });
+
+    await expect(helper.resolveBase(mirrorPath, undefined)).resolves.toBe("refs/remotes/origin/HEAD");
+
+    expect(spies.info).toHaveBeenCalledWith(
+      { mirrorPath, gitUrl: fixtureUrl },
+      "origin/HEAD self-healed via setHeadAuto",
+    );
   });
 });
 
@@ -694,6 +1496,19 @@ describe("GitMirrorManager — HTTPS auth failure heuristic (isLikelyHttpsAuthFa
     "Host key verification failed.",
   ])("does NOT match: %s", (msg) => {
     expect(isLikelyHttpsAuthFailure(msg)).toBe(false);
+  });
+});
+
+describe("GitMirrorManager — auth failure union helper", () => {
+  it("matches either HTTPS or SSH credential failures", () => {
+    expect(isLikelyAuthFailure("fatal: Authentication failed for 'https://github.com/foo/bar.git/'")).toBe(true);
+    expect(isLikelyAuthFailure("git@github.com: Permission denied (publickey).")).toBe(true);
+    expect(isLikelyAuthFailure("fatal: repository not found")).toBe(false);
+  });
+
+  it("constructs timeout and auth errors with stable names", () => {
+    expect(new GitMirrorTimeoutError("slow").name).toBe("GitMirrorTimeoutError");
+    expect(new GitMirrorAuthError("denied").name).toBe("GitMirrorAuthError");
   });
 });
 
@@ -925,6 +1740,17 @@ describe("GitMirrorManager — retryOnTransientNetwork policy", () => {
     expect(op).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces the original error when a sparse retry delay is missing", async () => {
+    const op = vi.fn().mockRejectedValue(transientErr);
+    const sparseDelays: number[] = [];
+    sparseDelays.length = 1;
+
+    await expect(flush(retryOnTransientNetwork(op, { delaysMs: sparseDelays, isRetryable }))).rejects.toThrow(
+      transientErr,
+    );
+    expect(op).toHaveBeenCalledTimes(1);
+  });
+
   it("handles non-Error throwables by classifying via String(value)", async () => {
     const op = vi.fn().mockRejectedValue("LibreSSL SSL_connect: SSL_ERROR_SYSCALL");
     const onRetry = vi.fn();
@@ -1063,6 +1889,7 @@ describe("GitMirrorManager — https→ssh URL rewrite (httpsToSshBaseRewrite)",
   it("returns null on parse failure / empty input", () => {
     expect(httpsToSshBaseRewrite("")).toBeNull();
     expect(httpsToSshBaseRewrite("not a url")).toBeNull();
+    expect(httpsToSshBaseRewrite("https://[bad")).toBeNull();
   });
 });
 
@@ -1085,6 +1912,13 @@ describe("GitMirrorManager — ssh→https URL rewrite (sshToHttpsBaseRewrite)",
   it("maps ssh:// URL form to https (default port)", () => {
     expect(sshToHttpsBaseRewrite("ssh://git@github.com/owner/repo.git")).toEqual({
       sshBase: "ssh://git@github.com/",
+      httpsBase: "https://github.com/",
+    });
+  });
+
+  it("maps ssh:// URL form without an explicit username", () => {
+    expect(sshToHttpsBaseRewrite("ssh://github.com/owner/repo.git")).toEqual({
+      sshBase: "ssh://github.com/",
       httpsBase: "https://github.com/",
     });
   });
@@ -1123,6 +1957,7 @@ describe("GitMirrorManager — ssh→https URL rewrite (sshToHttpsBaseRewrite)",
     expect(sshToHttpsBaseRewrite("file:///tmp/repo")).toBeNull();
     expect(sshToHttpsBaseRewrite("")).toBeNull();
     expect(sshToHttpsBaseRewrite("not-a-url")).toBeNull();
+    expect(sshToHttpsBaseRewrite("ssh://[bad")).toBeNull();
   });
 });
 
@@ -1247,5 +2082,56 @@ describe("GitMirrorManager — concurrency", () => {
     expect(ra.branchName).not.toBe(rb.branchName);
     expect(existsSync(a)).toBe(true);
     expect(existsSync(b)).toBe(true);
+  });
+
+  it("retries createWorktree when git reports config.lock contention", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "ftt-config-lock-"));
+    const { spies, log } = makeLogSpies();
+    const m = createGitMirrorManager({ dataDir, cloneTimeoutMs: 30_000, log });
+    createFakeBareMirror(dataDir, fixtureUrl);
+    const target = join(workRoot, "config-lock-retry");
+    const counter = join(dataDir, "worktree-add-count");
+
+    await withFakePath(
+      {
+        git: `#!/bin/sh
+case "$*" in
+  *"worktree prune"*) exit 0 ;;
+  *"rev-parse --verify --quiet refs/heads/"*) exit 1 ;;
+  *"cat-file -e"*) exit 0 ;;
+  *"worktree add -b"*)
+    count=$(/bin/cat "${counter}" 2>/dev/null || echo 0)
+    count=$((count + 1))
+    echo "$count" > "${counter}"
+    if [ "$count" = "1" ]; then
+      echo "error: could not lock config file config.lock" >&2
+      exit 255
+    fi
+    /bin/mkdir -p "$5"
+    exit 0
+    ;;
+  *"rev-parse HEAD"*) echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; exit 0 ;;
+  *) exit 0 ;;
+esac
+`,
+      },
+      async () => {
+        const result = await m.createWorktree({
+          url: fixtureUrl,
+          ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          targetPath: target,
+          sessionKey: "lock-chat",
+          agentName: "agent-x",
+        });
+        expect(result.headCommit).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      },
+    );
+
+    expect(existsSync(target)).toBe(true);
+    expect(spies.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ gitUrl: fixtureUrl, branchName: expect.stringMatching(/^hub-session-/), attempt: 1 }),
+      "worktree add hit config lock contention — retrying",
+    );
+    rmSync(dataDir, { recursive: true, force: true });
   });
 });
