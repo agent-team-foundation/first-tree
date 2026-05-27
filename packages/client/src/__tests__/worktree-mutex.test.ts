@@ -66,4 +66,38 @@ describe("withWorktreePathLock", () => {
     await first;
     expect(order).toEqual(["first:start", "second", "first:end"]);
   });
+
+  it("still releases when the self promise resolver keeps its initializer", async () => {
+    await withWorktreePathLock("/tmp/worktree-noop-resolver", async () => "prime");
+
+    const NativePromise = globalThis.Promise;
+    let skipNextExecutor = true;
+    class NoExecutorOncePromise<T> extends NativePromise<T> {
+      constructor(
+        executor: (resolve: (value: T | PromiseLike<T>) => void, reject: (reason?: unknown) => void) => void,
+      ) {
+        if (skipNextExecutor) {
+          skipNextExecutor = false;
+          super(() => {});
+          return;
+        }
+        super(executor);
+      }
+    }
+
+    Object.defineProperty(globalThis, "Promise", {
+      configurable: true,
+      value: NoExecutorOncePromise,
+      writable: true,
+    });
+    try {
+      await expect(withWorktreePathLock("/tmp/worktree-noop-resolver", async () => "ok")).resolves.toBe("ok");
+    } finally {
+      Object.defineProperty(globalThis, "Promise", {
+        configurable: true,
+        value: NativePromise,
+        writable: true,
+      });
+    }
+  });
 });

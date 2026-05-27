@@ -78,6 +78,28 @@ describe("AgentConfigCache (Step 4)", () => {
     expect(sdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("stores a fetched config when the placeholder entry was forgotten mid-flight", async () => {
+    let resolveConfig: (cfg: AgentRuntimeConfig) => void = () => {};
+    const sdk = {
+      fetchAgentConfig: vi.fn(
+        () =>
+          new Promise<AgentRuntimeConfig>((resolve) => {
+            resolveConfig = resolve;
+          }),
+      ),
+      isHubReachable: vi.fn(),
+    } as unknown as FirstTreeHubSDK;
+    const cache = createAgentConfigCache({ sdk });
+
+    const pending = cache.refresh("agent-1");
+    cache.forget("agent-1");
+    resolveConfig(makeConfig(9, ["https://github.com/foo/recovered.git"]));
+
+    await expect(pending).resolves.toMatchObject({ version: 9 });
+    expect(cache.get("agent-1")?.version).toBe(9);
+    expect([...cache.allReferencedUrls()]).toEqual(["https://github.com/foo/recovered.git"]);
+  });
+
   it("allReferencedUrls aggregates across agents", async () => {
     const cfgA = makeConfig(1, ["https://github.com/foo/a.git"]);
     const cfgB = makeConfig(1, ["https://github.com/foo/b.git", "https://github.com/foo/c.git"]);

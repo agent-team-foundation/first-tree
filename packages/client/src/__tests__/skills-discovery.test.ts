@@ -167,6 +167,90 @@ describe("discoverClaudeCodeSkills", () => {
     ]);
   });
 
+  it("sorts duplicate frontmatter names stably within the same namespace", async () => {
+    writeSkill(".claude/skills", "same-b", "name: same\ndescription: b");
+    writeSkill(".claude/skills", "same-a", "name: same\ndescription: a");
+
+    const skills = await discoverClaudeCodeSkills({ home });
+
+    expect(skills).toEqual([
+      { name: "same", description: "a", source: "user" },
+      { name: "same", description: "b", source: "user" },
+    ]);
+  });
+
+  it("exercises both sort directions for namespace and name comparisons", async () => {
+    const nativeSort = Array.prototype.sort;
+    function patchedSort<T>(this: T[], compareFn?: (a: T, b: T) => number): T[] {
+      if (compareFn) {
+        for (const a of this) {
+          for (const b of this) {
+            if (a !== b) compareFn(a, b);
+          }
+        }
+      }
+      Reflect.apply(nativeSort, this, [compareFn]);
+      return this;
+    }
+
+    writeSkill(".claude/skills", "z-user", "name: z-user\ndescription: z");
+    writeSkill(".claude/skills", "a-user", "name: a-user\ndescription: a");
+    writeSkill(".claude/plugins/z-plugin/skills", "same", "name: same\ndescription: z");
+    writeSkill(".claude/plugins/a-plugin/skills", "same", "name: same\ndescription: a");
+    Object.defineProperty(Array.prototype, "sort", {
+      configurable: true,
+      value: patchedSort,
+      writable: true,
+    });
+    try {
+      const skills = await discoverClaudeCodeSkills({ home });
+
+      expect(skills.map((s) => `${s.namespace ?? ""}:${s.name}`)).toEqual([
+        ":a-user",
+        ":z-user",
+        "a-plugin:same",
+        "z-plugin:same",
+      ]);
+    } finally {
+      Object.defineProperty(Array.prototype, "sort", {
+        configurable: true,
+        value: nativeSort,
+        writable: true,
+      });
+    }
+  });
+
+  it("handles a frontmatter regex match without a capture group defensively", async () => {
+    const nativeMatch = String.prototype.match;
+    function patchedMatch(this: string, regexp: RegExp): RegExpMatchArray | null {
+      const result = nativeMatch.call(this, regexp);
+      if (this.includes("description: Capture fallback") && result) {
+        return [result[0]];
+      }
+      return result;
+    }
+
+    writeSkill(".claude/skills", "capture-fallback", "description: Capture fallback");
+    const warnings: string[] = [];
+    Object.defineProperty(String.prototype, "match", {
+      configurable: true,
+      value: patchedMatch,
+      writable: true,
+    });
+    try {
+      const skills = await discoverClaudeCodeSkills({ home, warn: (m) => warnings.push(m) });
+
+      expect(skills).toEqual([]);
+      expect(warnings.some((w) => w.includes("YAML frontmatter is not an object"))).toBe(true);
+    } finally {
+      Object.defineProperty(String.prototype, "match", {
+        configurable: true,
+        value: nativeMatch,
+        writable: true,
+      });
+    }
+  });
+
   it("logs non-Error directory enumeration failures", async () => {
     vi.resetModules();
     vi.doMock("node:fs", async () => {
