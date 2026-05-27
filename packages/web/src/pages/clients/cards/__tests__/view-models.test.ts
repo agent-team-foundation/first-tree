@@ -46,7 +46,7 @@ function agent(overrides: Partial<RuntimeAgent>): RuntimeAgent {
     activeSessions: null,
     totalSessions: null,
     runtimeUpdatedAt: null,
-    type: "autonomous_agent",
+    type: "agent",
     managedByMe: true,
     ...overrides,
   };

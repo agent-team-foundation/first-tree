@@ -6,12 +6,32 @@ import { runtimeProviderSchema } from "./runtime-provider.js";
 
 export const AGENT_TYPES = {
   HUMAN: "human",
-  PERSONAL_ASSISTANT: "personal_assistant",
-  AUTONOMOUS_AGENT: "autonomous_agent",
+  AGENT: "agent",
 } as const;
 
-export const agentTypeSchema = z.enum(["human", "personal_assistant", "autonomous_agent"]);
+export const agentTypeSchema = z.enum(["human", "agent"]);
 export type AgentType = z.infer<typeof agentTypeSchema>;
+
+/**
+ * Wire-compatibility enum for `agent:pinned` WebSocket frames. Accepts the
+ * post-merge values (`human`, `agent`) AND the pre-merge values
+ * (`personal_assistant`, `autonomous_agent`) so that:
+ *
+ *   - **Old clients (≤ 0.5.1)** can still parse frames pushed by post-merge
+ *     servers — the server translates `agent` rows back to the old enum based
+ *     on `visibility` (private → personal_assistant, organization →
+ *     autonomous_agent) before sending. The old client decodes a value it
+ *     recognises and keeps working without an upgrade.
+ *   - **New clients (≥ 0.5.2)** can still parse frames pushed by pre-merge
+ *     servers if the rollout interleaves — they see one of the legacy values
+ *     and downstream code collapses it to `agent` (visibility is the
+ *     authoritative axis post-merge anyway).
+ *
+ * Remove the two legacy values once every deployed client is on a release
+ * that emits/consumes only the post-merge values.
+ */
+export const legacyWireAgentTypeSchema = z.enum(["human", "agent", "personal_assistant", "autonomous_agent"]);
+export type LegacyWireAgentType = z.infer<typeof legacyWireAgentTypeSchema>;
 
 export const AGENT_VISIBILITY = {
   PRIVATE: "private",
@@ -256,7 +276,16 @@ export const agentPinnedMessageSchema = z.object({
    * non-null string, so tightening this here is wire-compatible.
    */
   displayName: z.string(),
-  agentType: agentTypeSchema,
+  /**
+   * Wire-only: accepts the 4-value legacy enum (`human`, `agent`,
+   * `personal_assistant`, `autonomous_agent`) for cross-version
+   * compatibility. See {@link legacyWireAgentTypeSchema}. The server emits
+   * the post-merge canonical (`human` / `agent`) for new clients and
+   * translates `agent` rows back to `personal_assistant` / `autonomous_agent`
+   * for older clients that predate the type-merge. New consumers should
+   * collapse the two legacy values to `agent` after parsing.
+   */
+  agentType: legacyWireAgentTypeSchema,
   /**
    * Authoritative runtime provider for this agent (post-0026). Older clients
    * that omit this field on parse are tolerated by the consumer side, which

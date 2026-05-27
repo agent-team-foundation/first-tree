@@ -23,7 +23,7 @@ export const agents = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organizations.id),
-    /** "human" | "personal_assistant" | "autonomous_agent" */
+    /** "human" | "agent" */
     type: text("type").notNull(),
     /**
      * Required human-readable label. Defaulted to `name` (or "Unnamed Agent"

@@ -45,7 +45,7 @@ If the task only gives you a package name, a docs URL, and a server URL, transla
 
    ```bash
    first-tree agent create <name> \
-     --server <url> --type <human|personal_assistant|autonomous_agent> \
+     --server <url> --type <human|agent> \
      --client-id "$(first-tree config get client.id | awk '{print $2}')"
    ```
 
@@ -85,7 +85,7 @@ Interpret it as:
 
 - **Required**
   - agent `name`
-  - agent `type`: `human`, `personal_assistant`, or `autonomous_agent`
+  - agent `type`: `human` or `agent`
   - `client-id` (run `first-tree config get client.id` to read it)
   - `server` URL (unless already in `client.yaml` / env)
 - **Optional**
@@ -97,12 +97,12 @@ Interpret it as:
 ## Type-Specific Notes
 
 - **`human`**
-  - After creating the human agent, create a separate `personal_assistant` agent if needed (`agent create <assistant-name> --type personal_assistant`).
+  - After creating the human agent, create a separate `agent` (with `visibility=private`) if a personal assistant is desired (`agent create <assistant-name> --type agent`).
   - If a Feishu bot is bound, remind the human to send `/bind <name>` in Feishu after the command completes.
-- **`autonomous_agent`**
-  - Standalone — no companion assistant.
+- **`agent`** (autonomous, `visibility=organization`)
+  - Standalone bot — no companion human required.
   - Feishu bot binding is optional; no `/bind` follow-up.
-- **`personal_assistant`**
+- **`agent`** (personal assistant, `visibility=private`)
   - Usually paired with a human agent on the same machine.
 
 ## Example Commands
@@ -120,7 +120,7 @@ first-tree agent create alice \
 
 first-tree agent create alice-assistant \
   --server https://first-tree.staging.unispark.dev/ \
-  --type personal_assistant --client-id "$CLIENT_ID"
+  --type agent --client-id "$CLIENT_ID"
 
 first-tree agent bind bot --platform feishu \
   --app-id "$FEISHU_APP_ID" --app-secret "$FEISHU_APP_SECRET" \
@@ -136,7 +136,7 @@ first-tree login <token>
 
 first-tree agent create code-reviewer \
   --server https://first-tree.staging.unispark.dev/ \
-  --type autonomous_agent --display-name "Code Review" \
+  --type agent --display-name "Code Review" \
   --client-id "$(first-tree config get client.id | awk '{print $2}')"
 
 first-tree daemon start

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/su;
-const VALID_TYPES = new Set(["human", "personal_assistant", "autonomous_agent"]);
+const VALID_TYPES = new Set(["human", "agent"]);
 const VALID_STATUSES = new Set(["invited"]);
 
 function rel(path: string, root: string): string {

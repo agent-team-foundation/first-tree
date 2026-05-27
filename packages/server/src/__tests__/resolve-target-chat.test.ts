@@ -40,7 +40,7 @@ async function seedDelegate(
     uuid,
     name,
     organizationId: orgId,
-    type: "autonomous_agent",
+    type: "agent",
     displayName: `Delegate ${name}`,
     inboxId: `inbox_${uuid}`,
     managerId: memberId,

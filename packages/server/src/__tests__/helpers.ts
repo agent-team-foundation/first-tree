@@ -194,7 +194,7 @@ export async function createTestAgent(
     status: "connected",
   });
 
-  const type = opts.type ?? "autonomous_agent";
+  const type = opts.type ?? "agent";
   const agent = await createAgent(app.db, {
     name: opts.name ?? `test-agent-${crypto.randomUUID().slice(0, 8)}`,
     type,
@@ -266,7 +266,7 @@ export async function seedAgentFactory(app: FastifyInstance) {
   return async (opts: { name?: string; type?: AgentType; displayName?: string } = {}) => {
     return createAgent(app.db, {
       name: opts.name ?? `seed-agent-${crypto.randomUUID().slice(0, 8)}`,
-      type: opts.type ?? "autonomous_agent",
+      type: opts.type ?? "agent",
       displayName: opts.displayName ?? "Seed Agent",
       managerId: admin.memberId,
       clientId: opts.type === "human" ? undefined : clientId,

@@ -11,10 +11,11 @@ import { createTestAdmin, useTestApp } from "./helpers.js";
  * The Web UI already gates the field on `agent.type === "human"`
  * (`identity-section.tsx:127, 211`), but the server service used to allow
  * any type. Without this guard, CLI / Admin API / scripts could set
- * delegateMention on a `personal_assistant` / `autonomous_agent` row and
- * the audience resolver would happily fan webhook events out from it —
- * accidentally re-enabling the autonomous-agent-self-mention path that
- * resolveAudience's `kind: "new"` branch leaves wide open.
+ * delegateMention on a non-human `agent` row (formerly `personal_assistant`
+ * / `autonomous_agent`) and the audience resolver would happily fan
+ * webhook events out from it — accidentally re-enabling the
+ * autonomous-agent-self-mention path that resolveAudience's `kind: "new"`
+ * branch leaves wide open.
  *
  * Companion to `agent-delegate-mention-cross-org.test.ts` which pins the
  * target-side guards (cross-org, not-found).
@@ -29,7 +30,7 @@ async function seedTargetHuman(
     uuid,
     name: `tgt-${randomUUID().slice(0, 6)}`,
     organizationId: orgId,
-    type: "personal_assistant",
+    type: "human",
     displayName: "Target",
     inboxId: `inbox_${uuid}`,
     managerId,
@@ -40,7 +41,7 @@ async function seedTargetHuman(
 describe("agent service — delegateMention source-type guard", () => {
   const getApp = useTestApp();
 
-  it("createAgent rejects delegateMention on a personal_assistant source", async () => {
+  it("createAgent rejects delegateMention on a non-human (agent) source", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const target = await seedTargetHuman(app, admin.organizationId, admin.memberId);
@@ -48,23 +49,7 @@ describe("agent service — delegateMention source-type guard", () => {
     await expect(
       createAgent(app.db, {
         name: `src-${randomUUID().slice(0, 6)}`,
-        type: "personal_assistant",
-        displayName: "Source",
-        managerId: admin.memberId,
-        delegateMention: target,
-      }),
-    ).rejects.toBeInstanceOf(BadRequestError);
-  });
-
-  it("createAgent rejects delegateMention on an autonomous_agent source", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const target = await seedTargetHuman(app, admin.organizationId, admin.memberId);
-
-    await expect(
-      createAgent(app.db, {
-        name: `src-${randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Source",
         managerId: admin.memberId,
         delegateMention: target,
@@ -78,7 +63,7 @@ describe("agent service — delegateMention source-type guard", () => {
 
     const created = await createAgent(app.db, {
       name: `src-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Source",
       managerId: admin.memberId,
     });
@@ -94,7 +79,7 @@ describe("agent service — delegateMention source-type guard", () => {
       uuid: nonHumanUuid,
       name: `bot-${randomUUID().slice(0, 6)}`,
       organizationId: admin.organizationId,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bot",
       inboxId: `inbox_${nonHumanUuid}`,
       managerId: admin.memberId,
@@ -116,7 +101,7 @@ describe("agent service — delegateMention source-type guard", () => {
       uuid: nonHumanUuid,
       name: `bot-${randomUUID().slice(0, 6)}`,
       organizationId: admin.organizationId,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bot",
       inboxId: `inbox_${nonHumanUuid}`,
       managerId: admin.memberId,
@@ -138,7 +123,7 @@ describe("agent service — delegateMention source-type guard", () => {
       uuid: sourceUuid,
       name: `src-${randomUUID().slice(0, 6)}`,
       organizationId: admin.organizationId,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Source",
       inboxId: `inbox_${sourceUuid}`,
       managerId: admin.memberId,
@@ -159,7 +144,7 @@ describe("agent service — delegateMention source-type guard", () => {
 
     await expect(
       updateAgent(app.db, admin.humanAgentUuid, {
-        type: "autonomous_agent",
+        type: "agent",
         delegateMention: target,
       }),
     ).rejects.toBeInstanceOf(BadRequestError);
@@ -167,7 +152,7 @@ describe("agent service — delegateMention source-type guard", () => {
 
   it("updateAgent rejects flipping type away from human when delegateMention is set (no same-patch clear)", async () => {
     // The type-flip leak: without a guard on the `type` write itself,
-    // `{type: "autonomous_agent"}` alone (no delegateMention field) would
+    // `{type: "agent"}` alone (no delegateMention field) would
     // silently leave behind a non-human row carrying a delegate uuid —
     // violating the invariant the source-type guard is meant to enforce.
     const app = getApp();
@@ -176,9 +161,7 @@ describe("agent service — delegateMention source-type guard", () => {
     // Seed a human source with delegateMention set.
     await updateAgent(app.db, admin.humanAgentUuid, { delegateMention: target });
 
-    await expect(updateAgent(app.db, admin.humanAgentUuid, { type: "autonomous_agent" })).rejects.toBeInstanceOf(
-      BadRequestError,
-    );
+    await expect(updateAgent(app.db, admin.humanAgentUuid, { type: "agent" })).rejects.toBeInstanceOf(BadRequestError);
   });
 
   it("updateAgent accepts flipping type away from human when the same patch clears delegateMention", async () => {
@@ -191,10 +174,10 @@ describe("agent service — delegateMention source-type guard", () => {
     await updateAgent(app.db, admin.humanAgentUuid, { delegateMention: target });
 
     const updated = await updateAgent(app.db, admin.humanAgentUuid, {
-      type: "autonomous_agent",
+      type: "agent",
       delegateMention: null,
     });
-    expect(updated.type).toBe("autonomous_agent");
+    expect(updated.type).toBe("agent");
     expect(updated.delegateMention).toBeNull();
   });
 });

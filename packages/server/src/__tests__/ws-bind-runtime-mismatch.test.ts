@@ -73,7 +73,7 @@ describe("Agent WS — runtime provider mismatch on bind", () => {
         tx as unknown as typeof app.db,
         {
           name: `rtmm-codex-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-          type: "autonomous_agent",
+          type: "agent",
           displayName: "Codex Agent",
           source: "admin-api",
           managerId: memberId,

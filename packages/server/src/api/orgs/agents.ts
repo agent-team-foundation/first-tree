@@ -31,7 +31,10 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
       agentId: agent.uuid,
       name: agent.name,
       displayName: agent.displayName,
-      agentType: agent.type,
+      // Wire-compat: translate `type=agent` back to the pre-merge
+      // `personal_assistant` so clients on ≤ 0.5.1 (strict zod) still
+      // decode the frame. See agentService.legacyWireAgentType.
+      agentType: agentService.legacyWireAgentType(agent.type),
       runtimeProvider: agent.runtimeProvider,
     });
     if (!parsed.success) {

@@ -44,13 +44,13 @@ describe("messaging E2E — group-chat mention scenarios", () => {
     });
     const b1 = await createAgent(app.db, {
       name: `e2ec-b1-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const b2 = await createAgent(app.db, {
       name: `e2ec-b2-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -102,19 +102,19 @@ describe("messaging E2E — group-chat mention scenarios", () => {
     });
     const b1 = await createAgent(app.db, {
       name: `e2ed-b1-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const b2 = await createAgent(app.db, {
       name: `e2ed-b2-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const b3 = await createAgent(app.db, {
       name: `e2ed-b3-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -175,13 +175,13 @@ describe("messaging E2E — group-chat mention scenarios", () => {
     const ctx = await createAdminContext(app, { username: `e2eimm-${Date.now()}` });
     const b1 = await createAgent(app.db, {
       name: `e2eimm-b1-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const b2 = await createAgent(app.db, {
       name: `e2eimm-b2-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });

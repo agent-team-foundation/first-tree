@@ -41,7 +41,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const privateAgent = await createAgent(app.db, {
       name: `priv-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice's Private Agent",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -69,7 +69,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     expect(xRow).toBeDefined();
     expect(xRow?.name).toBe(privateAgent.name);
     expect(xRow?.displayName).toBe("Alice's Private Agent");
-    expect(xRow?.type).toBe("autonomous_agent");
+    expect(xRow?.type).toBe("agent");
   });
 
   it("addMeChatParticipants rejects a non-owner who tries to add a private agent", async () => {
@@ -81,7 +81,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     // not manage the private agent.
     const privateAgent = await createAgent(app.db, {
       name: `priv-add-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice's Private Agent",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -112,7 +112,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const privateAgent = await createAgent(app.db, {
       name: `priv-self-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice's Private Agent",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -141,7 +141,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const privateAgent = await createAgent(app.db, {
       name: `priv-create-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice's Private Agent",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -165,11 +165,11 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     const bob = await createTestAdmin(app);
 
     // Bob's agent — the "caller" on the agent-SDK side. visibility
-    // defaults to organization for autonomous_agent so it doesn't
+    // defaults to organization for agent so it doesn't
     // entangle the test with discovery rules.
     const bobsAgent = await createAgent(app.db, {
       name: `bob-agent-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bob's Agent",
       managerId: bob.memberId,
       organizationId: bob.organizationId,
@@ -177,7 +177,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const alicesPrivate = await createAgent(app.db, {
       name: `alice-priv-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice's Private Agent",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -199,7 +199,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const bobsAgent = await createAgent(app.db, {
       name: `bob-agent-add-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bob's Agent",
       managerId: bob.memberId,
       organizationId: bob.organizationId,
@@ -207,7 +207,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const alicesPrivate = await createAgent(app.db, {
       name: `alice-priv-add-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice's Private Agent",
       managerId: alice.memberId,
       organizationId: alice.organizationId,
@@ -249,7 +249,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const mPublic = await createAgent(app.db, {
       name: `m-pub-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "M's Public Agent",
       managerId: m.memberId,
       organizationId: m.organizationId,
@@ -257,7 +257,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     });
     const mPrivate = await createAgent(app.db, {
       name: `m-priv-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "M's Private Agent",
       managerId: m.memberId,
       organizationId: m.organizationId,
@@ -289,7 +289,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const mPrivateA = await createAgent(app.db, {
       name: `m-priv-a-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "M's Private Agent A",
       managerId: m.memberId,
       organizationId: m.organizationId,
@@ -297,7 +297,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     });
     const mPrivateB = await createAgent(app.db, {
       name: `m-priv-b-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "M's Private Agent B",
       managerId: m.memberId,
       organizationId: m.organizationId,
@@ -329,7 +329,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const mPublic = await createAgent(app.db, {
       name: `m-pub-create-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "M's Public Agent",
       managerId: m.memberId,
       organizationId: m.organizationId,
@@ -337,7 +337,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     });
     const mPrivate = await createAgent(app.db, {
       name: `m-priv-create-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "M's Private Agent",
       managerId: m.memberId,
       organizationId: m.organizationId,
@@ -360,7 +360,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     const mPrivateA = await createAgent(app.db, {
       name: `m-priv-a-create-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "M's Private Agent A",
       managerId: m.memberId,
       organizationId: m.organizationId,
@@ -368,7 +368,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     });
     const mPrivateB = await createAgent(app.db, {
       name: `m-priv-b-create-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "M's Private Agent B",
       managerId: m.memberId,
       organizationId: m.organizationId,
@@ -398,7 +398,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     // via the web HTTP route.
     const bobsPrivate = await createAgent(app.db, {
       name: `bob-priv-admin-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bob's Private Agent",
       managerId: bob.memberId,
       organizationId: bob.organizationId,
@@ -434,7 +434,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     // directly avoids tangling the carve-out with already-speaker
     // conflict semantics.
     const selfUuid = crypto.randomUUID();
-    const result = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-other", type: "autonomous_agent" }, [
+    const result = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-other", type: "agent" }, [
       { uuid: selfUuid, visibility: "private", managerId: "member-original" },
     ]);
     expect(result).toEqual([]);
@@ -442,7 +442,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     // Sanity: same caller against a DIFFERENT private target with the same
     // managerId is still rejected (the carve-out is *only* for self-add).
     const otherUuid = crypto.randomUUID();
-    const result2 = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-shared", type: "autonomous_agent" }, [
+    const result2 = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-shared", type: "agent" }, [
       { uuid: otherUuid, visibility: "private", managerId: "member-shared" },
     ]);
     expect(result2).toHaveLength(1);

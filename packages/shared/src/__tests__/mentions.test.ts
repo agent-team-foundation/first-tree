@@ -23,7 +23,7 @@ function mkParticipant(
     // ChatParticipantDetail.displayName is non-null post-Phase 2, so fall
     // back to a synthetic label when the extras don't provide one.
     displayName: extras.displayName ?? `agent-${agentId}`,
-    type: extras.type ?? "autonomous_agent",
+    type: extras.type ?? "agent",
     avatarColorToken: extras.avatarColorToken ?? null,
     avatarImageUrl: extras.avatarImageUrl ?? null,
   };

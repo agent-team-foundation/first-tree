@@ -8,7 +8,7 @@ export function registerAgentCreateCommand(agent: Command): void {
   agent
     .command("create <name>")
     .description("Create an agent on Hub and bind it locally")
-    .requiredOption("--type <type>", "Agent type (human, personal_assistant, autonomous_agent)")
+    .requiredOption("--type <type>", "Agent type (human, agent)")
     .requiredOption(
       "--client-id <id>",
       "Client (machine) that will run this agent — must be owned by you. Run `first-tree login <token>` on that machine first.",

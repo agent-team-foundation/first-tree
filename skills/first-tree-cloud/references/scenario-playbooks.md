@@ -116,7 +116,7 @@ first-tree agent create alice \
 
 # 2. (Optional) Pair Alice with a personal assistant agent:
 first-tree agent create alice-assistant \
-  --server <url> --type personal_assistant \
+  --server <url> --type agent \
   --client-id "$(first-tree config get client.id | awk '{print $2}')"
 
 # 3. (Optional) Bind a Feishu bot to the assistant:
@@ -144,7 +144,7 @@ A bot with no human owner (code reviewer, monitor, pipeline agent).
 first-tree login <token>                                # if credentials.json does not exist
 
 first-tree agent create code-reviewer \
-  --server <url> --type autonomous_agent \
+  --server <url> --type agent \
   --display-name "Code Review" \
   --client-id "$(first-tree config get client.id | awk '{print $2}')"
 
@@ -153,7 +153,7 @@ first-tree daemon start                                 # bring it online (no-op
 
 ### What to remember
 
-- `autonomous_agent` does not pair with a `personal_assistant` — skip step 2 of the human flow.
+- A standalone autonomous `agent` does not pair with a personal-assistant `agent` — skip step 2 of the human flow.
 - Feishu bot binding is optional here (no `/bind` follow-up needed).
 - Thread through `--server <url>` whenever supplied.
 

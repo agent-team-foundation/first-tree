@@ -22,7 +22,7 @@ async function seedAgent(
     orgId: string;
     memberId: string;
     name: string;
-    type: "human" | "autonomous_agent";
+    type: "human" | "agent";
     status?: "active" | "suspended";
   },
 ): Promise<string> {
@@ -74,7 +74,7 @@ describe("maybeBindGithubEntityFromToolCall", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const chatId = await seedChat(app, admin.organizationId, "direct", [admin.humanAgentUuid, delegate]);
 
@@ -109,7 +109,7 @@ describe("maybeBindGithubEntityFromToolCall", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     // Build two extra humans, then pick whichever sorts smaller as the
@@ -159,7 +159,7 @@ describe("maybeBindGithubEntityFromToolCall", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const human2 = await seedAgent(app, {
       orgId: admin.organizationId,
@@ -194,7 +194,7 @@ describe("maybeBindGithubEntityFromToolCall", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const chatId = await seedChat(app, admin.organizationId, "direct", [admin.humanAgentUuid, delegate]);
 
@@ -216,13 +216,13 @@ describe("maybeBindGithubEntityFromToolCall", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const outsider = await seedAgent(app, {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `out-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const chatId = await seedChat(app, admin.organizationId, "direct", [admin.humanAgentUuid, delegate]);
 
@@ -247,13 +247,13 @@ describe("maybeBindGithubEntityFromToolCall", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `a-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const delegateB = await seedAgent(app, {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `b-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const chatId = await seedChat(app, admin.organizationId, "direct", [delegateA, delegateB]);
 
@@ -278,7 +278,7 @@ describe("maybeBindGithubEntityFromToolCall", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const chatId = await seedChat(app, admin.organizationId, "direct", [admin.humanAgentUuid, delegate]);
 
@@ -314,7 +314,7 @@ describe("resolveTargetChat creation-event guard", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     const result = await resolveTargetChat(app.db, {
@@ -343,7 +343,7 @@ describe("resolveTargetChat creation-event guard", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     const ent = entity();
@@ -370,7 +370,7 @@ describe("resolveTargetChat creation-event guard", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     const result = await resolveTargetChat(app.db, {
@@ -400,7 +400,7 @@ describe("resolveTargetChat creation-event guard", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const chatId = await seedChat(app, admin.organizationId, "direct", [admin.humanAgentUuid, delegate]);
     await maybeBindGithubEntityFromToolCall(
@@ -473,7 +473,7 @@ describe("appendEvent → agent_created binding hook", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const chatId = await seedChat(app, admin.organizationId, "direct", [admin.humanAgentUuid, delegate]);
 
@@ -495,7 +495,7 @@ describe("appendEvent → agent_created binding hook", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const chatId = await seedChat(app, admin.organizationId, "direct", [admin.humanAgentUuid, delegate]);
 
@@ -530,7 +530,7 @@ describe("appendEvent → agent_created binding hook", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `dlg-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const orphanChatId = `chat_${randomUUID()}`;
     await app.db
@@ -577,7 +577,7 @@ describe("appendEvent → agent_created binding hook", () => {
       orgId: orgA.organizationId,
       memberId: orgA.memberId,
       name: `dlg-a-${randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
     const humanB = await seedAgent(app, {
       orgId: orgBId,

@@ -9,7 +9,7 @@ import { print } from "./output.js";
 
 type OnboardArgs = {
   id: string;
-  type: "human" | "personal_assistant" | "autonomous_agent";
+  type: "human" | "agent";
   clientId?: string;
   role?: string;
   domains?: string;
@@ -227,7 +227,14 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     try {
       const assistant = await createAgentViaAdmin(serverUrl, accessToken, orgId, {
         name: args.assistant,
-        type: "personal_assistant",
+        type: "agent",
+        // Personal-assistant framing is now carried by visibility=private.
+        // The server's `defaultVisibility("agent")` returns "organization"
+        // (the autonomous-bot default), so callers wanting the
+        // personal-assistant framing MUST pass `visibility: "private"`
+        // explicitly — otherwise this assistant would surface as an
+        // org-visible agent.
+        visibility: "private",
         displayName: args.assistant,
         metadata: { role: `Personal Assistant to ${args.id}`, domains: ["message triage", "task coordination"] },
         clientId: args.clientId,
@@ -268,7 +275,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     // Ignore
   }
 
-  const typeLabel = args.type === "human" ? "Human" : args.type === "autonomous_agent" ? "Agent" : "Assistant";
+  const typeLabel = args.type === "human" ? "Human" : "Agent";
   print.line("\n\u2705 Onboard complete!\n\n");
   print.line(`  ${typeLabel}:${" ".repeat(Math.max(1, 10 - typeLabel.length))}${args.id}\n`);
   if (args.assistant) {

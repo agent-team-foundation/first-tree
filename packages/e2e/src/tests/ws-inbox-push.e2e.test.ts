@@ -66,7 +66,7 @@ beforeAll(async () => {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.accessToken}` },
     body: JSON.stringify({
       name: `e2e-ws-${randomBytes(3).toString("hex")}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "E2E WS Target",
       clientId: listenerClientId,
     }),

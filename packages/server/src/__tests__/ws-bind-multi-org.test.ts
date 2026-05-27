@@ -129,7 +129,7 @@ describe("Agent WS — multi-org bind under one user", () => {
 
       const agentA = await createAgent(tx as unknown as typeof app.db, {
         name: `mo-bot-a-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Bot A",
         managerId: memberAId,
         clientId,
@@ -137,7 +137,7 @@ describe("Agent WS — multi-org bind under one user", () => {
       });
       const agentB = await createAgent(tx as unknown as typeof app.db, {
         name: `mo-bot-b-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "Bot B",
         managerId: memberBId,
         clientId,

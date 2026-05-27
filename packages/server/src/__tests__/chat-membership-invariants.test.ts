@@ -41,7 +41,7 @@ describe("chat membership invariants", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-rcw-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-Rcw",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -218,7 +218,7 @@ describe("chat membership invariants", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-mark-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-Mark",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -258,7 +258,7 @@ describe("chat membership invariants", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-join-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-Join",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -309,7 +309,7 @@ describe("chat membership invariants", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-mode-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-Mode",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -348,7 +348,7 @@ describe("chat membership invariants", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-orph-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-Orph",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -405,7 +405,7 @@ describe("chat membership invariants", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-eng1-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-Eng1",
       managerId: admin.memberId,
       organizationId: admin.organizationId,
@@ -437,7 +437,7 @@ describe("chat membership invariants", () => {
     const admin = await createTestAdmin(app);
     const managed = await createAgent(app.db, {
       name: `mng-eng2-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Mng-Eng2",
       managerId: admin.memberId,
       organizationId: admin.organizationId,

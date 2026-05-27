@@ -44,7 +44,7 @@ describe("PR-D: /me/managed-agents", () => {
     // Pin one autonomous agent in org B owned by the same user.
     await createAgent(app.db, {
       name: `mma-bot-b-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "MMA Bot B",
       managerId: memberBId,
       organizationId: orgBId,
@@ -72,7 +72,7 @@ describe("PR-D: /me/managed-agents", () => {
     // Alice creates a private autonomous agent under her management.
     const alicePrivate = await createAgent(app.db, {
       name: `mma-priv-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice's Private Bot",
       managerId: alice.memberId,
       organizationId: alice.organizationId,

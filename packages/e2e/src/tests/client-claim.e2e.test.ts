@@ -48,7 +48,7 @@ beforeAll(async () => {
     `/api/v1/orgs/${encodeURIComponent(creds.organizationId)}/agents`,
     {
       name: `e2e-claim-${randomBytes(3).toString("hex")}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Pre-claim pinned agent",
       clientId: creds.clientId,
     },

@@ -188,7 +188,7 @@ export async function setupDevUser(opts: SetupDevUserOptions): Promise<DevUserSe
     `/api/v1/orgs/${encodeURIComponent(orgId)}/agents`,
     {
       name: agentName,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Dev User's Assistant",
       clientId: clientRow.id,
     },

@@ -25,7 +25,7 @@ describe("Admin agent client-status (Step 10)", () => {
     const { req, ctx } = await authedReq(app);
     const agent = await createAgent(app.db, {
       name: `cs-none-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -42,7 +42,7 @@ describe("Admin agent client-status (Step 10)", () => {
     const { req, ctx } = await authedReq(app);
     const agent = await createAgent(app.db, {
       name: `cs-on-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -62,7 +62,7 @@ describe("Admin agent client-status (Step 10)", () => {
     const { req, ctx } = await authedReq(app);
     const agent = await createAgent(app.db, {
       name: `cs-off-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });

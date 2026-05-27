@@ -33,7 +33,7 @@ function mockSdk(): {
 } {
   const sendMessage = vi.fn().mockResolvedValue({ id: "msg-reply" });
   const listChatParticipants = vi.fn().mockResolvedValue([
-    { agentId: "agent-1", role: "member", mode: "full", name: "agent", displayName: "Agent", type: "autonomous_agent" },
+    { agentId: "agent-1", role: "member", mode: "full", name: "agent", displayName: "Agent", type: "agent" },
     { agentId: "user-1", role: "member", mode: "full", name: "user", displayName: "User", type: "human" },
   ]);
   return {
@@ -67,7 +67,8 @@ function makeSessionManager(opts: {
       agentId: "agent-1",
       inboxId: "inbox-agent-1",
       displayName: "Test Agent",
-      type: "autonomous_agent",
+      type: "agent",
+      visibility: "organization",
       delegateMention: null,
       metadata: {},
     },
@@ -260,7 +261,8 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
         displayName: "Test Agent",
-        type: "autonomous_agent",
+        type: "agent",
+        visibility: "organization",
         delegateMention: null,
         metadata: {},
       },

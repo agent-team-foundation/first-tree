@@ -27,7 +27,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-patch-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     const before = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
@@ -59,7 +59,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-partial-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     // Seed every field with a non-default value so a stray default is visible.
@@ -99,7 +99,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-409-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     const r1 = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
@@ -122,7 +122,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-dry-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     const dry = await req("POST", `/api/v1/agents/${agent.uuid}/config/dry-run`, {
@@ -142,7 +142,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-env-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     const patch = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
@@ -180,7 +180,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-resave-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
@@ -206,7 +206,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-debounce-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     // Five concurrent writers all claiming expectedVersion=1. Exactly one
@@ -243,7 +243,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const req = await authedRequest(app);
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-notify-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     const events: string[] = [];
@@ -269,7 +269,7 @@ describe("Admin agent-config API (Step 2)", () => {
     // below is NOT managed by `admin` above.
     const agent = await (await seedAgentFactory(app))({
       name: `cfg-404-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
     });
 
     // Demote to "member" via direct update.
@@ -309,7 +309,7 @@ describe("Admin agent-config API (Step 2)", () => {
 
   it("manager (non-admin) can GET and PATCH config on an agent they manage", async () => {
     // Regression guard: prior to removing the plugin-scoped adminOnly hook on
-    // /admin/agents/:uuid/config, a member editing their own personal_assistant
+    // /admin/agents/:uuid/config, a member editing their own agent
     // got "Admin role required" — blocking the documented "manager retains
     // CRUD" semantics from agents schema.
     const app = getApp();
@@ -331,7 +331,7 @@ describe("Admin agent-config API (Step 2)", () => {
       .values({ id: clientId, userId: member.userId, organizationId: member.organizationId, status: "connected" });
     const agent = await createAgent(app.db, {
       name: `cfg-mgr-agent-${crypto.randomUUID().slice(0, 8)}`,
-      type: "personal_assistant",
+      type: "agent",
       displayName: "My Assistant",
       managerId: admin.memberId,
       clientId,
@@ -404,7 +404,7 @@ describe("Admin agent-config API (Step 2)", () => {
     });
     const agent = await createAgent(app.db, {
       name: `cfg-vis-agent-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Shared Agent",
       managerId: manager.memberId,
       clientId,

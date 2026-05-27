@@ -59,7 +59,7 @@ describe("Notification — fault dedup + auto-resolve", () => {
       });
       const agent = await createAgent(tx as unknown as typeof app.db, {
         name: `fault-agent-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: `Fault Agent ${suffix}`,
         source: "admin-api",
         managerId: memberId,

@@ -48,7 +48,7 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
   it("createChat / human + agent (size=2) → both 'mention_only'", async () => {
     const app = getApp();
     const humanCtx = await createTestAgent(app, { type: "human" });
-    const { agent: peer } = await createTestAgent(app, { type: "autonomous_agent" });
+    const { agent: peer } = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, humanCtx.agent.uuid, {
       type: "group",
@@ -61,8 +61,8 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
 
   it("createChat / agent + agent (size=2) → both 'mention_only'", async () => {
     const app = getApp();
-    const a = await createTestAgent(app, { type: "autonomous_agent" });
-    const { agent: b } = await createTestAgent(app, { type: "autonomous_agent" });
+    const a = await createTestAgent(app, { type: "agent" });
+    const { agent: b } = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, a.agent.uuid, {
       type: "group",
@@ -76,8 +76,8 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
   it("createChat / group (size=3, human + 2 agents) → all 'mention_only'", async () => {
     const app = getApp();
     const humanCtx = await createTestAgent(app, { type: "human" });
-    const { agent: ag1 } = await createTestAgent(app, { type: "autonomous_agent" });
-    const { agent: ag2 } = await createTestAgent(app, { type: "autonomous_agent" });
+    const { agent: ag1 } = await createTestAgent(app, { type: "agent" });
+    const { agent: ag2 } = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, humanCtx.agent.uuid, {
       type: "group",
@@ -91,9 +91,9 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
 
   it("createChat / group (size=3, 3 agents) → all 'mention_only'", async () => {
     const app = getApp();
-    const a = await createTestAgent(app, { type: "autonomous_agent" });
-    const { agent: b } = await createTestAgent(app, { type: "autonomous_agent" });
-    const { agent: c } = await createTestAgent(app, { type: "autonomous_agent" });
+    const a = await createTestAgent(app, { type: "agent" });
+    const { agent: b } = await createTestAgent(app, { type: "agent" });
+    const { agent: c } = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, a.agent.uuid, {
       type: "group",
@@ -108,8 +108,8 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
   it("addParticipant on a 2-speaker chat → new + existing rows all 'mention_only' (no re-grade needed)", async () => {
     const app = getApp();
     const humanCtx = await createTestAgent(app, { type: "human" });
-    const { agent: ag1 } = await createTestAgent(app, { type: "autonomous_agent" });
-    const { agent: ag2 } = await createTestAgent(app, { type: "autonomous_agent" });
+    const { agent: ag1 } = await createTestAgent(app, { type: "agent" });
+    const { agent: ag2 } = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, humanCtx.agent.uuid, {
       type: "group",
@@ -129,14 +129,14 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
     const admin = await createAdminContext(app);
     const ag1 = await createAgent(app.db, {
       name: `inv-mc-a-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Agent A",
       managerId: admin.memberId,
       clientId: admin.clientId,
     });
     const ag2 = await createAgent(app.db, {
       name: `inv-mc-b-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Agent B",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -154,9 +154,9 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
   it("ensureParticipant on a group chat seeds the new speaker as 'mention_only'", async () => {
     const app = getApp();
     const humanCtx = await createTestAgent(app, { type: "human" });
-    const { agent: ag1 } = await createTestAgent(app, { type: "autonomous_agent" });
-    const { agent: ag2 } = await createTestAgent(app, { type: "autonomous_agent" });
-    const { agent: late } = await createTestAgent(app, { type: "autonomous_agent" });
+    const { agent: ag1 } = await createTestAgent(app, { type: "agent" });
+    const { agent: ag2 } = await createTestAgent(app, { type: "agent" });
+    const { agent: late } = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, humanCtx.agent.uuid, {
       type: "group",
@@ -170,7 +170,7 @@ describe("v2 invariant: chat_membership.mode is the constant 'mention_only'", ()
 
   it("findOrCreateChatForChannel / IM adapter pair (bot + human sender) → both 'mention_only'", async () => {
     const app = getApp();
-    const botCtx = await createTestAgent(app, { type: "autonomous_agent" });
+    const botCtx = await createTestAgent(app, { type: "agent" });
     const senderUuid = crypto.randomUUID();
     await app.db.insert(agents).values({
       uuid: senderUuid,
