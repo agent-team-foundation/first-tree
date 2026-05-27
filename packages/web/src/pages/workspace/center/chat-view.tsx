@@ -4,6 +4,8 @@ import {
   type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
+  isImageBatchRefContent,
+  isImageRefContent,
   type MentionParticipant,
   parseWorkspaceDocKey,
 } from "@first-tree/shared";
@@ -649,29 +651,6 @@ function isInlineImageContent(content: unknown): content is FileMessageContent {
   if (typeof content !== "object" || content === null) return false;
   const c = content as Record<string, unknown>;
   return typeof c.data === "string" && typeof c.mimeType === "string" && (c.mimeType as string).startsWith("image/");
-}
-
-function isImageRefContent(content: unknown): content is ImageRefContent {
-  if (typeof content !== "object" || content === null) return false;
-  const c = content as Record<string, unknown>;
-  return (
-    typeof c.imageId === "string" &&
-    typeof c.mimeType === "string" &&
-    (c.mimeType as string).startsWith("image/") &&
-    typeof c.filename === "string"
-  );
-}
-
-/**
- * Batch shape detection: caption + 1+ image refs. Distinguished from the
- * single-ref shape by the presence of an `attachments` array; old messages
- * (whose `content` is a single ref) fall through to `isImageRefContent`.
- */
-function isImageBatchRefContent(content: unknown): content is ImageBatchRefContent {
-  if (typeof content !== "object" || content === null) return false;
-  const c = content as Record<string, unknown>;
-  if (!Array.isArray(c.attachments) || c.attachments.length === 0) return false;
-  return c.attachments.every((a: unknown) => isImageRefContent(a));
 }
 
 /**

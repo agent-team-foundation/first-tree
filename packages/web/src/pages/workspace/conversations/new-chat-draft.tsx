@@ -53,9 +53,9 @@ import { cn } from "../../../lib/utils.js";
  *     (2+ chips) still needs an `@` in the body so the server's per-
  *     message mention guard accepts the file send.
  *
- * On send: createMeChat({participantIds: chips ∪ body @s}) → for each
- * staged image putImage(IndexedDB) + sendFileMessage → sendChatMessage
- * with the verbatim body. Empty body is allowed when there's ≥1 chip and
+ * On send: createMeChat({participantIds: chips ∪ body @s}) → stage each
+ * image into IndexedDB → single `sendFileMessageBatch` carrying caption +
+ * all attachments. Empty body is allowed when there's ≥1 chip and
  * (a non-empty body or ≥1 image).
  */
 

@@ -1,3 +1,4 @@
+import { extractCaption, isImageBatchRefContent, isImageRefContent } from "@first-tree/shared";
 import { FIRST_TREE_ATTR } from "@first-tree/shared/observability";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
 import { trace } from "@opentelemetry/api";
@@ -798,23 +799,18 @@ async function ackEntry(db: Database, entryId: number): Promise<void> {
  * any internal download link.
  */
 function renderFileMessageForFeishu(content: unknown): string | null {
-  if (!content || typeof content !== "object") return null;
-  const c = content as Record<string, unknown>;
   // Batch shape: caption + N image refs.
-  if (Array.isArray(c.attachments)) {
-    const attachments = c.attachments.filter(
-      (a): a is { filename: string } => Boolean(a) && typeof (a as { filename?: unknown }).filename === "string",
-    );
-    if (attachments.length === 0) return null;
-    const caption = typeof c.caption === "string" ? c.caption.trim() : "";
+  if (isImageBatchRefContent(content)) {
+    const { attachments } = content;
+    const caption = extractCaption(content).trim();
     const list = attachments.map((a) => `• ${a.filename}`).join("\n");
     return caption.length > 0
       ? `${caption}\n\n📎 ${attachments.length} image(s):\n${list}`
       : `📎 ${attachments.length} image(s):\n${list}`;
   }
   // Single image ref shape.
-  if (typeof c.imageId === "string" && typeof c.filename === "string") {
-    return `📎 ${c.filename}`;
+  if (isImageRefContent(content)) {
+    return `📎 ${content.filename}`;
   }
   return null;
 }

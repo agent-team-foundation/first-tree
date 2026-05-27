@@ -293,6 +293,7 @@ export {
   githubPermissionLevelSchema,
 } from "./schemas/github-app.js";
 export {
+  extractCaption,
   IMAGE_MIME_TO_EXT,
   type ImageBatchInlineContent,
   type ImageBatchRefContent,
@@ -304,6 +305,9 @@ export {
   imageInlineContentSchema,
   imagePayloadFrameSchema,
   imageRefContentSchema,
+  isImageBatchRefContent,
+  isImageRefContent,
+  MAX_BATCH_ATTACHMENTS,
   SUPPORTED_IMAGE_MIMES,
   type SupportedImageMime,
   supportedImageMimeSchema,

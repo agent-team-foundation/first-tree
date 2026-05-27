@@ -13,7 +13,12 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
-import { deriveRepoLocalPath, SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  isImageBatchRefContent,
+  isImageRefContent,
+  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
+} from "@first-tree/shared";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import {
   bootstrapWorkspace,
@@ -131,42 +136,6 @@ const MIME_TO_EXT: Record<SupportedImageMime, string> = {
   "image/gif": "gif",
   "image/webp": "webp",
 };
-
-/** Post-refactor image message shape in `messages.content`: a reference only.
- * The bytes arrive via the separate `image_payload` WS push and live on
- * this client's local disk under `<dataDir>/chats/<chatId>/images/`. */
-type ImageRefContent = {
-  imageId: string;
-  mimeType: SupportedImageMime;
-  filename: string;
-  size?: number;
-};
-
-function isImageRefContent(content: unknown): content is ImageRefContent {
-  if (!content || typeof content !== "object") return false;
-  const c = content as Record<string, unknown>;
-  return (
-    typeof c.imageId === "string" &&
-    typeof c.mimeType === "string" &&
-    typeof c.filename === "string" &&
-    SUPPORTED_IMAGE_MIMES.has(c.mimeType as SupportedImageMime)
-  );
-}
-
-/** Batched image message shape: optional caption + 1+ image refs in a single
- * `format: "file"` message. Produced by composers that send "caption + N
- * images" as one bubble; old single-ref messages still take the path above. */
-type ImageBatchRefContent = {
-  caption?: string;
-  attachments: ImageRefContent[];
-};
-
-function isImageBatchRefContent(content: unknown): content is ImageBatchRefContent {
-  if (!content || typeof content !== "object") return false;
-  const c = content as Record<string, unknown>;
-  if (!Array.isArray(c.attachments) || c.attachments.length === 0) return false;
-  return c.attachments.every((a: unknown) => isImageRefContent(a));
-}
 
 /** Legacy pre-refactor image content with base64 inlined into the message.
  * Only exercised by messages that pre-date the image-out-of-messages PR —

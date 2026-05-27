@@ -83,9 +83,11 @@ export type ImageRefContent = {
 };
 
 /**
- * Inline shape sent over the wire. Server accepts the optional `imageId`
- * (so the sender can write to IndexedDB ahead of the POST round-trip) and
- * rewrites `content` to {@link ImageRefContent} before the DB insert.
+ * Inline shape sent over the wire for one attachment. Server accepts the
+ * optional `imageId` (so the sender can write to IndexedDB ahead of the POST
+ * round-trip) and rewrites the persisted `content` to {@link ImageRefContent}
+ * before the DB insert. Used as the array element of
+ * {@link SendFileMessageBatchBody.attachments}.
  */
 export type SendFileMessageBody = FileMessageContent & { imageId?: string };
 
@@ -107,33 +109,16 @@ export type ImageBatchRefContent = {
 /**
  * Optional message metadata for a file send. Today only `mentions` is wired
  * — it lets a multi-image send carry the @-mentions parsed from the user's
- * accompanying text so the server's group-chat mention guard accepts each
- * image POST. Without this, the image messages arrive with no addressees and
- * are rejected before the text is sent (issue 387).
+ * accompanying text so the server's group-chat mention guard accepts the
+ * send. Without this, the message arrives with no addressees and is
+ * rejected before the text reaches anyone (issue 387).
  */
 export type SendFileMessageMetadata = { mentions?: string[] };
 
-export function sendFileMessage(
-  chatId: string,
-  content: SendFileMessageBody,
-  metadata?: SendFileMessageMetadata,
-): Promise<Message> {
-  // Project explicit fields rather than spreading `metadata` whole so future
-  // additions to SendFileMessageMetadata don't ride out on the `mentions`
-  // truthiness check by accident — each new field must be opted in here.
-  const mentions = metadata?.mentions;
-  const hasMentions = Array.isArray(mentions) && mentions.length > 0;
-  return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
-    format: "file",
-    content,
-    ...(hasMentions ? { metadata: { mentions } } : {}),
-  });
-}
-
 /**
  * Send a single `format: "file"` message carrying 1+ image attachments and
- * an optional text caption. Used so the composer can ship one bubble per
- * user "send" action instead of N+1 separate rows.
+ * an optional text caption. The only image-send path — single-attachment
+ * sends use this same batch shape with `attachments.length === 1`.
  *
  * Server intercepts each attachment's bytes, pushes one `image_payload`
  * frame per attachment (clients keep their per-imageId disk-write path),
@@ -150,6 +135,9 @@ export function sendFileMessageBatch(
   content: SendFileMessageBatchBody,
   metadata?: SendFileMessageMetadata,
 ): Promise<Message> {
+  // Project explicit fields rather than spreading `metadata` whole so future
+  // additions to SendFileMessageMetadata don't ride out on the `mentions`
+  // truthiness check by accident — each new field must be opted in here.
   const mentions = metadata?.mentions;
   const hasMentions = Array.isArray(mentions) && mentions.length > 0;
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {

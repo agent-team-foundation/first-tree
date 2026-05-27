@@ -1,4 +1,4 @@
-import { extractMentions, type SendMessage, scanMentionTokens } from "@first-tree/shared";
+import { extractCaption, extractMentions, type SendMessage, scanMentionTokens } from "@first-tree/shared";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -241,13 +241,8 @@ async function sendMessageInner(
     // `{caption?, attachments[]}`) the same as a text message for mention
     // purposes: the caption is user-typed prose that should feed the same
     // `extractMentions` path the standalone text message used to take. Pure
-    // single-image messages have no caption and stay empty.
-    const captionText =
-      typeof effectiveContent === "object" &&
-      effectiveContent !== null &&
-      typeof (effectiveContent as { caption?: unknown }).caption === "string"
-        ? (effectiveContent as { caption: string }).caption
-        : "";
+    // single-image messages have no caption and `extractCaption` returns "".
+    const captionText = extractCaption(effectiveContent);
     const contentText = typeof effectiveContent === "string" ? effectiveContent : captionText;
 
     // Resolve `receiverNames` against the chat's speaker list.
@@ -382,14 +377,21 @@ async function sendMessageInner(
     //   unaffected. `purpose === "agent-final-text"` bypasses through
     //   `purposeProfile.skipUnresolvedTokenGuard` for the same reason it
     //   bypasses enforceGroupMention.
+    //   `contentText` collapses both the text-message body and the batched
+    //   image caption into one string, so a `@typo` typed alongside images
+    //   gets the same unresolved-token check as a `@typo` in plain text.
+    //   Pre-existing web composer always pre-resolves mentions into
+    //   `metadata.mentions`, so this path stays inert for the web flow;
+    //   future adapter / webhook callers that send batched images without
+    //   declared mentions inherit the guard for free.
     if (
       options.enforceGroupMention &&
       !explicitlyDeclared &&
       contentExtractEnabled &&
       !purposeProfile.skipUnresolvedTokenGuard &&
-      typeof effectiveContent === "string"
+      contentText.length > 0
     ) {
-      const rawTokens = scanMentionTokens(effectiveContent);
+      const rawTokens = scanMentionTokens(contentText);
       if (rawTokens.length > 0) {
         const speakerNames = new Set(
           participants
@@ -553,13 +555,7 @@ async function sendMessageInner(
     // still surfaces its text in the conversation list. Pure single-image
     // messages (no caption) stay empty — same as before.
     const previewText =
-      typeof outboundContent === "string"
-        ? outboundContent.trim()
-        : typeof outboundContent === "object" &&
-            outboundContent !== null &&
-            typeof (outboundContent as { caption?: unknown }).caption === "string"
-          ? ((outboundContent as { caption: string }).caption.trim() ?? "")
-          : "";
+      typeof outboundContent === "string" ? outboundContent.trim() : extractCaption(outboundContent).trim();
     await applyAfterFanOut(tx, {
       chatId,
       messageId: msg.id,
