@@ -86,6 +86,15 @@ describe("probeClaudeCodeCapability", () => {
     expect(entry.state).toBe("unauthenticated");
   });
 
+  it("treats malformed `~/.claude.json` as unauthenticated", async () => {
+    writeFileSync(join(tmpHome, ".claude.json"), "{not-json");
+
+    const entry = await probeClaudeCodeCapability();
+
+    expect(entry.state).toBe("unauthenticated");
+    expect(entry.authMethod).toBe("none");
+  });
+
   it("returns a non-null `sdkVersion` when the SDK package.json is reachable (smoke-only)", async () => {
     process.env.ANTHROPIC_API_KEY = "sk-test";
     const entry = await probeClaudeCodeCapability();
@@ -93,6 +102,75 @@ describe("probeClaudeCodeCapability", () => {
     // should resolve. Don't pin a specific version — bumping the dep
     // would invalidate the test for no good reason.
     expect(typeof entry.sdkVersion === "string" || entry.sdkVersion === null).toBe(true);
+  });
+
+  it("reports missing when the Claude SDK import fails", async () => {
+    vi.resetModules();
+    vi.doMock("@anthropic-ai/claude-agent-sdk", () => {
+      throw new Error("sdk missing");
+    });
+    const mod = await import("../runtime/capabilities/claude-code.js");
+
+    const entry = await mod.probeClaudeCodeCapability();
+
+    expect(entry).toMatchObject({
+      state: "missing",
+      available: false,
+      authenticated: false,
+      sdkVersion: null,
+      authMethod: "none",
+    });
+    vi.doUnmock("@anthropic-ai/claude-agent-sdk");
+    vi.resetModules();
+  });
+
+  it("reports errors thrown from auth detection", async () => {
+    const originalEnv = process.env;
+    try {
+      Object.defineProperty(process, "env", {
+        configurable: true,
+        value: new Proxy(originalEnv, {
+          get(target, prop, receiver) {
+            if (prop === "ANTHROPIC_API_KEY") {
+              throw new Error("env read failed");
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        }),
+      });
+
+      const entry = await probeClaudeCodeCapability();
+
+      expect(entry).toMatchObject({
+        state: "error",
+        available: false,
+        authenticated: false,
+        authMethod: "none",
+        error: "env read failed",
+      });
+    } finally {
+      Object.defineProperty(process, "env", { configurable: true, value: originalEnv });
+    }
+
+    try {
+      Object.defineProperty(process, "env", {
+        configurable: true,
+        value: new Proxy(originalEnv, {
+          get(target, prop, receiver) {
+            if (prop === "ANTHROPIC_API_KEY") {
+              throw "env string failed";
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        }),
+      });
+
+      const entry = await probeClaudeCodeCapability();
+
+      expect(entry.error).toBe("env string failed");
+    } finally {
+      Object.defineProperty(process, "env", { configurable: true, value: originalEnv });
+    }
   });
 });
 
@@ -150,6 +228,75 @@ describe("probeCodexCapability", () => {
       if (homePrev === undefined) delete process.env.HOME;
       else process.env.HOME = homePrev;
       rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("reports missing when the Codex SDK import fails", async () => {
+    vi.resetModules();
+    vi.doMock("@openai/codex-sdk", () => {
+      throw new Error("sdk missing");
+    });
+    const mod = await import("../runtime/capabilities/codex.js");
+
+    const entry = await mod.probeCodexCapability();
+
+    expect(entry).toMatchObject({
+      state: "missing",
+      available: false,
+      authenticated: false,
+      sdkVersion: null,
+      authMethod: "none",
+    });
+    vi.doUnmock("@openai/codex-sdk");
+    vi.resetModules();
+  });
+
+  it("reports errors thrown from Codex auth detection", async () => {
+    const originalEnv = process.env;
+    try {
+      Object.defineProperty(process, "env", {
+        configurable: true,
+        value: new Proxy(originalEnv, {
+          get(target, prop, receiver) {
+            if (prop === "CODEX_API_KEY") {
+              throw "codex env failed";
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        }),
+      });
+
+      const entry = await probeCodexCapability();
+
+      expect(entry).toMatchObject({
+        state: "error",
+        available: false,
+        authenticated: false,
+        authMethod: "none",
+        error: "codex env failed",
+      });
+    } finally {
+      Object.defineProperty(process, "env", { configurable: true, value: originalEnv });
+    }
+
+    try {
+      Object.defineProperty(process, "env", {
+        configurable: true,
+        value: new Proxy(originalEnv, {
+          get(target, prop, receiver) {
+            if (prop === "CODEX_API_KEY") {
+              throw new Error("codex env error");
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        }),
+      });
+
+      const entry = await probeCodexCapability();
+
+      expect(entry.error).toBe("codex env error");
+    } finally {
+      Object.defineProperty(process, "env", { configurable: true, value: originalEnv });
     }
   });
 });
