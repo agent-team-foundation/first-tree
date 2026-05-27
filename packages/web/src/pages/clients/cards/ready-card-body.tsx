@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
 import { BoundAgentsList } from "./shared/bound-agents-list.js";
 import { CardMetaRow } from "./shared/card-meta-row.js";
-import { PROVIDER_INSTALL_HINT, PROVIDER_LABEL, PROVIDER_ORDER, PROVIDER_UNAUTH_HINT } from "./shared/providers.js";
+import { PROVIDER_LABEL, PROVIDER_ORDER, providerInstallHint, providerUnauthHint } from "./shared/providers.js";
 import { summarizeBoundAgents } from "./view-models.js";
 
 type ReadyCardBodyProps = {
@@ -16,29 +16,40 @@ type ReadyCardBodyProps = {
  * Variant A body — the happy path. Three groups separated by hairlines
  * inside the per-computer block:
  *   1. Heartbeat / first-tree / OS — `<dl>` field grid via `CardMetaRow`
- *   2. Runtimes — per-provider state line
+ *   2. Runtimes — per-provider state line (filtered to reported runtimes)
  *   3. Bound agents — when ≥ 1
  *
  * Mockup §"Variant A" puts agents last. The Runtimes section is
- * informational (one runtime must be `ok` for the pill to be Ready) but
- * worth showing so the user sees at a glance whether they have both
- * runtimes or just one.
+ * informational (one runtime must be `ok` for the pill to be Ready)
+ * but worth showing so the user sees at a glance whether they have
+ * both runtimes or just one.
+ *
+ * Runtimes the SDK never reported (`entry === null`) are *not*
+ * rendered — they'd otherwise be a "not reported · Install …" advert
+ * for a runtime the user actively chose not to install. The fully-
+ * empty case is owned by the Setup-incomplete pill, which has its own
+ * install boxes.
  */
 export function ReadyCardBody({ client, boundAgents, agentName }: ReadyCardBodyProps) {
   const summary = summarizeBoundAgents(boundAgents);
+  const reportedProviders = PROVIDER_ORDER.filter((p) => client.capabilities[p] != null);
   return (
     <div className="flex flex-col">
       <Group>
         <CardMetaRow client={client} />
       </Group>
-      <Group>
-        <GroupLabel>Runtimes</GroupLabel>
-        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-          {PROVIDER_ORDER.map((provider) => (
-            <RuntimeStateLine key={provider} provider={provider} entry={client.capabilities[provider] ?? null} />
-          ))}
-        </div>
-      </Group>
+      {reportedProviders.length > 0 && (
+        <Group>
+          <GroupLabel>Runtimes</GroupLabel>
+          <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+            {reportedProviders.map((provider) => {
+              const entry = client.capabilities[provider];
+              if (entry == null) return null;
+              return <RuntimeStateLine key={provider} provider={provider} entry={entry} os={client.os} />;
+            })}
+          </div>
+        </Group>
+      )}
       {summary.total > 0 && (
         <Group>
           <GroupLabel>{summary.total === 1 ? "Agent" : `Agents · ${summary.total}`}</GroupLabel>
@@ -77,34 +88,52 @@ function GroupLabel({ children }: { children: ReactNode }) {
   );
 }
 
-function RuntimeStateLine({ provider, entry }: { provider: RuntimeProvider; entry: CapabilityEntry | null }) {
+/**
+ * Per-runtime state line. All states render with a leading status
+ * glyph and the provider label as the first segment, then peer
+ * mid-dot-separated segments for version / state-or-method. Action
+ * hints (login / install) come after a period as a separate sentence
+ * so they don't crowd the segment rhythm.
+ *
+ * `entry === null` (not-yet-reported) is filtered upstream — this
+ * function assumes a real capability snapshot.
+ */
+function RuntimeStateLine({
+  provider,
+  entry,
+  os,
+}: {
+  provider: RuntimeProvider;
+  entry: CapabilityEntry;
+  os: string | null;
+}) {
   const label = PROVIDER_LABEL[provider];
-  if (!entry) {
-    return (
-      <div className="text-body" style={{ color: "var(--fg-3)" }}>
-        <span style={{ color: "var(--fg-2)" }}>{label}</span> · not reported · {PROVIDER_INSTALL_HINT[provider]}
-      </div>
-    );
-  }
   switch (entry.state) {
-    case "ok":
+    case "ok": {
+      const segments = [label, entry.sdkVersion ? `v${entry.sdkVersion}` : null, entry.authMethod ?? null].filter(
+        Boolean,
+      ) as string[];
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
-          <span style={{ color: "var(--state-idle)" }}>✓</span> {label}
-          {entry.sdkVersion ? ` · v${entry.sdkVersion}` : ""} · authenticated ({entry.authMethod})
+          <span style={{ color: "var(--state-idle)" }}>✓</span> {segments.join(" · ")}
         </div>
       );
-    case "unauthenticated":
+    }
+    case "unauthenticated": {
+      const segments = [label, entry.sdkVersion ? `v${entry.sdkVersion}` : null, "unauthenticated"].filter(
+        Boolean,
+      ) as string[];
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
-          <span style={{ color: "var(--state-blocked)" }}>⚠</span> {label}
-          {entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}, not authenticated · {PROVIDER_UNAUTH_HINT[provider]}
+          <span style={{ color: "var(--state-blocked)" }}>⚠</span> {segments.join(" · ")}.{" "}
+          <span style={{ color: "var(--fg-3)" }}>{providerUnauthHint(provider, os)}</span>
         </div>
       );
+    }
     case "missing":
       return (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
-          <span style={{ color: "var(--fg-4)" }}>✗</span> {label} · not installed · {PROVIDER_INSTALL_HINT[provider]}
+          <span style={{ color: "var(--fg-4)" }}>✗</span> {label} · not installed. {providerInstallHint(provider, os)}
         </div>
       );
     case "error":
