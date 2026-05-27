@@ -348,12 +348,6 @@ export const serverConfigSchema = defineConfig({
    * deploy manifest (systemd / docker-compose / Fly.toml / Render env).
    */
   runtime: {
-    inboxTimeoutSeconds: field(z.coerce.number().int().positive().default(300), {
-      env: "FIRST_TREE_INBOX_TIMEOUT_SECONDS",
-    }),
-    maxRetryCount: field(z.coerce.number().int().nonnegative().default(3), {
-      env: "FIRST_TREE_MAX_RETRY_COUNT",
-    }),
     pollingIntervalSeconds: field(z.coerce.number().int().positive().default(5), {
       env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
     }),

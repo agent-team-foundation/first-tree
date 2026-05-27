@@ -476,16 +476,17 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   }
 
   /**
-   * Ack a delivered inbox entry over the WS data plane. Safe to call when the
-   * WS is closed — the frame is dropped (logged) and the entry will time out
-   * server-side and re-deliver on reconnect. The handler has by then already
-   * started processing, so reaper-driven redelivery surfaces as a duplicate
-   * dispatch on the next connect; SessionManager's dedupe key
-   * `(chatId, messageId)` collapses it.
+   * Ack a delivered inbox entry over the WS data plane. Safe to call when
+   * the WS is closed — the frame is dropped (logged) and the entry stays
+   * `delivered` server-side until the next `agent:bind`, which resets every
+   * still-`delivered` row back to `pending` for redelivery (see
+   * inflight-message-recovery-design.md §4). The redelivered entry then
+   * surfaces as a duplicate dispatch and SessionManager's
+   * `(chatId, messageId)` Deduplicator collapses it.
    */
   sendInboxAck(entryId: number): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      // Visibility for the "ack lost on closed socket → server reaper resets
+      // Visibility for the "ack lost on closed socket → next bind resets
       // entry to pending → duplicate dispatch on reconnect" path. Warn-level
       // so staging can correlate spikes against reconnect-storm windows.
       this.wsLogger.warn({ entryId, readyState: this.ws?.readyState }, "inbox:ack dropped — socket not OPEN");
@@ -1036,13 +1037,16 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "inbox:deliver") {
       const parsed = inboxDeliverFrameSchema.safeParse(msg);
       if (!parsed.success) {
-        // Best-effort ack: without it the server's reaper rolls the entry
-        // back to `pending` 300s later and re-pushes the same frame, which
-        // this build is guaranteed to drop again. The retry loop runs up
-        // to maxRetries before the entry is abandoned — pure spam in both
-        // directions. `entryId` is a top-level field and usually survives
-        // when inner `message` validation is what failed (see frameKeys).
-        // Logged separately as `entryIdAcked` so operators can correlate.
+        // Best-effort ack: without it the entry stays `delivered`
+        // server-side and the next `agent:bind` resets it back to
+        // `pending` and re-pushes the same frame (see
+        // inflight-message-recovery-design.md §4) — which this build is
+        // guaranteed to drop again, so we'd loop on every reconnect. By
+        // acking we close the row out: a malformed frame this build
+        // cannot parse will never be parseable. `entryId` is a top-level
+        // field and usually survives when inner `message` validation is
+        // what failed (see frameKeys). Logged separately as
+        // `entryIdAcked` so operators can correlate.
         const rawEntryId = msg.entryId;
         // Match `inboxAckFrameSchema`: non-negative integer. A `typeof "number"`
         // check alone would let NaN / Infinity / floats slip through and ack

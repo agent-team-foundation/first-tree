@@ -22,6 +22,7 @@ export function mockCtxPlumbing(
   chatId: string,
 ): {
   forwardResult: (text: string) => Promise<void>;
+  markCompleted: () => void;
   buildAgentEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   formatInboundContent: (msg: SessionMessage) => Promise<string>;
   resolveSenderLabel: (senderId: string) => Promise<string>;
@@ -30,6 +31,8 @@ export function mockCtxPlumbing(
     forwardResult: async (text: string) => {
       await sdk.sendMessage(chatId, { source: "api", format: "text", content: text });
     },
+    // Default stub: tests that care about ack timing override via spies.
+    markCompleted: () => {},
     buildAgentEnv: (env) => env,
     formatInboundContent: async (msg) => {
       const raw = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);

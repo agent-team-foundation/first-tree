@@ -203,6 +203,17 @@ export class AgentSlot {
     this.clientConnection.on("session:command", onCommand);
     this.listeners.push({ event: "session:command", fn: onCommand });
 
+    // Initial-startup fullStateSync. The `on("agent:bound", onBound)`
+    // listener above only catches RECONNECT agent:bound frames — the
+    // first-time bind already resolved inside `await bindAgent` before
+    // this listener was attached, so its emit was lost. Without an
+    // explicit sync here, after a process restart the server's
+    // `agent_chat_sessions.state` keeps the pre-shutdown snapshot (often
+    // `suspended` from the previous shutdown's notify) forever, and the
+    // web UI shows "pause" on every chat with a persisted session
+    // until the user manually triggers a state-changing event.
+    this.fullStateSync();
+
     this.startReconcileLoop();
 
     return agent;
@@ -280,14 +291,17 @@ export class AgentSlot {
    * Translate an `inbox:deliver` push frame into the {@link InboxEntryWithMessage}
    * shape `SessionManager.dispatch` expects, then dispatch.
    *
-   * Ack happens INSIDE `dispatch` via the `ackEntry` callback we pinned at
-   * construction time — `clientConnection.sendInboxAck`. Sending an additional
-   * ack here would double-ack: a WS frame the server cannot match against any
-   * `delivered` row, which leaks the server's per-agent in-flight counter and
-   * stalls push after `inboxMaxInFlightPerAgent` messages.
+   * Ack happens INSIDE the SessionManager via the `ackEntry` callback we
+   * pinned at construction time — `clientConnection.sendInboxAck`. Post
+   * inflight-message-recovery the ack is deferred until the handler closes
+   * the turn via `ctx.markCompleted()`. Sending an additional ack here
+   * would double-ack: a WS frame the server cannot match against any
+   * `delivered` row, which leaks the server's per-agent in-flight counter
+   * and stalls push after `inboxMaxInFlightPerAgent` messages.
    *
    * Dispatch errors propagate up; the entry stays `delivered` server-side
-   * and the 300s timeout reaper rolls it back to `pending` for replay.
+   * and the next `agent:bind` resets it back to `pending` for redelivery
+   * (see inflight-message-recovery-design.md §4).
    */
   private async dispatchPushedFrame(frame: InboxDeliverFrame): Promise<void> {
     if (!this.sessionManager) return;

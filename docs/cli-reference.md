@@ -513,7 +513,6 @@ and are not used by the CLI. They are listed here for ops reference.
 | Variable | Default |
 |---|---|
 | `FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT` | server-tuned |
-| `FIRST_TREE_INBOX_TIMEOUT_SECONDS` | server-tuned |
 | `FIRST_TREE_WS_MAX_PAYLOAD` | `262144` (256 KiB) |
 | `FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS` | `300` (set `0` to disable) |
 | `FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` | `3600` |
