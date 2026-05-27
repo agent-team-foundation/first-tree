@@ -74,3 +74,24 @@ function MetaEntry({
     </>
   );
 }
+
+/**
+ * `CardMetaRow` with the hairline-separated bottom-of-card framing used
+ * by AuthExpired / Offline / SetupIncomplete bodies. The diagnostic +
+ * action lives above; this footer slot renders the meta block under a
+ * `border-top` hairline so the eye registers it as supporting context,
+ * not the focus. Extracted to dedupe the 3-way repeat of the same
+ * wrapper pattern (yuezengwu review nit #3 on PR-D1).
+ */
+export function CardMetaFooter({ client, dimmed = true }: { client: HubClient; dimmed?: boolean }) {
+  return (
+    <div
+      style={{
+        borderTop: "var(--hairline) solid var(--border-faint)",
+        paddingTop: "var(--sp-2_5)",
+      }}
+    >
+      <CardMetaRow client={client} dimmed={dimmed} />
+    </div>
+  );
+}

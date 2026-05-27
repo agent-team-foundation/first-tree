@@ -1,7 +1,7 @@
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
 import { Button } from "../../../components/ui/button.js";
 import { BoundAgentsList } from "./shared/bound-agents-list.js";
-import { CardMetaRow } from "./shared/card-meta-row.js";
+import { CardMetaFooter } from "./shared/card-meta-row.js";
 import { authExpiredDiagnostic, summarizeBoundAgents } from "./view-models.js";
 
 type AuthExpiredCardBodyProps = {
@@ -42,14 +42,7 @@ export function AuthExpiredCardBody({ client, boundAgents, agentName, onGenerate
         </Button>
         {summary.total > 0 && <BoundAgentsList summary={summary} agentName={agentName} compact />}
       </div>
-      <div
-        style={{
-          borderTop: "var(--hairline) solid var(--border-faint)",
-          paddingTop: "var(--sp-2_5)",
-        }}
-      >
-        <CardMetaRow client={client} dimmed />
-      </div>
+      <CardMetaFooter client={client} />
     </div>
   );
 }

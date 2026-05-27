@@ -1,6 +1,6 @@
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
 import { BoundAgentsList } from "./shared/bound-agents-list.js";
-import { CardMetaRow } from "./shared/card-meta-row.js";
+import { CardMetaFooter } from "./shared/card-meta-row.js";
 import { InlineCommand } from "./shared/inline-command.js";
 import { offlineDiagnostic, summarizeBoundAgents } from "./view-models.js";
 
@@ -39,14 +39,7 @@ export function OfflineCardBody({ client, boundAgents, agentName }: OfflineCardB
         <InlineCommand command="first-tree daemon start" ariaLabel="Daemon wake command" />
       </div>
       {summary.total > 0 && <BoundAgentsList summary={summary} agentName={agentName} compact />}
-      <div
-        style={{
-          borderTop: "var(--hairline) solid var(--border-faint)",
-          paddingTop: "var(--sp-2_5)",
-        }}
-      >
-        <CardMetaRow client={client} dimmed />
-      </div>
+      <CardMetaFooter client={client} />
     </div>
   );
 }
