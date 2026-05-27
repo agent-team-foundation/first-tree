@@ -134,7 +134,7 @@ describe("claude-code handler — SDK options", () => {
     await handler.shutdown();
   });
 
-  it("registers an AskUserQuestion bridge via canUseTool + toolConfig.askUserQuestion.previewFormat=html", async () => {
+  it("denies AskUserQuestion via canUseTool (NHA M0: bridge removed, agent redirected)", async () => {
     capturedCalls.length = 0;
 
     const cache = buildCache();
@@ -148,13 +148,37 @@ describe("claude-code handler — SDK options", () => {
     );
 
     const options = capturedCalls[0]?.options;
-    // canUseTool MUST be a function — the bridge's only entry point. Without
-    // it the SDK falls back to its default permission flow which has no way
-    // to surface AskUserQuestion to the Hub UI.
-    expect(typeof options?.canUseTool).toBe("function");
-    // previewFormat=html drives the model to emit web-renderable previews;
-    // commit 5 sanitises with DOMPurify before rendering.
-    expect(options?.toolConfig).toEqual({ askUserQuestion: { previewFormat: "html" } });
+    // canUseTool MUST still be a function — it gates AskUserQuestion behind
+    // a deny+redirect message pointing at NHA. Other tools auto-allow.
+    const canUseTool = options?.canUseTool;
+    expect(typeof canUseTool).toBe("function");
+    if (typeof canUseTool !== "function") throw new Error("canUseTool not a function");
+
+    // Minimal options shape: signal + toolUseID are not consulted on this deny path.
+    const denyResult = (await canUseTool(
+      "AskUserQuestion",
+      { questions: [] },
+      {
+        signal: new AbortController().signal,
+        suggestions: [],
+        toolUseID: "tu_test",
+      },
+    )) as { behavior: string; message?: string };
+    expect(denyResult.behavior).toBe("deny");
+    if (denyResult.behavior === "deny") {
+      expect(denyResult.message).toMatch(/no longer supported/i);
+    }
+
+    const allowResult = (await canUseTool(
+      "Bash",
+      { command: "ls" },
+      {
+        signal: new AbortController().signal,
+        suggestions: [],
+        toolUseID: "tu_bash",
+      },
+    )) as { behavior: string };
+    expect(allowResult.behavior).toBe("allow");
 
     await handler.shutdown();
   });

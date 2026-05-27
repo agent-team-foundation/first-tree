@@ -9,7 +9,6 @@ import type {
   SessionState,
 } from "@first-tree/shared";
 import { deriveRepoLocalPath } from "@first-tree/shared";
-import { hasPendingForChat, tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
@@ -287,38 +286,6 @@ export class SessionManager {
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
-
-    // 0. AskUserQuestion bridge: a `question_answer` message has two
-    //    delivery paths:
-    //
-    //    a) Live waiter — the original `canUseTool` Promise is still
-    //       pending in the bridge. Resolve it, ack the inbox entry, and
-    //       short-circuit; the SDK takes the answer back into the same
-    //       turn. This is the happy path while the agent's SDK process
-    //       is still alive.
-    //
-    //    b) Stale waiter — the SDK process was killed (idle suspend or
-    //       explicit shutdown) before the user answered. The bridge map
-    //       was cleared by the handler at suspend time, so
-    //       `tryResolveQuestionAnswer` reports no match. We must NOT
-    //       short-circuit here: the answer needs to flow into the regular
-    //       dispatch path so the handler resumes the session and feeds
-    //       the answer to the SDK as fresh user input. The handler's
-    //       formatInboundContent renders question_answer messages as
-    //       readable text ("User selected: ..."), so the resumed turn
-    //       sees a normal text prompt.
-    if (entry.message.format === "question_answer") {
-      const resolved = tryResolveQuestionAnswer(entry.message.content);
-      if (resolved) {
-        await this.ackEntry(entry.id, chatId);
-        return;
-      }
-      this.config.log.info(
-        { chatId, messageId },
-        "question_answer with no live bridge waiter — resuming session with answer as input",
-      );
-      // Fall through to normal dispatch.
-    }
 
     // 1. Deduplication — key by (chatId, messageId). Cross-chat reply
     // routing has been removed (see first-tree-context PR #281) so a single
@@ -891,7 +858,6 @@ export class SessionManager {
     const timeoutMs = this.config.session.idle_timeout * 1000;
     const workingGraceMs = this.config.session.working_grace_seconds * 1000;
     const now = Date.now();
-    const agentId = this.config.agentIdentity.agentId;
 
     for (const [, session] of this.sessions) {
       if (session.status !== "active") continue;
@@ -905,22 +871,6 @@ export class SessionManager {
       // Anything else means a stuck handler can hold a slot forever just
       // by never flipping `runtimeState` back to `idle`.
       const pastHardCap = inactiveMs >= timeoutMs + workingGraceMs;
-
-      // #418: when an AskUserQuestion is in flight, suspending tears down
-      // the SDK transport and silently drops the bridge entry — the
-      // eventual answer then arrives with no live waiter and the asker
-      // session is permanently stuck. Skip the suspend so the awaiter can
-      // resolve through the live-bridge path. `lastActivity` still ticks
-      // forward on inject, so a runaway pending entry is bounded by the
-      // supersede paths (chat archive / client claim) and, as a last
-      // resort, by the hard cap above.
-      if (!pastHardCap && hasPendingForChat(agentId, session.chatId)) {
-        this.config.log.info(
-          { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
-          "session idle but AskUserQuestion in flight — skipping suspend",
-        );
-        continue;
-      }
 
       // `lastActivity` is bumped per inbound SDK message/event (handler
       // `touch()`), so a long thinking turn or a single very large message

@@ -356,7 +356,14 @@
       "idx": 50,
       "version": "7",
       "when": 1780358400000,
-      "tag": "0050_collapse_agent_type",
+      "tag": "0050_agent_skills",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1780444800000,
+      "tag": "0051_collapse_agent_type",
       "breakpoints": true
     }
   ]

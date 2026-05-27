@@ -12,7 +12,6 @@ import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext } from "./doc-snapshots.js";
-import { assertSenderMayEmitQuestion, recordPendingQuestionFromMessage } from "./questions.js";
 
 const log = createLogger("message");
 
@@ -71,14 +70,6 @@ export type SendMessageOptions = {
    * non-silenced fan-out branch, addressed agents always receive
    * `notify=true` regardless of their chat membership mode (`mention_only`)
    * or `metadata.mentions`.
-   *
-   * Canonical use: a `question_answer` from a human submitter is addressed
-   * to the original asker. Without this override, a chat that upgraded
-   * `direct → group` after the question was posted would silently re-grade
-   * the asker to `mention_only`, and the answer's structured content (an
-   * object, not a string with `@<name>`) would produce no mentions and
-   * therefore no notify=true row — leaving the asker's `canUseTool` Promise
-   * dangling forever.
    *
    * `isSilentSend` and `isAgentFinalText` still take precedence (they force
    * notify=false for everyone); this only widens the notify set within the
@@ -205,7 +196,7 @@ async function sendMessageInner(
     //
     //     Guarded by sender type (human-typed quoted phrases never touched)
     //     and by a strict structural match (see `maybeUnwrapDoubleEncoded`).
-    //     Non-string content (e.g. structured question payloads) is bypassed.
+    //     Non-string content (e.g. structured card payloads) is bypassed.
     let effectiveContent: SendMessage["content"] = data.content;
     if (senderRow.type !== "human" && typeof effectiveContent === "string") {
       const unwrapped = maybeUnwrapDoubleEncoded(effectiveContent);
@@ -220,7 +211,7 @@ async function sendMessageInner(
 
     // 2. Decide the mention set. Three sources can contribute:
     //   - `metadata.mentions: [uuid]` — caller already resolved uuids
-    //     (result-sink / questions / adapter / webhook).
+    //     (result-sink / adapter / webhook).
     //   - `data.receiverNames: [name]` — caller knows the recipient by name
     //     and wants the server to resolve it against the chat's participant
     //     list (CLI `chat send <name>` post-Phase-1). An unknown name is a
@@ -434,30 +425,20 @@ async function sendMessageInner(
       }
     }
 
-    // 2d. Defensive: only Claude-runtime agents may emit ask-user questions.
-    //     Codex SDK has no ask-user surface, so any `format=question` message
-    //     coming from a codex-runtime sender is a runtime regression. We
-    //     surface it as 403 here rather than silently writing the row, so
-    //     the buggy caller is forced to fix itself. See questions.ts.
-    if (data.format === "question") {
-      await assertSenderMayEmitQuestion(tx, senderId);
-    }
-
     // 2e. L4 silent-send form guard — mirror of the client-side result-sink
     //     silent-turn (runtime/result-sink.ts). Covers any path that reaches
     //     sendMessage without going through result-sink: the agent CLI
-    //     `chat send`, AskUserQuestion, external IM adapters, admin/web
-    //     posts. Form-only check on the FINAL outbound text (after
-    //     normalizeMentionsInContent has had its turn): if everything that
-    //     remains after stripping leading `@<name>` tokens is empty, the
-    //     send becomes silent — the message row is still written so chat
-    //     history stays complete, but fan-out emits notify=false for every
-    //     recipient (silent context rows; L3 behavior).
+    //     `chat send`, external IM adapters, admin/web posts. Form-only
+    //     check on the FINAL outbound text (after normalizeMentionsInContent
+    //     has had its turn): if everything that remains after stripping
+    //     leading `@<name>` tokens is empty, the send becomes silent — the
+    //     message row is still written so chat history stays complete, but
+    //     fan-out emits notify=false for every recipient (silent context
+    //     rows; L3 behavior).
     //
     //     NO content language evaluation. Non-empty filler like "." or
     //     "(待命中)" still wakes the recipient; the agent prompt + silent-
-    //     turn protocol is responsible for those. Non-string content
-    //     (e.g. structured question payloads) bypasses the guard entirely.
+    //     turn protocol is responsible for those.
     const isSilentSend =
       typeof outboundContent === "string" && outboundContent.replace(/^(@\S+\s*)+/, "").trim().length === 0;
     if (isSilentSend) {
@@ -494,19 +475,6 @@ async function sendMessageInner(
         source: data.source,
       })
       .returning();
-
-    // 3b. For ask-user questions, record the pending lifecycle row in the
-    //     same transaction so a rollback drops both. The content was just
-    //     stored verbatim above; recordPendingQuestionFromMessage parses it
-    //     to extract the correlationId and rejects malformed payloads.
-    if (data.format === "question" && msg) {
-      await recordPendingQuestionFromMessage(tx, {
-        agentId: senderId,
-        chatId,
-        messageId: msg.id,
-        content: outboundContent,
-      });
-    }
 
     // 4. Fan-out: create inbox entries for every non-sender participant.
     //    The `notify` flag splits them in two:

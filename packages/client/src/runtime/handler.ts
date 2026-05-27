@@ -22,7 +22,7 @@ export type AgentIdentity = {
   displayName: string;
   type: string;
   /**
-   * Post-type-merge (migration 0050) `type` only distinguishes
+   * Post-type-merge (migration 0051) `type` only distinguishes
    * `human` vs `agent`; the "personal vs. shared" axis lives here in
    * `visibility`. Renderers that need to know whether a non-human row is a
    * personal assistant (private) or an autonomous bot (organization) MUST

@@ -79,6 +79,15 @@ export const agents = pgTable(
      * edit. NULL iff data is NULL.
      */
     avatarImageUpdatedAt: timestamp("avatar_image_updated_at", { withTimezone: true }),
+    /**
+     * Agent-reported skill (slash-command) list. Discovered by the daemon by
+     * scanning the agent runtime's skill directories (~/.claude/skills,
+     * <repo>/.claude/skills, plugin skill dirs) and uploaded via
+     * `PATCH /api/v1/agents/:uuid/skills`. Consumed by the web composer to
+     * render the `/`-triggered slash-command popover after the user
+     * @mentions this agent. Default `[]` keeps existing rows valid.
+     */
+    skills: jsonb("skills").$type<Array<Record<string, unknown>>>().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

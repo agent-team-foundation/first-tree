@@ -51,7 +51,11 @@ export { blank, status } from "./output.js";
 // Interactive prompts
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
 // Pre-flight runtime-provider reconciliation (P2 — capabilities + YAML rewrite)
-export { reconcileLocalRuntimeProviders, uploadClientCapabilities } from "./runtime-provider-reconcile.js";
+export {
+  reconcileLocalRuntimeProviders,
+  uploadAgentSkills,
+  uploadClientCapabilities,
+} from "./runtime-provider-reconcile.js";
 // Background service install (launchd / systemd --user)
 export type { ServiceInfo, ServiceOpResult, ServiceState } from "./service-install.js";
 export {

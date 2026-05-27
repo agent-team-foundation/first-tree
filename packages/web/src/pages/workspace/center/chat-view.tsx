@@ -6,8 +6,6 @@ import {
   extractMentions,
   type MentionParticipant,
   parseWorkspaceDocKey,
-  type QuestionAnswerMessageContent,
-  type QuestionMessageContent,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -35,6 +33,7 @@ import {
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
+import { getAgentSkills } from "../../../api/agents.js";
 import {
   type FileMessageContent,
   getChat,
@@ -69,12 +68,6 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
-import {
-  isQuestionAnswerContent,
-  isQuestionContent,
-  QuestionMessage,
-  type QuestionStatus,
-} from "../../../components/chat/question-message.js";
 import { WorkingBubble } from "../../../components/chat/working-bubble.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
 import {
@@ -83,6 +76,12 @@ import {
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
+import {
+  resolveMentionContext,
+  SlashCommandPopover,
+  type SlashSystemCommand,
+  useSlashCommand,
+} from "../../../components/slash-command-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
@@ -691,118 +690,6 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
   );
 }
 
-function QuestionMessageRow({
-  msg,
-  chatId,
-  content,
-  answer,
-  status,
-  agentNameFn,
-  agentAvatarFn,
-  agentColorTokenFn,
-}: {
-  msg: MessageWithDelivery;
-  chatId: string;
-  content: QuestionMessageContent;
-  answer: QuestionAnswerMessageContent | null;
-  status: QuestionStatus;
-  agentNameFn: (id: string) => string;
-  agentAvatarFn: (id: string) => string | null;
-  agentColorTokenFn: (id: string) => string | null;
-}) {
-  const senderName = agentNameFn(msg.senderId);
-  return (
-    <div
-      className="grid"
-      data-message-id={msg.id}
-      // Anchors for the compose status bar's jump-to-timeline. The boolean
-      // flag drives the legacy "scroll to latest pending" path; the agent one
-      // lets the rail locate *this* agent's pending question by id.
-      data-pending-question={status === "pending" ? "true" : undefined}
-      data-pending-question-agent={status === "pending" ? msg.senderId : undefined}
-      style={{
-        gridTemplateColumns: "var(--sp-5) 1fr",
-        columnGap: 8,
-        padding: "var(--sp-1_5) 0",
-      }}
-    >
-      <Avatar
-        name={senderName}
-        imageUrl={agentAvatarFn(msg.senderId)}
-        seed={msg.senderId}
-        colorToken={agentColorTokenFn(msg.senderId)}
-      />
-      <div className="min-w-0 flex flex-col" style={{ gap: "var(--sp-1)" }}>
-        <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono text-body font-semibold" style={{ color: "var(--accent)" }}>
-            {senderName}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            {formatClockTime(msg.createdAt)}
-          </span>
-        </div>
-        <QuestionMessage chatId={chatId} questionMessageId={msg.id} content={content} answer={answer} status={status} />
-      </div>
-    </div>
-  );
-}
-
-/** Compact recap row for `format=question_answer`. Mirrors the style of a
- *  user text reply but flagged so it's clear this came from the answer card. */
-function QuestionAnswerRow({
-  msg,
-  agentNameFn,
-  agentAvatarFn,
-  agentColorTokenFn,
-}: {
-  msg: MessageWithDelivery;
-  agentNameFn: (id: string) => string;
-  agentAvatarFn: (id: string) => string | null;
-  agentColorTokenFn: (id: string) => string | null;
-}) {
-  const parsed = isQuestionAnswerContent(msg.content) ? msg.content : null;
-  const senderName = agentNameFn(msg.senderId);
-  const summary = parsed
-    ? Object.entries(parsed.answers)
-        .map(([q, a]) => `${q.replace(/\s+\?$/u, "?")}: ${a}`)
-        .join(" · ")
-    : "(answer)";
-  return (
-    <div
-      className="grid"
-      data-message-id={msg.id}
-      style={{
-        gridTemplateColumns: "var(--sp-5) 1fr",
-        columnGap: 8,
-        padding: "var(--sp-1_5) 0",
-      }}
-    >
-      <Avatar
-        name={senderName}
-        imageUrl={agentAvatarFn(msg.senderId)}
-        seed={msg.senderId}
-        colorToken={agentColorTokenFn(msg.senderId)}
-      />
-      <div className="min-w-0">
-        <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono text-body font-semibold" style={{ color: "var(--fg)" }}>
-            {senderName}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            {formatClockTime(msg.createdAt)}
-          </span>
-          <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-            answered question
-          </span>
-        </div>
-        <div className="text-body" style={{ color: "var(--fg-2)", marginTop: 2 }}>
-          {summary}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 type TimelineItem =
   | { kind: "message"; at: string; key: string; data: MessageWithDelivery }
   | { kind: "event"; at: string; key: string; data: SessionEventRow }
@@ -984,7 +871,7 @@ export function ChatView({
   // needs to call `scrollToBottom` — and sendMut is declared
   // shortly after this point. The hook only depends on
   // `scrollContainerRef`, which is just a ref.
-  const { scrollToBottomImmediate, scrollToMessageImmediate, scrollToBottom, isAtBottom } =
+  const { scrollToBottomImmediate, scrollToMessageImmediate, scrollToBottom, scrollToMessage, isAtBottom } =
     useChatScroll(scrollContainerRef);
 
   // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
@@ -1517,31 +1404,6 @@ export function ChatView({
     return grouped;
   }, [mergedMessages, eventsData]);
 
-  /**
-   * For every `format=question` message we render, we need the matching
-   * `question_answer` (when one has landed). Build a (correlationId →
-   * answer-content) lookup once per messages refresh — there's no separate
-   * pending-status endpoint yet, so the presence of the answer message is
-   * the canonical "answered" signal. v1 collapses superseded into pending
-   * since we don't have a WS-pushed supersede signal yet (commit 6).
-   */
-  // Build the lookup from mergedMessages (cache ∪ server), not just
-  // messagesData. Otherwise a cached question_answer that has aged out of
-  // the server's "last 50" window would be invisible to this lookup —
-  // its matching question would render as `pending` even though the
-  // answer is right there in the timeline (cached). Caught in PR 286
-  // review by Codex / yuezengwu.
-  const answersByCorrelationId = useMemo(() => {
-    const map = new Map<string, QuestionAnswerMessageContent>();
-    for (const m of mergedMessages) {
-      if (m.format !== "question_answer") continue;
-      if (isQuestionAnswerContent(m.content)) {
-        map.set(m.content.correlationId, m.content);
-      }
-    }
-    return map;
-  }, [mergedMessages]);
-
   const itemCount = items.length;
 
   // M2: scroll-position snapshot — synchronous IndexedDB lookup of
@@ -1835,6 +1697,22 @@ export function ChatView({
   // commit but before paint, so the first frame the user sees is
   // already at the right scroll position.
   //
+  // Each branch fires two scrolls:
+  //   1. *Immediate — synchronous, lands the first paint at the
+  //      current scrollHeight floor (no top-then-bottom flash).
+  //   2. Non-immediate (ResizeObserver-debounced) — re-lands once
+  //      the container's height has been stable for `stabilityDelay`
+  //      (200 ms). `messagesData` and `eventsData` arrive in two
+  //      independent React Query fetches, and messages typically
+  //      land first; without this follow-up the immediate scroll
+  //      lands at "messages end" and any in-progress `tool_call`
+  //      workgroups arriving moments later end up below the fold
+  //      (and `isAtBottom` flips to `false` as `scrollHeight` grows,
+  //      so the streaming auto-follow effect below ALSO bails).
+  //      The follow-up call is also why this useLayoutEffect doesn't
+  //      need to wait for both queries — first paint stays correct,
+  //      and the stable callback handles the late-arriving events.
+  //
   // Earlier rounds:
   //  - PR 286 review M1 round → answersByCorrelationId source fix.
   //  - PR 286 review M2 round → Bug 1 (hard reload landed at top
@@ -1845,6 +1723,10 @@ export function ChatView({
   //    "last-read marker" to "bottom-visible-on-leave snapshot",
   //    so coming back to a chat lands you where you were visually,
   //    not at "the bottom of all content I've ever seen here".
+  //  - baixiaohang manual report → on chat open the viewport landed
+  //    at the last message's bottom, leaving in-progress tool_call
+  //    workgroups (events that arrived after messages) below the
+  //    fold. Added the stable follow-up scroll.
   const landedForChatRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (itemCount === 0) return;
@@ -1855,13 +1737,23 @@ export function ChatView({
       // newer than the anchor sit below the fold; the pill will
       // surface them.
       scrollToMessageImmediate(bottomVisibleResolution.anchorId, "end", "auto");
+      scrollToMessage(bottomVisibleResolution.anchorId, "end", "auto");
     } else {
       // No prior snapshot (first-time visit, or the stored anchor
       // is gone): preserve the M1-era "open scrolls to bottom"
       // behavior.
       scrollToBottomImmediate("auto");
+      scrollToBottom("auto");
     }
-  }, [chatId, itemCount, bottomVisibleResolution, scrollToMessageImmediate, scrollToBottomImmediate]);
+  }, [
+    chatId,
+    itemCount,
+    bottomVisibleResolution,
+    scrollToMessageImmediate,
+    scrollToBottomImmediate,
+    scrollToMessage,
+    scrollToBottom,
+  ]);
 
   // Watches the scroll position and persists the bottom-visible
   // message id per chat. Distinct from the prior monotonic-marker
@@ -2177,6 +2069,86 @@ export function ChatView({
         el.focus();
         el.setSelectionRange(update.cursor, update.cursor);
       });
+    },
+  });
+
+  /**
+   * Slash-command setup. Per the design contract (`/ for commands` in the
+   * placeholder), the popover follows the @mention context:
+   *   - explicit @mention in the draft wins (most recent before cursor)
+   *   - 1-on-1 chats (no required @) fall back to the sole other speaker
+   *     so `/<cmd>` works without typing `@` first
+   *   - group chats with no resolved @ show only system commands
+   */
+  const slashMentionContext = useMemo<{ agentId: string; displayName: string } | null>(() => {
+    const explicit = resolveMentionContext(draft, cursor, mentionCandidates);
+    if (explicit) return explicit;
+    if (!requiresMention && mentionCandidates.length === 1) {
+      const c = mentionCandidates[0];
+      if (!c) return null;
+      return { agentId: c.agentId, displayName: c.displayName ?? c.name ?? c.agentId };
+    }
+    return null;
+  }, [draft, cursor, mentionCandidates, requiresMention]);
+
+  // Phase 1C ships with a single in-product system command (`/clear`).
+  // The four-command roadmap from the design doc (`/help`, `/me`,
+  // `/invite`) needs its own UX surfaces (modals + invite flow), so it's
+  // deferred to keep this PR scoped to the popover wiring. The
+  // useSlashCommand hook expects an array, not an opinionated set —
+  // adding the others is a one-line append once their actions exist.
+  const slashSystemCommands = useMemo<SlashSystemCommand[]>(
+    () => [{ kind: "system", name: "clear", description: "Clear the message draft" }],
+    [],
+  );
+
+  const { data: slashSkillsData } = useQuery({
+    queryKey: ["agent-skills", slashMentionContext?.agentId ?? null],
+    queryFn: () => {
+      const id = slashMentionContext?.agentId;
+      if (!id) return Promise.resolve({ skills: [] });
+      return getAgentSkills(id);
+    },
+    // Only fetch when we actually have a scope. Re-fetching on every
+    // keystroke would amplify the GET — staleTime keeps the result for
+    // a minute, which matches the daemon's "upload at start" cadence.
+    enabled: Boolean(slashMentionContext?.agentId),
+    staleTime: 60_000,
+  });
+
+  const slash = useSlashCommand({
+    value: draft,
+    cursor,
+    systemCommands: slashSystemCommands,
+    agentSkills: slashMentionContext
+      ? {
+          agentId: slashMentionContext.agentId,
+          agentDisplayName: slashMentionContext.displayName,
+          skills: slashSkillsData?.skills ?? [],
+        }
+      : null,
+    mentionedAgent: slashMentionContext,
+    disabled: sendMut.isPending || uploading,
+    onSelect: (update, picked) => {
+      setDraft(update.text);
+      setCursor(update.cursor);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(update.cursor, update.cursor);
+      });
+      if (picked.kind === "system") {
+        switch (picked.name) {
+          case "clear":
+            // `buildSlashInsert` already cleared the textarea content;
+            // nothing else to do for v1.
+            break;
+        }
+      }
+      // Skill picks are not intercepted — the literal `/<name> ` is
+      // already in the textarea so the user can append arguments and
+      // send. The agent's harness routes the slash on receipt.
     },
   });
 
@@ -2541,44 +2513,16 @@ export function ChatView({
                       }
                     } else {
                       const msg = item.data;
-                      if (msg.format === "question" && isQuestionContent(msg.content)) {
-                        const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
-                        const status: QuestionStatus = answer ? "answered" : "pending";
-                        node = (
-                          <QuestionMessageRow
-                            key={item.key}
-                            msg={msg}
-                            chatId={chatId}
-                            content={msg.content}
-                            answer={answer}
-                            status={status}
-                            agentNameFn={chatScopedAgentName}
-                            agentAvatarFn={agentAvatar}
-                            agentColorTokenFn={agentColorToken}
-                          />
-                        );
-                      } else if (msg.format === "question_answer") {
-                        node = (
-                          <QuestionAnswerRow
-                            key={item.key}
-                            msg={msg}
-                            agentNameFn={chatScopedAgentName}
-                            agentAvatarFn={agentAvatar}
-                            agentColorTokenFn={agentColorToken}
-                          />
-                        );
-                      } else {
-                        node = (
-                          <TextRow
-                            key={item.key}
-                            msg={msg}
-                            myAgentId={myAgentId}
-                            agentNameFn={chatScopedAgentName}
-                            agentAvatarFn={agentAvatar}
-                            agentColorTokenFn={agentColorToken}
-                          />
-                        );
-                      }
+                      node = (
+                        <TextRow
+                          key={item.key}
+                          msg={msg}
+                          myAgentId={myAgentId}
+                          agentNameFn={chatScopedAgentName}
+                          agentAvatarFn={agentAvatar}
+                          agentColorTokenFn={agentColorToken}
+                        />
+                      );
                     }
                     // Insert the gap banner immediately after the last cached
                     // message when there's a known break between cache and the
@@ -2755,6 +2699,14 @@ export function ChatView({
                         anchorRef={textareaRef}
                         onPick={mention.pick}
                       />
+                      <SlashCommandPopover
+                        trigger={slash.trigger}
+                        results={slash.results}
+                        highlightIndex={slash.highlightIndex}
+                        mentionedAgent={slash.mentionedAgent}
+                        anchorRef={textareaRef}
+                        onPick={slash.pick}
+                      />
                       <textarea
                         ref={textareaRef}
                         value={draft}
@@ -2809,6 +2761,11 @@ export function ChatView({
                           // Skip while an IME is composing so Enter confirms the
                           // candidate instead of sending / picking a mention.
                           if (e.nativeEvent.isComposing) return;
+                          // Slash command popover handles navigation keys when active.
+                          // Sits before mention so `/`-typed draft never falls through to
+                          // mention-autocomplete (the trigger predicates are disjoint, but
+                          // ordering documents intent).
+                          if (slash.handleKey(e)) return;
                           // Mention autocomplete gets first crack at navigation keys so
                           // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
                           // sending or moving the cursor.

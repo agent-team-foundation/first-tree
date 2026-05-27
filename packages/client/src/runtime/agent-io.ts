@@ -149,28 +149,10 @@ export function resolveSenderLabel(senderId: string, participants: ChatParticipa
  */
 /**
  * Convert a SessionMessage's payload to a plain-text snippet the LLM can
- * read as user input. Most formats are already strings; the special case
- * is `question_answer` — when an answer arrives AFTER the SDK process was
- * suspended, SessionManager.dispatch routes it through the normal path,
- * and we need to render the structured `{correlationId, answers}` payload
- * as readable English so the resumed Claude turn can act on it.
+ * read as user input. Most formats are already strings; non-string
+ * payloads are stringified so the resumed turn still sees readable text.
  */
 function renderForLLM(message: SessionMessage): string {
-  if (message.format === "question_answer" && message.content && typeof message.content === "object") {
-    const c = message.content as { correlationId?: string; answers?: Record<string, string> };
-    if (c.answers && typeof c.answers === "object") {
-      const lines: string[] = [];
-      for (const [question, answer] of Object.entries(c.answers)) {
-        lines.push(`Q: ${question}`);
-        lines.push(`A: ${answer}`);
-      }
-      return [
-        "[The user has answered an earlier AskUserQuestion you raised. Continue the task using their answers below; do NOT call AskUserQuestion again for the same questions.]",
-        "",
-        ...lines,
-      ].join("\n");
-    }
-  }
   return typeof message.content === "string" ? message.content : JSON.stringify(message.content);
 }
 

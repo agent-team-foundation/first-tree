@@ -60,7 +60,7 @@ export type RegisterResult = {
   displayName: string;
   type: string;
   /**
-   * Post-merge of `personal_assistant` / `autonomous_agent` (migration 0050)
+   * Post-merge of `personal_assistant` / `autonomous_agent` (migration 0051)
    * the row-level "personal vs. shared" axis lives in `visibility` instead
    * of `type`. Surfaced to the runtime so CLAUDE.md / AGENTS.md generation
    * can render the personal-assistant vs. autonomous-bot framing without

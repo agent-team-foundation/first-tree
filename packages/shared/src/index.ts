@@ -535,23 +535,7 @@ export {
   pulseBucketSchema,
   pulseTickSchema,
 } from "./schemas/pulse.js";
-export {
-  QUESTION_STATUSES,
-  type QuestionAnswerMessageContent,
-  type QuestionItem,
-  type QuestionMessageContent,
-  type QuestionOption,
-  type QuestionPreviewFormat,
-  type QuestionStatus,
-  questionAnswerMessageContentSchema,
-  questionItemSchema,
-  questionMessageContentSchema,
-  questionOptionSchema,
-  questionPreviewFormatSchema,
-  questionStatusSchema,
-  type SubmitQuestionAnswer,
-  submitQuestionAnswerSchema,
-} from "./schemas/question.js";
+export { QUESTION_STATUSES, type QuestionStatus, questionStatusSchema } from "./schemas/question.js";
 export {
   DEFAULT_RUNTIME_PROVIDER,
   RUNTIME_PROVIDERS,
@@ -586,6 +570,18 @@ export {
   sessionReconcileRequestSchema,
   sessionReconcileResultSchema,
 } from "./schemas/session-reconcile.js";
+export {
+  type AgentSkills,
+  agentSkillsSchema,
+  SKILL_NAME_REGEX,
+  SKILL_SOURCES,
+  type SkillDescriptor,
+  type SkillSource,
+  skillDescriptorSchema,
+  skillSourceSchema,
+  type UpdateAgentSkills,
+  updateAgentSkillsSchema,
+} from "./schemas/skill.js";
 export {
   type OrgStats,
   orgStatsSchema,
