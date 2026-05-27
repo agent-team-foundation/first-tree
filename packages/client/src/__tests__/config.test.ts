@@ -87,6 +87,25 @@ agents:
     }
   });
 
+  it("expands environment variables inside arrays", () => {
+    process.env.TEST_CONFIG_REPO = "first-tree";
+    try {
+      const path = writeTempYaml(`
+agents:
+  myagent:
+    agentId: agent-1
+    type: claude-code
+    repos:
+      - \${TEST_CONFIG_REPO}
+`);
+      const config = loadRuntimeConfig(path);
+      const myagent = config.agents.myagent as unknown as { repos?: string[] };
+      expect(myagent.repos).toEqual(["first-tree"]);
+    } finally {
+      delete process.env.TEST_CONFIG_REPO;
+    }
+  });
+
   it("throws for missing environment variable", () => {
     delete process.env.NONEXISTENT_VAR_XYZ;
     const path = writeTempYaml(`

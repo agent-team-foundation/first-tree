@@ -210,6 +210,20 @@ describe("createResultSink — forwardResult enrichment", () => {
       expect(body.metadata?.documentContext).toBeUndefined();
     });
 
+    it("emits failedMentions for unresolved bare doc mentions", async () => {
+      const { sink, sendMessage } = buildSink({
+        trigger: { messageId: "m1", senderId: "agent-peer" },
+        getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
+      });
+
+      await sink("missing reference: docs/missing.md");
+
+      const body = sendMessage.mock.calls[0]?.[1] as {
+        metadata?: { documentContext?: { failedMentions?: Array<{ raw: string; reason: string }> } };
+      };
+      expect(body.metadata?.documentContext?.failedMentions).toEqual([{ raw: "docs/missing.md", reason: "missing" }]);
+    });
+
     it("stores canonical workspace-relative paths so web cache lookup matches", async () => {
       // `./docs/intro.md` and `docs/intro.md` should both store as `docs/intro.md`,
       // matching what `docPreviewPathFromHref` produces for a click.
