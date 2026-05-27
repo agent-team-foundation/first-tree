@@ -44,6 +44,15 @@ type Worktree = { url: string; path: string; branchName: string };
  * of the SDK fetch-retry layer (`sdk-retry.test.ts`) without falling into the
  * same band that PostgreSQL LISTEN/NOTIFY uses for inbox redelivery.
  *
+ * **Layering with `FirstTreeHubSDK` fetch retry (PR #600 review nit #3):**
+ * this counter sits on top of the SDK's internal `doFetch` retry (3 tries,
+ * 0/500/1000 ms) AND on top of whatever `@openai/codex-sdk` does inside its
+ * child-process call. Worst-case attempts per turn ≈ this layer (3) × inner
+ * SDK fetch retry (3) = ~9 model invocations and a wall-clock ceiling near
+ * `RETRY_BASE_MS * RETRY_MULTIPLIER^MAX_TURN_RETRIES + sum(inner backoffs)`.
+ * Operators looking at long-tail latency / retry logs should know both
+ * layers exist before tuning either.
+ *
  * Retries fire ONLY when (a) the error message looks transient (see
  * `isTransientCodexErrorMessage`) AND (b) no user-visible event has been
  * emitted yet for this turn (see `isUserVisibleItem`). Once the agent has
@@ -59,13 +68,25 @@ const RETRY_MULTIPLIER = 3;
  *
  * Codex CLI reads AGENTS.md once at thread startup; the handler rewrites it
  * on every start/resume because there is no per-turn prompt-injection API
- * (see proposal §⓪.3). Two chats starting for the same agent within this
- * window almost certainly raced — the second writer clobbered the first
- * briefing before the codex CLI got to read it. We log instead of locking
- * because the operational signal ("wrong chat context surfaces in codex")
- * is the actionable thing; the fix lives upstream (per-turn prompt API).
+ * (see proposal §⓪.3 risk acceptance / §④ race-window decision). Two chats
+ * starting for the same agent within this window almost certainly raced —
+ * the second writer clobbered the first briefing before the codex CLI got
+ * to read it. We log instead of locking because the operational signal
+ * ("wrong chat context surfaces in codex") is the actionable thing; the
+ * fix lives upstream (per-turn prompt API).
+ *
+ * **1000 ms chosen empirically (PR #600 review nit #2):** the bootstrap
+ * pipeline (git mirror prepare → `bootstrapWorkspace` → briefing rewrite)
+ * runs in roughly 200 ms-1 s when the mirror is warm. A tighter window
+ * (the original 100 ms) systematically MISSED the most dangerous form of
+ * the race — two chats triggering `ensureCodexBootstrap` within the same
+ * bootstrap envelope — so we widen to cover that. Conversely, two writes
+ * spaced more than 1 s apart are unlikely to share a CLI read window. We
+ * accept a small chance of false positives (e.g. fast resume followed by
+ * fast resume from the same chat) over false negatives, because the log
+ * line is diagnostic-only — no behaviour change.
  */
-const AGENTS_MD_RACE_WINDOW_MS = 100;
+const AGENTS_MD_RACE_WINDOW_MS = 1000;
 
 /**
  * Module-level so the race detector spans every handler instance for the
@@ -101,6 +122,15 @@ export function detectAgentsMdConcurrentWrite(workspace: string, now: number, lo
 }
 
 /**
+ * HTTP status-code matchers anchored at word boundaries so unrelated
+ * numeric IDs ("request id 5023", "job_id=5001", "context window 4012")
+ * don't smuggle a false-positive match through `includes("500")` etc.
+ * See PR #600 review nit #1.
+ */
+const AUTH_HTTP_CODE_RE = /\b(401|403)\b/;
+const TRANSIENT_HTTP_CODE_RE = /\b(500|502|503|504)\b/;
+
+/**
  * Transient-error heuristic for `turn.failed` / SDK throws.
  *
  * The codex SDK surfaces `ThreadError = { message: string }` only — no
@@ -116,10 +146,11 @@ export function isTransientCodexErrorMessage(message: string): boolean {
   const m = message.toLowerCase();
   // Explicit non-retriables — short-circuit so a message like "401:
   // unauthorized after fetch failed" doesn't get retried because of
-  // "fetch failed".
+  // "fetch failed". HTTP codes use \b word boundaries so a `job_id=4012345`
+  // / `request id 4019` in the wrapped error doesn't get misclassified as
+  // an auth failure (which would silently swallow a real transient).
   if (
-    m.includes("401") ||
-    m.includes("403") ||
+    AUTH_HTTP_CODE_RE.test(m) ||
     m.includes("unauthorized") ||
     m.includes("forbidden") ||
     m.includes("invalid api key") ||
@@ -133,10 +164,7 @@ export function isTransientCodexErrorMessage(message: string): boolean {
     return false;
   }
   return (
-    m.includes("500") ||
-    m.includes("502") ||
-    m.includes("503") ||
-    m.includes("504") ||
+    TRANSIENT_HTTP_CODE_RE.test(m) ||
     m.includes("rate limit") ||
     m.includes("rate_limit") ||
     m.includes("overloaded") ||
@@ -606,66 +634,97 @@ export const createCodexHandler: HandlerFactory = (config) => {
         let retryRequested = false;
         let retryDelay = 0;
         let retryReason = "";
+
+        // Per-attempt child AbortController (PR #600 review nit #4): the
+        // codex-sdk Thread exposes no explicit close/cancel beyond the
+        // AbortSignal passed to runStreamed. If we `break` out of the
+        // for-await on a transient `turn.failed` and reuse the parent
+        // signal, the SDK's background generator + child-process stdout
+        // reader can keep draining the dead stream until child exit.
+        // A fresh child controller per attempt lets us explicitly tear
+        // down the previous stream before starting the next, while
+        // suspend/shutdown still cascades down via the parent listener.
+        const attemptAbort = new AbortController();
+        const onParentAbort = (): void => attemptAbort.abort();
+        abort.signal.addEventListener("abort", onParentAbort, { once: true });
+
         try {
-          const streamed = await activeThread.runStreamed(input, { signal: abort.signal });
-          for await (const event of streamed.events) {
-            if (abort.signal.aborted) break;
-            sessionCtx.touch();
-            if (event.type === "thread.started") {
-              threadId = event.thread_id;
-            } else if (event.type === "turn.started") {
-              // No-op — runtime state already "working".
-            } else if (event.type === "item.completed") {
-              const text = processItem(event.item, sessionCtx);
-              if (text) assistantTexts.push(text);
-              if (isUserVisibleItem(event.item)) userVisibleEmitted = true;
-            } else if (event.type === "item.started" || event.type === "item.updated") {
-              // Stream-only intermediate states — claude-code likewise emits
-              // events on terminal items only; codex's run-to-completion model
-              // means the terminal item carries the full payload.
-            } else if (event.type === "turn.completed") {
-              // Capture usage for the post-turn metrics log; `turn_end` is
-              // still emitted after forwardResult below.
-              usageBox.value = event.usage;
-            } else if (event.type === "turn.failed") {
-              if (
-                !userVisibleEmitted &&
-                attempt < MAX_TURN_RETRIES &&
-                isTransientCodexErrorMessage(event.error.message)
-              ) {
-                retryRequested = true;
-                retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
-                retryReason = `turn.failed (transient): ${event.error.message}`;
-                break;
+          try {
+            const streamed = await activeThread.runStreamed(input, { signal: attemptAbort.signal });
+            for await (const event of streamed.events) {
+              if (attemptAbort.signal.aborted) break;
+              sessionCtx.touch();
+              if (event.type === "thread.started") {
+                threadId = event.thread_id;
+              } else if (event.type === "turn.started") {
+                // No-op — runtime state already "working".
+              } else if (event.type === "item.completed") {
+                const text = processItem(event.item, sessionCtx);
+                if (text) assistantTexts.push(text);
+                if (isUserVisibleItem(event.item)) userVisibleEmitted = true;
+              } else if (event.type === "item.started" || event.type === "item.updated") {
+                // Stream-only intermediate states — claude-code likewise emits
+                // events on terminal items only; codex's run-to-completion model
+                // means the terminal item carries the full payload.
+              } else if (event.type === "turn.completed") {
+                // Capture usage for the post-turn metrics log; `turn_end` is
+                // still emitted after forwardResult below.
+                usageBox.value = event.usage;
+              } else if (event.type === "turn.failed") {
+                if (
+                  !userVisibleEmitted &&
+                  attempt < MAX_TURN_RETRIES &&
+                  isTransientCodexErrorMessage(event.error.message)
+                ) {
+                  retryRequested = true;
+                  retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
+                  retryReason = `turn.failed (transient): ${event.error.message}`;
+                  break;
+                }
+                turnFailed = true;
+                sessionCtx.emitEvent({
+                  kind: "error",
+                  payload: { source: "sdk", message: event.error.message },
+                });
+              } else if (event.type === "error") {
+                sessionCtx.emitEvent({
+                  kind: "error",
+                  payload: { source: "sdk", message: event.message },
+                });
               }
+            }
+          } catch (err) {
+            if (abort.signal.aborted) return;
+            const msg = err instanceof Error ? err.message : String(err);
+            if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(msg)) {
+              retryRequested = true;
+              retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
+              retryReason = `runStreamed threw (transient): ${msg}`;
+            } else {
               turnFailed = true;
-              sessionCtx.emitEvent({
-                kind: "error",
-                payload: { source: "sdk", message: event.error.message },
-              });
-            } else if (event.type === "error") {
-              sessionCtx.emitEvent({
-                kind: "error",
-                payload: { source: "sdk", message: event.message },
-              });
+              sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: msg } });
             }
           }
-        } catch (err) {
-          if (abort.signal.aborted) return;
-          const msg = err instanceof Error ? err.message : String(err);
-          if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(msg)) {
-            retryRequested = true;
-            retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
-            retryReason = `runStreamed threw (transient): ${msg}`;
-          } else {
-            turnFailed = true;
-            sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: msg } });
-          }
+        } finally {
+          // Detach the parent listener whether we retry or break. Even
+          // with `{ once: true }` the listener may never fire (no
+          // parent-abort during this attempt) — without removal we'd
+          // leak one per attempt for the lifetime of the parent
+          // controller (i.e. of this turn).
+          abort.signal.removeEventListener("abort", onParentAbort);
         }
 
         if (!retryRequested) break;
+        // Explicit tear-down: kill the previous stream before the backoff
+        // sleep so its drain doesn't overlap the next attempt's child
+        // process. No-op if the parent already aborted (the listener
+        // above already cascaded).
+        attemptAbort.abort();
         sessionCtx.log(`codex turn retry ${attempt + 1}/${MAX_TURN_RETRIES + 1} after ${retryDelay}ms; ${retryReason}`);
         try {
+          // Sleep on PARENT signal: only suspend/shutdown should cut
+          // short the backoff window, not the retry-triggered abort we
+          // just fired on the per-attempt controller.
           await sleepWithAbort(retryDelay, abort.signal);
         } catch {
           // AbortError — suspend/shutdown raced ahead; let the abort path

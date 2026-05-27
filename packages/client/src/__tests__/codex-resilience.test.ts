@@ -97,6 +97,33 @@ describe("isTransientCodexErrorMessage", () => {
       expect(isTransientCodexErrorMessage(m), `expected non-transient: ${m}`).toBe(false);
     }
   });
+
+  it("does not false-positive on numeric IDs that contain HTTP status digits (PR #600 review nit #1)", () => {
+    // Before the \b word-boundary tightening, naive `includes("500")` /
+    // `includes("401")` would match these and burn retry budget on a
+    // non-transient failure (or, for the 401 case, silently swallow a real
+    // transient by short-circuiting through the auth branch).
+    const noise = [
+      "request id 5023 failed: unknown",
+      "job_id=5001 produced no output",
+      "context window 4012 tokens exceeded the limit", // looks like 401 but isn't
+      "task 4030450 finished without emitting a result", // looks like 403 but isn't
+      "trace 50123 dropped before flush",
+      "model gpt-5024 not available", // looks like 502 but isn't
+    ];
+    for (const m of noise) {
+      expect(isTransientCodexErrorMessage(m), `expected non-transient (id-like): ${m}`).toBe(false);
+    }
+  });
+
+  it("matches HTTP codes even when adjacent to common punctuation (`:`, `,`, `)`)", () => {
+    // \b honours non-word punctuation as a boundary, so these realistic
+    // wrapped-error shapes still classify correctly.
+    expect(isTransientCodexErrorMessage("openai responded: 500 internal server error")).toBe(true);
+    expect(isTransientCodexErrorMessage("status 503, retrying")).toBe(true);
+    expect(isTransientCodexErrorMessage("HTTP(502) bad gateway")).toBe(true);
+    expect(isTransientCodexErrorMessage("upstream returned 401: unauthorized")).toBe(false);
+  });
 });
 
 describe("detectAgentsMdConcurrentWrite + __resetCodexHandlerStateForTests", () => {
@@ -112,52 +139,72 @@ describe("detectAgentsMdConcurrentWrite + __resetCodexHandlerStateForTests", () 
 
   it("does not log when writes are spaced apart (>= AGENTS_MD_RACE_WINDOW_MS)", () => {
     const log = vi.fn();
-    // Race window is 100 ms in the SUT; 150 ms gap is comfortably outside.
+    // Race window is 1000 ms in the SUT (widened from 100 ms per PR #600
+    // review nit #2 so realistic git-mirror-warm bootstraps land inside).
+    // 1500 ms gap is comfortably outside.
     detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_000, log);
-    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_150, log);
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 2_500, log);
     expect(log).not.toHaveBeenCalled();
   });
 
   it("logs once with workspace + gap_ms when two writes fall inside the race window", () => {
     const log = vi.fn();
     detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_000, log);
-    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_050, log);
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_500, log); // 500ms — well inside the 1000ms window
     expect(log).toHaveBeenCalledTimes(1);
     const msg = log.mock.calls[0]?.[0] as string;
     expect(msg).toContain("workspace=/workspaces/agent-a");
-    expect(msg).toContain("gap_ms=50");
+    expect(msg).toContain("gap_ms=500");
     // Reference to the proposal section makes the log greppable in ops.
+    // Both §⓪.3 (risk acceptance) and §④ (race-window decision) are
+    // valid grep targets; the log line carries §⓪.3 because that's where
+    // the operational risk is tracked.
     expect(msg).toContain("§⓪.3");
+  });
+
+  it("logs at exactly the previous boundary (e.g. 999ms gap is just inside)", () => {
+    // Locks the strict `<` boundary: 999ms triggers, 1000ms does not.
+    const log = vi.fn();
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_000, log);
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_999, log);
+    expect(log).toHaveBeenCalledTimes(1);
+
+    __resetCodexHandlerStateForTests();
+    log.mockClear();
+
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_000, log);
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 2_000, log); // exactly at the boundary — not inside
+    expect(log).not.toHaveBeenCalled();
   });
 
   it("tracks per-workspace state — concurrent writes on different agents do not cross-fire", () => {
     const log = vi.fn();
     detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_000, log);
-    detectAgentsMdConcurrentWrite("/workspaces/agent-b", 1_010, log);
-    detectAgentsMdConcurrentWrite("/workspaces/agent-c", 1_020, log);
+    detectAgentsMdConcurrentWrite("/workspaces/agent-b", 1_100, log);
+    detectAgentsMdConcurrentWrite("/workspaces/agent-c", 1_200, log);
     expect(log).not.toHaveBeenCalled();
   });
 
   it("logs on each subsequent write that lands inside the window — not just the first", () => {
     const log = vi.fn();
     detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_000, log);
-    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_040, log); // 40ms gap
-    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_080, log); // 40ms gap from prev
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_400, log); // 400ms gap
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_800, log); // 400ms gap from prev
     expect(log).toHaveBeenCalledTimes(2);
   });
 
   it("__resetCodexHandlerStateForTests clears prior state — first post-reset write logs nothing", () => {
     const log = vi.fn();
     detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_000, log);
-    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_010, log);
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_200, log);
     expect(log).toHaveBeenCalledTimes(1);
 
     __resetCodexHandlerStateForTests();
     log.mockClear();
 
-    // After reset, the second write of the new run should not see any
+    // After reset, the next write of the new run should not see any
     // record of the pre-reset writes.
-    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_020, log);
+    detectAgentsMdConcurrentWrite("/workspaces/agent-a", 1_400, log);
     expect(log).not.toHaveBeenCalled();
   });
 });
