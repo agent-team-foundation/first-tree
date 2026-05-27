@@ -41,7 +41,7 @@ export function AuthExpiredCardBody({ client, boundAgents, agentName }: AuthExpi
             {reportedProviders.map((provider) => {
               const entry = client.capabilities[provider];
               if (entry == null) return null;
-              return <RuntimeStateLine key={provider} provider={provider} entry={entry} />;
+              return <RuntimeStateLine key={provider} provider={provider} entry={entry} os={client.os} />;
             })}
           </div>
         </CardSection>
