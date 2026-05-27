@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RotatingFileStream } from "../rotating-file-stream.js";
 
 describe("RotatingFileStream", () => {
@@ -12,6 +12,8 @@ describe("RotatingFileStream", () => {
   });
 
   afterEach(() => {
+    vi.doUnmock("node:fs");
+    vi.resetModules();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -60,5 +62,113 @@ describe("RotatingFileStream", () => {
     expect(readFileSync(path, "utf8")).toBe("first\nsecond\n");
     // Size is the appended total, not just the newest chunk.
     expect(statSync(path).size).toBe("first\nsecond\n".length);
+  });
+
+  it("accepts direct string chunks from Writable internals", () => {
+    const path = join(dir, "app.log");
+    const s = new RotatingFileStream({ path, maxBytes: 100, maxFiles: 3 });
+    let callbackError: Error | null | undefined;
+
+    s._write("raw string\n", "utf8", (err) => {
+      callbackError = err;
+    });
+    s.end();
+
+    expect(callbackError).toBeUndefined();
+    expect(readFileSync(path, "utf8")).toBe("raw string\n");
+  });
+
+  it("passes write and final errors to the stream callbacks", async () => {
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      let closeCalls = 0;
+      return {
+        ...actual,
+        writeSync: () => {
+          throw "write failed";
+        },
+        closeSync: () => {
+          closeCalls += 1;
+          if (closeCalls > 1) {
+            throw new Error("close failed as error");
+          }
+          throw "close failed";
+        },
+      };
+    });
+    const mod = await import("../rotating-file-stream.js");
+    const path = join(dir, "app.log");
+    const s = new mod.RotatingFileStream({ path, maxBytes: 100, maxFiles: 3 });
+    const t = new mod.RotatingFileStream({ path: join(dir, "other.log"), maxBytes: 100, maxFiles: 3 });
+    let writeError: Error | null | undefined;
+    let finalError: Error | null | undefined;
+    let secondFinalError: Error | null | undefined;
+
+    s._write(Buffer.from("line\n"), "utf8", (err) => {
+      writeError = err;
+    });
+    s._final((err) => {
+      finalError = err;
+    });
+    t._final((err) => {
+      secondFinalError = err;
+    });
+
+    expect(writeError).toBeInstanceOf(Error);
+    expect(writeError?.message).toBe("write failed");
+    expect(finalError).toBeInstanceOf(Error);
+    expect(finalError?.message).toBe("close failed");
+    expect(secondFinalError).toBeInstanceOf(Error);
+    expect(secondFinalError?.message).toBe("close failed as error");
+  });
+
+  it("surfaces non-ENOENT rename failures during rotation", async () => {
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        renameSync: () => {
+          const err = new Error("rename denied");
+          Object.assign(err, { code: "EACCES" });
+          throw err;
+        },
+      };
+    });
+    const mod = await import("../rotating-file-stream.js");
+    const path = join(dir, "app.log");
+    const s = new mod.RotatingFileStream({ path, maxBytes: 1, maxFiles: 3 });
+    let callbackError: Error | null | undefined;
+
+    s._write(Buffer.from("xx"), "utf8", (err) => {
+      callbackError = err;
+    });
+
+    expect(callbackError).toBeInstanceOf(Error);
+    expect(callbackError?.message).toBe("rename denied");
+  });
+
+  it("surfaces non-ENOENT unlink failures during rotation", async () => {
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        unlinkSync: () => {
+          const err = new Error("unlink denied");
+          Object.assign(err, { code: "EACCES" });
+          throw err;
+        },
+      };
+    });
+    const mod = await import("../rotating-file-stream.js");
+    const path = join(dir, "app.log");
+    const s = new mod.RotatingFileStream({ path, maxBytes: 1, maxFiles: 3 });
+    let callbackError: Error | null | undefined;
+
+    s._write(Buffer.from("xx"), "utf8", (err) => {
+      callbackError = err;
+    });
+
+    expect(callbackError).toBeInstanceOf(Error);
+    expect(callbackError?.message).toBe("unlink denied");
   });
 });

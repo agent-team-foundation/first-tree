@@ -7,6 +7,20 @@ import { monorepoSourceAliases } from "../../scripts/vitest-aliases.js";
 // plugin is needed at transform time to strip the JSX.
 export default defineConfig({
   plugins: [react()],
+  test: {
+    coverage: {
+      include: [
+        "src/auth/redirect-from-state.ts",
+        "src/lib/agent-status-view.ts",
+        "src/pages/onboarding/copy.ts",
+        "src/pages/onboarding/steps.ts",
+        "src/utils/agent-state.ts",
+        "src/utils/chat-gap.ts",
+        "src/utils/onboarding-team-name.ts",
+        "src/utils/requires-mention.ts",
+      ],
+    },
+  },
   resolve: {
     alias: monorepoSourceAliases,
   },

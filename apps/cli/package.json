@@ -67,6 +67,7 @@
     "@first-tree/web": "workspace:*",
     "@types/node": "^22.16.0",
     "@types/semver": "^7.5.8",
+    "@vitest/coverage-v8": "3.2.4",
     "postgres": "^3.4.0",
     "tsdown": "^0.21.4",
     "tsx": "^4.21.0",

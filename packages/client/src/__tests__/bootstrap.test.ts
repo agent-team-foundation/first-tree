@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,6 +8,7 @@ import {
   buildChatSystemPrompt,
   CONTEXT_TREE_HEAD_REL,
   type ContextTreeBinding,
+  deepEqualIdentity,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
   readCachedBundledCliVersion,
@@ -599,6 +600,30 @@ describe("installFirstTreeIntegration", () => {
     expect(logs.join("\n")).toContain("First-tree integration skipped");
   });
 
+  it("logs non-Error integration failures without retrying", () => {
+    const workspace = join(tmpBase, "integrate-string-error");
+    const treePath = join(tmpBase, "ctx-string-error");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec(() => {
+      throw "plain failure";
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-a",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(logs.join("\n")).toContain("plain failure");
+  });
+
   it("omits --tree-url when no URL is provided", () => {
     const workspace = join(tmpBase, "integrate-no-url");
     const treePath = join(tmpBase, "ctx-no-url");
@@ -729,6 +754,14 @@ describe("Context Tree HEAD drift helpers", () => {
     expect(readContextTreeHead(notGit)).toBeNull();
   });
 
+  it("readContextTreeHead returns null when git rev-parse fails", () => {
+    const brokenGit = join(tmpBase, "tree-head-broken-git");
+    mkdirSync(brokenGit, { recursive: true });
+    writeFileSync(join(brokenGit, ".git"), "gitdir: /path/that/does/not/exist\n");
+
+    expect(readContextTreeHead(brokenGit)).toBeNull();
+  });
+
   it("write/read roundtrip pins the HEAD value for drift comparison", () => {
     const workspace = join(tmpBase, "tree-head-cache");
     mkdirSync(workspace, { recursive: true });
@@ -738,6 +771,24 @@ describe("Context Tree HEAD drift helpers", () => {
     writeContextTreeHead(workspace, "abc123def456");
     expect(readCachedContextTreeHead(workspace)).toBe("abc123def456");
     expect(existsSync(join(workspace, CONTEXT_TREE_HEAD_REL))).toBe(true);
+  });
+
+  it("readCachedContextTreeHead returns null when the cache file cannot be read", () => {
+    const workspace = join(tmpBase, "tree-head-cache-unreadable");
+    const path = join(workspace, CONTEXT_TREE_HEAD_REL);
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(path, "abc123");
+    chmodSync(path, 0);
+
+    expect(readCachedContextTreeHead(workspace)).toBeNull();
+  });
+
+  it("readCachedContextTreeHead returns null for an empty cache file", () => {
+    const workspace = join(tmpBase, "tree-head-cache-empty");
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(join(workspace, CONTEXT_TREE_HEAD_REL), "  \n");
+
+    expect(readCachedContextTreeHead(workspace)).toBeNull();
   });
 
   it("writeContextTreeHead is a no-op when the HEAD is null (unknown)", () => {
@@ -784,6 +835,14 @@ describe("Bundled CLI version drift helpers", () => {
     expect(version).toBeNull();
   });
 
+  it("resolveBundledCliVersion keeps walking past a corrupt package.json", () => {
+    const dir = join(tmpBase, "cli-version-corrupt", "nested");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(tmpBase, "cli-version-corrupt", "package.json"), "{not-json");
+
+    expect(resolveBundledCliVersion(`file://${join(dir, "module.js")}`)).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
   it("write/read roundtrip pins the CLI version for drift comparison", () => {
     const workspace = join(tmpBase, "cli-version-cache");
     mkdirSync(workspace, { recursive: true });
@@ -807,6 +866,35 @@ describe("Bundled CLI version drift helpers", () => {
     mkdirSync(join(workspace, ".agent"), { recursive: true });
     writeFileSync(join(workspace, BUNDLED_CLI_VERSION_REL), "  0.5.3-staging.1.1  \n");
     expect(readCachedBundledCliVersion(workspace)).toBe("0.5.3-staging.1.1");
+  });
+
+  it("readCachedBundledCliVersion returns null when the cache file cannot be read", () => {
+    const workspace = join(tmpBase, "cli-version-unreadable");
+    const path = join(workspace, BUNDLED_CLI_VERSION_REL);
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(path, "0.5.3");
+    chmodSync(path, 0);
+
+    expect(readCachedBundledCliVersion(workspace)).toBeNull();
+  });
+
+  it("readCachedBundledCliVersion returns null for an empty cache file", () => {
+    const workspace = join(tmpBase, "cli-version-empty");
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(join(workspace, BUNDLED_CLI_VERSION_REL), "  \n");
+
+    expect(readCachedBundledCliVersion(workspace)).toBeNull();
+  });
+});
+
+describe("deepEqualIdentity", () => {
+  it("compares primitives, nested objects, changed values, and extra keys", () => {
+    expect(deepEqualIdentity("same", "same")).toBe(true);
+    expect(deepEqualIdentity("left", "right")).toBe(false);
+    expect(deepEqualIdentity({ metadata: { tier: "prod" } }, { metadata: { tier: "prod" } })).toBe(true);
+    expect(deepEqualIdentity({ metadata: { tier: "prod" } }, { metadata: { tier: "dev" } })).toBe(false);
+    expect(deepEqualIdentity({ agentId: "agent-1" }, { agentId: "agent-1", displayName: "Agent" })).toBe(false);
+    expect(deepEqualIdentity({ agentId: "agent-1" }, { agentId: "agent-1" })).toBe(true);
   });
 });
 

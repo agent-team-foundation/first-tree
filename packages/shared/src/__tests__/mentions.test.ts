@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { extractMentions, scanMentionTokens, segmentMentions } from "../mentions.js";
 import type { ChatParticipantDetail } from "../schemas/chat.js";
 
@@ -29,6 +29,22 @@ function mkParticipant(
   };
 }
 
+function fakeMatch(raw: string, token: string | undefined, index: number | undefined): RegExpExecArray {
+  const match = [raw, token];
+  Object.defineProperties(match, {
+    index: { value: index },
+    input: { value: "" },
+  });
+
+  // The defensive branches under test handle malformed matchAll iterators;
+  // RegExpExecArray cannot express those impossible shapes directly.
+  return match as unknown as RegExpExecArray;
+}
+
+function* fakeMatches(...matches: RegExpExecArray[]): Generator<RegExpExecArray> {
+  yield* matches;
+}
+
 describe("extractMentions", () => {
   const participants = [
     mkParticipant("alice", "agent-alice"),
@@ -57,6 +73,19 @@ describe("extractMentions", () => {
 
   it("returns empty array when no participant has a name", () => {
     expect(extractMentions("@alice", [mkParticipant(null, "x")])).toEqual([]);
+  });
+
+  it("skips malformed mention matches without a capture token", () => {
+    const matchAll = vi
+      .spyOn(String.prototype, "matchAll")
+      .mockImplementation(() => fakeMatches(fakeMatch("@", "", 0)));
+
+    try {
+      expect(extractMentions("@", participants)).toEqual([]);
+      expect(scanMentionTokens("@")).toEqual([]);
+    } finally {
+      matchAll.mockRestore();
+    }
   });
 
   it("does not match email addresses (gate 2 — word boundary)", () => {
@@ -143,6 +172,12 @@ describe("segmentMentions", () => {
     expect(segmentMentions("hello world", participants)).toEqual([{ kind: "text", value: "hello world" }]);
   });
 
+  it("returns a single text segment when no participant has a name", () => {
+    expect(segmentMentions("@alice", [mkParticipant(null, "agent-nameless")])).toEqual([
+      { kind: "text", value: "@alice" },
+    ]);
+  });
+
   it("returns an empty array for empty content", () => {
     expect(segmentMentions("", participants)).toEqual([]);
   });
@@ -216,6 +251,42 @@ describe("segmentMentions", () => {
       { kind: "text", value: "```\n@alice in code\n```\nhey " },
       { kind: "mention", value: "@bob", name: "bob", agentId: "agent-bob" },
     ]);
+  });
+
+  it("merges nested code ranges before checking mention offsets", () => {
+    const source = "``` `@alice` ``` then @bob";
+    expect(segmentMentions(source, participants)).toEqual([
+      { kind: "text", value: "``` `@alice` ``` then " },
+      { kind: "mention", value: "@bob", name: "bob", agentId: "agent-bob" },
+    ]);
+  });
+
+  it("ignores malformed code-range matches without offsets", () => {
+    const matchAll = vi.spyOn(String.prototype, "matchAll").mockImplementation((regexp: RegExp) => {
+      if (regexp.source.startsWith("```")) return fakeMatches(fakeMatch("```", "", undefined));
+      return fakeMatches();
+    });
+
+    try {
+      expect(segmentMentions("``` @alice ```", participants)).toEqual([{ kind: "text", value: "``` @alice ```" }]);
+    } finally {
+      matchAll.mockRestore();
+    }
+  });
+
+  it("keeps malformed mention matches with missing tokens or offsets as text", () => {
+    const matchAll = vi.spyOn(String.prototype, "matchAll").mockImplementation((regexp: RegExp) => {
+      if (regexp.source.startsWith("(?<!")) {
+        return fakeMatches(fakeMatch("@", undefined, 0), fakeMatch("@alice", "alice", undefined));
+      }
+      return fakeMatches();
+    });
+
+    try {
+      expect(segmentMentions("@alice", participants)).toEqual([{ kind: "text", value: "@alice" }]);
+    } finally {
+      matchAll.mockRestore();
+    }
   });
 
   it("does not chip @tokens inside tilde ~~~ blocks", () => {

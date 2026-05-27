@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { scanBareDocPathTokens, stripDocPathLineSuffix } from "../doc-link-scan.js";
 
 function tokens(text: string): string[] {
@@ -45,6 +45,10 @@ describe("scanBareDocPathTokens", () => {
     expect(matches[0]?.enclosingCodeSpan).toBeUndefined();
   });
 
+  it("treats unclosed backtick runs as plain text", () => {
+    expect(tokens("See `docs/unclosed.md")).toEqual(["docs/unclosed.md"]);
+  });
+
   it("ignores paths inside fenced code blocks", () => {
     const text = ["```", "docs/fenced.md", "```", "and docs/after.md"].join("\n");
     expect(tokens(text)).toEqual(["docs/after.md"]);
@@ -71,6 +75,52 @@ describe("scanBareDocPathTokens", () => {
     expect(tokens("See notes.md/follow-up.md")).toEqual(["notes.md/follow-up.md"]);
   });
 
+  it("keeps paths when the domain-like first-segment fallback is empty", () => {
+    const originalSplit = String.prototype.split;
+    const split = vi.spyOn(String.prototype, "split").mockImplementation(function (this: string, separator, limit) {
+      const separatorValue: unknown = separator;
+      if (this === "docs/intro.md" && separatorValue === "/" && limit === 1) return [];
+      // Type assertion: this defensive branch simulates a hostile split result
+      // while preserving String.prototype.split's overloaded runtime behavior.
+      return Reflect.apply(originalSplit, this, [separator, limit]) as string[];
+    });
+
+    try {
+      expect(tokens("docs/intro.md")).toEqual(["docs/intro.md"]);
+    } finally {
+      split.mockRestore();
+    }
+  });
+
+  it("skips malformed bare-path regex matches without a named path group", () => {
+    const originalExec = RegExp.prototype.exec;
+    let barePathCalls = 0;
+    const exec = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (this: RegExp, value: string) {
+      if (this.source.includes("(?<path>") && value === "docs/intro.md") {
+        barePathCalls += 1;
+        if (barePathCalls === 1) {
+          const match = ["docs/intro.md"];
+          Object.defineProperties(match, {
+            index: { value: 0 },
+            input: { value },
+          });
+
+          // Type assertion: RegExpExecArray cannot express a missing `groups`
+          // object, but the scanner has a defensive fallback for it.
+          return match as unknown as RegExpExecArray;
+        }
+        return null;
+      }
+      return originalExec.call(this, value);
+    });
+
+    try {
+      expect(tokens("docs/intro.md")).toEqual([]);
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
   it("reports byte offsets that point to the raw token inside the input", () => {
     const text = "Hello docs/intro.md world";
     const matches = scanBareDocPathTokens(text);
@@ -89,5 +139,9 @@ describe("stripDocPathLineSuffix", () => {
   it("drops :line and :line:col suffixes", () => {
     expect(stripDocPathLineSuffix("docs/intro.md:12")).toBe("docs/intro.md");
     expect(stripDocPathLineSuffix("docs/api.md:42:13")).toBe("docs/api.md");
+  });
+
+  it("returns the raw value when it is not a markdown path", () => {
+    expect(stripDocPathLineSuffix("not-a-doc.txt:12")).toBe("not-a-doc.txt:12");
   });
 });
