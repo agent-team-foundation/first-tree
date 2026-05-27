@@ -99,6 +99,12 @@ describe("error-taxonomy.classify", () => {
       expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(c.reasonCode).toBe("auth_expired");
     });
+
+    it("network refresh failures → transient (auth_network_error)", () => {
+      const c = classify({ message: "connect ECONNRESET", code: "ECONNRESET" }, { source: "auth" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(c.reasonCode).toBe("auth_network_error");
+    });
   });
 
   describe("source=bind", () => {
@@ -135,6 +141,11 @@ describe("error-taxonomy.classify", () => {
       const c = classify({ reason: "weird_thing" }, { source: "bind" });
       expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(c.reasonCode).toBe("bind_unknown");
+    });
+
+    it("falls back to the error message or unknown for missing bind reasons", () => {
+      expect(classify({ message: "not_owned" }, { source: "bind" }).reasonCode).toBe("bind_not_owned");
+      expect(classify("", { source: "bind" }).message).toBe("bind rejected: unknown");
     });
   });
 
@@ -189,6 +200,12 @@ describe("error-taxonomy.classify", () => {
       expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
       expect(c.reasonCode).toBe("claude_unauthorized");
     });
+
+    it("API Error without auth status → transient stream error", () => {
+      const c = classify(new Error("API Error: upstream reset"), { source: "stream" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(c.reasonCode).toBe("claude_socket_closed");
+    });
   });
 
   describe("fallback", () => {
@@ -203,6 +220,12 @@ describe("error-taxonomy.classify", () => {
       expect(classify("plain string").kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(classify(42).kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(classify(null).kind).toBe(ERROR_KINDS.TRANSIENT);
+    });
+
+    it("normalises object-shaped thrown values with non-string fields", () => {
+      const c = classify({ name: 123, message: { nested: true }, code: 500, statusCode: 429, reason: 42 });
+      expect(c.reasonCode).toBe("claude_rate_limit");
+      expect(c.message).toContain('"nested":true');
     });
   });
 });
