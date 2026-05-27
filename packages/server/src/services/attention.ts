@@ -16,6 +16,7 @@ import { members } from "../db/schema/members.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
+import { sendMessage } from "./message.js";
 
 /**
  * NHA (Need Human Attention) — service layer.
@@ -222,6 +223,14 @@ export async function raiseAttention(
  * is absent we stringify `answers` into the stored response so the column
  * stays a single text field (the structured payload is preserved verbatim
  * — the wire schema deliberately does not enforce its shape).
+ *
+ * Side effect: after the attention closes, a chat message is posted to
+ * `origin_chat_id` with the human as sender. **Asks stay out of chat
+ * (proposal §5.1), but the answer flows back as a normal chat message**
+ * so co-speakers see the decision in the conversation thread without
+ * having to dig into the sidebar's closed-attention popover. The post
+ * is best-effort — if it fails, the attention is still closed and the
+ * response is preserved on `attentions.response` (the canonical value).
  */
 export async function respondAttention(
   db: Database,
@@ -259,6 +268,39 @@ export async function respondAttention(
     .returning();
   if (!updated) {
     throw new ConflictError(`Attention "${attentionId}" was closed concurrently`);
+  }
+
+  // Echo the response as a normal chat message in origin_chat_id. The
+  // human is the sender — the chat thread reads "human answered: …" so
+  // other speakers (co-targets, auditors) see the decision inline. This
+  // is a side effect of `respond`; failure to write the message is
+  // swallowed (the canonical answer is on `attentions.response`).
+  try {
+    await sendMessage(
+      db,
+      row.originChatId,
+      callerHumanId,
+      {
+        format: "text",
+        content: responseText,
+        // Tag the message so consumers can attribute it to the NHA flow
+        // (web rendering may opt to chip-decorate "answer to <subject>",
+        // exports / search may filter on it). The bag also carries the
+        // attention id so the linkage is explicit, not inferred.
+        metadata: { attentionResponseFor: attentionId },
+        source: "api",
+      },
+      // No mention extraction: the response text often contains plain
+      // `@<name>` tokens that aren't routing intent (e.g. quoting the
+      // ask), and the ask itself already names the audience. Keep this
+      // path quiet — receiverNames is empty, content extraction off.
+      { extractMentionsFromContent: false },
+    );
+  } catch (err) {
+    log.warn(
+      { err, attentionId, chatId: row.originChatId },
+      "attention response posted but chat-echo message failed — canonical answer preserved on attentions.response",
+    );
   }
 
   log.info(

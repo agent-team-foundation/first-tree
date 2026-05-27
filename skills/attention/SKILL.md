@@ -40,9 +40,12 @@ Attention and message are **separate substrates by design**, not two views on th
 | Want to `@<name>` ping someone else | ✅ (message handles mention routing) | ❌ (attention is single-target by definition) |
 | Want attachments / images inline today | ✅ (built in) | ⚠️ pass refs via `metadata` (skill convention; see `references/metadata-shape.md`) |
 | Need lifecycle (open → closed, response, cancel) | ❌ | ✅ |
-| Want it in chat search history | ✅ | ⚠️ separate index (follow-up) |
+| Appears in the chat scroll | ✅ | Ask: ❌ &nbsp;·&nbsp; Reply: ✅ (server echoes the human's response into chat) |
+| Want it in chat search history | ✅ | ⚠️ ask: separate index (follow-up); reply: covered by the echoed message |
 
 **Do not write `@<name>` inside an attention body expecting the named person to be notified.** Attention already names its target; the `@` token is treated as plain text. If you need a second human's attention, post a separate chat message (which handles mentions) or raise a separate attention.
+
+**Asks are silent in chat; replies are not.** Raising an attention does not write a chat message — the ask lives in its own card and sidebar. When the target replies (`first-tree attention respond <id> ...`), the server posts a normal chat message in the chat with the human as `sender_id`, content = the response text. Co-speakers see the answer in the chat stream as it happens; `attentions.response` remains the canonical record.
 
 If you need attachments today, post a normal chat message with the image and reference it from the attention body in prose. The skill's `references/metadata-shape.md` covers the planned `metadata.attachments` convention for when attention-native attachments land.
 

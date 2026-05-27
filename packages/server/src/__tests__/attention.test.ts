@@ -15,10 +15,12 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { messages } from "../db/schema/messages.js";
 import { ConflictError, ForbiddenError } from "../errors.js";
 import { cancelAttention, listAttentions, raiseAttention, respondAttention } from "../services/attention.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -174,6 +176,51 @@ describe("attention service — invariants", () => {
     await expect(
       respondAttention(app.db, bystanderHuman, created.id, { text: "I'm not the target" }),
     ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it("respond echoes the answer as a chat message with the human as sender", async () => {
+    // Per proposal §5.1 asks stay out of the chat scroll; the answer
+    // flows back into chat so co-speakers see the decision inline.
+    // Sender of the echo message is the target human (not the origin
+    // agent) so the thread reads "alice answered: deploy" naturally.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const bot = await seedAutonomousAgent(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId);
+    await addSpeaker(app, chatId, human);
+    await addSpeaker(app, chatId, bot, "owner");
+
+    const created = await raiseAttention(app.db, bot, {
+      chatId,
+      target: human,
+      subject: "deploy approval",
+      body: "",
+      requiresResponse: true,
+      metadata: {},
+    });
+
+    // Sanity: raising the ask does NOT post a chat message — the chat
+    // is silent until the human replies.
+    const preEcho = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(preEcho.length).toBe(0);
+
+    const closed = await respondAttention(app.db, human, created.id, { text: "deploy — diff looks clean" });
+    expect(closed.state).toBe("closed");
+    expect(closed.response).toBe("deploy — diff looks clean");
+
+    const postEcho = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(postEcho.length).toBe(1);
+    const echo = postEcho[0];
+    expect(echo).toBeDefined();
+    if (!echo) return;
+    expect(echo.senderId).toBe(human);
+    expect(echo.content).toBe("deploy — diff looks clean");
+    expect(echo.format).toBe("text");
+    // The echo carries the linkage back to the originating attention so
+    // exports / search / rendering can opt in to a "this was an answer"
+    // visual without inferring from heuristics.
+    expect((echo.metadata as Record<string, unknown>).attentionResponseFor).toBe(created.id);
   });
 
   it("cancel by non-origin → ForbiddenError", async () => {

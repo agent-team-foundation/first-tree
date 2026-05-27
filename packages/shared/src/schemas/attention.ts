@@ -46,6 +46,14 @@ import { z } from "zod";
  *   - Chat archive does NOT cascade-delete attentions. Closed records
  *     remain as audit; raising new attentions in an archived chat is
  *     refused by the speaker-membership gate.
+ *   - **Asks do not enter the chat stream; replies do.** Per proposal
+ *     §5.1, raising an attention is silent in chat (no message is
+ *     written). Responding, by contrast, posts a normal chat message
+ *     with the human as `sender_id` so the conversation thread carries
+ *     the decision inline — co-speakers see "alice answered: deploy"
+ *     without having to dig into the sidebar's closed-attention view.
+ *     The message is a best-effort echo; `attentions.response` is the
+ *     canonical authoritative value.
  *
  * For the design rationale see proposals/nha-need-human-attention.md.
  */
