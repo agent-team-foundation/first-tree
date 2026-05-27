@@ -667,7 +667,7 @@ export async function createMeChat(
   // the shared `rejectedPrivateTargets` keeps the rule in exactly one
   // place — same discipline as `inviteParticipantsToChat` and
   // `chat.ts::createChat`. See that predicate's comment for the strict-
-  // vs-shared history (PR #601 / #604).
+  // vs-shared history (PR #601 / #608).
   const caller = found.find((a) => a.uuid === humanAgentId);
   if (!caller) {
     throw new BadRequestError("Caller agent not found in the chat's organization");

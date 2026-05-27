@@ -59,7 +59,7 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
   //
   // The predicate lives in `participant-invite.ts::rejectedPrivateTargets`
   // alongside the Layer-2 invite gate so the invariant has exactly one
-  // source of truth — see that file's comment for the PR #601 → PR #604
+  // source of truth — see that file's comment for the PR #601 → PR #608
   // strict-vs-shared history.
   const targetsForGate = existingAgents
     .filter((a) => a.id !== creatorId)

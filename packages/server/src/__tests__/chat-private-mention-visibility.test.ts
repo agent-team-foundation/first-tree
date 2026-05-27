@@ -234,7 +234,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
   // target's manager may invite a private target; the manager and the
   // manager's agents act under one consent boundary. PR #601 implemented
   // the strict reading (caller MUST be `type=human`), which a follow-up
-  // product decision (PR #604) reversed: an owner's agent acting on the
+  // product decision (PR #608) reversed: an owner's agent acting on the
   // owner's behalf is intentional delegation, not a social-engineering
   // hole. The cases below pin BOTH (a) the cross-manager rejection (the
   // permission still does block "Bob pulls owner M's private agent")

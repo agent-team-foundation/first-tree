@@ -51,7 +51,7 @@
  *     private agent).
  *
  *     Earlier (PR #601) this gate required the caller to be a `type=human`
- *     agent of the owning member; PR #604 relaxed back to the shared-
+ *     agent of the owning member; PR #608 relaxed back to the shared-
  *     managerId reading after a product decision that "owner's agent
  *     acts on owner's behalf" — see that PR for the deliberation
  *     transcript.
@@ -126,7 +126,7 @@ export type PrivateGateTarget = {
  *     to close a social-engineering path: Bob pulls owner M's PUBLIC agent
  *     X_pub into a chat, then X_pub turns around and pulls M's PRIVATE
  *     agent X_priv. The lenient reading admits X_priv there.
- *   - PR #604 reverted to this lenient reading after the product owner
+ *   - PR #608 reverted to this lenient reading after the product owner
  *     decided that "owner's agent acts on owner's behalf" — i.e. X_pub
  *     pulling X_priv is intentional delegation, not a social-engineering
  *     hole. Cross-manager admission of a private agent remains refused;
