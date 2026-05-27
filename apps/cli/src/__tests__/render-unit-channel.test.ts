@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { defaultHome } from "@first-tree/shared/config";
 import { describe, expect, it } from "vitest";
 import { channelConfig } from "../core/channel.js";
@@ -47,6 +48,12 @@ describe("renderSystemdUnit — channel identity baked into unit text", () => {
 
   it("embeds the CLI program path in ExecStart", () => {
     expect(unit).toMatch(/ExecStart=\/usr\/local\/bin\/first-tree-dev daemon start --no-interactive/);
+  });
+
+  it("includes the current Node binary directory in PATH", () => {
+    const pathLine = unit.split("\n").find((line) => line.startsWith("Environment=PATH="));
+    expect(pathLine).toBeDefined();
+    expect(pathLine).toContain(dirname(process.execPath));
   });
 });
 
