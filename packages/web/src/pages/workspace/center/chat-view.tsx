@@ -2761,7 +2761,7 @@ export function ChatView({
                         value={draft}
                         participants={mentionParticipants}
                         textareaRef={textareaRef}
-                        chipClassName="mention-chip"
+                        chipClassName="mention-text"
                         mirrorStyle={{
                           padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                           fontSize: "var(--text-subtitle)",

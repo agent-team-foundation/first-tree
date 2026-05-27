@@ -15,6 +15,15 @@ import { type CSSProperties, type RefObject, useEffect, useRef } from "react";
  * behaviour. The host passes those via `mirrorStyle` (typically the
  * same style object used on the textarea, minus background/color).
  *
+ * Chip class contract — the `chipClassName` MUST NOT add horizontal
+ * padding, background-with-offset, border, margin, or any other
+ * box-width-affecting property. The textarea underneath positions
+ * its caret per character; any extra horizontal pixels on the chip
+ * shift glyphs out from under the caret and the user perceives
+ * "the cursor is in the wrong place." For the pill / capsule look,
+ * render the same `@<name>` through `rehype-mentions` after sending
+ * (see `.mention-chip`); the composer side uses `.mention-text`.
+ *
  * Long drafts that scroll inside the textarea are handled by an inner
  * `transform: translateY(-scrollTop)` — using a fixed-position inner
  * shifts the painted glyphs in lockstep with the textarea's own

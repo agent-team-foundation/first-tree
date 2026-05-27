@@ -1395,19 +1395,36 @@ tr[data-interactive]:hover {
   }
 }
 
-/* Mention chip — used by the composer mirror overlay and the
- * rehype-mentions plugin so the same visual treatment shows up for
- * both the user's draft and rendered sent messages. The chip stays
- * inline (no block-level layout) and `white-space: nowrap` keeps the
- * `@<name>` from wrapping at a hyphen mid-handle. */
+/* Mention chip — pill style for rendered sent messages (rehype-mentions
+ * plugin). The composer mirror overlay uses `.mention-text` instead
+ * (see below) because any horizontal padding / background offset on
+ * the mirror chip pushes the visual glyphs out of sync with the
+ * textarea's caret position underneath. `white-space: nowrap` keeps
+ * `@<name>` from wrapping at a hyphen mid-handle. The hard-coded
+ * `999px` radius (instead of `--radius-chip`) gives the full capsule
+ * shape without touching the shared chip radius. */
 .mention-chip {
   display: inline;
   background: var(--accent);
   color: var(--fg-on-vivid);
-  padding: 0 5px;
-  border-radius: var(--radius-chip);
+  padding: 0 6px;
+  border-radius: 999px;
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* Mention text — composer-side variant. MUST NOT introduce padding,
+ * background, border, margin, OR font-weight / font-size / letter-
+ * spacing changes, because the mirror overlay paints glyphs
+ * character-for-character on top of a transparent-text textarea;
+ * any per-glyph metric change shifts the painted text out from
+ * under the textarea's caret. Sans-serif fonts in particular widen
+ * by a few percent at weight 600 vs 400, which is small but enough
+ * to drift the trailing characters and re-introduce the caret-lag
+ * bug this class was created to fix. `color` is the only property
+ * that's metric-neutral, so it's the only differentiator we use. */
+.mention-text {
+  color: var(--accent);
 }
 
 /* Selection inside the mention composer: textarea text is rendered
