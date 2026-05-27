@@ -106,4 +106,26 @@ describe("selectArrivedClient", () => {
     const b = client({ id: "b", connectedAt: new Date(OPENED_AT + 2_000).toISOString() });
     expect(selectArrivedClient([a, b], OPENED_AT, ME)?.id).toBe("a");
   });
+
+  it("with targetClientId set, only the matching row counts (re-auth from a specific card)", () => {
+    // Re-auth flow: card A (clientId 'wanted') was AuthExpired, user clicked
+    // Generate new token. Meanwhile card B's CLI ('unwanted') also reconnects.
+    // Without targetClientId, B would consume A's mint event — wrong card
+    // would flip to success. The constraint prevents that.
+    const wanted = client({ id: "wanted", connectedAt: new Date(OPENED_AT + 3_000).toISOString() });
+    const unwanted = client({ id: "unwanted", connectedAt: new Date(OPENED_AT + 1_000).toISOString() });
+    expect(selectArrivedClient([unwanted, wanted], OPENED_AT, ME, "wanted")?.id).toBe("wanted");
+    expect(selectArrivedClient([unwanted], OPENED_AT, ME, "wanted")).toBeNull();
+  });
+
+  it("with targetClientId set, still respects the userId filter", () => {
+    // Defense-in-depth: a same-id-different-user collision shouldn't unlock
+    // the success branch. The userId check stays primary.
+    const theirs = client({
+      id: "wanted",
+      userId: OTHER,
+      connectedAt: new Date(OPENED_AT + 3_000).toISOString(),
+    });
+    expect(selectArrivedClient([theirs], OPENED_AT, ME, "wanted")).toBeNull();
+  });
 });

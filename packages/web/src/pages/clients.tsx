@@ -1,9 +1,4 @@
-import {
-  type CapabilityEntry,
-  type ClientCapabilities,
-  RUNTIME_PROVIDERS,
-  type RuntimeProvider,
-} from "@first-tree/shared";
+import type { CapabilityEntry, ClientCapabilities, RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -34,6 +29,13 @@ import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate, formatRelative } from "../lib/utils.js";
+import { ComputerCard } from "./clients/cards/computer-card.js";
+import {
+  PROVIDER_INSTALL_HINT,
+  PROVIDER_LABEL,
+  PROVIDER_ORDER,
+  PROVIDER_UNAUTH_HINT,
+} from "./clients/cards/shared/providers.js";
 import { ComputerStatusPill } from "./clients/computer-status-pill.js";
 import { compareByPillPriority, deriveComputerStatus, summarizeComputers } from "./clients/derive-status.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
@@ -70,6 +72,34 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [confirmRetire, setConfirmRetire] = useState<HubClient | null>(null);
   const [retireError, setRetireError] = useState<string | null>(null);
   const [newConnectionOpen, setNewConnectionOpen] = useState(false);
+  /**
+   * Re-auth target — when set, the next NewConnectionDialog opening is
+   * scoped to *this specific client.id* so the arrival detector only
+   * succeeds when that machine reconnects. Without this, a parallel
+   * AuthExpired re-auth on another card could consume the wrong event.
+   * Cleared when the dialog closes.
+   */
+  const [reAuthClientId, setReAuthClientId] = useState<string | null>(null);
+  /** Hostname captured when the re-auth was kicked off — drives dialog copy. */
+  const [reAuthHostname, setReAuthHostname] = useState<string | null>(null);
+
+  const openNewConnection = (): void => {
+    setReAuthClientId(null);
+    setReAuthHostname(null);
+    setNewConnectionOpen(true);
+  };
+  const openReAuth = (client: HubClient): void => {
+    setReAuthClientId(client.id);
+    setReAuthHostname(client.hostname);
+    setNewConnectionOpen(true);
+  };
+  const handleDialogClose = (next: boolean): void => {
+    setNewConnectionOpen(next);
+    if (!next) {
+      setReAuthClientId(null);
+      setReAuthHostname(null);
+    }
+  };
 
   const orgClientsQuery = useQuery({
     queryKey: ["clients", "org"],
@@ -203,6 +233,16 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // empty-state branch off this list keeps the two display modes in sync.
   const clients = grouped ? orgClientsQuery.data : memberList;
 
+  // "Are we still waiting on the primary listing?" — distinct from `!clients`
+  // because once a query resolves with an empty array we want to drop out of
+  // loading and show the empty state. Without this gate, admins see the empty
+  // CTA flash before the org-scoped query lands on first paint.
+  const clientsLoading = isAdmin
+    ? orgClientsQuery.isError
+      ? meClientsQuery.isLoading
+      : orgClientsQuery.isLoading
+    : meClientsQuery.isLoading;
+
   // Subtitle is the pure-function output of `summarizeComputers` — single
   // headline for one row owned by the viewer ("Your computer is ready"),
   // neutral phrasing when admin is looking at a teammate's lone row, and a
@@ -211,23 +251,33 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // surfaced. See `clients/derive-status.ts` for the pure logic + tests.
   const subtitle = useMemo(() => summarizeComputers(clients, user?.id), [clients, user?.id]);
 
+  // Cards now host the per-row affordances (Generate new token, install
+  // guide, ⋯ menu) inline, so the PageHeader's right slot no longer needs
+  // a "+ Connect" button. The connect entry point lives at the bottom of
+  // the page as a low-emphasis "Add another computer" outline button when
+  // appropriate (see `addAnotherSpot` below). Single-device + viewer-owned
+  // hides the button entirely per mockup §"已敲定" 第 5 条 — a user with
+  // exactly one working computer doesn't usually want a second one, and
+  // they can still reach the entry via the empty-state CTA after retire.
+  const singleOwnCard = !grouped && (memberList?.length ?? 0) === 1 && memberList?.[0]?.userId === user?.id;
+  const showBottomAddButton = !singleOwnCard && (clients?.length ?? 0) >= 1;
+
   return (
     <div className={embedded ? "" : "-m-6"}>
-      <PageHeader
-        title="Computers"
-        subtitle={subtitle}
-        right={
-          <div className="flex items-center gap-1.5">
-            <Button size="xs" onClick={() => setNewConnectionOpen(true)}>
-              <Plus className="h-3 w-3" />
-              Connect computer
-            </Button>
-          </div>
-        }
-      />
+      <PageHeader title="Computers" subtitle={subtitle} />
 
       <div style={{ padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)" }}>
-        <NewConnectionDialog open={newConnectionOpen} onOpenChange={setNewConnectionOpen} />
+        <NewConnectionDialog
+          open={newConnectionOpen}
+          onOpenChange={handleDialogClose}
+          targetClientId={reAuthClientId ?? undefined}
+          titleOverride={reAuthClientId ? "Re-authenticate computer" : undefined}
+          descriptionOverride={
+            reAuthClientId
+              ? `Run this command on ${reAuthHostname ?? "the computer"} to refresh its access token.`
+              : undefined
+          }
+        />
 
         {confirmRetire && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
@@ -355,138 +405,109 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
           </div>
         )}
 
-        {!clients || clients.length === 0 ? (
+        {clientsLoading ? (
+          // Hold the page chrome quiet while the primary listing is still
+          // in flight. Without this, admins briefly see the "No computers
+          // connected yet" empty state on first paint because
+          // `orgClientsQuery.data` is `undefined` for one render before the
+          // 10s-poll query resolves — a confusing flash on a settings page
+          // they're typically returning to, not visiting fresh.
+          <div className="py-10 text-body" style={{ color: "var(--fg-4)", textAlign: "center" }}>
+            Loading computers…
+          </div>
+        ) : !clients || clients.length === 0 ? (
           <div>
             {teamLoadError && <TeamLoadErrorBanner />}
-            <div className="text-center py-10 text-body" style={{ color: "var(--fg-3)" }}>
-              No computers connected. Use the button above to generate a connect command.
+            <div
+              className="flex flex-col items-center text-center py-10 text-body"
+              style={{ color: "var(--fg-3)", gap: "var(--sp-3)" }}
+            >
+              <span>No computers connected yet.</span>
+              <Button size="sm" onClick={openNewConnection}>
+                <Plus className="h-3 w-3" />
+                Connect your first computer
+              </Button>
             </div>
           </div>
         ) : (
-          <div>
+          <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
             {teamLoadError && <TeamLoadErrorBanner />}
-            <DenseTable>
-              <DenseTableHeader>
-                <DenseTableRow>
-                  <DenseTableHead style={{ width: 16 }} />
-                  <DenseTableHead>Hostname</DenseTableHead>
-                  {grouped && <DenseTableHead>Owner</DenseTableHead>}
-                  <DenseTableHead>OS</DenseTableHead>
-                  <DenseTableHead>first-tree</DenseTableHead>
-                  <DenseTableHead>Agents</DenseTableHead>
-                  <DenseTableHead>Last seen</DenseTableHead>
-                  <DenseTableHead>Status</DenseTableHead>
-                  <DenseTableHead aria-hidden />
-                </DenseTableRow>
-              </DenseTableHeader>
-              <DenseTableBody>
-                {grouped ? (
-                  <>
-                    <GroupHeaderRow title="Your computers" count={mineList.length} colSpan={ADMIN_COLSPAN} />
-                    {mineList.length === 0 ? (
-                      <EmptyGroupRow colSpan={ADMIN_COLSPAN} message="No computers of your own." />
-                    ) : (
-                      mineList.map((client) => {
-                        const isExpanded = !collapsedIds.has(client.id);
-                        const boundAgents = getClientAgents(client.id);
-                        return (
-                          <ClientRow
-                            key={client.id}
-                            client={client}
-                            boundAgents={boundAgents}
-                            isExpanded={isExpanded}
-                            agentName={agentName}
-                            onToggle={() =>
-                              setCollapsedIds((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(client.id)) next.delete(client.id);
-                                else next.add(client.id);
-                                return next;
-                              })
-                            }
-                            onDisconnect={() => setConfirmDisconnect(client)}
-                            onRetire={() => {
-                              setRetireError(null);
-                              setConfirmRetire(client);
-                            }}
-                            onReconnect={() => setNewConnectionOpen(true)}
-                            showOwner
-                            ownerLabel={resolveOwner(client)}
-                          />
-                        );
-                      })
-                    )}
-                    <GroupHeaderRow title="Team computers" count={teamList.length} colSpan={ADMIN_COLSPAN} />
-                    {teamList.length === 0 ? (
-                      <EmptyGroupRow colSpan={ADMIN_COLSPAN} message="No other team computers." />
-                    ) : (
-                      teamList.map((client) => {
-                        const isExpanded = !collapsedIds.has(client.id);
-                        const boundAgents = getClientAgents(client.id);
-                        return (
-                          <ClientRow
-                            key={client.id}
-                            client={client}
-                            boundAgents={boundAgents}
-                            isExpanded={isExpanded}
-                            agentName={agentName}
-                            onToggle={() =>
-                              setCollapsedIds((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(client.id)) next.delete(client.id);
-                                else next.add(client.id);
-                                return next;
-                              })
-                            }
-                            // Team rows are read-only for admins — see ClientRow:restricted
-                            // for the full story. Server enforces this too:
-                            // `DELETE /clients/:id` 403s on non-owners, and
-                            // `GET /clients/:id` (used by the expanded row's
-                            // capability matrix) does the same. We don't even
-                            // wire the open/close callbacks, since the row is
-                            // not interactive.
-                            onDisconnect={() => {}}
-                            onRetire={() => {}}
-                            onReconnect={() => {}}
-                            showOwner
-                            ownerLabel={resolveOwner(client)}
-                            restricted
-                          />
-                        );
-                      })
-                    )}
-                  </>
-                ) : (
-                  clients.map((client) => {
-                    const isExpanded = !collapsedIds.has(client.id);
-                    const boundAgents = getClientAgents(client.id);
-                    return (
-                      <ClientRow
-                        key={client.id}
-                        client={client}
-                        boundAgents={boundAgents}
-                        isExpanded={isExpanded}
-                        agentName={agentName}
-                        onToggle={() =>
-                          setCollapsedIds((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(client.id)) next.delete(client.id);
-                            else next.add(client.id);
-                            return next;
-                          })
-                        }
-                        onDisconnect={() => setConfirmDisconnect(client)}
-                        onRetire={() => {
-                          setRetireError(null);
-                          setConfirmRetire(client);
-                        }}
-                        onReconnect={() => setNewConnectionOpen(true)}
-                      />
-                    );
-                  })
-                )}
-              </DenseTableBody>
-            </DenseTable>
+            {grouped ? (
+              <>
+                <CardSection title="Your computers" count={mineList.length}>
+                  {mineList.length === 0 ? (
+                    <EmptyCardsNote message="No computers of your own." />
+                  ) : (
+                    <CardGrid>
+                      {mineList.map((client) => (
+                        <ComputerCard
+                          key={client.id}
+                          client={client}
+                          boundAgents={getClientAgents(client.id)}
+                          agentName={agentName}
+                          onGenerateNewToken={() => openReAuth(client)}
+                          onReconnect={openNewConnection}
+                          onDisconnect={() => setConfirmDisconnect(client)}
+                          onRetire={() => {
+                            setRetireError(null);
+                            setConfirmRetire(client);
+                          }}
+                          ownerLabel={resolveOwner(client)}
+                        />
+                      ))}
+                    </CardGrid>
+                  )}
+                </CardSection>
+                <CardSection title="Team computers" count={teamList.length}>
+                  {teamList.length === 0 ? (
+                    <EmptyCardsNote message="No other team computers." />
+                  ) : (
+                    // Team rows stay as table for PR-B — they're read-only,
+                    // their primary value is "at a glance, who needs help",
+                    // and the per-row inline action affordances cards offer
+                    // (Generate new token / install guide) aren't applicable
+                    // to teammates. The full team-card redesign with
+                    // "Copy suggestion → Alice" buttons is deferred to a
+                    // follow-up PR; see proposal §"Variant D".
+                    <TeamComputersTable
+                      teamList={teamList}
+                      collapsedIds={collapsedIds}
+                      setCollapsedIds={setCollapsedIds}
+                      agentName={agentName}
+                      getClientAgents={getClientAgents}
+                      resolveOwner={resolveOwner}
+                    />
+                  )}
+                </CardSection>
+              </>
+            ) : (
+              <CardGrid>
+                {(memberList ?? []).map((client) => (
+                  <ComputerCard
+                    key={client.id}
+                    client={client}
+                    boundAgents={getClientAgents(client.id)}
+                    agentName={agentName}
+                    onGenerateNewToken={() => openReAuth(client)}
+                    onReconnect={openNewConnection}
+                    onDisconnect={() => setConfirmDisconnect(client)}
+                    onRetire={() => {
+                      setRetireError(null);
+                      setConfirmRetire(client);
+                    }}
+                  />
+                ))}
+              </CardGrid>
+            )}
+
+            {showBottomAddButton && (
+              <div className="flex justify-center" style={{ paddingTop: "var(--sp-2)" }}>
+                <Button variant="outline" size="sm" onClick={openNewConnection}>
+                  <Plus className="h-3 w-3" />
+                  Add another computer
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -494,28 +515,134 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   );
 }
 
-const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-};
+/**
+ * Responsive card grid. `auto-fit` with `minmax(min(100%, 35rem), 1fr)`
+ * yields 2-up on viewports wider than ~1120 logical units and 1-up
+ * below. The 35rem minimum keeps the AuthExpired card's
+ * `first-tree login <jwt>` command from wrapping into ugly multi-line
+ * fragments inside narrow cards.
+ */
+function CardGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: "var(--sp-4)",
+        gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 35rem), 1fr))",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
-const PROVIDER_ORDER: RuntimeProvider[] = [RUNTIME_PROVIDERS.CLAUDE_CODE, RUNTIME_PROVIDERS.CODEX];
+function CardSection({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+      <header className="flex items-baseline" style={{ gap: "var(--sp-2)" }}>
+        {/*
+          `text-subtitle` + `font-semibold` is the same visual weight used by
+          PageHeader's section headings — bumping above `text-body` makes the
+          "Your computers" / "Team computers" hierarchy survive when both
+          sections are present (admin view) and the page is otherwise wall-
+          to-wall cards.
+        */}
+        <h2 className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+          {title}
+        </h2>
+        <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+          · {count}
+        </span>
+      </header>
+      {children}
+    </section>
+  );
+}
 
-const PROVIDER_INSTALL_HINT: Record<RuntimeProvider, string> = {
-  "claude-code": "Run `npm install -g @anthropic-ai/claude-code` on this computer.",
-  codex: "Install the OpenAI Codex CLI on this computer.",
-};
+function EmptyCardsNote({ message }: { message: string }) {
+  return (
+    <div className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) var(--sp-1)" }}>
+      {message}
+    </div>
+  );
+}
 
-const PROVIDER_UNAUTH_HINT: Record<RuntimeProvider, string> = {
-  "claude-code": "Run `claude login` (or set ANTHROPIC_API_KEY) on the computer.",
-  codex: "Run `codex login` (or set CODEX_API_KEY) on the computer.",
-};
+/**
+ * Team computers table — preserved from pre-PR-B as the admin's
+ * read-only audit view. Wraps the existing `ClientRow` component with
+ * the table chrome that used to live inline in `ClientsPage`.
+ */
+function TeamComputersTable({
+  teamList,
+  collapsedIds,
+  setCollapsedIds,
+  agentName,
+  getClientAgents,
+  resolveOwner,
+}: {
+  teamList: HubClient[];
+  collapsedIds: Set<string>;
+  setCollapsedIds: (updater: (prev: Set<string>) => Set<string>) => void;
+  agentName: (uuid: string | null | undefined) => string;
+  getClientAgents: (clientId: string) => RuntimeAgent[];
+  resolveOwner: (client: HubClient) => { text: string; title?: string };
+}) {
+  return (
+    <DenseTable>
+      <DenseTableHeader>
+        <DenseTableRow>
+          <DenseTableHead style={{ width: "var(--sp-4)" }} />
+          <DenseTableHead>Hostname</DenseTableHead>
+          <DenseTableHead>Owner</DenseTableHead>
+          <DenseTableHead>OS</DenseTableHead>
+          <DenseTableHead>first-tree</DenseTableHead>
+          <DenseTableHead>Agents</DenseTableHead>
+          <DenseTableHead>Last seen</DenseTableHead>
+          <DenseTableHead>Status</DenseTableHead>
+        </DenseTableRow>
+      </DenseTableHeader>
+      <DenseTableBody>
+        {teamList.map((client) => {
+          const isExpanded = !collapsedIds.has(client.id);
+          const boundAgents = getClientAgents(client.id);
+          return (
+            <ClientRow
+              key={client.id}
+              client={client}
+              boundAgents={boundAgents}
+              isExpanded={isExpanded}
+              agentName={agentName}
+              onToggle={() =>
+                setCollapsedIds((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(client.id)) next.delete(client.id);
+                  else next.add(client.id);
+                  return next;
+                })
+              }
+              onDisconnect={() => {}}
+              onRetire={() => {}}
+              onReconnect={() => {}}
+              showOwner
+              ownerLabel={resolveOwner(client)}
+              restricted
+            />
+          );
+        })}
+      </DenseTableBody>
+    </DenseTable>
+  );
+}
 
 /**
  * Runtime-provider capability matrix shown inside the expanded row of the
  * Computers table. The snapshot is pre-loaded with the list response now
  * (single-source via `/me/clients` / `/orgs/:orgId/clients`), so the
  * matrix renders synchronously — no extra round-trip when a row opens.
+ *
+ * Constants for label / order / hints live in `cards/shared/providers.ts`
+ * — the card-based IA uses the same vocabulary, so duplicating strings
+ * here would invite drift.
  */
 function CapabilityMatrix({ capabilities }: { capabilities: ClientCapabilities }) {
   const empty = Object.keys(capabilities).length === 0;
@@ -621,40 +748,6 @@ function TeamLoadErrorBanner() {
     >
       Failed to load team computers. Showing only your computers.
     </div>
-  );
-}
-
-function GroupHeaderRow({ title, count, colSpan }: { title: string; count: number; colSpan: number }) {
-  return (
-    <DenseTableRow>
-      <td colSpan={colSpan} style={{ padding: "var(--sp-6) var(--sp-3_5) var(--sp-2) 0" }}>
-        <span className="inline-flex items-baseline" style={{ gap: "var(--sp-2)" }}>
-          <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
-            {title}
-          </span>
-          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            · {count}
-          </span>
-        </span>
-      </td>
-    </DenseTableRow>
-  );
-}
-
-function EmptyGroupRow({ colSpan, message }: { colSpan: number; message: string }) {
-  return (
-    <DenseTableRow>
-      <td
-        colSpan={colSpan}
-        className="text-body"
-        style={{
-          padding: "var(--sp-3) var(--sp-3_5)",
-          color: "var(--fg-4)",
-        }}
-      >
-        {message}
-      </td>
-    </DenseTableRow>
   );
 }
 
