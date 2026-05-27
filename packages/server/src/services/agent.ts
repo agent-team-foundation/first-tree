@@ -156,6 +156,30 @@ function defaultVisibility(type: AgentType): AgentVisibility {
 }
 
 /**
+ * Translate a post-merge `(type, visibility)` pair into the 3-value enum
+ * older clients (≤ 0.5.1) expect on the wire. The pre-merge type enum was
+ * `human | personal_assistant | autonomous_agent`; this PR collapsed the
+ * latter two into a single `agent` row, with the personal-vs-shared axis
+ * carried by `visibility`. Old clients deserialise via a strict zod enum
+ * that rejects the unknown `agent` value — pushing the legacy label keeps
+ * them working without an upgrade. Drop this and emit `agentTypeSchema`
+ * directly once every deployed client is on a release that accepts `agent`.
+ *
+ * Parameter types are widened to `string` because callers source `type` and
+ * `visibility` directly from drizzle row reads (text columns), which surface
+ * as `string` rather than the narrowed `AgentType` / `AgentVisibility`
+ * union — narrowing them at every call site would be needless ceremony for
+ * a helper whose only `===` check is against a known literal.
+ */
+export function legacyWireAgentType(
+  type: string,
+  visibility: string,
+): "human" | "personal_assistant" | "autonomous_agent" {
+  if (type === "human") return "human";
+  return visibility === AGENT_VISIBILITY.PRIVATE ? "personal_assistant" : "autonomous_agent";
+}
+
+/**
  * Resolve + validate the client that will own the new agent.
  *
  * Rule (unified-user-token, post-first-bind relaxation):

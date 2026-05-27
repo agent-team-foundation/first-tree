@@ -22,6 +22,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     name: string | null;
     displayName: string | null;
     type: string;
+    visibility: string;
     clientId: string | null;
     runtimeProvider: string;
   }): void {
@@ -31,7 +32,10 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
       agentId: agent.uuid,
       name: agent.name,
       displayName: agent.displayName,
-      agentType: agent.type,
+      // Wire-compat: translate post-merge `(type, visibility)` back to the
+      // pre-merge 3-value enum so clients on ≤ 0.5.1 (strict zod) still
+      // decode the frame. See agentService.legacyWireAgentType.
+      agentType: agentService.legacyWireAgentType(agent.type, agent.visibility),
       runtimeProvider: agent.runtimeProvider,
     });
     if (!parsed.success) {

@@ -65,6 +65,8 @@ export {
   agentTypeSchema,
   agentVisibilitySchema,
   avatarColorTokenSchema,
+  type LegacyWireAgentType,
+  legacyWireAgentTypeSchema,
   type ContextTreeInfo,
   type CreateAgent,
   contextTreeInfoSchema,
