@@ -36,9 +36,9 @@ export function StepConnectComputer() {
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
       {!connectedClient ? (
         <>
-          <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
-            {COPY.connectComputer.instruction}
-          </p>
+          {/* No instruction line — the step title + why already cover what to
+              do; the OS-specific "open Terminal / PowerShell" guidance lives
+              under <ShowMeHow> below for users who need it. */}
           <CommandBox command={cliCommand} />
           {tokenError ? (
             <FlowNote>{tokenError}</FlowNote>
