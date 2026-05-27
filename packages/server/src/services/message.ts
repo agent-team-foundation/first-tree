@@ -89,7 +89,7 @@ export type SendMessageOptions = {
    * (the agent runtime's LLM output naturally writes `@<peer>` without a
    * companion `receiverNames` array, and breaking that mental model
    * requires a runtime-side parser rewrite that is out of scope for the
-   * current PR). The unresolved-@-token guard is gated on the same flag.
+   * current PR).
    *
    * Default when omitted: ON (`undefined !== false` evaluates to true).
    * Adapter / webhook / programmatic callers don't need to opt out — they
@@ -215,8 +215,9 @@ async function sendMessageInner(
     //     (result-sink / adapter / webhook).
     //   - `data.receiverNames: [name]` — caller knows the recipient by name
     //     and wants the server to resolve it against the chat's participant
-    //     list (CLI `chat send <name>` post-Phase-1). An unknown name is a
-    //     400 with a `chat invite` hint — never silently dropped.
+    //     list (CLI `chat send <name>` post-Phase-1). Unknown names are
+    //     dropped silently; the group-chat `enforceGroupMention` guard
+    //     below catches the "nobody resolved" case for ≥3-speaker chats.
     //   - Content-extracted `@<name>` tokens — opt-in via
     //     `extractMentionsFromContent`, used only by the human web endpoint
     //     where the typed message is the sole source of routing intent.
@@ -240,27 +241,20 @@ async function sendMessageInner(
       : [];
     const contentText = typeof effectiveContent === "string" ? effectiveContent : "";
 
-    // Resolve `receiverNames` against the chat's speaker list.
+    // Resolve `receiverNames` against the chat's speaker list. Names that
+    // don't match a current speaker are silently dropped — the group-chat
+    // `enforceGroupMention` guard below still trips on "nothing resolved"
+    // for ≥3-speaker chats, so the misroute is caught where it actually
+    // matters (group sends without a recipient).
     const receiverNames = data.receiverNames ?? [];
     const speakersByName = new Map<string, string>();
     for (const p of participants) {
       if (p.name) speakersByName.set(p.name.toLowerCase(), p.agentId);
     }
     const resolvedFromNames: string[] = [];
-    const unresolvedNames: string[] = [];
     for (const name of receiverNames) {
       const id = speakersByName.get(name.toLowerCase());
       if (id) resolvedFromNames.push(id);
-      else unresolvedNames.push(name);
-    }
-    if (unresolvedNames.length > 0) {
-      const sample = unresolvedNames[0];
-      throw new BadRequestError(
-        `Cannot route to "${sample}" — they are not a participant of this chat. ` +
-          "Add them first:\n" +
-          `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
-          "Then retry your send. Or ask a human in this chat to add them.",
-      );
     }
 
     // Explicit-wins-with-content-fallback. When the caller declares routing
@@ -317,8 +311,6 @@ async function sendMessageInner(
     // `agent-final-text` profile rationale:
     //   - skip group-mention enforcement (handler-initiated forward, not a
     //     user-typed broadcast).
-    //   - skip the unresolved-@-token guard (handler text may legitimately
-    //     contain narrative @ tokens that don't resolve to chat members).
     //   - force every fan-out row to notify=false (final text lands in
     //     chat history for human observers but never wakes another
     //     session). v1 §四 改造 4 (b) bypass channel.
@@ -326,12 +318,10 @@ async function sendMessageInner(
     const purposeProfile = isAgentFinalText
       ? {
           skipMentionEnforcement: true,
-          skipUnresolvedTokenGuard: true,
           forceSilentFanOut: true,
         }
       : {
           skipMentionEnforcement: false,
-          skipUnresolvedTokenGuard: false,
           forceSilentFanOut: false,
         };
 
@@ -353,50 +343,6 @@ async function sendMessageInner(
           "Sending to a group chat requires an explicit @mention. " +
             `Use \`${getServerCliBinding().binName} chat send <name>\` to message a single agent, or @<name> in the content to address one or more group members.`,
         );
-      }
-    }
-
-    // 2b.1. Unresolved-@-token guard. Closes the foot-gun where a caller
-    //   types `@<name>` for someone who is not a speaker of THIS chat —
-    //   `extractMentions` would silently drop it and the message would land
-    //   with `mentions=[]`, never waking the intended recipient.
-    //
-    //   Gated on `enforceGroupMention` (same flag that opts a caller into
-    //   strict routing checks — HTTP endpoints set it; internal / adapter
-    //   paths leave it off and keep the "unknown @ silently drops" legacy
-    //   semantics). Also skipped when the caller declared recipients
-    //   explicitly: their `@<name>` tokens are narrative, not routing.
-    //
-    //   Code-fenced `@` tokens are already stripped by `scanMentionTokens`
-    //   upstream, so legitimate quoted `@<name>` in code blocks is
-    //   unaffected. `purpose === "agent-final-text"` bypasses through
-    //   `purposeProfile.skipUnresolvedTokenGuard` for the same reason it
-    //   bypasses enforceGroupMention.
-    if (
-      options.enforceGroupMention &&
-      !explicitlyDeclared &&
-      contentExtractEnabled &&
-      !purposeProfile.skipUnresolvedTokenGuard &&
-      typeof effectiveContent === "string"
-    ) {
-      const rawTokens = scanMentionTokens(effectiveContent);
-      if (rawTokens.length > 0) {
-        const speakerNames = new Set(
-          participants
-            .map((p) => p.name)
-            .filter((n): n is string => typeof n === "string" && n.length > 0)
-            .map((n) => n.toLowerCase()),
-        );
-        const unresolved = rawTokens.filter((t) => !speakerNames.has(t));
-        if (unresolved.length > 0) {
-          const sample = unresolved[0];
-          throw new BadRequestError(
-            `Cannot @-mention "${sample}" — they are not a participant of this chat. ` +
-              "Add them first:\n" +
-              `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
-              "Then retry your send. Or ask a human in this chat to add them.",
-          );
-        }
       }
     }
 
