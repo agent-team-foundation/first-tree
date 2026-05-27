@@ -204,17 +204,26 @@ export function DemoNavigator({
  * Reads `?demo=<key>` from the URL and keeps state in sync with browser
  * back/forward. Returns `null` when the param isn't set or doesn't
  * match a known scenario.
+ *
+ * Every branch is no-op in production: `import.meta.env.DEV` folds to
+ * `false`, the initializer returns null, the popstate listener bails,
+ * and the updater rejects writes — so the hook keeps a stable shape
+ * (React rules-of-hooks happy) while the demo code path stays inert.
+ * Combined with the gated `DEMO_SCENARIOS` array in `dev-fixtures.ts`,
+ * the entire feature drops out of the prod bundle.
  */
 export function useDemoScenarioParam(): [string | null, (key: string | null) => void] {
   const [key, setKey] = useState<string | null>(() => readDemoParam());
 
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     const sync = () => setKey(readDemoParam());
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
 
   const update = (nextKey: string | null) => {
+    if (!import.meta.env.DEV) return;
     const url = new URL(window.location.href);
     if (nextKey) {
       url.searchParams.set("demo", nextKey);
@@ -229,6 +238,7 @@ export function useDemoScenarioParam(): [string | null, (key: string | null) => 
 }
 
 function readDemoParam(): string | null {
+  if (!import.meta.env.DEV) return null;
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("demo");
   if (!raw) return null;
