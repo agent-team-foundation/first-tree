@@ -39,22 +39,22 @@ export type ComputerCardProps = {
 };
 
 /**
- * Top-level card shell. Routes by `deriveComputerStatus(client).pill`
- * to one of four body components — each mockup variant (A/B/B-2/B-3)
- * gets its own body so the per-pill content is encapsulated.
+ * Per-computer detail block. Renders as a flat region inside its parent
+ * `<Section>` ("Your computers" / "Team computers") — no raised
+ * background, no shadow, no border. The visual vocabulary matches the
+ * rest of Settings (Section → fields → hairline separators) so this tab
+ * sits next to /settings/github and /settings/messaging without looking
+ * like an outlier.
  *
- * Card chrome (shared across pills):
- *   - role="region" + aria-label for screen-reader semantic equivalence
- *     to the table's row/column structure pre-PR-B
- *   - Header row: hostname (+ optional owner) + pill chip + ⋯ menu
- *   - Body slot driven by pill
+ * Multiple machines stack vertically; the parent `CardStack` paints a
+ * hairline between adjacent entries so the eye still sees the boundary
+ * without an explicit card chrome.
  *
- * The ⋯ menu carries the same actions the table's RowActionsMenu had —
- * Disconnect / Retire (+ Reconnect when offline). Reconnect on offline
- * cards opens the dialog as a fresh connect (no targetClientId), since
- * "the user wants to fire up a new install path" is the offline-mode
- * mental model. AuthExpired uses the Generate-new-token button instead
- * (it threads `targetClientId` through).
+ * Header row: hostname + optional owner caption + pill + ⋯ menu.
+ * The ⋯ menu carries the same actions the legacy table's RowActionsMenu
+ * had — Disconnect / Retire (+ Reconnect when offline). Reconnect on
+ * offline rows opens the dialog as a fresh connect (no targetClientId);
+ * AuthExpired uses the inline "Generate new token" button instead.
  */
 export function ComputerCard({
   client,
@@ -70,25 +70,24 @@ export function ComputerCard({
   const isOffline = client.status !== "connected";
 
   return (
-    // `<section>` already conveys region semantics; biome flags an
-    // explicit `role="region"` as redundant. `aria-label` on a labeled
-    // section is the documented pattern for naming the region.
-    <section
+    // `<article>` (instead of nested `<section>`) keeps the page outline
+    // flat: the parent `<Section>` is the named region, each computer is
+    // an article inside it. `aria-label` names it for screen readers.
+    <article
       aria-label={vm.ariaLabel}
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: "var(--sp-3_5)",
-        padding: "var(--sp-4) var(--sp-5)",
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-panel)",
-        boxShadow: "var(--shadow-sm)",
+        gap: "var(--sp-3)",
+        // Padding only on the inline axis — vertical spacing comes from
+        // the parent stack's hairline separators so adjacent rows don't
+        // collide but also don't waste extra padding on themselves.
+        padding: "var(--sp-3_5) 0",
       }}
     >
       <header className="flex items-start" style={{ gap: "var(--sp-3)" }}>
-        <div className="flex flex-col" style={{ flex: 1, minWidth: 0, gap: "var(--sp-1)" }}>
-          <h3 className="text-subtitle" style={{ margin: 0, overflowWrap: "anywhere" }}>
+        <div className="flex flex-col" style={{ flex: 1, minWidth: 0, gap: "var(--sp-0_5)" }}>
+          <h3 className="text-body font-semibold" style={{ margin: 0, overflowWrap: "anywhere", color: "var(--fg)" }}>
             {vm.label}
           </h3>
           {ownerLabel && (
@@ -114,7 +113,7 @@ export function ComputerCard({
         agentName={agentName}
         onGenerateNewToken={onGenerateNewToken}
       />
-    </section>
+    </article>
   );
 }
 

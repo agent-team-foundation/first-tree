@@ -31,21 +31,17 @@ export function RuntimeInstallBox({ provider, entry, hostname }: RuntimeInstallB
   const label = PROVIDER_LABEL[provider];
   const { headline, command } = installBoxView(entry, provider, hostname);
 
+  // No outer raised-bg / border / radius — the inner `InlineCommand`'s
+  // sunken pre-block is the only chrome that earns its weight (commands
+  // are a single visual unit the operator scans + copies). Wrapping
+  // again would nest a box inside a box inside the page, which fights
+  // the Settings tab's "flat hairline-only" vocabulary.
   return (
-    <div
-      className="flex flex-col"
-      style={{
-        gap: "var(--sp-2)",
-        padding: "var(--sp-3)",
-        borderRadius: "var(--radius-input)",
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-        <span className="text-body font-medium">{label}</span>
+    <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
+      <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
+        {label}
       </div>
-      <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
+      <p className="text-caption" style={{ margin: 0, color: "var(--fg-3)" }}>
         {renderHeadlineWithCode(headline)}
       </p>
       <InlineCommand command={command} ariaLabel={`${label} setup command`} />

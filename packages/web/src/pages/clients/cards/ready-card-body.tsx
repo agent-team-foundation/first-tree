@@ -1,6 +1,6 @@
 import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
+import type { ReactNode } from "react";
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
-import { UppercaseLabel } from "../../../components/ui/section-header.js";
 import { BoundAgentsList } from "./shared/bound-agents-list.js";
 import { CardMetaRow } from "./shared/card-meta-row.js";
 import { PROVIDER_INSTALL_HINT, PROVIDER_LABEL, PROVIDER_ORDER, PROVIDER_UNAUTH_HINT } from "./shared/providers.js";
@@ -13,43 +13,66 @@ type ReadyCardBodyProps = {
 };
 
 /**
- * Variant A body — the happy path. Renders:
- *   - Heartbeat / first-tree / OS meta row
- *   - Runtimes section: per-provider state line (✓ / ⚠ / ⊘)
- *   - Bound agents: full list with PresenceChips
+ * Variant A body — the happy path. Three groups separated by hairlines
+ * inside the per-computer block:
+ *   1. Heartbeat / first-tree / OS — `<dl>` field grid via `CardMetaRow`
+ *   2. Runtimes — per-provider state line
+ *   3. Bound agents — when ≥ 1
  *
- * Mockup §"Variant A" puts the agents section last. The Runtimes
- * matrix on a Ready card is informational (one runtime is `ok` by
- * definition — that's why the pill is Ready) but worth showing so the
- * user can see at a glance whether they're running both Claude Code
- * and Codex, or only one.
+ * Mockup §"Variant A" puts agents last. The Runtimes section is
+ * informational (one runtime must be `ok` for the pill to be Ready) but
+ * worth showing so the user sees at a glance whether they have both
+ * runtimes or just one.
  */
 export function ReadyCardBody({ client, boundAgents, agentName }: ReadyCardBodyProps) {
   const summary = summarizeBoundAgents(boundAgents);
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <CardMetaRow client={client} />
-      <RuntimesSection capabilities={client.capabilities} />
-      <BoundAgentsList summary={summary} agentName={agentName} />
+    <div className="flex flex-col">
+      <Group>
+        <CardMetaRow client={client} />
+      </Group>
+      <Group>
+        <GroupLabel>Runtimes</GroupLabel>
+        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+          {PROVIDER_ORDER.map((provider) => (
+            <RuntimeStateLine key={provider} provider={provider} entry={client.capabilities[provider] ?? null} />
+          ))}
+        </div>
+      </Group>
+      {summary.total > 0 && (
+        <Group>
+          <GroupLabel>{summary.total === 1 ? "Agent" : `Agents · ${summary.total}`}</GroupLabel>
+          <BoundAgentsList summary={summary} agentName={agentName} headerless />
+        </Group>
+      )}
     </div>
   );
 }
 
 /**
- * Compact Runtimes section for Ready cards. Same vocabulary as the
- * pre-PR-B `ProviderRow` (under the table's expanded row) but rendered
- * unconditionally inline. Reused so the visual hint colors stay
- * consistent across the page.
+ * Group inside a card body: stacks vertically with a hairline separator
+ * on top. Keeps meta/runtimes/agents visually separated without nesting
+ * boxes — same vocabulary `<Section>` uses for its top border.
  */
-function RuntimesSection({ capabilities }: { capabilities: HubClient["capabilities"] }) {
+function Group({ children }: { children: ReactNode }) {
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
-      <UppercaseLabel style={{ display: "block", marginBottom: 4 }}>Runtimes</UppercaseLabel>
-      <div className="flex flex-col gap-1">
-        {PROVIDER_ORDER.map((provider) => (
-          <RuntimeStateLine key={provider} provider={provider} entry={capabilities[provider] ?? null} />
-        ))}
-      </div>
+    <div
+      className="flex flex-col"
+      style={{
+        gap: "var(--sp-1_5)",
+        padding: "var(--sp-2_5) 0",
+        borderTop: "var(--hairline) solid var(--border-faint)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function GroupLabel({ children }: { children: ReactNode }) {
+  return (
+    <div className="text-caption" style={{ color: "var(--fg-3)" }}>
+      {children}
     </div>
   );
 }
@@ -58,60 +81,36 @@ function RuntimeStateLine({ provider, entry }: { provider: RuntimeProvider; entr
   const label = PROVIDER_LABEL[provider];
   if (!entry) {
     return (
-      <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
-        <span className="font-medium" style={{ minWidth: 140 }}>
-          {label}
-        </span>
-        <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-          not reported · {PROVIDER_INSTALL_HINT[provider]}
-        </span>
+      <div className="text-body" style={{ color: "var(--fg-3)" }}>
+        <span style={{ color: "var(--fg-2)" }}>{label}</span> · not reported · {PROVIDER_INSTALL_HINT[provider]}
       </div>
     );
   }
   switch (entry.state) {
     case "ok":
       return (
-        <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: 140 }}>
-            {label}
-          </span>
-          <span className="text-caption" style={{ color: "var(--state-idle)" }}>
-            ✓ {entry.sdkVersion ? `v${entry.sdkVersion} · ` : ""}authenticated ({entry.authMethod})
-          </span>
+        <div className="text-body" style={{ color: "var(--fg-2)" }}>
+          <span style={{ color: "var(--state-idle)" }}>✓</span> {label}
+          {entry.sdkVersion ? ` · v${entry.sdkVersion}` : ""} · authenticated ({entry.authMethod})
         </div>
       );
     case "unauthenticated":
       return (
-        <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: 140 }}>
-            {label}
-          </span>
-          <span className="text-caption" style={{ color: "var(--state-blocked)" }}>
-            ⚠ installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}, not authenticated ·{" "}
-            {PROVIDER_UNAUTH_HINT[provider]}
-          </span>
+        <div className="text-body" style={{ color: "var(--fg-2)" }}>
+          <span style={{ color: "var(--state-blocked)" }}>⚠</span> {label}
+          {entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}, not authenticated · {PROVIDER_UNAUTH_HINT[provider]}
         </div>
       );
     case "missing":
       return (
-        <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
-          <span className="font-medium" style={{ minWidth: 140 }}>
-            {label}
-          </span>
-          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            ✗ not installed · {PROVIDER_INSTALL_HINT[provider]}
-          </span>
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          <span style={{ color: "var(--fg-4)" }}>✗</span> {label} · not installed · {PROVIDER_INSTALL_HINT[provider]}
         </div>
       );
     case "error":
       return (
-        <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: 140 }}>
-            {label}
-          </span>
-          <span className="text-caption" style={{ color: "var(--state-error)" }}>
-            error · {entry.error ?? "probe failed"}
-          </span>
+        <div className="text-body" style={{ color: "var(--fg-2)" }}>
+          <span style={{ color: "var(--state-error)" }}>!</span> {label} · {entry.error ?? "probe failed"}
         </div>
       );
   }

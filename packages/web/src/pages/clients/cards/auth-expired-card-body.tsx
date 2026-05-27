@@ -1,7 +1,7 @@
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
 import { Button } from "../../../components/ui/button.js";
 import { BoundAgentsList } from "./shared/bound-agents-list.js";
-import { CardMetaRow } from "./shared/card-meta-row.js";
+import { CardMetaFooter } from "./shared/card-meta-row.js";
 import { authExpiredDiagnostic, summarizeBoundAgents } from "./view-models.js";
 
 type AuthExpiredCardBodyProps = {
@@ -32,30 +32,17 @@ type AuthExpiredCardBodyProps = {
 export function AuthExpiredCardBody({ client, boundAgents, agentName, onGenerateNewToken }: AuthExpiredCardBodyProps) {
   const summary = summarizeBoundAgents(boundAgents);
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg)" }}>
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
         {authExpiredDiagnostic(client)}
       </p>
-      <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+      <div className="flex items-center" style={{ gap: "var(--sp-3)" }}>
         <Button size="sm" onClick={onGenerateNewToken}>
           Generate new token
         </Button>
         {summary.total > 0 && <BoundAgentsList summary={summary} agentName={agentName} compact />}
       </div>
-      <Divider />
-      <CardMetaRow client={client} dimmed />
+      <CardMetaFooter client={client} />
     </div>
-  );
-}
-
-function Divider() {
-  return (
-    <div
-      aria-hidden
-      style={{
-        borderTop: "var(--hairline) solid var(--border-faint)",
-        margin: 0,
-      }}
-    />
   );
 }

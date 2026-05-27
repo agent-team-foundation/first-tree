@@ -1,5 +1,4 @@
 import { PresenceChip, runtimeStateToPresence } from "../../../../components/ui/presence-chip.js";
-import { UppercaseLabel } from "../../../../components/ui/section-header.js";
 import type { BoundAgentsSummary } from "../view-models.js";
 
 type BoundAgentsListProps = {
@@ -11,20 +10,28 @@ type BoundAgentsListProps = {
    * cards where the agents section is supporting context, not the focus.
    */
   compact?: boolean;
+  /**
+   * When true, skip the in-component "Agents · N" header — the parent
+   * Group is already labeling the block. Without this the Ready card
+   * would render two labels (one in the group, one here).
+   */
+  headerless?: boolean;
 };
 
 /**
- * Renders the bound-agents section of a computer card.
+ * Renders the bound-agents block of a computer card body.
  *
- * Two display modes — both driven by the same `BoundAgentsSummary` from
- * `view-models.ts`:
- *
- *   - **expanded** (Ready card): full list, one row per agent, with
- *     `PresenceChip` + active/total session counts.
+ * Two display modes — both fed by the same `BoundAgentsSummary`:
+ *   - **expanded** (Ready card): per-agent row with `PresenceChip`
  *   - **compact** (AuthExpired / Offline): single-line summary like
- *     "3 agents · all offline".
+ *     "3 agents · all offline"
+ *
+ * Session counts (active / total) used to render here but were dropped
+ * in the minimal-style pass — the per-computer card is a *status*
+ * surface, not an agent detail view. Session info belongs on
+ * `/agent/:id`, which the user reaches from the bound name.
  */
-export function BoundAgentsList({ summary, agentName, compact = false }: BoundAgentsListProps) {
+export function BoundAgentsList({ summary, agentName, compact = false, headerless = false }: BoundAgentsListProps) {
   if (summary.total === 0) {
     return null;
   }
@@ -46,23 +53,18 @@ export function BoundAgentsList({ summary, agentName, compact = false }: BoundAg
   }
 
   return (
-    <>
-      <UppercaseLabel style={{ display: "block", marginBottom: 6 }}>Agents · {summary.total}</UppercaseLabel>
-      <div className="flex flex-col gap-1">
-        {summary.agents.map((a) => (
-          <div key={a.agentId} className="flex items-center gap-2.5 text-body">
-            <span className="font-medium" style={{ minWidth: 140 }}>
-              {agentName(a.agentId)}
-            </span>
-            <PresenceChip status={runtimeStateToPresence(a.runtimeState)} />
-            {a.activeSessions !== null && (
-              <span className="mono tnum text-caption" style={{ color: "var(--fg-3)" }}>
-                {a.activeSessions} / {a.totalSessions ?? 0} sessions
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    </>
+    <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+      {!headerless && (
+        <div className="text-caption" style={{ color: "var(--fg-3)" }}>
+          {summary.total === 1 ? "Agent" : `Agents · ${summary.total}`}
+        </div>
+      )}
+      {summary.agents.map((a) => (
+        <div key={a.agentId} className="flex items-center text-body" style={{ gap: "var(--sp-2_5)" }}>
+          <span style={{ color: "var(--fg-2)" }}>{agentName(a.agentId)}</span>
+          <PresenceChip status={runtimeStateToPresence(a.runtimeState)} />
+        </div>
+      ))}
+    </div>
   );
 }
