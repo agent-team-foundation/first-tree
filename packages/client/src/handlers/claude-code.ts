@@ -44,6 +44,7 @@ import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
+import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
@@ -244,6 +245,38 @@ function isResultMessage(message: unknown): message is ResultMessage {
   if (!message || typeof message !== "object") return false;
   const m = message as Record<string, unknown>;
   return m.type === "result" && typeof m.subtype === "string";
+}
+
+/**
+ * Extract the typed auth-failure signal from any of the three SDK message
+ * shapes that can carry `SDKAssistantMessageError`. Returns the original
+ * provider-side message (when the SDK has one to share) so the chat-timeline
+ * hint can quote it verbatim.
+ *
+ * Three sources we watch (per `@anthropic-ai/claude-agent-sdk` `sdk.d.ts`):
+ *
+ *   - `assistant` messages with `error === "authentication_failed"`.
+ *   - `system/api_retry` retry pre-emption with `error === "authentication_failed"`.
+ *   - `auth_status` messages with a non-empty `error` string.
+ *
+ * The first two use the typed union (`SDKAssistantMessageError`), so we
+ * detect them by code equality rather than substring — strictly more
+ * robust than codex's keyword path.
+ */
+function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | null {
+  if (!message || typeof message !== "object") return null;
+  const m = message as Record<string, unknown>;
+  if (m.type === "assistant" && isClaudeAuthError(m.error as string | undefined)) {
+    return { rawMessage: "authentication_failed" };
+  }
+  if (m.type === "system" && m.subtype === "api_retry" && isClaudeAuthError(m.error as string | undefined)) {
+    const status = typeof m.error_status === "number" ? ` (HTTP ${m.error_status})` : "";
+    return { rawMessage: `authentication_failed${status}` };
+  }
+  if (m.type === "auth_status" && typeof m.error === "string" && m.error.length > 0) {
+    return { rawMessage: m.error };
+  }
+  return null;
 }
 
 function extractToolResultText(content: unknown): string {
@@ -803,11 +836,33 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         try {
           sessionCtx.setRuntimeState("working");
 
+          // Per-turn flag for auth-failure hint emission. Set when we detect a
+          // typed `authentication_failed` on assistant / api_retry / auth_status
+          // messages; consulted in the result-error branch below so we don't
+          // double-emit the same failure (once as a hint, once as the raw SDK
+          // error string). Reset on each `result` boundary so the next turn
+          // starts fresh — claude-code's bg-agent mode can run multiple turns
+          // in one query.
+          let authHintEmitted = false;
+
           for await (const message of currentQuery) {
             // Every message refreshes lastActivity to prevent idle timeout
             sessionCtx.touch();
 
             toolCallProcessor.onMessage(message);
+
+            // Detect typed auth failure BEFORE result-message handling so the
+            // user sees the actionable hint before any redundant result error.
+            // The SDK's auth state lives in claude's own credential store —
+            // we only translate the surface error, we don't manage tokens.
+            const authFailure = detectClaudeAuthFailure(message);
+            if (authFailure && !authHintEmitted) {
+              authHintEmitted = true;
+              sessionCtx.emitEvent({
+                kind: "error",
+                payload: { source: "sdk", message: formatAuthHint("claude-code", authFailure.rawMessage) },
+              });
+            }
 
             if (isResultMessage(message)) {
               if (message.subtype === "success") {
@@ -895,10 +950,21 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
                 const errorLog = `Query result error: ${errors} (subtype=${message.subtype}, turns=${message.num_turns ?? "?"}, duration=${message.duration_ms ?? "?"}ms)`;
                 sessionCtx.log(errorLog);
-                sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
+                // If we already emitted an auth-failure hint earlier in this
+                // turn (typed `authentication_failed` on an assistant /
+                // api_retry / auth_status message), skip the raw SDK error
+                // emit so the timeline shows the actionable hint instead of
+                // a redundant opaque second line.
+                if (!authHintEmitted) {
+                  sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
+                }
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
               }
               sessionCtx.setRuntimeState("idle");
+              // Reset the per-turn hint flag so the next turn in the same
+              // query (claude-code's bg-agent mode runs multiple turns per
+              // query) starts with a clean slate.
+              authHintEmitted = false;
             }
           }
           sessionCtx.setRuntimeState("idle");
