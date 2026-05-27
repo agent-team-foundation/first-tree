@@ -553,7 +553,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
  * org has a non-human agent — matching the user-level mental model.
  */
 async function inferOnboardingStep(app: FastifyInstance, userId: string): Promise<OnboardingStep> {
-  const [hasClient] = await app.db.select({ id: clients.id }).from(clients).where(eq(clients.userId, userId)).limit(1);
+  // Archived clients don't count toward onboarding — a user whose only
+  // computer rows are sweep-soft-deleted should be sent back to "connect",
+  // not falsely advanced to "create_agent".
+  const [hasClient] = await app.db
+    .select({ id: clients.id })
+    .from(clients)
+    .where(and(eq(clients.userId, userId), isNull(clients.archivedAt)))
+    .limit(1);
   if (!hasClient) return "connect";
 
   const [hasAgent] = await app.db

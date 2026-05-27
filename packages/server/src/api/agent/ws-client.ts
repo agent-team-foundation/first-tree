@@ -34,6 +34,7 @@ import {
 } from "../../observability/index.js";
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
+import { ClientDedupConflictError } from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
 import * as inboxService from "../../services/inbox.js";
 import * as notificationService from "../../services/notification.js";
@@ -461,17 +462,30 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 socket.close(4403, "no membership");
                 return;
               }
+              let registerResult: clientService.RegisterClientResult;
               try {
-                await clientService.registerClient(app.db, {
-                  clientId: data.clientId,
-                  userId: session.userId,
-                  organizationId: placeholderOrgId,
-                  instanceId,
-                  hostname: data.hostname,
-                  os: data.os,
-                  sdkVersion: data.sdkVersion,
-                  lastUpdateAttempt: data.lastUpdateAttempt,
-                });
+                registerResult = await clientService.registerClient(
+                  app.db,
+                  {
+                    clientId: data.clientId,
+                    userId: session.userId,
+                    organizationId: placeholderOrgId,
+                    instanceId,
+                    hostname: data.hostname,
+                    os: data.os,
+                    sdkVersion: data.sdkVersion,
+                    lastUpdateAttempt: data.lastUpdateAttempt,
+                  },
+                  // Connection-stealing guard for soft-dedup: the canonical
+                  // slot is "live" iff a DIFFERENT socket holds it and is
+                  // still OPEN. If our own socket is registered there (e.g.
+                  // an in-flight reconnect via the same id), we are NOT
+                  // stealing — let the register through.
+                  (canonicalId) => {
+                    const existing = connectionManager.getClientConnection(canonicalId);
+                    return existing !== undefined && existing !== socket && existing.readyState === existing.OPEN;
+                  },
+                );
               } catch (err) {
                 const message = err instanceof Error ? err.message : "client register failed";
                 const code =
@@ -479,7 +493,9 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     ? err.code
                     : err instanceof ClientOrgMismatchError
                       ? err.code
-                      : undefined;
+                      : err instanceof ClientDedupConflictError
+                        ? err.code
+                        : undefined;
                 socket.send(
                   JSON.stringify({
                     type: "client:register:rejected",
@@ -491,10 +507,14 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               }
 
-              clientId = data.clientId;
-              setWsConnectionAttrs(socket, { "client.id": data.clientId });
-              connectionManager.setClientConnection(data.clientId, socket);
-              socket.send(JSON.stringify({ type: "client:registered", clientId: data.clientId }));
+              // Use the canonical id for the local session, connection
+              // manager registration, and the response frame. On the
+              // soft-dedup redirect path the caller's input id is not the
+              // identity the server tracks — see services/client.ts §B.
+              clientId = registerResult.canonicalClientId;
+              setWsConnectionAttrs(socket, { "client.id": registerResult.canonicalClientId });
+              connectionManager.setClientConnection(registerResult.canonicalClientId, socket);
+              socket.send(JSON.stringify({ type: "client:registered", clientId: registerResult.canonicalClientId }));
 
               // Backfill `agent:pinned` for any agent already bound to this
               // client at registration time. Without this, an admin who pins an
@@ -502,8 +522,15 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // `first-tree agent add` after restart — the realtime push in
               // admin/agents.ts only fires for live sockets. The client dedupes
               // on agentId, so re-firing on every reconnect is safe.
+              //
+              // Enumerate by `canonicalClientId`, not the caller's input id —
+              // on the dedup-redirect path, agents are pinned to the canonical
+              // row, not to the (rejected) input id.
               try {
-                const pinned = await clientService.listActiveAgentsPinnedToClient(app.db, data.clientId);
+                const pinned = await clientService.listActiveAgentsPinnedToClient(
+                  app.db,
+                  registerResult.canonicalClientId,
+                );
                 for (const agent of pinned) {
                   const parsed = agentPinnedMessageSchema.safeParse({
                     type: "agent:pinned",
@@ -515,7 +542,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   });
                   if (!parsed.success) {
                     app.log.warn(
-                      { err: parsed.error.flatten(), agentId: agent.uuid, clientId: data.clientId },
+                      { err: parsed.error.flatten(), agentId: agent.uuid, clientId: registerResult.canonicalClientId },
                       "agent:pinned backfill frame failed schema validation — skipping",
                     );
                     continue;
@@ -524,7 +551,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 }
               } catch (err) {
                 app.log.error(
-                  { err, clientId: data.clientId },
+                  { err, clientId: registerResult.canonicalClientId },
                   "agent:pinned backfill on client:register failed — client may need manual `agent add`",
                 );
               }

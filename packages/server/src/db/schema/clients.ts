@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations.js";
 import { users } from "./users.js";
@@ -37,6 +38,35 @@ export const clients = pgTable(
     connectedAt: timestamp("connected_at", { withTimezone: true }),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    /**
+     * Soft-delete timestamp for orphan-row archival.
+     *
+     * - NULL  → active row. Surfaces in all read paths
+     *   (`/me/clients`, `/orgs/:orgId/clients`, `GET /clients/:id`,
+     *   `agent:bind` joins, onboarding inference).
+     * - Non-NULL → archived (`archiveAbandonedClients` sweep judged this
+     *   row abandoned: disconnected, >30 days unseen, zero pinned
+     *   agents). Excluded from every read path but the row stays for
+     *   audit / recovery (admin SQL `UPDATE clients SET archived_at =
+     *   NULL WHERE id = '...'` resurrects).
+     *
+     * Soft-delete (not DELETE) so the dedup path can `pickCanonical` an
+     * archived row when a re-registering CLI returns; the `(A)` same-id
+     * upsert clears `archived_at` automatically on reconnect — see
+     * `services/client.ts::registerClient`.
+     */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
   },
-  (table) => [index("idx_clients_user").on(table.userId), index("idx_clients_org").on(table.organizationId)],
+  (table) => [
+    index("idx_clients_user").on(table.userId),
+    index("idx_clients_org").on(table.organizationId),
+    /**
+     * Supports the hourly `archiveAbandonedClients` sweep — its WHERE
+     * clause scans `(status='disconnected', last_seen_at < cutoff,
+     * archived_at IS NULL)`. The partial predicate keeps the index small
+     * (archived rows excluded) and a (status, last_seen_at) leading key
+     * lines up with the equality + range predicate.
+     */
+    index("idx_clients_sweep").on(table.status, table.lastSeenAt).where(sql`archived_at IS NULL`),
+  ],
 );

@@ -5,7 +5,7 @@ import {
   type UpdateAttempt,
   updateAttemptSchema,
 } from "@first-tree/shared";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
@@ -23,30 +23,87 @@ import { markSupersededByAgents } from "./questions.js";
  * ownership transfer goes through `claimClient` in PR-B.
  */
 export async function assertClientOwner(db: Database, clientId: string, scope: { userId: string }): Promise<void> {
+  // Archived rows are 404 from the user's perspective — they were
+  // sweep-soft-deleted, so admin actions against them must go through
+  // SQL recovery, not the regular owner-scoped routes.
   const [row] = await db
-    .select({ id: clients.id, userId: clients.userId })
+    .select({ id: clients.id, userId: clients.userId, archivedAt: clients.archivedAt })
     .from(clients)
     .where(eq(clients.id, clientId))
     .limit(1);
-  if (!row || row.userId !== scope.userId) {
+  if (!row || row.userId !== scope.userId || row.archivedAt !== null) {
     throw new NotFoundError(`Client "${clientId}" not found`);
   }
 }
 
 /**
- * Upsert the clients row for a given `client_id` under an authenticated user.
+ * Outcome of {@link registerClient}.
  *
- * Claim semantics (decouple-client-from-identity §4.1.1):
- *   - New client_id → INSERT with the authenticated user_id. `organization_id`
- *     is written as a placeholder (NOT NULL legacy column; no longer consumed
- *     by any read path) sourced from the caller-supplied JWT default org.
- *   - Existing row with the same user_id → refresh runtime columns.
- *     `organization_id` is **not** updated on conflict, so the placeholder set
- *     at first insert sticks for the row's lifetime.
- *   - Existing row with a different user_id → raises
- *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `first-tree login <token> --override` to take
- *     ownership, which unpins the previous owner's agents from the machine.
+ * - `canonicalClientId` — the id the WS handler must use to track this
+ *   session going forward. Differs from the caller's `data.clientId` only
+ *   on the soft-dedup redirect path (B).
+ * - `redirected` — true iff soft-dedup picked an existing row to merge
+ *   the new connection into. The WS handler tells the CLI by setting
+ *   the `client:registered` frame's `clientId` to `canonicalClientId`;
+ *   a new-protocol CLI compares and updates yaml.
+ */
+export type RegisterClientResult = {
+  canonicalClientId: string;
+  redirected: boolean;
+};
+
+/**
+ * Soft-dedup refused because the canonical row is currently held by
+ * another live socket. The WS handler maps this to
+ * `client:register:rejected { code: "CLIENT_DEDUP_CONFLICT" }` and
+ * closes 4403 so the offending CLI does not silently steal the slot
+ * every reconnect. CLI side: error class lives in
+ * `packages/client/src/client-connection.ts` for protocol symmetry.
+ */
+export class ClientDedupConflictError extends Error {
+  readonly code = "CLIENT_DEDUP_CONFLICT";
+  constructor(canonicalId: string) {
+    super(`Another client is currently connected as canonical "${canonicalId}". Retry later.`);
+    this.name = "ClientDedupConflictError";
+  }
+}
+
+/**
+ * Upsert / soft-dedup the clients row for a given `client_id` under an
+ * authenticated user.
+ *
+ * Three branches:
+ *
+ *   (A) **Same-id path** — a row with the caller's `clientId` already
+ *       exists. Runs the existing user-mismatch + upsert logic.
+ *       `archived_at` is cleared so a returning install (rare: archived
+ *       row whose owner kept yaml) auto-resurrects. Returns the caller's
+ *       id, `redirected: false`.
+ *
+ *   (B) **Dedup path** — caller's id is brand new AND both `hostname`
+ *       and `os` are present. Acquires a transaction-scoped advisory
+ *       lock on `hash(user_id | hostname | os)` so two concurrent
+ *       first-time registers from the same machine serialize. Then
+ *       picks a canonical row via {@link pickCanonical}; if one is
+ *       found, the new connection's runtime info is merged onto the
+ *       canonical row (clearing `archived_at` on the way) and the
+ *       caller's id is never inserted. If the canonical slot is held by
+ *       a different live socket, {@link ClientDedupConflictError} is
+ *       thrown so the offending CLI bounces instead of stealing.
+ *
+ *   (C) **Plain insert** — caller's id is new and there is no anchor
+ *       (no hostname/os, or no canonical match). Inserts a fresh row.
+ *
+ * Cross-user same-id still raises {@link ClientUserMismatchError} (WS
+ * close 4403); the CLI guides the operator through `first-tree login
+ * <token> --override`.
+ *
+ * @param isCanonicalSlotLive Injected by the WS handler. Returns true
+ *   iff the canonical id currently has a live socket held by
+ *   `connectionManager` that is NOT this caller. Defaults to `() =>
+ *   false` for unit tests / service-layer callers that don't have a
+ *   `connectionManager` in scope; bypassing the guard outside the WS
+ *   handler is safe because there's no real socket to steal.
  */
 export async function registerClient(
   db: Database,
@@ -67,21 +124,9 @@ export async function registerClient(
      */
     lastUpdateAttempt?: UpdateAttempt;
   },
-) {
+  isCanonicalSlotLive: (canonicalId: string) => boolean = () => false,
+): Promise<RegisterClientResult> {
   const now = new Date();
-
-  const [existing] = await db
-    .select({ id: clients.id, userId: clients.userId })
-    .from(clients)
-    .where(eq(clients.id, data.clientId))
-    .limit(1);
-
-  if (existing?.userId && existing.userId !== data.userId) {
-    throw new ClientUserMismatchError(
-      `Client "${data.clientId}" is owned by a different user. ` +
-        "Run `first-tree login <token> --override` to transfer ownership.",
-    );
-  }
 
   // Shallow-merge `lastUpdateAttempt` into the existing metadata jsonb so
   // we don't clobber sibling keys like `capabilities` (written by
@@ -95,25 +140,78 @@ export async function registerClient(
     ? sql`COALESCE(${clients.metadata}, '{}'::jsonb) || ${JSON.stringify({ lastUpdateAttempt: data.lastUpdateAttempt })}::jsonb`
     : undefined;
 
-  await db
-    .insert(clients)
-    .values({
-      id: data.clientId,
-      userId: data.userId,
-      organizationId: data.organizationId,
-      status: "connected",
-      instanceId: data.instanceId,
-      hostname: data.hostname ?? null,
-      os: data.os ?? null,
-      sdkVersion: data.sdkVersion ?? null,
-      connectedAt: now,
-      lastSeenAt: now,
-      ...(data.lastUpdateAttempt ? { metadata: { lastUpdateAttempt: data.lastUpdateAttempt } } : {}),
-    })
-    .onConflictDoUpdate({
-      target: clients.id,
-      set: {
+  return db.transaction(async (tx) => {
+    // (A) Same-id path. No dedup query, no advisory lock — normal
+    // reconnect stays O(1).
+    const [existing] = await tx
+      .select({ id: clients.id, userId: clients.userId, archivedAt: clients.archivedAt })
+      .from(clients)
+      .where(eq(clients.id, data.clientId))
+      .limit(1);
+
+    if (existing) {
+      if (existing.userId && existing.userId !== data.userId) {
+        throw new ClientUserMismatchError(
+          `Client "${data.clientId}" is owned by a different user. ` +
+            "Run `first-tree login <token> --override` to transfer ownership.",
+        );
+      }
+      // Refuse to first-time-claim an archived legacy (user_id NULL) row.
+      // The archival sweep already judged this row abandoned; allowing any
+      // user who learns the client_id to claim it (the existing legacy-
+      // claim path) would open an attack window since `client.id` may end
+      // up in server logs, screenshots, or shared filesystems. Returning
+      // users with their own row (existing.userId === data.userId) hit
+      // the same-user branch above and are NOT affected — they retain
+      // their identity and the row unarchives below.
+      if (existing.userId === null && existing.archivedAt !== null) {
+        throw new ClientUserMismatchError(
+          `Client "${data.clientId}" is archived and cannot be claimed. ` +
+            "Generate a fresh connect token and let the server assign a new identity.",
+        );
+      }
+      await tx
+        .insert(clients)
+        .values({
+          id: data.clientId,
+          userId: data.userId,
+          organizationId: data.organizationId,
+          status: "connected",
+          instanceId: data.instanceId,
+          hostname: data.hostname ?? null,
+          os: data.os ?? null,
+          sdkVersion: data.sdkVersion ?? null,
+          connectedAt: now,
+          lastSeenAt: now,
+          ...(data.lastUpdateAttempt ? { metadata: { lastUpdateAttempt: data.lastUpdateAttempt } } : {}),
+        })
+        .onConflictDoUpdate({
+          target: clients.id,
+          set: {
+            userId: data.userId,
+            status: "connected",
+            instanceId: data.instanceId,
+            hostname: data.hostname ?? null,
+            os: data.os ?? null,
+            sdkVersion: data.sdkVersion ?? null,
+            connectedAt: now,
+            lastSeenAt: now,
+            // Unarchive on reconnect — if this row was previously
+            // archived by the sweep, returning the user to the same
+            // identity should resurrect it transparently.
+            archivedAt: null,
+            ...(metadataMerge ? { metadata: metadataMerge } : {}),
+          },
+        });
+      return { canonicalClientId: data.clientId, redirected: false };
+    }
+
+    // (C) Plain-insert path when there's no anchor to dedup on.
+    if (!data.hostname || !data.os) {
+      await tx.insert(clients).values({
+        id: data.clientId,
         userId: data.userId,
+        organizationId: data.organizationId,
         status: "connected",
         instanceId: data.instanceId,
         hostname: data.hostname ?? null,
@@ -121,9 +219,141 @@ export async function registerClient(
         sdkVersion: data.sdkVersion ?? null,
         connectedAt: now,
         lastSeenAt: now,
+        ...(data.lastUpdateAttempt ? { metadata: { lastUpdateAttempt: data.lastUpdateAttempt } } : {}),
+      });
+      return { canonicalClientId: data.clientId, redirected: false };
+    }
+
+    // (B) Dedup path. Acquire an advisory lock keyed on the dedup tuple
+    // BEFORE the candidate SELECT — `SELECT ... FOR UPDATE` would not
+    // serialize concurrent first-time registers because an empty result
+    // set locks nothing. The advisory lock is transaction-scoped (auto-
+    // released at COMMIT/ROLLBACK) and survives empty SELECTs.
+    //
+    // `hashtextextended` (64-bit, seed 0) instead of `hashtext` (32-bit):
+    // PG's int4 advisory keyspace lands ~50% collision odds around 65k
+    // distinct active tuples, causing unrelated `(user, host, os)` triples
+    // to serialize for no semantic reason. int8 keyspace is 2^64 — same
+    // protocol, ~zero false sharing.
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${data.userId} || '|' || ${data.hostname} || '|' || ${data.os}, 0))`,
+    );
+
+    // Re-check after acquiring the lock: a concurrent register that won
+    // the race may have just INSERTed the caller's id (unlikely — caller
+    // ids are freshly generated UUIDs — but the cost of a defensive
+    // re-check is one indexed lookup).
+    const [insertedConcurrently] = await tx
+      .select({ id: clients.id })
+      .from(clients)
+      .where(eq(clients.id, data.clientId))
+      .limit(1);
+    if (insertedConcurrently) {
+      // Fall through to the same-id upsert path that the (A) branch
+      // takes. Easier than re-implementing: do another tiny upsert here.
+      await tx
+        .update(clients)
+        .set({
+          userId: data.userId,
+          status: "connected",
+          instanceId: data.instanceId,
+          hostname: data.hostname,
+          os: data.os,
+          sdkVersion: data.sdkVersion ?? null,
+          connectedAt: now,
+          lastSeenAt: now,
+          archivedAt: null,
+          ...(metadataMerge ? { metadata: metadataMerge } : {}),
+        })
+        .where(eq(clients.id, data.clientId));
+      return { canonicalClientId: data.clientId, redirected: false };
+    }
+
+    const candidateRows = await tx
+      .select({
+        id: clients.id,
+        status: clients.status,
+        lastSeenAt: clients.lastSeenAt,
+        archivedAt: clients.archivedAt,
+      })
+      .from(clients)
+      .where(and(eq(clients.userId, data.userId), eq(clients.hostname, data.hostname), eq(clients.os, data.os)));
+
+    // Two-step agent-count: GROUP BY + FOR UPDATE is invalid in PG
+    // (cannot lock through an aggregate). The advisory lock scopes ONLY
+    // to other concurrent `registerClient`s on the same (user, host, os) —
+    // it does NOT cover the `agents` table, so an admin PATCH that
+    // rebinds `agents.client_id` while we read may shift the count.
+    // Worst case: pickCanonical picks the wrong canonical (priority
+    // delta), no data loss. Acceptable under soft-dedup semantics.
+    const candidateIds = candidateRows.map((r) => r.id);
+    const agentCounts =
+      candidateIds.length > 0
+        ? await tx
+            .select({ clientId: agents.clientId, count: sql<number>`count(*)::int` })
+            .from(agents)
+            .where(
+              and(
+                sql`${agents.clientId} IS NOT NULL`,
+                inArray(agents.clientId, candidateIds),
+                ne(agents.status, "deleted"),
+              ),
+            )
+            .groupBy(agents.clientId)
+        : [];
+    const counts = new Map(agentCounts.map((c) => [c.clientId, c.count]));
+
+    const canonical = pickCanonical(
+      candidateRows.map((r) => ({
+        id: r.id,
+        status: r.status as "connected" | "disconnected",
+        lastSeenAt: r.lastSeenAt,
+        agentCount: counts.get(r.id) ?? 0,
+        archivedAt: r.archivedAt,
+      })),
+    );
+
+    if (!canonical) {
+      // No canonical to merge into — plain INSERT with the caller's id.
+      await tx.insert(clients).values({
+        id: data.clientId,
+        userId: data.userId,
+        organizationId: data.organizationId,
+        status: "connected",
+        instanceId: data.instanceId,
+        hostname: data.hostname,
+        os: data.os,
+        sdkVersion: data.sdkVersion ?? null,
+        connectedAt: now,
+        lastSeenAt: now,
+        ...(data.lastUpdateAttempt ? { metadata: { lastUpdateAttempt: data.lastUpdateAttempt } } : {}),
+      });
+      return { canonicalClientId: data.clientId, redirected: false };
+    }
+
+    // Connection-stealing guard: a different live socket is currently
+    // registered as canonical. Refuse the dedup; offending CLI gets a
+    // `CLIENT_DEDUP_CONFLICT` error and bounces with reconnect backoff.
+    if (isCanonicalSlotLive(canonical.id)) {
+      throw new ClientDedupConflictError(canonical.id);
+    }
+
+    // Redirect-merge: take the caller's connection info onto the canonical
+    // row. `archivedAt: null` resurrects archived canonicals on return.
+    await tx
+      .update(clients)
+      .set({
+        status: "connected",
+        instanceId: data.instanceId,
+        sdkVersion: data.sdkVersion ?? null,
+        connectedAt: now,
+        lastSeenAt: now,
+        archivedAt: null,
         ...(metadataMerge ? { metadata: metadataMerge } : {}),
-      },
-    });
+      })
+      .where(eq(clients.id, canonical.id));
+    return { canonicalClientId: canonical.id, redirected: true };
+  });
 }
 
 /**
@@ -209,8 +439,66 @@ export async function heartbeatClient(db: Database, clientId: string) {
 }
 
 export async function getClient(db: Database, clientId: string) {
-  const [row] = await db.select().from(clients).where(eq(clients.id, clientId)).limit(1);
+  // Filter out archived rows — they're soft-deleted from the user's
+  // perspective (sweep gave up on them). Admin SQL can resurrect by
+  // clearing `archived_at`; this read path stays simple.
+  const [row] = await db
+    .select()
+    .from(clients)
+    .where(and(eq(clients.id, clientId), isNull(clients.archivedAt)))
+    .limit(1);
   return row ?? null;
+}
+
+/**
+ * One candidate row in the soft-dedup canonical decision. Mirrors the
+ * column subset `registerClient` actually consults — kept separate from
+ * `Client` (the full DTO) so {@link pickCanonical} stays a pure function
+ * over plain data, testable without a DB.
+ */
+export type DedupCandidate = {
+  id: string;
+  status: "connected" | "disconnected";
+  lastSeenAt: Date;
+  agentCount: number;
+  archivedAt: Date | null;
+};
+
+/**
+ * Pick the canonical row for a `(user_id, hostname, os)` candidate set
+ * during soft-dedup. Pure — sorts a copy of the input, never mutates.
+ *
+ * Priority (most preferred first):
+ *   1. Non-archived rows beat archived. An archived row was abandoned
+ *      long enough ago that the sweep gave up on it; a live row should
+ *      take over the identity instead of resurrecting a dead one.
+ *   2. Higher `agentCount` beats lower. A row with pinned work is the
+ *      one that holds the user's state — losing its identity would
+ *      orphan their agents.
+ *   3. More-recent `lastSeenAt` beats older.
+ *   4. Lexicographically smaller `id` beats larger. UUID v7 sorts ≈
+ *      ascending creation time, so this stable tie-break prefers the
+ *      oldest row — keeping identity continuity for the longest-lived
+ *      install.
+ *
+ * Returns null only when the candidate set is empty.
+ */
+export function pickCanonical(candidates: DedupCandidate[]): DedupCandidate | null {
+  if (candidates.length === 0) return null;
+  return (
+    [...candidates].sort((a, b) => {
+      const aArchived = a.archivedAt !== null;
+      const bArchived = b.archivedAt !== null;
+      if (aArchived !== bArchived) return aArchived ? 1 : -1;
+      if (a.agentCount !== b.agentCount) return b.agentCount - a.agentCount;
+      const aMs = a.lastSeenAt.getTime();
+      const bMs = b.lastSeenAt.getTime();
+      if (aMs !== bMs) return bMs - aMs;
+      if (a.id < b.id) return -1;
+      if (a.id > b.id) return 1;
+      return 0;
+    })[0] ?? null
+  );
 }
 
 /**
@@ -286,7 +574,7 @@ export async function listMyPinnedAgents(
     })
     .from(agents)
     .innerJoin(clients, eq(agents.clientId, clients.id))
-    .where(and(eq(clients.userId, scope.userId), ne(agents.status, "deleted")));
+    .where(and(eq(clients.userId, scope.userId), ne(agents.status, "deleted"), isNull(clients.archivedAt)));
   return rows
     .filter((r): r is { agentId: string; clientId: string; runtimeProvider: string } => r.clientId !== null)
     .map((r) => ({
@@ -334,7 +622,10 @@ export async function updateClientCapabilities(
  * `?organizationId=` cross-user view via {@link listClientsForOrgAdmin}.
  */
 export async function listClients(db: Database, scope: { userId: string }) {
-  const rows = await db.select().from(clients).where(eq(clients.userId, scope.userId));
+  const rows = await db
+    .select()
+    .from(clients)
+    .where(and(eq(clients.userId, scope.userId), isNull(clients.archivedAt)));
   return attachAgentCounts(db, rows);
 }
 
@@ -365,7 +656,7 @@ export async function listClientsForOrgAdmin(db: Database, orgId: string) {
     })
     .from(clients)
     .innerJoin(members, eq(members.userId, clients.userId))
-    .where(and(eq(members.organizationId, orgId), eq(members.status, "active")));
+    .where(and(eq(members.organizationId, orgId), eq(members.status, "active"), isNull(clients.archivedAt)));
   return attachAgentCounts(db, rows);
 }
 
@@ -488,5 +779,56 @@ export async function cleanupStaleClients(db: Database, staleSeconds = 60): Prom
       .where(inArray(agentPresence.clientId, staleIds));
   }
 
+  return result.length;
+}
+
+/**
+ * Default threshold for the orphan-row archival sweep. A `clients` row
+ * is auto-archived when ALL of the following hold:
+ *   1. `status = 'disconnected'`
+ *   2. `last_seen_at < NOW() - ORPHAN_ARCHIVAL_STALE_DAYS days`
+ *   3. zero non-deleted agents are pinned to it
+ *   4. it is not already archived (idempotency guard)
+ *
+ * 30 days is a deliberate product decision (2026-05-27): long enough to
+ * survive a typical vacation / contractor cycle, short enough that
+ * abandoned `client.yaml` regenerations clear within a month. Decoupled
+ * from the auth refresh-token TTL — even if a row's creds are still
+ * mintable, an unused machine for 30 days with no pinned work is
+ * treated as abandoned.
+ *
+ * Returns become recoverable via admin SQL: `UPDATE clients SET
+ * archived_at = NULL WHERE id = '...'`. Or transparent unarchive when
+ * the same yaml id reconnects — see `registerClient` (A) path.
+ */
+export const ORPHAN_ARCHIVAL_STALE_DAYS = 30;
+
+/**
+ * Sweep abandoned `clients` rows: set `archived_at = NOW()` on rows
+ * meeting all four conditions above. Read paths exclude `archived_at IS
+ * NOT NULL` so the row stops surfacing in the UI / API; the row stays
+ * in the table for audit and recovery.
+ *
+ * Returns the number of rows archived. Cheap: a single indexed UPDATE
+ * via `idx_clients_sweep` (status, last_seen_at) WHERE archived_at IS
+ * NULL. Idempotent on the second sweep within the same window — the
+ * `archived_at IS NULL` guard skips rows we already archived.
+ *
+ * Driven by `services/background-tasks.ts` on an hourly timer.
+ */
+export async function archiveAbandonedClients(db: Database, staleDays = ORPHAN_ARCHIVAL_STALE_DAYS): Promise<number> {
+  const result = await db.execute<{ id: string }>(sql`
+    UPDATE clients
+    SET archived_at = NOW()
+    WHERE status = 'disconnected'
+      AND archived_at IS NULL
+      AND last_seen_at < NOW() - make_interval(days => ${staleDays})
+      AND NOT EXISTS (
+        SELECT 1 FROM agents
+        WHERE agents.client_id = clients.id
+          AND agents.status != 'deleted'
+      )
+    RETURNING id
+  `);
   return result.length;
 }

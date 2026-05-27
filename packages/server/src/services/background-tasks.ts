@@ -26,6 +26,7 @@ export function createBackgroundTasks(
   let adapterOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let kaelOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let archiveSweepTimer: ReturnType<typeof setInterval> | null = null;
+  let clientOrphanArchiveTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -94,6 +95,29 @@ export function createBackgroundTasks(
         }, 5_000);
       }
 
+      // Orphan client archival sweep — runs hourly. A `clients` row gets
+      // archived once it's been disconnected for ≥30 days AND has zero
+      // pinned non-deleted agents. The predicate is day-grained so
+      // hourly cadence is plenty; the partial index idx_clients_sweep
+      // keeps the cost bounded as the table grows. See
+      // services/client.ts::archiveAbandonedClients.
+      clientOrphanArchiveTimer = setInterval(
+        async () => {
+          try {
+            const archived = await clientService.archiveAbandonedClients(app.db);
+            if (archived > 0) {
+              log.info(
+                { archived, staleDays: clientService.ORPHAN_ARCHIVAL_STALE_DAYS },
+                "archived abandoned client rows",
+              );
+            }
+          } catch (err) {
+            log.error({ err }, "client orphan archival sweep failed");
+          }
+        },
+        60 * 60 * 1000,
+      );
+
       // Chat auto-archive sweeper — cadence comes from runtime config so
       // ops can tune (or zero-disable) without touching code. See
       // services/chat-archive.ts for the two routes and their idle
@@ -152,6 +176,10 @@ export function createBackgroundTasks(
       if (archiveSweepTimer) {
         clearInterval(archiveSweepTimer);
         archiveSweepTimer = null;
+      }
+      if (clientOrphanArchiveTimer) {
+        clearInterval(clientOrphanArchiveTimer);
+        clientOrphanArchiveTimer = null;
       }
     },
   };

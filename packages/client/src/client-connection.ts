@@ -135,6 +135,15 @@ type ClientConnectionEvents = {
    */
   "auth:fatal": [error: Error];
   "server:welcome": [welcome: ServerWelcome];
+  /**
+   * Server soft-dedupped this register into a canonical clientId that
+   * differs from the local one. The consumer should persist the new id
+   * to yaml, dispose this `ClientConnection`, and either spawn a fresh
+   * one with the canonical id or exit cleanly so a supervisor restarts.
+   * The current connection has already set `closing = true` and the WS
+   * has been closed — reconnection is suppressed.
+   */
+  "client:redirect": [canonicalClientId: string];
 };
 
 /**
@@ -164,6 +173,26 @@ export class ClientUserMismatchError extends Error {
   constructor(message = "Client belongs to a different user") {
     super(message);
     this.name = "ClientUserMismatchError";
+  }
+}
+
+/**
+ * Thrown when the server refuses `client:register` because the
+ * `(user_id, hostname, os)` canonical row is currently held by a
+ * different live socket. The dedup soft-merge would silently steal the
+ * canonical slot from the live CLI, so the server refuses instead.
+ *
+ * Recovery is automatic: the CLI's reconnect backoff will retry, and
+ * once the live CLI disconnects the dedup succeeds. No operator action
+ * required — emitted on the connection's `error` event so the CLI logs
+ * the cause but does NOT exit on this code (distinct from
+ * `auth:fatal`).
+ */
+export class ClientDedupConflictError extends Error {
+  readonly code = "CLIENT_DEDUP_CONFLICT";
+  constructor(message = "Another client holds the canonical row for this machine") {
+    super(message);
+    this.name = "ClientDedupConflictError";
   }
 }
 
@@ -757,18 +786,21 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "client:register:rejected") {
       const code = typeof msg.code === "string" ? msg.code : undefined;
       const message = typeof msg.message === "string" ? msg.message : "unknown";
-      // Mark closing so the WS `close` handler does not auto-reconnect — a
-      // reconnect with the same clientId would just re-trigger the rejection.
-      // The caller (CLI) is expected to surface the mismatch to the user,
-      // abandon the local clientId, and start a fresh connection with a new
-      // one. See first-tree-context:agent-hub/multi-tenancy.md (B4).
-      this.closing = true;
+      const isDedupConflict = code === "CLIENT_DEDUP_CONFLICT";
+      // CLIENT_DEDUP_CONFLICT is *transient* — another live CLI holds the
+      // canonical row right now; backoff and retry will succeed once that
+      // CLI disconnects. Don't mark `closing = true` for this code so the
+      // reconnect loop kicks in. All other rejections (USER/ORG mismatch,
+      // generic) are terminal — the same clientId would re-trigger them.
+      if (!isDedupConflict) this.closing = true;
       const err =
         code === "CLIENT_USER_MISMATCH"
           ? new ClientUserMismatchError(message)
           : code === "CLIENT_ORG_MISMATCH"
             ? new ClientOrgMismatchError(message)
-            : new Error(`client:register rejected: ${message}`);
+            : code === "CLIENT_DEDUP_CONFLICT"
+              ? new ClientDedupConflictError(message)
+              : new Error(`client:register rejected: ${message}`);
       this.lastHandshakeError = err;
       this.wsLogger.error({ code, message }, "client register rejected");
       this.emit("error", err);
@@ -777,6 +809,24 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
 
     if (type === "client:registered") {
+      // Soft-dedup redirect: server returned a canonical id that differs
+      // from ours, meaning a `(user_id, hostname, os)` row already exists
+      // and our local clientId was merged into it. Persist the new id +
+      // bounce out — reconnect is suppressed (the canonical id is
+      // server-side truth; reconnecting with our stale local id would
+      // just trigger the same redirect every cycle).
+      const responseClientId = typeof msg.clientId === "string" ? msg.clientId : null;
+      if (responseClientId && responseClientId !== this.clientId) {
+        this.wsLogger.info(
+          { local: this.clientId, canonical: responseClientId },
+          "server soft-dedup redirect — clientId reassigned",
+        );
+        this.closing = true;
+        this.emit("client:redirect", responseClientId);
+        this.ws?.close(1000, "client redirect");
+        return;
+      }
+
       const isReconnect = this.boundAgents.size > 0 || this.desiredBindings.size > 0;
       this.registered = true;
       // Application-layer success — only now is it safe to reset the backoff

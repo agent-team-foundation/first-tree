@@ -4,7 +4,12 @@ export type {
   ServerWelcome,
   SessionCommand,
 } from "./client-connection.js";
-export { ClientConnection, ClientOrgMismatchError, ClientUserMismatchError } from "./client-connection.js";
+export {
+  ClientConnection,
+  ClientDedupConflictError,
+  ClientOrgMismatchError,
+  ClientUserMismatchError,
+} from "./client-connection.js";
 // Handlers
 export { registerBuiltinHandlers } from "./handlers/index.js";
 export {

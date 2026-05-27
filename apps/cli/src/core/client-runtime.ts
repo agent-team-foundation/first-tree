@@ -14,7 +14,13 @@ import {
 } from "@first-tree/client";
 import type { AgentPinnedMessage } from "@first-tree/shared";
 import type { AgentConfig } from "@first-tree/shared/config";
-import { agentConfigSchema, defaultDataDir, loadAgents } from "@first-tree/shared/config";
+import {
+  agentConfigSchema,
+  defaultConfigDir,
+  defaultDataDir,
+  loadAgents,
+  setConfigValue,
+} from "@first-tree/shared/config";
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 import { print } from "./output.js";
@@ -139,6 +145,17 @@ export class ClientRuntime {
     this.connection.on("agent:pinned", (message) => {
       this.handleAgentPinned(message);
     });
+
+    // Soft-dedup redirect: the server merged our local clientId into an
+    // existing canonical `(user, host, os)` row. Persist the canonical id
+    // to yaml + cleanly shut down so the supervisor restarts us under the
+    // new identity. queueMicrotask defers off the WS-event-handler frame so
+    // the close handler and any in-flight cleanup can settle first.
+    this.connection.on("client:redirect", (canonicalId) => {
+      queueMicrotask(() => {
+        void this.handleClientRedirect(canonicalId);
+      });
+    });
   }
 
   addAgent(name: string, config: AgentConfig): void {
@@ -260,6 +277,64 @@ export class ClientRuntime {
     this.updateManager = null;
     await Promise.allSettled(this.agents.map((a) => a.slot.stop()));
     await this.connection.disconnect();
+  }
+
+  /**
+   * Soft-dedup redirect handler. Persists the canonical clientId to
+   * `client.yaml` and exits cleanly so the supervisor (systemd/launchd)
+   * restarts the process under the canonical identity.
+   *
+   * Why exit-and-restart instead of in-process re-attach:
+   * `ClientConnection.clientId` is readonly — a soft-dedup redirect
+   * literally changes the identity this process speaks for. Re-attaching
+   * in place would require re-running login bootstrap, re-acquiring git
+   * mirror handles, and reconciling agent slots. The exit path reuses
+   * the bootstrap we already trust.
+   *
+   * Failure mode: if `setConfigValue` throws (disk full, EACCES, read-
+   * only FS), the process exits with TEMPFAIL (75) so the supervisor
+   * applies its backoff instead of looping at 1Hz. Silently swallowing
+   * the failure would re-trigger the redirect on every restart and
+   * never make progress.
+   *
+   * `protected` for testability: a subclass can override and capture
+   * the canonicalId without actually writing yaml / exiting.
+   */
+  protected async handleClientRedirect(canonicalId: string): Promise<void> {
+    const yamlPath = join(defaultConfigDir(), "client.yaml");
+    try {
+      setConfigValue(yamlPath, "client.id", canonicalId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      print.check(false, "failed to persist canonical client id to yaml", msg);
+      print.status("", "Recovery: ensure the config directory is writable, then re-run the command.");
+      await this.stop().catch(() => {});
+      process.exit(75);
+    }
+
+    print.status("✓", `merged with existing computer record on this hub (id: ${canonicalId})`);
+    print.status("", "restarting to pick up the new identity...");
+
+    // Graceful shutdown — same path SIGINT triggers in login.ts. Without
+    // this, agent.slot.stop() never fires and git mirror worktree refs
+    // could leak. Bounded by a hard timeout so a wedged handler (e.g.,
+    // an agent subprocess ignoring SIGTERM) cannot trap us in the stale
+    // identity forever: after the timeout the supervisor restart wins.
+    const STOP_TIMEOUT_MS = 10_000;
+    const stopWithTimeout = Promise.race([
+      this.stop().catch((err) => {
+        print.status("⚠️", `runtime.stop() during redirect threw: ${err instanceof Error ? err.message : String(err)}`);
+      }),
+      new Promise<"timeout">((resolve) =>
+        setTimeout(() => {
+          print.status("⚠️", `runtime.stop() exceeded ${STOP_TIMEOUT_MS}ms during redirect — forcing exit`);
+          resolve("timeout");
+        }, STOP_TIMEOUT_MS),
+      ),
+    ]);
+    await stopWithTimeout;
+
+    process.exit(0);
   }
 
   private aggregateQuietGate(): { activeCount: number; lastActivityMs: number } {
