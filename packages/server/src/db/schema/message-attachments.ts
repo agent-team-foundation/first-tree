@@ -1,4 +1,5 @@
-import { customType, index, integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, customType, index, integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { chats } from "./chats.js";
 import { messages } from "./messages.js";
 
@@ -41,7 +42,13 @@ export const messageAttachments = pgTable(
     filename: text("filename").notNull(),
     size: integer("size").notNull(),
     sha256: text("sha256").notNull(),
-    /** "image" | "file" — render/delivery split (deriveAttachmentKind). */
+    /**
+     * "image" | "file" — render/delivery split. Stamped on upload via
+     * `deriveAttachmentKind(mime)` (shared); the CHECK constraint below
+     * defends against accidental drift if anyone tries to write a value
+     * other than the two enums (typos, future contributors who don't see
+     * the shared helper).
+     */
     kind: text("kind").notNull(),
     bytes: bytea("bytes").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -51,5 +58,6 @@ export const messageAttachments = pgTable(
     index("idx_message_attachments_chat").on(table.chatId),
     // Orphan-GC sweep: WHERE message_id IS NULL AND created_at < now() - ttl.
     index("idx_message_attachments_created").on(table.createdAt),
+    check("message_attachments_kind_check", sql`${table.kind} IN ('image', 'file')`),
   ],
 );

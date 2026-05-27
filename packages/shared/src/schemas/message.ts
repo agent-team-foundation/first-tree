@@ -117,6 +117,50 @@ export function deriveAttachmentKind(mimeType: string): "image" | "file" {
   return mimeType.startsWith("image/") ? "image" : "file";
 }
 
+/**
+ * Read A′ attachment refs off a message's metadata, or [] when none. Single
+ * call site for `messageAttachmentsMetadataSchema.safeParse(...).data.attachments`
+ * — server adapter / web renderer / agent runtime all consume the same shape,
+ * so a shared helper prevents the parse + fallback from drifting across them.
+ */
+export function getMessageAttachments(metadata: unknown): AttachmentRef[] {
+  const parsed = messageAttachmentsMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data.attachments : [];
+}
+
+/**
+ * Metadata keys that are **server-managed**: the server stamps them on writes,
+ * clients must never set them. Listed here as the single source of truth so
+ * `stripUntrustedMetadataKeys` is the only place that needs to know about new
+ * server-managed keys — adding one to the set is enough to plug it across
+ * every write path that consumes client-supplied metadata.
+ *
+ *   - `attachments` — folded in from `attachmentIds` after C3 validation
+ *     (server/services/message.ts:sendMessage + prepareAttachmentsForSend).
+ *   - `editedAt`    — stamped on edits (server/services/message.ts:editMessage).
+ *
+ * NOTE: this is the **defensive-strip set**, not a complete inventory of
+ * every metadata key the platform uses. Client-trusted keys (`mentions`,
+ * `documentContext`, ...) intentionally are not listed — they go through
+ * their own validation paths.
+ */
+export const SERVER_MANAGED_METADATA_KEYS = new Set<string>(["attachments", "editedAt"]);
+
+/**
+ * Return a shallow copy of `metadata` with every {@link SERVER_MANAGED_METADATA_KEYS}
+ * key removed. Use this at every write path that accepts caller-supplied
+ * metadata so a client cannot forge server-stamped fields (e.g. C3 forged
+ * `metadata.attachments`). Centralised so future server-managed keys only
+ * need to be added to the set above.
+ */
+export function stripUntrustedMetadataKeys(metadata: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...metadata };
+  for (const key of SERVER_MANAGED_METADATA_KEYS) {
+    delete result[key];
+  }
+  return result;
+}
+
 export const sendMessageSchema = z.object({
   format: messageFormatSchema.default("text"),
   content: z.unknown(),

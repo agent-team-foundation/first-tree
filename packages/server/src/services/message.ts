@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { extractMentions, type SendMessage, scanMentionTokens } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  extractMentions,
+  type SendMessage,
+  scanMentionTokens,
+  stripUntrustedMetadataKeys,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -207,14 +212,18 @@ async function sendMessageInner(
     //     where the typed message is the sole source of routing intent.
     //     Agent / programmatic callers leave this off so a narrative
     //     `@<peer>` in content never silently wakes anyone.
-    // Copy the incoming metadata, then drop any client-supplied `attachments`
-    // key (C3 hardening). Attachment refs may ONLY be produced server-side by
-    // `prepareAttachmentsForSend` and folded in at insert time — without this a
-    // caller could omit `attachmentIds` and write a forged `metadata.attachments`
-    // straight into the message, bypassing the uploader / unbound / same-chat /
-    // count / size validation entirely.
-    const incomingMeta: Record<string, unknown> = { ...((data.metadata ?? {}) as Record<string, unknown>) };
-    delete incomingMeta.attachments;
+    // Copy the incoming metadata, then strip every server-managed key
+    // (`attachments`, `editedAt`, ... — see `SERVER_MANAGED_METADATA_KEYS`
+    // in shared). C3 hardening: attachment refs may ONLY be produced
+    // server-side by `prepareAttachmentsForSend` and folded in at insert time
+    // — without this a caller could omit `attachmentIds` and write a forged
+    // `metadata.attachments` straight into the message, bypassing the
+    // uploader / unbound / same-chat / count / size validation entirely. Same
+    // defence applies to every other server-managed key (e.g. `editedAt`);
+    // centralising the set in shared makes future additions one-line.
+    const incomingMeta: Record<string, unknown> = stripUntrustedMetadataKeys(
+      (data.metadata ?? {}) as Record<string, unknown>,
+    );
     // Server-side bottom-line on `metadata.documentContext`: shape via shared
     // schema + byte budgets and sha256 calibration. Snapshot content arrives
     // from a trusted runtime, but server still has to verify so a client bug

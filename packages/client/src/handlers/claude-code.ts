@@ -11,7 +11,7 @@ import type {
 import {
   type AttachmentRef,
   deriveRepoLocalPath,
-  messageAttachmentsMetadataSchema,
+  getMessageAttachments,
   type QuestionItem,
   type QuestionMessageContent,
   questionItemSchema,
@@ -128,13 +128,6 @@ async function writeLegacyImageToTempFile(content: LegacyImageFileContent, chatI
   const path = join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`);
   await writeFile(path, Buffer.from(content.data, "base64"));
   return path;
-}
-
-/** Read the A′ attachment refs off a message's metadata, or [] when none. */
-function parseAttachments(metadata: Record<string, unknown> | null): AttachmentRef[] {
-  if (!metadata) return [];
-  const parsed = messageAttachmentsMetadataSchema.safeParse(metadata);
-  return parsed.success ? parsed.data.attachments : [];
 }
 
 /**
@@ -530,7 +523,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // an explicit "do not answer from it" placeholder so the model never
     // answers on missing content — and it's retryable (route 2 is durable),
     // not the permanent loss the old WS-push path implied.
-    const attachments = parseAttachments(message.metadata);
+    const attachments = getMessageAttachments(message.metadata);
     if (attachments.length > 0) {
       const caption = await sessionCtx.formatInboundContent(message);
       const blocks: string[] = [];

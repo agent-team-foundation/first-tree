@@ -408,6 +408,7 @@ export {
   type ClientMessage,
   clientMessageSchema,
   deriveAttachmentKind,
+  getMessageAttachments,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   type Message,
@@ -423,8 +424,10 @@ export {
   type PrecedingMessage,
   participantModeSchema,
   precedingMessageSchema,
+  SERVER_MANAGED_METADATA_KEYS,
   type SendMessage,
   sendMessageSchema,
+  stripUntrustedMetadataKeys,
 } from "./schemas/message.js";
 export {
   GITHUB_EVENT_CARD_REASONS,

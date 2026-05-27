@@ -4,9 +4,9 @@ import {
   type ChatParticipantDetail,
   documentContextSchema,
   extractMentions,
+  getMessageAttachments,
   isInlineSafeImage,
   type MentionParticipant,
-  messageAttachmentsMetadataSchema,
   parseWorkspaceDocKey,
   type QuestionAnswerMessageContent,
   type QuestionMessageContent,
@@ -529,12 +529,6 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
       …
     </span>
   );
-}
-
-/** Read A′ attachment refs off a message's metadata, or [] when none. */
-function getMessageAttachments(metadata: Record<string, unknown>): AttachmentRef[] {
-  const parsed = messageAttachmentsMetadataSchema.safeParse(metadata);
-  return parsed.success ? parsed.data.attachments : [];
 }
 
 function formatBytes(n: number): string {

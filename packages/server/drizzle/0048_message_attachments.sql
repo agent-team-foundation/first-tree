@@ -16,7 +16,7 @@ CREATE TABLE "message_attachments" (
 	"filename" text NOT NULL,
 	"size" integer NOT NULL,
 	"sha256" text NOT NULL,
-	"kind" text NOT NULL,
+	"kind" text NOT NULL CONSTRAINT "message_attachments_kind_check" CHECK ("kind" IN ('image', 'file')),
 	"bytes" bytea NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );

@@ -4,6 +4,7 @@ import {
   type AttachmentRef,
   AttachmentRejectedError,
   classifyAttachment,
+  deriveAttachmentKind,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -65,6 +66,12 @@ export async function createAttachment(
 
   const id = randomUUID();
   const sha256 = createHash("sha256").update(args.bytes).digest("hex");
+  // Single source of truth for kind: always `deriveAttachmentKind(mime)`. The
+  // DB CHECK constraint (`kind IN ('image', 'file')`) defends against any
+  // accidental write of another value, but this call site keeps the derivation
+  // explicit so future contributors don't accept a `kind` parameter from a
+  // caller — kind is a pure function of mime, never of caller intent.
+  const kind = deriveAttachmentKind(classification.mimeType);
   await db.insert(messageAttachments).values({
     id,
     chatId: args.chatId,
@@ -74,7 +81,7 @@ export async function createAttachment(
     filename: args.filename,
     size: args.bytes.length,
     sha256,
-    kind: classification.kind,
+    kind,
     bytes: args.bytes,
   });
 
@@ -83,7 +90,7 @@ export async function createAttachment(
     mimeType: classification.mimeType,
     filename: args.filename,
     size: args.bytes.length,
-    kind: classification.kind,
+    kind,
   };
 }
 
@@ -121,7 +128,6 @@ export async function prepareAttachmentsForSend(
       mime: messageAttachments.mime,
       filename: messageAttachments.filename,
       size: messageAttachments.size,
-      kind: messageAttachments.kind,
     })
     .from(messageAttachments)
     .where(inArray(messageAttachments.id, ids))
@@ -140,8 +146,17 @@ export async function prepareAttachmentsForSend(
     if (row.messageId !== null) throw new BadRequestError("Attachment is already attached to a message.");
     if (row.chatId !== args.chatId) throw new BadRequestError("Attachment belongs to a different chat.");
     totalBytes += row.size;
-    const kind = row.kind === "image" ? "image" : "file";
-    refs.push({ attachmentId: row.id, mimeType: row.mime, filename: row.filename, size: row.size, kind });
+    // Re-derive kind from mime here (instead of trusting the DB column) so the
+    // read path can never disagree with the write path — `deriveAttachmentKind`
+    // is the single source of truth. The DB CHECK ensures stored `kind` is
+    // valid; this guarantees the *returned* ref is always consistent with mime.
+    refs.push({
+      attachmentId: row.id,
+      mimeType: row.mime,
+      filename: row.filename,
+      size: row.size,
+      kind: deriveAttachmentKind(row.mime),
+    });
   }
   if (totalBytes > ATTACHMENT_LIMITS.maxMessageBytes) {
     throw new BadRequestError(
