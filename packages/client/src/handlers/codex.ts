@@ -11,8 +11,11 @@ import {
   installFirstTreeIntegration,
   isHubWorktreeMarker,
   type PredeclaredSourceRepo,
+  readCachedBundledCliVersion,
   readCachedContextTreeHead,
   readContextTreeHead,
+  resolveBundledCliVersion,
+  writeBundledCliVersion,
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
@@ -530,10 +533,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
     await runTurn(inputs.join("\n\n"), sessionCtx);
   }
 
-  /** Install the first-tree skill + binding block; no-op when context tree is unconfigured. */
-  function ensureFirstTreeBinding(workspace: string, sessionCtx: SessionContext): void {
-    if (!contextTreePath) return;
-    installFirstTreeIntegration({
+  /**
+   * Install the first-tree skill + binding block; no-op when context tree is
+   * unconfigured. Returns the integration result so the caller can decide
+   * whether to pin the CLI-version drift marker (don't pin on failure or the
+   * next start skips the retry).
+   */
+  function ensureFirstTreeBinding(workspace: string, sessionCtx: SessionContext): boolean {
+    if (!contextTreePath) return true;
+    return installFirstTreeIntegration({
       workspacePath: workspace,
       contextTreePath,
       // Workspace id identifies the agent home (per agent-session-cwd-
@@ -581,7 +589,17 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
     const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
 
-    if (sentinelPresent && !treeDrifted) {
+    // CLI-version drift forces a fresh `installFirstTreeIntegration` so the
+    // shipped `.agents/skills/*` payload tracks `first-tree upgrade` even
+    // when the Context Tree HEAD is unchanged. Same "fail open" rule as
+    // tree drift: a null on either side means "unknown" and we do not
+    // force re-bootstrap.
+    const currentCliVersion = resolveBundledCliVersion();
+    const cachedCliVersion = readCachedBundledCliVersion(workspace);
+    const cliDrifted =
+      currentCliVersion !== null && cachedCliVersion !== null && currentCliVersion !== cachedCliVersion;
+
+    if (sentinelPresent && !treeDrifted && !cliDrifted) {
       // Fast path: identity hash check, briefing rewrite, no integrate.
       const identityPath = join(workspace, ".agent", "identity.json");
       const desired = {
@@ -622,6 +640,11 @@ export const createCodexHandler: HandlerFactory = (config) => {
         `Context Tree HEAD changed (${cachedTreeHead?.slice(0, 7)} → ${currentTreeHead?.slice(0, 7)}); re-running bootstrap`,
       );
     }
+    if (sentinelPresent && cliDrifted) {
+      sessionCtx.log(
+        `Bundled CLI version changed (${cachedCliVersion} → ${currentCliVersion}); re-running bootstrap to refresh skills`,
+      );
+    }
 
     bootstrapWorkspace({
       workspacePath: workspace,
@@ -630,8 +653,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
       serverUrl: sessionCtx.sdk.serverUrl,
       briefing: { format: "agents-md", content: briefing },
     });
-    ensureFirstTreeBinding(workspace, sessionCtx);
+    const integrationOk = ensureFirstTreeBinding(workspace, sessionCtx);
     writeContextTreeHead(workspace, currentTreeHead);
+    // Only pin the CLI version when integrate actually succeeded — pinning
+    // on a failed run would silently mask the gap and the next start would
+    // skip the retry that this drift trigger exists to perform.
+    if (integrationOk) {
+      writeBundledCliVersion(workspace, currentCliVersion);
+    }
   }
 
   return {

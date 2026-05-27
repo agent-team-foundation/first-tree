@@ -22,8 +22,11 @@ import {
   installFirstTreeIntegration,
   isHubWorktreeMarker,
   type PredeclaredSourceRepo,
+  readCachedBundledCliVersion,
   readCachedContextTreeHead,
   readContextTreeHead,
+  resolveBundledCliVersion,
+  writeBundledCliVersion,
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
@@ -1237,7 +1240,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
     const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
 
-    if (sentinelPresent && !treeDrifted) {
+    // CLI-version drift forces a fresh `installFirstTreeIntegration` so the
+    // shipped `.agents/skills/*` payload tracks `first-tree upgrade` even
+    // when the Context Tree HEAD is unchanged. Same "fail open" rule as
+    // tree drift: a null on either side means "unknown" and we do not
+    // force re-bootstrap.
+    const currentCliVersion = resolveBundledCliVersion();
+    const cachedCliVersion = readCachedBundledCliVersion(workspace);
+    const cliDrifted =
+      currentCliVersion !== null && cachedCliVersion !== null && currentCliVersion !== cachedCliVersion;
+
+    if (sentinelPresent && !treeDrifted && !cliDrifted) {
       ensureStableIdentity(workspace, sessionCtx);
       return;
     }
@@ -1245,6 +1258,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     if (sentinelPresent && treeDrifted) {
       sessionCtx.log(
         `Context Tree HEAD changed (${cachedTreeHead?.slice(0, 7)} → ${currentTreeHead?.slice(0, 7)}); re-running bootstrap`,
+      );
+    }
+    if (sentinelPresent && cliDrifted) {
+      sessionCtx.log(
+        `Bundled CLI version changed (${cachedCliVersion} → ${currentCliVersion}); re-running bootstrap to refresh skills`,
       );
     }
 
@@ -1256,8 +1274,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     });
     generateStableClaudeMd(workspace, sessionCtx.agent, contextTreePath);
 
+    let integrationOk = true;
     if (contextTreePath) {
-      installFirstTreeIntegration({
+      integrationOk = installFirstTreeIntegration({
         workspacePath: workspace,
         contextTreePath,
         workspaceId: agentName ?? sessionCtx.agent.agentId,
@@ -1268,6 +1287,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     // Pin the current HEAD so the next start can detect drift.
     writeContextTreeHead(workspace, currentTreeHead);
+    // Only pin the CLI version when integrate actually succeeded — pinning
+    // on a failed run would silently mask the gap and the next start would
+    // skip the retry that this drift trigger exists to perform.
+    if (integrationOk) {
+      writeBundledCliVersion(workspace, currentCliVersion);
+    }
   }
 
   const handler: AgentHandler = {
