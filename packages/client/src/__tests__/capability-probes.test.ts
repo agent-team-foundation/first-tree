@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeClaudeCodeCapability } from "../runtime/capabilities/claude-code.js";
 import { probeCodexCapability } from "../runtime/capabilities/codex.js";
 import { probeCapabilities } from "../runtime/capabilities/index.js";
@@ -198,5 +198,37 @@ describe("probeCapabilities (aggregator)", () => {
     const caps = await probeCapabilities();
     expect(caps["claude-code"]?.state).toBe("ok");
     expect(caps.codex?.state).toBe("unauthenticated");
+  });
+
+  it("converts provider probe failures into error capability entries", async () => {
+    vi.resetModules();
+    vi.doMock("../runtime/capabilities/claude-code.js", () => ({
+      probeClaudeCodeCapability: vi.fn().mockRejectedValue(new Error("claude probe failed")),
+    }));
+    vi.doMock("../runtime/capabilities/codex.js", () => ({
+      probeCodexCapability: vi.fn().mockRejectedValue("codex probe failed"),
+    }));
+    const mod = await import("../runtime/capabilities/index.js");
+
+    const caps = await mod.probeCapabilities();
+
+    expect(caps["claude-code"]).toMatchObject({
+      state: "error",
+      available: false,
+      authenticated: false,
+      authMethod: "none",
+      error: "claude probe failed",
+    });
+    expect(caps.codex).toMatchObject({
+      state: "error",
+      available: false,
+      authenticated: false,
+      authMethod: "none",
+      error: "codex probe failed",
+    });
+
+    vi.doUnmock("../runtime/capabilities/claude-code.js");
+    vi.doUnmock("../runtime/capabilities/codex.js");
+    vi.resetModules();
   });
 });
