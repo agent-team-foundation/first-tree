@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
+import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
 
 /**
@@ -20,6 +21,11 @@ import { cn } from "../lib/utils.js";
  * (sidebar 200 + main 960 = 1160 total).
  * Layout opts out of the default 960 wrapper via `isSettings` so this whole
  * shell can centre itself at ~1180.
+ *
+ * Narrow viewport (<48rem): the sidebar would steal half the screen,
+ * so it collapses into a horizontally-scrollable pill bar above the
+ * `<Outlet/>`. Same NavLink semantics (active state via `isActive`), same
+ * route targets — only the chrome shape changes.
  *
  * Sub-routes:
  *   Computers     — user-scoped: machines connected to Hub (most-frequent
@@ -47,6 +53,7 @@ const ITEMS: Item[] = [
 
 export function SettingsLayout() {
   const { role, onboardingCompletedAt, meLoaded } = useAuth();
+  const viewport = useWorkspaceViewport();
   // Wait for `/me` to resolve before rendering the nav — otherwise a fresh
   // direct hit on /settings/github would briefly paint the member-view nav
   // (no GitHub) before `role` flips to "admin".
@@ -64,6 +71,38 @@ export function SettingsLayout() {
     if (it.to === "/settings/onboarding" && hasCompletedOnboarding) return false;
     return true;
   });
+
+  if (viewport === "narrow") {
+    return (
+      <div className="flex flex-col" style={{ minHeight: "100%" }}>
+        <nav
+          aria-label="Settings"
+          // Pill row is non-sticky on purpose: settings is a low-frequency
+          // switch scenario (users come here to do one thing, not to bounce
+          // between sub-pages). Letting the row scroll away with the content
+          // gives the sub-page itself the full vertical space below the
+          // Layout's already-permanent top nav. Horizontal scroll inside
+          // keeps the row one line even when all 5 items wouldn't fit on
+          // the narrowest phone.
+          className="flex shrink-0"
+          style={{
+            gap: "var(--sp-1)",
+            padding: "var(--sp-2) var(--sp-3)",
+            borderBottom: "var(--hairline) solid var(--border)",
+            background: "var(--bg)",
+            overflowX: "auto",
+          }}
+        >
+          {visible.map((item) => (
+            <PillLink key={item.to} to={item.to} label={item.label} />
+          ))}
+        </nav>
+        <div className="flex-1 min-w-0">
+          <Outlet />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex" style={{ maxWidth: 1160, minHeight: "100%" }}>
@@ -109,6 +148,33 @@ function SidebarLink({ to, label }: { to: string; label: string }) {
           className="block"
           style={{
             padding: "var(--sp-2) var(--sp-3)",
+            borderRadius: "var(--radius-input)",
+            color: isActive ? "var(--fg)" : "var(--fg-3)",
+            background: isActive ? "var(--bg-hover)" : "transparent",
+            fontWeight: isActive ? 500 : 400,
+          }}
+        >
+          {label}
+        </span>
+      )}
+    </NavLink>
+  );
+}
+
+function PillLink({ to, label }: { to: string; label: string }) {
+  return (
+    <NavLink
+      to={to}
+      className={cn(
+        "shrink-0 text-body transition-colors",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+      )}
+    >
+      {({ isActive }) => (
+        <span
+          className="inline-block whitespace-nowrap"
+          style={{
+            padding: "var(--sp-1_5) var(--sp-3)",
             borderRadius: "var(--radius-input)",
             color: isActive ? "var(--fg)" : "var(--fg-3)",
             background: isActive ? "var(--bg-hover)" : "transparent",
