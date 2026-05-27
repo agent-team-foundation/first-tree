@@ -33,12 +33,6 @@ export type ComputerCardProps = {
   onDisconnect: () => void;
   /** Opens the retire-confirmation modal. */
   onRetire: () => void;
-  /**
-   * Optional owner label rendered in the header below the hostname.
-   * Used by admin "Your computers" cards to display the viewer's name
-   * (matches the pre-PR-B Owner column).
-   */
-  ownerLabel?: { text: string; title?: string };
 };
 
 /**
@@ -67,7 +61,6 @@ export function ComputerCard({
   onReconnect,
   onDisconnect,
   onRetire,
-  ownerLabel,
 }: ComputerCardProps) {
   const vm = computerCardViewModel(client);
 
@@ -94,28 +87,10 @@ export function ComputerCard({
         rendered height so top-aligned ≠ visually-aligned).
       */}
       <header className="flex items-center" style={{ gap: "var(--sp-3)" }}>
-        {/*
-          Hostname + owner share a single baseline-aligned row. Owner
-          is treated as inline meta (smaller, fg-3) rather than a
-          subtitle on its own line — saves a row of vertical space per
-          card and gives the right slot (pill + kebab) something to
-          align against. Long hostnames still wrap via overflowWrap
-          and owner sits at the end of the wrap.
-        */}
         <div className="flex items-baseline" style={{ flex: 1, minWidth: 0, gap: "var(--sp-2)", flexWrap: "wrap" }}>
           <h3 className="text-body font-semibold" style={{ margin: 0, overflowWrap: "anywhere", color: "var(--fg)" }}>
             {vm.label}
           </h3>
-          {ownerLabel && (
-            <>
-              <span className="text-caption" style={{ color: "var(--fg-4)" }} aria-hidden>
-                ·
-              </span>
-              <span className="text-caption" style={{ color: "var(--fg-3)" }} title={ownerLabel.title}>
-                {ownerLabel.text}
-              </span>
-            </>
-          )}
         </div>
         {/*
           Reading order: state pill ("what's happening") → action
