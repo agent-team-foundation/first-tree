@@ -186,6 +186,15 @@ describe("formatInboundContent", () => {
     expect(logs).toContain("listChatParticipants failed: hub string failure");
   });
 
+  it("resets inflight after a successful direct cache fetch", async () => {
+    const listFn = vi.fn().mockResolvedValue(participants);
+    const cache = createParticipantCache(mkSdk(listFn), "chat-1", () => {});
+
+    await expect(cache.get()).resolves.toEqual(participants);
+    await expect(cache.get()).resolves.toEqual(participants);
+    expect(listFn).toHaveBeenCalledTimes(1);
+  });
+
   it("renders precedingMessages as an [Earlier in chat] block before the trigger", async () => {
     const ps = [mkParticipant("agent-a", "alice"), mkParticipant("agent-b", "bob"), mkParticipant("agent-c", "carol")];
     const sdk = mkSdk(async () => ps);
