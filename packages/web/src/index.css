@@ -1407,17 +1407,12 @@ tr[data-interactive]:hover {
  * selection, briefly making the user see two stacks of text (the
  * overlay's chips/text underneath, the textarea's selected text on
  * top). Holding the textarea's selection color transparent keeps the
- * overlay's chips legible while the selection band still shows. */
+ * overlay's chips legible while the selection band still shows. The
+ * `accent-ring` (30% alpha) band tints chips slightly darker but the
+ * chip's foreground glyphs in the overlay layer below stay readable —
+ * the overlay is `pointer-events: none` and not part of the textarea's
+ * selection range, so no chip-scoped `::selection` rule is needed. */
 .mention-composer-textarea::selection {
   background: var(--accent-ring);
   color: transparent;
-}
-
-/* Chips painted by the mirror overlay also live inside the selection
- * range when the user drags across them. Preserve the chip's own
- * background and foreground so it stays readable through the
- * selection band. */
-.mention-chip::selection {
-  background: var(--accent);
-  color: var(--fg-on-vivid);
 }
