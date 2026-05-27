@@ -21,14 +21,26 @@ import { runVisibilityAwareInterval } from "../../lib/visibility-interval.js";
  * both first-time insert and `ON CONFLICT DO UPDATE` reconnect — so this
  * works for brand-new machines AND re-pairs of previously-known machines.
  *
+ * When `targetClientId` is set (re-auth path from an AuthExpired card), the
+ * detector only matches that specific row — prevents a card-A reauth from
+ * accidentally consuming a card-B connect event when both happen to land in
+ * the same poll cycle.
+ *
  * @param openedAt epoch-ms; the modal-open timestamp (already adjusted for
  *   any clock-skew fudge by the caller).
+ * @param targetClientId optional — when set, only the matching row counts.
  */
-export function selectArrivedClient(clients: HubClient[], openedAt: number, userId: string): HubClient | null {
+export function selectArrivedClient(
+  clients: HubClient[],
+  openedAt: number,
+  userId: string,
+  targetClientId?: string,
+): HubClient | null {
   if (!userId) return null;
   return (
     clients.find((c) => {
       if (c.status !== "connected" || c.userId !== userId || !c.connectedAt) return false;
+      if (targetClientId && c.id !== targetClientId) return false;
       return new Date(c.connectedAt).getTime() >= openedAt;
     }) ?? null
   );
@@ -68,7 +80,38 @@ const TOKEN_EXPIRY_BUFFER_MS = 2_000;
  *
  * Cancel / backdrop close: drops the unused token (server expires it on TTL).
  */
-export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (next: boolean) => void }) {
+/**
+ * `NewConnectionDialog` props.
+ *
+ * Default UX is "pair a brand-new computer with this Hub". The optional
+ * overrides re-purpose the dialog for the re-auth flow triggered from an
+ * AuthExpired computer card — same mint + polling machinery, different
+ * wording + a `targetClientId` constraint on the success-arrival detector
+ * so card-A's reauth doesn't accidentally consume card-B's arrival event.
+ */
+export type NewConnectionDialogProps = {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  /**
+   * Re-auth path only: only the specified clientId counts as arrival.
+   * Without this, any newly-connected client owned by the user would
+   * succeed — wrong when the user has 2+ AuthExpired cards open and the
+   * other one happens to reconnect first.
+   */
+  targetClientId?: string;
+  /** Override dialog title for non-default flows (e.g. re-auth). */
+  titleOverride?: string;
+  /** Override dialog description. */
+  descriptionOverride?: string;
+};
+
+export function NewConnectionDialog({
+  open,
+  onOpenChange,
+  targetClientId,
+  titleOverride,
+  descriptionOverride,
+}: NewConnectionDialogProps) {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const [phase, setPhase] = useState<ConnectPhase>("loading");
@@ -111,6 +154,16 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
   // 1. On open: mint a token. On close: reset all transient state. The
   //    mint cycle bump in mintToken ensures any in-flight resolve from a
   //    previous open() can't bleed into the new lifecycle.
+  //
+  //    `targetClientId` is in the dep array even though the effect body
+  //    doesn't read it directly: when the user clicks "Generate new
+  //    token" on a *different* AuthExpired card while the dialog is
+  //    already open, the prop changes (parent rewires the dialog target)
+  //    and we want a fresh mint. Without this dep the arrival detector
+  //    would silently wait on the old client.id while the visible dialog
+  //    header (and the user's mental model) point at a new one.
+  //    See PR-B review #1.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: targetClientId is intentionally in deps; see block comment above.
   useEffect(() => {
     if (!open) {
       mintCycleRef.current += 1;
@@ -123,7 +176,7 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
       return;
     }
     void mintToken();
-  }, [open, mintToken]);
+  }, [open, mintToken, targetClientId]);
 
   // 2. While waiting: poll for a client whose handshake landed AFTER the modal
   //    opened. Timestamp comparison (not id-set diff) is what lets us catch a
@@ -136,7 +189,7 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
     const tick = async () => {
       try {
         const fresh = await queryClient.fetchQuery({ queryKey: ["clients"], queryFn: listClients });
-        const arrived = selectArrivedClient(fresh, openedAtRef.current, user.id);
+        const arrived = selectArrivedClient(fresh, openedAtRef.current, user.id, targetClientId);
         if (arrived) {
           setArrivedHostname(arrived.hostname ?? null);
           setPhase("success");
@@ -146,7 +199,7 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
       }
     };
     return runVisibilityAwareInterval(tick, POLL_MS);
-  }, [open, phase, queryClient, user]);
+  }, [open, phase, queryClient, user, targetClientId]);
 
   // 2b. Token expiry: server returns `expiresIn` (seconds). When that
   //     elapses, flip to error so the user sees the dead-token state
@@ -202,10 +255,10 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Connect computer</DialogTitle>
+          <DialogTitle>{titleOverride ?? "Connect computer"}</DialogTitle>
           <DialogDescription>
-            Run this command on the machine you want to pair with this Hub. If first-tree isn't installed yet, the
-            command includes the install step.
+            {descriptionOverride ??
+              "Run this command on the machine you want to pair with this Hub. If first-tree isn't installed yet, the command includes the install step."}
           </DialogDescription>
         </DialogHeader>
 
