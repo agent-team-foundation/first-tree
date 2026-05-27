@@ -100,6 +100,9 @@ export default defineConfig({
               "  return { __coverage: { withUrlLock, mirrorDir, git, gitOk, gitWithNetworkRetry, setHeadAuto, readOriginUrl, fetchOrigin, assertMirrorConfig, bootstrapMirror, branchExists, resolveBase },\n    get mirrorsRoot() {",
             );
         }
+        if (id.endsWith("/src/client-connection.ts")) {
+          return `${code}\nexport const __coverage = { waitWithAbort, decodeJwtExp };\n`;
+        }
         if (!id.endsWith("/src/runtime/bootstrap.ts")) return null;
         return code.replace(
           "\n  ];\n\n  for (let index = 0; index < attempts.length; index += 1) {",
