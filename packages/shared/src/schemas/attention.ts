@@ -259,20 +259,6 @@ export const attentionOpenedFrameSchema = z
 export type AttentionOpenedFrame = z.infer<typeof attentionOpenedFrameSchema>;
 
 /**
- * Emitted to the origin agent's connections when the human responds.
- * The client runtime resolves the wait + hands the response to the agent's
- * handler (which may begin a new turn).
- */
-export const attentionRespondedFrameSchema = z
-  .object({
-    type: z.literal("attention:responded"),
-    attentionId: z.string(),
-    originAgentId: z.string(),
-  })
-  .passthrough();
-export type AttentionRespondedFrame = z.infer<typeof attentionRespondedFrameSchema>;
-
-/**
  * Emitted to the target human's connections when the origin agent cancels
  * an open Attention. The UI removes the "needs you" indicator without
  * waiting for a list refetch.

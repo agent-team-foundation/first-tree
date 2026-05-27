@@ -258,28 +258,26 @@ function broadcast(msg: WsMessage) {
         latestQc.invalidateQueries({ queryKey: ["chat-messages", chatId] });
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
       }
-    } else if (
-      msg.type === "attention:opened" ||
-      msg.type === "attention:responded" ||
-      msg.type === "attention:cancelled"
-    ) {
-      // NHA frame fan-out (M1 末). The opened / responded / cancelled
-      // frames each carry the affected `chatId` (passthrough field — see
-      // `attentionOpenedFrameSchema` etc. in `@first-tree/shared`). The
-      // chat-bottom card reads `attentionsInChatQueryKey(chatId)`; invalidate
-      // exactly that key so the card mounts / dismounts without waiting for a
-      // poll. No throttle: an NHA fires at most a handful of frames per chat
-      // per hour, well below the storm threshold the throttled invalidators
-      // exist to clamp.
+    } else if (msg.type === "attention:opened" || msg.type === "attention:cancelled") {
+      // NHA frame fan-out. Both frames carry the affected `chatId` as a
+      // passthrough field (see `attentionOpenedFrameSchema` /
+      // `attentionCancelledFrameSchema` in `@first-tree/shared`). The chat-
+      // bottom card reads `attentionsInChatQueryKey(chatId)`; invalidate
+      // exactly that key so the card mounts / dismounts without waiting for
+      // a poll. No throttle: an NHA fires at most a handful of frames per
+      // chat per hour, well below the storm threshold the throttled
+      // invalidators exist to clamp.
+      //
+      // No `attention:responded` branch: the responder's own UI refreshes
+      // via the React-Query mutation onSuccess hook in attention-card.tsx,
+      // and the chat-echo message that `respondAttention` posts triggers a
+      // `chat:message` frame that already invalidates
+      // `["chat-messages", chatId]` for co-speaker observers. Their sidebar
+      // attention list catches up on next refetch — acceptable latency for
+      // that low-frequency surface.
       const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: attentionsInChatQueryKey(chatId) });
-      } else {
-        // `attention:responded` is emitted to the origin agent's sockets and
-        // does NOT carry `chatId` (the frame audience is the agent, not the
-        // human's chat). Fall back to a prefix invalidate so any cached
-        // attention list refreshes.
-        latestQc.invalidateQueries({ queryKey: ["attentions"] });
       }
     } else if (msg.type === "pulse:tick") {
       // Per-org runtime-state aggregate (pulse-aggregator broadcasts every 5s).
