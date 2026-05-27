@@ -1,3 +1,4 @@
+import { AGENT_VISIBILITY } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
@@ -672,18 +673,27 @@ describe("Chat Access Control", () => {
       const adminBundle = await authedRequest(app);
       const member = await createMemberAndLogin(app, adminBundle);
 
-      // Create two agents managed by member
+      // Create two non-human agents managed by member. `visibility` is
+      // pinned explicitly to `organization` (instead of leaning on
+      // `defaultVisibility(type)`) so the fixture states its intent in
+      // its own terms and won't shift if the type→default-visibility
+      // mapping ever changes. The strict owner-exclusive rule (RFC §4.5)
+      // would refuse a chat of two `visibility=private` agents that
+      // didn't include the human manager — keeping these
+      // `organization`-visible keeps the test scenario reachable while
+      // the watcher-recompute mechanism this test pins is itself
+      // type/visibility-agnostic.
       const agentA = await seedAgent(app, {
         name: "join-a",
         type: "agent",
-        visibility: "private",
         managerId: member.memberId,
+        visibility: AGENT_VISIBILITY.ORGANIZATION,
       });
       const agentB = await seedAgent(app, {
         name: "join-b",
         type: "agent",
-        visibility: "private",
         managerId: member.memberId,
+        visibility: AGENT_VISIBILITY.ORGANIZATION,
       });
 
       // Create a chat between the two agents (not including human agent).
@@ -716,24 +726,32 @@ describe("Chat Access Control", () => {
       const memberA = await createMemberAndLogin(app, adminBundle);
       const memberB = await createMemberAndLogin(app, adminBundle);
 
-      // Create agents managed by member A
+      // Create two private non-human agents managed by member A.
+      // `visibility` is pinned explicitly (rather than relying on
+      // `defaultVisibility(type)`) so the fixture states its intent
+      // — "private agents owned by A" — directly, with no implicit
+      // type→default-visibility coupling.
       const agentA = await seedAgent(app, {
         name: "nojoin-a",
         type: "agent",
-        visibility: "private",
         managerId: memberA.memberId,
+        visibility: AGENT_VISIBILITY.PRIVATE,
       });
       const agentA2 = await seedAgent(app, {
         name: "nojoin-a2",
         type: "agent",
-        visibility: "private",
         managerId: memberA.memberId,
+        visibility: AGENT_VISIBILITY.PRIVATE,
       });
 
-      // Create a chat between A's agents
-      const chat = await createChat(app.db, agentA.uuid, {
+      // Member A (the human, owner of both private agents) drives the
+      // creation — under the strict owner-exclusive rule (RFC §4.5)
+      // only the human-agent manager may bring a private agent in, so
+      // having one of A's non-human agents create the chat with the
+      // other as a target would 403.
+      const chat = await createChat(app.db, memberA.agentId, {
         type: "group",
-        participantIds: [agentA2.uuid],
+        participantIds: [agentA.uuid, agentA2.uuid],
       });
 
       // Member B tries to join — refused. memberB has no watcher row for

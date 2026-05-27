@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type AddParticipant, AGENT_VISIBILITY, type CreateChat } from "@first-tree/shared";
+import type { AddParticipant, CreateChat } from "@first-tree/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -11,7 +11,7 @@ import { agentAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
 import { WIRE_RECIPIENT_MODE } from "./message-dispatcher.js";
-import { inviteParticipantsToChat } from "./participant-invite.js";
+import { inviteParticipantsToChat, rejectedPrivateTargets } from "./participant-invite.js";
 import { addChatParticipants, applyMembershipWrite, recomputeChatWatchers } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
 import { leaveAsParticipant } from "./watcher.js";
@@ -49,19 +49,30 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
   }
 
-  // Owner-exclusive rule: a private agent can only be brought into a
-  // chat by another agent owned by the same member (i.e. the creator
-  // and the target share `managerId`). `creator.managerId` is the
-  // caller's effective owner identity — for a human agent this is the
-  // member's own id; for an autonomous agent this is whichever member
-  // owns it. RFC §4.4.2 / §4.5 — keeping the gate at the service layer
-  // closes the agent-SDK bypass path, not only the user-facing /me API.
-  const privateNotOwned = existingAgents.filter(
-    (a) => a.id !== creatorId && a.visibility === AGENT_VISIBILITY.PRIVATE && a.managerId !== creator.managerId,
+  // Strict owner-exclusive rule for private targets (RFC §4.5): only
+  // the human-agent manager of a private target may bring it into a
+  // chat. Even a manager's own public agent / other private agents
+  // CANNOT pull a sibling private agent in — that path is the social-
+  // engineering hole the strict reading closes. Self-add (`a.id ===
+  // creatorId`) is exempt; we filter the creator out of the target
+  // set before running the check so a private agent legitimately
+  // creating a chat with itself as a participant isn't tripped up.
+  //
+  // The predicate lives in `participant-invite.ts::rejectedPrivateTargets`
+  // alongside the Layer-2 invite gate so the invariant has exactly one
+  // source of truth (PR #550 collapsed the duplicate writers; this
+  // mirrors the same "one rule, one home" discipline for the create
+  // path).
+  const targetsForGate = existingAgents
+    .filter((a) => a.id !== creatorId)
+    .map((a) => ({ uuid: a.id, visibility: a.visibility, managerId: a.managerId }));
+  const rejectedTargets = rejectedPrivateTargets(
+    { agentId: creator.id, memberId: creator.managerId, type: creator.type },
+    targetsForGate,
   );
-  if (privateNotOwned.length > 0) {
+  if (rejectedTargets.length > 0) {
     throw new ForbiddenError(
-      `Only the owner can add a private agent to a chat: ${privateNotOwned.map((a) => a.id).join(", ")}`,
+      `Only the human owner can add a private agent to a chat: ${rejectedTargets.map((t) => t.uuid).join(", ")}`,
     );
   }
 
