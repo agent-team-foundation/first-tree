@@ -33,6 +33,7 @@ import {
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
+import { getAgentSkills } from "../../../api/agents.js";
 import {
   type FileMessageContent,
   getChat,
@@ -75,6 +76,12 @@ import {
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
+import {
+  resolveMentionContext,
+  SlashCommandPopover,
+  type SlashSystemCommand,
+  useSlashCommand,
+} from "../../../components/slash-command-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
@@ -2065,6 +2072,86 @@ export function ChatView({
     },
   });
 
+  /**
+   * Slash-command setup. Per the design contract (`/ for commands` in the
+   * placeholder), the popover follows the @mention context:
+   *   - explicit @mention in the draft wins (most recent before cursor)
+   *   - 1-on-1 chats (no required @) fall back to the sole other speaker
+   *     so `/<cmd>` works without typing `@` first
+   *   - group chats with no resolved @ show only system commands
+   */
+  const slashMentionContext = useMemo<{ agentId: string; displayName: string } | null>(() => {
+    const explicit = resolveMentionContext(draft, cursor, mentionCandidates);
+    if (explicit) return explicit;
+    if (!requiresMention && mentionCandidates.length === 1) {
+      const c = mentionCandidates[0];
+      if (!c) return null;
+      return { agentId: c.agentId, displayName: c.displayName ?? c.name ?? c.agentId };
+    }
+    return null;
+  }, [draft, cursor, mentionCandidates, requiresMention]);
+
+  // Phase 1C ships with a single in-product system command (`/clear`).
+  // The four-command roadmap from the design doc (`/help`, `/me`,
+  // `/invite`) needs its own UX surfaces (modals + invite flow), so it's
+  // deferred to keep this PR scoped to the popover wiring. The
+  // useSlashCommand hook expects an array, not an opinionated set —
+  // adding the others is a one-line append once their actions exist.
+  const slashSystemCommands = useMemo<SlashSystemCommand[]>(
+    () => [{ kind: "system", name: "clear", description: "Clear the message draft" }],
+    [],
+  );
+
+  const { data: slashSkillsData } = useQuery({
+    queryKey: ["agent-skills", slashMentionContext?.agentId ?? null],
+    queryFn: () => {
+      const id = slashMentionContext?.agentId;
+      if (!id) return Promise.resolve({ skills: [] });
+      return getAgentSkills(id);
+    },
+    // Only fetch when we actually have a scope. Re-fetching on every
+    // keystroke would amplify the GET — staleTime keeps the result for
+    // a minute, which matches the daemon's "upload at start" cadence.
+    enabled: Boolean(slashMentionContext?.agentId),
+    staleTime: 60_000,
+  });
+
+  const slash = useSlashCommand({
+    value: draft,
+    cursor,
+    systemCommands: slashSystemCommands,
+    agentSkills: slashMentionContext
+      ? {
+          agentId: slashMentionContext.agentId,
+          agentDisplayName: slashMentionContext.displayName,
+          skills: slashSkillsData?.skills ?? [],
+        }
+      : null,
+    mentionedAgent: slashMentionContext,
+    disabled: sendMut.isPending || uploading,
+    onSelect: (update, picked) => {
+      setDraft(update.text);
+      setCursor(update.cursor);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(update.cursor, update.cursor);
+      });
+      if (picked.kind === "system") {
+        switch (picked.name) {
+          case "clear":
+            // `buildSlashInsert` already cleared the textarea content;
+            // nothing else to do for v1.
+            break;
+        }
+      }
+      // Skill picks are not intercepted — the literal `/<name> ` is
+      // already in the textarea so the user can append arguments and
+      // send. The agent's harness routes the slash on receipt.
+    },
+  });
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Chat body: left column owns header + timeline + composer; right
@@ -2612,6 +2699,14 @@ export function ChatView({
                         anchorRef={textareaRef}
                         onPick={mention.pick}
                       />
+                      <SlashCommandPopover
+                        trigger={slash.trigger}
+                        results={slash.results}
+                        highlightIndex={slash.highlightIndex}
+                        mentionedAgent={slash.mentionedAgent}
+                        anchorRef={textareaRef}
+                        onPick={slash.pick}
+                      />
                       <textarea
                         ref={textareaRef}
                         value={draft}
@@ -2666,6 +2761,11 @@ export function ChatView({
                           // Skip while an IME is composing so Enter confirms the
                           // candidate instead of sending / picking a mention.
                           if (e.nativeEvent.isComposing) return;
+                          // Slash command popover handles navigation keys when active.
+                          // Sits before mention so `/`-typed draft never falls through to
+                          // mention-autocomplete (the trigger predicates are disjoint, but
+                          // ordering documents intent).
+                          if (slash.handleKey(e)) return;
                           // Mention autocomplete gets first crack at navigation keys so
                           // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
                           // sending or moving the cursor.

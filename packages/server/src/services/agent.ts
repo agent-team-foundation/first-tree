@@ -1,4 +1,5 @@
 import type {
+  AgentSkills,
   AgentType,
   AgentVisibility,
   CreateAgent,
@@ -1088,6 +1089,45 @@ export async function clearAgentAvatarImage(db: Database, uuid: string): Promise
       avatarImageUpdatedAt: null,
       updatedAt: new Date(),
     })
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .returning({ uuid: agents.uuid });
+  if (result.length === 0) {
+    throw new NotFoundError(`Agent "${uuid}" not found`);
+  }
+}
+
+/**
+ * Read the agent-reported slash-command skill list. Returns `[]` for agents
+ * whose daemon has not uploaded yet — the column is `NOT NULL DEFAULT '[]'`
+ * so this is a fast row read with no conditional logic.
+ */
+export async function getAgentSkills(db: Database, uuid: string): Promise<AgentSkills> {
+  const [row] = await db
+    .select({ skills: agents.skills })
+    .from(agents)
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .limit(1);
+  if (!row) {
+    throw new NotFoundError(`Agent "${uuid}" not found`);
+  }
+  // The DB column is typed as `Array<Record<string, unknown>>` in the schema
+  // (we keep the row loose so legacy fields don't break reads). Routes are
+  // expected to validate the payload with `agentSkillsSchema` on the way
+  // in, so the stored shape is trusted on the way out.
+  return row.skills as unknown as AgentSkills;
+}
+
+/**
+ * Replace the agent's full skill list. The daemon uploads the entire
+ * snapshot on every restart — no per-skill merge, no diff. Phase 1 keeps
+ * this unconditional (users restart daemons rarely); a future revision
+ * may persist the last-uploaded content hash in the agent's local yaml
+ * to skip no-op PATCHes if write-amplification ever shows up.
+ */
+export async function updateAgentSkills(db: Database, uuid: string, skills: AgentSkills): Promise<void> {
+  const result = await db
+    .update(agents)
+    .set({ skills, updatedAt: new Date() })
     .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
     .returning({ uuid: agents.uuid });
   if (result.length === 0) {

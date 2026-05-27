@@ -4,6 +4,7 @@ import {
   ClientOrgMismatchError,
   ClientUserMismatchError,
   configureClientLoggerForService,
+  discoverClaudeCodeSkills,
   probeCapabilities,
 } from "@first-tree/client";
 import {
@@ -35,6 +36,7 @@ import {
   promptUpdate,
   reconcileLocalRuntimeProviders,
   startClientService,
+  uploadAgentSkills,
   uploadClientCapabilities,
 } from "../../core/index.js";
 import { print } from "../../core/output.js";
@@ -241,6 +243,40 @@ export function registerDaemonStartCommand(daemon: Command): void {
             const msg = err instanceof Error ? err.message : String(err);
             print.status("⚠️", `capabilities upload skipped: ${msg}`);
           }
+        }
+
+        // Post-register slash-command skill upload. Phase 1B scope is
+        // user-global Claude Code skills — every claude-code agent on this
+        // client receives the same payload, which the web composer reads
+        // via `GET /api/v1/agents/:uuid/skills` after the user @mentions
+        // the agent. Codex (and any future runtime without a skill system)
+        // is skipped. Best-effort: log + continue on failure.
+        try {
+          const claudeAgents = [...agents].filter(([, c]) => c.runtime === "claude-code");
+          if (claudeAgents.length > 0) {
+            const skills = await discoverClaudeCodeSkills({
+              warn: (msg) => print.status("⚠️", `skill scan: ${msg}`),
+            });
+            const accessToken = await ensureFreshAccessToken();
+            await Promise.all(
+              claudeAgents.map(async ([name, c]) => {
+                try {
+                  await uploadAgentSkills({
+                    serverUrl: config.server.url,
+                    accessToken,
+                    agentId: c.agentId,
+                    skills,
+                  });
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  print.status("⚠️", `skills upload for ${name} skipped: ${msg}`);
+                }
+              }),
+            );
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.status("⚠️", `skills upload skipped: ${msg}`);
         }
 
         // Watch agents config dir for hot-add

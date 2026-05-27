@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { reconcileLocalRuntimeProviders, uploadClientCapabilities } from "../core/runtime-provider-reconcile.js";
+import {
+  reconcileLocalRuntimeProviders,
+  uploadAgentSkills,
+  uploadClientCapabilities,
+} from "../core/runtime-provider-reconcile.js";
 
 /**
  * Two CLI helpers, both fetch-driven against the hub:
@@ -204,5 +208,66 @@ describe("uploadClientCapabilities", () => {
         capabilities: {},
       }),
     ).rejects.toThrow(/403/);
+  });
+});
+
+describe("uploadAgentSkills", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("PATCHes /agents/:id/skills with the scanned descriptors", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await uploadAgentSkills({
+      serverUrl: "http://hub.test",
+      accessToken: "tok-xyz",
+      agentId: "agent-1",
+      skills: [{ name: "review", description: "Pre-landing PR review", source: "user" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const call = fetchMock.mock.calls[0];
+    if (!call) throw new Error("fetch was not called");
+    const [url, init] = call as [string, RequestInit];
+    expect(url).toBe("http://hub.test/api/v1/agents/agent-1/skills");
+    expect(init.method).toBe("PATCH");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-xyz");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    const body = JSON.parse(String(init.body));
+    expect(body.skills).toEqual([{ name: "review", description: "Pre-landing PR review", source: "user" }]);
+  });
+
+  it("URL-encodes the agentId so weird ids survive", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await uploadAgentSkills({
+      serverUrl: "http://hub.test",
+      accessToken: "tok",
+      agentId: "agent/with slash",
+      skills: [],
+    });
+    const call = fetchMock.mock.calls[0];
+    if (!call) throw new Error("fetch was not called");
+    const url = call[0] as string;
+    expect(url).toBe("http://hub.test/api/v1/agents/agent%2Fwith%20slash/skills");
+  });
+
+  it("throws on non-OK status so the caller can log + continue", async () => {
+    fetchMock.mockResolvedValue(new Response("nope", { status: 500 }));
+    await expect(
+      uploadAgentSkills({
+        serverUrl: "http://hub.test",
+        accessToken: "tok",
+        agentId: "agent-1",
+        skills: [],
+      }),
+    ).rejects.toThrow(/500/);
   });
 });
