@@ -165,7 +165,7 @@ export async function attentionRoutes(app: FastifyInstance): Promise<void> {
 
     const myHumans = await listHumanAgentIdsForUser(app, userId);
     if (myHumans.length === 0) {
-      return { rows: [] as Attention[] };
+      return [] as Attention[];
     }
 
     // Multi-agent collapse: list once per human and merge by id. Each
@@ -181,7 +181,7 @@ export async function attentionRoutes(app: FastifyInstance): Promise<void> {
       for (const row of list) byId.set(row.id, row);
     }
     const merged = Array.from(byId.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return { rows: merged.slice(0, query.limit) };
+    return merged.slice(0, query.limit);
   });
 
   app.get<{ Params: { id: string } }>("/:id", async (request) => {

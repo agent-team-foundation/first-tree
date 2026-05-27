@@ -41,8 +41,7 @@ export async function agentAttentionRoutes(app: FastifyInstance): Promise<void> 
   app.get("/", async (request) => {
     const identity = requireAgent(request);
     const query = listAttentionsQuerySchema.parse(request.query);
-    const rows = await listAttentions(app.db, { agentId: identity.uuid, isHuman: false }, query);
-    return { rows };
+    return listAttentions(app.db, { agentId: identity.uuid, isHuman: false }, query);
   });
 
   app.get<{ Params: { id: string } }>("/:id", async (request) => {
