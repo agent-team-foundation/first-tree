@@ -35,6 +35,7 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? false,
+    chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
   };
 }
 
@@ -184,63 +185,11 @@ describe("groupRows — type", () => {
   });
 });
 
-describe("splitAttentionRows — pinned failed + needs-you partition", () => {
-  it("separates failed and needs-you rows from the rest, preserving order", () => {
-    const rows = [
-      row({ id: "a", lastMessageAt: offsetIso(-1) }),
-      row({ id: "b", lastMessageAt: offsetIso(-2), pendingQuestionAgentIds: ["agent-1"] }),
-      row({ id: "c", lastMessageAt: offsetIso(-3) }),
-      row({ id: "d", lastMessageAt: offsetIso(-4), failedAgentIds: ["agent-2"] }),
-    ];
-    const { attention, rest } = splitAttentionRows(rows);
-    // failed (d) ranks above needs-you (b); rest keeps source order.
-    expect(attention.map((r) => r.chatId)).toEqual(["d", "b"]);
-    expect(rest.map((r) => r.chatId)).toEqual(["a", "c"]);
-  });
-
-  it("failed ranks above needs-you within the attention bucket", () => {
-    const rows = [
-      row({ id: "n", lastMessageAt: offsetIso(-1), pendingQuestionAgentIds: ["a1"] }),
-      row({ id: "f", lastMessageAt: offsetIso(-2), failedAgentIds: ["a2"] }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["f", "n"]);
-  });
-
-  it("a chat that is both failed AND needs-you appears once, in the failed tier", () => {
-    const rows = [
-      row({ id: "both", lastMessageAt: offsetIso(-1), failedAgentIds: ["a1"], pendingQuestionAgentIds: ["a2"] }),
-      row({ id: "n", lastMessageAt: offsetIso(-2), pendingQuestionAgentIds: ["a3"] }),
-    ];
-    const { attention, rest } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["both", "n"]);
-    expect(rest).toEqual([]);
-  });
-
-  it("all-quiet → empty attention", () => {
-    const { attention, rest } = splitAttentionRows([row({ id: "x", lastMessageAt: null })]);
-    expect(attention).toEqual([]);
-    expect(rest.map((r) => r.chatId)).toEqual(["x"]);
-  });
-
-  it("orders the attention bucket by ATTENTION_PRIORITY (failed > needs_you), stable within tier", () => {
-    // Interleaved failed / needs-you; the bucket order must put every failed
-    // row before every needs-you row, preserving source order inside each tier.
-    const rows = [
-      row({ id: "n1", lastMessageAt: offsetIso(-1), pendingQuestionAgentIds: ["a"] }),
-      row({ id: "f1", lastMessageAt: offsetIso(-2), failedAgentIds: ["b"] }),
-      row({ id: "n2", lastMessageAt: offsetIso(-3), pendingQuestionAgentIds: ["c"] }),
-      row({ id: "f2", lastMessageAt: offsetIso(-4), failedAgentIds: ["d"] }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["f1", "f2", "n1", "n2"]);
-  });
-});
-
-// Chat-granularity scoping predicate — R1 (mine-failed), R2 (mine-pending),
-// R3 (chatHasOpenQuestion AND caller is a HUMAN speaker), R4 (unread mention).
-// See docs/development/needs-attention-scoping.20260526.md.
-describe("splitAttentionRows — predicate (R1–R4)", () => {
+// Phase 1 chat-granularity predicate.
+// R1 (mine-failed via failedAgentIds), R2 (explicit @<me> in unread window via
+// chatHasExplicitMentionToMe + unreadMentionCount > 0). See
+// docs/development/needs-attention-scoping.20260526.md.
+describe("splitAttentionRows — Phase 1 predicate", () => {
   it("R1: mine-failed → attention bucket, failed tier", () => {
     const rows = [row({ id: "r1", lastMessageAt: null, failedAgentIds: ["mine"] })];
     const { attention } = splitAttentionRows(rows);
@@ -248,50 +197,36 @@ describe("splitAttentionRows — predicate (R1–R4)", () => {
     expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
   });
 
-  it("R2: mine-pending → attention bucket, needs_you tier", () => {
-    const rows = [row({ id: "r2", lastMessageAt: null, pendingQuestionAgentIds: ["mine"] })];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["r2"]);
-    expect(attention[0] && rowNeedsYou(attention[0])).toBe(true);
-  });
-
-  it("R3: chatHasOpenQuestion + caller is speaker → attention bucket, needs_you tier (but badge stays narrow)", () => {
+  it("R2: unread + explicit @<me> → attention bucket, mention tier", () => {
     const rows = [
       row({
-        id: "r3",
+        id: "r2",
         lastMessageAt: null,
-        chatHasOpenQuestion: true,
-        membershipKind: "participant",
+        unreadMentionCount: 1,
+        chatHasExplicitMentionToMe: true,
       }),
     ];
     const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["r3"]);
-    // Bucket placement: needs_you tier (so it sorts between failed and mention).
-    expect(attention[0] && rowAttentionReason(attention[0])).toBe("needs_you");
-    // Row badge: stays specific to caller-managed (R2 only). R3 enters the
-    // bucket but does NOT light the orange ? indicator — `pendingQuestionAgentIds`
-    // is server-narrowed to "mine", and this peer-question row has [].
-    expect(attention[0] && rowNeedsYou(attention[0])).toBe(false);
+    expect(attention.map((r) => r.chatId)).toEqual(["r2"]);
+    expect(attention[0] && rowAttentionReason(attention[0])).toBe("mention");
   });
 
-  it("R3 watcher: chatHasOpenQuestion + caller is watcher → NOT attention", () => {
+  it("R2 disabled by 1-on-1 implicit auto-mention: unreadMentionCount > 0 but flag false → NOT attention", () => {
+    // The original痛点 (t7): in a 1v1, agent → human plain "ack" bumps the
+    // v1 red-dot counter but `metadata.mentions` is empty, so the server
+    // emits `chatHasExplicitMentionToMe: false`. The front-end must NOT
+    // pin this row even though unreadMentionCount > 0.
     const rows = [
       row({
-        id: "r3w",
+        id: "r2-implicit",
         lastMessageAt: null,
-        chatHasOpenQuestion: true,
-        membershipKind: "watching",
+        unreadMentionCount: 1,
+        chatHasExplicitMentionToMe: false,
       }),
     ];
     const { attention, rest } = splitAttentionRows(rows);
     expect(attention).toEqual([]);
-    expect(rest.map((r) => r.chatId)).toEqual(["r3w"]);
-  });
-
-  it("R4: unread @-mention → attention bucket (no failed/pending)", () => {
-    const rows = [row({ id: "r4", lastMessageAt: null, unreadMentionCount: 3 })];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["r4"]);
+    expect(rest.map((r) => r.chatId)).toEqual(["r2-implicit"]);
   });
 
   it("quiet row → NOT attention", () => {
@@ -301,61 +236,45 @@ describe("splitAttentionRows — predicate (R1–R4)", () => {
     expect(rest.map((r) => r.chatId)).toEqual(["quiet"]);
   });
 
-  it("priority: failed beats mention", () => {
+  it("priority: failed > mention across two tiers", () => {
+    const rows = [
+      row({ id: "m", lastMessageAt: null, unreadMentionCount: 1, chatHasExplicitMentionToMe: true }),
+      row({ id: "f", lastMessageAt: null, failedAgentIds: ["y"] }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["f", "m"]);
+  });
+
+  it("priority: failed beats mention on the same row", () => {
     const rows = [
       row({
         id: "fm",
         lastMessageAt: null,
         failedAgentIds: ["a"],
         unreadMentionCount: 1,
+        chatHasExplicitMentionToMe: true,
       }),
     ];
     const { attention } = splitAttentionRows(rows);
-    expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
+    expect(attention[0] && rowAttentionReason(attention[0])).toBe("failed");
   });
 
-  it("priority: needs_you beats mention (R2 + mention)", () => {
+  it("rowNeedsYou stays dark — no R3 in Phase 1", () => {
+    // Phase 1 reserves the `needs_you` tier in ATTENTION_PRIORITY for a
+    // future open-Attention-targeting-me rule (R3, NHA-backed). No
+    // predicate branch emits it yet, and rowNeedsYou returns false for
+    // every input.
     const rows = [
-      row({
-        id: "pm",
-        lastMessageAt: null,
-        pendingQuestionAgentIds: ["a"],
-        unreadMentionCount: 1,
-      }),
+      row({ id: "f", lastMessageAt: null, failedAgentIds: ["a"] }),
+      row({ id: "m", lastMessageAt: null, unreadMentionCount: 1, chatHasExplicitMentionToMe: true }),
+      row({ id: "q", lastMessageAt: null }),
     ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention[0] && rowIsFailed(attention[0])).toBe(false);
-    expect(attention[0] && rowNeedsYou(attention[0])).toBe(true);
+    for (const r of rows) {
+      expect(rowNeedsYou(r)).toBe(false);
+    }
   });
 
-  it("sort: failed > needs_you > mention across all three tiers", () => {
-    const rows = [
-      row({ id: "m", lastMessageAt: null, unreadMentionCount: 1 }),
-      row({ id: "n", lastMessageAt: null, pendingQuestionAgentIds: ["x"] }),
-      row({ id: "f", lastMessageAt: null, failedAgentIds: ["y"] }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention.map((r) => r.chatId)).toEqual(["f", "n", "m"]);
-  });
-
-  it("R2 + R3 simultaneously → single needs_you tier row (no double-count), badge fires for R2", () => {
-    const rows = [
-      row({
-        id: "r23",
-        lastMessageAt: null,
-        pendingQuestionAgentIds: ["mine"],
-        chatHasOpenQuestion: true,
-        membershipKind: "participant",
-      }),
-    ];
-    const { attention } = splitAttentionRows(rows);
-    expect(attention).toHaveLength(1);
-    expect(attention[0] && rowAttentionReason(attention[0])).toBe("needs_you");
-    // Badge DOES fire here because mine-pending (R2) is true on this row.
-    expect(attention[0] && rowNeedsYou(attention[0])).toBe(true);
-  });
-
-  it("stable sort within failed tier preserves input order", () => {
+  it("stable sort within tier preserves input order", () => {
     const rows = [
       row({ id: "f1", lastMessageAt: null, failedAgentIds: ["a"] }),
       row({ id: "f2", lastMessageAt: null, failedAgentIds: ["b"] }),
@@ -364,7 +283,7 @@ describe("splitAttentionRows — predicate (R1–R4)", () => {
     expect(attention.map((r) => r.chatId)).toEqual(["f1", "f2"]);
   });
 
-  it("boundary A: my failed agent, caller is watcher → still attention (manager wins over membership)", () => {
+  it("boundary A: my failed agent, caller is watcher → still attention", () => {
     // Server already narrows `failedAgentIds` to mine regardless of membership.
     // The front-end predicate stays membership-agnostic for R1, so the row
     // pins even when membershipKind is "watching" — boundary A locked.
@@ -379,5 +298,32 @@ describe("splitAttentionRows — predicate (R1–R4)", () => {
     const { attention } = splitAttentionRows(rows);
     expect(attention.map((r) => r.chatId)).toEqual(["rA"]);
     expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
+  });
+});
+
+// Version-skew safety: the web client casts the server response as-is and
+// does NOT run rows through `meChatRowSchema.parse`, so the zod
+// `.default(false)` only applies server-side. The predicate must therefore
+// check the new boolean with strict `=== true` so an `undefined` value from
+// an old server returns "off" for that rule instead of trusting a `&&`
+// coercion of an unknown shape.
+describe("splitAttentionRows — version skew (old server, new web)", () => {
+  it("missing chatHasExplicitMentionToMe (undefined) → R2 disabled", () => {
+    const stale = {
+      ...row({ id: "stale", lastMessageAt: null, unreadMentionCount: 1 }),
+    };
+    delete (stale as { chatHasExplicitMentionToMe?: boolean }).chatHasExplicitMentionToMe;
+    const { attention, rest } = splitAttentionRows([stale]);
+    expect(attention).toEqual([]);
+    expect(rest.map((r) => r.chatId)).toEqual(["stale"]);
+  });
+
+  it("missing field still lets R1 (failedAgentIds) fire", () => {
+    const stale = {
+      ...row({ id: "stale-r1", lastMessageAt: null, failedAgentIds: ["mine"] }),
+    };
+    delete (stale as { chatHasExplicitMentionToMe?: boolean }).chatHasExplicitMentionToMe;
+    const { attention } = splitAttentionRows([stale]);
+    expect(attention.map((r) => r.chatId)).toEqual(["stale-r1"]);
   });
 });
