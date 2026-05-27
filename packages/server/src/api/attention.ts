@@ -104,10 +104,15 @@ export async function emitAttentionOpened(app: FastifyInstance, attention: Atten
 export async function emitAttentionResponded(app: FastifyInstance, attention: Attention): Promise<void> {
   const orgId = await resolveChatOrg(app, attention.originChatId);
   if (!orgId) return;
-  const frame: AttentionRespondedFrame & { organizationId: string } = {
+  const frame: AttentionRespondedFrame & { chatId: string; organizationId: string } = {
     type: "attention:responded",
     attentionId: attention.id,
     originAgentId: attention.originAgentId,
+    // Embed chatId so the admin-ws invalidator can hit the per-chat query
+    // key directly instead of falling back to a broad `["attentions"]`
+    // prefix sweep. The frame schema is passthrough so unknown fields are
+    // forwarded by the client dispatcher without a Zod failure.
+    chatId: attention.originChatId,
     organizationId: orgId,
   };
   broadcastToAdmins(frame);
@@ -123,11 +128,12 @@ export async function emitAttentionResponded(app: FastifyInstance, attention: At
 export async function emitAttentionCancelled(app: FastifyInstance, attention: Attention): Promise<void> {
   const orgId = await resolveChatOrg(app, attention.originChatId);
   if (!orgId) return;
-  const frame: AttentionCancelledFrame & { organizationId: string } = {
+  const frame: AttentionCancelledFrame & { chatId: string; organizationId: string } = {
     type: "attention:cancelled",
     attentionId: attention.id,
     targetHumanId: attention.targetHumanId,
     reason: attention.cancelledReason,
+    chatId: attention.originChatId,
     organizationId: orgId,
   };
   broadcastToAdmins(frame);

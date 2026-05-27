@@ -1,21 +1,20 @@
 import type { ChatParticipantDetail } from "@first-tree/shared";
-import { X } from "lucide-react";
 import { AttentionsSection } from "./attentions-section.js";
 import { GitHubSection } from "./github-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 
 /**
  * ChatRightSidebar — chat-scoped detail + management panel mounted inside
- * ChatView. No internal header bar: the surrounding chrome (left column
- * header + this rail's left border) already frames the panel, so an extra
- * "Chat details" title strip was visually redundant. The close affordance
- * floats in the top-right corner instead, and sections kick off straight
- * from the first eyebrow.
+ * ChatView. No internal header bar and no in-panel close button: the
+ * chat header already owns a "Hide chat details" toggle, so a duplicate
+ * × inside the panel was just redundant clutter. Sections kick off
+ * straight from the first eyebrow.
  *
  * Sections, top-to-bottom:
- *   1. Participants — humans + agents with per-agent Suspend (matches the
+ *   1. Attention — chat-scoped NHA summary (open asks targeting this user).
+ *   2. Participants — humans + agents with per-agent Suspend (matches the
  *      legacy AgentRow capability).
- *   2. GitHub bindings — read-only list of PRs / Issues bound to this
+ *   3. GitHub bindings — read-only list of PRs / Issues bound to this
  *      chat. Hidden entirely when there are no bindings.
  *
  * Archive / Delete are intentionally NOT in this rail — the
@@ -29,7 +28,6 @@ export function ChatRightSidebar({
   participantsLoading,
   managedByMe,
   onAdded,
-  onClose,
   readOnly,
   width = 320,
 }: {
@@ -38,7 +36,6 @@ export function ChatRightSidebar({
   participantsLoading: boolean;
   managedByMe: Map<string, boolean>;
   onAdded: () => void;
-  onClose: () => void;
   /** Watcher mode: hide write surfaces. Currently gates the inline
    *  "Add participant" affordance inside ParticipantsSection. */
   readOnly: boolean;
@@ -57,30 +54,6 @@ export function ChatRightSidebar({
         borderLeft: "var(--hairline) solid var(--border)",
       }}
     >
-      {/* Floating close button. Anchors to the rail's top-right corner so
-          it stays consistent regardless of which section is in view. The
-          z-index keeps it above the scrollable section list. */}
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close chat details"
-        title="Close (Esc)"
-        className="absolute z-10 inline-flex items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-        style={{
-          top: "var(--sp-1_5)",
-          right: "var(--sp-2)",
-          width: 28,
-          height: 28,
-          border: 0,
-          background: "transparent",
-          borderRadius: "var(--radius-input)",
-          color: "var(--fg-3)",
-          cursor: "pointer",
-        }}
-      >
-        <X size={16} />
-      </button>
-
       <div className="flex-1 overflow-y-auto">
         <AttentionsSection chatId={chatId} />
         <ParticipantsSection

@@ -35,9 +35,9 @@ Example — single choice with a default:
     "mode": "single",
     "defaultValue": "deploy",
     "items": [
-      { "value": "deploy",   "label": "批准 deploy 到 prod" },
-      { "value": "postpone", "label": "推迟到下个 deploy 窗口" },
-      { "value": "abandon",  "label": "放弃这次 deploy" }
+      { "value": "deploy",   "label": "Approve deploy to prod" },
+      { "value": "postpone", "label": "Postpone to next deploy window" },
+      { "value": "abandon",  "label": "Drop this deploy" }
     ]
   }
 }
@@ -52,10 +52,10 @@ Example — multi with bounds:
     "min": 1,
     "max": 3,
     "items": [
-      { "value": "rerun-tests",       "label": "重跑测试" },
-      { "value": "rebuild-image",     "label": "重新构建镜像" },
-      { "value": "notify-oncall",     "label": "通知 oncall" },
-      { "value": "open-incident",     "label": "开 incident ticket" }
+      { "value": "rerun-tests",       "label": "Re-run tests" },
+      { "value": "rebuild-image",     "label": "Rebuild image" },
+      { "value": "notify-oncall",     "label": "Notify oncall" },
+      { "value": "open-incident",     "label": "Open incident ticket" }
     ]
   }
 }
@@ -68,11 +68,11 @@ Example — option with typed input:
   "options": {
     "mode": "single",
     "items": [
-      { "value": "approve",        "label": "批准" },
-      { "value": "approve-window", "label": "批准，但指定 deploy 时间",
+      { "value": "approve",        "label": "Approve" },
+      { "value": "approve-window", "label": "Approve, but specify the deploy time",
         "input": { "type": "datetime", "required": true,
                    "placeholder": "e.g. 2026-05-27 09:00" } },
-      { "value": "reject",         "label": "拒绝" }
+      { "value": "reject",         "label": "Reject" }
     ]
   }
 }
@@ -80,7 +80,7 @@ Example — option with typed input:
 
 ## Multiple decisions in one NHA: `metadata.questions`
 
-Use when several related questions should be answered together. The whole NHA is submitted atomically (the human must answer all questions before submit). M1 末 the UI renders a single top-level question; full multi-question rendering lands in M2 初. Populate `questions[]` now if you have it — the data is preserved and surfaced as soon as the UI catches up.
+Use when several related questions should be answered together. The whole NHA is submitted atomically (the human must answer all questions before submit). The UI renders every question; populate `questions[]` whenever you have multiple related sub-decisions for the same human.
 
 ```ts
 type AttentionQuestion = {
@@ -98,7 +98,7 @@ Example:
   "questions": [
     {
       "id": "deploy_decision",
-      "prompt": "要不要 deploy commit abc123？",
+      "prompt": "Should we deploy commit abc123?",
       "options": {
         "mode": "single",
         "items": [
@@ -109,13 +109,13 @@ Example:
     },
     {
       "id": "deploy_window",
-      "prompt": "如果 deploy，什么时候？",
-      "context": "下一个标准窗口是今晚 22:00。",
+      "prompt": "If yes, when?",
+      "context": "Next standard window is tonight at 22:00.",
       "options": {
         "mode": "single",
         "items": [
-          { "value": "now",     "label": "立刻" },
-          { "value": "window",  "label": "等今晚 22:00 窗口" }
+          { "value": "now",     "label": "Now" },
+          { "value": "window",  "label": "Wait for tonight's 22:00 window" }
         ]
       }
     }

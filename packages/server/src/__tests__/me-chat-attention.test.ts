@@ -72,12 +72,39 @@ describe("listMeChats: needs-attention scoping (R1-R3 backend projection)", () =
     await makeReachable(agentId);
   }
 
-  // Seed a pending AskUserQuestion row for the given agent in the chat.
+  // Seed an open NHA request authored by `agentId` in the chat. After the
+  // M1 末 repoint, `derivePendingQuestions` reads from `attentions` instead of
+  // `pending_questions`, so the test fixture mirrors that. Direct INSERT
+  // bypasses the service-layer invariants — the projection only looks at
+  // (origin_chat_id, origin_agent_id, state, requires_response), so the
+  // target_human_id can be any non-null string.
   async function markPending(agentId: string, chatId: string): Promise<void> {
     const app = getApp();
     await app.db.execute(sql`
-      INSERT INTO pending_questions (id, agent_id, chat_id, message_id, status, created_at)
-      VALUES (${crypto.randomUUID()}, ${agentId}, ${chatId}, ${crypto.randomUUID()}, 'pending', NOW())
+      INSERT INTO attentions (
+        id, origin_agent_id, origin_chat_id, target_human_id,
+        subject, body, requires_response, state, metadata, created_at
+      )
+      VALUES (
+        ${crypto.randomUUID()}, ${agentId}, ${chatId}, ${crypto.randomUUID()},
+        'test-seeded ask', '', true, 'open', '{}'::jsonb, NOW()
+      )
+    `);
+  }
+
+  // Like `markPending`, but explicitly aims the ask at a specific human
+  // — used to exercise the "target = me" arm of the strict scoping.
+  async function markPendingTo(originAgentId: string, chatId: string, targetHumanId: string): Promise<void> {
+    const app = getApp();
+    await app.db.execute(sql`
+      INSERT INTO attentions (
+        id, origin_agent_id, origin_chat_id, target_human_id,
+        subject, body, requires_response, state, metadata, created_at
+      )
+      VALUES (
+        ${crypto.randomUUID()}, ${originAgentId}, ${chatId}, ${targetHumanId},
+        'test-seeded ask (targeted)', '', true, 'open', '{}'::jsonb, NOW()
+      )
     `);
   }
 
@@ -188,7 +215,10 @@ describe("listMeChats: needs-attention scoping (R1-R3 backend projection)", () =
     expect(row?.chatHasOpenQuestion).toBe(true);
   });
 
-  it("B6: peer's pending question, caller is speaker → pending = [] AND chatHasOpenQuestion = true", async () => {
+  it("B6: peer's pending question, caller is speaker → pending = [] AND chatHasOpenQuestion = false (strict)", async () => {
+    // Post-NHA-strict-scoping: a peer's open ask in a chat I'm in but
+    // not the target of, no longer pins my row to "Needs attention".
+    // Only target=me OR origin=my-managed-agent lights the bit.
     const app = getApp();
     const me = await createTestAdmin(app);
     const them = await createTestAdmin(app, { username: `peer-${crypto.randomUUID().slice(0, 8)}` });
@@ -200,10 +230,12 @@ describe("listMeChats: needs-attention scoping (R1-R3 backend projection)", () =
     await markPending(theirs.agent.uuid, chatId);
     const row = await rowFor(chatId, me);
     expect(row?.pendingQuestionAgentIds).toEqual([]);
-    expect(row?.chatHasOpenQuestion).toBe(true);
+    expect(row?.chatHasOpenQuestion).toBe(false);
   });
 
-  it("B7: peer's pending question, caller is watcher → pending = [] AND chatHasOpenQuestion = true", async () => {
+  it("B7: peer's pending question, caller is watcher → pending = [] AND chatHasOpenQuestion = false (strict)", async () => {
+    // Same strict policy as B6 — being a chat watcher doesn't earn you
+    // a "Needs attention" signal for someone else's ask.
     const app = getApp();
     const me = await createTestAdmin(app);
     const them = await createTestAdmin(app, { username: `peer-${crypto.randomUUID().slice(0, 8)}` });
@@ -214,6 +246,26 @@ describe("listMeChats: needs-attention scoping (R1-R3 backend projection)", () =
     });
     await addAsWatcher(chatId, me.humanAgentUuid);
     await markPending(theirs.agent.uuid, chatId);
+    const row = await rowFor(chatId, me);
+    expect(row?.pendingQuestionAgentIds).toEqual([]);
+    expect(row?.chatHasOpenQuestion).toBe(false);
+  });
+
+  it("B6b: peer's bot asks ME → pending = [] AND chatHasOpenQuestion = true (target arm)", async () => {
+    // The "target = me" arm of the strict union. Peer owns the bot, the
+    // bot asks me. I am not the manager-of-origin, but I am the target.
+    // pendingQuestionAgentIds stays empty (the agent isn't mine — we
+    // don't list peer agents under "my pending"), but chatHasOpenQuestion
+    // is true so the row pins to "Needs attention".
+    const app = getApp();
+    const me = await createTestAdmin(app);
+    const them = await createTestAdmin(app, { username: `peer-${crypto.randomUUID().slice(0, 8)}` });
+    const theirs = await createTestAgent(app, { name: `b6b-${crypto.randomUUID().slice(0, 6)}` });
+    await setManager(theirs.agent.uuid, them.memberId);
+    const { chatId } = await createMeChat(app.db, me.humanAgentUuid, me.organizationId, {
+      participantIds: [theirs.agent.uuid],
+    });
+    await markPendingTo(theirs.agent.uuid, chatId, me.humanAgentUuid);
     const row = await rowFor(chatId, me);
     expect(row?.pendingQuestionAgentIds).toEqual([]);
     expect(row?.chatHasOpenQuestion).toBe(true);

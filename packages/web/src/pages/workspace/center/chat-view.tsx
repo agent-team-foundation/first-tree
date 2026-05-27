@@ -62,7 +62,6 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AttentionCard } from "../../../components/chat/attention-card.js";
-import { AttentionRefChips } from "../../../components/chat/attention-ref-chip.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
@@ -535,10 +534,7 @@ function TextRow({
           ) : msg.format === "file" && isImageRefContent(msg.content) ? (
             <ImageFromRef content={msg.content} />
           ) : msg.format === "text" || msg.format === "markdown" ? (
-            <>
-              <AttentionRefChips text={textContent} />
-              <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
-            </>
+            <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
           ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
             <GithubEventCardMessage content={msg.content} />
           ) : (
@@ -968,14 +964,23 @@ export function ChatView({
     queryFn: () => listAttentionsInChat(chatId),
     enabled: !!chatId && !readOnly,
   });
+  // Strict targeting filter — the chat-bottom AttentionCard only renders
+  // when there's an open ask AIMED AT this user's human agent. Asks
+  // routed to other humans in the same group chat must not surface here
+  // (every NHA has exactly one target — co-speakers are bystanders).
+  // `useAuth().agentId` is the caller's `members.agentId` (their human
+  // in the active org); cross-org chats resolve correctly because the
+  // query already returns only attentions visible to this user.
   const activeAttention = useMemo(() => {
-    if (!openAttentions || openAttentions.length === 0) return null;
-    const respondable = openAttentions.filter((a) => a.state === "open" && a.requiresResponse);
+    if (!openAttentions || openAttentions.length === 0 || !myAgentId) return null;
+    const respondable = openAttentions.filter(
+      (a) => a.state === "open" && a.requiresResponse && a.targetHumanId === myAgentId,
+    );
     if (respondable.length === 0) return null;
     return respondable.reduce((oldest, curr) =>
       new Date(curr.createdAt).getTime() < new Date(oldest.createdAt).getTime() ? curr : oldest,
     );
-  }, [openAttentions]);
+  }, [openAttentions, myAgentId]);
 
   /** Org-wide agent list, consumed by `managedByMeMap` for picker
    *  grouping and by the identity-map hooks (`useAgentIdentityMap` etc.)
@@ -2994,7 +2999,6 @@ export function ChatView({
                   participantsLoading={chatDetailLoading}
                   managedByMe={managedByMeMap}
                   onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-                  onClose={() => setShowSidebar(false)}
                   readOnly={readOnly}
                   width="min(88vw, 20rem)"
                 />
@@ -3007,7 +3011,6 @@ export function ChatView({
               participantsLoading={chatDetailLoading}
               managedByMe={managedByMeMap}
               onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-              onClose={() => setShowSidebar(false)}
               readOnly={readOnly}
             />
           )

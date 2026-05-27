@@ -1,6 +1,5 @@
 import type {
   Attention,
-  AttentionMetadata,
   AttentionState,
   ListAttentionsQuery,
   RaiseAttentionInput,
@@ -13,6 +12,7 @@ import { agents } from "../db/schema/agents.js";
 import { attentions } from "../db/schema/attentions.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { members } from "../db/schema/members.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
@@ -108,7 +108,11 @@ export async function raiseAttention(
   const { chatId, target, subject, body, requiresResponse, metadata } = input;
 
   // 1. Chat must exist.
-  const [chat] = await db.select({ id: chats.id }).from(chats).where(eq(chats.id, chatId)).limit(1);
+  const [chat] = await db
+    .select({ id: chats.id, organizationId: chats.organizationId })
+    .from(chats)
+    .where(eq(chats.id, chatId))
+    .limit(1);
   if (!chat) throw new NotFoundError(`Chat "${chatId}" not found`);
 
   // 2. Caller agent must be a speaker of this chat.
@@ -116,11 +120,20 @@ export async function raiseAttention(
     throw new ForbiddenError("Caller is not a speaker of this chat");
   }
 
-  // 3. Target agent must exist and be type=human.
+  // 3. Target agent must exist and be type=human. The `target` input may be
+  // either an agent uuid OR an agent name (resolved in the chat's org —
+  // names are not globally unique). Mirrors `services/chat.ts::addParticipant`
+  // so `attention raise --target yuezengwu` works the same as
+  // `chat invite yuezengwu`. Uuid takes priority on collision.
+  const targetSelector = or(
+    eq(agents.uuid, target),
+    and(eq(agents.organizationId, chat.organizationId), eq(agents.name, target)),
+  );
+  if (!targetSelector) throw new BadRequestError("Empty target");
   const [targetAgent] = await db
     .select({ uuid: agents.uuid, type: agents.type })
     .from(agents)
-    .where(eq(agents.uuid, target))
+    .where(targetSelector)
     .limit(1);
   if (!targetAgent) {
     throw new BadRequestError(`Target agent "${target}" not found`);
@@ -130,10 +143,11 @@ export async function raiseAttention(
       `Target agent "${target}" is not a human (type="${targetAgent.type}"); attentions only fire at humans.`,
     );
   }
+  const resolvedTargetId = targetAgent.uuid;
 
   // 4. Target must be a member of origin_chat. 409 + hint matches the
   // shared-schema doc comment.
-  if (!(await isSpeaker(db, chatId, target))) {
+  if (!(await isSpeaker(db, chatId, resolvedTargetId))) {
     throw new ConflictError(
       `Target human "${target}" is not a member of chat "${chatId}". ` +
         "Add them first:\n" +
@@ -152,12 +166,12 @@ export async function raiseAttention(
       id,
       originAgentId: callerAgentId,
       originChatId: chatId,
-      targetHumanId: target,
+      targetHumanId: resolvedTargetId,
       subject,
       body,
       requiresResponse,
       state: closed ? "closed" : "open",
-      metadata: metadata as AttentionMetadata,
+      metadata,
       createdAt: now,
       closedAt: closed ? now : null,
     })
@@ -169,7 +183,7 @@ export async function raiseAttention(
       attentionId: id,
       chatId,
       originAgentId: callerAgentId,
-      targetHumanId: target,
+      targetHumanId: resolvedTargetId,
       requiresResponse,
     },
     "attention raised",
@@ -203,6 +217,10 @@ export async function respondAttention(
     typeof input.text === "string" && input.text.length > 0 ? input.text : JSON.stringify(input.answers ?? {});
   const now = new Date();
 
+  // Atomic state guard. Two responders racing (or a respond racing a cancel)
+  // would both pass the load-check above; the `state='open'` predicate on
+  // the UPDATE makes the second one a no-op. The `RETURNING` row is empty
+  // in that case so we surface the same Conflict the load-check would.
   const [updated] = await db
     .update(attentions)
     .set({
@@ -212,9 +230,11 @@ export async function respondAttention(
       state: "closed",
       closedAt: now,
     })
-    .where(eq(attentions.id, attentionId))
+    .where(and(eq(attentions.id, attentionId), eq(attentions.state, "open")))
     .returning();
-  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+  if (!updated) {
+    throw new ConflictError(`Attention "${attentionId}" was closed concurrently`);
+  }
 
   log.info(
     {
@@ -250,6 +270,7 @@ export async function cancelAttention(
   }
 
   const now = new Date();
+  // Atomic state guard — see `respondAttention` for the same pattern.
   const [updated] = await db
     .update(attentions)
     .set({
@@ -258,9 +279,11 @@ export async function cancelAttention(
       cancelledReason: reason,
       closedAt: now,
     })
-    .where(eq(attentions.id, attentionId))
+    .where(and(eq(attentions.id, attentionId), eq(attentions.state, "open")))
     .returning();
-  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+  if (!updated) {
+    throw new ConflictError(`Attention "${attentionId}" was closed concurrently`);
+  }
 
   log.info(
     {
@@ -281,14 +304,34 @@ export async function getAttention(db: Database, id: string): Promise<Attention 
 }
 
 /**
- * Caller identity used by `listAttentions`. Humans see attentions
- * targeted at them OR raised in any chat they're a speaker of. Agents
- * see only attentions they raised themselves (their own audit trail).
+ * Caller identity used by `listAttentions`. Strict visibility:
+ *
+ *   - Human caller: targeted at them, OR raised by an autonomous agent
+ *     they manage. Co-speakers in shared chats do NOT see attentions
+ *     routed to other humans — every NHA has exactly one target, and
+ *     surfacing it to bystanders is just noise.
+ *   - Agent caller: only attentions they raised themselves (audit trail).
  */
 export type AttentionCaller = {
   agentId: string;
   isHuman: boolean;
 };
+
+/**
+ * Resolve the set of (non-human) `agents.uuid` values whose `manager_id`
+ * points at one of the caller-human's member rows. Single indexed read
+ * via `idx_members_user` + `idx_agents_manager`; empty array on missing
+ * memberships (caller has no managed agents). Cross-org callers
+ * naturally union across all their member rows.
+ */
+async function listAgentIdsManagedByCallerHuman(db: Database, callerHumanAgentId: string): Promise<string[]> {
+  const rows = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .innerJoin(members, eq(agents.managerId, members.id))
+    .where(and(eq(members.agentId, callerHumanAgentId), eq(members.status, "active")));
+  return rows.map((r) => r.uuid);
+}
 
 /**
  * `GET /attention?filter…` — visibility-scoped list. Default state
@@ -306,31 +349,21 @@ export async function listAttentions(
 ): Promise<Attention[]> {
   const limit = Math.min(Math.max(filter.limit ?? DEFAULT_LIST_LIMIT, 1), MAX_LIST_LIMIT);
 
-  // Visibility scope. The two branches produce disjoint id-sets; we
-  // resolve them up-front so the SQL WHERE stays expressible as
-  // straightforward equality / inArray clauses.
-  let scopedChatIds: string[] | null = null;
-  if (caller.isHuman) {
-    const memberRows = await db
-      .select({ chatId: chatMembership.chatId })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.agentId, caller.agentId), eq(chatMembership.accessMode, "speaker")));
-    scopedChatIds = memberRows.map((r) => r.chatId);
-  }
-
-  // Build the visibility WHERE in a single pass. Humans: target == me
-  // OR chat IN scopedChatIds (drizzle's `or` short-circuits to undefined
-  // on a single arm, so we guard the empty-chat case explicitly).
-  // Agents: origin == me.
+  // Build the visibility WHERE. Strict policy:
+  //   - Human: target == me OR origin agent is one I manage.
+  //   - Agent: origin == me.
+  // Co-speaker visibility (the old "chat IN my-chats" arm) is intentionally
+  // dropped — every NHA has exactly one target human, and surfacing it to
+  // bystanders in shared chats is just noise the proposal §4 single-target
+  // invariant explicitly tries to keep out of the UI.
   const conditions: SQL[] = [];
   if (caller.isHuman) {
-    const hasScopedChats = scopedChatIds !== null && scopedChatIds.length > 0;
-    if (hasScopedChats && scopedChatIds) {
-      const pred = or(eq(attentions.targetHumanId, caller.agentId), inArray(attentions.originChatId, scopedChatIds));
-      if (pred) conditions.push(pred);
-    } else {
-      conditions.push(eq(attentions.targetHumanId, caller.agentId));
-    }
+    const managedAgentIds = await listAgentIdsManagedByCallerHuman(db, caller.agentId);
+    const pred =
+      managedAgentIds.length > 0
+        ? or(eq(attentions.targetHumanId, caller.agentId), inArray(attentions.originAgentId, managedAgentIds))
+        : eq(attentions.targetHumanId, caller.agentId);
+    if (pred) conditions.push(pred);
   } else {
     conditions.push(eq(attentions.originAgentId, caller.agentId));
   }

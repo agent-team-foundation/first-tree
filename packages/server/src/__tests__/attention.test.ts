@@ -20,7 +20,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { ConflictError, ForbiddenError } from "../errors.js";
-import { cancelAttention, raiseAttention, respondAttention } from "../services/attention.js";
+import { cancelAttention, listAttentions, raiseAttention, respondAttention } from "../services/attention.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
@@ -197,5 +197,80 @@ describe("attention service — invariants", () => {
     });
 
     await expect(cancelAttention(app.db, botB, created.id, "not mine")).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  // Multi-user group-chat visibility (strict): a co-speaker who is neither
+  // the target nor the manager-of-origin must NOT see the ask. Both arms
+  // of the "relevant to me" union (target=me, origin=my-managed-agent) are
+  // exercised against the same chat.
+  it("listAttentions strict scoping for humans in multi-user group chats", async () => {
+    const app = getApp();
+    // Use two real admins so each human-agent has a `members` row — the
+    // strict scope joins `agents.manager_id → members.id → members.agent_id`
+    // and would otherwise fall back to target-only for both callers.
+    const adminA = await createTestAdmin(app);
+    const adminB = await createTestAdmin(app, { username: `peer-${randomUUID().slice(0, 8)}` });
+    const alice = adminA.humanAgentUuid;
+    const bob = adminB.humanAgentUuid;
+
+    // Two bots in adminA's org — deploy-bot managed by alice, monitor-bot
+    // managed by bob (cross-org manager ref is fine for the lookup).
+    const deployBot = await seedAutonomousAgent(app, adminA.organizationId, adminA.memberId);
+    const monitorBot = await seedAutonomousAgent(app, adminA.organizationId, adminB.memberId);
+    const chatId = await seedChat(app, adminA.organizationId);
+    await addSpeaker(app, chatId, alice);
+    await addSpeaker(app, chatId, bob);
+    await addSpeaker(app, chatId, deployBot, "owner");
+    await addSpeaker(app, chatId, monitorBot);
+
+    // alice's bot asks alice → both relevance arms (target + origin) point at alice
+    const askAliceMine = await raiseAttention(app.db, deployBot, {
+      chatId,
+      target: alice,
+      subject: "deploy approval",
+      body: "",
+      requiresResponse: true,
+      metadata: {},
+    });
+    // bob's bot asks bob → bob's concern, irrelevant to alice
+    const askBobTheirs = await raiseAttention(app.db, monitorBot, {
+      chatId,
+      target: bob,
+      subject: "monitor threshold",
+      body: "",
+      requiresResponse: true,
+      metadata: {},
+    });
+    // alice's bot asks bob → alice owns the origin, but the ask itself
+    // targets bob. Strict policy: visible to BOTH alice (managed origin)
+    // and bob (target).
+    const askBobMineOrigin = await raiseAttention(app.db, deployBot, {
+      chatId,
+      target: bob,
+      subject: "needs bob's call",
+      body: "",
+      requiresResponse: true,
+      metadata: {},
+    });
+
+    const aliceVisible = await listAttentions(
+      app.db,
+      { agentId: alice, isHuman: true },
+      { chat: chatId, state: "open", limit: 50 },
+    );
+    const aliceIds = aliceVisible.map((a) => a.id).sort();
+    expect(aliceIds).toEqual([askAliceMine.id, askBobMineOrigin.id].sort());
+
+    const bobVisible = await listAttentions(
+      app.db,
+      { agentId: bob, isHuman: true },
+      { chat: chatId, state: "open", limit: 50 },
+    );
+    const bobIds = bobVisible.map((a) => a.id).sort();
+    expect(bobIds).toEqual([askBobTheirs.id, askBobMineOrigin.id].sort());
+
+    // The ask only relevant to one of them never shows up for the other.
+    expect(aliceIds).not.toContain(askBobTheirs.id);
+    expect(bobIds).not.toContain(askAliceMine.id);
   });
 });

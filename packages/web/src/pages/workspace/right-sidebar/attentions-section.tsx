@@ -1,10 +1,19 @@
 import type { Attention } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { attentionsInChatQueryKey, listAttentionsInChat } from "../../../api/attention.js";
+import { useAuth } from "../../../auth/auth-context.js";
 import { formatElapsed } from "../../../components/chat/working-chip.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+
+/**
+ * Sidebar cap — the list shows at most this many rows. Per proposal §5.3
+ * the sidebar is a quick at-a-glance summary, not a full audit surface;
+ * older history can be reached via `first-tree attention list`.
+ */
+const SIDEBAR_MAX_ROWS = 5;
 
 /**
  * Right-rail Attention section — one row per Attention bound to this chat.
@@ -12,10 +21,11 @@ import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
  * Per proposal §5.3 every row is a single-line summary; clicking opens a
  * popover anchored to the row instead of expanding inline. Rendering rules:
  *
- *   - Open request: row says "在底部展开中" / "已折叠"; clicking opens a
- *     popover that just points the human at the chat-bottom card (the
- *     authoritative response surface is the AttentionCard, not the
- *     sidebar — keeps respond submission flows in one place).
+
+ *   - Open request: clicking opens a portal popover anchored to the row.
+ *     The popover is a read-only summary plus a "Go to chat" deep link —
+ *     the authoritative response surface is the chat-bottom AttentionCard,
+ *     not the sidebar (keeps respond submission flows in one place).
  *   - Notification (always closed on creation): row plus popover show the
  *     body markdown; no action.
  *   - Closed request: read-only summary in the popover (subject + body +
@@ -26,6 +36,7 @@ import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
  * to both surfaces at once.
  */
 export function AttentionsSection({ chatId }: { chatId: string }) {
+  const { agentId: myAgentId } = useAuth();
   const { data } = useQuery({
     queryKey: attentionsInChatQueryKey(chatId),
     queryFn: () => listAttentionsInChat(chatId),
@@ -33,16 +44,24 @@ export function AttentionsSection({ chatId }: { chatId: string }) {
   });
   const [openId, setOpenId] = useState<string | null>(null);
   const all = data ?? [];
-  // Newest first; open requests float to the top so the most recent
-  // actionable item is one scroll away.
+  // Strict relevance filter — only show attentions where THIS user is the
+  // target. The server already restricts the list to attentions visible
+  // to this user (target=me OR origin=my-managed-agent), but the sidebar
+  // is the "what's on my plate" panel: limit further to target=me so the
+  // viewer's own asks-out-to-others don't clutter their attention list.
+  // Sorted: open requests first, then by newest. Capped at the most
+  // recent SIDEBAR_MAX_ROWS rows.
   const sorted = useMemo(() => {
-    return [...all].sort((a, b) => {
-      const aOpen = a.state === "open" && a.requiresResponse ? 0 : 1;
-      const bOpen = b.state === "open" && b.requiresResponse ? 0 : 1;
-      if (aOpen !== bOpen) return aOpen - bOpen;
-      return b.createdAt.localeCompare(a.createdAt);
-    });
-  }, [all]);
+    const mine = myAgentId ? all.filter((a) => a.targetHumanId === myAgentId) : [];
+    return [...mine]
+      .sort((a, b) => {
+        const aOpen = a.state === "open" && a.requiresResponse ? 0 : 1;
+        const bOpen = b.state === "open" && b.requiresResponse ? 0 : 1;
+        if (aOpen !== bOpen) return aOpen - bOpen;
+        return b.createdAt.localeCompare(a.createdAt);
+      })
+      .slice(0, SIDEBAR_MAX_ROWS);
+  }, [all, myAgentId]);
   const openCount = sorted.filter((a) => a.state === "open" && a.requiresResponse).length;
 
   if (sorted.length === 0) return null;
@@ -117,13 +136,15 @@ function AttentionRow({
   const isOpenAsk = attention.state === "open" && attention.requiresResponse;
   const isNotify = !attention.requiresResponse;
   const elapsed = useElapsed(attention.createdAt);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
 
-  const tagText = isOpenAsk ? "请示" : isNotify ? "通报" : "已关闭";
+  const tagText = isOpenAsk ? "Ask" : isNotify ? "Notify" : "Closed";
   const tagColor = isOpenAsk ? "var(--fg-error-strong)" : attention.state === "closed" ? "var(--fg-3)" : "var(--fg-2)";
 
   return (
-    <li style={{ position: "relative" }}>
+    <li>
       <button
+        ref={buttonRef}
         type="button"
         onClick={onOpen}
         className="w-full text-left transition-colors"
@@ -172,33 +193,77 @@ function AttentionRow({
           ↗
         </span>
       </button>
-      {active ? <AttentionPopover attention={attention} onClose={onClose} /> : null}
+      {active ? <AttentionPopover attention={attention} anchor={buttonRef.current} onClose={onClose} /> : null}
     </li>
   );
 }
 
-function AttentionPopover({ attention, onClose }: { attention: Attention; onClose: () => void }) {
+function AttentionPopover({
+  attention,
+  anchor,
+  onClose,
+}: {
+  attention: Attention;
+  anchor: HTMLElement | null;
+  onClose: () => void;
+}) {
   const isOpenAsk = attention.state === "open" && attention.requiresResponse;
   const scrollToCard = () => {
     const el = document.querySelector(`[data-attention-id="${attention.id}"]`);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
     onClose();
   };
-  return (
+
+  // Re-anchor on mount + on scroll / resize. We portal to document.body to
+  // escape the sidebar's stacking context (the popover otherwise renders
+  // behind the main-area chat header). `position: fixed` lets us track the
+  // anchor by viewport coordinates without re-parenting math.
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!anchor) return;
+    const reposition = () => {
+      const rect = anchor.getBoundingClientRect();
+      setPos({ top: rect.top, left: rect.left });
+    };
+    reposition();
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [anchor]);
+
+  // Esc closes the popover (consistent with modal hygiene).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (!pos) return null;
+
+  const popover = (
     <div
       role="dialog"
       aria-label={`Attention ${attention.subject}`}
       style={{
-        position: "absolute",
-        right: "calc(100% + var(--sp-1))",
-        top: 0,
+        position: "fixed",
+        top: pos.top,
+        // Anchor LEFT of the row (sidebar sits on the right edge); the
+        // popover's right edge stops `var(--sp-1)` short of the row's left.
+        right: `calc(100vw - ${pos.left}px + var(--sp-1))`,
         width: "clamp(20rem, 28vw, 28rem)",
+        maxHeight: "calc(100vh - var(--sp-4))",
+        overflowY: "auto",
         background: "var(--bg-raised)",
         border: "var(--hairline) solid var(--border)",
         borderRadius: "var(--radius-panel)",
         boxShadow: "var(--shadow-lg)",
         padding: "var(--sp-2_5) var(--sp-3) var(--sp-3)",
-        zIndex: 10,
+        zIndex: 1000,
       }}
     >
       <div
@@ -210,7 +275,7 @@ function AttentionPopover({ attention, onClose }: { attention: Attention; onClos
       <button
         type="button"
         onClick={onClose}
-        aria-label="关闭浮窗"
+        aria-label="Close popover"
         className="transition-colors"
         style={{
           position: "absolute",
@@ -243,7 +308,7 @@ function AttentionPopover({ attention, onClose }: { attention: Attention; onClos
           }}
         >
           <div className="mono text-caption" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-0_5)" }}>
-            人类回复
+            Human reply
           </div>
           <div className="text-label" style={{ color: "var(--fg)" }}>
             <Markdown>{attention.response}</Markdown>
@@ -252,7 +317,7 @@ function AttentionPopover({ attention, onClose }: { attention: Attention; onClos
       ) : null}
       {attention.cancelled ? (
         <div className="text-caption" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1_5)" }}>
-          已取消{attention.cancelledReason ? ` · ${attention.cancelledReason}` : ""}
+          Cancelled{attention.cancelledReason ? ` · ${attention.cancelledReason}` : ""}
         </div>
       ) : null}
       {isOpenAsk ? (
@@ -269,11 +334,12 @@ function AttentionPopover({ attention, onClose }: { attention: Attention; onClos
             cursor: "pointer",
           }}
         >
-          去底部回应 ↓
+          Go to chat ↓
         </button>
       ) : null}
     </div>
   );
+  return createPortal(popover, document.body);
 }
 
 function useElapsed(iso: string): string {

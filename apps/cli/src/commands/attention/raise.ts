@@ -22,7 +22,10 @@ export function registerAttentionRaiseCommand(parent: Command): void {
     .command("raise")
     .description("Raise a Need-Human-Attention request to a human in this chat")
     .requiredOption("--chat <id>", "Chat id (or chat name resolvable by the server) the attention is anchored to")
-    .requiredOption("--target <human>", "Target human's name or agent id (must be a member of --chat)")
+    .requiredOption(
+      "--target <human>",
+      "Target human's agent uuid OR agent name (resolved in --chat's org; uuid wins on collision). Must be a member of --chat.",
+    )
     .requiredOption("--subject <text>", "Short subject line (max 500 chars)")
     .option("--body <text|@file>", "Body text, or `@path/to/file.md` to load from disk")
     .option("--requires-response", "Treat as a request (the human must reply). Default: notification.")

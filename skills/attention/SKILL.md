@@ -5,11 +5,27 @@ description: How to ask humans well — when to raise an NHA, how to write the b
 
 # Attention — asking humans well
 
+## Channel binary
+
+This document spells every CLI invocation as `first-tree …` — the canonical
+prod binary name. **Substitute your local channel** when running:
+
+| Channel | Binary | Home |
+|---|---|---|
+| Prod (npm) | `first-tree` | `~/.first-tree/` |
+| Staging | `first-tree-staging` | `~/.first-tree-staging/` |
+| Dev (in-tree) | `first-tree-dev` (alias `ftd`) | `~/.first-tree-dev/` |
+
+Operators on staging would type `first-tree-staging attention raise …` —
+flags and behaviour are identical across channels. Running agents inherit
+their channel from the daemon that started them; you can check via
+`echo $FIRST_TREE_HOME` (the runtime sets it).
+
 ## North Star
 
-**该问的时候问，不该问的时候自动处理，必须让人知道的时候再通知。**
+**Ask when you need to ask. Decide for yourself when you can. Notify when the human must know.**
 
-NHA (Need-Human-Attention) is the structured "I need a human" primitive. You raise one with `first-tree attention raise`. If you need an answer, the human responds and your turn resumes. If you only need them to know, you raise a notification and continue working. Each NHA is chat-bound (`origin.chat` is required), targets exactly one human, and carries a single structural axis: `requiresResponse` — `true` for a request (请示), `false` for a notification (通报).
+NHA (Need-Human-Attention) is the structured "I need a human" primitive. You raise one with `first-tree attention raise`. If you need an answer, the human responds and your turn resumes. If you only need them to know, you raise a notification and continue working. Each NHA is chat-bound (`origin.chat` is required), targets exactly one human, and carries a single structural axis: `requiresResponse` — `true` for a request (Ask), `false` for a notification (Notify).
 
 The system layer is intentionally thin. It stores, routes, and delivers; it does **not** decide whether you should raise, how long to wait, or what to do on timeout. Those are your job — that's why this skill exists.
 
@@ -42,21 +58,21 @@ Mapping to schema:
 The body is markdown. Use four implicit sections — question, background, what-I'll-do, validity scope:
 
 ```markdown
-## 问题
-要把 commit abc123 部署到 prod 吗？
+## Question
+Should we deploy commit abc123 to prod?
 
-## 背景
-- 上一次 prod deploy 是 3 天前
-- 当前 staging 已验证 2h，未发现 regression
-- 这次包含: <一段 diff 摘要>
+## Background
+- Last prod deploy was 3 days ago
+- Staging has been verified for 2h, no regression
+- This release: <one-paragraph diff summary>
 
-## 我会怎么做
-- 你回 yes：我立刻执行 deploy（30min 内）
-- 你回 no：我把这个 commit 留在 staging，等下次窗口
-- 4 小时没回：我会按 "no" 处理，并把任务挂起，同时升级到 oncall
+## What I'll do
+- You reply yes: I run the deploy within 30 min
+- You reply no: I leave the commit on staging until the next window
+- 4h with no reply: I treat it as "no", park the task, and escalate to oncall
 
-## 这次决定的有效范围
-仅本 commit hash。不是"以后类似的 deploy 都可以"。
+## Validity scope
+This commit hash only. Not "any similar deploy from now on".
 ```
 
 Then mirror the load-bearing parts into `metadata` so the UI can render them as first-class affordances:
@@ -67,7 +83,7 @@ Then mirror the load-bearing parts into `metadata` so the UI can render them as 
 - `metadata.tags` — `["endorse", "deploy"]`
 - `metadata.options` — structured single/multi choice the human can click (see `references/metadata-shape.md`)
 
-You can also write `metadata.questions[]` for a single NHA that asks several linked sub-questions at once (M2). At M1 末 the UI renders the top-level question; populate `questions[]` if you have it, but always write a coherent prose body too.
+You can also write `metadata.questions[]` for a single NHA that asks several linked sub-questions at once. The UI renders each question; populate `questions[]` whenever you have multiple related sub-decisions for the same human, but always write a coherent prose body too.
 
 ## CLI reference
 
@@ -79,11 +95,11 @@ The CLI calls the server-side schema described in `packages/shared/src/schemas/a
 first-tree attention raise \
   --chat prod-deploy-window \
   --target yuezengwu \
-  --subject "批准 deploy commit abc123 到 prod" \
+  --subject "Approve deploy of commit abc123 to prod" \
   --body @body.md \
   --requires-response \
-  --meta tags[0]=endorse --meta tags[1]=deploy \
-  --meta timeoutHint=4h \
+  --meta 'tags[0]=endorse' --meta 'tags[1]=deploy' \
+  --meta 'timeoutHint=4h' \
   --meta-json @options.json
 ```
 
@@ -97,9 +113,9 @@ If the target is not yet a member of `--chat`, the server rejects the raise with
 first-tree attention raise \
   --chat prod-deploy-window \
   --target yuezengwu \
-  --subject "deploy abc123 到 prod 已完成" \
+  --subject "deploy abc123 to prod completed" \
   --body @body.md \
-  --meta tags[0]=notify --meta tags[1]=deploy
+  --meta 'tags[0]=notify' --meta 'tags[1]=deploy'
 ```
 
 No `--requires-response`. The record is created with `state=closed`. The human sees it in the right-sidebar Attention list but is not asked to reply. Your turn continues immediately.
@@ -114,13 +130,13 @@ first-tree attention cancel att-9b2c \
 first-tree attention raise \
   --chat prod-deploy-window \
   --target yuezengwu \
-  --subject "批准 deploy commit def456 到 prod (取代 att-9b2c)" \
+  --subject "Approve deploy of commit def456 to prod (supersedes att-9b2c)" \
   --body @body.md \
   --requires-response \
-  --meta tags[0]=endorse --meta tags[1]=deploy
+  --meta 'tags[0]=endorse' --meta 'tags[1]=deploy'
 ```
 
-In the new body's `## 背景` section, reference the cancelled id: *"This replaces att-9b2c, which was cancelled because main advanced to def456."* The system does not link the two; the human reads the relationship from your prose.
+In the new body's `## Background` section, reference the cancelled id: *"This replaces att-9b2c, which was cancelled because main advanced to def456."* The system does not link the two; the human reads the relationship from your prose.
 
 ### Other useful commands
 
@@ -132,17 +148,23 @@ first-tree attention show <id>                          # full record incl. resp
 
 The human side (`first-tree attention respond <id> --text "..."`) is theirs to drive, not yours. Only the target can respond; only you (origin agent) can cancel.
 
+### How to wait for the response
+
+The runtime does **not** yet wake your session on `attention:responded`. To resume after a human reply, **poll `attention show <id>` periodically** (or `attention list --raised-by-me --state closed` if you're checking a batch). Recommended cadence: every 30-60s for the first 10 minutes, then back off. Don't tight-loop — and don't `sleep 4h` either; if you're idle that long, exit the turn and let the next session check.
+
+If you absolutely need a sync wait without burning a session, your handler can `exit` and rely on the next external wake (next chat message, scheduled run, etc.) to re-enter and check.
+
 ## When NOT to raise an NHA
 
 - **Yes/no buttons for trivial decisions.** "Should I name this `user` or `u`?" — decide yourself; the human can change it later.
 - **Facts you can look up.** "What deploy platform do we use?" — search the Tree, configs, chat history, and code before asking.
-- **Parallel NHAs in the same chat.** If you have several related decisions, bundle them into one NHA's `metadata.questions[]` (M2) or sequence them. The UI assumes 0 or 1 open request-NHA per chat.
+- **Parallel NHAs in the same chat.** If you have several related decisions, bundle them into one NHA's `metadata.questions[]` or sequence them. The UI assumes 0 or 1 open request-NHA per chat.
 - **"Are you there?" with no concrete decision.** The human needs to know what they're deciding. If you can't articulate the choice, you're not ready to raise.
 - **Reusing a stale answer.** A `yes` from 3 days ago does not authorize today's action — even if "it's basically the same thing." Raise a fresh NHA.
 
 ## Multi-round flows
 
-There is no built-in wizard / chain. If a human's response leads to a follow-up question, that's just `cancel` (or wait for `closed`) and `raise` a new NHA. The new body's `## 背景` should reference the previous answer: *"Based on your earlier `yes` to deploying abc123, the next decision is whether to also fast-follow with the migration in def456."*
+There is no built-in wizard / chain. If a human's response leads to a follow-up question, that's just `cancel` (or wait for `closed`) and `raise` a new NHA. The new body's `## Background` should reference the previous answer: *"Based on your earlier `yes` to deploying abc123, the next decision is whether to also fast-follow with the migration in def456."*
 
 This keeps the schema honest — each NHA is one question with one outcome, and the conversation thread lives in the chat prose, not in NHA metadata.
 

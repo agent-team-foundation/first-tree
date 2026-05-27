@@ -18,10 +18,15 @@ interface ListOptions {
 export function registerAttentionListCommand(parent: Command): void {
   parent
     .command("list")
-    .description("List attentions visible to this agent (default: attentions targeting me)")
-    .option("--raised-by-me", "Show attentions this agent raised, instead of those targeting it")
+    .description(
+      "List attentions raised by this agent (the CLI always runs in agent context — humans get their inbox via the web UI)",
+    )
+    .option(
+      "--raised-by-me",
+      "Show attentions this agent raised (default — kept as an explicit form for clarity in scripts)",
+    )
     .option("--state <state>", "open | closed | all (default: open)")
-    .option("--from-agent <id>", "Filter to attentions raised by this origin agent id")
+    .option("--from-agent <id>", "Filter to attentions raised by this origin agent id (overrides default)")
     .option("--in-chat <id>", "Filter to attentions anchored to this chat id")
     .option("-l, --limit <number>", "Max records to return (1-200)")
     .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
@@ -41,9 +46,13 @@ export function registerAttentionListCommand(parent: Command): void {
           filter.chat = options.inChat;
         }
 
-        // Default semantics: target=me (the calling agent). When --raised-by-me
-        // is set we flip to agent=me; an explicit --from-agent overrides both
-        // by pinning a specific origin agent id.
+        // Default semantics: agent=me (raised-by-me). The CLI runs in agent
+        // context (X-Agent-Id is always set), and an agent can only ever be
+        // an *origin* — never a target (targets must be type=human). The
+        // legacy default of `target=me` therefore returned [] for every
+        // CLI invocation. `--raised-by-me` is kept as an explicit synonym
+        // for backwards compatibility / script readability; an explicit
+        // `--from-agent <id>` overrides everything.
         const sdk = createSdk(options.agent);
         const meId = sdk.agentId;
         if (meId === undefined) {
@@ -55,10 +64,8 @@ export function registerAttentionListCommand(parent: Command): void {
         }
         if (options.fromAgent !== undefined) {
           filter.agent = options.fromAgent;
-        } else if (options.raisedByMe === true) {
-          filter.agent = meId;
         } else {
-          filter.target = meId;
+          filter.agent = meId;
         }
 
         if (options.limit !== undefined) {

@@ -287,13 +287,13 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
               textTransform: "uppercase",
             }}
           >
-            请示 · ASK
+            ASK
           </span>
           <span className="mono text-label font-semibold" style={{ color: "var(--fg-error-strong)" }}>
             {fromName}
           </span>
           <span className="mono text-caption" style={{ color: "var(--fg-2)" }}>
-            · {clock} · 已等待 {elapsed}
+            · {clock} · waiting {elapsed}
           </span>
           {collapsed ? (
             <span
@@ -320,8 +320,8 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
           </span>
           <button
             type="button"
-            aria-label={collapsed ? "展开请示卡片" : "折叠请示卡片以查看历史"}
-            title={collapsed ? "展开" : "折叠卡片以查看历史"}
+            aria-label={collapsed ? "Expand ask card" : "Collapse ask card to view chat history"}
+            title={collapsed ? "Expand" : "Collapse to view history"}
             onClick={() => setCollapsed((v) => !v)}
             className="inline-flex items-center justify-center transition-colors"
             style={{
@@ -334,7 +334,7 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
               fontWeight: 700,
             }}
           >
-            {collapsed ? "▾ 展开" : "▴ 折叠"}
+            {collapsed ? "▾ Expand" : "▴ Collapse"}
           </button>
         </div>
 
@@ -385,7 +385,7 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
               <textarea
                 value={freeText}
                 onChange={(e) => setFreeText(e.target.value)}
-                placeholder="自由回复…"
+                placeholder="Free-form reply…"
                 rows={3}
                 disabled={mutation.isPending}
                 className="w-full outline-none text-body"
@@ -435,7 +435,7 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
               opacity: !canSubmit || mutation.isPending ? 0.4 : 1,
             }}
           >
-            {mutation.isPending ? "提交中…" : questions.length > 0 && !freeTextOpen ? "提交所选" : "回复"}
+            {mutation.isPending ? "Submitting…" : questions.length > 0 && !freeTextOpen ? "Submit selection" : "Reply"}
           </button>
           {questions.length > 0 ? (
             <button
@@ -452,12 +452,12 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
                 cursor: mutation.isPending ? "not-allowed" : "pointer",
               }}
             >
-              {freeTextOpen ? "改回选项…" : "改用自由回复…"}
+              {freeTextOpen ? "Back to options…" : "Switch to free-form…"}
             </button>
           ) : null}
           <span style={{ flex: 1 }} />
           <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-            enter 提交 · esc 取消选中
+            enter to submit · esc to clear
           </span>
         </div>
       </div>
@@ -505,7 +505,7 @@ function CompactRows({
         }}
         title={excerpt}
       >
-        {excerpt || "（无正文）"}
+        {excerpt || "(no body)"}
       </div>
       <div
         className="flex items-center"
@@ -532,15 +532,15 @@ function CompactRows({
               opacity: isPending ? 0.4 : 1,
             }}
           >
-            {isPending ? "提交中…" : `${recommendedLabel}（推荐）`}
+            {isPending ? "Submitting…" : `${recommendedLabel} (recommended)`}
           </button>
         ) : (
           <span className="text-caption" style={{ color: "var(--fg-3)" }}>
             {isMultiQuestion
-              ? "多题 — 请展开后逐题作答"
+              ? "Multi-question — expand to answer each"
               : hasOptions
-                ? "多选 — 请展开后挑选"
-                : "需要自由回复 — 请展开后输入"}
+                ? "Multi-select — expand to choose"
+                : "Free-form reply — expand to type"}
           </span>
         )}
         <span style={{ flex: 1 }} />
@@ -558,7 +558,7 @@ function CompactRows({
             textUnderlineOffset: "var(--sp-0_5)",
           }}
         >
-          {otherCount > 0 ? `还有 ${otherCount} 个选项 — 展开查看 →` : "展开查看 →"}
+          {otherCount > 0 ? `${otherCount} more option${otherCount === 1 ? "" : "s"} — expand →` : "Expand →"}
         </button>
       </div>
     </>
@@ -592,7 +592,7 @@ function QuestionBlock({
           className="mono text-caption"
           style={{ color: "var(--fg-3)", marginBottom: "var(--sp-0_75)", textTransform: "uppercase" }}
         >
-          问题 {index} / {total}
+          Question {index} / {total}
         </div>
       ) : null}
       <div className="text-body font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-1)" }}>
@@ -607,7 +607,7 @@ function QuestionBlock({
         <OptionsList group={question.options} selected={selected} disabled={disabled} onToggle={onToggle} />
       ) : (
         <p className="text-label" style={{ color: "var(--fg-3)" }}>
-          此题需要自由回复（请打开下方"改用自由回复"输入框）。
+          This question needs a free-form reply — use the "Switch to free-form…" button below.
         </p>
       )}
     </div>
