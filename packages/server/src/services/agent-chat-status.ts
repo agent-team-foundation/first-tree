@@ -15,23 +15,24 @@ import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
+import { attentions } from "../db/schema/attentions.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
-import { pendingQuestions } from "../db/schema/pending-questions.js";
 
 /**
  * Single source of truth for per-(agent,chat) composite status.
  *
  * `resolveAgentChatStatuses` is the ONE producer behind every chat surface:
  *   - `GET /chats/:chatId/agent-status` (this file's `getChatAgentStatuses`),
- *   - the chat-list `failedAgentIds` / `liveActivity` / `pendingQuestionAgentIds`
- *     projections in `services/me-chat.ts`.
+ *   - the chat-list `failedAgentIds` / `liveActivity` projections in
+ *     `services/me-chat.ts` (the legacy `pendingQuestionAgentIds` projection
+ *     it used to feed has been retired with the three-rule simplification).
  *
  * It folds the four orthogonal axes per agent and reduces them via the shared
  * `buildAgentChatStatus` (so `main` is always derived, never hand-set):
  *   - reachability (A): the agent has a bound client (`agent_presence.client_id`)
  *   - engagement   (C): `agent_chat_sessions.state` for this pair
  *   - activity     (D): a fresh, non-terminal latest `session_events` row
- *   - attention       : a pending AskUserQuestion (`pending_questions`)
+ *   - attention       : an OPEN attention raised by this agent (`attentions.state='open'`)
  *     OR a failure (session `errored` OR runtime `error`)
  *
  * The `errored` predicate lives here ONCE (it used to be duplicated as a TS
@@ -151,21 +152,28 @@ export function withTurnNarration(base: LiveActivity | null, narrationText: unkn
 }
 
 /**
- * Per-chat set of agent ids with a PENDING question (`pending_questions`
- * status = 'pending'), grouped chatId → agentId[]. Chats with no pending
- * question are absent from the map (caller treats absence as []). One
- * indexed read via `idx_pending_questions_chat_status`. Not membership- or
- * type-filtered (humans never write pending questions, so the set is
- * effectively non-human).
+ * Per-chat set of agent ids who have raised at least one OPEN attention
+ * (`attentions.state = 'open'`) in this chat, grouped chatId → originAgentId[].
+ * Chats with no open attention are absent from the map (caller treats
+ * absence as []). One indexed read via `idx_attentions_chat_open`.
+ *
+ * Replaces the legacy `pending_questions` source — that table no longer has
+ * a production writer (PR #578 removed the `format=question` write path) and
+ * NHA M1 introduced `attentions` as the canonical "agent is waiting for a
+ * human" store. The downstream `needsYou` axis semantics are unchanged: an
+ * agent is needs-you in a chat iff it has an open attention there (target
+ * filtering happens at the caller-projection layer, e.g. me-chat's
+ * `chatHasOpenAttentionForMe`, not here — this set is the per-(agent, chat)
+ * truth that surfaces to the right-side status panel).
  */
-export async function derivePendingQuestions(db: Database, chatIds: string[]): Promise<Map<string, string[]>> {
+export async function deriveOpenAttentionAgents(db: Database, chatIds: string[]): Promise<Map<string, string[]>> {
   if (chatIds.length === 0) return new Map();
   const rows = await db
-    .select({ chatId: pendingQuestions.chatId, agentId: pendingQuestions.agentId })
-    .from(pendingQuestions)
-    .where(and(inArray(pendingQuestions.chatId, chatIds), eq(pendingQuestions.status, "pending")));
-  // Dedupe per chat: one agent may have several pending questions in the same
-  // chat, but the field is "agents with a pending question" (a set).
+    .select({ chatId: attentions.originChatId, agentId: attentions.originAgentId })
+    .from(attentions)
+    .where(and(inArray(attentions.originChatId, chatIds), eq(attentions.state, "open")));
+  // Dedupe per chat: one agent may have several open attentions in the same
+  // chat, but the field is "agents with an open attention" (a set).
   const sets = new Map<string, Set<string>>();
   for (const row of rows) {
     const set = sets.get(row.chatId);
@@ -301,15 +309,18 @@ const pairKey = (chatId: string, agentId: string) => `${chatId}${ROW_SEP}${agent
  *   - non-human speakers (the /agent-status set; every speaker resolves so a
  *     reachable-but-idle speaker still reads `ready` and an unbound one
  *     `offline`), and
- *   - non-human agents with a PENDING question (so the chat-list
- *     `pendingQuestionAgentIds`, which is NOT speaker-filtered, is reproduced
- *     from this one call even for a pending agent that has since left).
+ *   - non-human agents who have raised an OPEN attention (covers the rare
+ *     case where the asking agent has since left the chat — its open
+ *     attention is still surfaced on the panel).
  * Non-speaker session-holders are intentionally NOT a union source: after the
  * chat-list live-dot narrowed to speakers they surface on no list/panel.
  *
  * Callers project per-surface (each already knows its speaker set):
  *   - /agent-status → filter to non-human speakers (getChatAgentStatuses).
- *   - me/chats failed/live-dot → speaker-filtered; pending → not filtered.
+ *   - me/chats failed/live-dot → speaker-filtered. `needsYou` is no longer
+ *     consumed by me-chat (R2/R3 are sourced from EXISTS subqueries on
+ *     `messages.metadata` and `attentions.target_human_id`); the panel
+ *     still uses `needsYou` to show "agent X is waiting".
  */
 export async function resolveAgentChatStatuses(
   db: Database,
@@ -328,25 +339,30 @@ export async function resolveAgentChatStatuses(
       and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker"), ne(agents.type, "human")),
     );
 
-  // -- Union source 2: pending-question agents per chat (raw; may include a
-  // non-speaker who left while a question was pending). Filter to non-human.
-  const pendingByChat = await derivePendingQuestions(db, chatIds);
-  const pendingAllIds = [...new Set([...pendingByChat.values()].flat())];
-  const nonHumanPending =
-    pendingAllIds.length > 0
+  // -- Union source 2: agents with an OPEN attention per chat. May include
+  // a non-speaker who left while an attention was open. Filter to non-human
+  // (attentions can in principle be raised by any agent type, but the service
+  // layer constrains origin_agent to a chat speaker — humans don't raise
+  // attentions in this flow).
+  const openAttentionByChat = await deriveOpenAttentionAgents(db, chatIds);
+  const openAttentionAllIds = [...new Set([...openAttentionByChat.values()].flat())];
+  const nonHumanWithOpenAttention =
+    openAttentionAllIds.length > 0
       ? new Set(
           (
             await db
               .select({ uuid: agents.uuid })
               .from(agents)
-              .where(and(inArray(agents.uuid, pendingAllIds), ne(agents.type, "human")))
+              .where(and(inArray(agents.uuid, openAttentionAllIds), ne(agents.type, "human")))
           ).map((r) => r.uuid),
         )
       : new Set<string>();
 
-  // Build the union + a per-chat pending-set for the needsYou axis.
+  // Build the union + a per-chat needs-you set (agents with at least one open
+  // attention in that chat). The set's membership drives `AgentChatStatus.needsYou`
+  // for the right-side status panel.
   const unionByChat = new Map<string, Set<string>>();
-  const pendingSetByChat = new Map<string, Set<string>>();
+  const needsYouSetByChat = new Map<string, Set<string>>();
   const addUnion = (chatId: string, agentId: string) => {
     let s = unionByChat.get(chatId);
     if (!s) {
@@ -356,14 +372,14 @@ export async function resolveAgentChatStatuses(
     s.add(agentId);
   };
   for (const r of speakerRows) addUnion(r.chatId, r.agentId);
-  for (const [chatId, ids] of pendingByChat) {
+  for (const [chatId, ids] of openAttentionByChat) {
     const set = new Set<string>();
     for (const id of ids) {
-      if (!nonHumanPending.has(id)) continue;
+      if (!nonHumanWithOpenAttention.has(id)) continue;
       addUnion(chatId, id);
       set.add(id);
     }
-    if (set.size > 0) pendingSetByChat.set(chatId, set);
+    if (set.size > 0) needsYouSetByChat.set(chatId, set);
   }
   if (unionByChat.size === 0) return out;
 
@@ -415,7 +431,7 @@ export async function resolveAgentChatStatuses(
 
   const now = Date.now();
   for (const [chatId, agentSet] of unionByChat) {
-    const pendingSet = pendingSetByChat.get(chatId);
+    const needsYouSet = needsYouSetByChat.get(chatId);
     const perAgentActivity = activityByChat.get(chatId);
     const arr: AgentChatStatus[] = [];
     for (const agentId of agentSet) {
@@ -430,7 +446,7 @@ export async function resolveAgentChatStatuses(
           agentId,
           reachable: p?.clientId != null,
           errored: computeErrored(sess, p?.runtimeState ?? null, now),
-          needsYou: pendingSet?.has(agentId) ?? false,
+          needsYou: needsYouSet?.has(agentId) ?? false,
           working,
           engagement,
           // The activity is a descriptor of in-flight work — carry it only

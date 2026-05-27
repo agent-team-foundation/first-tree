@@ -74,8 +74,8 @@ export async function sweepChatArchive(
  * Implemented as a single `INSERT … SELECT … ON CONFLICT` round-trip:
  *  - The inner CTE picks chats whose `BOOL_AND(entity_state IN
  *    ('closed','merged'))` and idle timestamp both hold, and that have no
- *    `pending` ask-user question outstanding. The pending-question carve-out
- *    is chat-scoped (a single pending row defers the whole chat) because the
+ *    open NHA `attentions` outstanding. The attention carve-out is
+ *    chat-scoped (a single open row defers the whole chat) because the
  *    askee is always some human member of the chat, so per-user dispatch
  *    would not buy anything and the chat-level skip is cheaper.
  *  - The outer SELECT joins back to the mapping table for the (chat,
@@ -101,8 +101,8 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
          AND c.last_message_at IS NOT NULL
          AND c.last_message_at < NOW() - make_interval(secs => ${idleSeconds})
          AND NOT EXISTS (
-           SELECT 1 FROM pending_questions pq
-            WHERE pq.chat_id = m.chat_id AND pq.status = 'pending'
+           SELECT 1 FROM attentions a
+            WHERE a.origin_chat_id = m.chat_id AND a.state = 'open'
          )
        GROUP BY m.chat_id
       HAVING bool_and(m.entity_state IN ('closed', 'merged'))
@@ -136,8 +136,8 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
  *   - the user has no unread mentions,
  *   - the user's engagement is currently `active` (either an explicit
  *     row or the implicit default via missing row),
- *   - the chat has no `pending` ask-user question outstanding (chat-level
- *     skip, same rationale as Route A: askee is always a human member).
+ *   - the chat has no open NHA `attentions` outstanding (chat-level skip,
+ *     same rationale as Route A: askee is always a human member).
  *
  * The `last_read_at IS NOT NULL` condition implies `cus` is materialised,
  * so the `COALESCE(cus.engagement_status, 'active') = 'active'` clause
@@ -170,8 +170,8 @@ async function sweepUnmapped(db: Database, idleSeconds: number, batchSize: numbe
        AND cus.unread_mention_count = 0
        AND cus.engagement_status = 'active'
        AND NOT EXISTS (
-         SELECT 1 FROM pending_questions pq
-          WHERE pq.chat_id = cm.chat_id AND pq.status = 'pending'
+         SELECT 1 FROM attentions a
+          WHERE a.origin_chat_id = cm.chat_id AND a.state = 'open'
        )
      LIMIT ${batchSize}
         ON CONFLICT (chat_id, agent_id) DO UPDATE

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { agentChatStatusSchema, type LiveActivity, RUNTIME_STALE_MS } from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { pendingQuestions } from "../db/schema/pending-questions.js";
 import {
   computeErrored,
   computeWorking,
@@ -72,17 +71,14 @@ describe("agent-chat-status", () => {
   }
 
   describe("getChatAgentStatuses (the /agent-status projection)", () => {
-    it("folds reachability + active session + pending question into needs_you, and excludes humans", async () => {
+    it("folds reachability + active session + open attention into needs_you, and excludes humans", async () => {
       const { app, admin, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId);
       await setSession(peer.agent.uuid, chatId, "active");
-      await app.db.insert(pendingQuestions).values({
-        id: randomUUID(),
-        agentId: peer.agent.uuid,
-        chatId,
-        messageId: randomUUID(),
-        status: "pending",
-      });
+      await app.db.execute(sql`
+        INSERT INTO attentions (id, origin_agent_id, origin_chat_id, target_human_id, subject, body, requires_response, state, metadata, created_at)
+        VALUES (${randomUUID()}, ${peer.agent.uuid}, ${chatId}, ${admin.humanAgentUuid}, 'q', '', true, 'open', '{}'::jsonb, NOW())
+      `);
 
       const statuses = await getChatAgentStatuses(app.db, chatId);
       const s = statuses.find((x) => x.agentId === peer.agent.uuid);
@@ -295,19 +291,16 @@ describe("agent-chat-status", () => {
       expect((await resolveAgentChatStatuses(getApp().db, [])).size).toBe(0);
     });
 
-    it("union includes a non-speaker agent that has a pending question (not just speakers)", async () => {
-      const { app, peer, chatId } = await newChatWithAgent();
+    it("union includes a non-speaker agent that has an open attention (not just speakers)", async () => {
+      const { app, admin, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId);
-      // An agent that is NOT a speaker of this chat but has a pending question
-      // in it (e.g. it left while a question was outstanding).
+      // An agent that is NOT a speaker of this chat but holds an open
+      // attention in it (e.g. it left while the attention was still open).
       const ghost = await createTestAgent(app, { name: `ghost-${randomUUID().slice(0, 6)}` });
-      await app.db.insert(pendingQuestions).values({
-        id: randomUUID(),
-        agentId: ghost.agent.uuid,
-        chatId,
-        messageId: randomUUID(),
-        status: "pending",
-      });
+      await app.db.execute(sql`
+        INSERT INTO attentions (id, origin_agent_id, origin_chat_id, target_human_id, subject, body, requires_response, state, metadata, created_at)
+        VALUES (${randomUUID()}, ${ghost.agent.uuid}, ${chatId}, ${admin.humanAgentUuid}, 'q', '', true, 'open', '{}'::jsonb, NOW())
+      `);
 
       const all = (await resolveAgentChatStatuses(app.db, [chatId])).get(chatId) ?? [];
       const ghostStatus = all.find((s) => s.agentId === ghost.agent.uuid);

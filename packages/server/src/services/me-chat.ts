@@ -325,6 +325,22 @@ export async function listMeChats(
   // postgres-js returns timestamptz as ISO strings when bound through
   // a raw sql template; coerce below so the response uses ISO
   // strings consistently.
+  //
+  // Two correlated EXISTS subqueries feed the three-rule "Needs
+  // attention" predicate on the front-end:
+  //
+  //   - `chat_has_explicit_mention_to_me` — drives R2. Scans messages in
+  //     the caller's unread window (`m.created_at > last_read_at`) for
+  //     any whose `metadata->'mentions'` JSONB array contains the
+  //     caller's human-agent uuid. Distinguishes explicit `@<me>` from
+  //     the v1 1-on-1 implicit DM auto-mention (services/message.ts:282
+  //     `dmAutoProjection`), which bumps `unread_mention_count` for the
+  //     red dot but never writes the recipient into `metadata.mentions`.
+  //     Uses existing `idx_messages_chat_time` for the chat+window scan.
+  //
+  //   - `chat_has_open_attention_for_me` — drives R3. Scans the NHA
+  //     `attentions` table for any open row targeting the caller in this
+  //     chat. Uses `idx_attentions_chat_open`.
   const rawRows = (await db.execute(sql`
     SELECT
       c.id                  AS chat_id,
@@ -339,7 +355,19 @@ export async function listMeChats(
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
       COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
       ${chatSourceSqlExpression} AS source,
-      c.metadata->>'entityType' AS entity_type
+      c.metadata->>'entityType' AS entity_type,
+      EXISTS (
+        SELECT 1 FROM messages m
+         WHERE m.chat_id = c.id
+           AND m.created_at > COALESCE(cus.last_read_at, '-infinity'::timestamptz)
+           AND m.metadata -> 'mentions' @> jsonb_build_array(${humanAgentId}::text)
+      ) AS chat_has_explicit_mention_to_me,
+      EXISTS (
+        SELECT 1 FROM attentions a
+         WHERE a.origin_chat_id = c.id
+           AND a.state = 'open'
+           AND a.target_human_id = ${humanAgentId}
+      ) AS chat_has_open_attention_for_me
       FROM chats c
       JOIN chat_membership cm
         ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
@@ -373,6 +401,8 @@ export async function listMeChats(
     engagement_status: ChatEngagementStatus;
     source: ChatSource;
     entity_type: string | null;
+    chat_has_explicit_mention_to_me: boolean;
+    chat_has_open_attention_for_me: boolean;
   }>;
 
   const toDate = (v: Date | string | null): Date | null => {
@@ -407,7 +437,7 @@ export async function listMeChats(
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
   // Per-chat non-human speaker set — the filter for the failed / live-dot
-  // projections below (pending is intentionally NOT speaker-filtered).
+  // projections below.
   const nonHumanSpeakersByChat = new Map<string, Set<string>>();
   for (const p of participantRows) {
     const list = participantsByChat.get(p.chatId) ?? [];
@@ -444,9 +474,12 @@ export async function listMeChats(
 
   // Manager-scope: non-human agent UUIDs the caller manages
   // (`agents.manager_id = caller.member_id`). Drives the "mine" narrowing on
-  // the `failedAgentIds` / `pendingQuestionAgentIds` projections below — so a
-  // watcher (or peer speaker) is no longer pinned into "Needs attention" by
-  // someone else's broken / waiting agent.
+  // the `failedAgentIds` projection (R1) below — so a watcher (or peer speaker)
+  // is no longer pinned into "Needs attention" by someone else's broken agent.
+  // The `pendingQuestionAgentIds` projection it used to feed is now retired
+  // (R2/R3 sourced from `chat_has_explicit_mention_to_me` /
+  // `chat_has_open_attention_for_me` above); the field is kept emitted as
+  // `[]` for one release for old-web skew compatibility.
   //
   // The `ne(type, 'human')` guard excludes the caller's own human agent (which
   // is self-managed, `manager_id = caller.member_id` per `createTestAdmin` /
@@ -474,9 +507,7 @@ export async function listMeChats(
 
   const liveActivityByChat = new Map<string, LiveActivity>();
   const failedByChat = new Map<string, string[]>();
-  const pendingByChat = new Map<string, string[]>();
   const busyByChat = new Map<string, string[]>();
-  const hasOpenQuestionByChat = new Map<string, boolean>();
   for (const [chatId, statuses] of statusByChat) {
     const speakers = nonHumanSpeakersByChat.get(chatId);
     // live-dot: freshest activity among non-human SPEAKERS. (Narrowed from the
@@ -484,7 +515,6 @@ export async function listMeChats(
     // chat, and never lights for a human predictive-active session.)
     let freshest: { activity: LiveActivity; startedMs: number } | null = null;
     const failed: string[] = [];
-    const pending: string[] = [];
     const busy: string[] = [];
     for (const s of statuses) {
       const isSpeaker = speakers?.has(s.agentId) ?? false;
@@ -503,23 +533,14 @@ export async function listMeChats(
       // `liveActivity` alone can never cover. NOT narrowed to mine — "someone
       // is working" is informational, not an attention signal.
       if (isSpeaker && s.working) busy.push(s.agentId);
-      // pending — NOT speaker-filtered (a pending agent that has since left
-      // the chat still counts, matching the prior `derivePendingQuestions`
-      // surface), AND narrowed to "mine" (R2). The front-end covers R3
-      // (caller-is-speaker fallback) via the separate `chatHasOpenQuestion`
-      // boolean below — which stays raw, unfiltered.
-      if (s.needsYou && isMine) pending.push(s.agentId);
-      // chatHasOpenQuestion — raw "any agent in this chat has a pending
-      // question" bit. Feeds the front-end R3 rule (a speaker in a chat with
-      // an open question is in attention even if the asking agent is someone
-      // else's). Computed over the same union (non-human speakers + non-human
-      // pending) that `resolveAgentChatStatuses` returns, so a pending agent
-      // that has left still flips this true.
-      if (s.needsYou) hasOpenQuestionByChat.set(chatId, true);
+      // (s.needsYou is intentionally NOT consumed here in the three-rule
+      // refactor. R2/R3 are now sourced directly from the EXISTS subqueries
+      // — see `chat_has_explicit_mention_to_me` / `chat_has_open_attention_for_me`.
+      // The per-(agent, chat) `needsYou` axis remains live for the right-side
+      // status panel via `GET /chats/:id/agent-status`.)
     }
     if (freshest) liveActivityByChat.set(chatId, freshest.activity);
     if (failed.length > 0) failedByChat.set(chatId, failed);
-    if (pending.length > 0) pendingByChat.set(chatId, pending);
     if (busy.length > 0) busyByChat.set(chatId, busy);
   }
 
@@ -572,10 +593,16 @@ export async function listMeChats(
       canReply: isSpeaker,
       engagementStatus: r.engagement_status,
       liveActivity: liveActivityByChat.get(r.chat_id) ?? null,
-      pendingQuestionAgentIds: pendingByChat.get(r.chat_id) ?? [],
+      // Deprecated fields — server permanently emits empty / false for one
+      // release so old web bundles don't crash on a missing key. Followup PR
+      // drops them. Three-rule refactor sources R2/R3 from the two new
+      // booleans below.
+      pendingQuestionAgentIds: [],
+      chatHasOpenQuestion: false,
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
       busyAgentIds: busyByChat.get(r.chat_id) ?? [],
-      chatHasOpenQuestion: hasOpenQuestionByChat.get(r.chat_id) ?? false,
+      chatHasExplicitMentionToMe: r.chat_has_explicit_mention_to_me,
+      chatHasOpenAttentionForMe: r.chat_has_open_attention_for_me,
     };
   });
 

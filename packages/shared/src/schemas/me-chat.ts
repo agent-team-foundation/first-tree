@@ -246,13 +246,13 @@ export const meChatRowSchema = z.object({
    */
   liveActivity: liveActivitySchema.nullable(),
   /**
-   * Speakers in this chat with a PENDING AskUserQuestion waiting on a human
-   * (`pending_questions.status === 'pending'`). Drives the chat-list
-   * "needs-you" attention signal without opening the chat. Per-(agent,chat),
-   * derived at query time from the existing `pending_questions` table (no
-   * schema migration). `.default([])` for version skew: an older server
-   * build that predates this field would otherwise blank the row on a
-   * web-ahead deploy.
+   * @deprecated Replaced by `chatHasOpenAttentionForMe` (NHA M1 attentions
+   * table). The legacy `pending_questions` data source no longer has any
+   * production writer (PR #578 removed the `format=question` write path),
+   * and the new R3 rule sources attention directly from
+   * `attentions.target_human_id = caller`. Server permanently emits `[]`
+   * for one release so old web bundles don't crash on a missing key; a
+   * followup PR drops the field entirely. New code MUST NOT consume it.
    */
   pendingQuestionAgentIds: z.array(z.string()).default([]),
   /**
@@ -285,24 +285,61 @@ export const meChatRowSchema = z.object({
    */
   busyAgentIds: z.array(z.string()).default([]),
   /**
-   * True iff this chat has at least one non-human agent with a pending
-   * `AskUserQuestion` (`pending_questions.status === 'pending'`), regardless
-   * of whether that agent is managed by the caller. Drives the chat-list
-   * "Needs attention" speaker-fallback rule (R3) on the front-end: a chat
-   * with an open question pins for callers who are HUMAN speakers in it,
-   * even when the asking agent belongs to a peer manager. Keeps
-   * `pendingQuestionAgentIds` cleanly narrowed to caller-managed so the
-   * row's needs-you indicator stays specific to "agents I manage".
-   *
-   * Derived at query time (no schema migration). `.default(false)` for
-   * version skew: an older server build that predates this field would
-   * otherwise produce `undefined`, which silently disables R3 on the new
-   * web — exactly the conservative degradation we want during a
-   * web-ahead-of-server rollout (R1/R2/R4 continue to fire correctly).
-   *
-   * See docs/development/needs-attention-scoping.20260526.md §4 / §5.
+   * @deprecated Same retirement as `pendingQuestionAgentIds`. The R3
+   * "speaker fallback on any open question" rule was retired in the
+   * three-rule simplification (R1 = my failed agent, R2 = explicit
+   * `@<me>`, R3 = open attention targeting me). Server permanently
+   * emits `false` for one release; followup PR drops the field.
+   * New code MUST NOT consume it.
    */
   chatHasOpenQuestion: z.boolean().default(false),
+  /**
+   * True iff there exists at least one unread message in this chat whose
+   * `messages.metadata.mentions` array explicitly contains the caller's
+   * human-agent UUID. Drives the chat-list R2 rule of the three-rule
+   * "Needs attention" predicate (R1 = my failed agent, R2 = explicit
+   * @<me>, R3 = open attention).
+   *
+   * Distinguishes explicit `@<me>` from the v1 1-on-1 implicit DM
+   * auto-mention: the latter still bumps `unreadMentionCount` for the red
+   * dot (services/message.ts:282 `dmAutoProjection`) but never writes the
+   * recipient into `metadata.mentions`, so a 1-on-1 agent → human plain
+   * final message correctly leaves `chatHasExplicitMentionToMe = false`.
+   *
+   * Unread window = `(cus.last_read_at, NOW()]`; NULL `last_read_at` means
+   * "never read", treated as "every message counts".
+   *
+   * Derived at query time via a correlated `EXISTS` on `messages` joined
+   * to the per-row `chat_user_state.last_read_at`. No schema migration.
+   * `.default(false)` for version skew: an older server build that
+   * predates this field would otherwise produce `undefined`, which —
+   * combined with the strict `=== true` check in the front-end predicate
+   * (`group-rows.ts`) — silently disables R2 on the new web during a
+   * web-ahead-of-server rollout. R1 keeps firing.
+   */
+  chatHasExplicitMentionToMe: z.boolean().default(false),
+  /**
+   * True iff there exists at least one `state = 'open'` row in the NHA
+   * `attentions` table whose `target_human_id` is the caller's
+   * human-agent UUID, anchored to this chat via `origin_chat_id`. Drives
+   * the R3 rule of the three-rule "Needs attention" predicate.
+   *
+   * Supersedes the legacy `chatHasOpenQuestion` / `pendingQuestionAgentIds`
+   * path: NHA M1 introduced `attentions.target_human_id` as the explicit
+   * "who is this Attention for" signal, eliminating the need for the
+   * speaker-fallback fudge that R3 used to ride on. The legacy fields
+   * keep being emitted as `[]` / `false` for one release for old-web
+   * compat; this field is the canonical source going forward.
+   *
+   * Note this is target-filtered (per-caller), unlike the per-agent panel's
+   * `needsYou` axis (in `agent-chat-status.ts`) which is *not* target-
+   * filtered. Both surfaces read from `attentions` but project different
+   * dimensions.
+   *
+   * `.default(false)` for the same version-skew rationale as
+   * `chatHasExplicitMentionToMe`.
+   */
+  chatHasOpenAttentionForMe: z.boolean().default(false),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 

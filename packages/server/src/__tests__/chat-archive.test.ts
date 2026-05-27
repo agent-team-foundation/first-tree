@@ -17,11 +17,11 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
+import { attentions } from "../db/schema/attentions.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
-import { pendingQuestions } from "../db/schema/pending-questions.js";
 import { sweepChatArchive } from "../services/chat-archive.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -76,18 +76,23 @@ async function addHumanMember(app: App, chatId: string, agentId: string): Promis
   });
 }
 
-async function seedPendingQuestion(
+async function seedAttention(
   app: App,
   chatId: string,
   agentId: string,
-  status: "pending" | "answered" | "superseded" = "pending",
+  targetHumanId: string,
+  state: "open" | "closed" = "open",
 ): Promise<void> {
-  await app.db.insert(pendingQuestions).values({
+  await app.db.insert(attentions).values({
     id: randomUUID(),
-    chatId,
-    agentId,
-    messageId: randomUUID(),
-    status,
+    originAgentId: agentId,
+    originChatId: chatId,
+    targetHumanId,
+    subject: "q",
+    body: "",
+    requiresResponse: true,
+    state,
+    metadata: {},
   });
 }
 
@@ -333,11 +338,11 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
       boundVia: "direct",
       entityState: "merged",
     });
-    // Delegate has an unanswered ask-user question outstanding on this chat.
-    // Even though every mapped entity is terminal and the chat is idle, the
-    // archive must wait — otherwise the question disappears from the user's
+    // Delegate has an unanswered Attention outstanding on this chat. Even
+    // though every mapped entity is terminal and the chat is idle, the
+    // archive must wait — otherwise the attention disappears from the user's
     // "needs you" surface with the chat itself.
-    await seedPendingQuestion(app, chatId, delegate, "pending");
+    await seedAttention(app, chatId, delegate, human, "open");
 
     const result = await sweepChatArchive(app.db);
 
@@ -345,7 +350,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     expect(await getEngagement(app, chatId, human)).toBeNull();
   });
 
-  it("ignores answered / superseded questions when deciding eligibility", async () => {
+  it("ignores closed attentions when deciding eligibility", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
@@ -361,9 +366,9 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
       boundVia: "direct",
       entityState: "merged",
     });
-    // Two historic rows, both resolved — must not block the archive.
-    await seedPendingQuestion(app, chatId, delegate, "answered");
-    await seedPendingQuestion(app, chatId, delegate, "superseded");
+    // Two historic closed attentions — must not block the archive.
+    await seedAttention(app, chatId, delegate, human, "closed");
+    await seedAttention(app, chatId, delegate, human, "closed");
 
     const result = await sweepChatArchive(app.db);
 
@@ -540,7 +545,7 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
     expect(await getEngagement(app, chatId, robot)).toBeNull();
   });
 
-  it("does not archive when the chat has a pending ask-user question", async () => {
+  it("does not archive when the chat has an open Attention outstanding", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
@@ -548,9 +553,9 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
     const chatId = await seedChat(app, admin.organizationId, longAgo());
     await addHumanMember(app, chatId, human);
     await seedReadAcknowledgement(app, chatId, human);
-    // Same carve-out as Route A: a delegate's outstanding question keeps the
-    // chat out of the Archived tab even on the long-idle no-mapping path.
-    await seedPendingQuestion(app, chatId, delegate, "pending");
+    // Same carve-out as Route A: a delegate's outstanding attention keeps
+    // the chat out of the Archived tab even on the long-idle no-mapping path.
+    await seedAttention(app, chatId, delegate, human, "open");
 
     const result = await sweepChatArchive(app.db);
 

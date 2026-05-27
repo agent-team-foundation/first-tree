@@ -9,8 +9,8 @@ import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { NotFoundError } from "../errors.js";
+import { closeOpenAttentionsByChat } from "./attention.js";
 import type { Notifier } from "./notifier.js";
-import { markSupersededByChat } from "./questions.js";
 
 export const SUMMARY_MAX_LENGTH = 50;
 
@@ -381,19 +381,19 @@ async function transitionSessionState(
       })
       .where(eq(agentPresence.agentId, agentId));
 
-    // Archive transition: any pending ask-user questions on this chat are
-    // now unanswerable (the runtime that emitted them may already be gone).
-    // Mark them superseded inside the same transaction so a rollback would
-    // also revert the question state — preserves atomicity with the chat
-    // session state flip itself.
+    // Archive transition: any open NHA attentions on this chat are now
+    // unanswerable (the runtime that raised them may already be gone). Close
+    // them inside the same transaction so a rollback would also revert the
+    // attention state — preserves atomicity with the chat session state flip
+    // itself.
     if (target === "evicted") {
       // No explicit needs-you push needed here: this transition emits a
       // post-commit `notifySessionStateChange` below, which the web admin WS
-      // already maps to a `me/chats` refetch — so the cleared (superseded)
-      // pending question drops out of `pendingQuestionAgentIds` on the next
-      // list load. The client-claim path (client.ts) has no such session:state
+      // already maps to a `me/chats` refetch — so the cleared (closed)
+      // attention drops out of `chatHasOpenAttentionForMe` on the next list
+      // load. The client-claim path (client.ts) has no such session:state
       // change, which is why only that path fires `notifyChatMessage`.
-      await markSupersededByChat(tx, chatId, "chat_archived");
+      await closeOpenAttentionsByChat(tx, chatId, "chat_archived");
     }
 
     finalState = target;

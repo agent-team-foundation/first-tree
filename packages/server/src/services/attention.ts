@@ -8,6 +8,7 @@ import type {
 } from "@first-tree/shared";
 import { AGENT_TYPES } from "@first-tree/shared";
 import { and, desc, eq, inArray, lt, or, type SQL } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { attentions } from "../db/schema/attentions.js";
@@ -358,4 +359,66 @@ export async function listAttentions(
   const where = conditions.length === 1 ? conditions[0] : and(...conditions);
   const rows = await db.select().from(attentions).where(where).orderBy(desc(attentions.createdAt)).limit(limit);
   return rows.map(toWireRecord);
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle: bulk-close on chat archive / client claim
+// ---------------------------------------------------------------------------
+//
+// These two helpers replace the now-retired
+// `services/questions.ts::markSupersededByChat/Agents`. They flip every open
+// attention matched by the predicate to `state='closed' + cancelled=true +
+// cancelled_reason=<reason>` so a stale attention doesn't keep its chat
+// pinned in the needs-you / R3 bucket after a chat archive or client claim.
+//
+// The closure is recorded as `cancelled` (not a fresh "superseded" axis) for
+// parity with `cancelAttention`: anything terminated without a human response
+// is, by definition, withdrawn. The reason string distinguishes the trigger
+// — `chat_archived`, `client_claimed`, etc.
+
+type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "insert" | "update">;
+
+/**
+ * Close every OPEN attention anchored to `chatId`. Used by the chat-archive
+ * evict path so an open attention doesn't survive the archive and keep
+ * pinning the chat into Needs attention via R3.
+ *
+ * Returns the count of rows touched (zero is fine and idempotent — the
+ * caller has no reason to differentiate).
+ */
+export async function closeOpenAttentionsByChat(tx: TxLike, chatId: string, reason = "chat_archived"): Promise<number> {
+  const now = new Date();
+  const rows = await tx
+    .update(attentions)
+    .set({ state: "closed", cancelled: true, cancelledReason: reason, closedAt: now })
+    .where(and(eq(attentions.originChatId, chatId), eq(attentions.state, "open")))
+    .returning({ id: attentions.id });
+  return rows.length;
+}
+
+/**
+ * Close every OPEN attention raised by any of `agentIds`. Used when the
+ * client that carried these agents is claimed by a new user — the agents are
+ * unpinned, and any attentions they were holding open should not keep
+ * pinning their chats to the previous owner's Needs attention.
+ *
+ * Returns the DISTINCT origin chat ids that had a row closed, so the caller
+ * can fire a post-commit `notifyChatMessage(chatId)` to clear any stale R3
+ * indicator on the chat list. Mirrors the old
+ * `markSupersededByAgents` return shape so the chat-list refresh fan-out
+ * keeps working.
+ */
+export async function closeOpenAttentionsByAgents(
+  tx: TxLike,
+  agentIds: string[],
+  reason = "client_claimed",
+): Promise<string[]> {
+  if (agentIds.length === 0) return [];
+  const now = new Date();
+  const rows = await tx
+    .update(attentions)
+    .set({ state: "closed", cancelled: true, cancelledReason: reason, closedAt: now })
+    .where(and(inArray(attentions.originAgentId, agentIds), eq(attentions.state, "open")))
+    .returning({ id: attentions.id, chatId: attentions.originChatId });
+  return [...new Set(rows.map((r) => r.chatId))];
 }
