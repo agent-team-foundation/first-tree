@@ -128,14 +128,29 @@ describe("shouldEnterOnboarding", () => {
 
 describe("resolveInviteeKickoffState", () => {
   it("waits when the team has no knowledge link yet (admin not done)", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "", teamRepoCount: 0 })).toBe("waiting");
-    expect(resolveInviteeKickoffState({ treeUrl: "", teamRepoCount: 3 })).toBe("waiting");
+    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false, teamRepoCount: 0 })).toBe("waiting");
+    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: true, teamRepoCount: 3 })).toBe("waiting");
   });
-  it("confirms from the team's projects when both link + projects exist", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", teamRepoCount: 2 })).toBe("confirm");
+  it("waiting wins over no-installation when the tree is also missing (fix the bigger blocker first)", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false, teamRepoCount: 3 })).toBe("waiting");
   });
-  it("lets the invitee pick when the team has a link but listed no projects", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", teamRepoCount: 0 })).toBe("picker");
+  it("stops at no-installation when the tree is set but the App was never installed (would 403 in picker)", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: false, teamRepoCount: 0 })).toBe(
+      "no-installation",
+    );
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: false, teamRepoCount: 3 })).toBe(
+      "no-installation",
+    );
+  });
+  it("confirms from the team's projects when link + install + projects all exist", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: true, teamRepoCount: 2 })).toBe(
+      "confirm",
+    );
+  });
+  it("lets the invitee pick when the team has link + install but listed no projects", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: true, teamRepoCount: 0 })).toBe(
+      "picker",
+    );
   });
 });
 

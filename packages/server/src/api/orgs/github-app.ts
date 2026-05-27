@@ -7,7 +7,7 @@ import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { authIdentities } from "../../db/schema/auth-identities.js";
 import { ForbiddenError, NotFoundError } from "../../errors.js";
-import { requireOrgAdmin } from "../../scope/require-org.js";
+import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import { getStoredGithubAccessToken } from "../../services/auth-identity.js";
 import {
   buildAppInstallUrl,
@@ -100,6 +100,26 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       updatedAt: row.updatedAt.toISOString(),
     };
     return out;
+  });
+
+  /**
+   * GET `/exists` — member-readable boolean "does this team have a GitHub
+   * App installation?". The full GET above is admin-only because it exposes
+   * installation-id / permissions / events that regular members shouldn't
+   * see; this endpoint redacts everything except the bare presence bit so
+   * the invitee onboarding path can authoritatively detect the
+   * "admin set up the tree but never connected code" failure mode (without
+   * which we either block every invitee of a working team — if 403 maps to
+   * `missing` — or never trip the warning at all — if 403 maps to
+   * `installed`).
+   *
+   * Returns `{ exists: boolean }`. No 404 path; presence is the whole
+   * answer.
+   */
+  app.get<{ Params: { orgId: string } }>("/exists", async (request) => {
+    const scope = await requireOrgMembership(request, app.db);
+    const row = await findInstallationByOrg(app.db, scope.organizationId);
+    return { exists: row !== null && row !== undefined };
   });
 
   // ── POST-ish helper: build the "Install on GitHub" URL ──────────────
