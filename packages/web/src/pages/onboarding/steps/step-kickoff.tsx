@@ -5,7 +5,7 @@ import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js"
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { ApiError } from "../../../api/client.js";
 import { listGithubRepos } from "../../../api/github.js";
-import { getGithubAppInstallation } from "../../../api/github-app.js";
+import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import {
   getContextTreeSetting,
@@ -281,40 +281,39 @@ function AdminKickoff() {
 
 function InviteeKickoff() {
   const { organizationId } = useOnboardingFlow();
-  // Fetch tree config, source repos, and installation status together. The
-  // installation status drives the new "no-installation" sub-state — without
-  // it we'd advance the invitee into the picker and let the agent's first
-  // git op fail with 403, an opaque failure mode.
+  // Fetch tree config, source repos, and installation existence together.
+  // The installation bit drives the new "no-installation" sub-state, which
+  // catches "admin set up the tree but never connected GitHub" before the
+  // invitee sails into the picker and hits a 403 on the first git op.
   //
-  // Subtle: the installation endpoint is admin-only (requireOrgAdmin) so a
-  // non-admin invitee gets 403. We MUST NOT treat that as "not installed" —
-  // doing so would block every invitee of a correctly-configured team out of
-  // confirm/picker. Codex review caught this on round 1. The rule is:
-  //   - 200 with payload → definitely installed
-  //   - 404 (api client maps to null) → definitely not installed
-  //   - 403 / other errors → unknown, assume installed (conservative).
+  // We use the dedicated /github-app-installation/exists endpoint here
+  // (returns `{ exists: boolean }`, member-readable) rather than the full
+  // installation GET — that one is admin-gated (requireOrgAdmin), so as a
+  // non-admin invitee it would 403. Round 1 of codex review caught that
+  // mapping 403→"missing" blocks every invitee of a healthy team; round 2
+  // caught that mapping 403→"installed" makes the new safeguard
+  // unreachable. The /exists endpoint side-steps both by exposing just the
+  // presence bit to members. Any unexpected error here falls through to
+  // `hasInstallation: true` so a transient blip never bounces the user
+  // into the wrong sub-state.
   const teamQuery = useQuery({
     queryKey: ["onboarding", "team-config", organizationId],
     queryFn: async () => {
-      const [tree, repos, installState] = await Promise.all([
+      const [tree, repos, exists] = await Promise.all([
         getContextTreeSetting(organizationId ?? ""),
         getSourceReposSetting(organizationId ?? ""),
-        getGithubAppInstallation(organizationId ?? "")
-          .then<"installed" | "missing">((r) => (r === null ? "missing" : "installed"))
-          .catch<"installed">((err) => {
-            // 403 = admin-only endpoint. Invitee can't tell, so we don't
-            // block. Any other error → also "unknown" so a transient blip
-            // doesn't bounce the user into the no-installation state.
-            if (err instanceof ApiError && err.status === 403) return "installed";
-            return "installed";
-          }),
+        getGithubAppInstallationExists(organizationId ?? "").catch((err) => {
+          // Conservative on unknown error: stay on the happy path. The
+          // 5-second poll below re-checks, and if the install truly is
+          // missing the next tick will catch it.
+          console.warn("onboarding: installation-exists probe failed", err);
+          return true;
+        }),
       ]);
       return {
         treeUrl: tree.repo ?? "",
         teamRepoUrls: (repos.repos ?? []).map((r) => r.url),
-        // Only an authoritative 404 ("missing") marks the team as
-        // installation-less. Unknown reads stay on the happy path.
-        hasInstallation: installState !== "missing",
+        hasInstallation: exists,
       };
     },
     enabled: !!organizationId,
