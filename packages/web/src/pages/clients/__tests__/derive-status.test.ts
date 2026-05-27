@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
-import { compareByPillPriority, deriveComputerStatus, PILL_PRIORITY, summarizeComputers } from "../derive-status.js";
+import { compareByPillPriority, deriveComputerStatus, PILL_PRIORITY } from "../derive-status.js";
 
 /**
  * Pure-function unit tests for the 4-state Settings → Computers status
@@ -140,61 +140,5 @@ describe("compareByPillPriority", () => {
     const a = client({ id: "a" });
     const b = client({ id: "b" });
     expect(compareByPillPriority(a, b)).toBe(0);
-  });
-});
-
-describe("summarizeComputers — page subtitle pure helper", () => {
-  it("returns null for an empty list", () => {
-    expect(summarizeComputers([], "u-1")).toBeNull();
-  });
-
-  it("returns null for undefined input (loading state)", () => {
-    expect(summarizeComputers(undefined, "u-1")).toBeNull();
-  });
-
-  it("uses the possessive headline when the viewer owns the single row", () => {
-    const c = client({ userId: "u-1", capabilities: { "claude-code": capability("ok") } });
-    expect(summarizeComputers([c], "u-1")).toBe("Your computer is ready");
-  });
-
-  it("uses neutral phrasing when admin views someone else's single row", () => {
-    const c = client({ userId: "u-other", capabilities: { "claude-code": capability("ok") }, agentCount: 0 });
-    expect(summarizeComputers([c], "u-1")).toBe("1 computer is ready");
-  });
-
-  it("uses neutral phrasing when there is no viewer id (server-rendered fallback)", () => {
-    const c = client({ userId: "u-other" });
-    expect(summarizeComputers([c], null)).toBe("1 computer needs setup");
-  });
-
-  it("appends an agents-bound suffix when agents are present (single computer)", () => {
-    const c = client({
-      userId: "u-1",
-      agentCount: 3,
-      capabilities: { "claude-code": capability("ok") },
-    });
-    expect(summarizeComputers([c], "u-1")).toBe("Your computer is ready · 3 agents bound");
-  });
-
-  it("uses the singular 'agent' when exactly one agent is bound", () => {
-    const c = client({
-      userId: "u-1",
-      agentCount: 1,
-      capabilities: { "claude-code": capability("ok") },
-    });
-    expect(summarizeComputers([c], "u-1")).toBe("Your computer is ready · 1 agent bound");
-  });
-
-  it("breaks down pills in priority order and omits zero-count pills for multi-row views", () => {
-    const c1 = client({ id: "c1", status: "disconnected", authState: "expired", agentCount: 1 });
-    const c2 = client({ id: "c2", capabilities: { "claude-code": capability("ok") }, agentCount: 2 });
-    const c3 = client({ id: "c3", capabilities: { "claude-code": capability("ok") }, agentCount: 0 });
-    expect(summarizeComputers([c1, c2, c3], "u-1")).toBe("1 auth expired · 2 ready · 3 agents bound");
-  });
-
-  it("omits the agents-bound suffix entirely when no agents are bound", () => {
-    const c1 = client({ id: "c1", agentCount: 0 });
-    const c2 = client({ id: "c2", agentCount: 0 });
-    expect(summarizeComputers([c1, c2], "u-1")).toBe("2 setup incomplete");
   });
 });

@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
+import { Button } from "../../../components/ui/button.js";
 import { RowActionsMenu } from "../../../components/ui/row-actions-menu.js";
 import { ComputerStatusPill } from "../computer-status-pill.js";
 import { AuthExpiredCardBody } from "./auth-expired-card-body.js";
@@ -31,12 +33,6 @@ export type ComputerCardProps = {
   onDisconnect: () => void;
   /** Opens the retire-confirmation modal. */
   onRetire: () => void;
-  /**
-   * Optional owner label rendered in the header below the hostname.
-   * Used by admin "Your computers" cards to display the viewer's name
-   * (matches the pre-PR-B Owner column).
-   */
-  ownerLabel?: { text: string; title?: string };
 };
 
 /**
@@ -65,7 +61,6 @@ export function ComputerCard({
   onReconnect,
   onDisconnect,
   onRetire,
-  ownerLabel,
 }: ComputerCardProps) {
   const vm = computerCardViewModel(client);
 
@@ -85,18 +80,27 @@ export function ComputerCard({
         padding: "var(--sp-3_5) 0",
       }}
     >
-      <header className="flex items-start" style={{ gap: "var(--sp-3)" }}>
-        <div className="flex flex-col" style={{ flex: 1, minWidth: 0, gap: "var(--sp-0_5)" }}>
+      {/*
+        items-center lines up pill, kebab, and the hostname row on a
+        single centerline — fixes the visible misalignment that the
+        previous items-start caused (each child has a different
+        rendered height so top-aligned ≠ visually-aligned).
+      */}
+      <header className="flex items-center" style={{ gap: "var(--sp-3)" }}>
+        <div className="flex items-baseline" style={{ flex: 1, minWidth: 0, gap: "var(--sp-2)", flexWrap: "wrap" }}>
           <h3 className="text-body font-semibold" style={{ margin: 0, overflowWrap: "anywhere", color: "var(--fg)" }}>
             {vm.label}
           </h3>
-          {ownerLabel && (
-            <span className="text-caption" style={{ color: "var(--fg-3)" }} title={ownerLabel.title}>
-              {ownerLabel.text}
-            </span>
-          )}
         </div>
+        {/*
+          Reading order: state pill ("what's happening") → action
+          ("what to do") → kebab (secondary). Matches the GitHub /
+          Linear / Stripe admin-list convention where a status badge
+          sits to the left of its CTA. Empty action slot collapses
+          when no inline action applies (Ready / Setup-incomplete).
+        */}
         <ComputerStatusPill pill={vm.pill} />
+        <HeaderAction pill={vm.pill} onGenerateNewToken={onGenerateNewToken} onReconnect={onReconnect} />
         <RowActionsMenu
           ariaLabel="Computer actions"
           actions={[
@@ -129,30 +133,59 @@ function CardBody(props: {
     case "ready":
       return <ReadyCardBody client={props.client} boundAgents={props.boundAgents} agentName={props.agentName} />;
     case "auth_expired":
-      return (
-        <AuthExpiredCardBody
-          client={props.client}
-          boundAgents={props.boundAgents}
-          agentName={props.agentName}
-          onGenerateNewToken={props.onGenerateNewToken}
-        />
-      );
+      return <AuthExpiredCardBody client={props.client} boundAgents={props.boundAgents} agentName={props.agentName} />;
     case "setup_incomplete":
       return (
         <SetupIncompleteCardBody client={props.client} boundAgents={props.boundAgents} agentName={props.agentName} />
       );
     case "offline":
-      return (
-        <OfflineCardBody
-          client={props.client}
-          boundAgents={props.boundAgents}
-          agentName={props.agentName}
-          onReconnect={props.onReconnect}
-        />
-      );
+      return <OfflineCardBody client={props.client} boundAgents={props.boundAgents} agentName={props.agentName} />;
     default: {
       const exhaustive: never = props.pill;
       return exhaustive;
     }
   }
+}
+
+/**
+ * State-specific primary action rendered in the card header. Lives
+ * here (not inside the per-pill body) so it sits on the same horizontal
+ * line as the pill — gives the operator a one-glance "this is the
+ * state, this is what to do" pairing without scanning down.
+ *
+ * `null` (no header action) for Ready and Setup-incomplete:
+ *   - Ready needs no action — the machine is fine
+ *   - Setup-incomplete's primary action *is* the install-box body
+ *     (per-runtime commands), which needs vertical space anyway
+ */
+function HeaderAction({
+  pill,
+  onGenerateNewToken,
+  onReconnect,
+}: {
+  pill: ComputerCardViewModel["pill"];
+  onGenerateNewToken: () => void;
+  onReconnect: () => void;
+}): ReactNode {
+  // `outline` instead of the default filled variant — pill already
+  // carries the color-coded urgency signal (red Auth expired / grey
+  // Offline). Re-stating that urgency with a filled green button next
+  // to the pill would just stack visual weight. Same low-strength
+  // treatment matches the PageHeader's `[+ Connect]` button so the
+  // whole tab speaks one visual language.
+  if (pill === "auth_expired") {
+    return (
+      <Button variant="outline" size="sm" onClick={onGenerateNewToken}>
+        Generate new token
+      </Button>
+    );
+  }
+  if (pill === "offline") {
+    return (
+      <Button variant="outline" size="sm" onClick={onReconnect}>
+        Reconnect
+      </Button>
+    );
+  }
+  return null;
 }
