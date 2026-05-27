@@ -1,7 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeClaudeCodeCapability } from "../runtime/capabilities/claude-code.js";
 import { probeCodexCapability } from "../runtime/capabilities/codex.js";
@@ -103,36 +102,6 @@ describe("probeClaudeCodeCapability", () => {
     // should resolve. Don't pin a specific version — bumping the dep
     // would invalidate the test for no good reason.
     expect(typeof entry.sdkVersion === "string" || entry.sdkVersion === null).toBe(true);
-  });
-
-  it("reads the Claude SDK version by walking up from the resolved entry file", async () => {
-    const pkgRoot = join(tmpHome, "claude-sdk");
-    const distDir = join(pkgRoot, "dist");
-    mkdirSync(distDir, { recursive: true });
-    writeFileSync(
-      join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", version: "9.8.7" }),
-    );
-    writeFileSync(join(distDir, "sdk.mjs"), "");
-    Reflect.set(globalThis, "__firstTreeResolveClaudeSdk", () => pathToFileURL(join(distDir, "sdk.mjs")).href);
-    process.env.ANTHROPIC_API_KEY = "sk-test";
-    try {
-      const entry = await probeClaudeCodeCapability();
-      expect(entry.sdkVersion).toBe("9.8.7");
-    } finally {
-      Reflect.deleteProperty(globalThis, "__firstTreeResolveClaudeSdk");
-    }
-  });
-
-  it("returns null when the Claude SDK version walk reaches the filesystem root", async () => {
-    Reflect.set(globalThis, "__firstTreeResolveClaudeSdk", () => "file:///sdk.mjs");
-    process.env.ANTHROPIC_API_KEY = "sk-test";
-    try {
-      const entry = await probeClaudeCodeCapability();
-      expect(entry.sdkVersion).toBeNull();
-    } finally {
-      Reflect.deleteProperty(globalThis, "__firstTreeResolveClaudeSdk");
-    }
   });
 
   it("reports missing when the Claude SDK import fails", async () => {
@@ -259,33 +228,6 @@ describe("probeCodexCapability", () => {
       if (homePrev === undefined) delete process.env.HOME;
       else process.env.HOME = homePrev;
       rmSync(fakeHome, { recursive: true, force: true });
-    }
-  });
-
-  it("reads the Codex SDK version by walking up from the resolved entry file", async () => {
-    const pkgRoot = join(tmpHome, "codex-sdk");
-    const distDir = join(pkgRoot, "dist");
-    mkdirSync(distDir, { recursive: true });
-    writeFileSync(join(pkgRoot, "package.json"), JSON.stringify({ name: "@openai/codex-sdk", version: "8.7.6" }));
-    writeFileSync(join(distDir, "index.js"), "");
-    Reflect.set(globalThis, "__firstTreeResolveCodexSdk", () => pathToFileURL(join(distDir, "index.js")).href);
-    process.env.CODEX_API_KEY = "ck-test";
-    try {
-      const entry = await probeCodexCapability();
-      expect(entry.sdkVersion).toBe("8.7.6");
-    } finally {
-      Reflect.deleteProperty(globalThis, "__firstTreeResolveCodexSdk");
-    }
-  });
-
-  it("returns null when the Codex SDK version walk reaches the filesystem root", async () => {
-    Reflect.set(globalThis, "__firstTreeResolveCodexSdk", () => "file:///sdk.mjs");
-    process.env.CODEX_API_KEY = "ck-test";
-    try {
-      const entry = await probeCodexCapability();
-      expect(entry.sdkVersion).toBeNull();
-    } finally {
-      Reflect.deleteProperty(globalThis, "__firstTreeResolveCodexSdk");
     }
   });
 

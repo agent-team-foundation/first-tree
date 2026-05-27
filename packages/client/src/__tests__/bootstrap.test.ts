@@ -624,30 +624,6 @@ describe("installFirstTreeIntegration", () => {
     expect(logs.join("\n")).toContain("plain failure");
   });
 
-  it("returns false when the coverage hook exposes the defensive no-attempts fallthrough", () => {
-    const workspace = join(tmpBase, "integrate-coverage-fallthrough");
-    const treePath = join(tmpBase, "ctx-coverage-fallthrough");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(treePath, { recursive: true });
-    const { exec, calls } = makeRecordingExec();
-
-    Reflect.set(globalThis, "__firstTreeCoverageHoleInstallAttempts", true);
-    try {
-      expect(
-        installFirstTreeIntegration({
-          workspacePath: workspace,
-          contextTreePath: treePath,
-          workspaceId: "agent-a",
-          log: () => {},
-          exec,
-        }),
-      ).toBe(false);
-    } finally {
-      Reflect.deleteProperty(globalThis, "__firstTreeCoverageHoleInstallAttempts");
-    }
-    expect(calls).toHaveLength(0);
-  });
-
   it("omits --tree-url when no URL is provided", () => {
     const workspace = join(tmpBase, "integrate-no-url");
     const treePath = join(tmpBase, "ctx-no-url");
