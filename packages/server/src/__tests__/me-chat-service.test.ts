@@ -47,7 +47,7 @@ describe("chat-first workspace service layer", () => {
   it("listMeChats: empty when user has no participations", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
@@ -93,7 +93,7 @@ describe("chat-first workspace service layer", () => {
     });
 
     // admin (manager of `managed`) should now see this chat as a watcher
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
@@ -173,7 +173,7 @@ describe("chat-first workspace service layer", () => {
     expect(projRow?.last_message_preview).toContain("Please review");
 
     // watcher counter incremented for admin (manager of `managed`)
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 10,
       filter: "all",
       engagement: "all",
@@ -407,7 +407,7 @@ describe("chat-first workspace service layer", () => {
     const result = await leaveMeChat(app.db, chatId, admin.humanAgentUuid);
     expect(result.membershipKind).toBe("watching");
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
@@ -585,7 +585,7 @@ describe("chat-first workspace service layer", () => {
 
     // Page size 2: first page is [c1, one of c2/c3]; second page returns
     // exactly the missing one.
-    const page1 = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const page1 = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 2,
       filter: "all",
       engagement: "all",
@@ -594,7 +594,7 @@ describe("chat-first workspace service layer", () => {
     expect(page1.nextCursor).not.toBeNull();
     expect(page1.rows[0]?.chatId).toBe(c1.chatId); // most-recent message wins
 
-    const page2 = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const page2 = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 2,
       filter: "all",
       engagement: "all",
@@ -629,7 +629,7 @@ describe("chat-first workspace service layer", () => {
       VALUES ('nested-x', ${admin.humanAgentUuid}, 'member', 'speaker')
     `);
 
-    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const list = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
@@ -660,7 +660,7 @@ describe("chat-first workspace service layer", () => {
     await setChatEngagement(app.db, hides.chatId, admin.humanAgentUuid, "archived");
     await setChatEngagement(app.db, gone.chatId, admin.humanAgentUuid, "deleted");
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",
@@ -684,7 +684,7 @@ describe("chat-first workspace service layer", () => {
     });
     await setChatEngagement(app.db, archived.chatId, admin.humanAgentUuid, "archived");
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "archived",
@@ -711,7 +711,7 @@ describe("chat-first workspace service layer", () => {
     await setChatEngagement(app.db, archived.chatId, admin.humanAgentUuid, "archived");
     await setChatEngagement(app.db, deleted.chatId, admin.humanAgentUuid, "deleted");
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",
@@ -776,7 +776,7 @@ describe("chat-first workspace service layer", () => {
     );
     expect(stateRows[0]?.count).toBe(0);
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "active",

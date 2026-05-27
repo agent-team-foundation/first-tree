@@ -1,6 +1,12 @@
-import { compareMainStatus, type MeChatRow } from "@first-tree/shared";
+import type { MeChatRow } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { groupRows, splitAttentionRows } from "../conversations/group-rows.js";
+import {
+  groupRows,
+  rowAttentionReason,
+  rowIsFailed,
+  rowNeedsYou,
+  splitAttentionRows,
+} from "../conversations/group-rows.js";
 
 // Fixed reference "now" — picked to be mid-week so the
 // `startOfWeek` (Monday) maths is exercised non-trivially. UTC noon
@@ -28,6 +34,7 @@ function row(overrides: Partial<MeChatRow> & { id: string; lastMessageAt: string
     pendingQuestionAgentIds: overrides.pendingQuestionAgentIds ?? [],
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
+    chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? false,
   };
 }
 
@@ -216,10 +223,9 @@ describe("splitAttentionRows — pinned failed + needs-you partition", () => {
     expect(rest.map((r) => r.chatId)).toEqual(["x"]);
   });
 
-  it("orders the attention bucket via compareMainStatus, not a hardcoded concat", () => {
-    // Interleaved failed / needs-you; the bucket order must equal sorting their
-    // composite mains by compareMainStatus — so a future MAIN_STATUS_PRIORITY
-    // change flows through here automatically (no parallel hardcoded order).
+  it("orders the attention bucket by ATTENTION_PRIORITY (failed > needs_you), stable within tier", () => {
+    // Interleaved failed / needs-you; the bucket order must put every failed
+    // row before every needs-you row, preserving source order inside each tier.
     const rows = [
       row({ id: "n1", lastMessageAt: offsetIso(-1), pendingQuestionAgentIds: ["a"] }),
       row({ id: "f1", lastMessageAt: offsetIso(-2), failedAgentIds: ["b"] }),
@@ -227,9 +233,151 @@ describe("splitAttentionRows — pinned failed + needs-you partition", () => {
       row({ id: "f2", lastMessageAt: offsetIso(-4), failedAgentIds: ["d"] }),
     ];
     const { attention } = splitAttentionRows(rows);
-    const mains = attention.map((r): "failed" | "needs_you" => (r.failedAgentIds.length > 0 ? "failed" : "needs_you"));
-    expect(mains).toEqual([...mains].sort((x, y) => compareMainStatus(x, y)));
-    // failed tier first (stable within tier), then needs-you tier (stable).
     expect(attention.map((r) => r.chatId)).toEqual(["f1", "f2", "n1", "n2"]);
+  });
+});
+
+// Chat-granularity scoping predicate — R1 (mine-failed), R2 (mine-pending),
+// R3 (chatHasOpenQuestion AND caller is a HUMAN speaker), R4 (unread mention).
+// See docs/development/needs-attention-scoping.20260526.md.
+describe("splitAttentionRows — predicate (R1–R4)", () => {
+  it("R1: mine-failed → attention bucket, failed tier", () => {
+    const rows = [row({ id: "r1", lastMessageAt: null, failedAgentIds: ["mine"] })];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["r1"]);
+    expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
+  });
+
+  it("R2: mine-pending → attention bucket, needs_you tier", () => {
+    const rows = [row({ id: "r2", lastMessageAt: null, pendingQuestionAgentIds: ["mine"] })];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["r2"]);
+    expect(attention[0] && rowNeedsYou(attention[0])).toBe(true);
+  });
+
+  it("R3: chatHasOpenQuestion + caller is speaker → attention bucket, needs_you tier (but badge stays narrow)", () => {
+    const rows = [
+      row({
+        id: "r3",
+        lastMessageAt: null,
+        chatHasOpenQuestion: true,
+        membershipKind: "participant",
+      }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["r3"]);
+    // Bucket placement: needs_you tier (so it sorts between failed and mention).
+    expect(attention[0] && rowAttentionReason(attention[0])).toBe("needs_you");
+    // Row badge: stays specific to caller-managed (R2 only). R3 enters the
+    // bucket but does NOT light the orange ? indicator — `pendingQuestionAgentIds`
+    // is server-narrowed to "mine", and this peer-question row has [].
+    expect(attention[0] && rowNeedsYou(attention[0])).toBe(false);
+  });
+
+  it("R3 watcher: chatHasOpenQuestion + caller is watcher → NOT attention", () => {
+    const rows = [
+      row({
+        id: "r3w",
+        lastMessageAt: null,
+        chatHasOpenQuestion: true,
+        membershipKind: "watching",
+      }),
+    ];
+    const { attention, rest } = splitAttentionRows(rows);
+    expect(attention).toEqual([]);
+    expect(rest.map((r) => r.chatId)).toEqual(["r3w"]);
+  });
+
+  it("R4: unread @-mention → attention bucket (no failed/pending)", () => {
+    const rows = [row({ id: "r4", lastMessageAt: null, unreadMentionCount: 3 })];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["r4"]);
+  });
+
+  it("quiet row → NOT attention", () => {
+    const rows = [row({ id: "quiet", lastMessageAt: null })];
+    const { attention, rest } = splitAttentionRows(rows);
+    expect(attention).toEqual([]);
+    expect(rest.map((r) => r.chatId)).toEqual(["quiet"]);
+  });
+
+  it("priority: failed beats mention", () => {
+    const rows = [
+      row({
+        id: "fm",
+        lastMessageAt: null,
+        failedAgentIds: ["a"],
+        unreadMentionCount: 1,
+      }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
+  });
+
+  it("priority: needs_you beats mention (R2 + mention)", () => {
+    const rows = [
+      row({
+        id: "pm",
+        lastMessageAt: null,
+        pendingQuestionAgentIds: ["a"],
+        unreadMentionCount: 1,
+      }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention[0] && rowIsFailed(attention[0])).toBe(false);
+    expect(attention[0] && rowNeedsYou(attention[0])).toBe(true);
+  });
+
+  it("sort: failed > needs_you > mention across all three tiers", () => {
+    const rows = [
+      row({ id: "m", lastMessageAt: null, unreadMentionCount: 1 }),
+      row({ id: "n", lastMessageAt: null, pendingQuestionAgentIds: ["x"] }),
+      row({ id: "f", lastMessageAt: null, failedAgentIds: ["y"] }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["f", "n", "m"]);
+  });
+
+  it("R2 + R3 simultaneously → single needs_you tier row (no double-count), badge fires for R2", () => {
+    const rows = [
+      row({
+        id: "r23",
+        lastMessageAt: null,
+        pendingQuestionAgentIds: ["mine"],
+        chatHasOpenQuestion: true,
+        membershipKind: "participant",
+      }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention).toHaveLength(1);
+    expect(attention[0] && rowAttentionReason(attention[0])).toBe("needs_you");
+    // Badge DOES fire here because mine-pending (R2) is true on this row.
+    expect(attention[0] && rowNeedsYou(attention[0])).toBe(true);
+  });
+
+  it("stable sort within failed tier preserves input order", () => {
+    const rows = [
+      row({ id: "f1", lastMessageAt: null, failedAgentIds: ["a"] }),
+      row({ id: "f2", lastMessageAt: null, failedAgentIds: ["b"] }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["f1", "f2"]);
+  });
+
+  it("boundary A: my failed agent, caller is watcher → still attention (manager wins over membership)", () => {
+    // Server already narrows `failedAgentIds` to mine regardless of membership.
+    // The front-end predicate stays membership-agnostic for R1, so the row
+    // pins even when membershipKind is "watching" — boundary A locked.
+    const rows = [
+      row({
+        id: "rA",
+        lastMessageAt: null,
+        failedAgentIds: ["mine"],
+        membershipKind: "watching",
+      }),
+    ];
+    const { attention } = splitAttentionRows(rows);
+    expect(attention.map((r) => r.chatId)).toEqual(["rA"]);
+    expect(attention[0] && rowIsFailed(attention[0])).toBe(true);
   });
 });

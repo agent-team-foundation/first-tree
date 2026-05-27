@@ -37,7 +37,7 @@ import {
   type MeChatSourceCounts,
   type MeChatUnreadResponse,
 } from "@first-tree/shared";
-import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -290,6 +290,7 @@ function participantsFilterSql(agentIds: ReadonlyArray<string>): SQL {
 export async function listMeChats(
   db: Database,
   humanAgentId: string,
+  callerMemberId: string,
   organizationId: string,
   query: ListMeChatsQuery,
 ): Promise<ListMeChatsResponse> {
@@ -441,10 +442,41 @@ export async function listMeChats(
   // (only the compose status bar does). Each signal is projected below.
   const statusByChat = await resolveAgentChatStatuses(db, chatIds, { withTurnText: false });
 
+  // Manager-scope: non-human agent UUIDs the caller manages
+  // (`agents.manager_id = caller.member_id`). Drives the "mine" narrowing on
+  // the `failedAgentIds` / `pendingQuestionAgentIds` projections below — so a
+  // watcher (or peer speaker) is no longer pinned into "Needs attention" by
+  // someone else's broken / waiting agent.
+  //
+  // The `ne(type, 'human')` guard excludes the caller's own human agent (which
+  // is self-managed, `manager_id = caller.member_id` per `createTestAdmin` /
+  // `createMember`). Today the downstream projection is safe regardless —
+  // `resolveAgentChatStatuses` already filters non-human, so a human agent in
+  // this set never reaches the loop. The guard is defensive: if a future
+  // change ever surfaces human statuses (e.g. an "adapter offline" signal),
+  // we don't want the caller's own human agent's main accidentally flowing
+  // into `failedAgentIds`. Belt-and-braces flagged in PR #579 review.
+  //
+  // One indexed read via `idx_agents_manager`. Filtering by `manager_id` alone
+  // (no `organization_id` clause) is sufficient — `members.id` is unique per
+  // (user, org) so any agent whose manager is `callerMemberId` is necessarily
+  // in the caller's org. An extra `organization_id` clause would silently drop
+  // a legitimate "mine" agent in the (rare) case where the create-time
+  // invariant `agents.organization_id == manager.organization_id` was broken
+  // by a buggy admin path. Read-side trusts the invariant; write-side guards.
+  //
+  // See docs/development/needs-attention-scoping.20260526.md.
+  const managedRows = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(eq(agents.managerId, callerMemberId), ne(agents.type, "human")));
+  const managedAgentIds = new Set(managedRows.map((r) => r.uuid));
+
   const liveActivityByChat = new Map<string, LiveActivity>();
   const failedByChat = new Map<string, string[]>();
   const pendingByChat = new Map<string, string[]>();
   const busyByChat = new Map<string, string[]>();
+  const hasOpenQuestionByChat = new Map<string, boolean>();
   for (const [chatId, statuses] of statusByChat) {
     const speakers = nonHumanSpeakersByChat.get(chatId);
     // live-dot: freshest activity among non-human SPEAKERS. (Narrowed from the
@@ -456,20 +488,34 @@ export async function listMeChats(
     const busy: string[] = [];
     for (const s of statuses) {
       const isSpeaker = speakers?.has(s.agentId) ?? false;
+      const isMine = managedAgentIds.has(s.agentId);
       if (isSpeaker && s.activity) {
         const startedMs = new Date(s.activity.startedAt).getTime();
         if (!freshest || startedMs > freshest.startedMs) freshest = { activity: s.activity, startedMs };
       }
-      if (isSpeaker && s.main === "failed") failed.push(s.agentId);
+      // failed — speaker-filtered AND narrowed to "mine" (R1). A peer's broken
+      // agent in a chat I'm in no longer pins my row to "Needs attention".
+      if (isSpeaker && s.main === "failed" && isMine) failed.push(s.agentId);
       // busy = speakers with composite `working` (the D-axis truth from
       // `agent_chat_sessions.runtime_state`). Drives the chat-list activity
       // indicator authoritatively, so it lights even when a runtime emits
       // no intermediate session_events (codex no-events case) — the gap
-      // `liveActivity` alone can never cover.
+      // `liveActivity` alone can never cover. NOT narrowed to mine — "someone
+      // is working" is informational, not an attention signal.
       if (isSpeaker && s.working) busy.push(s.agentId);
-      // pending is NOT speaker-filtered (matches the prior derivePendingQuestions
-      // surface: a pending agent that has since left the chat still counts).
-      if (s.needsYou) pending.push(s.agentId);
+      // pending — NOT speaker-filtered (a pending agent that has since left
+      // the chat still counts, matching the prior `derivePendingQuestions`
+      // surface), AND narrowed to "mine" (R2). The front-end covers R3
+      // (caller-is-speaker fallback) via the separate `chatHasOpenQuestion`
+      // boolean below — which stays raw, unfiltered.
+      if (s.needsYou && isMine) pending.push(s.agentId);
+      // chatHasOpenQuestion — raw "any agent in this chat has a pending
+      // question" bit. Feeds the front-end R3 rule (a speaker in a chat with
+      // an open question is in attention even if the asking agent is someone
+      // else's). Computed over the same union (non-human speakers + non-human
+      // pending) that `resolveAgentChatStatuses` returns, so a pending agent
+      // that has left still flips this true.
+      if (s.needsYou) hasOpenQuestionByChat.set(chatId, true);
     }
     if (freshest) liveActivityByChat.set(chatId, freshest.activity);
     if (failed.length > 0) failedByChat.set(chatId, failed);
@@ -529,6 +575,7 @@ export async function listMeChats(
       pendingQuestionAgentIds: pendingByChat.get(r.chat_id) ?? [],
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
       busyAgentIds: busyByChat.get(r.chat_id) ?? [],
+      chatHasOpenQuestion: hasOpenQuestionByChat.get(r.chat_id) ?? false,
     };
   });
 
