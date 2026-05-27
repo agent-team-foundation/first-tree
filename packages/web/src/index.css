@@ -1384,3 +1384,18 @@ tr[data-interactive]:hover {
     display: none;
   }
 }
+
+/* Mention chip — used by the composer mirror overlay and the
+ * rehype-mentions plugin so the same visual treatment shows up for
+ * both the user's draft and rendered sent messages. The chip stays
+ * inline (no block-level layout) and `white-space: nowrap` keeps the
+ * `@<name>` from wrapping at a hyphen mid-handle. */
+.mention-chip {
+  display: inline;
+  background: var(--accent);
+  color: var(--fg-on-vivid);
+  padding: 0 5px;
+  border-radius: var(--radius-chip);
+  font-weight: 500;
+  white-space: nowrap;
+}

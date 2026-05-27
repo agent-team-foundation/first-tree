@@ -88,3 +88,61 @@ export function scanMentionTokens(content: string): string[] {
   }
   return tokens;
 }
+
+/** One slice of a message body in source order. `mention` segments
+ *  carry the resolved agentId so renderers can avatar / link the chip. */
+export type MentionSegment =
+  | { kind: "text"; value: string }
+  | { kind: "mention"; value: string; name: string; agentId: string };
+
+/**
+ * Split `content` into ordered text / mention segments. The segmenter
+ * keeps the original `@<token>` substring (case preserved) in
+ * `segment.value` so renderers don't re-typeset what the user wrote and
+ * preserve byte-for-byte fidelity with the source text — critical for the
+ * composer mirror overlay, where character positions must match the
+ * underlying textarea exactly.
+ *
+ * Same word-boundary gates as {@link extractMentions} (`alice@example.com`,
+ * `@scope/pkg`, leading `@@`) are still applied because they're cheap and
+ * prevent obvious false positives. Code-block stripping is intentionally
+ * NOT applied here: composer overlay needs offsets relative to the raw
+ * draft, and the markdown renderer skips code nodes through its own
+ * code/inline-code components, so re-stripping would double-count.
+ *
+ * Unresolved `@<token>` tokens (typos, outsiders, npm package names the
+ * regex didn't filter out) stay inside the surrounding text segment —
+ * the UI's "valid mention" signal is exactly "did this token get a chip
+ * or not", so callers don't need a separate "invalid mention" type.
+ */
+export function segmentMentions(content: string, participants: MentionParticipant[]): MentionSegment[] {
+  if (content.length === 0) return [];
+  const nameMap = new Map<string, { name: string; agentId: string }>();
+  for (const p of participants) {
+    if (p.name) nameMap.set(p.name.toLowerCase(), { name: p.name, agentId: p.agentId });
+  }
+  if (nameMap.size === 0) return [{ kind: "text", value: content }];
+
+  const out: MentionSegment[] = [];
+  let cursor = 0;
+  for (const m of content.matchAll(MENTION_REGEX)) {
+    const token = m[1];
+    if (token === undefined || m.index === undefined) continue;
+    const resolved = nameMap.get(token.toLowerCase());
+    if (!resolved) continue;
+    if (m.index > cursor) {
+      out.push({ kind: "text", value: content.slice(cursor, m.index) });
+    }
+    out.push({
+      kind: "mention",
+      value: m[0],
+      name: resolved.name,
+      agentId: resolved.agentId,
+    });
+    cursor = m.index + m[0].length;
+  }
+  if (cursor < content.length) {
+    out.push({ kind: "text", value: content.slice(cursor) });
+  }
+  return out;
+}

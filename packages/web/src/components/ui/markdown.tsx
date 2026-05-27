@@ -1,12 +1,16 @@
+import type { ComponentProps } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/utils.js";
 
+type RehypePlugins = ComponentProps<typeof ReactMarkdown>["rehypePlugins"];
+
 export type MarkdownProps = {
   children: string;
   className?: string;
   components?: Components;
+  rehypePlugins?: RehypePlugins;
 };
 
 /**
@@ -18,7 +22,7 @@ export type MarkdownProps = {
  * same component fits both the dark workspace chat and the light agent
  * detail page without a theme switch.
  */
-export function Markdown({ children, className, components }: MarkdownProps) {
+export function Markdown({ children, className, components, rehypePlugins }: MarkdownProps) {
   return (
     <div
       className={cn(
@@ -36,6 +40,7 @@ export function Markdown({ children, className, components }: MarkdownProps) {
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
+        rehypePlugins={rehypePlugins}
         components={{
           a: ({ node, ...props }) => {
             void node;

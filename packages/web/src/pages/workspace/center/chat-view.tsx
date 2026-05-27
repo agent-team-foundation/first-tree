@@ -75,7 +75,9 @@ import {
   type MentionCandidate,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
+import { MentionHighlightOverlay } from "../../../components/mention-highlight-overlay.js";
 import { NewMessagesPill } from "../../../components/new-messages-pill.js";
+import { rehypeMentions } from "../../../components/rehype-mentions.js";
 import {
   resolveMentionContext,
   SlashCommandPopover,
@@ -304,12 +306,14 @@ function TextRow({
   agentNameFn,
   agentAvatarFn,
   agentColorTokenFn,
+  mentionParticipants,
 }: {
   msg: MessageWithDelivery;
   myAgentId: string | null;
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
+  mentionParticipants: MentionParticipant[];
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -357,6 +361,12 @@ function TextRow({
     }
     return body;
   }, [msg.format, msg.content, msg.source, msg.chatId, docSnapshots, failedDocMentions]);
+  // Highlight `@<participant>` tokens in sent messages with the same
+  // chip styling the composer's mirror overlay uses. Code blocks and
+  // link text are skipped by the plugin itself, so a message containing
+  // `\`@param\`` or a quoted handle inside a markdown link keeps its
+  // original rendering.
+  const messageRehypePlugins = useMemo(() => [rehypeMentions(mentionParticipants)], [mentionParticipants]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
@@ -532,7 +542,9 @@ function TextRow({
           ) : msg.format === "file" && isImageRefContent(msg.content) ? (
             <ImageFromRef content={msg.content} />
           ) : msg.format === "text" || msg.format === "markdown" ? (
-            <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
+            <Markdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
+              {textContent ?? ""}
+            </Markdown>
           ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
             <GithubEventCardMessage content={msg.content} />
           ) : (
@@ -2048,19 +2060,37 @@ export function ChatView({
    * runs its own unresolved-token guard on the agent path (the PR-393
    * anti-hallucination fix); on the human web path it's tolerated by the
    * `mentions.ts` regex excluding npm scoped names from token scans. */
-  const draftMentions = useMemo(() => {
-    const ps: MentionParticipant[] = mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name }));
-    return extractMentions(draft, ps);
-  }, [draft, mentionCandidates]);
+  // Shared participant projection: drives draftMentions resolution, the
+  // composer's mirror-overlay highlight, and the sent-message rehype
+  // plugin — keeping a single source of truth so the three paths can't
+  // drift on case-sensitivity or filtering.
+  const mentionParticipants = useMemo<MentionParticipant[]>(
+    () => mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name })),
+    [mentionCandidates],
+  );
+  const draftMentions = useMemo(() => extractMentions(draft, mentionParticipants), [draft, mentionParticipants]);
 
+  // Records the buffer offset of an `@` the user just typed (keystroke
+  // or explicit `@` toolbar click). The popover keyboard-hijack (Enter
+  // → pick candidate, Tab → next, Arrows → cycle) only fires when this
+  // index matches the active trigger, so a pasted block that happens
+  // to contain `@foo` no longer steals the user's "press Enter to
+  // send" — the popover still renders for click-to-pick but Enter
+  // falls through. Reset to `null` whenever the trigger window closes
+  // (cursor moves out / `@` deleted / user picked a candidate).
+  const [interactiveTriggerIndex, setInteractiveTriggerIndex] = useState<number | null>(null);
   const mention = useMentionAutocomplete({
     value: draft,
     cursor,
     candidates: mentionCandidates,
     disabled: sendMut.isPending || uploading,
+    interactiveTriggerIndex,
     onSelect: (update) => {
       setDraft(update.text);
       setCursor(update.cursor);
+      // Mention picked — trigger closes immediately, no need to keep
+      // the interactive flag around.
+      setInteractiveTriggerIndex(null);
       // Defer so React has committed the new value before we move the
       // selection — otherwise the textarea snaps back to its old cursor.
       requestAnimationFrame(() => {
@@ -2071,6 +2101,20 @@ export function ChatView({
       });
     },
   });
+  // When the user moves the caret off the active trigger (or deletes
+  // the `@`), drop the interactive flag so re-entering an old `@` by
+  // arrow-key doesn't re-arm the keyboard hijack.
+  useEffect(() => {
+    if (mention.trigger === null && interactiveTriggerIndex !== null) {
+      setInteractiveTriggerIndex(null);
+    } else if (
+      mention.trigger !== null &&
+      interactiveTriggerIndex !== null &&
+      mention.trigger.triggerIndex !== interactiveTriggerIndex
+    ) {
+      setInteractiveTriggerIndex(null);
+    }
+  }, [mention.trigger, interactiveTriggerIndex]);
 
   /**
    * Slash-command setup. Per the design contract (`/ for commands` in the
@@ -2521,6 +2565,7 @@ export function ChatView({
                           agentNameFn={chatScopedAgentName}
                           agentAvatarFn={agentAvatar}
                           agentColorTokenFn={agentColorToken}
+                          mentionParticipants={mentionParticipants}
                         />
                       );
                     }
@@ -2707,6 +2752,29 @@ export function ChatView({
                         anchorRef={textareaRef}
                         onPick={slash.pick}
                       />
+                      {/* Mirror layer painting `@<participant>` chips behind
+                          the textarea. Typography (`text-subtitle font-normal`)
+                          is copied from the textarea's className so glyphs
+                          align character-for-character; padding / sizing
+                          must match the textarea's inline style below. */}
+                      <MentionHighlightOverlay
+                        value={draft}
+                        participants={mentionParticipants}
+                        textareaRef={textareaRef}
+                        chipClassName="mention-chip"
+                        mirrorStyle={{
+                          padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                          fontSize: "var(--text-subtitle)",
+                          lineHeight: "var(--text-subtitle--line-height)",
+                          letterSpacing: "var(--text-subtitle--letter-spacing)",
+                          // Textarea is `font-normal` (400) which overrides
+                          // the token's 600. Match it so character-width
+                          // metrics line up with the textarea, otherwise
+                          // chips would drift left of the textarea glyphs.
+                          fontWeight: 400,
+                          boxSizing: "border-box",
+                        }}
+                      />
                       <textarea
                         ref={textareaRef}
                         value={draft}
@@ -2738,6 +2806,11 @@ export function ChatView({
                           focusPrimedRef.current = true;
                           setDraft("@");
                           setCursor(1);
+                          // Focus-prime is system-stamped, but it's the user's
+                          // very next intention (mid-keystroke before they start
+                          // typing the name) — treat it as interactive so Enter
+                          // can pick from the popover the same way as a typed @.
+                          setInteractiveTriggerIndex(0);
                           requestAnimationFrame(() => {
                             const el = textareaRef.current;
                             if (!el) return;
@@ -2766,6 +2839,17 @@ export function ChatView({
                           // mention-autocomplete (the trigger predicates are disjoint, but
                           // ordering documents intent).
                           if (slash.handleKey(e)) return;
+                          // Record interactive `@` trigger: when the user types `@`,
+                          // remember the offset where it lands. The popover only
+                          // intercepts Enter/Tab/Arrows when its trigger position
+                          // matches this index — paste-introduced `@` keeps the
+                          // popover visible (for click-to-pick) without stealing
+                          // the send keystroke.
+                          if (e.key === "@" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                            const el = e.currentTarget;
+                            const start = el.selectionStart;
+                            if (start !== null) setInteractiveTriggerIndex(start);
+                          }
                           // Mention autocomplete gets first crack at navigation keys so
                           // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
                           // sending or moving the cursor.
@@ -2795,7 +2879,24 @@ export function ChatView({
                           maxHeight: "10.5rem",
                           overflowY: "auto",
                           resize: "none",
-                          color: "var(--fg)",
+                          // Text is rendered by `<MentionHighlightOverlay>`
+                          // behind the textarea; here we only need to keep
+                          // the caret and selection visible. `caretColor`
+                          // restores the cursor that `color: transparent`
+                          // would otherwise hide. Selection alpha picks up
+                          // the browser's default highlight band, which
+                          // remains visible over the overlay glyphs.
+                          color: "transparent",
+                          caretColor: "var(--fg)",
+                          // The overlay is `position: absolute` and DOM-
+                          // ordered before this textarea, so by default it
+                          // paints in front of the textarea's static
+                          // (caret) layer — which would hide the caret
+                          // even though the text itself is transparent.
+                          // Promoting the textarea to its own stacking
+                          // context lifts the caret above the overlay.
+                          position: "relative",
+                          zIndex: 1,
                         }}
                       />
                     </div>
@@ -2826,6 +2927,10 @@ export function ChatView({
                             const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
                             setDraft(next);
                             setCursor(start + 1);
+                            // Treat the inserted `@` as user-initiated so the
+                            // popover can drive Enter/Tab on the candidate list,
+                            // matching the typed-`@` path.
+                            setInteractiveTriggerIndex(start);
                             requestAnimationFrame(() => {
                               el.focus();
                               el.setSelectionRange(start + 1, start + 1);
@@ -2891,7 +2996,7 @@ export function ChatView({
                           }
                           title={
                             requiresMention && draftMentions.length === 0
-                              ? "Pick at least one recipient with @ before sending in a group chat"
+                              ? "Group chats need at least one @member to send"
                               : "Send (Enter)"
                           }
                           aria-label="Send"
