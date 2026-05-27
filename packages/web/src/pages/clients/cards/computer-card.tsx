@@ -85,15 +85,34 @@ export function ComputerCard({
         padding: "var(--sp-3_5) 0",
       }}
     >
-      <header className="flex items-start" style={{ gap: "var(--sp-3)" }}>
-        <div className="flex flex-col" style={{ flex: 1, minWidth: 0, gap: "var(--sp-0_5)" }}>
+      {/*
+        items-center lines up pill, kebab, and the hostname row on a
+        single centerline — fixes the visible misalignment that the
+        previous items-start caused (each child has a different
+        rendered height so top-aligned ≠ visually-aligned).
+      */}
+      <header className="flex items-center" style={{ gap: "var(--sp-3)" }}>
+        {/*
+          Hostname + owner share a single baseline-aligned row. Owner
+          is treated as inline meta (smaller, fg-3) rather than a
+          subtitle on its own line — saves a row of vertical space per
+          card and gives the right slot (pill + kebab) something to
+          align against. Long hostnames still wrap via overflowWrap
+          and owner sits at the end of the wrap.
+        */}
+        <div className="flex items-baseline" style={{ flex: 1, minWidth: 0, gap: "var(--sp-2)", flexWrap: "wrap" }}>
           <h3 className="text-body font-semibold" style={{ margin: 0, overflowWrap: "anywhere", color: "var(--fg)" }}>
             {vm.label}
           </h3>
           {ownerLabel && (
-            <span className="text-caption" style={{ color: "var(--fg-3)" }} title={ownerLabel.title}>
-              {ownerLabel.text}
-            </span>
+            <>
+              <span className="text-caption" style={{ color: "var(--fg-4)" }} aria-hidden>
+                ·
+              </span>
+              <span className="text-caption" style={{ color: "var(--fg-3)" }} title={ownerLabel.title}>
+                {ownerLabel.text}
+              </span>
+            </>
           )}
         </div>
         <ComputerStatusPill pill={vm.pill} />

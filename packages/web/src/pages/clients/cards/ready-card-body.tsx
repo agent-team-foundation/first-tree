@@ -110,9 +110,12 @@ function RuntimeStateLine({
   const label = PROVIDER_LABEL[provider];
   switch (entry.state) {
     case "ok": {
-      const segments = [label, entry.sdkVersion ? `v${entry.sdkVersion}` : null, entry.authMethod ?? null].filter(
-        Boolean,
-      ) as string[];
+      // authMethod (`oauth` / `auth_json` / `api_key`) is implementation
+      // detail — users care that the runtime is reachable, not *how*
+      // it's authed. The ✓ glyph already conveys "authenticated". If
+      // troubleshooting needs the method later, it's still in the
+      // wire response and reachable via /agent/:id.
+      const segments = [label, entry.sdkVersion ? `v${entry.sdkVersion}` : null].filter(Boolean) as string[];
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
           <span style={{ color: "var(--state-idle)" }}>✓</span> {segments.join(" · ")}

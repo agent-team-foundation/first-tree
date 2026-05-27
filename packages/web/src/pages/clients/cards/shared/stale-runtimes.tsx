@@ -43,8 +43,11 @@ export function StaleRuntimeLine({ provider, entry }: { provider: RuntimeProvide
     entry.state === "ok" ? "✓" : entry.state === "unauthenticated" ? "⚠" : entry.state === "missing" ? "✗" : "!";
   const segments: string[] = [label];
   if (entry.sdkVersion) segments.push(`v${entry.sdkVersion}`);
-  if (entry.state === "ok" && entry.authMethod) segments.push(entry.authMethod);
-  else if (entry.state === "unauthenticated") segments.push("unauthenticated");
+  // `ok` skips the auth-method segment — same rule as the Ready card's
+  // RuntimeStateLine. The ✓ glyph already conveys "was authenticated";
+  // exposing `oauth` / `auth_json` here would be implementation detail
+  // the operator doesn't need at status-glance.
+  if (entry.state === "unauthenticated") segments.push("unauthenticated");
   else if (entry.state === "missing") segments.push("not installed");
   else if (entry.state === "error") segments.push(entry.error ?? "probe failed");
   return (

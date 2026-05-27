@@ -491,7 +491,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
             {teamLoadError && <TeamLoadErrorBanner />}
             {grouped ? (
               <>
-                <Section title="Your computers" count={mineList.length}>
+                <Section title="Your computers" count={mineList.length > 1 ? mineList.length : undefined}>
                   {mineList.length === 0 ? (
                     // Admin with no own computers + N team rows — the "Add
                     // another computer" bottom button would read wrong here
@@ -530,7 +530,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                 </Section>
                 <Section
                   title="Team computers"
-                  count={teamList.length}
+                  count={teamList.length > 1 ? teamList.length : undefined}
                   action={
                     teamList.length > 0 ? (
                       <Button
@@ -771,8 +771,7 @@ function ProviderRow({
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--state-idle)" }}>
-            ✓ {entry.sdkVersion ? `v${entry.sdkVersion} · ` : ""}
-            {entry.authMethod ?? "authenticated"}
+            ✓{entry.sdkVersion ? ` v${entry.sdkVersion}` : " authenticated"}
           </span>
         </div>
       );
