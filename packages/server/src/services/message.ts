@@ -237,7 +237,18 @@ async function sendMessageInner(
     const explicitMentions = Array.isArray(explicitMentionsRaw)
       ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
       : [];
-    const contentText = typeof effectiveContent === "string" ? effectiveContent : "";
+    // Treat a batched-image-with-caption (`format: "file"` with
+    // `{caption?, attachments[]}`) the same as a text message for mention
+    // purposes: the caption is user-typed prose that should feed the same
+    // `extractMentions` path the standalone text message used to take. Pure
+    // single-image messages have no caption and stay empty.
+    const captionText =
+      typeof effectiveContent === "object" &&
+      effectiveContent !== null &&
+      typeof (effectiveContent as { caption?: unknown }).caption === "string"
+        ? (effectiveContent as { caption: string }).caption
+        : "";
+    const contentText = typeof effectiveContent === "string" ? effectiveContent : captionText;
 
     // Resolve `receiverNames` against the chat's speaker list.
     const receiverNames = data.receiverNames ?? [];
@@ -536,7 +547,19 @@ async function sendMessageInner(
     //    Updates chats.last_message_*, increments speaker + watcher mention
     //    counters. New code; no existing path is modified — see
     //    first-tree-context:agent-hub/web-console.md "Risk Constraints".
-    const previewText = typeof outboundContent === "string" ? outboundContent.trim() : "";
+    // Chat-list preview: prefer string content (text/markdown) verbatim;
+    // fall back to the caption of a batched image send (`format: "file"`
+    // with `{caption?, attachments[]}` shape) so a "text + N images" send
+    // still surfaces its text in the conversation list. Pure single-image
+    // messages (no caption) stay empty — same as before.
+    const previewText =
+      typeof outboundContent === "string"
+        ? outboundContent.trim()
+        : typeof outboundContent === "object" &&
+            outboundContent !== null &&
+            typeof (outboundContent as { caption?: unknown }).caption === "string"
+          ? ((outboundContent as { caption: string }).caption.trim() ?? "")
+          : "";
     await applyAfterFanOut(tx, {
       chatId,
       messageId: msg.id,

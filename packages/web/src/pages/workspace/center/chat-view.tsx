@@ -37,6 +37,7 @@ import { getAgentSkills } from "../../../api/agents.js";
 import {
   type FileMessageContent,
   getChat,
+  type ImageBatchRefContent,
   type ImageRefContent,
   listChatMessages,
   type MessageWithDelivery,
@@ -45,7 +46,7 @@ import {
   readFileAsBase64,
   renameChat,
   sendChatMessage,
-  sendFileMessage,
+  sendFileMessageBatch,
 } from "../../../api/chats.js";
 import { getImage, putImage } from "../../../api/image-store.js";
 import { cacheMessages, getCachedMessages } from "../../../api/message-store.js";
@@ -85,7 +86,7 @@ import {
   useSlashCommand,
 } from "../../../components/slash-command-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
-import { Markdown } from "../../../components/ui/markdown.js";
+import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
@@ -533,7 +534,13 @@ function TextRow({
             marginTop: 2,
           }}
         >
-          {msg.format === "file" && isInlineImageContent(msg.content) ? (
+          {msg.format === "file" && isImageBatchRefContent(msg.content) ? (
+            <ImageBatchFromRef
+              content={msg.content}
+              markdownComponents={markdownComponents}
+              rehypePlugins={messageRehypePlugins}
+            />
+          ) : msg.format === "file" && isInlineImageContent(msg.content) ? (
             <img
               src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
               alt={msg.content.filename ?? "image"}
@@ -656,6 +663,18 @@ function isImageRefContent(content: unknown): content is ImageRefContent {
 }
 
 /**
+ * Batch shape detection: caption + 1+ image refs. Distinguished from the
+ * single-ref shape by the presence of an `attachments` array; old messages
+ * (whose `content` is a single ref) fall through to `isImageRefContent`.
+ */
+function isImageBatchRefContent(content: unknown): content is ImageBatchRefContent {
+  if (typeof content !== "object" || content === null) return false;
+  const c = content as Record<string, unknown>;
+  if (!Array.isArray(c.attachments) || c.attachments.length === 0) return false;
+  return c.attachments.every((a: unknown) => isImageRefContent(a));
+}
+
+/**
  * Render an image whose bytes live in per-browser IndexedDB. Cache hit →
  * inline preview; miss → placeholder text (cross-device or cleared cache).
  */
@@ -699,6 +718,38 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
     <span className="text-label" style={{ color: "var(--fg-4)" }}>
       …
     </span>
+  );
+}
+
+/**
+ * Render a batched image message: optional caption rendered as markdown
+ * (matching the regular text path so mention chips and links look the
+ * same), followed by each attachment via {@link ImageFromRef}. One bubble
+ * per send, regardless of how many images the user attached.
+ */
+function ImageBatchFromRef({
+  content,
+  markdownComponents,
+  rehypePlugins,
+}: {
+  content: ImageBatchRefContent;
+  markdownComponents: Components;
+  rehypePlugins: MarkdownProps["rehypePlugins"];
+}) {
+  const caption = content.caption?.trim() ?? "";
+  return (
+    <div className="flex flex-col" style={{ gap: 4 }}>
+      {caption.length > 0 ? (
+        <Markdown components={markdownComponents} rehypePlugins={rehypePlugins}>
+          {caption}
+        </Markdown>
+      ) : null}
+      <div className="flex flex-wrap" style={{ gap: 6, marginTop: caption.length > 0 ? 2 : 0 }}>
+        {content.attachments.map((att) => (
+          <ImageFromRef key={att.imageId} content={att} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1191,12 +1242,19 @@ export function ChatView({
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
       const pendingTempIds = new Set<string>();
       try {
-        // Track the latest server-returned message id across the
-        // sequence of file POSTs (and the optional trailing text
-        // POST) so we can pre-advance the high water in one shot
-        // after the whole batch lands. See `pendingHighWaterAdvance`
-        // for rationale.
+        // Track the latest server-returned message id so we can pre-advance
+        // the high water in one shot after the send lands. See
+        // `pendingHighWaterAdvance` for rationale.
         let lastSentMessageId: string | null = null;
+
+        // Read every image's bytes + write to IndexedDB up front, building
+        // the inline batch body in one pass. The batched POST below sends
+        // caption + all attachments as a single `format: "file"` message,
+        // collapsing what used to be N image messages + 1 trailing text
+        // message into one bubble.
+        const inlineAttachments: { data: string; mimeType: string; filename: string; size: number; imageId: string }[] =
+          [];
+        const optimisticRefs: ImageRefContent[] = [];
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
           const imageId = crypto.randomUUID();
@@ -1204,61 +1262,59 @@ export function ChatView({
           // its own message via the imageRef shape immediately on refetch,
           // even if the server write races ahead of the response.
           await putImage({ imageId, base64: data, mimeType: img.file.type });
-          let tempId: string | null = null;
-          if (myAgentId) {
-            const imageRef: ImageRefContent = {
-              imageId,
-              mimeType: img.file.type,
-              filename: img.file.name,
-              size: img.file.size,
-            };
-            const optimistic: MessageWithDelivery = {
-              id: `optimistic-${crypto.randomUUID()}`,
-              chatId,
-              senderId: myAgentId,
-              format: "file",
-              content: imageRef,
-              metadata: imageMetadata ?? {},
-              inReplyTo: null,
-              source: "web",
-              createdAt: new Date().toISOString(),
-              deliveryStatus: "pending",
-            };
-            tempId = optimistic.id;
-            pendingTempIds.add(tempId);
-            insertOptimisticMessage(optimistic);
-          }
-          const saved = await sendFileMessage(
-            chatId,
-            {
-              data,
-              mimeType: img.file.type,
-              filename: img.file.name,
-              size: img.file.size,
-              imageId,
-            },
-            imageMetadata,
-          );
-          if (tempId) {
-            replaceOptimisticMessage(tempId, saved);
-            pendingTempIds.delete(tempId);
-          }
-          lastSentMessageId = saved.id;
-          URL.revokeObjectURL(img.previewUrl);
+          inlineAttachments.push({
+            data,
+            mimeType: img.file.type,
+            filename: img.file.name,
+            size: img.file.size,
+            imageId,
+          });
+          optimisticRefs.push({
+            imageId,
+            mimeType: img.file.type,
+            filename: img.file.name,
+            size: img.file.size,
+          });
         }
-        if (text) {
-          const optimistic = buildOptimisticTextMessage(text);
-          const tempId = optimistic?.id ?? null;
-          if (optimistic && tempId) {
-            pendingTempIds.add(tempId);
-            insertOptimisticMessage(optimistic);
-          }
-          const saved = await sendChatMessage(chatId, text);
-          if (tempId) {
-            replaceOptimisticMessage(tempId, saved);
-            pendingTempIds.delete(tempId);
-          }
-          lastSentMessageId = saved.id;
+
+        let batchTempId: string | null = null;
+        if (myAgentId) {
+          const optimisticContent: ImageBatchRefContent = {
+            ...(text ? { caption: text } : {}),
+            attachments: optimisticRefs,
+          };
+          const optimistic: MessageWithDelivery = {
+            id: `optimistic-${crypto.randomUUID()}`,
+            chatId,
+            senderId: myAgentId,
+            format: "file",
+            content: optimisticContent,
+            metadata: imageMetadata ?? {},
+            inReplyTo: null,
+            source: "web",
+            createdAt: new Date().toISOString(),
+            deliveryStatus: "pending",
+          };
+          batchTempId = optimistic.id;
+          pendingTempIds.add(batchTempId);
+          insertOptimisticMessage(optimistic);
+        }
+
+        const saved = await sendFileMessageBatch(
+          chatId,
+          {
+            ...(text ? { caption: text } : {}),
+            attachments: inlineAttachments,
+          },
+          imageMetadata,
+        );
+        if (batchTempId) {
+          replaceOptimisticMessage(batchTempId, saved);
+          pendingTempIds.delete(batchTempId);
+        }
+        lastSentMessageId = saved.id;
+        for (const img of images) {
+          URL.revokeObjectURL(img.previewUrl);
         }
         // Mirror sendMut.onSettled: predictive session-activation only shows
         // up in the sidebar after we invalidate, otherwise the file-send path

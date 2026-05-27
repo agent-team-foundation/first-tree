@@ -87,7 +87,22 @@ export type ImageRefContent = {
  * (so the sender can write to IndexedDB ahead of the POST round-trip) and
  * rewrites `content` to {@link ImageRefContent} before the DB insert.
  */
-type SendFileMessageBody = FileMessageContent & { imageId?: string };
+export type SendFileMessageBody = FileMessageContent & { imageId?: string };
+
+/**
+ * Post-refactor persisted batch shape — what `format: "file"` messages
+ * carry on the wire when a composer sends a caption together with N image
+ * attachments in one send. The server rewrites inline batch bodies to this
+ * shape after extracting the bytes (see `prepareImageOutbound`).
+ *
+ * Old single-image messages (whose `content` is just an `ImageRefContent`)
+ * keep working — renderers detect the batch shape via `attachments` being
+ * an array and fall through to the legacy branch otherwise.
+ */
+export type ImageBatchRefContent = {
+  caption?: string;
+  attachments: ImageRefContent[];
+};
 
 /**
  * Optional message metadata for a file send. Today only `mentions` is wired
@@ -106,6 +121,35 @@ export function sendFileMessage(
   // Project explicit fields rather than spreading `metadata` whole so future
   // additions to SendFileMessageMetadata don't ride out on the `mentions`
   // truthiness check by accident — each new field must be opted in here.
+  const mentions = metadata?.mentions;
+  const hasMentions = Array.isArray(mentions) && mentions.length > 0;
+  return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
+    format: "file",
+    content,
+    ...(hasMentions ? { metadata: { mentions } } : {}),
+  });
+}
+
+/**
+ * Send a single `format: "file"` message carrying 1+ image attachments and
+ * an optional text caption. Used so the composer can ship one bubble per
+ * user "send" action instead of N+1 separate rows.
+ *
+ * Server intercepts each attachment's bytes, pushes one `image_payload`
+ * frame per attachment (clients keep their per-imageId disk-write path),
+ * and rewrites `content` to the persisted {@link ImageBatchRefContent}
+ * shape before insert.
+ */
+export type SendFileMessageBatchBody = {
+  caption?: string;
+  attachments: SendFileMessageBody[];
+};
+
+export function sendFileMessageBatch(
+  chatId: string,
+  content: SendFileMessageBatchBody,
+  metadata?: SendFileMessageMetadata,
+): Promise<Message> {
   const mentions = metadata?.mentions;
   const hasMentions = Array.isArray(mentions) && mentions.length > 0;
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {

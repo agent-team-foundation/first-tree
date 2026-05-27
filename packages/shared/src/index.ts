@@ -294,9 +294,13 @@ export {
 } from "./schemas/github-app.js";
 export {
   IMAGE_MIME_TO_EXT,
+  type ImageBatchInlineContent,
+  type ImageBatchRefContent,
   type ImageInlineContent,
   type ImagePayloadFrame,
   type ImageRefContent,
+  imageBatchInlineContentSchema,
+  imageBatchRefContentSchema,
   imageInlineContentSchema,
   imagePayloadFrameSchema,
   imageRefContentSchema,

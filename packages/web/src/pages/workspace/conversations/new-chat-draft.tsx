@@ -2,7 +2,7 @@ import { type Agent, extractMentions, type MentionParticipant } from "@first-tre
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { readFileAsBase64, sendChatMessage, sendFileMessage } from "../../../api/chats.js";
+import { readFileAsBase64, sendChatMessage, sendFileMessageBatch } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
@@ -352,34 +352,39 @@ export function NewChatDraft({
     }) => {
       const created = await createMeChat({ participantIds });
       const chatId = created.chatId;
-      // Send images first (mirrors the in-chat composer ordering), then the
-      // text body, so the new chat opens with attachments above the message.
+      const trimmed = text.trim();
+      // Collapse "N images + optional caption" into a single batched
+      // `format: "file"` message — one bubble, no N+1 split. Pure-text
+      // sends still go through `sendChatMessage` below.
       if (images.length > 0) {
-        // Carry the @-mentions onto each image message so the server's
-        // group-chat mention guard accepts file-format sends (issue 387).
+        // Carry the @-mentions onto the batch so the server's group-chat
+        // mention guard accepts the file-format send (issue 387).
         // Single-chip (direct) chats have no mentions and skip the check.
         const imageMetadata = mentions.length > 0 ? { mentions } : undefined;
+        const attachments: { data: string; mimeType: string; filename: string; size: number; imageId: string }[] = [];
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
           const imageId = crypto.randomUUID();
           // Write to IndexedDB before the POST so the sending tab can render
           // the image from its imageRef immediately on refetch.
           await putImage({ imageId, base64: data, mimeType: img.file.type });
-          await sendFileMessage(
-            chatId,
-            {
-              data,
-              mimeType: img.file.type,
-              filename: img.file.name,
-              size: img.file.size,
-              imageId,
-            },
-            imageMetadata,
-          );
+          attachments.push({
+            data,
+            mimeType: img.file.type,
+            filename: img.file.name,
+            size: img.file.size,
+            imageId,
+          });
         }
-      }
-      const trimmed = text.trim();
-      if (trimmed.length > 0) {
+        await sendFileMessageBatch(
+          chatId,
+          {
+            ...(trimmed.length > 0 ? { caption: trimmed } : {}),
+            attachments,
+          },
+          imageMetadata,
+        );
+      } else if (trimmed.length > 0) {
         await sendChatMessage(chatId, trimmed);
       }
       return chatId;

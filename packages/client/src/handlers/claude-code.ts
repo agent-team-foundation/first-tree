@@ -153,6 +153,21 @@ function isImageRefContent(content: unknown): content is ImageRefContent {
   );
 }
 
+/** Batched image message shape: optional caption + 1+ image refs in a single
+ * `format: "file"` message. Produced by composers that send "caption + N
+ * images" as one bubble; old single-ref messages still take the path above. */
+type ImageBatchRefContent = {
+  caption?: string;
+  attachments: ImageRefContent[];
+};
+
+function isImageBatchRefContent(content: unknown): content is ImageBatchRefContent {
+  if (!content || typeof content !== "object") return false;
+  const c = content as Record<string, unknown>;
+  if (!Array.isArray(c.attachments) || c.attachments.length === 0) return false;
+  return c.attachments.every((a: unknown) => isImageRefContent(a));
+}
+
 /** Legacy pre-refactor image content with base64 inlined into the message.
  * Only exercised by messages that pre-date the image-out-of-messages PR —
  * kept so a client upgraded mid-backlog can still read them. */
@@ -527,6 +542,36 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // emit the same `[From: <name>]` header as the default text path.
       const senderLabel = message.senderId ? await sessionCtx.resolveSenderLabel(message.senderId) : "";
       const prefix = senderLabel ? `[From: ${senderLabel}]\n\n` : "";
+
+      // Batched send (caption + N images in one message). Resolve every
+      // imageId to a local path the Read tool can open; missing-byte cases
+      // surface a per-attachment "not available on this device" placeholder
+      // so the session keeps moving and a partial-delivery doesn't strand
+      // the whole turn.
+      if (isImageBatchRefContent(message.content)) {
+        const caption = message.content.caption?.trim() ?? "";
+        const lines: string[] = [];
+        if (caption.length > 0) lines.push(caption);
+        lines.push(
+          message.content.attachments.length === 1
+            ? "An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see."
+            : `${message.content.attachments.length} images were shared in this chat. Please use the Read tool to read each one, then respond based on what you see.`,
+        );
+        for (const att of message.content.attachments) {
+          const imagePath = findImagePath(message.chatId, att.imageId, att.mimeType);
+          if (imagePath) {
+            lines.push(`\nFilename: ${att.filename}\nPath: ${imagePath}`);
+          } else {
+            lines.push(`\n[Image "${att.filename}" not available on this device]`);
+          }
+        }
+        return {
+          type: "user",
+          message: { role: "user", content: `${prefix}${lines.join("\n")}` },
+          parent_tool_use_id: null,
+          session_id: sessionId,
+        };
+      }
 
       if (isImageRefContent(message.content)) {
         const { imageId, mimeType, filename } = message.content;

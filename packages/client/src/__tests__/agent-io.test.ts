@@ -123,6 +123,56 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("anon");
   });
 
+  it("renders a batched image message (caption + N refs) instead of a JSON dump", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "file",
+      content: {
+        caption: "look at these",
+        attachments: [
+          { imageId: "9c2ce4e7-3f0d-4f53-9c0c-1c93e7d51a92", mimeType: "image/png", filename: "a.png" },
+          { imageId: "11111111-1111-4111-8111-111111111111", mimeType: "image/png", filename: "b.png" },
+        ],
+      },
+      metadata: null,
+    };
+    const out = await formatInboundContent(msg, cache);
+    // Bytes never landed on this client (no `writeImage` ran in the test
+    // harness) so each attachment surfaces the not-available placeholder.
+    // The point: caption + per-image lines, not a `{"caption":"…"}` blob.
+    expect(out).toContain("[From: alice]");
+    expect(out).toContain("look at these");
+    expect(out).toContain("2 images were shared");
+    expect(out).toContain("a.png");
+    expect(out).toContain("b.png");
+    expect(out).not.toContain('{"caption"');
+  });
+
+  it("renders a single image ref (pre-batch shape) as filename + placeholder", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "file",
+      content: {
+        imageId: "9c2ce4e7-3f0d-4f53-9c0c-1c93e7d51a92",
+        mimeType: "image/png",
+        filename: "legacy.png",
+      },
+      metadata: null,
+    };
+    const out = await formatInboundContent(msg, cache);
+    expect(out).toContain("[From: alice]");
+    expect(out).toContain("legacy.png");
+    expect(out).not.toContain('{"imageId"');
+  });
+
   it("only calls listChatParticipants once across many messages (cache hit)", async () => {
     const listFn = vi.fn().mockResolvedValue(participants);
     const sdk = { serverUrl: "http://test", listChatParticipants: listFn } as unknown as FirstTreeHubSDK;

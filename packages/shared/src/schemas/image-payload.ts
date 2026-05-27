@@ -46,6 +46,35 @@ export const imageRefContentSchema = z.object({
 export type ImageRefContent = z.infer<typeof imageRefContentSchema>;
 
 /**
+ * Batch inbound shape: a single `format: "file"` message that carries a text
+ * caption plus 1+ image attachments. Server extracts each attachment's bytes,
+ * pushes one `image_payload` WS frame per attachment, then rewrites `content`
+ * to {@link imageBatchRefContentSchema} before the DB insert. Used so the
+ * composer can send "caption + N images" as a single message (one bubble)
+ * instead of producing N+1 separate rows.
+ *
+ * Backward compatibility: single-image messages keep using
+ * {@link imageInlineContentSchema} — old clients are unaffected. Readers
+ * choose the right shape via type guards (see `isImageBatchRefContent`).
+ */
+export const imageBatchInlineContentSchema = z.object({
+  caption: z.string().optional(),
+  attachments: z.array(imageInlineContentSchema).min(1),
+});
+export type ImageBatchInlineContent = z.infer<typeof imageBatchInlineContentSchema>;
+
+/**
+ * Persisted batch shape (caption + N image refs). Mirrors
+ * {@link imageBatchInlineContentSchema} after the server has stripped the
+ * bytes into per-attachment WS pushes.
+ */
+export const imageBatchRefContentSchema = z.object({
+  caption: z.string().optional(),
+  attachments: z.array(imageRefContentSchema).min(1),
+});
+export type ImageBatchRefContent = z.infer<typeof imageBatchRefContentSchema>;
+
+/**
  * Server → client WS frame carrying the full image bytes for an image
  * message. Pushed before the corresponding `inbox:deliver` frame so the
  * client has the file on disk by the time it renders the message.

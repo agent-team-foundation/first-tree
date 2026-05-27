@@ -1,6 +1,7 @@
-import type { ChatParticipantDetail } from "@first-tree/shared";
+import { type ChatParticipantDetail, SUPPORTED_IMAGE_MIMES, type SupportedImageMime } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentIdentity, SessionMessage } from "./handler.js";
+import { findImagePath } from "./image-store.js";
 
 /**
  * Cross-handler plumbing for Agent Hub ↔ agent-runtime interaction.
@@ -151,9 +152,75 @@ export function resolveSenderLabel(senderId: string, participants: ChatParticipa
  * Convert a SessionMessage's payload to a plain-text snippet the LLM can
  * read as user input. Most formats are already strings; non-string
  * payloads are stringified so the resumed turn still sees readable text.
+ *
+ * `format: "file"` image messages (single-ref or batched caption + N refs)
+ * get a human-readable rendering — caption text plus the on-disk path of
+ * each image so a shell-capable LLM (codex CLI, claude-code) can read it,
+ * or a "[Image … not available on this device]" placeholder when the bytes
+ * never arrived on this client. Without this, codex / future handlers that
+ * delegate to `formatInboundContent` would see the raw `{caption,
+ * attachments}` JSON.
  */
 function renderForLLM(message: SessionMessage): string {
-  return typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+  if (typeof message.content === "string") return message.content;
+  if (message.format === "file") {
+    const rendered = renderFileMessageForLLM(message);
+    if (rendered !== null) return rendered;
+  }
+  return JSON.stringify(message.content);
+}
+
+type ImageRef = { imageId: string; mimeType: SupportedImageMime; filename: string };
+
+function isImageRef(value: unknown): value is ImageRef {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.imageId === "string" &&
+    typeof v.mimeType === "string" &&
+    typeof v.filename === "string" &&
+    (SUPPORTED_IMAGE_MIMES as readonly string[]).includes(v.mimeType)
+  );
+}
+
+/** Return a text rendering for a file message's content, or null when the
+ * shape isn't a known image variant — caller falls back to JSON. */
+function renderFileMessageForLLM(message: SessionMessage): string | null {
+  const content = message.content;
+  if (!content || typeof content !== "object") return null;
+  const c = content as Record<string, unknown>;
+
+  // Batch shape: caption + N image refs.
+  if (Array.isArray(c.attachments) && c.attachments.every((a) => isImageRef(a))) {
+    const attachments = c.attachments as ImageRef[];
+    const caption = typeof c.caption === "string" ? c.caption.trim() : "";
+    const lines: string[] = [];
+    if (caption.length > 0) lines.push(caption);
+    lines.push(
+      attachments.length === 1
+        ? "An image was shared in this chat. Use the Read tool / shell to open it before responding."
+        : `${attachments.length} images were shared in this chat. Use the Read tool / shell to open each before responding.`,
+    );
+    for (const att of attachments) {
+      const path = findImagePath(message.chatId, att.imageId, att.mimeType);
+      lines.push(
+        path
+          ? `\nFilename: ${att.filename}\nPath: ${path}`
+          : `\n[Image "${att.filename}" not available on this device]`,
+      );
+    }
+    return lines.join("\n");
+  }
+
+  // Single image ref (pre-batch shape, kept for backward compatibility).
+  if (isImageRef(c)) {
+    const path = findImagePath(message.chatId, c.imageId, c.mimeType);
+    return path
+      ? `An image was shared in this chat. Use the Read tool / shell to open it before responding.\n\nFilename: ${c.filename}\nPath: ${path}`
+      : `[Image "${c.filename}" not available on this device]`;
+  }
+
+  return null;
 }
 
 export async function formatInboundContent(message: SessionMessage, participants: ParticipantCache): Promise<string> {

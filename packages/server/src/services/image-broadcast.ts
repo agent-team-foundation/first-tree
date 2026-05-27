@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  type ImageBatchRefContent,
   type ImagePayloadFrame,
   type ImageRefContent,
+  imageBatchInlineContentSchema,
   imageInlineContentSchema,
   type SendMessage,
 } from "@first-tree/shared";
@@ -43,6 +45,54 @@ export async function prepareImageOutbound(
   data: SendMessage,
 ): Promise<SendMessage> {
   if (data.format !== "file") return data;
+
+  // Batch shape: caption + N inline images. Composers send one message per
+  // user "send" action regardless of how many images were attached. Each
+  // attachment still gets its own `image_payload` push (clients keep their
+  // per-imageId disk-write path unchanged); the persisted content collapses
+  // the inline bytes into a single batch-ref shape.
+  const batchParsed = imageBatchInlineContentSchema.safeParse(data.content);
+  if (batchParsed.success) {
+    const inboxIds = await collectTargetInboxes(db, chatId);
+    const refs: ImageRefContent[] = [];
+    for (const attachment of batchParsed.data.attachments) {
+      const imageId = attachment.imageId ?? randomUUID();
+      const frame: ImagePayloadFrame = {
+        type: "image_payload",
+        imageId,
+        chatId,
+        base64: attachment.data,
+        mimeType: attachment.mimeType,
+        filename: attachment.filename,
+        ...(attachment.size !== undefined ? { size: attachment.size } : {}),
+      };
+      const serialised = JSON.stringify(frame);
+      for (const inboxId of inboxIds) {
+        notifier.pushFrameToInbox(inboxId, serialised).catch(() => {
+          // Best-effort side channel; missing-byte case surfaces a
+          // placeholder downstream just like the single-image path.
+        });
+      }
+      refs.push({
+        imageId,
+        mimeType: attachment.mimeType,
+        filename: attachment.filename,
+        ...(attachment.size !== undefined ? { size: attachment.size } : {}),
+      });
+    }
+    const batchRef: ImageBatchRefContent = {
+      ...(batchParsed.data.caption !== undefined ? { caption: batchParsed.data.caption } : {}),
+      attachments: refs,
+    };
+    return {
+      ...data,
+      content: batchRef,
+    };
+  }
+
+  // Legacy single-image path: kept for clients that still send the
+  // pre-batch shape. Behaviour is unchanged — extract bytes, push one frame,
+  // rewrite content to a single ref.
   const parsed = imageInlineContentSchema.safeParse(data.content);
   if (!parsed.success) return data;
 
