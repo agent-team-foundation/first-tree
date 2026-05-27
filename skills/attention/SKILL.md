@@ -150,4 +150,7 @@ This keeps the schema honest — each NHA is one question with one outcome, and 
 
 - `examples/endorse-deploy.md` — well-formed approval request, with structured `options`.
 - `examples/notify-completion.md` — well-formed completion notification.
+- `examples/supply-missing-detail.md` — request filling in a single factual input (credentials / id / threshold).
+- `examples/direct-route-decision.md` — request routing a decision that's not the agent's call (escalation, customer-facing trade-off).
+- `examples/multi-question-launch.md` — one NHA carrying multiple related decisions via `metadata.questions[]` (atomic submission).
 - `references/metadata-shape.md` — terse spec of `metadata.options` and `metadata.questions` for when you want the human to click instead of type.

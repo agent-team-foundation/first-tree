@@ -1,7 +1,8 @@
-import type { ListAttentionsQuery } from "@first-tree/shared";
+import type { Attention, ListAttentionsQuery } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { listAttentions } from "../../core/attention/index.js";
+import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 
 interface ListOptions {
@@ -11,6 +12,7 @@ interface ListOptions {
   inChat?: string;
   limit?: string;
   agent?: string;
+  groupByChat?: boolean;
 }
 
 export function registerAttentionListCommand(parent: Command): void {
@@ -23,6 +25,7 @@ export function registerAttentionListCommand(parent: Command): void {
     .option("--in-chat <id>", "Filter to attentions anchored to this chat id")
     .option("-l, --limit <number>", "Max records to return (1-200)")
     .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
+    .option("--group-by-chat", "Render a human-readable grouping by chat on stderr (still emits JSON on stdout)")
     .action(async (options: ListOptions) => {
       try {
         const filter: Partial<ListAttentionsQuery> = {};
@@ -67,9 +70,51 @@ export function registerAttentionListCommand(parent: Command): void {
         }
 
         const records = await listAttentions(sdk, filter);
+        if (options.groupByChat === true) {
+          // `print.line` is auto-silenced in --json mode so scripted consumers
+          // get a clean stdout envelope; human readers get the grouping on stderr.
+          for (const block of renderGroupedByChat(records)) {
+            print.line(block);
+          }
+        }
         success(records);
       } catch (error) {
         handleSdkError(error);
       }
     });
+}
+
+/**
+ * Format attentions grouped by `originChatId`, newest open requests first.
+ * Yields plain text blocks suitable for `print.line` (each already ending
+ * in a newline). One block per chat, listing the chat id then one line per
+ * Attention. Closed records are dimmed with a `·` marker; open requests
+ * with `!`.
+ */
+export function* renderGroupedByChat(records: Attention[]): Generator<string> {
+  const groups = new Map<string, Attention[]>();
+  for (const r of records) {
+    const arr = groups.get(r.originChatId) ?? [];
+    arr.push(r);
+    groups.set(r.originChatId, arr);
+  }
+  // Sort groups so chats with the most "needs reply" rows come first.
+  const sortedChats = [...groups.entries()].sort(([, a], [, b]) => {
+    const openA = a.filter((x) => x.state === "open" && x.requiresResponse).length;
+    const openB = b.filter((x) => x.state === "open" && x.requiresResponse).length;
+    return openB - openA;
+  });
+  for (const [chatId, list] of sortedChats) {
+    const openCount = list.filter((x) => x.state === "open" && x.requiresResponse).length;
+    const header = openCount > 0 ? `chat ${chatId}  (${openCount} open ask)` : `chat ${chatId}`;
+    yield `\n${header}\n`;
+    const sorted = [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    for (const att of sorted) {
+      const marker = att.state === "open" && att.requiresResponse ? "!" : "·";
+      const tag = att.requiresResponse ? "ask " : "note";
+      const id = att.id.slice(0, 8);
+      const subjectClip = att.subject.length > 60 ? `${att.subject.slice(0, 57)}…` : att.subject;
+      yield `  ${marker} ${tag}  ${id}  ${subjectClip}\n`;
+    }
+  }
 }

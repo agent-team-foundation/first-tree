@@ -62,6 +62,7 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AttentionCard } from "../../../components/chat/attention-card.js";
+import { AttentionRefChips } from "../../../components/chat/attention-ref-chip.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
@@ -534,7 +535,10 @@ function TextRow({
           ) : msg.format === "file" && isImageRefContent(msg.content) ? (
             <ImageFromRef content={msg.content} />
           ) : msg.format === "text" || msg.format === "markdown" ? (
-            <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
+            <>
+              <AttentionRefChips text={textContent} />
+              <Markdown components={markdownComponents}>{textContent ?? ""}</Markdown>
+            </>
           ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
             <GithubEventCardMessage content={msg.content} />
           ) : (

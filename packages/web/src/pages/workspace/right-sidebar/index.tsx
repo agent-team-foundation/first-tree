@@ -1,5 +1,6 @@
 import type { ChatParticipantDetail } from "@first-tree/shared";
 import { X } from "lucide-react";
+import { AttentionsSection } from "./attentions-section.js";
 import { GitHubSection } from "./github-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 
@@ -81,6 +82,7 @@ export function ChatRightSidebar({
       </button>
 
       <div className="flex-1 overflow-y-auto">
+        <AttentionsSection chatId={chatId} />
         <ParticipantsSection
           chatId={chatId}
           participants={participants}

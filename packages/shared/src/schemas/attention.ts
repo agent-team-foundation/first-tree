@@ -195,6 +195,12 @@ export const listAttentionsQuerySchema = z.object({
   /** state="all" returns both open and closed. Default "open". */
   state: z.enum(["open", "closed", "all"]).default("open"),
   limit: z.coerce.number().int().positive().max(200).default(50),
+  /**
+   * Pagination cursor — ISO-8601 timestamp from the last row of the previous
+   * page (e.g. `attentions[attentions.length-1].createdAt`). Server returns
+   * rows strictly older than this cursor. Omit for the first page.
+   */
+  cursor: z.string().datetime().optional(),
 });
 export type ListAttentionsQuery = z.infer<typeof listAttentionsQuerySchema>;
 

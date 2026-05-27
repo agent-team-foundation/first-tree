@@ -33,12 +33,18 @@ export function respondAttention(
 }
 
 /**
- * `GET /attention?chat=<chatId>&state=open` — list open Attentions anchored
- * to one chat. The web client fetches the open set, then the bottom-card
- * picks the oldest one to display (M1 末: agents are expected to only have
- * one open at a time, but we defend against the rare overlap).
+ * `GET /attention?chat=<chatId>&state=all` — every Attention anchored to
+ * one chat (open + closed, server caps at 200 rows newest-first).
+ *
+ * Both consumers share this fetch:
+ *   - chat-bottom AttentionCard filters to `state==='open' && requiresResponse`
+ *     client-side and picks the oldest
+ *   - sidebar AttentionsSection wants the full history list for the chat
+ *
+ * Cross-consumer reuse via `attentionsInChatQueryKey` keeps WS-driven
+ * invalidations hitting one cache.
  */
 export async function listAttentionsInChat(chatId: string): Promise<Attention[]> {
-  const qs = new URLSearchParams({ chat: chatId, state: "open" });
+  const qs = new URLSearchParams({ chat: chatId, state: "all" });
   return api.get<Attention[]>(`/attention?${qs.toString()}`);
 }

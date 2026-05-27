@@ -1,4 +1,4 @@
-import type { Attention, AttentionOptionGroup } from "@first-tree/shared";
+import type { Attention, AttentionOptionGroup, AttentionQuestion } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { attentionsInChatQueryKey, respondAttention, respondAttentionMutationKey } from "../../api/attention.js";
@@ -7,25 +7,31 @@ import { Markdown } from "../ui/markdown.js";
 import { formatElapsed } from "./working-chip.js";
 
 /**
- * AttentionCard — M1 末 chat-bottom rendering of an open NHA request.
+ * AttentionCard — chat-bottom rendering of an open NHA request.
  *
- * Scope:
- *   - Expanded state only (no collapse affordance — folding lands in M2)
- *   - Single top-level question (the schema's `metadata.questions[]`
- *     multi-question path is M2)
- *   - No sidebar / popover rendering — this card is the chat-bottom card
- *     and is rendered in place of the composer by the chat-view
+ * Two visual states (per `/tmp/nha-design/ui-mockup.html` v0.8):
+ *   - **Expanded** (default): full form with subject / body markdown /
+ *     options / free-text / submit action row
+ *   - **Collapsed**: three-row strip (composer-height) — title row (with
+ *     subject inline) + one-line excerpt + one-line recommended-action row.
+ *     Composer still does NOT show — folding is for "let me see the chat
+ *     history", not for "let me bypass the question"
  *
- * Layout follows `/tmp/nha-design/ui-mockup.html` State B (v0.8). All
- * spacing / color / typography values resolve to the project's existing
- * CSS tokens (--sp-*, --fg-*, --bg-*, .text-* utilities). No raw pixel
- * literals, no inline font properties — the design-token guardrails are
- * enforced by `scripts/check-design-tokens.sh`.
+ * Question modes:
+ *   - **single-question** (default): `metadata.options` may carry one
+ *     options group; otherwise the card degrades to free-text only
+ *   - **multi-question**: `metadata.questions[]` carries N decision points;
+ *     submission is atomic (all questions must be answered)
  *
- * The component owns its own selection / free-text / submit state. On a
- * successful respond mutation it calls `onResponded` and invalidates the
- * per-chat attention list so the bottom-card disappears and the composer
- * comes back into view.
+ * Out of M2 初 scope (still TODO):
+ *   - sidebar / popover rendering (separate component)
+ *
+ * Layout uses project design tokens (--sp-*, --fg-*, --bg-*) only — the
+ * design-token guardrails are enforced by `scripts/check-design-tokens.sh`.
+ *
+ * Successful respond → onResponded callback + invalidates the per-chat
+ * attention list (so the bottom-card disappears and the composer comes
+ * back into view).
  */
 export type AttentionCardProps = {
   attention: Attention;
@@ -66,18 +72,48 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
   const agentName = useAgentNameMap();
   const fromName = agentName(attention.originAgentId);
 
-  const optionsGroup: AttentionOptionGroup | null = attention.metadata.options ?? null;
-  const isMulti = optionsGroup?.mode === "multi";
+  // Resolve question form. metadata.questions[] takes priority; otherwise
+  // we synthesize a single-question form from metadata.options. The
+  // single-question form's id is "default" — the same key that respond
+  // already uses for answers.
+  const questions: AttentionQuestion[] = useMemo(() => {
+    if (attention.metadata.questions && attention.metadata.questions.length > 0) {
+      return attention.metadata.questions;
+    }
+    const opts: AttentionOptionGroup | null = attention.metadata.options ?? null;
+    if (!opts) return [];
+    return [{ id: ANSWER_KEY, prompt: attention.subject, options: opts }];
+  }, [attention.metadata.questions, attention.metadata.options, attention.subject]);
 
-  const initialSelection = useMemo<Set<string>>(() => {
-    if (!optionsGroup?.defaultValue) return new Set();
-    if (Array.isArray(optionsGroup.defaultValue)) return new Set(optionsGroup.defaultValue);
-    return new Set([optionsGroup.defaultValue]);
-  }, [optionsGroup]);
+  const isMultiQuestion = questions.length > 1;
+  const singleOptionsGroup: AttentionOptionGroup | null =
+    !isMultiQuestion && questions[0]?.options ? questions[0].options : null;
+  const isMultiOption = singleOptionsGroup?.mode === "multi";
 
-  const [selected, setSelected] = useState<Set<string>>(initialSelection);
-  const [freeTextOpen, setFreeTextOpen] = useState(!optionsGroup);
+  // Selection state. Keyed by question id; value is a set of selected
+  // option values for that question. Initialized from each question's
+  // own defaultValue.
+  const initialAnswers = useMemo<Map<string, Set<string>>>(() => {
+    const map = new Map<string, Set<string>>();
+    for (const q of questions) {
+      const def = q.options?.defaultValue;
+      if (!def) {
+        map.set(q.id, new Set());
+      } else if (Array.isArray(def)) {
+        map.set(q.id, new Set(def));
+      } else {
+        map.set(q.id, new Set([def]));
+      }
+    }
+    return map;
+  }, [questions]);
+
+  const [answers, setAnswers] = useState<Map<string, Set<string>>>(initialAnswers);
+  const [freeTextOpen, setFreeTextOpen] = useState(questions.length === 0);
   const [freeText, setFreeText] = useState("");
+  // Manual fold; default expanded. Folding hides body + actions but keeps
+  // the composer suppressed — see the file header comment.
+  const [collapsed, setCollapsed] = useState(false);
 
   const mutation = useMutation({
     mutationKey: respondAttentionMutationKey(attention.id),
@@ -89,23 +125,48 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
   });
 
   const canSubmitFreeText = freeTextOpen && freeText.trim().length > 0;
-  const canSubmitOptions = optionsGroup != null && selected.size > 0 && !freeTextOpen;
-  const canSubmit = canSubmitFreeText || canSubmitOptions;
+  /**
+   * Per-question validity. A question is "answered" when its selected
+   * set's size satisfies the options' `min` (default 1 for single / 1 for
+   * multi when unspecified) and `max`. Questions with no options are
+   * treated as text-only and therefore never satisfied in form mode (free
+   * text is the only path).
+   */
+  const allQuestionsAnswered = useMemo(() => {
+    if (questions.length === 0 || freeTextOpen) return false;
+    for (const q of questions) {
+      if (!q.options) return false;
+      const sel = answers.get(q.id) ?? new Set<string>();
+      const min = q.options.min ?? 1;
+      const max = q.options.max;
+      if (sel.size < min) return false;
+      if (max !== undefined && sel.size > max) return false;
+    }
+    return true;
+  }, [answers, freeTextOpen, questions]);
+  const canSubmit = canSubmitFreeText || allQuestionsAnswered;
 
   const toggleOption = useCallback(
-    (value: string) => {
+    (questionId: string, value: string) => {
       if (mutation.isPending) return;
-      setSelected((prev) => {
-        if (isMulti) {
-          const next = new Set(prev);
-          if (next.has(value)) next.delete(value);
-          else next.add(value);
-          return next;
+      const q = questions.find((qq) => qq.id === questionId);
+      if (!q?.options) return;
+      const optionsMulti = q.options.mode === "multi";
+      setAnswers((prev) => {
+        const next = new Map(prev);
+        const prevSet = next.get(questionId) ?? new Set<string>();
+        if (optionsMulti) {
+          const updated = new Set(prevSet);
+          if (updated.has(value)) updated.delete(value);
+          else updated.add(value);
+          next.set(questionId, updated);
+        } else {
+          next.set(questionId, new Set([value]));
         }
-        return new Set([value]);
+        return next;
       });
     },
-    [isMulti, mutation.isPending],
+    [mutation.isPending, questions],
   );
 
   const handleSubmit = useCallback(() => {
@@ -114,14 +175,54 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
       mutation.mutate({ text: freeText.trim() });
       return;
     }
-    const value: string | string[] = isMulti ? Array.from(selected) : (Array.from(selected)[0] ?? "");
-    mutation.mutate({ answers: { [ANSWER_KEY]: value } });
-  }, [canSubmit, canSubmitFreeText, freeText, isMulti, mutation, selected]);
+    // Atomic submit: serialize every question's selection into one answers
+    // payload. Single-select keeps the historical scalar shape; multi-select
+    // sends an array.
+    const payload: Record<string, string | string[]> = {};
+    for (const q of questions) {
+      const sel = Array.from(answers.get(q.id) ?? []);
+      const optionsMulti = q.options?.mode === "multi";
+      payload[q.id] = optionsMulti ? sel : (sel[0] ?? "");
+    }
+    mutation.mutate({ answers: payload });
+  }, [answers, canSubmit, canSubmitFreeText, freeText, mutation, questions]);
+
+  // Compact "recommended action" — clicking submits the agent-supplied
+  // default option (single-question + single-mode only). Multi-question
+  // and multi-select questions degrade to "展开查看".
+  const recommendedItem = useMemo(() => {
+    if (isMultiQuestion || !singleOptionsGroup || isMultiOption) return null;
+    const defaultValue =
+      typeof singleOptionsGroup.defaultValue === "string"
+        ? singleOptionsGroup.defaultValue
+        : singleOptionsGroup.defaultValue?.[0];
+    if (!defaultValue) return null;
+    return singleOptionsGroup.items.find((it) => it.value === defaultValue) ?? null;
+  }, [isMultiQuestion, isMultiOption, singleOptionsGroup]);
+
+  const submitRecommended = useCallback(() => {
+    if (!recommendedItem || mutation.isPending || isMultiQuestion) return;
+    mutation.mutate({ answers: { [ANSWER_KEY]: recommendedItem.value } });
+  }, [isMultiQuestion, mutation, recommendedItem]);
+
+  const compactExcerpt = useMemo(() => {
+    const raw = (attention.body || attention.subject).trim();
+    const firstLine = raw.split("\n").find((l) => l.trim().length > 0) ?? "";
+    return firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine;
+  }, [attention.body, attention.subject]);
+
+  const anySelected = useMemo(() => {
+    for (const set of answers.values()) {
+      if (set.size > 0) return true;
+    }
+    return false;
+  }, [answers]);
 
   // Keyboard: Enter submits when not in free-text mode (Cmd/Ctrl+Enter in
-  // free-text). Esc clears the current selection — per the mockup's
-  // "enter 提交 · esc 取消选中" hint. Scoped to the card; the chat-level
-  // Esc handler is unaffected since we stopPropagation only when consuming.
+  // free-text). Esc clears the current selection across all questions —
+  // per the mockup's "enter 提交 · esc 取消选中" hint. Scoped to the card;
+  // the chat-level Esc handler is unaffected since we stopPropagation only
+  // when consuming.
   const handleCardKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
       if (e.nativeEvent.isComposing) return;
@@ -133,14 +234,14 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
         return;
       }
       if (e.key === "Escape") {
-        if (selected.size > 0) {
+        if (anySelected) {
           e.preventDefault();
           e.stopPropagation();
-          setSelected(new Set());
+          setAnswers(new Map(questions.map((q) => [q.id, new Set<string>()])));
         }
       }
     },
-    [canSubmit, freeTextOpen, handleSubmit, selected.size],
+    [anySelected, canSubmit, freeTextOpen, handleSubmit, questions],
   );
 
   const elapsed = useLiveSince(attention.createdAt);
@@ -194,11 +295,63 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
           <span className="mono text-caption" style={{ color: "var(--fg-2)" }}>
             · {clock} · 已等待 {elapsed}
           </span>
-          <span style={{ flex: 1 }} />
+          {collapsed ? (
+            <span
+              className="text-label"
+              style={{
+                color: "var(--fg)",
+                fontWeight: 600,
+                marginLeft: "var(--sp-1)",
+                flex: 1,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={attention.subject}
+            >
+              {attention.subject}
+            </span>
+          ) : (
+            <span style={{ flex: 1 }} />
+          )}
           <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
             {shortAttentionId(attention.id)}
           </span>
+          <button
+            type="button"
+            aria-label={collapsed ? "展开请示卡片" : "折叠请示卡片以查看历史"}
+            title={collapsed ? "展开" : "折叠卡片以查看历史"}
+            onClick={() => setCollapsed((v) => !v)}
+            className="inline-flex items-center justify-center transition-colors"
+            style={{
+              background: "transparent",
+              border: 0,
+              cursor: "pointer",
+              padding: "var(--sp-0_5) var(--sp-1_25)",
+              borderRadius: "var(--radius-input)",
+              color: "var(--fg-error-strong)",
+              fontWeight: 700,
+            }}
+          >
+            {collapsed ? "▾ 展开" : "▴ 折叠"}
+          </button>
         </div>
+
+        {collapsed ? (
+          <CompactRows
+            excerpt={compactExcerpt}
+            recommendedLabel={recommendedItem?.label ?? null}
+            otherCount={
+              singleOptionsGroup ? Math.max(0, singleOptionsGroup.items.length - (recommendedItem ? 1 : 0)) : 0
+            }
+            hasOptions={singleOptionsGroup != null || isMultiQuestion}
+            isMultiQuestion={isMultiQuestion}
+            isPending={mutation.isPending}
+            onSubmitRecommended={submitRecommended}
+            onExpand={() => setCollapsed(false)}
+          />
+        ) : null}
 
         {/* Body */}
         <div
@@ -206,6 +359,7 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
             padding: "var(--sp-3) var(--sp-4) var(--sp-3)",
             maxHeight: "56vh",
             overflowY: "auto",
+            display: collapsed ? "none" : "block",
           }}
         >
           <div className="text-subtitle font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-2_5)" }}>
@@ -214,14 +368,17 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
 
           {attention.body ? <Markdown>{attention.body}</Markdown> : null}
 
-          {optionsGroup ? (
-            <OptionsList
-              group={optionsGroup}
-              selected={selected}
+          {questions.map((q, idx) => (
+            <QuestionBlock
+              key={q.id}
+              question={q}
+              index={isMultiQuestion ? idx + 1 : null}
+              total={isMultiQuestion ? questions.length : null}
+              selected={answers.get(q.id) ?? new Set<string>()}
               disabled={mutation.isPending || freeTextOpen}
-              onToggle={toggleOption}
+              onToggle={(value) => toggleOption(q.id, value)}
             />
-          ) : null}
+          ))}
 
           {freeTextOpen ? (
             <div style={{ marginTop: "var(--sp-2_5)" }}>
@@ -260,6 +417,7 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
             padding: "var(--sp-2) var(--sp-4) var(--sp-3)",
             borderTop: "var(--hairline) solid var(--border-faint)",
             background: "var(--bg-raised)",
+            display: collapsed ? "none" : "flex",
           }}
         >
           <button
@@ -277,9 +435,9 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
               opacity: !canSubmit || mutation.isPending ? 0.4 : 1,
             }}
           >
-            {mutation.isPending ? "提交中…" : optionsGroup && !freeTextOpen ? "提交所选" : "回复"}
+            {mutation.isPending ? "提交中…" : questions.length > 0 && !freeTextOpen ? "提交所选" : "回复"}
           </button>
-          {optionsGroup ? (
+          {questions.length > 0 ? (
             <button
               type="button"
               onClick={() => setFreeTextOpen((v) => !v)}
@@ -303,6 +461,155 @@ export function AttentionCard({ attention, onResponded }: AttentionCardProps) {
           </span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Two-row compact body shown only when the card is folded. Excerpt row is
+ * a single-line ellipsised view of the body; recommend row offers a quick
+ * action — the agent-supplied default option if any (single-mode only;
+ * multi requires explicit selection so we degrade to "展开查看").
+ */
+function CompactRows({
+  excerpt,
+  recommendedLabel,
+  otherCount,
+  hasOptions,
+  isMultiQuestion,
+  isPending,
+  onSubmitRecommended,
+  onExpand,
+}: {
+  excerpt: string;
+  recommendedLabel: string | null;
+  otherCount: number;
+  hasOptions: boolean;
+  isMultiQuestion: boolean;
+  isPending: boolean;
+  onSubmitRecommended: () => void;
+  onExpand: () => void;
+}) {
+  return (
+    <>
+      <div
+        className="text-caption"
+        style={{
+          padding: "var(--sp-1_25) var(--sp-3)",
+          color: "var(--fg-2)",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          borderTop: "var(--hairline) solid var(--border-faint)",
+          background: "var(--bg-raised)",
+        }}
+        title={excerpt}
+      >
+        {excerpt || "（无正文）"}
+      </div>
+      <div
+        className="flex items-center"
+        style={{
+          padding: "var(--sp-1_25) var(--sp-3) var(--sp-1_5)",
+          borderTop: "var(--hairline) solid var(--border-faint)",
+          background: "var(--bg-raised)",
+          gap: "var(--sp-2)",
+        }}
+      >
+        {recommendedLabel && !isMultiQuestion ? (
+          <button
+            type="button"
+            onClick={onSubmitRecommended}
+            disabled={isPending}
+            className="text-label font-medium inline-flex items-center justify-center transition-opacity"
+            style={{
+              padding: "var(--sp-1) var(--sp-2_5)",
+              borderRadius: "var(--radius-input)",
+              background: "var(--fg)",
+              color: "var(--bg-raised)",
+              border: 0,
+              cursor: isPending ? "not-allowed" : "pointer",
+              opacity: isPending ? 0.4 : 1,
+            }}
+          >
+            {isPending ? "提交中…" : `${recommendedLabel}（推荐）`}
+          </button>
+        ) : (
+          <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+            {isMultiQuestion
+              ? "多题 — 请展开后逐题作答"
+              : hasOptions
+                ? "多选 — 请展开后挑选"
+                : "需要自由回复 — 请展开后输入"}
+          </span>
+        )}
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={onExpand}
+          className="text-caption transition-colors"
+          style={{
+            background: "transparent",
+            border: 0,
+            color: "var(--accent)",
+            cursor: "pointer",
+            padding: 0,
+            textDecoration: "underline",
+            textUnderlineOffset: "var(--sp-0_5)",
+          }}
+        >
+          {otherCount > 0 ? `还有 ${otherCount} 个选项 — 展开查看 →` : "展开查看 →"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+/**
+ * One question block. For single-question Attentions, `index` is null and
+ * the prompt is rendered as just a section title. For multi-question, the
+ * prompt is prefixed with "1 / N" so the human can see progress.
+ */
+function QuestionBlock({
+  question,
+  index,
+  total,
+  selected,
+  disabled,
+  onToggle,
+}: {
+  question: AttentionQuestion;
+  index: number | null;
+  total: number | null;
+  selected: ReadonlySet<string>;
+  disabled: boolean;
+  onToggle: (value: string) => void;
+}) {
+  return (
+    <div style={{ marginTop: "var(--sp-3)" }}>
+      {index !== null && total !== null ? (
+        <div
+          className="mono text-caption"
+          style={{ color: "var(--fg-3)", marginBottom: "var(--sp-0_75)", textTransform: "uppercase" }}
+        >
+          问题 {index} / {total}
+        </div>
+      ) : null}
+      <div className="text-body font-semibold" style={{ color: "var(--fg)", marginBottom: "var(--sp-1)" }}>
+        {question.prompt}
+      </div>
+      {question.context ? (
+        <div className="text-label" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-1_5)" }}>
+          <Markdown>{question.context}</Markdown>
+        </div>
+      ) : null}
+      {question.options ? (
+        <OptionsList group={question.options} selected={selected} disabled={disabled} onToggle={onToggle} />
+      ) : (
+        <p className="text-label" style={{ color: "var(--fg-3)" }}>
+          此题需要自由回复（请打开下方"改用自由回复"输入框）。
+        </p>
+      )}
     </div>
   );
 }

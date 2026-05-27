@@ -7,7 +7,7 @@ import type {
   RespondAttentionInput,
 } from "@first-tree/shared";
 import { AGENT_TYPES } from "@first-tree/shared";
-import { and, desc, eq, inArray, or, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, type SQL } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { attentions } from "../db/schema/attentions.js";
@@ -344,6 +344,16 @@ export async function listAttentions(
   if (filter.target) conditions.push(eq(attentions.targetHumanId, filter.target));
   if (filter.chat) conditions.push(eq(attentions.originChatId, filter.chat));
   if (filter.agent) conditions.push(eq(attentions.originAgentId, filter.agent));
+
+  // Cursor pagination. The cursor is the previous page's last row's
+  // createdAt; we return rows strictly older to avoid duplicating the
+  // boundary row. Order is desc(createdAt) so "older" === lt().
+  if (filter.cursor) {
+    const cursorDate = new Date(filter.cursor);
+    if (!Number.isNaN(cursorDate.getTime())) {
+      conditions.push(lt(attentions.createdAt, cursorDate));
+    }
+  }
 
   const where = conditions.length === 1 ? conditions[0] : and(...conditions);
   const rows = await db.select().from(attentions).where(where).orderBy(desc(attentions.createdAt)).limit(limit);
