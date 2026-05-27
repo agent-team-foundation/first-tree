@@ -96,6 +96,52 @@ export type MentionSegment =
   | { kind: "mention"; value: string; name: string; agentId: string };
 
 /**
+ * Collect the byte ranges of Markdown code regions (fenced ```, fenced
+ * ~~~, and inline `…`). Returned ranges are `[start, endExclusive)` into
+ * the ORIGINAL content — unlike {@link stripCode}, this version keeps
+ * offsets so callers (notably {@link segmentMentions}) can preserve the
+ * raw text byte-for-byte while still suppressing matches inside code.
+ *
+ * Patterns are scanned independently and then merged so overlapping
+ * regions (e.g. an inline backtick span surrounding a fenced block)
+ * collapse to a single skip range. This matches the visible outcome of
+ * `stripCode`'s three sequential `replace` passes: a `@token` is in code
+ * iff it would have been stripped by any pass.
+ */
+function codeRanges(content: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const patterns = [/```[\s\S]*?```/g, /~~~[\s\S]*?~~~/g, /`[^`\n]+`/g];
+  for (const re of patterns) {
+    for (const m of content.matchAll(re)) {
+      if (m.index === undefined) continue;
+      ranges.push([m.index, m.index + m[0].length]);
+    }
+  }
+  if (ranges.length <= 1) return ranges;
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const next of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && next[0] <= last[1]) {
+      last[1] = Math.max(last[1], next[1]);
+    } else {
+      merged.push(next);
+    }
+  }
+  return merged;
+}
+
+function isInCodeRange(index: number, ranges: Array<[number, number]>): boolean {
+  // Linear scan — ranges are typically tiny (typical chat draft has 0–2).
+  // Bail early thanks to the sort + merge in `codeRanges`.
+  for (const [start, end] of ranges) {
+    if (index < start) return false;
+    if (index < end) return true;
+  }
+  return false;
+}
+
+/**
  * Split `content` into ordered text / mention segments. The segmenter
  * keeps the original `@<token>` substring (case preserved) in
  * `segment.value` so renderers don't re-typeset what the user wrote and
@@ -103,12 +149,15 @@ export type MentionSegment =
  * composer mirror overlay, where character positions must match the
  * underlying textarea exactly.
  *
- * Same word-boundary gates as {@link extractMentions} (`alice@example.com`,
- * `@scope/pkg`, leading `@@`) are still applied because they're cheap and
- * prevent obvious false positives. Code-block stripping is intentionally
- * NOT applied here: composer overlay needs offsets relative to the raw
- * draft, and the markdown renderer skips code nodes through its own
- * code/inline-code components, so re-stripping would double-count.
+ * Defensive gates mirror {@link extractMentions}:
+ *   - Word-boundary lookbehind / lookahead from `MENTION_REGEX` keeps
+ *     `alice@example.com`, `@scope/pkg`, `@@alice` out.
+ *   - Code regions (fenced ```, fenced ~~~, inline `…`) suppress chip
+ *     emission while keeping the raw `@token` inside the surrounding
+ *     text segment. Without this, the composer overlay would chip a
+ *     token that the server-side `extractMentions` resolver would
+ *     drop — breaking the "chip ⇔ valid mention" contract that drives
+ *     the send-button gate (`draftMentions === [] → disabled`).
  *
  * Unresolved `@<token>` tokens (typos, outsiders, npm package names the
  * regex didn't filter out) stay inside the surrounding text segment —
@@ -123,11 +172,14 @@ export function segmentMentions(content: string, participants: MentionParticipan
   }
   if (nameMap.size === 0) return [{ kind: "text", value: content }];
 
+  const skipRanges = codeRanges(content);
+
   const out: MentionSegment[] = [];
   let cursor = 0;
   for (const m of content.matchAll(MENTION_REGEX)) {
     const token = m[1];
     if (token === undefined || m.index === undefined) continue;
+    if (isInCodeRange(m.index, skipRanges)) continue;
     const resolved = nameMap.get(token.toLowerCase());
     if (!resolved) continue;
     if (m.index > cursor) {

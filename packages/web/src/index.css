@@ -1399,3 +1399,25 @@ tr[data-interactive]:hover {
   font-weight: 500;
   white-space: nowrap;
 }
+
+/* Selection inside the mention composer: textarea text is rendered
+ * transparent with `color: transparent` so the mirror overlay paints
+ * the glyphs. The global `::selection { color: var(--fg) }` rule above
+ * would otherwise repaint the textarea text in `--fg` only during
+ * selection, briefly making the user see two stacks of text (the
+ * overlay's chips/text underneath, the textarea's selected text on
+ * top). Holding the textarea's selection color transparent keeps the
+ * overlay's chips legible while the selection band still shows. */
+.mention-composer-textarea::selection {
+  background: var(--accent-ring);
+  color: transparent;
+}
+
+/* Chips painted by the mirror overlay also live inside the selection
+ * range when the user drags across them. Preserve the chip's own
+ * background and foreground so it stays readable through the
+ * selection band. */
+.mention-chip::selection {
+  background: var(--accent);
+  color: var(--fg-on-vivid);
+}

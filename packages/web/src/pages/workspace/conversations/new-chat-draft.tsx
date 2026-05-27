@@ -272,6 +272,14 @@ export function NewChatDraft({
   // block containing `@foo` would steal the "Enter to send" keystroke
   // because `detectMentionTrigger` opens the popover on the cursor-
   // adjacent `@`.
+  //
+  // Note — unlike chat-view.tsx, this composer does NOT render a
+  // MentionHighlightOverlay. The chip row above the textarea is already
+  // the canonical "who is in the room" surface, and an `@<name>` typed
+  // in the body promotes the agent to that chip row (see the
+  // bodyMentions → setChips effect below). Painting a second chip
+  // inside the textarea would duplicate that signal — the chip row
+  // visualisation is enough on this surface.
   const [interactiveTriggerIndex, setInteractiveTriggerIndex] = useState<number | null>(null);
   const mention = useMentionAutocomplete({
     value: draft,

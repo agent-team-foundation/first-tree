@@ -199,4 +199,35 @@ describe("segmentMentions", () => {
       .join("");
     expect(rebuilt).toBe(source);
   });
+
+  // The next batch pins the agreement with `extractMentions` on code
+  // regions — without this, the composer paints chips for tokens the
+  // server's resolver would drop, and the user sees "chip + send
+  // disabled" with no explanation (PR 597 review #1).
+  it("does not chip @tokens inside inline backtick spans", () => {
+    expect(segmentMentions("use `@alice` literally", participants)).toEqual([
+      { kind: "text", value: "use `@alice` literally" },
+    ]);
+  });
+
+  it("does not chip @tokens inside fenced ``` blocks", () => {
+    const source = "```\n@alice in code\n```\nhey @bob";
+    expect(segmentMentions(source, participants)).toEqual([
+      { kind: "text", value: "```\n@alice in code\n```\nhey " },
+      { kind: "mention", value: "@bob", name: "bob", agentId: "agent-bob" },
+    ]);
+  });
+
+  it("does not chip @tokens inside tilde ~~~ blocks", () => {
+    const source = "~~~\n@alice example\n~~~";
+    expect(segmentMentions(source, participants)).toEqual([{ kind: "text", value: source }]);
+  });
+
+  it("byte-for-byte invariant holds even when code regions suppress mentions", () => {
+    const source = "before `@alice` middle @bob ```\n@charlie-07\n``` after @alice";
+    const rebuilt = segmentMentions(source, participants)
+      .map((s) => s.value)
+      .join("");
+    expect(rebuilt).toBe(source);
+  });
 });
