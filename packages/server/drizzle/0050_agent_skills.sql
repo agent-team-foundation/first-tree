@@ -11,4 +11,4 @@
 -- ({ name, namespace?, description, source }). Default `[]` keeps every
 -- existing row valid until its owning daemon next checks in — at which
 -- point the column is overwritten in full (no per-skill UPSERT).
-ALTER TABLE "agents" ADD COLUMN "skills" jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "skills" jsonb NOT NULL DEFAULT '[]'::jsonb;
