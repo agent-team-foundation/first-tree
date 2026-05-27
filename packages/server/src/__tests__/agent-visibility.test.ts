@@ -674,15 +674,12 @@ describe("Chat Access Control", () => {
       const member = await createMemberAndLogin(app, adminBundle);
 
       // Create two non-human agents managed by member. `visibility` is
-      // pinned explicitly to `organization` (instead of leaning on
+      // pinned explicitly to `organization` (rather than leaning on
       // `defaultVisibility(type)`) so the fixture states its intent in
       // its own terms and won't shift if the type→default-visibility
-      // mapping ever changes. The strict owner-exclusive rule (RFC §4.5)
-      // would refuse a chat of two `visibility=private` agents that
-      // didn't include the human manager — keeping these
-      // `organization`-visible keeps the test scenario reachable while
-      // the watcher-recompute mechanism this test pins is itself
-      // type/visibility-agnostic.
+      // mapping changes. The watcher-recompute mechanism this test
+      // pins is itself type/visibility-agnostic — the pin is for
+      // fixture clarity, not behaviour.
       const agentA = await seedAgent(app, {
         name: "join-a",
         type: "agent",
@@ -745,10 +742,10 @@ describe("Chat Access Control", () => {
       });
 
       // Member A (the human, owner of both private agents) drives the
-      // creation — under the strict owner-exclusive rule (RFC §4.5)
-      // only the human-agent manager may bring a private agent in, so
-      // having one of A's non-human agents create the chat with the
-      // other as a target would 403.
+      // creation. Under the shared-owner reading of RFC §4.5 either A
+      // herself OR any of A's non-human agents could open this chat
+      // with the others as targets; using the human keeps the fixture's
+      // intent (a chat A supervises but isn't yet a speaker in) tidy.
       const chat = await createChat(app.db, memberA.agentId, {
         type: "group",
         participantIds: [agentA.uuid, agentA2.uuid],

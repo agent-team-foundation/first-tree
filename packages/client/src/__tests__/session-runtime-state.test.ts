@@ -271,17 +271,24 @@ describe("SessionManager: runtime state cleanup on eviction", () => {
 });
 
 describe("SessionManager: runtime state cleanup on start failure", () => {
-  it("clears session runtime state when handler.start throws", async () => {
+  it("clears session runtime state when handler.start throws permanent error", async () => {
     const runtimeChanges: Array<"idle" | "working" | "blocked" | "error"> = [];
     let callCount = 0;
+
+    // After Task 3 (transient retry): transient errors keep the entry alive
+    // for retry; only permanent errors run the legacy teardown that this
+    // test guards. Use a permanent-classified error class.
+    class FakePermanentError extends Error {
+      override name = "ClientUserMismatchError";
+    }
 
     const factory: HandlerFactory = () => {
       callCount++;
       if (callCount === 2) {
-        // Second handler throws on start
+        // Second handler throws on start with a permanent classification.
         return createMockHandler({
           async start() {
-            throw new Error("start boom");
+            throw new FakePermanentError("start boom");
           },
         });
       }

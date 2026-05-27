@@ -115,6 +115,15 @@ describe("summarizeBoundAgents", () => {
     ]);
     expect(result.agents[0]).toMatchObject({ activeSessions: 2, totalSessions: 5 });
   });
+
+  it("preserves runtimeType so the bound-agents row can render `name · runtime`", () => {
+    const result = summarizeBoundAgents([
+      agent({ agentId: "a", runtimeType: "claude-code", runtimeState: "idle" }),
+      agent({ agentId: "b", runtimeType: "codex", runtimeState: null }),
+      agent({ agentId: "c", runtimeType: null, runtimeState: "idle" }),
+    ]);
+    expect(result.agents.map((a) => a.runtimeType)).toEqual(["claude-code", "codex", null]);
+  });
 });
 
 describe("diagnostic copy", () => {

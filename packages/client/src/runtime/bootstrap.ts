@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultDataDir } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
@@ -52,18 +53,32 @@ function toSshGitUrl(httpsRepo: string): string | null {
   return rewrite.sshBase + httpsRepo.slice(rewrite.httpsBase.length);
 }
 
-function withContextTreeSyncLock(
+/**
+ * De-dup concurrent Context Tree syncs for the same clone dir: when an
+ * in-flight sync exists for `key`, share its settled result instead of
+ * queueing another `git pull` round-trip. Once the in-flight promise
+ * settles, the slot is cleared — subsequent calls trigger a fresh sync.
+ *
+ * The old implementation chained callers (`prev.then(fn)`), so N agents
+ * sharing one Context Tree (the common case) cost N×git-pull at startup
+ * — observed as ~7s per extra agent. With dedup, those N calls collapse
+ * to a single shared sync. Each Hub `agent:bind` still resyncs the tree
+ * once per process restart (the first caller's pull), which is the
+ * contract `syncAgentContextTree` advertises.
+ *
+ * Exported for direct unit-testing; not re-exported from `src/index.ts`.
+ */
+export function withContextTreeSyncLock(
   key: string,
   fn: () => Promise<ContextTreeBinding | null>,
 ): Promise<ContextTreeBinding | null> {
-  const next = (contextTreeSyncLocks.get(key) ?? Promise.resolve(null))
-    .catch(() => null)
-    .then(fn)
-    .finally(() => {
-      if (contextTreeSyncLocks.get(key) === next) {
-        contextTreeSyncLocks.delete(key);
-      }
-    });
+  const inFlight = contextTreeSyncLocks.get(key);
+  if (inFlight) return inFlight;
+  const next = fn().finally(() => {
+    if (contextTreeSyncLocks.get(key) === next) {
+      contextTreeSyncLocks.delete(key);
+    }
+  });
   contextTreeSyncLocks.set(key, next);
   return next;
 }
@@ -294,6 +309,86 @@ export function readCachedContextTreeHead(workspacePath: string): string | null 
   } catch {
     return null;
   }
+}
+
+/**
+ * Per-agent-home pin file for the CLI version that performed the last
+ * bootstrap. Distinct from {@link CONTEXT_TREE_HEAD_REL}: this drifts when
+ * the operator upgrades the `first-tree` binary (a new shipped skills
+ * payload typically ships with it), even if the Context Tree HEAD is
+ * unchanged. Without this trigger, agent homes silently keep stale
+ * `.agents/skills/*` after a `first-tree upgrade` until the Context Tree
+ * happens to move.
+ */
+export const BUNDLED_CLI_VERSION_REL = join(".agent", "cli-version");
+
+/**
+ * Walk up from the current module to find the closest `package.json` with
+ * a `version` field.
+ *
+ * - **Published / `dev-install.sh` bundle** (the path that actually matters
+ *   for the drift trigger): `bootstrap.ts` is inlined into an `apps/cli/
+ *   dist/<chunk>.mjs` chunk, so the walk goes `dist/<chunk>.mjs` → `dist/`
+ *   → the CLI manifest. CI publish rewrites that manifest's `name`/`bin`
+ *   to the channel before `pnpm build`, so the version we read is the
+ *   consumer-facing CLI version (`first-tree` / `first-tree-staging` /
+ *   `first-tree-dev`). This is what `first-tree upgrade` bumps.
+ * - **Source-tree `tsx` / vitest runs**: there is no bundle; the walk
+ *   from `packages/client/src/runtime/bootstrap.ts` hits the
+ *   `@first-tree/client` manifest first. That package is `private`
+ *   (no published release bumps it), so the pin doesn't track CLI
+ *   versions in dev mode. Drift detection still works correctly because
+ *   each invocation reads the same value; the dev-mode pin just won't
+ *   tick when the operator runs a real `pnpm install -g first-tree@...`.
+ *   Acceptable: dev iteration is the wrong place to validate CLI-upgrade
+ *   refresh semantics anyway.
+ *
+ * Imported from here (not from `apps/cli`) to keep the client → CLI
+ * dependency direction one-way.
+ *
+ * Returns `null` if the walk exhausts every parent — we treat that as
+ * "version unknown" and fall back to the sentinel-only path, never as
+ * "drifted".
+ */
+export function resolveBundledCliVersion(moduleUrl: string = import.meta.url): string | null {
+  let dir = dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 10; i += 1) {
+    const candidate = resolve(dir, "package.json");
+    if (existsSync(candidate)) {
+      try {
+        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown };
+        if (typeof parsed.version === "string" && parsed.version.length > 0) {
+          return parsed.version;
+        }
+      } catch {
+        // Corrupt or unreadable — keep walking; finding *some* version is
+        // better than crashing the bootstrap path.
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/** Read the cached CLI version that last ran bootstrap, if any. */
+export function readCachedBundledCliVersion(workspacePath: string): string | null {
+  const path = join(workspacePath, BUNDLED_CLI_VERSION_REL);
+  if (!existsSync(path)) return null;
+  try {
+    return readFileSync(path, "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the bundled CLI version alongside the sentinel. */
+export function writeBundledCliVersion(workspacePath: string, version: string | null): void {
+  if (!version) return;
+  const path = join(workspacePath, BUNDLED_CLI_VERSION_REL);
+  mkdirSync(join(workspacePath, ".agent"), { recursive: true });
+  writeFileSync(path, version, "utf-8");
 }
 
 /** Persist the current HEAD value alongside the sentinel. */

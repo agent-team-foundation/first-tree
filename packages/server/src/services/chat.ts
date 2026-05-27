@@ -49,30 +49,25 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
   }
 
-  // Strict owner-exclusive rule for private targets (RFC §4.5): only
-  // the human-agent manager of a private target may bring it into a
-  // chat. Even a manager's own public agent / other private agents
-  // CANNOT pull a sibling private agent in — that path is the social-
-  // engineering hole the strict reading closes. Self-add (`a.id ===
-  // creatorId`) is exempt; we filter the creator out of the target
-  // set before running the check so a private agent legitimately
-  // creating a chat with itself as a participant isn't tripped up.
+  // Owner-exclusive rule for private targets (RFC §4.5, shared-owner
+  // reading): a private agent can only be brought into a chat by another
+  // agent owned by the same member (i.e. the creator and the target
+  // share `managerId`). Self-add (`a.id === creatorId`) is exempt; we
+  // filter the creator out of the target set before running the check
+  // so a private agent legitimately creating a chat with itself as a
+  // participant isn't tripped up.
   //
   // The predicate lives in `participant-invite.ts::rejectedPrivateTargets`
   // alongside the Layer-2 invite gate so the invariant has exactly one
-  // source of truth (PR #550 collapsed the duplicate writers; this
-  // mirrors the same "one rule, one home" discipline for the create
-  // path).
+  // source of truth — see that file's comment for the PR #601 → PR #608
+  // strict-vs-shared history.
   const targetsForGate = existingAgents
     .filter((a) => a.id !== creatorId)
     .map((a) => ({ uuid: a.id, visibility: a.visibility, managerId: a.managerId }));
-  const rejectedTargets = rejectedPrivateTargets(
-    { agentId: creator.id, memberId: creator.managerId, type: creator.type },
-    targetsForGate,
-  );
+  const rejectedTargets = rejectedPrivateTargets({ agentId: creator.id, memberId: creator.managerId }, targetsForGate);
   if (rejectedTargets.length > 0) {
     throw new ForbiddenError(
-      `Only the human owner can add a private agent to a chat: ${rejectedTargets.map((t) => t.uuid).join(", ")}`,
+      `Only the owner can add a private agent to a chat: ${rejectedTargets.map((t) => t.uuid).join(", ")}`,
     );
   }
 

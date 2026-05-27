@@ -39,6 +39,12 @@ export const promptUpdate: UpdatePromptFn = async ({ currentVersion, targetVersi
  */
 export const declineUpdate: UpdatePromptFn = async () => false;
 
+export type UpdateFailedPayload = {
+  targetVersion: string;
+  retryable: boolean;
+  reasonCode: string;
+};
+
 /**
  * Build the command-layer `executeUpdate` callback.
  *
@@ -53,8 +59,20 @@ export const declineUpdate: UpdatePromptFn = async () => false;
  * noticed — so the callback instead prints a restart hint, returns
  * `{ installed: true }`, and the UpdateManager stops retrying until the
  * operator restarts manually.
+ *
+ * `onUpdateFailed` (optional) — Task 6 / design §6.1: when npm install
+ * fails, the callback fires with `{ targetVersion, retryable, reasonCode }`
+ * so the ClientRuntime can `connection.emit("resilience.update.failed", …)`.
+ * Wired by `apps/cli/src/commands/daemon/start.ts` after ClientRuntime is
+ * built — see the deferred-reference pattern there.
  */
-export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteUpdateFn {
+export function createExecuteUpdate({
+  managed,
+  onUpdateFailed,
+}: {
+  managed: boolean;
+  onUpdateFailed?: (payload: UpdateFailedPayload) => void;
+}): ExecuteUpdateFn {
   return async ({ currentVersion, targetVersion }) => {
     const mode = detectInstallMode();
     if (mode === "source") {
@@ -120,6 +138,19 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
         reason: result.reason,
         at: new Date().toISOString(),
       });
+      // Design §6.1: emit through the ClientConnection EventEmitter so future
+      // admin / web consumers can surface "update is failing" without having
+      // to scrape on-disk update-state.json. `result.retryable` and
+      // `result.reasonCode` are populated by the taxonomy in update.ts.
+      try {
+        onUpdateFailed?.({
+          targetVersion,
+          retryable: result.retryable ?? false,
+          reasonCode: result.reasonCode ?? "unknown",
+        });
+      } catch {
+        // best-effort
+      }
       return { installed: false };
     }
 

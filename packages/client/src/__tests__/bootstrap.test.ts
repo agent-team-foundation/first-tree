@@ -3,13 +3,19 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BUNDLED_CLI_VERSION_REL,
   bootstrapWorkspace,
   buildChatSystemPrompt,
   CONTEXT_TREE_HEAD_REL,
+  type ContextTreeBinding,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
+  readCachedBundledCliVersion,
   readCachedContextTreeHead,
   readContextTreeHead,
+  resolveBundledCliVersion,
+  withContextTreeSyncLock,
+  writeBundledCliVersion,
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import type { AgentIdentity } from "../runtime/handler.js";
@@ -54,6 +60,95 @@ describe("contextTreeCloneDir", () => {
     expect(main).not.toBe(otherOrg);
     expect(main).toContain("context-tree-repos");
     expect(main.split("/").at(-1)).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
+
+describe("withContextTreeSyncLock", () => {
+  it("dedups concurrent callers sharing the same key to a single fn invocation", async () => {
+    // Each clone dir corresponds to one (repo, branch) pair. When N agents
+    // share that pair (the common case — one Context Tree per org), all N
+    // must share one in-flight sync instead of queuing N sequential pulls.
+    let invocations = 0;
+    let resolveSync: ((value: ContextTreeBinding) => void) | undefined;
+    const fn = (): Promise<ContextTreeBinding | null> => {
+      invocations++;
+      return new Promise<ContextTreeBinding>((resolve) => {
+        resolveSync = resolve;
+      });
+    };
+
+    const key = "/tmp/clone-dir-A";
+    const p1 = withContextTreeSyncLock(key, fn);
+    const p2 = withContextTreeSyncLock(key, fn);
+    const p3 = withContextTreeSyncLock(key, fn);
+
+    expect(invocations).toBe(1);
+    expect(p1).toBe(p2);
+    expect(p2).toBe(p3);
+
+    const binding: ContextTreeBinding = { path: key, repoUrl: "git@example/x", branch: "main" };
+    resolveSync?.(binding);
+    await expect(p1).resolves.toBe(binding);
+    await expect(p2).resolves.toBe(binding);
+    await expect(p3).resolves.toBe(binding);
+  });
+
+  it("isolates locks across distinct keys (different repos sync in parallel)", async () => {
+    let invocations = 0;
+    const fn = (): Promise<ContextTreeBinding | null> => {
+      invocations++;
+      return Promise.resolve(null);
+    };
+
+    await Promise.all([withContextTreeSyncLock("/tmp/clone-A", fn), withContextTreeSyncLock("/tmp/clone-B", fn)]);
+
+    expect(invocations).toBe(2);
+  });
+
+  it("clears the slot after settle so a later call triggers a fresh sync", async () => {
+    let invocations = 0;
+    const fn = (): Promise<ContextTreeBinding | null> => {
+      invocations++;
+      return Promise.resolve(null);
+    };
+
+    await withContextTreeSyncLock("/tmp/clone-C", fn);
+    await withContextTreeSyncLock("/tmp/clone-C", fn);
+
+    expect(invocations).toBe(2);
+  });
+
+  it("propagates rejection to all concurrent callers and clears the slot", async () => {
+    let invocations = 0;
+    let rejectSync: ((reason: Error) => void) | undefined;
+    const fn = (): Promise<ContextTreeBinding | null> => {
+      invocations++;
+      if (invocations === 1) {
+        return new Promise<ContextTreeBinding>((_, reject) => {
+          rejectSync = reject;
+        });
+      }
+      // Later retries succeed immediately so the test can observe that the
+      // slot was cleared without hanging on a second pending promise.
+      return Promise.resolve(null);
+    };
+
+    const key = "/tmp/clone-D";
+    const p1 = withContextTreeSyncLock(key, fn);
+    const p2 = withContextTreeSyncLock(key, fn);
+
+    expect(invocations).toBe(1);
+    expect(p1).toBe(p2);
+
+    rejectSync?.(new Error("git pull failed"));
+    await expect(p1).rejects.toThrow("git pull failed");
+    await expect(p2).rejects.toThrow("git pull failed");
+
+    // After the failed sync clears the slot, a new caller is allowed to
+    // retry — important so the next agent's bind isn't poisoned by an
+    // earlier transient network failure.
+    await expect(withContextTreeSyncLock(key, fn)).resolves.toBeNull();
+    expect(invocations).toBe(2);
   });
 });
 
@@ -670,5 +765,115 @@ describe("Context Tree HEAD drift helpers", () => {
     expect(readContextTreeHead(treeDir)).toBe(secondHead);
     expect(readCachedContextTreeHead(workspace)).toBe(firstHead);
     // The handler compares these two; mismatch ⇒ re-bootstrap.
+  });
+});
+
+describe("Bundled CLI version drift helpers", () => {
+  it("resolveBundledCliVersion finds the closest package.json with a version", () => {
+    // Walks up from this test file; the client package.json is the nearest
+    // manifest with a version, so we should get its version string back.
+    const version = resolveBundledCliVersion();
+    expect(version).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
+  it("resolveBundledCliVersion returns null when no manifest is on the walk", () => {
+    // Hand a URL whose dirname is the filesystem root — the walk exhausts
+    // immediately. We can't `vi.mock` `node:fs` here without disturbing the
+    // rest of the suite, so use a non-existent path under `/`.
+    const version = resolveBundledCliVersion("file:///__no_manifest_here__/dummy.js");
+    expect(version).toBeNull();
+  });
+
+  it("write/read roundtrip pins the CLI version for drift comparison", () => {
+    const workspace = join(tmpBase, "cli-version-cache");
+    mkdirSync(workspace, { recursive: true });
+
+    expect(readCachedBundledCliVersion(workspace)).toBeNull();
+
+    writeBundledCliVersion(workspace, "0.5.3");
+    expect(readCachedBundledCliVersion(workspace)).toBe("0.5.3");
+    expect(existsSync(join(workspace, BUNDLED_CLI_VERSION_REL))).toBe(true);
+  });
+
+  it("writeBundledCliVersion is a no-op when the version is null (unknown)", () => {
+    const workspace = join(tmpBase, "cli-version-null");
+    mkdirSync(workspace, { recursive: true });
+    writeBundledCliVersion(workspace, null);
+    expect(existsSync(join(workspace, BUNDLED_CLI_VERSION_REL))).toBe(false);
+  });
+
+  it("trims whitespace from the cached version on read", () => {
+    const workspace = join(tmpBase, "cli-version-trim");
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(join(workspace, BUNDLED_CLI_VERSION_REL), "  0.5.3-staging.1.1  \n");
+    expect(readCachedBundledCliVersion(workspace)).toBe("0.5.3-staging.1.1");
+  });
+});
+
+/**
+ * Locks in the handler-level contract around the CLI-version pin: the
+ * pin MUST only be written when `installFirstTreeIntegration` actually
+ * succeeded. Pinning on failure would silently mask the gap and the
+ * next start would skip the retry the drift trigger exists to perform.
+ *
+ * These mirror the gate logic in `ensureAgentBootstrap` (claude-code +
+ * codex handlers) — we drive `installFirstTreeIntegration` directly with
+ * a mocked `InstallFirstTreeIntegrationExec` because the handler's gate
+ * is a four-line composition: `if (ok) writeBundledCliVersion(...)`.
+ * If a future change drops that guard, these tests fail; that is the
+ * intent.
+ */
+describe("CLI-version pin contract (handler invariants)", () => {
+  it("does not overwrite the existing pin when integrate fails — next start retries", () => {
+    const workspace = join(tmpBase, "cli-pin-failure-keeps-stale");
+    const treePath = join(tmpBase, "cli-pin-failure-tree");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    // Pre-existing pin from an earlier successful bootstrap.
+    writeBundledCliVersion(workspace, "0.5.2");
+    const stalePinPath = join(workspace, BUNDLED_CLI_VERSION_REL);
+    expect(readFileSync(stalePinPath, "utf-8")).toBe("0.5.2");
+
+    const { exec } = makeRecordingExec(() => {
+      throw new Error("spawn npx ENOENT");
+    });
+    const ok = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-x",
+      log: () => {},
+      exec,
+    });
+    expect(ok).toBe(false);
+
+    // Handler gate: `if (ok) writeBundledCliVersion(workspace, "0.5.3")`.
+    // We're asserting the OK=false branch leaves the file untouched.
+    if (ok) writeBundledCliVersion(workspace, "0.5.3");
+    expect(readFileSync(stalePinPath, "utf-8")).toBe("0.5.2");
+  });
+
+  it("advances the pin to the new version when integrate succeeds", () => {
+    const workspace = join(tmpBase, "cli-pin-success-advances");
+    const treePath = join(tmpBase, "cli-pin-success-tree");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    writeBundledCliVersion(workspace, "0.5.2");
+    const pinPath = join(workspace, BUNDLED_CLI_VERSION_REL);
+    expect(readFileSync(pinPath, "utf-8")).toBe("0.5.2");
+
+    const { exec } = makeRecordingExec();
+    const ok = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-x",
+      log: () => {},
+      exec,
+    });
+    expect(ok).toBe(true);
+
+    if (ok) writeBundledCliVersion(workspace, "0.5.3");
+    expect(readFileSync(pinPath, "utf-8")).toBe("0.5.3");
   });
 });

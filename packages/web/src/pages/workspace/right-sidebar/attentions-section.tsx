@@ -49,20 +49,21 @@ export function AttentionsSection({ chatId }: { chatId: string }) {
   // to this user (target=me OR origin=my-managed-agent), but the sidebar
   // is the "what's on my plate" panel: limit further to target=me so the
   // viewer's own asks-out-to-others don't clutter their attention list.
-  // Sorted: open requests first, then by newest. Capped at the most
-  // recent SIDEBAR_MAX_ROWS rows.
-  const sorted = useMemo(() => {
-    const mine = myAgentId ? all.filter((a) => a.targetHumanId === myAgentId) : [];
-    return [...mine]
-      .sort((a, b) => {
-        const aOpen = a.state === "open" && a.requiresResponse ? 0 : 1;
-        const bOpen = b.state === "open" && b.requiresResponse ? 0 : 1;
-        if (aOpen !== bOpen) return aOpen - bOpen;
-        return b.createdAt.localeCompare(a.createdAt);
-      })
-      .slice(0, SIDEBAR_MAX_ROWS);
-  }, [all, myAgentId]);
-  const openCount = sorted.filter((a) => a.state === "open" && a.requiresResponse).length;
+  //
+  // Display rule: the most recent SIDEBAR_MAX_ROWS rows (`createdAt` desc,
+  // sliced). No "open at top" reorder — the badge shows the true open
+  // count across all rows, so an open ask outside the visible slice is
+  // still surfaced numerically. Users wanting the full audit list go to
+  // `first-tree attention list --raised-by-me --state all`.
+  const mine = useMemo(() => (myAgentId ? all.filter((a) => a.targetHumanId === myAgentId) : []), [all, myAgentId]);
+  const sorted = useMemo(
+    () => [...mine].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, SIDEBAR_MAX_ROWS),
+    [mine],
+  );
+  // True open count across the relevance-filtered set (pre-slice). This is
+  // what the user actually has on their plate; clamping the badge to the
+  // visible window would silently under-report.
+  const openCount = useMemo(() => mine.filter((a) => a.state === "open" && a.requiresResponse).length, [mine]);
 
   if (sorted.length === 0) return null;
 

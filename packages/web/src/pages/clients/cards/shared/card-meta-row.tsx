@@ -17,42 +17,38 @@ type CardMetaRowProps = {
 };
 
 /**
- * "Heartbeat / first-tree / OS / Agents" 4-field meta row shown at the
- * bottom (or under a divider) of every card. Same data points as the
- * old table's columns, just rearranged for the card form factor.
+ * "Heartbeat / first-tree / OS" meta block. Rendered as a `<dl>` so the
+ * label/value pairing is semantically explicit, with a 2-column grid for
+ * visual alignment. This matches the Settings tab's field-value rhythm
+ * used in /settings/github and /settings/messaging.
  *
- * The labels follow the column-header copy locked in PR-A:
- *   - "Heartbeat" (was "Last seen") — uses `formatRelative` so the
- *     value reads "12 sec ago" / "8 days ago"
- *   - "first-tree" — hub CLI version (NOT a per-provider runtime
- *     version)
+ * Labels follow the copy locked in PR-A:
+ *   - "Heartbeat" — `formatRelative(lastSeenAt)`, e.g. "12 sec ago"
+ *   - "first-tree" — hub CLI version (NOT a per-provider runtime version)
  *   - "OS" — `client.os` raw value
- *
- * Cards are wider than table cells, so the rendering uses a flex row
- * with right-aligned values; on narrow viewports the row wraps cleanly
- * without truncation because each field is bounded.
  */
 export function CardMetaRow({ client, dimmed = false, trailing }: CardMetaRowProps) {
-  const opacity = dimmed ? 0.6 : 1;
+  const opacity = dimmed ? 0.65 : 1;
   return (
-    <div
-      className="flex flex-col"
+    <dl
       style={{
-        gap: "var(--sp-1_5)",
-        fontSize: "var(--text-caption-size)",
-        color: "var(--fg-3)",
+        margin: 0,
+        display: "grid",
+        gridTemplateColumns: "max-content 1fr",
+        columnGap: "var(--sp-4)",
+        rowGap: "var(--sp-1)",
         opacity,
       }}
     >
-      <MetaLine label="Heartbeat" value={formatRelative(client.lastSeenAt)} title={formatDate(client.lastSeenAt)} />
-      <MetaLine label="first-tree" value={client.sdkVersion ?? "—"} mono />
-      <MetaLine label="OS" value={client.os ?? "—"} />
+      <MetaEntry label="Heartbeat" value={formatRelative(client.lastSeenAt)} title={formatDate(client.lastSeenAt)} />
+      <MetaEntry label="first-tree" value={client.sdkVersion ?? "—"} mono />
+      <MetaEntry label="OS" value={client.os ?? "—"} />
       {trailing}
-    </div>
+    </dl>
   );
 }
 
-function MetaLine({
+function MetaEntry({
   label,
   value,
   title,
@@ -64,13 +60,38 @@ function MetaLine({
   mono?: boolean;
 }) {
   return (
-    <div className="flex items-baseline" style={{ gap: "var(--sp-3)" }}>
-      <span className="text-caption" style={{ minWidth: 96, color: "var(--fg-4)" }}>
+    <>
+      <dt className="text-caption" style={{ color: "var(--fg-3)" }}>
         {label}
-      </span>
-      <span className={mono ? "mono text-caption" : "text-caption"} title={title}>
+      </dt>
+      <dd
+        className={mono ? "mono text-caption" : "text-caption"}
+        style={{ margin: 0, color: "var(--fg-2)" }}
+        title={title}
+      >
         {value}
-      </span>
+      </dd>
+    </>
+  );
+}
+
+/**
+ * `CardMetaRow` with the hairline-separated bottom-of-card framing used
+ * by AuthExpired / Offline / SetupIncomplete bodies. The diagnostic +
+ * action lives above; this footer slot renders the meta block under a
+ * `border-top` hairline so the eye registers it as supporting context,
+ * not the focus. Extracted to dedupe the 3-way repeat of the same
+ * wrapper pattern (yuezengwu review nit #3 on PR-D1).
+ */
+export function CardMetaFooter({ client, dimmed = true }: { client: HubClient; dimmed?: boolean }) {
+  return (
+    <div
+      style={{
+        borderTop: "var(--hairline) solid var(--border-faint)",
+        paddingTop: "var(--sp-2_5)",
+      }}
+    >
+      <CardMetaRow client={client} dimmed={dimmed} />
     </div>
   );
 }

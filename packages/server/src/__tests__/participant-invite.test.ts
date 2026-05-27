@@ -129,7 +129,7 @@ describe("inviteParticipantsToChat", () => {
         targetAgentIds: [targetOwner.agent.uuid],
         errorOnAlreadySpeaker: true,
       }),
-    ).rejects.toThrow(/Only the human owner/);
+    ).rejects.toThrow(/Only the owner/);
   });
 
   it("throws ConflictError on already-speaker target when errorOnAlreadySpeaker=true", async () => {

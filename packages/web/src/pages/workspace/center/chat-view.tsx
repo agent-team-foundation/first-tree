@@ -2643,10 +2643,11 @@ export function ChatView({
           (Slack / ChatGPT / Linear DM all do this). On phones, the
           bottom padding extends past `env(safe-area-inset-bottom)` so
           the home-indicator doesn't overlap the send button. */}
-          {/* NHA chat-bottom: if the chat has an open Attention targeting
-              ME and we're not in watcher mode, swap the composer for the
-              AttentionCard. The card owns its own outer padding so the
-              chat-bottom keeps a single visual slot. */}
+          {/* NHA chat-bottom: when an open Ask targets THIS user, the
+              AttentionCard takes the composer slot. Read-only / watcher
+              mode stays in the normal composer branch (the card itself
+              is gated on `!readOnly` via the `useQuery` enabled flag, so
+              activeAttention is always null in that branch). */}
           {activeAttention && !readOnly ? (
             <div className="shrink-0">
               <AttentionCard attention={activeAttention} />
@@ -2795,7 +2796,7 @@ export function ChatView({
                           value={draft}
                           participants={mentionParticipants}
                           textareaRef={textareaRef}
-                          chipClassName="mention-chip"
+                          chipClassName="mention-text"
                           mirrorStyle={{
                             padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                             fontSize: "var(--text-subtitle)",

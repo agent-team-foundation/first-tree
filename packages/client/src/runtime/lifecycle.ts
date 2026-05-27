@@ -8,7 +8,15 @@
  * Plan §7 distinguishes "graceful close" (this) from D9 (kill -9 / power
  * loss → orphan resources → manual cleanup). We do not attempt to detect
  * the latter.
+ *
+ * Bug 3 fix: after all user-registered hooks run we ALSO call the global
+ * ChildProcessRegistry's `killAll` so any subprocess the client spawned
+ * (git, npm install, etc.) is reaped before the host process exits. The
+ * design doc allows this to degrade to "git + npm only" if the Claude SDK
+ * does not expose its subprocesses — see notes in claude-code.ts.
  */
+
+import { getChildProcessRegistry } from "./child-process-registry.js";
 
 export type ShutdownHook = () => Promise<void> | void;
 
@@ -35,6 +43,17 @@ export function runShutdown(): Promise<void> {
       } catch {
         // Best-effort; one hook's failure must not abort the others.
       }
+    }
+    // Bug 3: after every hook finishes, sweep any subprocess we still have
+    // tracked. Hooks normally bring down their own children gracefully, but
+    // a stuck handler (or a child the hook forgot about) gets SIGTERM →
+    // grace window → SIGKILL via the registry, before the host process
+    // exits. Failures inside killAll are swallowed by the same "one-hook-
+    // fails-shouldn't-abort-the-others" rule.
+    try {
+      await getChildProcessRegistry().killAll("lifecycle-shutdown");
+    } catch {
+      // best-effort
     }
   })();
   return shuttingDown;

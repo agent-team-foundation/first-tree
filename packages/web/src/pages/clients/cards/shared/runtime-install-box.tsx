@@ -31,24 +31,30 @@ export function RuntimeInstallBox({ provider, entry, hostname }: RuntimeInstallB
   const label = PROVIDER_LABEL[provider];
   const { headline, command } = installBoxView(entry, provider, hostname);
 
+  // No outer raised-bg / border / radius — the inner `InlineCommand`'s
+  // sunken pre-block is the only chrome that earns its weight (commands
+  // are a single visual unit the operator scans + copies). Wrapping
+  // again would nest a box inside a box inside the page, which fights
+  // the Settings tab's "flat hairline-only" vocabulary.
+  //
+  // Layout: `height: 100%` lets the box take the full grid-row height
+  // (CSS Grid stretches items by default), and the InlineCommand
+  // wrapper is pushed to the bottom via `margin-top: auto`. The result
+  // is that when two boxes sit side-by-side with headlines of
+  // different lengths, their Copy buttons baseline-align at the bottom
+  // — the operator's eye doesn't have to chase varying button
+  // positions.
   return (
-    <div
-      className="flex flex-col"
-      style={{
-        gap: "var(--sp-2)",
-        padding: "var(--sp-3)",
-        borderRadius: "var(--radius-input)",
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-        <span className="text-body font-medium">{label}</span>
+    <div className="flex flex-col" style={{ gap: "var(--sp-1_5)", height: "100%" }}>
+      <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
+        {label}
       </div>
-      <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
+      <p className="text-caption" style={{ margin: 0, color: "var(--fg-3)" }}>
         {renderHeadlineWithCode(headline)}
       </p>
-      <InlineCommand command={command} ariaLabel={`${label} setup command`} />
+      <div style={{ marginTop: "auto" }}>
+        <InlineCommand command={command} ariaLabel={`${label} setup command`} />
+      </div>
     </div>
   );
 }

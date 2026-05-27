@@ -49,17 +49,49 @@ export function buildInstallCommand(provider: RuntimeProvider): string {
 }
 
 /**
- * Shortest hint string for "this runtime is installed but the user
- * isn't authed". Used by Ready card's compact capability matrix when
- * one provider is `unauthenticated`. Full re-auth lives in the
- * provider's docs.
+ * Friendly "this Mac / this Linux machine / this Windows PC" phrase
+ * derived from the client's reported OS. Lets recovery copy address
+ * the user's actual hardware instead of the generic "computer".
+ *
+ * Maps the kernel-side strings the SDK reports (`darwin`, `linux`,
+ * `win32`). Unknown / null falls back to "computer" — never breaks the
+ * sentence shape.
  */
-export const PROVIDER_UNAUTH_HINT: Record<RuntimeProvider, string> = {
-  "claude-code": "Run `claude login` (or set ANTHROPIC_API_KEY) on the computer.",
-  codex: "Run `codex login` (or set CODEX_API_KEY) on the computer.",
-};
+export function osDeviceName(os: string | null | undefined): string {
+  switch (os) {
+    case "darwin":
+      return "Mac";
+    case "linux":
+      return "Linux machine";
+    case "win32":
+    case "windows":
+      return "Windows PC";
+    default:
+      return "computer";
+  }
+}
 
-export const PROVIDER_INSTALL_HINT: Record<RuntimeProvider, string> = {
-  "claude-code": "Run `npm install -g @anthropic-ai/claude-code` on this computer.",
-  codex: "Install the OpenAI Codex CLI on this computer.",
-};
+/**
+ * Shortest hint for "this runtime is installed but the user isn't
+ * authed". Used by Ready card's runtime line when one provider is
+ * `unauthenticated`. The env-variable fallback (`ANTHROPIC_API_KEY` /
+ * `CODEX_API_KEY`) is intentionally dropped — most users discover the
+ * OAuth flow first, and the env var path is a footgun for newcomers
+ * who'd commit the key.
+ */
+export function providerUnauthHint(provider: RuntimeProvider, os: string | null | undefined): string {
+  return `Run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on this ${osDeviceName(os)}.`;
+}
+
+/**
+ * Hint for `state="missing"`. Distinct from `entry === null` ("not
+ * reported") — that case is suppressed in the Ready card entirely, so
+ * the hint only shows when the SDK explicitly probed and confirmed the
+ * runtime is not installed.
+ */
+export function providerInstallHint(provider: RuntimeProvider, os: string | null | undefined): string {
+  if (provider === "claude-code") {
+    return `Run \`npm install -g @anthropic-ai/claude-code\` on this ${osDeviceName(os)}.`;
+  }
+  return `Install the OpenAI Codex CLI on this ${osDeviceName(os)}.`;
+}

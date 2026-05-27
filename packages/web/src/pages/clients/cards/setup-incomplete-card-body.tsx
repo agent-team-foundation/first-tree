@@ -1,6 +1,6 @@
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
 import { BoundAgentsList } from "./shared/bound-agents-list.js";
-import { CardMetaRow } from "./shared/card-meta-row.js";
+import { CardMetaFooter } from "./shared/card-meta-row.js";
 import { PROVIDER_ORDER } from "./shared/providers.js";
 import { RuntimeInstallBox } from "./shared/runtime-install-box.js";
 import { cardHostnameLabel, SETUP_INCOMPLETE_DIAGNOSTIC, summarizeBoundAgents } from "./view-models.js";
@@ -30,8 +30,8 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
   const summary = summarizeBoundAgents(boundAgents);
   const installableProviders = PROVIDER_ORDER.filter((p) => client.capabilities[p]?.state !== "ok");
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg)" }}>
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
         {SETUP_INCOMPLETE_DIAGNOSTIC}
       </p>
       <div
@@ -53,8 +53,22 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
           />
         ))}
       </div>
-      {summary.total > 0 && <BoundAgentsList summary={summary} agentName={agentName} compact />}
-      <CardMetaRow client={client} />
+      {summary.total > 0 && (
+        <div
+          className="flex flex-col"
+          style={{
+            gap: "var(--sp-1_5)",
+            padding: "var(--sp-2_5) 0 0",
+            borderTop: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          <div className="text-caption" style={{ color: "var(--fg-3)" }}>
+            {summary.total === 1 ? "Agent · waiting on runtime" : `Agents · ${summary.total} · waiting on runtime`}
+          </div>
+          <BoundAgentsList summary={summary} agentName={agentName} headerless />
+        </div>
+      )}
+      <CardMetaFooter client={client} dimmed={false} />
     </div>
   );
 }

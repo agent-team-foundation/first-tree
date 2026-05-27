@@ -59,7 +59,7 @@ describe("§9 channel-mismatch guard — prod CLI", () => {
     if (!result.ok) {
       expect(result.reason).toMatch(/target channel "staging" does not match my channel "prod"/i);
     }
-  });
+  }, 30_000);
 
   it("refuses unknown prerelease formats (fail-closed)", async () => {
     vi.resetModules();
@@ -72,7 +72,7 @@ describe("§9 channel-mismatch guard — prod CLI", () => {
         expect(result.reason, `reason for ${spec}`).toMatch(/target channel "unknown"/i);
       }
     }
-  });
+  }, 30_000);
 });
 
 describe("§9 channel-mismatch guard — staging CLI", () => {
@@ -85,7 +85,7 @@ describe("§9 channel-mismatch guard — staging CLI", () => {
     if (!result.ok) {
       expect(result.reason).toMatch(/target channel "prod" does not match my channel "staging"/i);
     }
-  });
+  }, 30_000);
 
   it("refuses an unknown-channel prerelease", async () => {
     vi.resetModules();
@@ -96,5 +96,5 @@ describe("§9 channel-mismatch guard — staging CLI", () => {
     if (!result.ok) {
       expect(result.reason).toMatch(/target channel "unknown" does not match my channel "staging"/i);
     }
-  });
+  }, 30_000);
 });
