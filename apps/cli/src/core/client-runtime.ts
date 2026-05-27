@@ -1,20 +1,21 @@
 import type { FSWatcher } from "node:fs";
-import { existsSync, mkdirSync, watch, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   AgentSlot,
   ClientConnection,
   createGitMirrorManager,
   createLogger,
   type GitMirrorManager,
+  getChildProcessRegistry,
   getHandlerFactory,
   registerBuiltinHandlers,
   type UpdateHooks,
   UpdateManager,
 } from "@first-tree/client";
-import type { AgentPinnedMessage } from "@first-tree/shared";
+import type { AgentPinnedMessage, ClientPausedReason } from "@first-tree/shared";
 import type { AgentConfig } from "@first-tree/shared/config";
-import { agentConfigSchema, defaultDataDir, loadAgents } from "@first-tree/shared/config";
+import { agentConfigSchema, defaultConfigDir, defaultDataDir, loadAgents } from "@first-tree/shared/config";
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 import { print } from "./output.js";
@@ -76,6 +77,19 @@ export class ClientRuntime {
    * `agent:pinned` handler knows where to materialise new configs.
    */
   private agentsDir: string | null = null;
+  /**
+   * Watcher on credentials.json (Bug 2 paused-mode recovery). Detects a
+   * fresh `first-tree login <token>` while the runtime is paused and tells
+   * the connection to clear paused mode and reconnect with the new token.
+   */
+  private credentialsWatcher: FSWatcher | null = null;
+  private credentialsDebounce: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Snapshot of the credentials JSON the last time we observed it. Used to
+   * de-dupe the debounced watcher — `fs.watch` fires on every metadata
+   * touch and we only want to act on actual content changes.
+   */
+  private lastCredentialsSnapshot: string | null = null;
 
   constructor(serverUrl: string, clientId: string, options: ClientRuntimeOptions = {}) {
     this.serverUrl = serverUrl;
@@ -107,22 +121,32 @@ export class ClientRuntime {
       print.status("⚠️", "access token expired — reconnecting after refresh...");
     });
 
-    // Refresh token rejected by the server — the local credentials cannot
-    // refresh themselves out of this state, so retrying is pointless and the
-    // 1Hz reconnect storm just burns CPU + log volume. Print recovery
-    // instructions and exit 75 (TEMPFAIL) so systemd/launchd applies its
-    // restart backoff instead of letting us thrash. The operator gets a
-    // fresh token from the Web Computers page → New Connection and re-runs
-    // `first-tree login <token>`.
-    this.connection.on("auth:fatal", (err) => {
+    // Refresh token rejected by the server. Bug 2 fix: instead of
+    // `process.exit(75)` (which made systemd restart us into the same
+    // failing state, leaking claude / playwright subprocesses every cycle),
+    // enter paused mode. The connection holds, agent slots stop processing
+    // inbox messages, and a credentials.json watcher waits for the operator
+    // to run `first-tree login <new-token>`. On change we call
+    // `connection.clearPaused()` to resume.
+    this.connection.on("auth:paused", (reason, err) => {
       print.blank();
-      print.status("✗", "auth expired — service is shutting down to break the reconnect loop.");
+      print.status("✗", "auth rejected — pausing agents until fresh credentials arrive.");
       print.status("", err.message);
       print.status("", "Recovery: get a new connect token from your Hub's Web admin");
-      print.status("", "          (Computers → + New Connection), then re-run the command shown.");
-      // Honour the unit test environment which will assert via process.exit
-      // mocks; in production this triggers the supervisor's restart backoff.
-      process.exit(75);
+      print.status("", "          (Computers → + New Connection), then re-run `first-tree login <token>`.");
+      print.status("", `Paused reason: ${reason}. Process is staying alive — no restart needed after login.`);
+      this.ensureCredentialsWatcher();
+    });
+
+    this.connection.on("auth:resumed", (previousReason) => {
+      print.status("✓", `credentials refreshed — resuming agents (was paused: ${previousReason})`);
+    });
+
+    // Back-compat: legacy auth:fatal listeners on older consumers used to
+    // exit the process. We keep the event but no longer act on it —
+    // auth:paused is the actionable channel now.
+    this.connection.on("auth:fatal", () => {
+      // intentional no-op: handled by auth:paused above.
     });
 
     // Surface transport-level errors (TLS resets, DNS hiccups, WS handshake
@@ -256,10 +280,95 @@ export class ClientRuntime {
 
   async stop(): Promise<void> {
     this.unwatchAgentsDir();
+    this.stopCredentialsWatcher();
     this.updateManager?.dispose();
     this.updateManager = null;
     await Promise.allSettled(this.agents.map((a) => a.slot.stop()));
     await this.connection.disconnect();
+    // Bug 3: sweep any subprocess we still track (git, npm install) so they
+    // do not stay in our cgroup after the parent exits. AgentSlot.stop has
+    // already drained sessionManager.shutdown which closes Claude SDK
+    // queries, but git / npm spawned out-of-band needs an explicit reap.
+    try {
+      await getChildProcessRegistry().killAll("client-runtime-stop");
+    } catch {
+      // best-effort
+    }
+  }
+
+  /**
+   * Bug 2 paused-mode recovery: watch credentials.json for changes. When
+   * the file content changes (operator ran `first-tree login`), tell the
+   * connection to clear paused state. The connection's reconnect loop then
+   * picks up the new JWT via `ensureFreshAccessToken`.
+   */
+  private ensureCredentialsWatcher(): void {
+    if (this.credentialsWatcher) return;
+    const credentialsFile = join(defaultConfigDir(), "credentials.json");
+    const watchDir = dirname(credentialsFile);
+    if (!existsSync(watchDir)) return;
+    try {
+      this.lastCredentialsSnapshot = this.readCredentialsSnapshot(credentialsFile);
+      this.credentialsWatcher = watch(watchDir, (_evt, filename) => {
+        if (filename && filename !== "credentials.json") return;
+        if (this.credentialsDebounce) clearTimeout(this.credentialsDebounce);
+        this.credentialsDebounce = setTimeout(() => {
+          this.credentialsDebounce = null;
+          const snapshot = this.readCredentialsSnapshot(credentialsFile);
+          if (snapshot && snapshot !== this.lastCredentialsSnapshot) {
+            this.lastCredentialsSnapshot = snapshot;
+            if (this.connection.isPaused()) {
+              print.status("", "credentials.json updated — clearing paused mode");
+              this.connection.clearPaused();
+            }
+          }
+        }, 250);
+      });
+    } catch (err) {
+      print.status("⚠️", `credentials watcher failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private stopCredentialsWatcher(): void {
+    if (this.credentialsDebounce) {
+      clearTimeout(this.credentialsDebounce);
+      this.credentialsDebounce = null;
+    }
+    if (this.credentialsWatcher) {
+      this.credentialsWatcher.close();
+      this.credentialsWatcher = null;
+    }
+  }
+
+  private readCredentialsSnapshot(path: string): string | null {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      return null;
+    }
+  }
+
+  /** Test helper / external probe — true once paused mode is active. */
+  isPaused(): boolean {
+    return this.connection.isPaused();
+  }
+
+  /** Test helper / external probe — last paused reason (or null). */
+  pausedReason(): ClientPausedReason | null {
+    return this.connection.getPausedReason();
+  }
+
+  /**
+   * Forward a typed resilience event into the ClientConnection EventEmitter.
+   * Exposed for command-layer plumbing that fires outside the slot lifecycle
+   * (notably the update path, see {@link createExecuteUpdate}'s
+   * `onUpdateFailed` callback in `update-glue.ts`).
+   */
+  emitConnectionResilienceEvent(
+    event: "resilience.update.failed",
+    payload: { targetVersion: string; retryable: boolean; reasonCode: string },
+  ): void {
+    this.connection.emit(event, payload);
   }
 
   private aggregateQuietGate(): { activeCount: number; lastActivityMs: number } {

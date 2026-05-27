@@ -212,14 +212,28 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // supervised run, (2) enable exit-for-restart since the supervisor
         // will relaunch us on the new binary.
         const managed = options.interactive === false;
+        // The `executeUpdate` closure needs access to the ClientRuntime's
+        // connection to emit `resilience.update.failed`, but the runtime
+        // doesn't exist yet at construction time. Use a deferred reference
+        // (set immediately after `new ClientRuntime`) so the closure can
+        // reach the connection by the time it actually fires (npm install
+        // failures only happen after `runtime.start()`).
+        let runtimeRef: ClientRuntime | null = null;
+        const executeUpdate = createExecuteUpdate({
+          managed,
+          onUpdateFailed: (payload) => {
+            runtimeRef?.emitConnectionResilienceEvent("resilience.update.failed", payload);
+          },
+        });
         const runtime = new ClientRuntime(config.server.url, config.client.id, {
           currentVersion: COMMAND_VERSION,
           update: {
             updateConfig: config.update,
             prompt: managed ? declineUpdate : promptUpdate,
-            executeUpdate: createExecuteUpdate({ managed }),
+            executeUpdate,
           },
         });
+        runtimeRef = runtime;
         for (const [name, agentConfig] of agents) {
           runtime.addAgent(name, agentConfig);
         }

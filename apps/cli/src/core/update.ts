@@ -1,10 +1,14 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { classify, ERROR_KINDS, getChildProcessRegistry } from "@first-tree/client";
 import { inferChannelFromVersion } from "@first-tree/shared/channel";
 import * as semver from "semver";
 import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
+
+/** Hard ceiling on a single `npm install -g` invocation (5 min). */
+const NPM_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 
 export type InstallMode = "global" | "npx" | "source";
 
@@ -129,7 +133,20 @@ export function detectInstallMode(
 
 export type ExecuteUpdateResult =
   | { ok: true; mode: InstallMode; installedVersion: string | null }
-  | { ok: false; mode: InstallMode; reason: string };
+  | {
+      ok: false;
+      mode: InstallMode;
+      reason: string;
+      /**
+       * Bug 4: should the UpdateManager attempt this version again on the
+       * next welcome tick? `true` for transient failures (network blips,
+       * registry 5xx, killed-by-our-timeout), `false` for permanent
+       * (EBADENGINE, permission, version not found).
+       */
+      retryable?: boolean;
+      /** Stable code from the error taxonomy for log / telemetry routing. */
+      reasonCode?: string;
+    };
 
 /**
  * Validate an npm install spec (the part after `@` in `<pkg>@<spec>`). We
@@ -210,32 +227,67 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
   return new Promise((resolvePromise) => {
     const npmCmd = resolveNpmCommand();
     const npmArgs = ["install", "-g", `${PACKAGE_NAME}@${spec}`];
-    const child = spawn(npmCmd, npmArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    // Bug 4: route the subprocess through ChildProcessRegistry so it is
+    // tracked and reaped by the lifecycle shutdown hook, AND give it a
+    // 5-minute hard timeout (network blip on the registry used to block
+    // the main process for 60s+ with no escalation). Failures are mapped
+    // through the error taxonomy so UpdateManager knows whether to retry.
+    const { child } = getChildProcessRegistry().spawn(npmCmd, npmArgs, {
+      category: "npm-install",
+      label: `npm install -g ${PACKAGE_NAME}@${spec}`,
+      timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => {
+    let timedOut = false;
+    child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
       print.line(chunk.toString("utf8"));
     });
 
     child.on("error", (err) => {
-      resolvePromise({ ok: false, mode: "global", reason: err instanceof Error ? err.message : String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      const classification = classify(err, { source: "update" });
+      resolvePromise({
+        ok: false,
+        mode: "global",
+        reason: message,
+        retryable: classification.kind === ERROR_KINDS.TRANSIENT,
+        reasonCode: classification.reasonCode,
+      });
     });
 
-    child.on("exit", (code) => {
+    child.on("exit", (code, signal) => {
       if (code === 0) {
         const stdout = Buffer.concat(stdoutChunks).toString("utf8");
         resolvePromise({ ok: true, mode: "global", installedVersion: parseInstalledVersion(stdout) });
-      } else {
-        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
-        resolvePromise({
-          ok: false,
-          mode: "global",
-          reason: `npm install -g exited with code ${code}${stderr ? `: ${stderr.split("\n").slice(-3).join(" | ")}` : ""}`,
-        });
+        return;
       }
+      // Signal-terminated AND no exit code → almost certainly our 5-min
+      // timeout escalation. Treat as transient so the next tick retries.
+      if (code === null && signal) {
+        timedOut = true;
+      }
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+      const reason = `npm install -g ${timedOut ? `killed by signal ${signal} (timeout)` : `exited with code ${code}`}${
+        stderr ? `: ${stderr.split("\n").slice(-3).join(" | ")}` : ""
+      }`;
+      // Classify against the stderr + code so EBADENGINE, EACCES, 404,
+      // ENOTFOUND etc. each route to the right retry policy. Fall back to
+      // signal-based transient when we killed it for timeout.
+      const classification = timedOut
+        ? { kind: ERROR_KINDS.TRANSIENT, reasonCode: "npm_timeout" as const }
+        : classify(new Error(reason), { source: "update" });
+      resolvePromise({
+        ok: false,
+        mode: "global",
+        reason,
+        retryable: classification.kind === ERROR_KINDS.TRANSIENT,
+        reasonCode: classification.reasonCode,
+      });
     });
   });
 }

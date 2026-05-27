@@ -5,6 +5,7 @@ import {
   type AgentBindRejectReason,
   type AgentPinnedMessage,
   agentPinnedMessageSchema,
+  type ClientPausedReason,
   type InboxDeliverFrame,
   imagePayloadFrameSchema,
   inboxDeliverFrameSchema,
@@ -17,8 +18,21 @@ import {
 } from "@first-tree/shared";
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
+import { classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
 import { writeImage } from "./runtime/image-store.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
+
+/**
+ * Per-agent bind retry bookkeeping (Bug 5). A failed `agent:bind` no longer
+ * retries on every reconnect; instead each agent gets its own
+ * exponential-backoff window and degraded reasons (org_mismatch,
+ * unknown_agent) flip to permanent skip.
+ */
+type BindRetryRecord = {
+  attempts: number;
+  nextAllowedAt: number;
+  lastReason: string | null;
+};
 
 export type ClientConnectionConfig = {
   serverUrl: string;
@@ -132,9 +146,45 @@ type ClientConnectionEvents = {
    * has stopped trying to reconnect; the consumer should surface a recovery
    * prompt to the operator (re-run `first-tree login <token>`) and
    * usually exit so a supervisor can back off instead of looping at 1 Hz.
+   *
+   * Bug 2 fix (client-resilience design §5.2): consumers should NO LONGER
+   * exit the process on this event — they should listen for `auth:paused`
+   * instead and pause work, then resume when fresh credentials arrive. The
+   * `auth:fatal` channel is kept for backward compatibility and emitted in
+   * tandem with `auth:paused` for the same root cause.
    */
   "auth:fatal": [error: Error];
+  /**
+   * The connection has entered paused mode — refresh credentials cannot
+   * recover the current session and we are deliberately not retrying.
+   * Reconnect attempts are suspended until {@link ClientConnection.clearPaused}
+   * is called (typically by a credentials-file watcher that detects a fresh
+   * `first-tree login`). The WebSocket may be closed at the time of emit;
+   * the connection still answers `isConnected === false` and `isPaused
+   * === true`.
+   */
+  "auth:paused": [reason: ClientPausedReason, error: Error];
+  /**
+   * Mirror of {@link "auth:paused"} — emitted when paused mode is cleared
+   * (credentials refreshed). Consumers can use this to log resumption or
+   * re-enable slot processing UIs.
+   */
+  "auth:resumed": [previousReason: ClientPausedReason];
   "server:welcome": [welcome: ServerWelcome];
+  // -----------------------------------------------------------------------
+  // Bug-fix observability events (client-resilience design §6.1). Untyped
+  // payload (Record) — consumers cast to a known shape; the contract is
+  // documented in the design doc and stays out of the typed event union so
+  // adding a new event later doesn't ripple through downstream listeners.
+  // -----------------------------------------------------------------------
+  "resilience.connection.paused": [payload: { reason: ClientPausedReason }];
+  "resilience.connection.resumed": [payload: { previousReason: ClientPausedReason }];
+  "resilience.bind.skipped": [
+    payload: { agentId: string; attempts: number; nextAllowedAt: number; lastReasonCode: string | null },
+  ];
+  "resilience.bind.disabled": [payload: { agentId: string; reasonCode: string }];
+  "resilience.bind.recovered": [payload: { agentId: string; totalAttempts: number }];
+  "resilience.update.failed": [payload: { targetVersion: string; retryable: boolean; reasonCode: string }];
 };
 
 /**
@@ -311,6 +361,13 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private nextReconnectMinDelayMs = 0;
   private closing = false;
   private registered = false;
+  /**
+   * Paused state (Bug 2): refresh failed / token revoked. Reconnect attempts
+   * are suspended until {@link clearPaused} fires. Heartbeat tick still
+   * decorates frames with the reason while paused, so admin surfaces can
+   * show "client alive but waiting on operator".
+   */
+  private pausedReason: ClientPausedReason | null = null;
   /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
   private welcomeFramesReceived = 0;
   /**
@@ -343,6 +400,14 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   >();
 
   /**
+   * Bug 5: per-agent bind retry state. Keyed by agentId. A successful
+   * `agent:bound` clears the entry; a `bind:rejected` updates it according
+   * to the error taxonomy (transient → exponential next attempt; degraded /
+   * permanent → never).
+   */
+  private readonly bindRetryRecords = new Map<string, BindRetryRecord>();
+
+  /**
    * In-flight image writes from recent `image_payload` frames. `image_payload`
    * arrives on the WS just before `inbox:deliver` for the same message, but
    * the EventEmitter dispatch is sync — so without gating, the deliver
@@ -373,6 +438,37 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
   get isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN && this.registered;
+  }
+
+  /** Whether the connection is currently in {@link "auth:paused"} mode. */
+  isPaused(): boolean {
+    return this.pausedReason !== null;
+  }
+
+  /** Last paused reason. `null` when not paused. */
+  getPausedReason(): ClientPausedReason | null {
+    return this.pausedReason;
+  }
+
+  /**
+   * Clear paused mode and kick off a reconnect attempt. Intended to be
+   * called by the consumer's credentials-file watcher after the operator
+   * runs `first-tree login <new-token>` (which writes a fresh JWT to
+   * credentials.json).
+   */
+  clearPaused(): void {
+    if (this.pausedReason === null) return;
+    const prev = this.pausedReason;
+    this.pausedReason = null;
+    this.wsLogger.info(
+      { previousReason: prev, resilienceEvent: "resilience.connection.resumed" },
+      "auth paused cleared",
+    );
+    this.emit("auth:resumed", prev);
+    this.emit("resilience.connection.resumed", { previousReason: prev });
+    if (!this.closing && !this.isConnected) {
+      this.scheduleReconnect();
+    }
   }
 
   get agents(): ReadonlyMap<string, BoundAgent> {
@@ -419,6 +515,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           return;
         } catch (err) {
           if (this.closing) throw err;
+          // Bug 2: paused mode (auth_rejected / auth_refresh_failed) is an
+          // operator-recovery state — keep the initial-connect promise from
+          // looping forever. Surface the error so the consumer knows the
+          // initial handshake failed; the credentials watcher will trigger
+          // a fresh `connect()` once login succeeds.
+          if (this.pausedReason !== null) throw err;
           attempt++;
           const delayMs = Math.min(RECONNECT_BASE_MS * 2 ** (attempt - 1), RECONNECT_MAX_MS);
           this.wsLogger.warn(
@@ -428,6 +530,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           this.emit("error", err instanceof Error ? err : new Error(String(err)));
           await waitWithAbort(delayMs, this.connectAbort.signal);
           if (this.closing) throw err;
+          if (this.pausedReason !== null) throw err;
         }
       }
     } finally {
@@ -446,6 +549,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
 
     this.desiredBindings.set(agentId, { agentId, runtimeType, runtimeVersion });
+    // Bug 5: an explicit bindAgent call is operator intent — clear any
+    // backoff so this attempt isn't silently skipped.
+    this.bindRetryRecords.delete(agentId);
     return this.sendBind(agentId, runtimeType, runtimeVersion);
   }
 
@@ -608,8 +714,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           // command depends on client, not the other way around).
           const e = err instanceof Error ? err : new Error(String(err));
           if (e.name === "AuthRefreshFailedError") {
-            this.closing = true;
-            this.emit("auth:fatal", e);
+            // Bug 2: instead of marking the connection permanently closed and
+            // letting the consumer process.exit, enter paused mode. The
+            // operator can recover by running `first-tree login` and the
+            // credentials-watcher will call clearPaused() to resume.
+            this.enterPausedMode("auth_refresh_failed", e);
           } else if (e.name === "AuthRefreshRateLimitedError") {
             // Pull the server-suggested wait off the typed error and stash it
             // for the next scheduleReconnect; falls back to 30s if absent.
@@ -738,17 +847,14 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.emit("auth:expired");
       } else {
         // auth:rejected means the token itself was refused — retrying with
-        // the same token would just thrash. Mark closing so neither the
-        // close-handler reconnect path nor the initial-connect retry loop
-        // tries again, and reuse the auth:fatal channel so the consumer
-        // surfaces the same recovery prompt (re-run `connect <token>`) +
-        // `process.exit(75)` it already runs for AuthRefreshFailedError.
-        // Without the emit, both runtime and initial-handshake paths would
-        // die silently — process stays up, no recovery message, agents
-        // wedged.
+        // the same token would just thrash. Bug 2 fix: instead of marking
+        // the connection closed (and letting the consumer process.exit 75
+        // into a systemd restart storm), enter paused mode. The operator
+        // recovers by running `first-tree login <new-token>`; the
+        // credentials-watcher calls `clearPaused()` and a fresh reconnect
+        // re-handshakes with the new token.
         this.authLogger.warn("auth rejected by server");
-        this.closing = true;
-        this.emit("auth:fatal", new Error("Server rejected access token (auth:rejected)"));
+        this.enterPausedMode("auth_rejected", new Error("Server rejected access token (auth:rejected)"));
       }
       this.ws?.close(4401, type);
       return;
@@ -829,6 +935,35 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const pending = ref ? this.pendingBinds.get(ref) : undefined;
       if (ref && pending) {
         this.pendingBinds.delete(ref);
+        // Bug 5: classify the reason and update the per-agent retry record.
+        // Transient → exponential backoff; degraded/permanent → never retry.
+        const classification = classify({ reason }, { source: "bind" });
+        const record = this.bindRetryRecords.get(pending.agentId) ?? {
+          attempts: 0,
+          nextAllowedAt: 0,
+          lastReason: null,
+        };
+        record.attempts += 1;
+        record.lastReason = classification.reasonCode;
+        if (classification.kind === ERROR_KINDS.TRANSIENT) {
+          record.nextAllowedAt = Date.now() + nextRetryDelayMs(classification.strategy, record.attempts);
+        } else {
+          record.nextAllowedAt = Number.MAX_SAFE_INTEGER;
+          this.wsLogger.warn(
+            {
+              agentId: pending.agentId,
+              reason,
+              reasonCode: classification.reasonCode,
+              resilienceEvent: "resilience.bind.disabled",
+            },
+            "bind permanently disabled — operator action required",
+          );
+          this.emit("resilience.bind.disabled", {
+            agentId: pending.agentId,
+            reasonCode: classification.reasonCode,
+          });
+        }
+        this.bindRetryRecords.set(pending.agentId, record);
         this.emit("agent:bind:rejected", reason, pending.agentId);
         pending.reject(new Error(`agent:bind rejected (${reason})`));
       }
@@ -845,6 +980,10 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "agent:pinned") {
       const parsed = agentPinnedMessageSchema.safeParse(msg);
       if (parsed.success) {
+        // Bug 5: a fresh pin from the server is operator intent — clear any
+        // existing bind backoff so the next rebindAgents attempt picks the
+        // agent up immediately instead of sitting inside its window.
+        this.bindRetryRecords.delete(parsed.data.agentId);
         this.emit("agent:pinned", parsed.data);
       }
       return;
@@ -958,26 +1097,118 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
   }
 
-  /** Re-bind all agents after reconnection. */
+  /**
+   * Re-bind all agents after reconnection. Bug 5: each agent has its own
+   * per-rejection backoff window, so a single bad agent does not spam the
+   * server or our logs on every reconnect. Agents that exhausted their
+   * window are skipped; logs note them at debug level.
+   */
   private rebindAgents(): void {
     this.emit("reconnected");
+    const now = Date.now();
     for (const desired of this.desiredBindings.values()) {
+      const record = this.bindRetryRecords.get(desired.agentId);
+      if (record && record.nextAllowedAt > now) {
+        // Within backoff window — skip but emit a structured event so the
+        // operator / future web surface can see how many agents are paused.
+        this.wsLogger.debug(
+          {
+            agentId: desired.agentId,
+            attempts: record.attempts,
+            nextAllowedAt: record.nextAllowedAt,
+            lastReason: record.lastReason,
+            resilienceEvent: "resilience.bind.skipped",
+          },
+          "bind skipped — within backoff window",
+        );
+        this.emit("resilience.bind.skipped", {
+          agentId: desired.agentId,
+          attempts: record.attempts,
+          nextAllowedAt: record.nextAllowedAt,
+          lastReasonCode: record.lastReason,
+        });
+        continue;
+      }
+      const previousAttempts = record?.attempts ?? 0;
       this.sendBind(desired.agentId, desired.runtimeType, desired.runtimeVersion)
         .then((rebound) => {
+          this.bindRetryRecords.delete(rebound.agentId);
           this.boundAgents.set(rebound.agentId, rebound);
+          this.wsLogger.info(
+            { agentId: rebound.agentId, resilienceEvent: "resilience.bind.recovered" },
+            "agent rebind recovered",
+          );
+          if (previousAttempts > 0) {
+            this.emit("resilience.bind.recovered", {
+              agentId: rebound.agentId,
+              totalAttempts: previousAttempts,
+            });
+          }
         })
         .catch((err) => {
           this.boundAgents.delete(desired.agentId);
+          // The `agent:bind:rejected` handler already updated the retry
+          // record + emitted any structured event. We still drop the
+          // unbound notification so listeners see the agent went away.
           this.emit("agent:unbound", desired.agentId);
-          this.emit("error", err instanceof Error ? err : new Error(String(err)));
+          this.wsLogger.debug(
+            { agentId: desired.agentId, err: err instanceof Error ? err.message : String(err) },
+            "rebind attempt rejected",
+          );
         });
     }
+  }
+
+  /**
+   * Clear the per-agent bind backoff so the next reconnect retries this
+   * agent immediately. Called from `bindAgent` (operator just asked to bind
+   * a specific agent) and exposed for higher-level recovery flows.
+   */
+  resetBindRetry(agentId: string): void {
+    if (this.bindRetryRecords.delete(agentId)) {
+      this.wsLogger.info({ agentId }, "bind retry record cleared");
+    }
+  }
+
+  /**
+   * Enter paused mode (Bug 2): suspend reconnect attempts, keep the
+   * connection object alive so the operator can recover by writing fresh
+   * credentials. Emits both `auth:paused` (preferred) and `auth:fatal` (back-
+   * compat for consumers that haven't migrated yet).
+   */
+  private enterPausedMode(reason: ClientPausedReason, error: Error): void {
+    if (this.pausedReason === reason) {
+      // Already paused for the same reason; still emit so a duplicate auth
+      // rejection during reconnect is observable, but don't kick the
+      // reconnect timer.
+      this.emit("auth:paused", reason, error);
+      this.emit("auth:fatal", error);
+      this.emit("resilience.connection.paused", { reason });
+      return;
+    }
+    this.pausedReason = reason;
+    this.wsLogger.warn(
+      { reason, resilienceEvent: "resilience.connection.paused" },
+      "entering auth paused mode — will await fresh credentials",
+    );
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.emit("auth:paused", reason, error);
+    this.emit("auth:fatal", error);
+    this.emit("resilience.connection.paused", { reason });
   }
 
   private scheduleReconnect(): void {
     // Guard against an entry from auth:fatal / disconnect() racing with the
     // close handler — `closing=true` means "no more reconnects", honoured here.
     if (this.closing) return;
+    // Bug 2: paused mode suspends reconnect until clearPaused() fires.
+    if (this.pausedReason !== null) {
+      this.wsLogger.debug({ pausedReason: this.pausedReason }, "skipping reconnect — connection is paused");
+      return;
+    }
     this.reconnectAttempt++;
     this.emit("reconnecting", this.reconnectAttempt);
 
@@ -1051,7 +1282,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       // silence watchdog above is the source of truth — losing a single
       // send is fine.
       try {
-        ws.send(JSON.stringify({ type: "heartbeat" }));
+        const frame: { type: string; pausedReason?: ClientPausedReason } = { type: "heartbeat" };
+        if (this.pausedReason !== null) frame.pausedReason = this.pausedReason;
+        ws.send(JSON.stringify(frame));
         ws.ping();
       } catch {
         // ignore — the silence watchdog above is the source of truth
@@ -1146,12 +1379,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.nextReconnectMinDelayMs = Math.max(this.nextReconnectMinDelayMs, retryAfterMs);
         this.authLogger.warn({ retryAfterMs }, "proactive refresh rate-limited; deferring reconnect");
       } else if (e.name === "AuthRefreshFailedError") {
-        // Refresh token revoked/expired — surface fatal so the consumer
-        // (CLI) can prompt for `connect` instead of looping. Skip the
-        // close-and-reconnect dance since reconnecting would just throw
-        // the same error from the open handler.
-        this.closing = true;
-        this.emit("auth:fatal", e);
+        // Refresh token revoked/expired — Bug 2: enter paused mode instead
+        // of marking the connection closed. Skip the close-and-reconnect
+        // dance; reconnecting would just throw the same error from the open
+        // handler. clearPaused() (driven by the credentials watcher) will
+        // resume.
+        this.enterPausedMode("auth_refresh_failed", e);
         return;
       } else {
         this.authLogger.warn({ err: e }, "proactive refresh failed; falling back to reconnect path");

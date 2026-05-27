@@ -80,9 +80,18 @@ function makeSessionManager(opts: {
   });
 }
 
+/**
+ * Permanent-classified error so the F2 signalling path (Bug 1 design §5.1)
+ * actually fires. Transient errors now keep the entry alive for retry — see
+ * session-manager-retry.test.ts for those cases.
+ */
+class FakeClientUserMismatchError extends Error {
+  override name = "ClientUserMismatchError";
+}
+
 function failingHandler(): AgentHandler {
   return {
-    start: vi.fn().mockRejectedValue(new Error("git worktree add failed: branch already in use")),
+    start: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git worktree add failed: branch already in use")),
     resume: vi.fn(),
     inject: vi.fn(),
     suspend: vi.fn().mockResolvedValue(undefined),
@@ -156,7 +165,7 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
   it("truncates the error preview to ~800 characters to keep stderr out of the chat", async () => {
     const giant = `boom: ${"x".repeat(2000)}`;
     const handler = workingHandler();
-    handler.start = vi.fn().mockRejectedValue(new Error(giant));
+    handler.start = vi.fn().mockRejectedValue(new FakeClientUserMismatchError(giant));
     const events: SessionEvent[] = [];
     const sm = makeSessionManager({
       handlers: [handler],
@@ -282,7 +291,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const { sdk, sendMessage } = mockSdk();
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
-      resume: vi.fn().mockRejectedValue(new Error("git mirror fetch failed: connection refused")),
+      resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git mirror fetch failed: connection refused")),
       inject: vi.fn(),
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),
@@ -328,7 +337,7 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
-      resume: vi.fn().mockRejectedValue(new Error("resume blew up")),
+      resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("resume blew up")),
       inject: vi.fn(),
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),

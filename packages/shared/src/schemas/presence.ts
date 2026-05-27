@@ -8,6 +8,19 @@ export const PRESENCE_STATUSES = {
 export const presenceStatusSchema = z.enum(["online", "offline"]);
 export type PresenceStatus = z.infer<typeof presenceStatusSchema>;
 
+/**
+ * Reason a client is online-but-paused (Bug 2 / client-resilience design §5.2).
+ * The client is still connected and answering heartbeats, but is intentionally
+ * not processing inbox messages until the underlying issue resolves. Server
+ * may surface this in admin UIs; clients on the wire just ignore the field.
+ */
+export const CLIENT_PAUSED_REASONS = {
+  AUTH_REJECTED: "auth_rejected",
+  AUTH_REFRESH_FAILED: "auth_refresh_failed",
+} as const;
+export const clientPausedReasonSchema = z.enum(["auth_rejected", "auth_refresh_failed"]);
+export type ClientPausedReason = z.infer<typeof clientPausedReasonSchema>;
+
 // -- Runtime State --
 
 export const RUNTIME_STATES = {
