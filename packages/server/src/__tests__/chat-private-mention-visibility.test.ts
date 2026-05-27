@@ -286,7 +286,6 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     // own visibility.
     const app = getApp();
     const m = await createTestAdmin(app);
-    const bob = await createTestAdmin(app);
 
     const mPrivateA = await createAgent(app.db, {
       name: `m-priv-a-${crypto.randomUUID().slice(0, 8)}`,
@@ -305,13 +304,12 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
       visibility: AGENT_VISIBILITY.PRIVATE,
     });
 
-    // M herself spins up a chat and brings privateA in (allowed — M is
-    // human, owns privateA). Bob is unrelated but needs to be in the chat
-    // for it to be a real group; here we keep the chat to just M + privateA
-    // by having M create it directly.
+    // M spins up a chat with privateA — 2 speakers is a legal v2 chat
+    // (group is the only `chats.type` Hub writes now; 1:1 behaviour is
+    // derived from `participants.length === 2`, see chat.ts:289).
     const chat = await agentCreateChat(app.db, m.humanAgentUuid, {
       type: "group",
-      participantIds: [mPrivateA.uuid, bob.humanAgentUuid],
+      participantIds: [mPrivateA.uuid],
     });
     if (!chat.id) throw new Error("Unexpected: createChat returned no id");
 
