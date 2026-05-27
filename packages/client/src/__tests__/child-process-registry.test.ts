@@ -1,8 +1,20 @@
-import { spawn } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetChildProcessRegistryForTests, getChildProcessRegistry } from "../runtime/child-process-registry.js";
 
 const SLEEP_BIN = "/bin/sleep";
+
+type FakeChild = ChildProcess & {
+  kill: ReturnType<typeof vi.fn<(signal?: NodeJS.Signals) => boolean>>;
+  emit(eventName: "exit" | "error", ...args: unknown[]): boolean;
+};
+
+function makeFakeChild(options: { pid?: number; killImpl?: (signal?: NodeJS.Signals) => boolean } = {}): FakeChild {
+  const emitter = new EventEmitter();
+  const kill = vi.fn((signal?: NodeJS.Signals) => options.killImpl?.(signal) ?? true);
+  return Object.assign(emitter, { pid: options.pid, kill }) as unknown as FakeChild;
+}
 
 describe("ChildProcessRegistry", () => {
   beforeEach(() => {
@@ -10,7 +22,9 @@ describe("ChildProcessRegistry", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await getChildProcessRegistry().killAll("test-cleanup");
+    vi.restoreAllMocks();
   });
 
   it("registers spawned children and drops them on exit", async () => {
@@ -86,5 +100,148 @@ describe("ChildProcessRegistry", () => {
     record.kill("SIGTERM");
     await record.exited;
     expect(registry.list()).toHaveLength(0);
+  });
+
+  it("unregister drops a child and clears its timeout", () => {
+    vi.useFakeTimers();
+    const registry = getChildProcessRegistry();
+    const child = makeFakeChild({ pid: 4242 });
+    registry.adopt(child, { category: "other", label: "fake", timeoutMs: 100 });
+
+    registry.unregister(4242);
+    registry.unregister(4242);
+    vi.advanceTimersByTime(1000);
+
+    expect(registry.list()).toHaveLength(0);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("uses synthetic negative pids for children without a numeric pid", () => {
+    const registry = getChildProcessRegistry();
+    const child = makeFakeChild();
+
+    const record = registry.adopt(child, { category: "other", label: "synthetic" });
+    child.emit("exit", 0, null);
+
+    expect(record.pid).toBeLessThan(0);
+  });
+
+  it("tolerates an exit before the exited promise resolver is installed", () => {
+    const registry = getChildProcessRegistry();
+    const child = makeFakeChild({ pid: 4243 });
+    const originalPromise = globalThis.Promise;
+    function SilentPromise<T>(
+      _executor: (resolve: (value: T | PromiseLike<T>) => void, reject: (reason?: unknown) => void) => void,
+    ): void {
+      void _executor;
+    }
+
+    try {
+      Object.defineProperty(globalThis, "Promise", { configurable: true, value: SilentPromise });
+      registry.adopt(child, { category: "other", label: "silent promise" });
+    } finally {
+      Object.defineProperty(globalThis, "Promise", { configurable: true, value: originalPromise });
+    }
+
+    expect(() => child.emit("exit", 0, null)).not.toThrow();
+    expect(registry.list()).toHaveLength(0);
+  });
+
+  it("record.kill defaults to SIGTERM and swallows already-dead errors", async () => {
+    const registry = getChildProcessRegistry();
+    const child = makeFakeChild({ pid: 5001 });
+    const record = registry.adopt(child, { category: "other", label: "default kill" });
+
+    record.kill();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+    const throwingChild = makeFakeChild({
+      pid: 5002,
+      killImpl: () => {
+        throw new Error("already dead");
+      },
+    });
+    const throwingRecord = registry.adopt(throwingChild, { category: "other", label: "throwing kill" });
+    expect(() => throwingRecord.kill()).not.toThrow();
+    child.emit("exit", 0, null);
+    throwingChild.emit("exit", 0, null);
+
+    await Promise.all([record.exited, throwingRecord.exited]);
+  });
+
+  it("timeout cleanup uses the default policy and ignores kill errors", async () => {
+    vi.useFakeTimers();
+    const registry = getChildProcessRegistry();
+    let calls = 0;
+    const child = makeFakeChild({
+      pid: 6001,
+      killImpl: () => {
+        calls += 1;
+        throw new Error(`kill ${calls}`);
+      },
+    });
+    const record = registry.adopt(child, { category: "other", label: "timeout", timeoutMs: 100 });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    child.emit("exit", 0, null);
+    await record.exited;
+  });
+
+  it("killAll ignores first-signal failures when the child exits", async () => {
+    const registry = getChildProcessRegistry();
+    const child = makeFakeChild({
+      pid: 7001,
+      killImpl: () => {
+        throw new Error("no such process");
+      },
+    });
+    const record = registry.adopt(child, { category: "other", label: "killAll throw" });
+
+    const done = registry.killAll("shutdown");
+    child.emit("exit", 0, null);
+
+    await expect(done).resolves.toBeUndefined();
+    await record.exited;
+  });
+
+  it("killAll escalates to SIGKILL when a child survives the grace window", async () => {
+    vi.useFakeTimers();
+    const registry = getChildProcessRegistry();
+    const child = makeFakeChild({ pid: 8001 });
+    const record = registry.adopt(child, { category: "other", label: "stubborn" });
+
+    const done = registry.killAll("shutdown");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    child.emit("exit", 0, null);
+
+    await expect(done).resolves.toBeUndefined();
+    await record.exited;
+  });
+
+  it("killAll ignores final-signal failures while waiting for exit", async () => {
+    vi.useFakeTimers();
+    const registry = getChildProcessRegistry();
+    const child = makeFakeChild({
+      pid: 8002,
+      killImpl: (signal) => {
+        if (signal === "SIGKILL") {
+          throw new Error("final signal denied");
+        }
+        return true;
+      },
+    });
+    const record = registry.adopt(child, { category: "other", label: "stubborn final" });
+
+    const done = registry.killAll("shutdown");
+    await vi.advanceTimersByTimeAsync(5_000);
+    child.emit("exit", 0, null);
+
+    await expect(done).resolves.toBeUndefined();
+    await record.exited;
   });
 });
