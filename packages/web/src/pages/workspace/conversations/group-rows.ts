@@ -182,27 +182,42 @@ function groupByType(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket>
 }
 
 // ---------------------------------------------------------------------------
-// attention pinning (failed + needs-you + mention)
+// attention pinning (failed + mention)
 // ---------------------------------------------------------------------------
 //
 // Chat-granularity predicate — see docs/development/needs-attention-scoping.20260526.md.
 // A chat enters the "Needs attention" bucket when ANY of:
-//   R1. `failedAgentIds.length > 0`
-//       (server-narrowed to agents the caller manages — see services/me-chat.ts)
-//   R2. `pendingQuestionAgentIds.length > 0`
-//       (same narrowing)
-//   R3. `chatHasOpenQuestion && membershipKind === "participant"`
-//       (anyone has a pending question AND the caller is a HUMAN speaker in the
-//        chat — covers "someone else's agent is asking in a chat I'm in")
-//   R4. `unreadMentionCount > 0`
-//       (someone @-mentioned the caller)
 //
-// Sort priority inside the bucket: `failed > needs_you > mention`.
+//   R1. `failedAgentIds.length > 0`
+//       — A non-human agent I MANAGE is `failed` in this chat. Server
+//         narrows `failedAgentIds` to `agents.manager_id = caller` so a
+//         peer's broken agent never pins my row.
+//
+//   R2. `unreadMentionCount > 0 && chatHasExplicitMentionToMe === true`
+//       — I have unread, and at least one unread message explicitly
+//         `@<me>`-mentions me (server checks `messages.metadata.mentions`
+//         in the unread window). Distinguishes explicit `@<me>` from the
+//         v1 1-on-1 implicit DM auto-mention (`services/message.ts:282
+//         dmAutoProjection`), which still bumps `unreadMentionCount` for
+//         the red dot but never writes the recipient into
+//         `metadata.mentions` — so an agent's plain `"ack"` to me in a DM
+//         correctly stays out of attention.
+//
+// Sort priority: `failed > mention`. The intermediate `needs_you` tier is
+// reserved in `ATTENTION_PRIORITY` for a future "open Attention targeting
+// me" rule (R3) that will be sourced from the NHA `attentions` table after
+// that subsystem stabilises; not yet exposed as a predicate branch.
 //
 // This ladder is INTENTIONALLY separate from the shared agent-status
 // `compareMainStatus` (`failed`, `needs_you`, `working`, ...). `mention` is a
 // chat-level signal, not an agent main status — overloading the shared
 // comparator would couple two ladders that should evolve independently.
+//
+// `=== true` checks (not truthy) on booleans: the web client does NOT run
+// rows through `meChatRowSchema.parse`, so the Zod `.default(false)` only
+// applies server-side; an older server returning `undefined` would
+// silently degrade the rule to "off" under strict equality (safer
+// direction).
 
 const ATTENTION_PRIORITY = ["failed", "needs_you", "mention"] as const;
 type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
@@ -211,25 +226,12 @@ type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
  * Highest-priority attention reason for this row, or `null` when the row is
  * NOT in the attention bucket. Order matters: a row that satisfies multiple
  * rules sorts under its highest tier (e.g. failed + mention → failed).
- *
- * Exported because external surfaces sometimes need the tier (e.g. for
- * a per-row visual treatment), but the row-level indicator helpers
- * (`rowIsFailed` / `rowNeedsYou`) are deliberately NOT just thin wrappers
- * over this — they project the narrower "mine" semantics so the badges
- * stay specific to caller-managed agents even when R3 fires.
  */
 export function rowAttentionReason(r: MeChatRow): AttentionReason | null {
   if (r.failedAgentIds.length > 0) return "failed";
-  // `chatHasOpenQuestion === true` (not just truthy) because the web client
-  // does NOT run the row through `meChatRowSchema.parse` — it casts the
-  // response as-is. So the Zod `.default(false)` only applies server-side;
-  // an old server skewed with new web returns `undefined` here, and `&&` on
-  // an unknown shape should not silently coerce. Explicit boolean check
-  // keeps the R3 fallback off until the server actually emits the bit.
-  if (r.pendingQuestionAgentIds.length > 0 || (r.chatHasOpenQuestion === true && r.membershipKind === "participant")) {
-    return "needs_you";
+  if (r.unreadMentionCount > 0 && r.chatHasExplicitMentionToMe === true) {
+    return "mention";
   }
-  if (r.unreadMentionCount > 0) return "mention";
   return null;
 }
 
@@ -243,16 +245,13 @@ export function rowIsFailed(r: MeChatRow): boolean {
 }
 
 /**
- * The row's "needs-you" indicator (orange `?` / left border). Lights ONLY
- * for caller-managed agents with a pending question (R2). The R3 fallback
- * (someone else's agent asking in a chat where I'm a speaker) DOES enter
- * the attention bucket but does NOT light this badge — the indicator stays
- * specific to "an agent I manage is waiting on me", matching the field's
- * narrowed wire semantics. The bucket position alone signals R3-only rows;
- * the row's last-message preview surfaces the actual question.
+ * The row's "needs-you" indicator (orange `?` / left border). No rule in
+ * the current predicate emits this tier — it stays dark until the NHA-backed
+ * R3 lands (open Attention targeting me). Kept as a function for forward
+ * compatibility with `ATTENTION_PRIORITY`'s middle tier.
  */
-export function rowNeedsYou(r: MeChatRow): boolean {
-  return r.pendingQuestionAgentIds.length > 0;
+export function rowNeedsYou(_r: MeChatRow): boolean {
+  return false;
 }
 
 /**
