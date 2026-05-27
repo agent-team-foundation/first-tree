@@ -53,7 +53,21 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
           />
         ))}
       </div>
-      {summary.total > 0 && <BoundAgentsList summary={summary} agentName={agentName} compact />}
+      {summary.total > 0 && (
+        <div
+          className="flex flex-col"
+          style={{
+            gap: "var(--sp-1_5)",
+            padding: "var(--sp-2_5) 0 0",
+            borderTop: "var(--hairline) solid var(--border-faint)",
+          }}
+        >
+          <div className="text-caption" style={{ color: "var(--fg-3)" }}>
+            {summary.total === 1 ? "Agent · waiting on runtime" : `Agents · ${summary.total} · waiting on runtime`}
+          </div>
+          <BoundAgentsList summary={summary} agentName={agentName} headerless />
+        </div>
+      )}
       <CardMetaFooter client={client} dimmed={false} />
     </div>
   );

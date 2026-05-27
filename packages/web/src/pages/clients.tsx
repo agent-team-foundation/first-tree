@@ -32,13 +32,15 @@ import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate, formatRelative } from "../lib/utils.js";
 import { ComputerCard } from "./clients/cards/computer-card.js";
 import {
-  PROVIDER_INSTALL_HINT,
   PROVIDER_LABEL,
   PROVIDER_ORDER,
-  PROVIDER_UNAUTH_HINT,
+  providerInstallHint,
+  providerUnauthHint,
 } from "./clients/cards/shared/providers.js";
 import { ComputerStatusPill } from "./clients/computer-status-pill.js";
+import { DemoNavigator, useDemoScenarioParam } from "./clients/demo-navigator.js";
 import { compareByPillPriority, deriveComputerStatus, summarizeComputers } from "./clients/derive-status.js";
+import { DEMO_AGENT_NAMES, DEMO_SELF_USER_ID, findDemoScenario } from "./clients/dev-fixtures.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 
 /**
@@ -61,14 +63,38 @@ import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
  */
 export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
-  const agentName = useAgentNameMap();
+  const realAgentName = useAgentNameMap();
   const { role, user } = useAuth();
-  const isAdmin = role === "admin";
+  // DEV-only "?demo=<key>" param swaps the page's data sources for
+  // fixtures without touching the queries themselves. Lets a reviewer
+  // flip through every pill × sub-variant inside the real page chrome.
+  // Disabled (no-op) in production builds — Vite folds
+  // `import.meta.env.DEV` to false so the fixtures + DemoNavigator
+  // tree-shake out.
+  const [demoKey, setDemoKey] = useDemoScenarioParam();
+  const demoScenario = import.meta.env.DEV ? findDemoScenario(demoKey) : null;
+  const isAdmin = demoScenario ? demoScenario.key === "admin-grouped" : role === "admin";
+  const viewerUserId = demoScenario ? DEMO_SELF_USER_ID : user?.id;
+  // Demo agent names overlay the live map so fixture agent IDs render
+  // human-friendly labels in the bound-agents block.
+  const agentName = demoScenario
+    ? (uuid: string | null | undefined) => {
+        if (!uuid) return "unknown";
+        return DEMO_AGENT_NAMES[uuid] ?? realAgentName(uuid);
+      }
+    : realAgentName;
   // Personal scope: a user typically has 1-3 computers, so expand by default
   // and only let them collapse rows they actively want to hide. New clients
   // arriving via the 10s poll auto-expand too — we only treat the closed set
   // as "rows the user explicitly closed".
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
+  // Admin's Team computers section starts collapsed so it doesn't push the
+  // viewer's own machines below the fold. Visible count badge on the
+  // header still tells admins "you have N teammates" — they click to
+  // expand when they're in support mode. Reset rule: nothing forces it
+  // open automatically (in particular, polled changes to teamList shouldn't
+  // surprise-expand it).
+  const [teamExpanded, setTeamExpanded] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState<HubClient | null>(null);
   const [confirmRetire, setConfirmRetire] = useState<HubClient | null>(null);
   const [retireError, setRetireError] = useState<string | null>(null);
@@ -134,9 +160,17 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // `grouped` decides whether to render the two-block admin layout (with the
   // Owner column). When the org-scoped listing fails we collapse back to
   // the single-block member-style view so the admin still sees their own
-  // computers instead of a broken page.
-  const grouped = isAdmin && !orgClientsQuery.isError;
-  const teamLoadError = isAdmin && orgClientsQuery.isError;
+  // computers instead of a broken page. Demo mode forces the split based
+  // on the scenario.
+  const grouped = demoScenario ? demoScenario.key === "admin-grouped" : isAdmin && !orgClientsQuery.isError;
+  const teamLoadError = !demoScenario && isAdmin && orgClientsQuery.isError;
+
+  // Demo-mode data overrides feed the same downstream useMemo / render
+  // tree. Production builds skip these (demoScenario stays null).
+  const orgClientsData = demoScenario ? demoScenario.clients : orgClientsQuery.data;
+  const meClientsData = demoScenario
+    ? demoScenario.clients.filter((c) => c.userId === DEMO_SELF_USER_ID)
+    : meClientsQuery.data;
 
   const { data: activity } = useQuery({
     queryKey: ["activity"],
@@ -168,15 +202,16 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   });
 
   const agentsByClient = useMemo(() => {
+    const source = demoScenario ? demoScenario.agents : (activity?.agents ?? []);
     const map = new Map<string, RuntimeAgent[]>();
-    for (const a of activity?.agents ?? []) {
+    for (const a of source) {
       if (!a.clientId) continue;
       const list = map.get(a.clientId) ?? [];
       list.push(a);
       map.set(a.clientId, list);
     }
     return map;
-  }, [activity?.agents]);
+  }, [activity?.agents, demoScenario]);
 
   const getClientAgents = (clientId: string): RuntimeAgent[] => agentsByClient.get(clientId) ?? [];
 
@@ -187,14 +222,14 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // to scan the full list. `userId === null` (legacy clients that pre-date
   // user binding) lands in the team block.
   const mineList = useMemo<HubClient[]>(() => {
-    if (!grouped || !orgClientsQuery.data || !user) return [];
-    return [...orgClientsQuery.data].filter((c) => c.userId === user.id).sort(compareByPillPriority);
-  }, [grouped, orgClientsQuery.data, user]);
+    if (!grouped || !orgClientsData || !viewerUserId) return [];
+    return [...orgClientsData].filter((c) => c.userId === viewerUserId).sort(compareByPillPriority);
+  }, [grouped, orgClientsData, viewerUserId]);
 
   const teamList = useMemo<HubClient[]>(() => {
-    if (!grouped || !orgClientsQuery.data || !user) return [];
-    return [...orgClientsQuery.data].filter((c) => c.userId !== user.id).sort(compareByPillPriority);
-  }, [grouped, orgClientsQuery.data, user]);
+    if (!grouped || !orgClientsData || !viewerUserId) return [];
+    return [...orgClientsData].filter((c) => c.userId !== viewerUserId).sort(compareByPillPriority);
+  }, [grouped, orgClientsData, viewerUserId]);
 
   /**
    * Member-mode list (non-admin): the `/me/clients` payload arrives in
@@ -203,9 +238,9 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
    * deliberate UX change vs. the prior table — see PR description.
    */
   const memberList = useMemo<HubClient[] | undefined>(() => {
-    if (grouped || !meClientsQuery.data) return meClientsQuery.data;
-    return [...meClientsQuery.data].sort(compareByPillPriority);
-  }, [grouped, meClientsQuery.data]);
+    if (grouped || !meClientsData) return meClientsData;
+    return [...meClientsData].sort(compareByPillPriority);
+  }, [grouped, meClientsData]);
 
   const membersById = useMemo<Map<string, string>>(() => {
     const map = new Map<string, string>();
@@ -215,15 +250,21 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
   const resolveOwner = (client: HubClient): { text: string; title?: string } => {
     if (client.userId === null) return { text: "—" };
-    if (client.userId === user?.id) {
+    if (client.userId === viewerUserId) {
       const display = membersById.get(client.userId);
       // "gandy · you" rather than "gandy (you)" — nested parens read stiff
       // in card headers; the middot is the same separator the rest of the
       // page uses for meta segments.
-      return { text: display ? `${display} · you` : "you" };
+      const name = display ?? (demoScenario ? "gandy" : null);
+      return { text: name ? `${name} · you` : "you" };
     }
     const display = membersById.get(client.userId);
     if (display) return { text: display };
+    if (demoScenario) {
+      // Fixtures don't have a real members map — fall back to a friendly
+      // display name so the team-table doesn't show "other-us" short-ids.
+      return { text: "Alice" };
+    }
     // Owner is bound to a userId we can't resolve right now — either the
     // members fetch is still in flight or the user was removed from the org
     // mid-session. Show the short-id with a tooltip carrying the full uuid
@@ -235,17 +276,20 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // grouped mode → the org-scoped list (covers both mineList + teamList);
   // member mode → the pill-sorted memberList. Driving the subtitle and the
   // empty-state branch off this list keeps the two display modes in sync.
-  const clients = grouped ? orgClientsQuery.data : memberList;
+  const clients = grouped ? orgClientsData : memberList;
 
   // "Are we still waiting on the primary listing?" — distinct from `!clients`
   // because once a query resolves with an empty array we want to drop out of
   // loading and show the empty state. Without this gate, admins see the empty
-  // CTA flash before the org-scoped query lands on first paint.
-  const clientsLoading = isAdmin
-    ? orgClientsQuery.isError
-      ? meClientsQuery.isLoading
-      : orgClientsQuery.isLoading
-    : meClientsQuery.isLoading;
+  // CTA flash before the org-scoped query lands on first paint. Demo mode
+  // short-circuits since fixtures are synchronous.
+  const clientsLoading = demoScenario
+    ? false
+    : isAdmin
+      ? orgClientsQuery.isError
+        ? meClientsQuery.isLoading
+        : orgClientsQuery.isLoading
+      : meClientsQuery.isLoading;
 
   // Subtitle is the pure-function output of `summarizeComputers` — single
   // headline for one row owned by the viewer ("Your computer is ready"),
@@ -253,7 +297,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // zero-suppressed pill-count breakdown for multi-row views. The `· N
   // agents bound` suffix restores the power-user signal the old subtitle
   // surfaced. See `clients/derive-status.ts` for the pure logic + tests.
-  const subtitle = useMemo(() => summarizeComputers(clients, user?.id), [clients, user?.id]);
+  const subtitle = useMemo(() => summarizeComputers(clients, viewerUserId), [clients, viewerUserId]);
 
   // Cards now host the per-row affordances (Generate new token, install
   // guide, ⋯ menu) inline, so the PageHeader's right slot no longer needs
@@ -268,13 +312,16 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // their own and only team rows are showing — they don't yet have one
   // to "add another" to. In that case fall back to the full-page empty
   // CTA inside the "Your computers" section instead of the bottom button.
-  const singleOwnCard = !grouped && (memberList?.length ?? 0) === 1 && memberList?.[0]?.userId === user?.id;
+  const singleOwnCard = !grouped && (memberList?.length ?? 0) === 1 && memberList?.[0]?.userId === viewerUserId;
   const viewerOwnCount = grouped ? mineList.length : (memberList?.length ?? 0);
   const showBottomAddButton = !singleOwnCard && viewerOwnCount >= 1;
 
   return (
     <div className={embedded ? "" : "-m-6"}>
       <PageHeader title="Computers" subtitle={subtitle} />
+      {demoScenario && (
+        <DemoNavigator activeKey={demoScenario.key} onSelect={(k) => setDemoKey(k)} onExit={() => setDemoKey(null)} />
+      )}
 
       <div style={{ padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)" }}>
         <NewConnectionDialog
@@ -481,17 +528,41 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                     </CardStack>
                   )}
                 </Section>
-                <Section title="Team computers" count={teamList.length}>
+                <Section
+                  title="Team computers"
+                  count={teamList.length}
+                  action={
+                    teamList.length > 0 ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setTeamExpanded((e) => !e)}
+                        aria-expanded={teamExpanded}
+                      >
+                        {teamExpanded ? (
+                          <>
+                            <ChevronDown className="h-3 w-3" />
+                            Hide
+                          </>
+                        ) : (
+                          <>
+                            <ChevronRight className="h-3 w-3" />
+                            Show
+                          </>
+                        )}
+                      </Button>
+                    ) : undefined
+                  }
+                >
                   {teamList.length === 0 ? (
                     <EmptyCardsNote message="No other team computers." />
-                  ) : (
-                    // Team rows stay as table for PR-B — they're read-only,
-                    // their primary value is "at a glance, who needs help",
-                    // and the per-row inline action affordances cards offer
-                    // (Generate new token / install guide) aren't applicable
-                    // to teammates. The full team-card redesign with
-                    // "Copy suggestion → Alice" buttons is deferred to a
-                    // follow-up PR; see proposal §"Variant D".
+                  ) : teamExpanded ? (
+                    // Team rows stay as table for now — read-only audit
+                    // view. Per-row inline affordances (Generate new
+                    // token / install guide) don't apply to teammates;
+                    // the full team-card redesign with "Copy suggestion
+                    // → Alice" buttons is deferred to a follow-up PR
+                    // (proposal §"Variant D").
                     <TeamComputersTable
                       teamList={teamList}
                       collapsedIds={collapsedIds}
@@ -500,7 +571,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                       getClientAgents={getClientAgents}
                       resolveOwner={resolveOwner}
                     />
-                  )}
+                  ) : null}
                 </Section>
               </>
             ) : (
@@ -586,50 +657,57 @@ function TeamComputersTable({
   getClientAgents: (clientId: string) => RuntimeAgent[];
   resolveOwner: (client: HubClient) => { text: string; title?: string };
 }) {
+  // Wrapping div pulls the table left by the first cell's left padding
+  // so the chevron column lines up with the parent Section's title left
+  // edge. Without this the hostname column sits inside the section,
+  // breaking the page's vertical alignment rhythm. Audit-only table,
+  // no horizontal scroll concerns — safe to bleed past padding.
   return (
-    <DenseTable>
-      <DenseTableHeader>
-        <DenseTableRow>
-          <DenseTableHead style={{ width: "var(--sp-4)" }} />
-          <DenseTableHead>Hostname</DenseTableHead>
-          <DenseTableHead>Owner</DenseTableHead>
-          <DenseTableHead>OS</DenseTableHead>
-          <DenseTableHead>first-tree</DenseTableHead>
-          <DenseTableHead>Agents</DenseTableHead>
-          <DenseTableHead>Last seen</DenseTableHead>
-          <DenseTableHead>Status</DenseTableHead>
-        </DenseTableRow>
-      </DenseTableHeader>
-      <DenseTableBody>
-        {teamList.map((client) => {
-          const isExpanded = !collapsedIds.has(client.id);
-          const boundAgents = getClientAgents(client.id);
-          return (
-            <ClientRow
-              key={client.id}
-              client={client}
-              boundAgents={boundAgents}
-              isExpanded={isExpanded}
-              agentName={agentName}
-              onToggle={() =>
-                setCollapsedIds((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(client.id)) next.delete(client.id);
-                  else next.add(client.id);
-                  return next;
-                })
-              }
-              onDisconnect={() => {}}
-              onRetire={() => {}}
-              onReconnect={() => {}}
-              showOwner
-              ownerLabel={resolveOwner(client)}
-              restricted
-            />
-          );
-        })}
-      </DenseTableBody>
-    </DenseTable>
+    <div style={{ marginLeft: "calc(-1 * var(--sp-3_5))", marginRight: "calc(-1 * var(--sp-3_5))" }}>
+      <DenseTable>
+        <DenseTableHeader>
+          <DenseTableRow>
+            <DenseTableHead style={{ width: "var(--sp-4)" }} />
+            <DenseTableHead>Hostname</DenseTableHead>
+            <DenseTableHead>Owner</DenseTableHead>
+            <DenseTableHead>OS</DenseTableHead>
+            <DenseTableHead>first-tree</DenseTableHead>
+            <DenseTableHead>Agents</DenseTableHead>
+            <DenseTableHead>Last seen</DenseTableHead>
+            <DenseTableHead>Status</DenseTableHead>
+          </DenseTableRow>
+        </DenseTableHeader>
+        <DenseTableBody>
+          {teamList.map((client) => {
+            const isExpanded = !collapsedIds.has(client.id);
+            const boundAgents = getClientAgents(client.id);
+            return (
+              <ClientRow
+                key={client.id}
+                client={client}
+                boundAgents={boundAgents}
+                isExpanded={isExpanded}
+                agentName={agentName}
+                onToggle={() =>
+                  setCollapsedIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(client.id)) next.delete(client.id);
+                    else next.add(client.id);
+                    return next;
+                  })
+                }
+                onDisconnect={() => {}}
+                onRetire={() => {}}
+                onReconnect={() => {}}
+                showOwner
+                ownerLabel={resolveOwner(client)}
+                restricted
+              />
+            );
+          })}
+        </DenseTableBody>
+      </DenseTable>
+    </div>
   );
 }
 
@@ -643,7 +721,7 @@ function TeamComputersTable({
  * — the card-based IA uses the same vocabulary, so duplicating strings
  * here would invite drift.
  */
-function CapabilityMatrix({ capabilities }: { capabilities: ClientCapabilities }) {
+function CapabilityMatrix({ capabilities, os }: { capabilities: ClientCapabilities; os: string | null }) {
   const empty = Object.keys(capabilities).length === 0;
   return (
     <>
@@ -655,7 +733,7 @@ function CapabilityMatrix({ capabilities }: { capabilities: ClientCapabilities }
       ) : (
         <div className="flex flex-col gap-1">
           {PROVIDER_ORDER.map((provider) => (
-            <ProviderRow key={provider} provider={provider} entry={capabilities[provider] ?? null} />
+            <ProviderRow key={provider} provider={provider} entry={capabilities[provider] ?? null} os={os} />
           ))}
         </div>
       )}
@@ -663,7 +741,15 @@ function CapabilityMatrix({ capabilities }: { capabilities: ClientCapabilities }
   );
 }
 
-function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: CapabilityEntry | null }) {
+function ProviderRow({
+  provider,
+  entry,
+  os,
+}: {
+  provider: RuntimeProvider;
+  entry: CapabilityEntry | null;
+  os: string | null;
+}) {
   const label = PROVIDER_LABEL[provider];
   if (!entry) {
     return (
@@ -672,7 +758,7 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
           {label}
         </span>
         <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-          not reported · {PROVIDER_INSTALL_HINT[provider]}
+          not reported · {providerInstallHint(provider, os)}
         </span>
       </div>
     );
@@ -685,7 +771,8 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--state-idle)" }}>
-            ✓ {entry.sdkVersion ? `v${entry.sdkVersion} · ` : ""}authenticated ({entry.authMethod})
+            ✓ {entry.sdkVersion ? `v${entry.sdkVersion} · ` : ""}
+            {entry.authMethod ?? "authenticated"}
           </span>
         </div>
       );
@@ -697,7 +784,7 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
           </span>
           <span className="text-caption" style={{ color: "var(--state-blocked)" }}>
             ⚠ installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}, not authenticated ·{" "}
-            {PROVIDER_UNAUTH_HINT[provider]}
+            {providerUnauthHint(provider, os)}
           </span>
         </div>
       );
@@ -708,7 +795,7 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            ✗ not installed · {PROVIDER_INSTALL_HINT[provider]}
+            ✗ not installed · {providerInstallHint(provider, os)}
           </span>
         </div>
       );
@@ -862,7 +949,7 @@ function ClientRow({
         <tr style={{ background: "var(--bg-sunken)" }}>
           <DenseTableCell />
           <DenseTableCell colSpan={colSpan - 1} style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-3_5)" }}>
-            <CapabilityMatrix capabilities={client.capabilities} />
+            <CapabilityMatrix capabilities={client.capabilities} os={client.os} />
             {boundAgents.length > 0 && (
               <>
                 <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: 6 }}>

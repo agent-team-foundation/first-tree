@@ -1,0 +1,390 @@
+import type { CapabilityEntry } from "@first-tree/shared";
+import type { HubClient, RuntimeAgent } from "../../api/activity.js";
+
+/**
+ * DEV-only fixtures for the `?demo=<key>` query-param mode of
+ * `ClientsPage`. Lets a reviewer flip the live `/settings/computers`
+ * page through every pill × sub-variant without seeding the local DB
+ * or running multiple daemons.
+ *
+ * The page reads `?demo=<key>` from the URL when `import.meta.env.DEV`
+ * is true; if a scenario matches it overrides the react-query results
+ * and renders the same JSX with these fixtures. Production builds
+ * never check this param — but the module is tree-shake-friendly
+ * anyway (pure data + builders).
+ *
+ * Each scenario carries a `whatToCheck` checklist surfaced by the
+ * floating `<DemoNavigator>` overlay so the reviewer knows what's
+ * distinctive about the state without reading the source.
+ */
+
+const NOW = Date.now();
+
+function isoMinutesAgo(min: number): string {
+  return new Date(NOW - min * 60_000).toISOString();
+}
+
+function isoDaysAgo(days: number): string {
+  return new Date(NOW - days * 24 * 60 * 60_000).toISOString();
+}
+
+function cap(state: CapabilityEntry["state"], overrides: Partial<CapabilityEntry> = {}): CapabilityEntry {
+  return {
+    state,
+    available: state !== "missing",
+    authenticated: state === "ok",
+    authMethod: overrides.authMethod ?? "none",
+    detectedAt: overrides.detectedAt ?? isoMinutesAgo(1),
+    sdkVersion: overrides.sdkVersion,
+    error: overrides.error,
+  };
+}
+
+function client(overrides: Partial<HubClient>): HubClient {
+  return {
+    id: overrides.id ?? "fixture",
+    userId: overrides.userId ?? "self-uuid",
+    status: overrides.status ?? "connected",
+    authState: overrides.authState ?? "ok",
+    sdkVersion: overrides.sdkVersion ?? "0.5.3-staging.49.1",
+    hostname: overrides.hostname ?? "MacBook-Pro.local",
+    os: overrides.os ?? "darwin",
+    agentCount: overrides.agentCount ?? 0,
+    connectedAt: overrides.connectedAt ?? isoMinutesAgo(30),
+    lastSeenAt: overrides.lastSeenAt ?? isoMinutesAgo(0.2),
+    capabilities: overrides.capabilities ?? {},
+  };
+}
+
+function agent(overrides: Partial<RuntimeAgent>): RuntimeAgent {
+  // Default runtimeType picks claude-code for "*-dev" agents and codex
+  // for "*-asst" agents — gives the demo gallery visual variety when
+  // multiple agents are bound to the same fixture. Pin explicitly via
+  // `overrides.runtimeType` when a scenario needs a specific provider.
+  const id = overrides.agentId ?? "agent-uuid";
+  const defaultRuntime = id.endsWith("asst") ? "codex" : "claude-code";
+  return {
+    agentId: id,
+    clientId: overrides.clientId ?? "fixture",
+    runtimeType: overrides.runtimeType !== undefined ? overrides.runtimeType : defaultRuntime,
+    runtimeState: overrides.runtimeState ?? "idle",
+    activeSessions: overrides.activeSessions ?? 0,
+    totalSessions: overrides.totalSessions ?? 0,
+    runtimeUpdatedAt: overrides.runtimeUpdatedAt ?? isoMinutesAgo(1),
+    type: overrides.type ?? null,
+    managedByMe: overrides.managedByMe ?? true,
+  };
+}
+
+export const DEMO_SELF_USER_ID = "self-uuid";
+
+/**
+ * The set of clients + agents a particular `?demo=<key>` selects.
+ * Most scenarios use a single own-machine; "stack" and "admin-grouped"
+ * use multiple to exercise list-level UX.
+ */
+export type DemoScenario = {
+  key: string;
+  group: "Ready" | "Auth expired" | "Setup incomplete" | "Offline" | "Cross-cutting";
+  title: string;
+  summary: string;
+  whatToCheck: string[];
+  /** All clients in this scenario — first one is the "viewer's own" for non-admin paths. */
+  clients: HubClient[];
+  agents: RuntimeAgent[];
+};
+
+const READY_BOTH = client({
+  id: "demo-ready-both",
+  hostname: "GandydeMacBook-Pro.local",
+  capabilities: {
+    "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
+    codex: cap("ok", { sdkVersion: "0.125.0", authMethod: "auth_json" }),
+  },
+});
+
+const READY_CC_ONLY = client({
+  id: "demo-ready-cc-only",
+  hostname: "Linux-box.lan",
+  capabilities: {
+    "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
+  },
+});
+
+const READY_MIXED = client({
+  id: "demo-ready-mixed",
+  hostname: "MacBook-Pro.local",
+  capabilities: {
+    "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
+    codex: cap("unauthenticated", { sdkVersion: "0.125.0" }),
+  },
+});
+
+const AUTH_EXPIRED = client({
+  id: "demo-auth-expired",
+  hostname: "Mac-mini.attic",
+  status: "disconnected",
+  authState: "expired",
+  lastSeenAt: isoDaysAgo(8),
+  sdkVersion: "0.5.1",
+  capabilities: {
+    "claude-code": cap("ok", { sdkVersion: "0.2.130", authMethod: "oauth" }),
+  },
+});
+
+const SETUP_EMPTY = client({
+  id: "demo-setup-empty",
+  hostname: "fresh-linux-box.local",
+  os: "linux",
+});
+
+const SETUP_MIXED = client({
+  id: "demo-setup-mixed",
+  hostname: "MacBook-Pro.local",
+  capabilities: {
+    "claude-code": cap("unauthenticated", { sdkVersion: "0.2.141" }),
+  },
+});
+
+const SETUP_ERROR = client({
+  id: "demo-setup-error",
+  hostname: "MacBook-Pro.local",
+  capabilities: {
+    codex: cap("error", { error: "ENOENT: spawn /usr/local/bin/codex" }),
+  },
+});
+
+const OFFLINE_RECENT = client({
+  id: "demo-offline-recent",
+  hostname: "MacBook-Pro.local",
+  status: "disconnected",
+  lastSeenAt: isoMinutesAgo(120),
+  capabilities: {
+    "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
+  },
+});
+
+const OFFLINE_STALE = client({
+  id: "demo-offline-stale",
+  hostname: "old-laptop.fritz.box",
+  status: "disconnected",
+  lastSeenAt: isoDaysAgo(4),
+  capabilities: {
+    "claude-code": cap("ok", { sdkVersion: "0.2.130", authMethod: "oauth" }),
+  },
+});
+
+const TEAM_MACHINE = client({
+  id: "demo-team-machine",
+  userId: "other-user",
+  hostname: "alice-MBP.lan",
+  capabilities: {
+    "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
+  },
+});
+
+export const DEMO_AGENT_NAMES: Record<string, string> = {
+  "a-dev": "gandy-developer",
+  "a-asst": "gandy-assistant",
+  "a-rev": "code-reviewer",
+  "a-other": "alice-bot",
+};
+
+export const DEMO_SCENARIOS: DemoScenario[] = [
+  {
+    key: "ready-both",
+    group: "Ready",
+    title: "Ready · both runtimes ok · 2 agents",
+    summary:
+      "Happy path. Pill is Ready when status=connected, authState=ok, AND ≥1 capability=ok. Both runtimes ok is the most common shape.",
+    whatToCheck: [
+      "Green pill 'Ready' in the top-right",
+      "Hostname is the visual focus (font-semibold); owner label 'gandy · you' below (no nested parens)",
+      "Heartbeat / first-tree / OS as 2-col `<dl>` field grid",
+      "Runtimes block: ✓ Claude Code + ✓ Codex, lowercase label 'Runtimes'",
+      "Agent rows: name + presence chip only, no '3 / 7 sessions' counter",
+      "No background tint / shadow / radius — flat with hairlines",
+    ],
+    clients: [READY_BOTH],
+    agents: [
+      agent({ agentId: "a-dev", clientId: READY_BOTH.id, runtimeState: "idle" }),
+      agent({ agentId: "a-asst", clientId: READY_BOTH.id, runtimeState: "idle" }),
+    ],
+  },
+  {
+    key: "ready-cc-only",
+    group: "Ready",
+    title: "Ready · only Claude Code · 0 agents",
+    summary: "Ready with one runtime ok + one missing. Bound-agents block hides entirely when total=0.",
+    whatToCheck: [
+      "Pill still Ready (one ok is enough)",
+      "Runtimes: ✓ Claude Code + ✗ Codex 'not installed' inline",
+      "Agents block NOT rendered — only 2 groups (meta + runtimes)",
+    ],
+    clients: [READY_CC_ONLY],
+    agents: [],
+  },
+  {
+    key: "ready-mixed",
+    group: "Ready",
+    title: "Ready · Codex unauthenticated",
+    summary: "One runtime ok, one installed-but-unauthed. Card stays Ready; the unauth runtime gets a yellow ⚠ hint.",
+    whatToCheck: [
+      "Pill stays Ready (Claude Code is ok)",
+      "Codex line shows ⚠ + 'installed v0.125.0, not authenticated' + login hint",
+      "Warning yellow on the unauth line, idle green on the ok line",
+    ],
+    clients: [READY_MIXED],
+    agents: [agent({ agentId: "a-dev", clientId: READY_MIXED.id, runtimeState: "running" })],
+  },
+  {
+    key: "auth-expired",
+    group: "Auth expired",
+    title: "Auth expired · 8 days · 3 agents",
+    summary:
+      "Token has expired (authState=expired). Pill is Auth expired regardless of capability. The card surfaces recovery action inline.",
+    whatToCheck: [
+      "Red pill 'Auth expired' in the top-right",
+      "Diagnostic: 'Hasn't checked in for 8 days. Your access token has expired.'",
+      "Primary 'Generate new token' button inline — NOT in the kebab",
+      "Right of the button: compact summary '3 agents · all offline'",
+      "Footer: dimmed meta block under hairline",
+    ],
+    clients: [AUTH_EXPIRED],
+    agents: [
+      agent({ agentId: "a-dev", clientId: AUTH_EXPIRED.id, runtimeState: "offline" }),
+      agent({ agentId: "a-asst", clientId: AUTH_EXPIRED.id, runtimeState: "offline" }),
+      agent({ agentId: "a-rev", clientId: AUTH_EXPIRED.id, runtimeState: "offline" }),
+    ],
+  },
+  {
+    key: "setup-empty",
+    group: "Setup incomplete",
+    title: "Setup incomplete · no runtime installed",
+    summary: "Machine connected + auth OK but no runtime is `ok`. Two install boxes shown — operator picks one.",
+    whatToCheck: [
+      "Yellow pill 'Setup incomplete'",
+      "Two install boxes side-by-side on wide cards, stacked 1-up on narrow",
+      "Each box: runtime name + headline with `command` as <code> + InlineCommand with Copy",
+      "Install box has NO outer raised background — only the inner pre block is wrapped",
+      "Footer meta NOT dimmed (machine is online)",
+    ],
+    clients: [SETUP_EMPTY],
+    agents: [],
+  },
+  {
+    key: "setup-mixed",
+    group: "Setup incomplete",
+    title: "Setup incomplete · one unauth, one missing",
+    summary:
+      "Mixed setup: Claude Code installed-not-logged-in, Codex not installed. Each install box adapts its command.",
+    whatToCheck: [
+      "Claude Code box: 'installed (v0.2.141) but not logged in' — command is ONLY `claude login` (no npm install)",
+      "Codex box: full install + login two-liner",
+      "Backticks in headlines render as <code> elements, not literal backticks",
+    ],
+    clients: [SETUP_MIXED],
+    agents: [],
+  },
+  {
+    key: "setup-error",
+    group: "Setup incomplete",
+    title: "Setup incomplete · probe error on Codex",
+    summary: "A runtime probe failed. Surface the error string + a reinstall command.",
+    whatToCheck: [
+      "Codex headline includes the error string ('ENOENT: spawn …')",
+      "Codex command is the reinstall (`npm install -g @openai/codex`), no login appended",
+      "Claude Code box still renders (its state is 'missing')",
+      "1 agent offline — compact summary reads '1 agent · offline' (singular, no 'all')",
+    ],
+    clients: [SETUP_ERROR],
+    agents: [agent({ agentId: "a-dev", clientId: SETUP_ERROR.id, runtimeState: "offline" })],
+  },
+  {
+    key: "offline-recent",
+    group: "Offline",
+    title: "Offline · 2 hours · 0 agents",
+    summary: "Disconnected but auth still alive. Wake-guide command + dimmed meta.",
+    whatToCheck: [
+      "Grey pill 'Offline'",
+      "Diagnostic: 'Last seen 2 hours ago. Make sure the machine is awake and connected.'",
+      "Hint + InlineCommand with `first-tree daemon start`",
+      "Copy button flips to 'Copied' briefly on click",
+      "Agents block hidden (total=0)",
+    ],
+    clients: [OFFLINE_RECENT],
+    agents: [],
+  },
+  {
+    key: "offline-stale",
+    group: "Offline",
+    title: "Offline · 4 days · 2 agents",
+    summary: "Stale but not expired. Compact agents summary uses 'all offline' for ≥2 agents.",
+    whatToCheck: [
+      "Diagnostic: 'Last seen 4 days ago. …'",
+      "Agents summary reads '2 agents · all offline' (NOT '2 agents · 2 offline')",
+    ],
+    clients: [OFFLINE_STALE],
+    agents: [
+      agent({ agentId: "a-dev", clientId: OFFLINE_STALE.id, runtimeState: "offline" }),
+      agent({ agentId: "a-asst", clientId: OFFLINE_STALE.id, runtimeState: "offline" }),
+    ],
+  },
+  {
+    key: "stack",
+    group: "Cross-cutting",
+    title: "Stack of 3 own machines (member view)",
+    summary: "What a member with multiple machines sees. Hairline separators between cards.",
+    whatToCheck: [
+      "Top card has NO hairline above (first-child rule)",
+      "Subsequent cards each get a top hairline",
+      "Page subtitle reflects multi-machine summary",
+      "Bottom 'Add another computer' button visible",
+    ],
+    clients: [READY_BOTH, AUTH_EXPIRED, OFFLINE_STALE],
+    agents: [
+      agent({ agentId: "a-dev", clientId: READY_BOTH.id, runtimeState: "idle" }),
+      agent({ agentId: "a-asst", clientId: READY_BOTH.id, runtimeState: "idle" }),
+      agent({ agentId: "a-dev", clientId: AUTH_EXPIRED.id, runtimeState: "offline" }),
+      agent({ agentId: "a-asst", clientId: OFFLINE_STALE.id, runtimeState: "offline" }),
+    ],
+  },
+  {
+    key: "admin-grouped",
+    group: "Cross-cutting",
+    title: "Admin grouped: 2 own + 1 team machine",
+    summary:
+      "Admin view with 'Your computers' + 'Team computers'. Real Settings layout including the table for team rows.",
+    whatToCheck: [
+      "'Your computers · 2' section as Section heading with hairline below",
+      "'Team computers · 1' second Section",
+      "Team table uses the legacy dense-table chrome (deferred to Variant D)",
+      "Owner labels: 'gandy · you' on own cards, no '· you' on team rows",
+    ],
+    clients: [READY_BOTH, OFFLINE_RECENT, TEAM_MACHINE],
+    agents: [
+      agent({ agentId: "a-dev", clientId: READY_BOTH.id, runtimeState: "idle" }),
+      agent({ agentId: "a-asst", clientId: READY_BOTH.id, runtimeState: "idle" }),
+      agent({ agentId: "a-other", clientId: TEAM_MACHINE.id, runtimeState: "idle" }),
+    ],
+  },
+  {
+    key: "empty",
+    group: "Cross-cutting",
+    title: "Empty state · 0 computers",
+    summary: "Brand-new user with no machines connected. Centered CTA, no card stack.",
+    whatToCheck: [
+      "Page subtitle reads 0-machine summary",
+      "Centered 'No computers connected yet' message",
+      "Primary 'Connect your first computer' button (+ icon)",
+      "Bottom 'Add another' button NOT shown",
+    ],
+    clients: [],
+    agents: [],
+  },
+];
+
+export function findDemoScenario(key: string | null | undefined): DemoScenario | null {
+  if (!key) return null;
+  return DEMO_SCENARIOS.find((s) => s.key === key) ?? null;
+}

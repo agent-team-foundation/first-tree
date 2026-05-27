@@ -19,11 +19,12 @@ export type ComputerCardProps = {
   onGenerateNewToken: () => void;
   /**
    * Opens the NewConnectionDialog UNSCOPED (fresh connect command).
-   * Used by the offline-card kebab "Reconnect" entry — an offline
-   * machine's credentials are still likely valid, so the operator just
-   * needs a working connect token to re-pair from the machine. Routing
-   * this through `onGenerateNewToken` would scope the arrival detector
-   * to this row and mislead with re-auth copy.
+   * The Offline card promotes this to an inline "Reconnect" button as
+   * its primary affordance — an offline machine's credentials are
+   * usually still alive, so the operator just needs a working connect
+   * token to re-pair. Routing this through `onGenerateNewToken` would
+   * scope the arrival detector to this row and mislead with re-auth
+   * copy.
    */
   onReconnect: () => void;
   /** Opens the disconnect-confirmation modal. */
@@ -51,10 +52,10 @@ export type ComputerCardProps = {
  * without an explicit card chrome.
  *
  * Header row: hostname + optional owner caption + pill + ⋯ menu.
- * The ⋯ menu carries the same actions the legacy table's RowActionsMenu
- * had — Disconnect / Retire (+ Reconnect when offline). Reconnect on
- * offline rows opens the dialog as a fresh connect (no targetClientId);
- * AuthExpired uses the inline "Generate new token" button instead.
+ * The ⋯ menu only carries the destructive low-frequency actions
+ * (Disconnect / Retire). State-specific *primary* actions live inline
+ * inside the body — Generate new token on AuthExpired, Reconnect on
+ * Offline — so they're discoverable without clicking a kebab.
  */
 export function ComputerCard({
   client,
@@ -67,7 +68,6 @@ export function ComputerCard({
   ownerLabel,
 }: ComputerCardProps) {
   const vm = computerCardViewModel(client);
-  const isOffline = client.status !== "connected";
 
   return (
     // `<article>` (instead of nested `<section>`) keeps the page outline
@@ -100,7 +100,6 @@ export function ComputerCard({
         <RowActionsMenu
           ariaLabel="Computer actions"
           actions={[
-            ...(isOffline ? [{ key: "reconnect", label: "Reconnect", onSelect: onReconnect }] : []),
             { key: "disconnect", label: "Disconnect", onSelect: onDisconnect },
             { key: "retire", label: "Retire", destructive: true, onSelect: onRetire },
           ]}
@@ -112,6 +111,7 @@ export function ComputerCard({
         boundAgents={boundAgents}
         agentName={agentName}
         onGenerateNewToken={onGenerateNewToken}
+        onReconnect={onReconnect}
       />
     </article>
   );
@@ -123,6 +123,7 @@ function CardBody(props: {
   boundAgents: RuntimeAgent[];
   agentName: (uuid: string | null | undefined) => string;
   onGenerateNewToken: () => void;
+  onReconnect: () => void;
 }) {
   switch (props.pill) {
     case "ready":
@@ -141,7 +142,14 @@ function CardBody(props: {
         <SetupIncompleteCardBody client={props.client} boundAgents={props.boundAgents} agentName={props.agentName} />
       );
     case "offline":
-      return <OfflineCardBody client={props.client} boundAgents={props.boundAgents} agentName={props.agentName} />;
+      return (
+        <OfflineCardBody
+          client={props.client}
+          boundAgents={props.boundAgents}
+          agentName={props.agentName}
+          onReconnect={props.onReconnect}
+        />
+      );
     default: {
       const exhaustive: never = props.pill;
       return exhaustive;

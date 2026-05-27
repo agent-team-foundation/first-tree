@@ -58,6 +58,14 @@ export type AgentLine = {
   agentId: string;
   /** Server-derived runtime state ("idle" / "working" / "blocked" / "error" / null = offline). */
   runtimeState: string | null;
+  /**
+   * Runtime provider this agent is pinned to (e.g. "claude-code" /
+   * "codex"). Surfaced inline in the bound-agents list so the operator
+   * can see which runtime is carrying which agent — useful when one
+   * runtime is unauth'd or missing on the machine and they need to
+   * trace blast-radius.
+   */
+  runtimeType: string | null;
   activeSessions: number | null;
   totalSessions: number | null;
 };
@@ -85,6 +93,7 @@ export function summarizeBoundAgents(agents: RuntimeAgent[]): BoundAgentsSummary
     return {
       agentId: a.agentId,
       runtimeState: a.runtimeState,
+      runtimeType: a.runtimeType,
       activeSessions: a.activeSessions,
       totalSessions: a.totalSessions,
     };
