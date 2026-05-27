@@ -7,11 +7,15 @@ import { z } from "zod";
 import { loadAgents } from "../loader.js";
 import {
   collectMissingPrompts,
+  defaultConfigDir,
+  defaultDataDir,
+  defaultHome,
   getConfigMeta,
   getConfigValue,
   initConfig,
   readConfigFile,
   resetConfigMeta,
+  resolveConfigReadonly,
   setConfigValue,
 } from "../resolver.js";
 import { defineConfig, field, optional } from "../schema.js";
@@ -42,6 +46,22 @@ const simpleSchema = defineConfig({
   secrets: {
     key: field(z.string(), { auto: "random:hex:16", secret: true }),
   },
+});
+
+describe("default paths", () => {
+  it("derives default directories from FIRST_TREE_HOME", () => {
+    vi.stubEnv("FIRST_TREE_HOME", join(testDir, "home"));
+
+    expect(defaultHome()).toBe(join(testDir, "home"));
+    expect(defaultConfigDir()).toBe(join(testDir, "home", "config"));
+    expect(defaultDataDir()).toBe(join(testDir, "home", "data"));
+  });
+
+  it("falls back to the OS home when FIRST_TREE_HOME is unset", () => {
+    vi.stubEnv("FIRST_TREE_HOME", undefined);
+
+    expect(defaultHome()).toContain(".first-tree");
+  });
 });
 
 describe("initConfig", () => {
@@ -201,6 +221,139 @@ describe("initConfig", () => {
     expect(config.server.port).toBe(9999);
     expect(typeof config.server.port).toBe("number");
   });
+
+  it("keeps invalid numeric env vars for validation to reject", async () => {
+    vi.stubEnv("TEST_PORT", "not-a-number");
+
+    await expect(
+      initConfig({
+        schema: simpleSchema,
+        role: "test",
+        configDir: testDir,
+      }),
+    ).rejects.toThrow("Configuration validation failed");
+  });
+
+  it("coerces boolean env vars and rejects invalid boolean text", async () => {
+    const schema = defineConfig({
+      feature: {
+        enabled: field(z.boolean().optional(), { env: "TEST_FEATURE_ENABLED" }),
+      },
+    });
+
+    vi.stubEnv("TEST_FEATURE_ENABLED", "true");
+    await expect(initConfig({ schema, role: "test", configDir: testDir })).resolves.toMatchObject({
+      feature: { enabled: true },
+    });
+
+    resetConfig();
+    resetConfigMeta();
+    vi.stubEnv("TEST_FEATURE_ENABLED", "0");
+    await expect(initConfig({ schema, role: "test", configDir: testDir })).resolves.toMatchObject({
+      feature: { enabled: false },
+    });
+
+    resetConfig();
+    resetConfigMeta();
+    vi.stubEnv("TEST_FEATURE_ENABLED", "not-a-boolean");
+    await expect(initConfig({ schema, role: "test", configDir: testDir })).rejects.toThrow(
+      "Configuration validation failed",
+    );
+  });
+
+  it("uses the default config directory when configDir is omitted", async () => {
+    vi.stubEnv("FIRST_TREE_HOME", testDir);
+
+    const config = await initConfig({
+      schema: simpleSchema,
+      role: "test",
+    });
+
+    expect(config.server.port).toBe(8000);
+    expect(existsSync(join(testDir, "config", "test.yaml"))).toBe(true);
+  });
+
+  it("deep-merges auto-generated values into existing file groups", async () => {
+    writeFileSync(join(testDir, "test.yaml"), "server:\n  host: localhost\nsecrets:\n  existing: keep\n");
+
+    await initConfig({
+      schema: simpleSchema,
+      role: "test",
+      configDir: testDir,
+    });
+
+    const yamlContent = readFileSync(join(testDir, "test.yaml"), "utf-8");
+    const parsed = parseYaml(yamlContent);
+    expect(parsed).toMatchObject({
+      server: { host: "localhost" },
+      secrets: { existing: "keep" },
+    });
+    expect(parsed).toHaveProperty("secrets.key");
+  });
+
+  it("supports built-in client-id and base64url auto-generation strategies", async () => {
+    const schema = defineConfig({
+      client: {
+        id: field(z.string(), { auto: "client-id" }),
+        secret: field(z.string(), { auto: "random:base64url:6" }),
+      },
+    });
+
+    const config = await initConfig({
+      schema,
+      role: "test",
+      configDir: testDir,
+    });
+
+    expect(config.client.id).toMatch(/^client_[a-f0-9]{8}$/);
+    expect(config.client.secret).toHaveLength(8);
+  });
+
+  it("rejects unknown auto-generation strategies and encodings", async () => {
+    const unknownStrategySchema = defineConfig({
+      value: field(z.string(), { auto: "unknown" }),
+    });
+    await expect(initConfig({ schema: unknownStrategySchema, role: "test", configDir: testDir })).rejects.toThrow(
+      "Unknown auto-generation strategy",
+    );
+
+    resetConfig();
+    resetConfigMeta();
+
+    const unknownEncodingSchema = defineConfig({
+      value: field(z.string(), { auto: "random:utf8:1" }),
+    });
+    await expect(initConfig({ schema: unknownEncodingSchema, role: "test", configDir: testDir })).rejects.toThrow(
+      "Unknown random encoding",
+    );
+  });
+
+  it("rejects a random auto-generation strategy with an empty encoding capture", async () => {
+    const originalExec = RegExp.prototype.exec;
+    const execSpy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (this: RegExp, value: string) {
+      if (this.source === "^random:(\\w+):(\\d+)$" && value === "random:empty-encoding:1") {
+        const match = /random:empty-encoding:1/.exec(value);
+        if (match) {
+          match[1] = "";
+          match[2] = "1";
+        }
+        return match;
+      }
+      return originalExec.call(this, value);
+    });
+
+    const schema = defineConfig({
+      value: field(z.string(), { auto: "random:empty-encoding:1" }),
+    });
+
+    try {
+      await expect(initConfig({ schema, role: "test", configDir: testDir })).rejects.toThrow(
+        "Invalid auto-generation strategy",
+      );
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
 });
 
 describe("optional groups", () => {
@@ -248,6 +401,18 @@ describe("optional groups", () => {
     expect(config.extra?.repo).toBe("org/repo");
     expect(config.extra?.branch).toBe("main");
   });
+
+  it("optional group from CLI args", async () => {
+    const config = await initConfig({
+      schema: schemaWithOptional,
+      role: "test",
+      configDir: testDir,
+      cliArgs: { extra: { repo: "org/repo" } },
+    });
+
+    expect(config.extra?.repo).toBe("org/repo");
+    expect(config.extra?.branch).toBe("main");
+  });
 });
 
 describe("setConfigValue / getConfigValue / readConfigFile", () => {
@@ -276,6 +441,46 @@ describe("setConfigValue / getConfigValue / readConfigFile", () => {
   it("returns undefined for non-existent file", () => {
     expect(getConfigValue(join(testDir, "nope.yaml"), "key")).toBeUndefined();
     expect(readConfigFile(join(testDir, "nope.yaml"))).toEqual({});
+  });
+
+  it("returns empty values for scalar config files", () => {
+    const path = join(testDir, "test.yaml");
+    writeFileSync(path, "plain-value\n");
+
+    expect(getConfigValue(path, "database.url")).toBeUndefined();
+    expect(readConfigFile(path)).toEqual({});
+  });
+
+  it("creates missing parent directories when setting a value", () => {
+    const path = join(testDir, "nested", "test.yaml");
+
+    setConfigValue(path, "database.url", "postgres://localhost");
+
+    expect(getConfigValue(path, "database.url")).toBe("postgres://localhost");
+  });
+
+  it("handles sparse dot paths defensively when setting a value", () => {
+    const originalSplit = String.prototype.split;
+    const splitSpy = vi.spyOn(String.prototype, "split").mockImplementation(function (
+      this: string,
+      separator: string | RegExp | { [Symbol.split](string: string, limit?: number): string[] },
+      limit?: number,
+    ) {
+      if (this.toString() === "__sparse__.leaf" && separator === ".") {
+        const path = ["placeholder", "leaf"];
+        delete path[0];
+        return path;
+      }
+      return Reflect.apply(originalSplit, this, [separator, limit]);
+    });
+
+    const path = join(testDir, "test.yaml");
+    try {
+      setConfigValue(path, "__sparse__.leaf", "value");
+    } finally {
+      splitSpy.mockRestore();
+    }
+    expect(getConfigValue(path, "leaf")).toBe("value");
   });
 });
 
@@ -405,6 +610,69 @@ describe("collectMissingPrompts", () => {
     });
 
     expect(missing).toHaveLength(0);
+  });
+
+  it("uses the default config directory when collecting prompts", () => {
+    vi.stubEnv("FIRST_TREE_HOME", testDir);
+
+    const missing = collectMissingPrompts({
+      schema: schemaWithPrompts,
+      role: "test",
+    });
+
+    expect(missing.map((field) => field.dotPath)).toContain("database.url");
+  });
+});
+
+describe("config metadata", () => {
+  it("throws before config metadata is initialized", () => {
+    expect(() => getConfigMeta()).toThrow("Config not initialized");
+  });
+});
+
+describe("resolveConfigReadonly", () => {
+  const readonlySchema = defineConfig({
+    server: {
+      port: field(z.number().default(8000), { env: "READONLY_PORT" }),
+      host: field(z.string().default("127.0.0.1")),
+    },
+    feature: {
+      enabled: field(z.boolean().optional(), { env: "READONLY_FEATURE_ENABLED" }),
+    },
+    secret: field(z.string(), { auto: "random:hex:4" }),
+  });
+
+  it("resolves env, file, and defaults without writing generated values", () => {
+    writeFileSync(join(testDir, "test.yaml"), "server:\n  port: 9000\n  host: 0.0.0.0\n");
+    vi.stubEnv("READONLY_PORT", "3000");
+    vi.stubEnv("READONLY_FEATURE_ENABLED", "1");
+
+    const config = resolveConfigReadonly({
+      schema: readonlySchema,
+      role: "test",
+      configDir: testDir,
+    });
+
+    expect(config).toEqual({
+      server: { port: 3000, host: "0.0.0.0" },
+      feature: { enabled: true },
+    });
+    expect(readFileSync(join(testDir, "test.yaml"), "utf-8")).not.toContain("secret:");
+  });
+
+  it("uses default config directory and ignores non-object YAML", () => {
+    vi.stubEnv("FIRST_TREE_HOME", testDir);
+    mkdirSync(join(testDir, "config"), { recursive: true });
+    writeFileSync(join(testDir, "config", "test.yaml"), "plain-value\n");
+
+    const config = resolveConfigReadonly({
+      schema: readonlySchema,
+      role: "test",
+    });
+
+    expect(config).toEqual({
+      server: { port: 8000, host: "127.0.0.1" },
+    });
   });
 });
 
