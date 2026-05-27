@@ -984,7 +984,7 @@ export function ChatView({
   // needs to call `scrollToBottom` — and sendMut is declared
   // shortly after this point. The hook only depends on
   // `scrollContainerRef`, which is just a ref.
-  const { scrollToBottomImmediate, scrollToMessageImmediate, scrollToBottom, isAtBottom } =
+  const { scrollToBottomImmediate, scrollToMessageImmediate, scrollToBottom, scrollToMessage, isAtBottom } =
     useChatScroll(scrollContainerRef);
 
   // Auto-grow the composer up to the CSS `max-height` cap (10.5rem ≈ 8
@@ -1835,6 +1835,22 @@ export function ChatView({
   // commit but before paint, so the first frame the user sees is
   // already at the right scroll position.
   //
+  // Each branch fires two scrolls:
+  //   1. *Immediate — synchronous, lands the first paint at the
+  //      current scrollHeight floor (no top-then-bottom flash).
+  //   2. Non-immediate (ResizeObserver-debounced) — re-lands once
+  //      the container's height has been stable for `stabilityDelay`
+  //      (200 ms). `messagesData` and `eventsData` arrive in two
+  //      independent React Query fetches, and messages typically
+  //      land first; without this follow-up the immediate scroll
+  //      lands at "messages end" and any in-progress `tool_call`
+  //      workgroups arriving moments later end up below the fold
+  //      (and `isAtBottom` flips to `false` as `scrollHeight` grows,
+  //      so the streaming auto-follow effect below ALSO bails).
+  //      The follow-up call is also why this useLayoutEffect doesn't
+  //      need to wait for both queries — first paint stays correct,
+  //      and the stable callback handles the late-arriving events.
+  //
   // Earlier rounds:
   //  - PR 286 review M1 round → answersByCorrelationId source fix.
   //  - PR 286 review M2 round → Bug 1 (hard reload landed at top
@@ -1845,6 +1861,10 @@ export function ChatView({
   //    "last-read marker" to "bottom-visible-on-leave snapshot",
   //    so coming back to a chat lands you where you were visually,
   //    not at "the bottom of all content I've ever seen here".
+  //  - baixiaohang manual report → on chat open the viewport landed
+  //    at the last message's bottom, leaving in-progress tool_call
+  //    workgroups (events that arrived after messages) below the
+  //    fold. Added the stable follow-up scroll.
   const landedForChatRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (itemCount === 0) return;
@@ -1855,13 +1875,23 @@ export function ChatView({
       // newer than the anchor sit below the fold; the pill will
       // surface them.
       scrollToMessageImmediate(bottomVisibleResolution.anchorId, "end", "auto");
+      scrollToMessage(bottomVisibleResolution.anchorId, "end", "auto");
     } else {
       // No prior snapshot (first-time visit, or the stored anchor
       // is gone): preserve the M1-era "open scrolls to bottom"
       // behavior.
       scrollToBottomImmediate("auto");
+      scrollToBottom("auto");
     }
-  }, [chatId, itemCount, bottomVisibleResolution, scrollToMessageImmediate, scrollToBottomImmediate]);
+  }, [
+    chatId,
+    itemCount,
+    bottomVisibleResolution,
+    scrollToMessageImmediate,
+    scrollToBottomImmediate,
+    scrollToMessage,
+    scrollToBottom,
+  ]);
 
   // Watches the scroll position and persists the bottom-visible
   // message id per chat. Distinct from the prior monotonic-marker
