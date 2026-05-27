@@ -80,6 +80,7 @@ const LAUNCHD_LABEL = channelConfig.launchdLabel;
 // launchd label uses the same identifier convention (bare name), so we
 // reuse it for both.
 const SYSLOG_IDENT = channelConfig.launchdLabel;
+const SYSTEMD_BASE_PATH = ["/usr/local/bin", "/usr/bin", "/bin"];
 
 // Function rather than const: see `channel-env.ts` history note. A
 // top-level `const = join(defaultHome(), ...)` would lock at module
@@ -87,6 +88,11 @@ const SYSLOG_IDENT = channelConfig.launchdLabel;
 // the resolver's function-based redesign.
 function logDir(): string {
   return join(defaultHome(), "logs");
+}
+
+function systemdPathEnv(): string {
+  const nodeBinDir = dirname(process.execPath);
+  return [nodeBinDir, ...SYSTEMD_BASE_PATH].filter((value, index, values) => values.indexOf(value) === index).join(":");
 }
 
 const PROXY_ENV_KEYS = [
@@ -441,6 +447,10 @@ export function renderSystemdUnit(
   // `FIRST_TREE_HOME=/tmp/foo` test) silently disappears when the unit
   // gets installed. Embedding the resolved home eliminates that drift.
   const homeEnv = `Environment=FIRST_TREE_HOME=${shellQuote(defaultHome())}\n`;
+  // `systemd --user` does not inherit the operator's interactive shell PATH.
+  // Include this CLI's Node directory so npm/nvm-installed shebangs that use
+  // `#!/usr/bin/env node` keep working when supervised.
+  const pathEnv = `Environment=PATH=${shellQuote(systemdPathEnv())}\n`;
 
   // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
   const proxyEnvLines = Object.entries(proxyEnv)
@@ -476,8 +486,7 @@ TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${SYSLOG_IDENT}
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-Environment=FIRST_TREE_SERVICE_MODE=1
+${pathEnv}Environment=FIRST_TREE_SERVICE_MODE=1
 ${homeEnv}${proxyEnvLines}[Install]
 WantedBy=default.target
 `;
