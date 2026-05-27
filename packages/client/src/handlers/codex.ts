@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type AgentRuntimeConfigPayload, deriveRepoLocalPath, type SessionEvent } from "@first-tree/shared";
-import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions } from "@openai/codex-sdk";
+import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import {
   bootstrapWorkspace,
@@ -34,6 +34,166 @@ const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
 
 type Worktree = { url: string; path: string; branchName: string };
+
+/**
+ * Turn-level retry budget for transient codex failures.
+ *
+ * Total attempts = MAX_TURN_RETRIES + 1 (i.e. 1 initial + 2 retries = 3 tries).
+ * Backoff is `RETRY_BASE_MS * RETRY_MULTIPLIER^attempt`, so the schedule is
+ * 500 ms → 1500 ms before the third attempt — matches the order of magnitude
+ * of the SDK fetch-retry layer (`sdk-retry.test.ts`) without falling into the
+ * same band that PostgreSQL LISTEN/NOTIFY uses for inbox redelivery.
+ *
+ * Retries fire ONLY when (a) the error message looks transient (see
+ * `isTransientCodexErrorMessage`) AND (b) no user-visible event has been
+ * emitted yet for this turn (see `isUserVisibleItem`). Once the agent has
+ * said something or run a tool, re-running the turn would double-emit those
+ * items in the chat timeline — not acceptable.
+ */
+const MAX_TURN_RETRIES = 2;
+const RETRY_BASE_MS = 500;
+const RETRY_MULTIPLIER = 3;
+
+/**
+ * Concurrent-write detection window for the per-chat AGENTS.md briefing.
+ *
+ * Codex CLI reads AGENTS.md once at thread startup; the handler rewrites it
+ * on every start/resume because there is no per-turn prompt-injection API
+ * (see proposal §⓪.3). Two chats starting for the same agent within this
+ * window almost certainly raced — the second writer clobbered the first
+ * briefing before the codex CLI got to read it. We log instead of locking
+ * because the operational signal ("wrong chat context surfaces in codex")
+ * is the actionable thing; the fix lives upstream (per-turn prompt API).
+ */
+const AGENTS_MD_RACE_WINDOW_MS = 100;
+
+/**
+ * Module-level so the race detector spans every handler instance for the
+ * same agent home (each chat creates its own handler). Cleared per-test
+ * via `__resetCodexHandlerStateForTests`.
+ */
+const lastAgentsMdWriteAt = new Map<string, number>();
+
+/** Test-only: reset module-level race-detector state between vitest cases. */
+export function __resetCodexHandlerStateForTests(): void {
+  lastAgentsMdWriteAt.clear();
+}
+
+/**
+ * Record an AGENTS.md write and surface a warning when one fires inside the
+ * `AGENTS_MD_RACE_WINDOW_MS` of the previous write for the same workspace —
+ * the codex CLI reads AGENTS.md once at thread startup, so two writers
+ * inside this window mean the second one almost certainly clobbered the
+ * first briefing before the CLI got to read it. Exported so the behaviour
+ * is unit-testable without going through the full handler bootstrap path.
+ */
+export function detectAgentsMdConcurrentWrite(workspace: string, now: number, log: (msg: string) => void): void {
+  const prevWrite = lastAgentsMdWriteAt.get(workspace);
+  if (prevWrite !== undefined && now - prevWrite < AGENTS_MD_RACE_WINDOW_MS) {
+    log(
+      `codex AGENTS.md concurrent write detected workspace=${workspace} ` +
+        `gap_ms=${now - prevWrite} — another chat may have overwritten this briefing ` +
+        `before codex CLI read it (proposal §⓪.3 race window). ` +
+        `If chat-context surfaces wrong agent state, this is the cause.`,
+    );
+  }
+  lastAgentsMdWriteAt.set(workspace, now);
+}
+
+/**
+ * Transient-error heuristic for `turn.failed` / SDK throws.
+ *
+ * The codex SDK surfaces `ThreadError = { message: string }` only — no
+ * structured status code or `Retry-After`. We classify by keyword: HTTP 5xx,
+ * common network-error mnemonics, and the explicit "overloaded" / "rate
+ * limit" phrases the upstream model API uses. Auth, sandbox, and
+ * configuration failures are deliberately NOT in this set — retrying them
+ * just wastes attempts.
+ *
+ * Exported for tests so the classifier table is locked behavioural API.
+ */
+export function isTransientCodexErrorMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  // Explicit non-retriables — short-circuit so a message like "401:
+  // unauthorized after fetch failed" doesn't get retried because of
+  // "fetch failed".
+  if (
+    m.includes("401") ||
+    m.includes("403") ||
+    m.includes("unauthorized") ||
+    m.includes("forbidden") ||
+    m.includes("invalid api key") ||
+    m.includes("invalid_api_key") ||
+    m.includes("authentication") ||
+    m.includes("context length") ||
+    m.includes("context_length") ||
+    m.includes("sandbox") ||
+    m.includes("approval")
+  ) {
+    return false;
+  }
+  return (
+    m.includes("500") ||
+    m.includes("502") ||
+    m.includes("503") ||
+    m.includes("504") ||
+    m.includes("rate limit") ||
+    m.includes("rate_limit") ||
+    m.includes("overloaded") ||
+    m.includes("unavailable") ||
+    m.includes("timed out") ||
+    m.includes("timeout") ||
+    m.includes("fetch failed") ||
+    m.includes("network") ||
+    m.includes("econnreset") ||
+    m.includes("econnrefused") ||
+    m.includes("etimedout") ||
+    m.includes("epipe")
+  );
+}
+
+/**
+ * Tracks whether re-running this turn would double-emit a chat-visible item.
+ * `reasoning` and the bare `error` item are presence-only / diagnostic and
+ * safe to re-emit; everything else is rendered in the chat timeline.
+ */
+function isUserVisibleItem(item: ThreadItem): boolean {
+  switch (item.type) {
+    case "agent_message":
+    case "command_execution":
+    case "file_change":
+    case "mcp_tool_call":
+    case "web_search":
+    case "todo_list":
+      return true;
+    case "reasoning":
+    case "error":
+      return false;
+  }
+}
+
+/**
+ * Abort-aware sleep. Resolves on either the timer firing or the abort
+ * signal; on abort, rejects with `AbortError` so the caller can fall back
+ * to the abort-aware code path in `runTurn` instead of running another
+ * attempt against a cancelled turn.
+ */
+function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /**
  * Build the per-turn `ThreadOptions` Codex consumes. Exported so unit tests
@@ -424,45 +584,94 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // mirrors claude-code so admin events + completion bookkeeping reflect
     // actual delivery, not just SDK turn termination. `turn.completed` /
     // `turn.failed` only flip the local status here; the emit happens below.
+    //
+    // `userVisibleEmitted` gates the retry path: once we've emitted an
+    // assistant_text / tool_call to the chat, re-running the turn would
+    // double-render those items, so we stop retrying even if the SDK
+    // surfaces a transient `turn.failed`.
     const assistantTexts: string[] = [];
     let turnFailed = false;
+    let userVisibleEmitted = false;
+    // Wrapper object so TS doesn't narrow `lastUsage` to `null` based on the
+    // synchronous initializer (assignments live inside the IIFE below, which
+    // TS' control-flow analysis can't reach — microsoft/TypeScript#9998).
+    const usageBox: { value: Usage | null } = { value: null };
+    const turnStartedAt = Date.now();
     const promise = (async () => {
-      try {
-        const streamed = await activeThread.runStreamed(input, { signal: abort.signal });
-        for await (const event of streamed.events) {
-          if (abort.signal.aborted) break;
-          sessionCtx.touch();
-          if (event.type === "thread.started") {
-            threadId = event.thread_id;
-          } else if (event.type === "turn.started") {
-            // No-op — runtime state already "working".
-          } else if (event.type === "item.completed") {
-            const text = processItem(event.item, sessionCtx);
-            if (text) assistantTexts.push(text);
-          } else if (event.type === "item.started" || event.type === "item.updated") {
-            // Stream-only intermediate states — claude-code likewise emits
-            // events on terminal items only; codex's run-to-completion model
-            // means the terminal item carries the full payload.
-          } else if (event.type === "turn.completed") {
-            // Status-only — `turn_end` is emitted after forwardResult below.
-          } else if (event.type === "turn.failed") {
+      for (let attempt = 0; attempt <= MAX_TURN_RETRIES; attempt++) {
+        // Reset per-attempt; assistantTexts intentionally persists across
+        // attempts only because we abort retries the moment any user-visible
+        // item is emitted, so the array is empty whenever a retry runs.
+        turnFailed = false;
+        let retryRequested = false;
+        let retryDelay = 0;
+        let retryReason = "";
+        try {
+          const streamed = await activeThread.runStreamed(input, { signal: abort.signal });
+          for await (const event of streamed.events) {
+            if (abort.signal.aborted) break;
+            sessionCtx.touch();
+            if (event.type === "thread.started") {
+              threadId = event.thread_id;
+            } else if (event.type === "turn.started") {
+              // No-op — runtime state already "working".
+            } else if (event.type === "item.completed") {
+              const text = processItem(event.item, sessionCtx);
+              if (text) assistantTexts.push(text);
+              if (isUserVisibleItem(event.item)) userVisibleEmitted = true;
+            } else if (event.type === "item.started" || event.type === "item.updated") {
+              // Stream-only intermediate states — claude-code likewise emits
+              // events on terminal items only; codex's run-to-completion model
+              // means the terminal item carries the full payload.
+            } else if (event.type === "turn.completed") {
+              // Capture usage for the post-turn metrics log; `turn_end` is
+              // still emitted after forwardResult below.
+              usageBox.value = event.usage;
+            } else if (event.type === "turn.failed") {
+              if (
+                !userVisibleEmitted &&
+                attempt < MAX_TURN_RETRIES &&
+                isTransientCodexErrorMessage(event.error.message)
+              ) {
+                retryRequested = true;
+                retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
+                retryReason = `turn.failed (transient): ${event.error.message}`;
+                break;
+              }
+              turnFailed = true;
+              sessionCtx.emitEvent({
+                kind: "error",
+                payload: { source: "sdk", message: event.error.message },
+              });
+            } else if (event.type === "error") {
+              sessionCtx.emitEvent({
+                kind: "error",
+                payload: { source: "sdk", message: event.message },
+              });
+            }
+          }
+        } catch (err) {
+          if (abort.signal.aborted) return;
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(msg)) {
+            retryRequested = true;
+            retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
+            retryReason = `runStreamed threw (transient): ${msg}`;
+          } else {
             turnFailed = true;
-            sessionCtx.emitEvent({
-              kind: "error",
-              payload: { source: "sdk", message: event.error.message },
-            });
-          } else if (event.type === "error") {
-            sessionCtx.emitEvent({
-              kind: "error",
-              payload: { source: "sdk", message: event.message },
-            });
+            sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: msg } });
           }
         }
-      } catch (err) {
-        if (abort.signal.aborted) return;
-        turnFailed = true;
-        const msg = err instanceof Error ? err.message : String(err);
-        sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: msg } });
+
+        if (!retryRequested) break;
+        sessionCtx.log(`codex turn retry ${attempt + 1}/${MAX_TURN_RETRIES + 1} after ${retryDelay}ms; ${retryReason}`);
+        try {
+          await sleepWithAbort(retryDelay, abort.signal);
+        } catch {
+          // AbortError — suspend/shutdown raced ahead; let the abort path
+          // handle teardown.
+          return;
+        }
       }
     })();
 
@@ -503,6 +712,24 @@ export const createCodexHandler: HandlerFactory = (config) => {
       payload: { status: succeeded ? "success" : "error" },
     });
     sessionCtx.setRuntimeState("idle");
+
+    // Structured usage / timing log — emitted via `sessionCtx.log` rather
+    // than a new SessionEvent kind so we stay inside the codex handler
+    // (shared schema unchanged). Codex's `high` reasoning + larger context
+    // makes per-turn cost 3-5× claude-code at the same input length; without
+    // this line operators cannot account for spend per chat. `usage` is
+    // null when the turn ended without ever emitting `turn.completed` —
+    // i.e. abort / unrecoverable failure — in which case logging tokens
+    // would be misleading.
+    const usage = usageBox.value;
+    if (usage) {
+      sessionCtx.log(
+        `codex usage chatId=${sessionCtx.chatId} duration_ms=${Date.now() - turnStartedAt} ` +
+          `input_tokens=${usage.input_tokens} cached_input_tokens=${usage.cached_input_tokens} ` +
+          `output_tokens=${usage.output_tokens} reasoning_output_tokens=${usage.reasoning_output_tokens} ` +
+          `status=${succeeded ? "success" : "error"}`,
+      );
+    }
 
     // Drain queued messages — schedules at most one follow-up at a time so
     // a runaway inject loop can't recurse into stack overflow.
@@ -568,6 +795,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
    * no equivalent of Claude SDK's `appendSystemPrompt`.
    */
   function ensureCodexBootstrap(workspace: string, sessionCtx: SessionContext, briefing: string): void {
+    // Race-window detector: every `ensureCodexBootstrap` call rewrites
+    // AGENTS.md (per-chat block always changes). The detector logs when
+    // two writes for the same workspace land inside the race window — see
+    // proposal §⓪.3. Fix lives upstream (per-turn prompt API); we surface
+    // the operational signal so "wrong chat context surfaces in codex"
+    // bugs can be triaged.
+    detectAgentsMdConcurrentWrite(workspace, Date.now(), (m) => sessionCtx.log(m));
+
     const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
     const currentTreeHead = readContextTreeHead(contextTreePath);
     const cachedTreeHead = readCachedContextTreeHead(workspace);
