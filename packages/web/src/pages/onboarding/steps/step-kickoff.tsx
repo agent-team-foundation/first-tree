@@ -285,24 +285,36 @@ function InviteeKickoff() {
   // installation status drives the new "no-installation" sub-state — without
   // it we'd advance the invitee into the picker and let the agent's first
   // git op fail with 403, an opaque failure mode.
+  //
+  // Subtle: the installation endpoint is admin-only (requireOrgAdmin) so a
+  // non-admin invitee gets 403. We MUST NOT treat that as "not installed" —
+  // doing so would block every invitee of a correctly-configured team out of
+  // confirm/picker. Codex review caught this on round 1. The rule is:
+  //   - 200 with payload → definitely installed
+  //   - 404 (api client maps to null) → definitely not installed
+  //   - 403 / other errors → unknown, assume installed (conservative).
   const teamQuery = useQuery({
     queryKey: ["onboarding", "team-config", organizationId],
     queryFn: async () => {
-      const [tree, repos, installation] = await Promise.all([
+      const [tree, repos, installState] = await Promise.all([
         getContextTreeSetting(organizationId ?? ""),
         getSourceReposSetting(organizationId ?? ""),
-        // Installation is the new defense — if invitee can't read it (e.g.
-        // server policy locks it to admins), we conservatively assume
-        // installed=true to avoid a false-positive block.
-        getGithubAppInstallation(organizationId ?? "").catch((err) => {
-          if (err instanceof ApiError && (err.status === 403 || err.status === 404)) return null;
-          throw err;
-        }),
+        getGithubAppInstallation(organizationId ?? "")
+          .then<"installed" | "missing">((r) => (r === null ? "missing" : "installed"))
+          .catch<"installed">((err) => {
+            // 403 = admin-only endpoint. Invitee can't tell, so we don't
+            // block. Any other error → also "unknown" so a transient blip
+            // doesn't bounce the user into the no-installation state.
+            if (err instanceof ApiError && err.status === 403) return "installed";
+            return "installed";
+          }),
       ]);
       return {
         treeUrl: tree.repo ?? "",
         teamRepoUrls: (repos.repos ?? []).map((r) => r.url),
-        hasInstallation: installation !== null,
+        // Only an authoritative 404 ("missing") marks the team as
+        // installation-less. Unknown reads stay on the happy path.
+        hasInstallation: installState !== "missing",
       };
     },
     enabled: !!organizationId,
@@ -593,6 +605,13 @@ function InviteeWaiting() {
  * so the org has no installation row. Without one, the agent's first git
  * operation will 403 with no useful signal. We surface that here and offer
  * a "remind your admin" copy-link + a bailout to keep the user moving.
+ *
+ * Why this link IS safe to share (unlike connect-code's install URL): we
+ * copy `window.location.href`, the onboarding page URL itself, with no
+ * cookie-bound state JWT. Whoever opens it just lands on first-tree as
+ * themselves; if they're the admin, they see their own onboarding /
+ * Settings → GitHub and can finish the install. It's a reminder URL, not
+ * an authorization handoff.
  */
 function InviteeNoInstallation() {
   const { finishLater } = useOnboardingFlow();

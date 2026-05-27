@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check, Copy, Github } from "lucide-react";
+import { ArrowRight, Github } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApiError } from "../../../api/client.js";
 import { listGithubRepos } from "../../../api/github.js";
@@ -35,9 +35,6 @@ export function StepConnectCode() {
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   const [showSkipConfirm, setShowSkipConfirm] = useState(false);
-  const [shareLinkUrl, setShareLinkUrl] = useState<string | null>(null);
-  const [shareCopied, setShareCopied] = useState(false);
-  const [shareError, setShareError] = useState<string | null>(null);
   const [postAttemptStuck, setPostAttemptStuck] = useState(false);
 
   const installQuery = useQuery({
@@ -92,26 +89,6 @@ export function StepConnectCode() {
       else if (err instanceof ApiError && err.status === 403) setInstallError("not_admin");
       else setInstallError("generic");
     }
-  };
-
-  const handleRevealShareLink = async (): Promise<void> => {
-    if (!organizationId || shareLinkUrl) return;
-    setShareError(null);
-    try {
-      const url = await getGithubAppInstallUrl(organizationId, "/onboarding");
-      setShareLinkUrl(url);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 503) setShareError(COPY.connectCode.notConfigured);
-      else if (err instanceof ApiError && err.status === 403) setShareError(COPY.connectCode.notAdmin);
-      else setShareError(COPY.errors.generic);
-    }
-  };
-
-  const handleCopyShareLink = async (): Promise<void> => {
-    if (!shareLinkUrl) return;
-    await navigator.clipboard.writeText(shareLinkUrl);
-    setShareCopied(true);
-    window.setTimeout(() => setShareCopied(false), 1500);
   };
 
   const handleSkipClick = (): void => setShowSkipConfirm(true);
@@ -226,18 +203,20 @@ export function StepConnectCode() {
               </FlowNote>
             )}
 
-            {/* Non-owner share-link affordance, surfaced as a quiet sibling
-                of the primary CTA so the user can find it without first
-                failing on Install. Kept inline (not a separate dialog) so
-                copy-paste-to-Slack stays one decision deep. */}
-            <ShareWithAdmin
-              expanded={!!shareLinkUrl}
-              url={shareLinkUrl}
-              copied={shareCopied}
-              error={shareError}
-              onReveal={() => void handleRevealShareLink()}
-              onCopy={() => void handleCopyShareLink()}
-            />
+            {/* Non-owner hint. We can't hand the user a shareable install
+                URL because the OAuth state JWT is paired with a per-browser
+                `oauth_state_nonce` cookie — a copied URL opened in the org
+                owner's browser would fail the callback's state-nonce check.
+                Instead, lean on GitHub's own "request approval" flow: if a
+                non-owner clicks the Install button, GitHub itself routes
+                the request to org owners for approval, and once approved
+                the bounce-back lands in the original (cookie-bearing)
+                browser. So: just tell them to click Install anyway.
+                Server-side shareable links (signed token instead of cookie
+                nonce) is a follow-up. */}
+            <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+              {COPY.connectCode.notOwnerHint}
+            </p>
 
             <ShowMeHow>
               <InstallGuide />
@@ -303,105 +282,6 @@ function ContinueWithout({ onClick }: { onClick: () => void }) {
         <span>{COPY.connectCode.continueWithout}</span>
         <ArrowRight className="h-4 w-4" />
       </Button>
-    </div>
-  );
-}
-
-/**
- * Quiet "I'm not the GitHub org owner" affordance. Collapsed by default
- * (one line + chevron); expanded reveals the install URL + a Copy button.
- * The link is generated lazily on expand to avoid burning a state JWT for
- * users who never use it.
- */
-function ShareWithAdmin({
-  expanded,
-  url,
-  copied,
-  error,
-  onReveal,
-  onCopy,
-}: {
-  expanded: boolean;
-  url: string | null;
-  copied: boolean;
-  error: string | null;
-  onReveal: () => void;
-  onCopy: () => void;
-}) {
-  if (!expanded) {
-    return (
-      <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-        <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
-          {COPY.connectCode.notOwnerToggle}
-        </p>
-        <button
-          type="button"
-          onClick={onReveal}
-          className="text-label self-start"
-          style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--accent)" }}
-        >
-          → Get a link for your GitHub admin
-        </button>
-      </div>
-    );
-  }
-  return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      <p className="text-label" style={{ margin: 0, color: "var(--fg-2)" }}>
-        {COPY.connectCode.notOwnerIntro}
-      </p>
-      {error ? (
-        <FlowNote>{error}</FlowNote>
-      ) : (
-        <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
-          <div
-            className="text-label"
-            title={url ?? undefined}
-            style={{
-              flex: 1,
-              minHeight: 38,
-              padding: "var(--sp-2_5) var(--sp-3)",
-              background: "color-mix(in oklch, var(--bg-sunken) 42%, transparent)",
-              border: "var(--hairline) solid color-mix(in oklch, var(--border-faint) 58%, transparent)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--fg-2)",
-              minWidth: 0,
-              display: "flex",
-              alignItems: "center",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {url ?? "Generating link…"}
-          </div>
-          <button
-            type="button"
-            onClick={onCopy}
-            disabled={!url}
-            className="inline-flex items-center justify-center text-label font-medium"
-            style={{
-              gap: "var(--sp-1_5)",
-              padding: "0 var(--sp-3)",
-              minHeight: 38,
-              background: "color-mix(in oklch, var(--bg-raised) 48%, transparent)",
-              border: "var(--hairline) solid color-mix(in oklch, var(--border) 58%, transparent)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--fg-2)",
-              cursor: url ? "pointer" : "not-allowed",
-              opacity: url ? 1 : 0.6,
-            }}
-          >
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
-      )}
-      {!error && (
-        <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-          {COPY.connectCode.notOwnerAfter}
-        </p>
-      )}
     </div>
   );
 }

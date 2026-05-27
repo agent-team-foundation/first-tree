@@ -104,10 +104,15 @@ export const COPY = {
     continueWithout: "Continue without connecting code",
     continueNoProject: "Continue without a project",
     pickHint: "Pick one or more projects for your agent — or continue without any for now.",
-    /** Non-owner / share-link affordance, surfaced right under the primary CTA. */
-    notOwnerToggle: "Not a GitHub organization owner?",
-    notOwnerIntro: "Send this link to an owner of your GitHub org:",
-    notOwnerAfter: "This page updates on its own when they finish.",
+    /**
+     * Non-owner hint shown under the primary CTA. We deliberately don't hand
+     * out a copy-the-install-link button — GitHub's install URL is bound to
+     * a per-browser `oauth_state_nonce` cookie, so a link opened in someone
+     * else's browser would fail the callback. GitHub already routes
+     * non-owner installs through an owner-approval flow, so the right
+     * advice is to click Install anyway and let GitHub handle the ask.
+     */
+    notOwnerHint: "Not a GitHub organization owner? Click Install anyway — GitHub will ask an owner to approve.",
     /** Returned from the install dialog without a new installation. */
     postAttemptStuckTitle: "Looks like the install didn't complete.",
     postAttemptStuckBody:
