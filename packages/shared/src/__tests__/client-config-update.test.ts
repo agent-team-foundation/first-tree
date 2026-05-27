@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clientConfigSchema } from "../config/client-config.js";
+import { clientConfigSchema, getClientConfig } from "../config/client-config.js";
 import { UPDATE_POLICY_DEFAULT } from "../config/phase.js";
 import { initConfig } from "../config/resolver.js";
 import { resetConfig } from "../config/singleton.js";
@@ -50,6 +50,7 @@ describe("client config update block", () => {
     expect(cfg.update.restart_quiet_seconds).toBe(30);
     expect(cfg.update.restart_check_interval_seconds).toBe(10);
     expect(cfg.update.prompt_timeout_seconds).toBe(60);
+    expect(getClientConfig()).toBe(cfg);
   });
 
   it("honours env-var overrides", async () => {
