@@ -253,6 +253,46 @@ describe("registerClient — soft dedup", () => {
     expect(row?.status).toBe("connected");
   });
 
+  it("refuses to first-time-claim an archived legacy (user_id NULL) row", async () => {
+    // Security regression test (review finding #1). The (A) same-id path
+    // allows legacy NULL → caller's userId promotion as documented in the
+    // claim semantics, BUT archived legacy rows must NOT be claimable —
+    // client.id can leak via logs / shared FS, and silently transferring
+    // ownership of an archived row would be the attack window.
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `legacy-${crypto.randomUUID().slice(0, 8)}` });
+
+    const archivedLegacyId = `cli-legacy-${crypto.randomUUID().slice(0, 8)}`;
+    await app.db.insert(clients).values({
+      id: archivedLegacyId,
+      userId: null,
+      organizationId: admin.organizationId,
+      status: "disconnected",
+      hostname: "Stranger.local",
+      os: "darwin",
+      lastSeenAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+      archivedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    });
+
+    await expect(
+      registerClient(app.db, {
+        clientId: archivedLegacyId,
+        userId: admin.userId,
+        organizationId: admin.organizationId,
+        instanceId: "test-instance",
+        hostname: "MacBook-Pro.local",
+        os: "darwin",
+      }),
+    ).rejects.toMatchObject({ code: "CLIENT_USER_MISMATCH" });
+
+    // Row was NOT mutated — userId stays NULL, archived_at stays set,
+    // hostname unchanged. No silent ownership transfer.
+    const [unchanged] = await app.db.select().from(clients).where(eq(clients.id, archivedLegacyId)).limit(1);
+    expect(unchanged?.userId).toBeNull();
+    expect(unchanged?.archivedAt).not.toBeNull();
+    expect(unchanged?.hostname).toBe("Stranger.local");
+  });
+
   it("prefers a canonical with pinned agents over one without (pickCanonical priority)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app, { username: `priority-${crypto.randomUUID().slice(0, 8)}` });

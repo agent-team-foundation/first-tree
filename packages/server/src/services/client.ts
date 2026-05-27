@@ -57,8 +57,12 @@ export type RegisterClientResult = {
  * another live socket. The WS handler maps this to
  * `client:register:rejected { code: "CLIENT_DEDUP_CONFLICT" }` and
  * closes 4403 so the offending CLI does not silently steal the slot
- * every reconnect. CLI side: error class lives in
- * `packages/client/src/client-connection.ts` for protocol symmetry.
+ * every reconnect.
+ *
+ * Mirror of the CLI-side class:
+ * `packages/client/src/client-connection.ts::ClientDedupConflictError`.
+ * Both carry the same `code = "CLIENT_DEDUP_CONFLICT"` wire constant.
+ * Update both when changing the protocol code.
  */
 export class ClientDedupConflictError extends Error {
   readonly code = "CLIENT_DEDUP_CONFLICT";
@@ -416,7 +420,13 @@ export async function claimClient(
       }
     }
 
-    await tx.update(clients).set({ userId: newUserId }).where(eq(clients.id, clientId));
+    // Also clear `archived_at` so an admin re-claiming an archived row
+    // unarchives it in one step. Without this, the row stays archived
+    // and the next `assertClientOwner` returns 404 — `archived_at IS
+    // NULL` filters that surface elsewhere would skip it too. Aligns
+    // with the same-id (A) `registerClient` upsert path that already
+    // clears the column on reconnect.
+    await tx.update(clients).set({ userId: newUserId, archivedAt: null }).where(eq(clients.id, clientId));
 
     return { previousUserId, unpinnedAgentIds, supersededChatIds };
   });
@@ -813,6 +823,13 @@ export const ORPHAN_ARCHIVAL_STALE_DAYS = 30;
  * via `idx_clients_sweep` (status, last_seen_at) WHERE archived_at IS
  * NULL. Idempotent on the second sweep within the same window — the
  * `archived_at IS NULL` guard skips rows we already archived.
+ *
+ * Concurrency with `registerClient`: this UPDATE does NOT take the dedup
+ * advisory lock, and it doesn't need to. PG's READ COMMITTED re-
+ * evaluates the WHERE clause on a row a concurrent `UPDATE` already
+ * touched, so a register that flips `status='connected'` mid-sweep
+ * causes the sweep to skip the row. There is no "archived=NOW + status=
+ * connected" intermediate state visible to other transactions.
  *
  * Driven by `services/background-tasks.ts` on an hourly timer.
  */

@@ -523,37 +523,45 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // admin/agents.ts only fires for live sockets. The client dedupes
               // on agentId, so re-firing on every reconnect is safe.
               //
-              // Enumerate by `canonicalClientId`, not the caller's input id —
-              // on the dedup-redirect path, agents are pinned to the canonical
-              // row, not to the (rejected) input id.
-              try {
-                const pinned = await clientService.listActiveAgentsPinnedToClient(
-                  app.db,
-                  registerResult.canonicalClientId,
-                );
-                for (const agent of pinned) {
-                  const parsed = agentPinnedMessageSchema.safeParse({
-                    type: "agent:pinned",
-                    agentId: agent.uuid,
-                    name: agent.name,
-                    displayName: agent.displayName,
-                    agentType: agent.type,
-                    runtimeProvider: agent.runtimeProvider,
-                  });
-                  if (!parsed.success) {
-                    app.log.warn(
-                      { err: parsed.error.flatten(), agentId: agent.uuid, clientId: registerResult.canonicalClientId },
-                      "agent:pinned backfill frame failed schema validation — skipping",
-                    );
-                    continue;
+              // Skip the backfill on the dedup-redirect path: the new CLI is
+              // about to set `closing=true` and close this socket, so any
+              // frames we push are wasted. The next reconnect (with the
+              // canonical id in yaml) hits the same-id (A) branch and
+              // backfills then to a stable socket.
+              if (!registerResult.redirected) {
+                try {
+                  const pinned = await clientService.listActiveAgentsPinnedToClient(
+                    app.db,
+                    registerResult.canonicalClientId,
+                  );
+                  for (const agent of pinned) {
+                    const parsed = agentPinnedMessageSchema.safeParse({
+                      type: "agent:pinned",
+                      agentId: agent.uuid,
+                      name: agent.name,
+                      displayName: agent.displayName,
+                      agentType: agent.type,
+                      runtimeProvider: agent.runtimeProvider,
+                    });
+                    if (!parsed.success) {
+                      app.log.warn(
+                        {
+                          err: parsed.error.flatten(),
+                          agentId: agent.uuid,
+                          clientId: registerResult.canonicalClientId,
+                        },
+                        "agent:pinned backfill frame failed schema validation — skipping",
+                      );
+                      continue;
+                    }
+                    socket.send(JSON.stringify(parsed.data));
                   }
-                  socket.send(JSON.stringify(parsed.data));
+                } catch (err) {
+                  app.log.error(
+                    { err, clientId: registerResult.canonicalClientId },
+                    "agent:pinned backfill on client:register failed — client may need manual `agent add`",
+                  );
                 }
-              } catch (err) {
-                app.log.error(
-                  { err, clientId: registerResult.canonicalClientId },
-                  "agent:pinned backfill on client:register failed — client may need manual `agent add`",
-                );
               }
             } else if (type === "agent:bind") {
               if (!clientId) {

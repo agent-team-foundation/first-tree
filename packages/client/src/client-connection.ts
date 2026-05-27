@@ -187,6 +187,11 @@ export class ClientUserMismatchError extends Error {
  * required — emitted on the connection's `error` event so the CLI logs
  * the cause but does NOT exit on this code (distinct from
  * `auth:fatal`).
+ *
+ * Mirror of the server-side class:
+ * `packages/server/src/services/client.ts::ClientDedupConflictError`.
+ * Both carry the same `code = "CLIENT_DEDUP_CONFLICT"` wire constant.
+ * Update both when changing the protocol code.
  */
 export class ClientDedupConflictError extends Error {
   readonly code = "CLIENT_DEDUP_CONFLICT";
