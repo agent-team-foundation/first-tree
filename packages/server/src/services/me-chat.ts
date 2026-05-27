@@ -660,29 +660,27 @@ export async function createMeChat(
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.uuid).join(", ")}`);
   }
 
-  // Strict owner-exclusive for private targets (RFC §4.5). The route
-  // pins `humanAgentId = scope.humanAgentId`, so the caller is always
-  // human and the strict check coincides with the previous lenient
-  // shared-`managerId` form for THIS path. Routing through the shared
-  // `rejectedPrivateTargets` predicate anyway keeps the rule in exactly
-  // one place — same discipline as `inviteParticipantsToChat` and
-  // `chat.ts::createChat`. Without it, any future change that lets a
-  // non-human caller reach this code would silently fall back to the
-  // lenient reading (which is the exact two-copies-drift failure mode
-  // PR #550 wrote up).
+  // Owner-exclusive for private targets (RFC §4.5, shared-owner reading).
+  // The route pins `humanAgentId = scope.humanAgentId`, so the caller's
+  // owning member is the route caller's own member; the predicate refuses
+  // any private target whose `managerId` doesn't match. Routing through
+  // the shared `rejectedPrivateTargets` keeps the rule in exactly one
+  // place — same discipline as `inviteParticipantsToChat` and
+  // `chat.ts::createChat`. See that predicate's comment for the strict-
+  // vs-shared history (PR #601 / #604).
   const caller = found.find((a) => a.uuid === humanAgentId);
   if (!caller) {
     throw new BadRequestError("Caller agent not found in the chat's organization");
   }
   const rejected = rejectedPrivateTargets(
-    { agentId: humanAgentId, memberId: caller.managerId, type: caller.type },
+    { agentId: humanAgentId, memberId: caller.managerId },
     found
       .filter((a) => a.uuid !== humanAgentId)
       .map((a) => ({ uuid: a.uuid, visibility: a.visibility, managerId: a.managerId })),
   );
   if (rejected.length > 0) {
     throw new ForbiddenError(
-      `Only the human owner can add a private agent to a chat: ${rejected.map((t) => t.uuid).join(", ")}`,
+      `Only the owner can add a private agent to a chat: ${rejected.map((t) => t.uuid).join(", ")}`,
     );
   }
 

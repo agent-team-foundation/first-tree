@@ -21,7 +21,9 @@
  */
 
 import { AGENT_VISIBILITY, type ChatDetail } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { createAgent } from "../services/agent.js";
 import { addParticipant as agentAddParticipant, createChat as agentCreateChat } from "../services/chat.js";
 import { addMeChatParticipants, createMeChat } from "../services/me-chat.js";
@@ -228,21 +230,26 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Strict owner-exclusive (RFC §4.5 strict reading): only the human-agent
-  // manager of a private target may invite it. The cases above pin the
-  // cross-manager rejection; the cases below pin the same-manager-but-
-  // non-human-caller rejection — i.e. the social-engineering path where
-  // M's public agent is instructed (via natural-language message or
-  // otherwise) to bring M's sibling private agent in.
+  // Owner-exclusive (RFC §4.5, shared-owner reading): any agent owned by the
+  // target's manager may invite a private target; the manager and the
+  // manager's agents act under one consent boundary. PR #601 implemented
+  // the strict reading (caller MUST be `type=human`), which a follow-up
+  // product decision (PR #604) reversed: an owner's agent acting on the
+  // owner's behalf is intentional delegation, not a social-engineering
+  // hole. The cases below pin BOTH (a) the cross-manager rejection (the
+  // permission still does block "Bob pulls owner M's private agent")
+  // AND (b) the same-manager admission (M's public agent / private
+  // sibling can pull M's other private agent).
   // ---------------------------------------------------------------------------
 
-  it("addParticipant rejects M's public agent trying to pull M's private agent (bug path)", async () => {
-    // N1: this is the precise path the user reported — M is not in the
-    // chat; someone else legitimately added M's public agent (org-visible,
-    // anyone in the chat can add it); the public agent then turns around
-    // and invites M's private agent, "tricking" the gate when the rule was
-    // owner-exclusive in its lenient (shared-managerId) reading. Strict
-    // reading rejects: caller must be human.
+  it("addParticipant allows M's public agent to pull M's private agent (owner-team delegation)", async () => {
+    // N1: shared-owner reading admits this path. Bob (a different manager)
+    // legitimately pulls M's public agent into a chat; M's public agent
+    // then invites M's private agent. Both M-owned agents share `managerId
+    // = M`, so the predicate treats the public agent as acting on M's
+    // behalf and admits the private target. Bob himself still cannot invite
+    // M's private agent directly — see the "rejects a non-owner" case
+    // above for the cross-manager rejection that this PR keeps in place.
     const app = getApp();
     const m = await createTestAdmin(app);
     const bob = await createTestAdmin(app);
@@ -265,25 +272,33 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
     });
 
     // Bob (different manager) creates a group chat with M's public agent.
-    // Pulling a PUBLIC agent in is allowed under both readings of the rule.
     const chat = await agentCreateChat(app.db, bob.humanAgentUuid, {
       type: "group",
       participantIds: [mPublic.uuid],
     });
     if (!chat.id) throw new Error("Unexpected: createChat returned no id");
 
-    // Now M's public agent tries to bring M's private agent in. Under the
-    // lenient reading this was allowed (they share managerId). Strict
-    // reading rejects — only M's human agent can invite M's private agent.
-    await expect(agentAddParticipant(app.db, chat.id, mPublic.uuid, { agentId: mPrivate.uuid })).rejects.toThrow(
-      /private agent/i,
-    );
+    // M's public agent pulls M's private agent in — shared `managerId`,
+    // shared-owner reading admits.
+    await expect(agentAddParticipant(app.db, chat.id, mPublic.uuid, { agentId: mPrivate.uuid })).resolves.not.toThrow();
+
+    // Verify the private agent is now a speaker in the chat.
+    const speakers = await app.db
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(
+        and(
+          eq(chatMembership.chatId, chat.id),
+          eq(chatMembership.agentId, mPrivate.uuid),
+          eq(chatMembership.accessMode, "speaker"),
+        ),
+      );
+    expect(speakers).toHaveLength(1);
   });
 
-  it("addParticipant rejects M's private agent trying to pull M's other private agent", async () => {
-    // N2: same shape as N1, but caller is itself a private agent. Same
-    // strict reading applies — caller must be human regardless of caller's
-    // own visibility.
+  it("addParticipant allows M's private agent to pull M's other private agent (shared-owner)", async () => {
+    // N2: same shape as N1, but the caller is itself a private agent.
+    // Shared-owner reading is type-agnostic — only `managerId` matches.
     const app = getApp();
     const m = await createTestAdmin(app);
 
@@ -306,24 +321,39 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
 
     // M spins up a chat with privateA — 2 speakers is a legal v2 chat
     // (group is the only `chats.type` Hub writes now; 1:1 behaviour is
-    // derived from `participants.length === 2`, see chat.ts:289).
+    // derived from `participants.length === 2`, see chat.ts).
     const chat = await agentCreateChat(app.db, m.humanAgentUuid, {
       type: "group",
       participantIds: [mPrivateA.uuid],
     });
     if (!chat.id) throw new Error("Unexpected: createChat returned no id");
 
-    // privateA now tries to pull privateB in. Strict reading rejects.
-    await expect(agentAddParticipant(app.db, chat.id, mPrivateA.uuid, { agentId: mPrivateB.uuid })).rejects.toThrow(
-      /private agent/i,
-    );
+    // privateA pulls privateB in — shared `managerId`, admitted.
+    await expect(
+      agentAddParticipant(app.db, chat.id, mPrivateA.uuid, { agentId: mPrivateB.uuid }),
+    ).resolves.not.toThrow();
+
+    const speakers = await app.db
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(
+        and(
+          eq(chatMembership.chatId, chat.id),
+          eq(chatMembership.agentId, mPrivateB.uuid),
+          eq(chatMembership.accessMode, "speaker"),
+        ),
+      );
+    expect(speakers).toHaveLength(1);
   });
 
-  it("agent-SDK createChat rejects M's public agent including M's private agent as initial participant", async () => {
-    // N3: same rule applies at chat-creation time. M's public agent
-    // creating a fresh group chat with M's private agent listed in the
-    // initial participants must be rejected by the same strict
-    // owner-exclusive predicate. Closes the create-side bypass.
+  it("agent-SDK createChat admits M's public agent + M's private agent as initial participants", async () => {
+    // N3: shared-owner reading applies at chat-creation time too. M's
+    // public agent creating a fresh group chat with M's private agent
+    // listed in the initial participants is admitted — same `managerId`.
+    // The cross-manager rejection at create-time is covered by the
+    // pre-existing "agent-SDK createChat rejects a private target
+    // owned by a different member" case above; this case pins the
+    // same-owner admission.
     const app = getApp();
     const m = await createTestAdmin(app);
 
@@ -349,12 +379,12 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
         type: "group",
         participantIds: [mPrivate.uuid, m.humanAgentUuid],
       }),
-    ).rejects.toThrow(/private agent/i);
+    ).resolves.not.toThrow();
   });
 
-  it("agent-SDK createChat rejects M's private agent including M's other private agent as initial participant", async () => {
-    // N4: same as N3 but creator is itself private. Strict reading is
-    // independent of creator's visibility — only `type === 'human'` matters.
+  it("agent-SDK createChat admits M's private agent + M's other private agent as initial participants", async () => {
+    // N4: same as N3 but the creator is itself a private agent. Shared-
+    // owner reading is type-agnostic — only `managerId` matters.
     const app = getApp();
     const m = await createTestAdmin(app);
 
@@ -380,7 +410,7 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
         type: "group",
         participantIds: [mPrivateB.uuid, m.humanAgentUuid],
       }),
-    ).rejects.toThrow(/private agent/i);
+    ).resolves.not.toThrow();
   });
 
   it("HTTP web path: admin can pass discovery filter but is still rejected by the Layer-2 owner gate", async () => {
@@ -419,33 +449,46 @@ describe("chat-scoped identity rendering vs discovery visibility", () => {
       payload: { participantIds: [bobsPrivate.uuid] },
     });
 
-    // 403 is the strict reading's expected response: discovery short-
-    // circuit let Alice past the API-layer 404, but Layer-2 refuses.
+    // Discovery short-circuit lets admin Alice past the API-layer 404,
+    // but Layer-2 still refuses cross-manager admission of a private
+    // target — shared-owner reading is still owner-exclusive across
+    // managers.
     expect(res.statusCode).toBe(403);
     expect(res.body).toMatch(/private agent/i);
   });
 
-  it("rejectedPrivateTargets carve-out: a private agent self-add is allowed (pure-function unit)", async () => {
-    // N6: the self-add (`target.uuid === caller.agentId`) carve-out lets
-    // a private agent rejoin a chat it already owns — this matters for
-    // runtime reconnects where the same private-agent uuid both authors
-    // the call and is the target. The full service path covers this
-    // around `errorOnAlreadySpeaker`; testing the pure predicate
-    // directly avoids tangling the carve-out with already-speaker
-    // conflict semantics.
+  it("rejectedPrivateTargets carve-outs: self-add + same-owner admit; cross-owner rejects (pure-function unit)", async () => {
+    // N6: pure-function exercise of the three shared-owner predicate
+    // outcomes — self-add carve-out, same-owner admission, cross-owner
+    // rejection. Testing the predicate directly avoids tangling these
+    // outcomes with the service layer's already-speaker / chat-exists
+    // / caller-is-speaker preconditions.
+
+    // (a) Self-add carve-out: caller invites itself. `managerId` mismatch
+    //     is irrelevant — the carve-out short-circuits first. Matters
+    //     for runtime reconnect of a private agent.
     const selfUuid = crypto.randomUUID();
-    const result = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-other", type: "agent" }, [
+    const selfAdd = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-other" }, [
       { uuid: selfUuid, visibility: "private", managerId: "member-original" },
     ]);
-    expect(result).toEqual([]);
+    expect(selfAdd).toEqual([]);
 
-    // Sanity: same caller against a DIFFERENT private target with the same
-    // managerId is still rejected (the carve-out is *only* for self-add).
-    const otherUuid = crypto.randomUUID();
-    const result2 = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-shared", type: "agent" }, [
-      { uuid: otherUuid, visibility: "private", managerId: "member-shared" },
+    // (b) Same-owner admission: caller and a DIFFERENT private target
+    //     share `managerId`. Shared-owner reading admits — owner's
+    //     agents act under owner's authority.
+    const siblingUuid = crypto.randomUUID();
+    const sameOwner = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-shared" }, [
+      { uuid: siblingUuid, visibility: "private", managerId: "member-shared" },
     ]);
-    expect(result2).toHaveLength(1);
-    expect(result2[0]?.uuid).toBe(otherUuid);
+    expect(sameOwner).toEqual([]);
+
+    // (c) Cross-owner rejection: caller and target are owned by
+    //    different members. The owner-exclusive boundary still holds.
+    const strangerUuid = crypto.randomUUID();
+    const crossOwner = rejectedPrivateTargets({ agentId: selfUuid, memberId: "member-mine" }, [
+      { uuid: strangerUuid, visibility: "private", managerId: "member-theirs" },
+    ]);
+    expect(crossOwner).toHaveLength(1);
+    expect(crossOwner[0]?.uuid).toBe(strangerUuid);
   });
 });
