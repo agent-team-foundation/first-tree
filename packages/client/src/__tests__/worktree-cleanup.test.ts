@@ -24,11 +24,12 @@ function makeLog(): pino.Logger {
 async function importWithLsofMock(
   proc: FakeLsofProcess,
   exists = true,
+  statIsFile = true,
 ): Promise<typeof import("../runtime/worktree-cleanup.js")> {
   vi.resetModules();
   vi.doMock("node:fs", () => ({
     existsSync: () => exists,
-    statSync: () => ({ isFile: () => true }),
+    statSync: () => ({ isFile: () => statIsFile }),
   }));
   vi.doMock("node:child_process", () => ({
     spawn: vi.fn(() => proc),
@@ -42,6 +43,7 @@ describe("worktree cleanup helpers", () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:child_process");
+    vi.doUnmock("node:path");
     vi.resetModules();
   });
 
@@ -51,12 +53,61 @@ describe("worktree cleanup helpers", () => {
     expect(isUnderManagedRoot("/tmp/rootish/agent", ["/tmp/root"])).toBe(false);
   });
 
+  it("rejects separator-prefixed relative paths defensively", async () => {
+    vi.resetModules();
+    vi.doMock("node:path", async () => {
+      const actual = await vi.importActual<typeof import("node:path")>("node:path");
+      return {
+        ...actual,
+        relative: () => "/foreign-volume/path",
+        sep: "/",
+      };
+    });
+    const mod = await import("../runtime/worktree-cleanup.js");
+
+    expect(mod.isUnderManagedRoot("/tmp/root/agent/chat/repo", ["/tmp/root"])).toBe(false);
+  });
+
   it("returns no holders when the path does not exist", async () => {
     const proc = makeFakeLsofProcess();
     const mod = await importWithLsofMock(proc, false);
 
     await expect(mod.findPidsHoldingPath("/missing")).resolves.toEqual([]);
     expect(proc.kill).not.toHaveBeenCalled();
+  });
+
+  it("returns no holders when no lsof candidate can be resolved", async () => {
+    const nativeIterator = Array.prototype[Symbol.iterator];
+    function patchedIterator(this: unknown[]): IterableIterator<unknown> {
+      if (this.length === 4 && this[0] === "/usr/sbin/lsof" && this[3] === "lsof") {
+        return [this[0], this[1], this[2]][Symbol.iterator]();
+      }
+      return nativeIterator.call(this);
+    }
+
+    const proc = makeFakeLsofProcess();
+    const mod = await importWithLsofMock(proc, true, false);
+    const log = makeLog();
+    Object.defineProperty(Array.prototype, Symbol.iterator, {
+      configurable: true,
+      value: patchedIterator,
+      writable: true,
+    });
+
+    try {
+      await expect(mod.findPidsHoldingPath("/tmp/worktree", log)).resolves.toEqual([]);
+      expect(log.debug).toHaveBeenCalledWith(
+        { path: "/tmp/worktree" },
+        "no lsof binary found on disk — skipping holder scan",
+      );
+      expect(proc.kill).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(Array.prototype, Symbol.iterator, {
+        configurable: true,
+        value: nativeIterator,
+        writable: true,
+      });
+    }
   });
 
   it("parses lsof pid output and filters invalid, duplicate, and self pids", async () => {
