@@ -52,18 +52,32 @@ function toSshGitUrl(httpsRepo: string): string | null {
   return rewrite.sshBase + httpsRepo.slice(rewrite.httpsBase.length);
 }
 
-function withContextTreeSyncLock(
+/**
+ * De-dup concurrent Context Tree syncs for the same clone dir: when an
+ * in-flight sync exists for `key`, share its settled result instead of
+ * queueing another `git pull` round-trip. Once the in-flight promise
+ * settles, the slot is cleared — subsequent calls trigger a fresh sync.
+ *
+ * The old implementation chained callers (`prev.then(fn)`), so N agents
+ * sharing one Context Tree (the common case) cost N×git-pull at startup
+ * — observed as ~7s per extra agent. With dedup, those N calls collapse
+ * to a single shared sync. Each Hub `agent:bind` still resyncs the tree
+ * once per process restart (the first caller's pull), which is the
+ * contract `syncAgentContextTree` advertises.
+ *
+ * Exported for direct unit-testing; not re-exported from `src/index.ts`.
+ */
+export function withContextTreeSyncLock(
   key: string,
   fn: () => Promise<ContextTreeBinding | null>,
 ): Promise<ContextTreeBinding | null> {
-  const next = (contextTreeSyncLocks.get(key) ?? Promise.resolve(null))
-    .catch(() => null)
-    .then(fn)
-    .finally(() => {
-      if (contextTreeSyncLocks.get(key) === next) {
-        contextTreeSyncLocks.delete(key);
-      }
-    });
+  const inFlight = contextTreeSyncLocks.get(key);
+  if (inFlight) return inFlight;
+  const next = fn().finally(() => {
+    if (contextTreeSyncLocks.get(key) === next) {
+      contextTreeSyncLocks.delete(key);
+    }
+  });
   contextTreeSyncLocks.set(key, next);
   return next;
 }
