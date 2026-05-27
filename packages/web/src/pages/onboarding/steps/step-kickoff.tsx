@@ -299,31 +299,45 @@ function InviteeKickoff() {
   const teamQuery = useQuery({
     queryKey: ["onboarding", "team-config", organizationId],
     queryFn: async () => {
-      const [tree, repos, exists] = await Promise.all([
+      const [tree, repos, installResult] = await Promise.all([
         getContextTreeSetting(organizationId ?? ""),
         getSourceReposSetting(organizationId ?? ""),
-        getGithubAppInstallationExists(organizationId ?? "").catch((err) => {
-          // Conservative on unknown error: stay on the happy path. The
-          // 5-second poll below re-checks, and if the install truly is
-          // missing the next tick will catch it.
+        // Three-state result: true = installed, false = server confirmed
+        // missing, null = probe failed (network blip, 5xx). The null
+        // sentinel is distinct from `false` so refetchInterval below can
+        // tell "we don't know yet" from "we know it's missing".
+        getGithubAppInstallationExists(organizationId ?? "").catch<null>((err) => {
           console.warn("onboarding: installation-exists probe failed", err);
-          return true;
+          return null;
         }),
       ]);
       return {
         treeUrl: tree.repo ?? "",
         teamRepoUrls: (repos.repos ?? []).map((r) => r.url),
-        hasInstallation: exists,
+        // Optimistic on uncertainty: don't bounce the user into
+        // no-installation on a transient blip. The refetchInterval below
+        // keeps polling until we have an authoritative answer; if that
+        // answer is `false` the UI will flip into no-installation on the
+        // next tick. Codex round-2 review caught the original bug where
+        // catch→true plus "stop polling when hasInstallation truthy"
+        // wedged the query in a success state forever on the first error.
+        hasInstallation: installResult !== false,
+        installationKnown: installResult !== null,
       };
     },
     enabled: !!organizationId,
-    // While anything's still missing on the team side, keep polling so the
-    // invitee advances on its own the moment the admin catches up — no
-    // manual refresh. Stop once tree + installation are both present.
+    // Keep polling while anything's still unknown OR the admin hasn't
+    // finished. Stop only once we have a tree URL AND an authoritative
+    // (non-null) install probe result. Without the `installationKnown`
+    // gate, a transient error on first probe would set hasInstallation=true
+    // and then stop polling — wedging the user out of the no-installation
+    // safeguard for the rest of the session.
     refetchInterval: (query) => {
       const d = query.state.data;
-      if (d?.treeUrl && d?.hasInstallation) return false;
-      return 5000;
+      if (!d) return 5000;
+      if (!d.treeUrl) return 5000;
+      if (!d.installationKnown) return 5000;
+      return false;
     },
   });
 
@@ -536,13 +550,16 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
           </p>
         ) : scopeMissing ? (
           <FlowNote tone="info">
-            <a
-              href="/api/v1/auth/github/start?next=/onboarding"
-              className="font-medium"
-              style={{ color: "var(--accent)" }}
-            >
-              {COPY.connectCode.reconnect}
-            </a>
+            <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+              <span>{COPY.kickoff.inviteePickerScopeMissing}</span>
+              <a
+                href="/api/v1/auth/github/start?next=/onboarding"
+                className="font-medium self-start"
+                style={{ color: "var(--accent)" }}
+              >
+                {COPY.connectCode.reconnect}
+              </a>
+            </div>
           </FlowNote>
         ) : networkErr ? (
           <FlowNote>{COPY.kickoff.inviteePickerNetworkError}</FlowNote>

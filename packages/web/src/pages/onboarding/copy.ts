@@ -91,7 +91,10 @@ export const COPY = {
   hideSetup: "Hide setup",
   /** connect-code states */
   connectCode: {
-    intro: "Connect your projects so your agent can read the code. Every change comes back as a request you review.",
+    // `intro` was deleted (R1 from baixiaohang review): it duplicated
+    // `STEP_COPY['connect-code'].why` verbatim and had no remaining
+    // consumer after the connect-code step started reading from
+    // STEP_COPY directly. Keep the why as the single source of truth.
     cta: "Install First Tree on GitHub",
     waiting: "Waiting for GitHub…",
     connected: "Connected",
