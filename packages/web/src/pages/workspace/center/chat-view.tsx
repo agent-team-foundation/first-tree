@@ -34,6 +34,7 @@ import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
+import { attentionsInChatQueryKey, listAttentionsInChat } from "../../../api/attention.js";
 import {
   type FileMessageContent,
   getChat,
@@ -60,6 +61,7 @@ import {
 import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
+import { AttentionCard } from "../../../components/chat/attention-card.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
@@ -949,6 +951,27 @@ export function ChatView({
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
   });
+
+  /**
+   * NHA (M1 末): when the chat has at least one open Attention that requires
+   * a response, the chat-bottom composer is swapped for an `AttentionCard`.
+   * The agent-side contract is "one open at a time per (agent, chat)", but
+   * we defend against the rare overlap by picking the oldest. Disabled in
+   * read-only mode (a watcher can't respond anyway).
+   */
+  const { data: openAttentions } = useQuery({
+    queryKey: attentionsInChatQueryKey(chatId),
+    queryFn: () => listAttentionsInChat(chatId),
+    enabled: !!chatId && !readOnly,
+  });
+  const activeAttention = useMemo(() => {
+    if (!openAttentions || openAttentions.length === 0) return null;
+    const respondable = openAttentions.filter((a) => a.state === "open" && a.requiresResponse);
+    if (respondable.length === 0) return null;
+    return respondable.reduce((oldest, curr) =>
+      new Date(curr.createdAt).getTime() < new Date(oldest.createdAt).getTime() ? curr : oldest,
+    );
+  }, [openAttentions]);
 
   /** Org-wide agent list, consumed by `managedByMeMap` for picker
    *  grouping and by the identity-map hooks (`useAgentIdentityMap` etc.)
@@ -2572,366 +2595,379 @@ export function ChatView({
           from last message into textarea without a horizontal jump
           (Slack / ChatGPT / Linear DM all do this). On phones, the
           bottom padding extends past `env(safe-area-inset-bottom)` so
-          the home-indicator doesn't overlap the send button. */}
-          <div
-            className="shrink-0"
-            style={{
-              padding: "var(--sp-2_5) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
-            }}
-          >
-            <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-              {readOnly ? (
-                <div
-                  className="flex items-center"
-                  style={{
-                    gap: "var(--sp-3)",
-                    padding: "var(--sp-2) var(--sp-3)",
-                    border: "var(--hairline) solid var(--border)",
-                    borderRadius: 6,
-                    // Raised surface (`--bg-raised`) so the slot reads as a
-                    // distinct input card lifted above the timeline (`--bg`),
-                    // sharing the header chrome's surface. Mirrors the editable
-                    // composer below so the read-only state shares its footprint.
-                    background: "var(--bg-raised)",
-                  }}
-                >
-                  <Eye className="h-4 w-4 shrink-0" style={{ color: "var(--fg-3)" }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-body" style={{ color: "var(--fg-2)" }}>
-                      You're watching this chat — read-only.
-                    </div>
-                    {joinAction?.error && (
-                      <div className="mono text-label" style={{ color: "var(--state-error)", marginTop: 2 }}>
-                        {joinAction.error}
-                      </div>
-                    )}
-                  </div>
-                  {joinAction && (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      className="shrink-0"
-                      onClick={joinAction.onJoin}
-                      disabled={joinAction.joining}
-                    >
-                      {joinAction.joining ? "Joining…" : "Join to reply"}
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <ComposeStatusBar
-                    chatId={chatId}
-                    agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
-                  />
-                  {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
+          the home-indicator doesn't overlap the send button.
+
+          NHA (M1 末): if the chat has an open Attention awaiting reply,
+          we render an `AttentionCard` in place of the composer entirely.
+          The card owns its own outer-band padding so the chat-bottom keeps
+          a single visual slot (no nested wrappers). The composer comes
+          back the instant the Attention is responded to / cancelled — the
+          admin WS frame invalidates `attentionsInChatQueryKey`. */}
+          {activeAttention && !readOnly ? (
+            <div className="shrink-0">
+              <AttentionCard attention={activeAttention} />
+            </div>
+          ) : (
+            <div
+              className="shrink-0"
+              style={{
+                padding: "var(--sp-2_5) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
+              }}
+            >
+              <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+                {readOnly ? (
                   <div
+                    className="flex items-center"
                     style={{
-                      position: "relative",
+                      gap: "var(--sp-3)",
+                      padding: "var(--sp-2) var(--sp-3)",
                       border: "var(--hairline) solid var(--border)",
                       borderRadius: 6,
-                      // Raised surface (`--bg-raised`) lifts the composer above
-                      // the timeline (`--bg`) so it reads as a focused input card
-                      // rather than blending into the page; the hairline border
-                      // still defines its edge.
+                      // Raised surface (`--bg-raised`) so the slot reads as a
+                      // distinct input card lifted above the timeline (`--bg`),
+                      // sharing the header chrome's surface. Mirrors the editable
+                      // composer below so the read-only state shares its footprint.
                       background: "var(--bg-raised)",
                     }}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      addImages(Array.from(e.dataTransfer.files));
-                    }}
                   >
-                    {/* Image preview area — above textarea */}
-                    {pendingImages.length > 0 && (
-                      <div
-                        className="flex items-center"
-                        style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
+                    <Eye className="h-4 w-4 shrink-0" style={{ color: "var(--fg-3)" }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-body" style={{ color: "var(--fg-2)" }}>
+                        You're watching this chat — read-only.
+                      </div>
+                      {joinAction?.error && (
+                        <div className="mono text-label" style={{ color: "var(--state-error)", marginTop: 2 }}>
+                          {joinAction.error}
+                        </div>
+                      )}
+                    </div>
+                    {joinAction && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={joinAction.onJoin}
+                        disabled={joinAction.joining}
                       >
-                        {pendingImages.map((img) => (
-                          <div
-                            key={img.id}
-                            style={{
-                              position: "relative",
-                              flexShrink: 0,
-                              borderRadius: 4,
-                              border: "var(--hairline) solid var(--border)",
-                              overflow: "hidden",
-                            }}
-                          >
-                            <img
-                              src={img.previewUrl}
-                              alt={img.file.name}
-                              style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeImage(img.id)}
+                        {joinAction.joining ? "Joining…" : "Join to reply"}
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <ComposeStatusBar
+                      chatId={chatId}
+                      agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                    />
+                    {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
+                    <div
+                      style={{
+                        position: "relative",
+                        border: "var(--hairline) solid var(--border)",
+                        borderRadius: 6,
+                        // Raised surface (`--bg-raised`) lifts the composer above
+                        // the timeline (`--bg`) so it reads as a focused input card
+                        // rather than blending into the page; the hairline border
+                        // still defines its edge.
+                        background: "var(--bg-raised)",
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        addImages(Array.from(e.dataTransfer.files));
+                      }}
+                    >
+                      {/* Image preview area — above textarea */}
+                      {pendingImages.length > 0 && (
+                        <div
+                          className="flex items-center"
+                          style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
+                        >
+                          {pendingImages.map((img) => (
+                            <div
+                              key={img.id}
                               style={{
-                                position: "absolute",
-                                top: 1,
-                                right: 1,
-                                width: 14,
-                                height: 14,
-                                borderRadius: "50%",
-                                background: "var(--color-overlay-scrim)",
-                                border: "none",
-                                color: "var(--bg-raised)",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                cursor: "pointer",
-                                padding: 0,
+                                position: "relative",
+                                flexShrink: 0,
+                                borderRadius: 4,
+                                border: "var(--hairline) solid var(--border)",
+                                overflow: "hidden",
                               }}
                             >
-                              <X className="h-2 w-2" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div style={{ position: "relative" }}>
-                      <MentionAutocompletePopover
-                        trigger={mention.trigger}
-                        results={mention.results}
-                        highlightIndex={mention.highlightIndex}
-                        anchorRef={textareaRef}
-                        onPick={mention.pick}
-                      />
-                      <SlashCommandPopover
-                        trigger={slash.trigger}
-                        results={slash.results}
-                        highlightIndex={slash.highlightIndex}
-                        mentionedAgent={slash.mentionedAgent}
-                        anchorRef={textareaRef}
-                        onPick={slash.pick}
-                      />
-                      <textarea
-                        ref={textareaRef}
-                        value={draft}
-                        onChange={(e) => {
-                          setDraft(e.target.value);
-                          setCursor(e.target.selectionStart ?? e.target.value.length);
-                          // Dismiss a stale upload error (e.g. the "no @mention"
-                          // hint) the moment the user starts fixing it. Mirrors
-                          // the unconditional clears in `addImages` / `removeImage`
-                          // — React bails on identical setState so the null→null
-                          // case is free.
-                          setUploadError(null);
-                        }}
-                        onSelect={(e) => {
-                          setCursor(e.currentTarget.selectionStart ?? draft.length);
-                        }}
-                        onFocus={() => {
-                          // Group / about-to-be-group chats: prime the input with `@`
-                          // on focus so the autocomplete pops the recipient list right
-                          // away — matches the proposal §2 "must choose a receiver
-                          // before typing" UX. Once-per-chat (focusPrimedRef): we
-                          // don't want to re-stamp `@` after the user has cleared
-                          // their draft and tabbed away/back; that would constantly
-                          // fight the user when they're trying to write a fresh
-                          // empty message without addressing anyone (e.g. paste over).
-                          if (!requiresMention) return;
-                          if (focusPrimedRef.current) return;
-                          if (draft.length > 0 || mentionCandidates.length === 0) return;
-                          focusPrimedRef.current = true;
-                          setDraft("@");
-                          setCursor(1);
-                          requestAnimationFrame(() => {
-                            const el = textareaRef.current;
-                            if (!el) return;
-                            el.setSelectionRange(1, 1);
-                          });
-                        }}
-                        onPaste={(e) => {
-                          const files = Array.from(e.clipboardData.files);
-                          if (files.length > 0) {
-                            e.preventDefault();
-                            addImages(files);
-                          }
-                        }}
-                        placeholder={
-                          requiresMention
-                            ? "Type @ to pick a recipient, then your message"
-                            : `Message @${displayName}  ·  / for commands  ·  @ to mention`
-                        }
-                        rows={2}
-                        onKeyDown={(e) => {
-                          // Skip while an IME is composing so Enter confirms the
-                          // candidate instead of sending / picking a mention.
-                          if (e.nativeEvent.isComposing) return;
-                          // Slash command popover handles navigation keys when active.
-                          // Sits before mention so `/`-typed draft never falls through to
-                          // mention-autocomplete (the trigger predicates are disjoint, but
-                          // ordering documents intent).
-                          if (slash.handleKey(e)) return;
-                          // Mention autocomplete gets first crack at navigation keys so
-                          // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
-                          // sending or moving the cursor.
-                          if (mention.handleKey(e)) return;
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSend();
-                          }
-                        }}
-                        disabled={sendMut.isPending || uploading}
-                        className="w-full outline-none text-subtitle font-normal"
-                        style={{
-                          padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
-                          background: "transparent",
-                          border: "none",
-                          // `rows={2}` alone won't survive the auto-resize hook:
-                          // useLayoutEffect immediately sets `height = scrollHeight`,
-                          // which collapses an empty textarea to ~1 line and
-                          // breaks chat-view's pre-auto-grow 2-line contract.
-                          // CSS `min-height` is a hard floor that wins over the
-                          // hook's inline `height`, so we restate the 2-line
-                          // starting size here: 2 line-heights + top + bottom
-                          // padding. Cap at 10.5rem (~8 visible lines) so long
-                          // pastes scroll inside instead of pushing the footer
-                          // toolbar off-screen.
-                          minHeight: "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
-                          maxHeight: "10.5rem",
-                          overflowY: "auto",
-                          resize: "none",
-                          color: "var(--fg)",
-                        }}
-                      />
-                    </div>
-                    <div
-                      className="flex items-center justify-between text-caption"
-                      style={{
-                        position: "absolute",
-                        bottom: 6,
-                        left: 10,
-                        right: 10,
-                        color: "var(--fg-4)",
-                      }}
-                    >
-                      <span className="mono flex items-center" style={{ gap: 10 }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            // Insert `@` at the cursor (or replace the current selection)
-                            // and re-focus. The mention autocomplete will pick it up
-                            // from the resulting `value`/`cursor` state — same path as
-                            // typing `@` directly. Mirrors the Feishu / Slack
-                            // explicit-button affordance for users who don't know the
-                            // keyboard trick.
-                            const el = textareaRef.current;
-                            if (!el) return;
-                            const start = el.selectionStart ?? draft.length;
-                            const end = el.selectionEnd ?? start;
-                            const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
-                            setDraft(next);
-                            setCursor(start + 1);
+                              <img
+                                src={img.previewUrl}
+                                alt={img.file.name}
+                                style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeImage(img.id)}
+                                style={{
+                                  position: "absolute",
+                                  top: 1,
+                                  right: 1,
+                                  width: 14,
+                                  height: 14,
+                                  borderRadius: "50%",
+                                  background: "var(--color-overlay-scrim)",
+                                  border: "none",
+                                  color: "var(--bg-raised)",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  cursor: "pointer",
+                                  padding: 0,
+                                }}
+                              >
+                                <X className="h-2 w-2" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ position: "relative" }}>
+                        <MentionAutocompletePopover
+                          trigger={mention.trigger}
+                          results={mention.results}
+                          highlightIndex={mention.highlightIndex}
+                          anchorRef={textareaRef}
+                          onPick={mention.pick}
+                        />
+                        <SlashCommandPopover
+                          trigger={slash.trigger}
+                          results={slash.results}
+                          highlightIndex={slash.highlightIndex}
+                          mentionedAgent={slash.mentionedAgent}
+                          anchorRef={textareaRef}
+                          onPick={slash.pick}
+                        />
+                        <textarea
+                          ref={textareaRef}
+                          value={draft}
+                          onChange={(e) => {
+                            setDraft(e.target.value);
+                            setCursor(e.target.selectionStart ?? e.target.value.length);
+                            // Dismiss a stale upload error (e.g. the "no @mention"
+                            // hint) the moment the user starts fixing it. Mirrors
+                            // the unconditional clears in `addImages` / `removeImage`
+                            // — React bails on identical setState so the null→null
+                            // case is free.
+                            setUploadError(null);
+                          }}
+                          onSelect={(e) => {
+                            setCursor(e.currentTarget.selectionStart ?? draft.length);
+                          }}
+                          onFocus={() => {
+                            // Group / about-to-be-group chats: prime the input with `@`
+                            // on focus so the autocomplete pops the recipient list right
+                            // away — matches the proposal §2 "must choose a receiver
+                            // before typing" UX. Once-per-chat (focusPrimedRef): we
+                            // don't want to re-stamp `@` after the user has cleared
+                            // their draft and tabbed away/back; that would constantly
+                            // fight the user when they're trying to write a fresh
+                            // empty message without addressing anyone (e.g. paste over).
+                            if (!requiresMention) return;
+                            if (focusPrimedRef.current) return;
+                            if (draft.length > 0 || mentionCandidates.length === 0) return;
+                            focusPrimedRef.current = true;
+                            setDraft("@");
+                            setCursor(1);
                             requestAnimationFrame(() => {
-                              el.focus();
-                              el.setSelectionRange(start + 1, start + 1);
+                              const el = textareaRef.current;
+                              if (!el) return;
+                              el.setSelectionRange(1, 1);
                             });
                           }}
-                          title="Mention an agent (or type @)"
-                          style={{
-                            background: "none",
-                            border: "none",
-                            cursor: "pointer",
-                            color: "var(--fg-3)",
-                            padding: 0,
-                            display: "inline-flex",
-                            alignItems: "center",
-                          }}
-                        >
-                          <AtSign className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          title="Attach image"
-                          style={{
-                            background: "none",
-                            border: "none",
-                            cursor: "pointer",
-                            color: "var(--fg-3)",
-                            padding: 0,
-                            display: "inline-flex",
-                            alignItems: "center",
-                          }}
-                        >
-                          <Paperclip className="h-3.5 w-3.5" />
-                        </button>
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          style={{ display: "none" }}
-                          onChange={(e) => {
-                            if (e.target.files) {
-                              addImages(Array.from(e.target.files));
-                              e.target.value = "";
+                          onPaste={(e) => {
+                            const files = Array.from(e.clipboardData.files);
+                            if (files.length > 0) {
+                              e.preventDefault();
+                              addImages(files);
                             }
                           }}
+                          placeholder={
+                            requiresMention
+                              ? "Type @ to pick a recipient, then your message"
+                              : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+                          }
+                          rows={2}
+                          onKeyDown={(e) => {
+                            // Skip while an IME is composing so Enter confirms the
+                            // candidate instead of sending / picking a mention.
+                            if (e.nativeEvent.isComposing) return;
+                            // Slash command popover handles navigation keys when active.
+                            // Sits before mention so `/`-typed draft never falls through to
+                            // mention-autocomplete (the trigger predicates are disjoint, but
+                            // ordering documents intent).
+                            if (slash.handleKey(e)) return;
+                            // Mention autocomplete gets first crack at navigation keys so
+                            // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
+                            // sending or moving the cursor.
+                            if (mention.handleKey(e)) return;
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSend();
+                            }
+                          }}
+                          disabled={sendMut.isPending || uploading}
+                          className="w-full outline-none text-subtitle font-normal"
+                          style={{
+                            padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                            background: "transparent",
+                            border: "none",
+                            // `rows={2}` alone won't survive the auto-resize hook:
+                            // useLayoutEffect immediately sets `height = scrollHeight`,
+                            // which collapses an empty textarea to ~1 line and
+                            // breaks chat-view's pre-auto-grow 2-line contract.
+                            // CSS `min-height` is a hard floor that wins over the
+                            // hook's inline `height`, so we restate the 2-line
+                            // starting size here: 2 line-heights + top + bottom
+                            // padding. Cap at 10.5rem (~8 visible lines) so long
+                            // pastes scroll inside instead of pushing the footer
+                            // toolbar off-screen.
+                            minHeight: "calc(2lh + var(--sp-2_25) + var(--sp-7_5))",
+                            maxHeight: "10.5rem",
+                            overflowY: "auto",
+                            resize: "none",
+                            color: "var(--fg)",
+                          }}
                         />
-                      </span>
-                      <span className="flex items-center" style={{ gap: 8 }}>
-                        {uploading && (
-                          <span className="mono text-caption" style={{ color: "var(--accent)" }}>
-                            uploading…
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={handleSend}
-                          disabled={
-                            sendMut.isPending ||
-                            uploading ||
-                            (!draft.trim() && pendingImages.length === 0) ||
-                            (requiresMention && draftMentions.length === 0)
-                          }
-                          title={
-                            requiresMention && draftMentions.length === 0
-                              ? "Pick at least one recipient with @ before sending in a group chat"
-                              : "Send (Enter)"
-                          }
-                          aria-label="Send"
-                          className={cn(
-                            "inline-flex items-center justify-center transition-opacity",
-                            (sendMut.isPending ||
+                      </div>
+                      <div
+                        className="flex items-center justify-between text-caption"
+                        style={{
+                          position: "absolute",
+                          bottom: 6,
+                          left: 10,
+                          right: 10,
+                          color: "var(--fg-4)",
+                        }}
+                      >
+                        <span className="mono flex items-center" style={{ gap: 10 }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              // Insert `@` at the cursor (or replace the current selection)
+                              // and re-focus. The mention autocomplete will pick it up
+                              // from the resulting `value`/`cursor` state — same path as
+                              // typing `@` directly. Mirrors the Feishu / Slack
+                              // explicit-button affordance for users who don't know the
+                              // keyboard trick.
+                              const el = textareaRef.current;
+                              if (!el) return;
+                              const start = el.selectionStart ?? draft.length;
+                              const end = el.selectionEnd ?? start;
+                              const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
+                              setDraft(next);
+                              setCursor(start + 1);
+                              requestAnimationFrame(() => {
+                                el.focus();
+                                el.setSelectionRange(start + 1, start + 1);
+                              });
+                            }}
+                            title="Mention an agent (or type @)"
+                            style={{
+                              background: "none",
+                              border: "none",
+                              cursor: "pointer",
+                              color: "var(--fg-3)",
+                              padding: 0,
+                              display: "inline-flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            <AtSign className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            title="Attach image"
+                            style={{
+                              background: "none",
+                              border: "none",
+                              cursor: "pointer",
+                              color: "var(--fg-3)",
+                              padding: 0,
+                              display: "inline-flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            <Paperclip className="h-3.5 w-3.5" />
+                          </button>
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            style={{ display: "none" }}
+                            onChange={(e) => {
+                              if (e.target.files) {
+                                addImages(Array.from(e.target.files));
+                                e.target.value = "";
+                              }
+                            }}
+                          />
+                        </span>
+                        <span className="flex items-center" style={{ gap: 8 }}>
+                          {uploading && (
+                            <span className="mono text-caption" style={{ color: "var(--accent)" }}>
+                              uploading…
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleSend}
+                            disabled={
+                              sendMut.isPending ||
                               uploading ||
                               (!draft.trim() && pendingImages.length === 0) ||
-                              (requiresMention && draftMentions.length === 0)) &&
-                              "opacity-40 cursor-not-allowed",
-                          )}
-                          style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: "var(--radius-input)",
-                            background: "var(--fg)",
-                            color: "var(--bg-raised)",
-                            border: "none",
-                          }}
-                        >
-                          <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
-                        </button>
-                      </span>
+                              (requiresMention && draftMentions.length === 0)
+                            }
+                            title={
+                              requiresMention && draftMentions.length === 0
+                                ? "Pick at least one recipient with @ before sending in a group chat"
+                                : "Send (Enter)"
+                            }
+                            aria-label="Send"
+                            className={cn(
+                              "inline-flex items-center justify-center transition-opacity",
+                              (sendMut.isPending ||
+                                uploading ||
+                                (!draft.trim() && pendingImages.length === 0) ||
+                                (requiresMention && draftMentions.length === 0)) &&
+                                "opacity-40 cursor-not-allowed",
+                            )}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: "var(--radius-input)",
+                              background: "var(--fg)",
+                              color: "var(--bg-raised)",
+                              border: "none",
+                            }}
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                          </button>
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                  {(sendMut.isError || uploadError) && (
-                    <p
-                      className="mono text-label"
-                      style={{
-                        color: "var(--state-error)",
-                        padding: "var(--sp-1_5) var(--sp-0_5) 0",
-                      }}
-                    >
-                      {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}
-                    </p>
-                  )}
-                </>
-              )}
+                    {(sendMut.isError || uploadError) && (
+                      <p
+                        className="mono text-label"
+                        style={{
+                          color: "var(--state-error)",
+                          padding: "var(--sp-1_5) var(--sp-0_5) 0",
+                        }}
+                      >
+                        {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
         {showSidebar ? (
           narrow ? (

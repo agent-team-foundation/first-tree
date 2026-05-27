@@ -2,14 +2,20 @@ import {
   AGENT_SELECTOR_HEADER,
   type Agent,
   type AgentRuntimeConfig,
+  type Attention,
+  attentionRecordSchema,
+  type CancelAttentionInput,
   type Chat,
   type ChatDetail,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type ListAttentionsQuery,
   type Message,
+  type RaiseAttentionInput,
   type RuntimeProvider,
   type SendMessage,
 } from "@first-tree/shared";
+import { z } from "zod";
 
 /**
  * Callback that returns the current member access JWT.
@@ -285,6 +291,58 @@ export class FirstTreeHubSDK {
   /** Fetch Context Tree configuration for this SDK's authenticated agent. */
   async getAgentContextTreeConfig(): Promise<ContextTreeConfig> {
     return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree/info");
+  }
+
+  /**
+   * NHA (Need-Human-Attention) primitive — agent-scoped operations against
+   * `/api/v1/agent/attention`. Each method validates its response against
+   * the shared `attentionRecordSchema` so a server-side shape drift surfaces
+   * at the call site rather than silently leaking unknown fields downstream.
+   *
+   * Auth: the agent's bearer token + `X-Agent-Id` (set on every SDK request
+   * in `doFetchOnce`) is enough; no extra plumbing required.
+   */
+  attention = {
+    /** Raise an Attention. Server validates membership & target type. */
+    raise: async (input: RaiseAttentionInput): Promise<Attention> => {
+      const json = await this.requestJson<unknown>("/api/v1/agent/attention", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      return attentionRecordSchema.parse(json);
+    },
+    /** Cancel an open Attention raised by this agent. */
+    cancel: async (id: string, reason?: string): Promise<Attention> => {
+      const body: CancelAttentionInput = reason !== undefined ? { reason } : {};
+      const json = await this.requestJson<unknown>(`/api/v1/agent/attention/${encodeURIComponent(id)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      return attentionRecordSchema.parse(json);
+    },
+    /** List Attentions visible to this agent, filtered by query params. */
+    list: async (filter?: Partial<ListAttentionsQuery>): Promise<Attention[]> => {
+      const qs = this.attentionQueryString(filter);
+      const json = await this.requestJson<unknown>(`/api/v1/agent/attention${qs}`);
+      return z.array(attentionRecordSchema).parse(json);
+    },
+    /** Fetch a single Attention by id. */
+    show: async (id: string): Promise<Attention> => {
+      const json = await this.requestJson<unknown>(`/api/v1/agent/attention/${encodeURIComponent(id)}`);
+      return attentionRecordSchema.parse(json);
+    },
+  };
+
+  private attentionQueryString(filter?: Partial<ListAttentionsQuery>): string {
+    if (!filter) return "";
+    const params = new URLSearchParams();
+    if (filter.target !== undefined) params.set("target", filter.target);
+    if (filter.chat !== undefined) params.set("chat", filter.chat);
+    if (filter.agent !== undefined) params.set("agent", filter.agent);
+    if (filter.state !== undefined) params.set("state", filter.state);
+    if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+    const qs = params.toString();
+    return qs ? `?${qs}` : "";
   }
 
   private queryString(options?: { limit?: number; cursor?: string }): string {
