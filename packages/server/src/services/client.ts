@@ -234,6 +234,19 @@ export function extractLastUpdateAttempt(metadata: unknown): UpdateAttempt | nul
 }
 
 /**
+ * Pull the capability snapshot out of a client row's `metadata` jsonb.
+ * Returns `{}` (never `null` / `undefined`) so the web pill derivation
+ * can treat the value as a stable map without a conditional access.
+ * Mirrors {@link extractLastUpdateAttempt}; same defensive shape.
+ */
+export function extractCapabilities(metadata: unknown): ClientCapabilities {
+  if (!metadata || typeof metadata !== "object") return {};
+  const sub = (metadata as Record<string, unknown>).capabilities;
+  const parsed = clientCapabilitiesSchema.safeParse(sub);
+  return parsed.success ? parsed.data : {};
+}
+
+/**
  * List the active agents currently pinned to a client. Used by the WS
  * registration handshake to backfill `agent:pinned` notifications missed while
  * the client was offline — without it, an admin who pinned an agent during a

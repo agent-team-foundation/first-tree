@@ -284,6 +284,25 @@ export const meChatRowSchema = z.object({
    * poisoned identifier.
    */
   busyAgentIds: z.array(z.string()).default([]),
+  /**
+   * True iff this chat has at least one non-human agent with a pending
+   * `AskUserQuestion` (`pending_questions.status === 'pending'`), regardless
+   * of whether that agent is managed by the caller. Drives the chat-list
+   * "Needs attention" speaker-fallback rule (R3) on the front-end: a chat
+   * with an open question pins for callers who are HUMAN speakers in it,
+   * even when the asking agent belongs to a peer manager. Keeps
+   * `pendingQuestionAgentIds` cleanly narrowed to caller-managed so the
+   * row's needs-you indicator stays specific to "agents I manage".
+   *
+   * Derived at query time (no schema migration). `.default(false)` for
+   * version skew: an older server build that predates this field would
+   * otherwise produce `undefined`, which silently disables R3 on the new
+   * web — exactly the conservative degradation we want during a
+   * web-ahead-of-server rollout (R1/R2/R4 continue to fire correctly).
+   *
+   * See docs/development/needs-attention-scoping.20260526.md §4 / §5.
+   */
+  chatHasOpenQuestion: z.boolean().default(false),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 

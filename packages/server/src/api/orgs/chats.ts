@@ -91,7 +91,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
 
     // Default: workspace conversation list for the caller's HUMAN agent.
     const query = listMeChatsQuerySchema.parse(request.query);
-    return listMeChats(app.db, scope.humanAgentId, scope.organizationId, query);
+    return listMeChats(app.db, scope.humanAgentId, scope.memberId, scope.organizationId, query);
   });
 
   /**

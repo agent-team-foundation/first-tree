@@ -105,15 +105,30 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
           deps.workspacesRoot && deps.selfSlug
             ? { workspacesRoot: deps.workspacesRoot, chatId: deps.chatId, selfSlug: deps.selfSlug }
             : undefined;
-        const { docs, skipped, rewrittenText } = await buildMessageDocumentSnapshots(text, selfFence, fence);
+        const { docs, skipped, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
+          text,
+          selfFence,
+          fence,
+        );
         // Validate BEFORE committing the rewritten body: `rewrittenText`
         // contains explicit `[display](key)` links that only make sense paired
         // with their snapshots. If schema validation throws, the catch must
         // leave `content` as the ORIGINAL text — otherwise we'd ship explicit
         // links with no matching snapshot (dead links), breaking the
         // "rewritten ⇔ snapshotted" invariant (codex review finding).
-        if (docs.length > 0) {
-          metadata.documentContext = documentContextSchema.parse({ kind: "snapshot", docs });
+        //
+        // failedMentions enables the inert-chip UI on web: with ZERO
+        // snapshots but ≥1 failure we still attach the documentContext so the
+        // chat-view can render disabled chips + reason tooltips. Schema's
+        // refinement rejects empty docs + empty failedMentions, so we only
+        // attach when at least one is populated.
+        if (docs.length > 0 || failedMentions.length > 0) {
+          const payload: { kind: "snapshot"; docs: typeof docs; failedMentions?: typeof failedMentions } = {
+            kind: "snapshot",
+            docs,
+          };
+          if (failedMentions.length > 0) payload.failedMentions = failedMentions;
+          metadata.documentContext = documentContextSchema.parse(payload);
         }
         content = rewrittenText;
         if (skipped > 0) {

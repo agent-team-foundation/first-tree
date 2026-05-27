@@ -1,4 +1,4 @@
-import { type ChatSource, compareMainStatus, type MeChatRow } from "@first-tree/shared";
+import type { ChatSource, MeChatRow } from "@first-tree/shared";
 
 export type GroupMode = "recency" | "source" | "type" | "none";
 
@@ -182,44 +182,105 @@ function groupByType(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucket>
 }
 
 // ---------------------------------------------------------------------------
-// attention pinning (failed + needs-you)
+// attention pinning (failed + needs-you + mention)
 // ---------------------------------------------------------------------------
+//
+// Chat-granularity predicate — see docs/development/needs-attention-scoping.20260526.md.
+// A chat enters the "Needs attention" bucket when ANY of:
+//   R1. `failedAgentIds.length > 0`
+//       (server-narrowed to agents the caller manages — see services/me-chat.ts)
+//   R2. `pendingQuestionAgentIds.length > 0`
+//       (same narrowing)
+//   R3. `chatHasOpenQuestion && membershipKind === "participant"`
+//       (anyone has a pending question AND the caller is a HUMAN speaker in the
+//        chat — covers "someone else's agent is asking in a chat I'm in")
+//   R4. `unreadMentionCount > 0`
+//       (someone @-mentioned the caller)
+//
+// Sort priority inside the bucket: `failed > needs_you > mention`.
+//
+// This ladder is INTENTIONALLY separate from the shared agent-status
+// `compareMainStatus` (`failed`, `needs_you`, `working`, ...). `mention` is a
+// chat-level signal, not an agent main status — overloading the shared
+// comparator would couple two ladders that should evolve independently.
 
-/** A chat has a failed agent (composite `failed`) — see `MeChatRow.failedAgentIds`. */
+const ATTENTION_PRIORITY = ["failed", "needs_you", "mention"] as const;
+type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
+
+/**
+ * Highest-priority attention reason for this row, or `null` when the row is
+ * NOT in the attention bucket. Order matters: a row that satisfies multiple
+ * rules sorts under its highest tier (e.g. failed + mention → failed).
+ *
+ * Exported because external surfaces sometimes need the tier (e.g. for
+ * a per-row visual treatment), but the row-level indicator helpers
+ * (`rowIsFailed` / `rowNeedsYou`) are deliberately NOT just thin wrappers
+ * over this — they project the narrower "mine" semantics so the badges
+ * stay specific to caller-managed agents even when R3 fires.
+ */
+export function rowAttentionReason(r: MeChatRow): AttentionReason | null {
+  if (r.failedAgentIds.length > 0) return "failed";
+  // `chatHasOpenQuestion === true` (not just truthy) because the web client
+  // does NOT run the row through `meChatRowSchema.parse` — it casts the
+  // response as-is. So the Zod `.default(false)` only applies server-side;
+  // an old server skewed with new web returns `undefined` here, and `&&` on
+  // an unknown shape should not silently coerce. Explicit boolean check
+  // keeps the R3 fallback off until the server actually emits the bit.
+  if (r.pendingQuestionAgentIds.length > 0 || (r.chatHasOpenQuestion === true && r.membershipKind === "participant")) {
+    return "needs_you";
+  }
+  if (r.unreadMentionCount > 0) return "mention";
+  return null;
+}
+
+/**
+ * The row's "failed" indicator (red `!` / left border). Lights ONLY for
+ * caller-managed failed agents — server already narrows `failedAgentIds`.
+ * Equivalent to "this row is in the failed tier of the attention bucket".
+ */
 export function rowIsFailed(r: MeChatRow): boolean {
   return r.failedAgentIds.length > 0;
 }
 
-/** A chat has an agent with a pending AskUserQuestion (composite `needs_you`). */
+/**
+ * The row's "needs-you" indicator (orange `?` / left border). Lights ONLY
+ * for caller-managed agents with a pending question (R2). The R3 fallback
+ * (someone else's agent asking in a chat where I'm a speaker) DOES enter
+ * the attention bucket but does NOT light this badge — the indicator stays
+ * specific to "an agent I manage is waiting on me", matching the field's
+ * narrowed wire semantics. The bucket position alone signals R3-only rows;
+ * the row's last-message preview surfaces the actual question.
+ */
 export function rowNeedsYou(r: MeChatRow): boolean {
   return r.pendingQuestionAgentIds.length > 0;
 }
 
 /**
- * Partition rows into the pinned "Needs attention" set and the rest. Attention
- * rows are ordered by delegating to the shared `compareMainStatus`
- * (`MAIN_STATUS_PRIORITY`) — failed ranks above needs-you, matching the sidebar
- * / composer — rather than a hardcoded concat with no link to the priority
- * ladder. `Array.sort` is stable, so source order within a tier is preserved. A
- * chat that is both failed AND needs-you sorts under the failed tier. The caller
- * hoists `attention` into a single pinned bucket at the top and groups `rest`
- * normally, so a chat appears in exactly one place.
+ * Partition rows into the pinned "Needs attention" set and the rest. Within
+ * the attention bucket, sort by `ATTENTION_PRIORITY` (stable within tier,
+ * so source order is preserved among rows of the same reason). The caller
+ * hoists `attention` into a single pinned bucket at the top and groups
+ * `rest` normally, so a chat appears in exactly one place.
  *
  * ⚠️ Operates on the already-loaded rows only: an attention chat outside the
  * loaded page(s) is not pinned (page-local v1; the cross-page pinned query is
- * the §8.1#2 follow-up).
+ * a follow-up).
  */
 export function splitAttentionRows(rows: ReadonlyArray<MeChatRow>): { attention: MeChatRow[]; rest: MeChatRow[] } {
   const attention: MeChatRow[] = [];
   const rest: MeChatRow[] = [];
   for (const r of rows) {
-    if (rowIsFailed(r) || rowNeedsYou(r)) attention.push(r);
+    if (rowAttentionReason(r) !== null) attention.push(r);
     else rest.push(r);
   }
-  // The maintenance point for attention ordering: a contributor adding a new
-  // pinned status updates MAIN_STATUS_PRIORITY and the literal here, nothing else.
-  attention.sort((a, b) =>
-    compareMainStatus(rowIsFailed(a) ? "failed" : "needs_you", rowIsFailed(b) ? "failed" : "needs_you"),
-  );
+  attention.sort((a, b) => {
+    const ra = rowAttentionReason(a);
+    const rb = rowAttentionReason(b);
+    // Defensive guard — both are non-null by construction (only rows with a
+    // reason entered `attention`), but a runtime check is cheaper than a TS
+    // `as` cast and respects the repo's "no `as` assertions" rule (CLAUDE.md).
+    if (ra === null || rb === null) return 0;
+    return ATTENTION_PRIORITY.indexOf(ra) - ATTENTION_PRIORITY.indexOf(rb);
+  });
   return { attention, rest };
 }

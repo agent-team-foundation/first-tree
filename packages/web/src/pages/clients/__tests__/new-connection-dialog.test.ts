@@ -28,6 +28,7 @@ function client(overrides: Partial<HubClient>): HubClient {
     agentCount: 0,
     connectedAt: new Date(T0).toISOString(),
     lastSeenAt: new Date(T0).toISOString(),
+    capabilities: {},
     ...overrides,
   };
 }

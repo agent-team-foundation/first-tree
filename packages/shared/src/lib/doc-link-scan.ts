@@ -13,7 +13,6 @@
  *   - inline markdown links `[text](path.md)` (the runtime scans those
  *     separately via `scanInlineMarkdownLinks`; this scanner intentionally
  *     does not double-handle them)
- *   - inline code spans `` `...` ``
  *   - fenced code blocks (``` ``` ``` ``` / `~~~`)
  *   - indented code blocks (4+ spaces or leading tab)
  *   - HTML tag bodies `<...>` (so href / src attribute values aren't
@@ -21,6 +20,16 @@
  *   - reference-link definitions `[ref]: target`
  *   - domain-shaped tokens like `example.com/readme.md` — these are URLs the
  *     user almost certainly meant as external links, not workspace paths.
+ *
+ * Inline code spans (`` `…` ``, `` ``…`` ``, …) are NOT a hard skip: agents
+ * habitually wrap workspace paths in single backticks for mono-spaced visual
+ * intent, so a token found inside a single-line code span is still reported
+ * with an `enclosingCodeSpan` annotation. The downstream rewrite uses that to
+ * widen its replacement span — turning `` `docs/foo.md` `` into the
+ * commonmark-legal `` [`docs/foo.md`](docs/foo.md) ``, which renders as a
+ * code-styled clickable link instead of dead inline code. Fenced code blocks
+ * are deliberately left as a hard skip (typical content is directory dumps,
+ * error logs, third-party path examples — false-positive cost is high).
  *
  * The function returns matches WITH offsets so callers that need to rewrite
  * the source string (web's `linkifyMarkdownDocPaths`) can do so without
@@ -40,7 +49,7 @@
  * punctuation as part of a "filename".
  */
 const BARE_PATH_RE =
-  /(^|[\s([{"'])(?<path>(?:\.{1,2}\/|\/)?(?:[A-Za-z0-9_.~+@%-]+\/)*[A-Za-z0-9_.~+@%-]+\.md(?::\d+(?::\d+)?)?)(?=$|[\s)\]}"',.;!?])/g;
+  /(^|[\s([{"'`])(?<path>(?:\.{1,2}\/|\/)?(?:[A-Za-z0-9_.~+@%-]+\/)*[A-Za-z0-9_.~+@%-]+\.md(?::\d+(?::\d+)?)?)(?=$|[\s)\]}"',.;!?`])/g;
 
 const INLINE_MARKDOWN_LINK_RE = /\[(?:[^\]\\\n]|\\.)*\]\([^)\n]*\)/g;
 const REFERENCE_LINK_DEFINITION_RE = /^\s*\[[^\]\n]+\]:\s*\S+/;
@@ -56,6 +65,15 @@ export type BarePathMatch = {
   start: number;
   /** Byte offset of the character just after `raw`. */
   end: number;
+  /**
+   * Outer span (opening tick → closing tick, inclusive) of the inline code
+   * wrapper around this token, when the token sits inside one. Set only for
+   * single-line code spans (any tick count); fenced multi-line blocks remain
+   * a hard skip and produce no match. The rewrite pass widens its replacement
+   * to this span so the whole code-styled chunk becomes a single clickable
+   * code-styled link.
+   */
+  enclosingCodeSpan?: { start: number; end: number };
 };
 
 /**
@@ -92,7 +110,8 @@ export function scanBareDocPathTokens(text: string): BarePathMatch[] {
       continue;
     }
 
-    const skipRanges = findInlineSkipRanges(line);
+    const hardSkipRanges = findHardSkipRanges(line);
+    const codeSpanRanges = findInlineCodeSpans(line);
     BARE_PATH_RE.lastIndex = 0;
     let match: RegExpExecArray | null = BARE_PATH_RE.exec(line);
     while (match !== null) {
@@ -100,8 +119,20 @@ export function scanBareDocPathTokens(text: string): BarePathMatch[] {
       const path = match.groups?.path ?? "";
       const pathStart = match.index + boundary.length;
       const pathEnd = pathStart + path.length;
-      if (path && !isInsideAnyRange(pathStart, skipRanges) && !isDomainLike(path)) {
-        out.push({ raw: path, start: absoluteOffset + pathStart, end: absoluteOffset + pathEnd });
+      if (path && !isInsideAnyRange(pathStart, hardSkipRanges) && !isDomainLike(path)) {
+        const enclosing = findEnclosingRange(pathStart, codeSpanRanges);
+        const entry: BarePathMatch = {
+          raw: path,
+          start: absoluteOffset + pathStart,
+          end: absoluteOffset + pathEnd,
+        };
+        if (enclosing) {
+          entry.enclosingCodeSpan = {
+            start: absoluteOffset + enclosing.start,
+            end: absoluteOffset + enclosing.end,
+          };
+        }
+        out.push(entry);
       }
       match = BARE_PATH_RE.exec(line);
     }
@@ -122,15 +153,32 @@ export function stripDocPathLineSuffix(raw: string): string {
   return match?.groups?.path ?? raw;
 }
 
-function findInlineSkipRanges(line: string): Array<{ start: number; end: number }> {
+/**
+ * Hard-skip ranges: constructs whose contents must never be reported as a doc
+ * mention (the renderer already treats them specially or they semantically
+ * are not a workspace path). Inline code spans live on a SEPARATE list — they
+ * are still in scope, but get annotated rather than dropped.
+ */
+function findHardSkipRanges(line: string): Array<{ start: number; end: number }> {
   const ranges: Array<{ start: number; end: number }> = [];
-
   for (const match of line.matchAll(INLINE_MARKDOWN_LINK_RE)) {
     if (match.index !== undefined) ranges.push({ start: match.index, end: match.index + match[0].length });
   }
   for (const match of line.matchAll(HTML_TAG_RE)) {
     if (match.index !== undefined) ranges.push({ start: match.index, end: match.index + match[0].length });
   }
+  return ranges;
+}
+
+/**
+ * Single-line inline code spans, identified by a balanced run of N backticks
+ * (N >= 1). Ranges are inclusive of the outer ticks so the rewrite pass can
+ * replace the whole span without re-counting them. Unbalanced backtick runs
+ * are skipped — they aren't really code spans, and the path scanner should
+ * see through them as if they were literal text.
+ */
+function findInlineCodeSpans(line: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
   for (let idx = 0; idx < line.length; ) {
     if (line[idx] !== "`") {
       idx += 1;
@@ -149,6 +197,16 @@ function findInlineSkipRanges(line: string): Array<{ start: number; end: number 
 
 function isInsideAnyRange(index: number, ranges: Array<{ start: number; end: number }>): boolean {
   return ranges.some((range) => index >= range.start && index < range.end);
+}
+
+function findEnclosingRange(
+  index: number,
+  ranges: Array<{ start: number; end: number }>,
+): { start: number; end: number } | null {
+  for (const range of ranges) {
+    if (index >= range.start && index < range.end) return range;
+  }
+  return null;
 }
 
 /**

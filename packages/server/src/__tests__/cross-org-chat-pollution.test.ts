@@ -84,7 +84,7 @@ describe("cross-org chat pollution — read-side guard rails", () => {
       .where(eq(chatMembership.agentId, admin.humanAgentUuid));
     expect(participantRow?.chatId).toBe(dirtyChatId);
 
-    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.organizationId, {
+    const res = await listMeChats(app.db, admin.humanAgentUuid, admin.memberId, admin.organizationId, {
       limit: 50,
       filter: "all",
       engagement: "all",

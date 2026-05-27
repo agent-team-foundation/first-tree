@@ -1,4 +1,6 @@
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
@@ -86,5 +88,140 @@ describe("GET /me/clients", () => {
     const app = getApp();
     const res = await app.inject({ method: "GET", url: "/api/v1/me/clients" });
     expect(res.statusCode).toBe(401);
+  });
+
+  /**
+   * Computer status pill derivation (web) needs to know if any runtime
+   * capability is `ok` to distinguish "Ready" from "Setup incomplete". The
+   * full capability snapshot lives at `clients.metadata.capabilities`; the
+   * list response surfaces it so the pill can be computed client-side
+   * without fanning out one `GET /clients/:id` per row.
+   */
+  it("includes the reported capabilities snapshot in each row", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+
+    const capabilities = {
+      "claude-code": {
+        state: "ok",
+        available: true,
+        authenticated: true,
+        sdkVersion: "0.8.1",
+        authMethod: "oauth",
+        detectedAt: new Date().toISOString(),
+      },
+      codex: {
+        state: "missing",
+        available: false,
+        authenticated: false,
+        sdkVersion: null,
+        authMethod: "none",
+        detectedAt: new Date().toISOString(),
+      },
+    } as const;
+
+    await app.db.update(clients).set({ metadata: { capabilities } }).where(eq(clients.id, ctx.clientId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/clients",
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{
+      id: string;
+      capabilities: Record<string, { state: string; sdkVersion: string | null }>;
+    }>;
+    const row = body.find((c) => c.id === ctx.clientId);
+    expect(row).toBeDefined();
+    expect(row?.capabilities["claude-code"]?.state).toBe("ok");
+    expect(row?.capabilities["claude-code"]?.sdkVersion).toBe("0.8.1");
+    expect(row?.capabilities.codex?.state).toBe("missing");
+  });
+
+  /**
+   * Brand-new clients that have never run the capability probe land in
+   * the DB with `metadata = NULL` (or no `capabilities` sub-key). The
+   * response must still expose `capabilities` as an empty object — never
+   * `undefined` / `null` — so the web pill derivation can treat the value
+   * as a stable map without conditional access.
+   */
+  it("returns an empty capabilities object when the client has never reported any", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    // seedClient leaves metadata NULL; do not touch it.
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/clients",
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ id: string; capabilities: Record<string, unknown> }>;
+    const row = body.find((c) => c.id === ctx.clientId);
+    expect(row).toBeDefined();
+    expect(row?.capabilities).toEqual({});
+  });
+});
+
+/**
+ * Admin team listing — same capability surfacing as `/me/clients`, but for
+ * cross-user audit view. The pill derivation is shared between member
+ * self-view and admin team-view; both endpoints must carry the same
+ * payload shape. The admin's own client is part of the team list (joined
+ * via `members.userId = clients.userId`), so we cover the wiring without
+ * needing a separate teammate row.
+ */
+describe("GET /orgs/:orgId/clients (admin team view)", () => {
+  const getApp = useTestApp();
+
+  it("includes capabilities for clients in the team listing", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+
+    const capabilities = {
+      "claude-code": {
+        state: "unauthenticated",
+        available: true,
+        authenticated: false,
+        sdkVersion: "0.8.1",
+        authMethod: "none",
+        detectedAt: new Date().toISOString(),
+      },
+    } as const;
+
+    await app.db.update(clients).set({ metadata: { capabilities } }).where(eq(clients.id, admin.clientId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/clients`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{
+      id: string;
+      capabilities: Record<string, { state: string; sdkVersion: string | null }>;
+    }>;
+    const row = body.find((c) => c.id === admin.clientId);
+    expect(row).toBeDefined();
+    expect(row?.capabilities["claude-code"]?.state).toBe("unauthenticated");
+    expect(row?.capabilities["claude-code"]?.sdkVersion).toBe("0.8.1");
+  });
+
+  it("returns an empty capabilities object for clients that have not reported any", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    // seedClient (via createAdminContext) leaves metadata NULL.
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/clients`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ id: string; capabilities: Record<string, unknown> }>;
+    const row = body.find((c) => c.id === admin.clientId);
+    expect(row).toBeDefined();
+    expect(row?.capabilities).toEqual({});
   });
 });

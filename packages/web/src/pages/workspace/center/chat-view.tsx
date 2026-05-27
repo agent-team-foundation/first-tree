@@ -1,6 +1,7 @@
 import {
   CHAT_ENGAGEMENT_STATUSES,
   type ChatParticipantDetail,
+  type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
   type MentionParticipant,
@@ -89,7 +90,12 @@ import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
-import { docPreviewPathFromHref, linkifyMarkdownDocPaths } from "../../../lib/doc-preview-links.js";
+import {
+  docPreviewPathFromHref,
+  linkifyMarkdownDocPaths,
+  parseFailedDocHref,
+  wrapFailedDocMentions,
+} from "../../../lib/doc-preview-links.js";
 import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
@@ -323,6 +329,7 @@ function TextRow({
   const isSelf = !isGithubSystem && myAgentId === msg.senderId;
   const docBasePath = documentBasePathFromMetadata(msg.metadata);
   const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
+  const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
   // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
   // user typed in the web composer (`source === "web"`) is left untouched
   // so paths that humans write — code-fence walkthroughs, quoted snippets,
@@ -331,16 +338,64 @@ function TextRow({
   // the agent only *mentions* in prose stays plain text instead of becoming a
   // dead link — and every link that does render opens from cache without a
   // server round-trip.
+  //
+  // Failed mentions go through `wrapFailedDocMentions` AFTER linkify so any
+  // tokens still bare in the text get the inert-chip placeholder href
+  // (`#doc-failed?reason=…`). The `a` override below renders that placeholder
+  // as a disabled chip with a reason-mapped tooltip instead of a clickable
+  // link. Order matters: linkify first so a path that snapshotted is wrapped
+  // into a markdown link (and therefore hard-skipped by the scanner the
+  // failed-mention wrapper uses), and only the genuinely-failed remainder
+  // becomes chips.
   const textContent = useMemo<string | null>(() => {
     if (msg.format !== "text" && msg.format !== "markdown") return null;
     if (typeof msg.content !== "string") return JSON.stringify(msg.content);
     if (msg.source === "web") return msg.content;
     const snapshotPaths = new Set(docSnapshots?.keys() ?? []);
-    return linkifyMarkdownDocPaths(msg.content, snapshotPaths, msg.chatId);
-  }, [msg.format, msg.content, msg.source, msg.chatId, docSnapshots]);
+    let body = linkifyMarkdownDocPaths(msg.content, snapshotPaths, msg.chatId);
+    if (failedDocMentions && failedDocMentions.size > 0) {
+      body = wrapFailedDocMentions(body, failedDocMentions);
+    }
+    return body;
+  }, [msg.format, msg.content, msg.source, msg.chatId, docSnapshots, failedDocMentions]);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ href, children, ...props }) {
+        // Inert chip for runtime-reported snapshot failures: the magic
+        // `#doc-failed?reason=…` href is emitted by `wrapFailedDocMentions`
+        // around tokens the runtime couldn't snapshot. Gate detection on
+        // (a) the message actually carrying failedMentions metadata, so a
+        // user-typed `[anything](#doc-failed?reason=missing)` in a web-source
+        // message cannot spoof a system-rendered failure chip (round-2
+        // review), and (b) the href parsing successfully to a known reason
+        // — anything else falls through to the regular `<a>` rendering and
+        // click-to-preview path. `void props` keeps the unused-vars rule
+        // happy without splattering anchor-only attributes onto a non-anchor.
+        if (typeof href === "string" && failedDocMentions && failedDocMentions.size > 0) {
+          const failedReason = parseFailedDocHref(href);
+          if (failedReason) {
+            void props;
+            return (
+              <span
+                title={failedDocReasonTooltip(failedReason)}
+                data-doc-failed-reason={failedReason}
+                style={{
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                  background: "var(--bg-sunken)",
+                  color: "var(--fg-3)",
+                  borderRadius: "var(--radius-input)",
+                  padding: "0 var(--sp-1)",
+                  border: "var(--hairline) dashed var(--border)",
+                  cursor: "not-allowed",
+                  fontSize: "0.9em",
+                }}
+              >
+                {children}
+              </span>
+            );
+          }
+        }
         const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
           if (
             !href ||
@@ -411,7 +466,18 @@ function TextRow({
         );
       },
     }),
-    [docBasePath, docSnapshots, msg.chatId, msg.id, msg.senderId, queryClient, searchParams, setSearchParams, slugToId],
+    [
+      docBasePath,
+      docSnapshots,
+      failedDocMentions,
+      msg.chatId,
+      msg.id,
+      msg.senderId,
+      queryClient,
+      searchParams,
+      setSearchParams,
+      slugToId,
+    ],
   );
 
   return (
@@ -516,6 +582,45 @@ export function documentSnapshotMapFromMetadata(
     map.set(doc.path, { path: doc.path, content: doc.content, sha256: doc.sha256, size: doc.size });
   }
   return map;
+}
+
+/**
+ * For snapshot-variant `documentContext`, return a map from the agent's
+ * written raw token (suffix-stripped — wire format) to the failure reason.
+ * Empty / absent variants return undefined so callers can short-circuit the
+ * wrapping pass.
+ */
+export function failedDocMentionsFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Map<string, DocSnapshotFailReason> | undefined {
+  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
+  if (!parsed.success || parsed.data.kind !== "snapshot") return undefined;
+  const failed = parsed.data.failedMentions;
+  if (!failed || failed.length === 0) return undefined;
+  const map = new Map<string, DocSnapshotFailReason>();
+  for (const entry of failed) map.set(entry.raw, entry.reason);
+  return map;
+}
+
+/**
+ * User-facing tooltip text for an inert-chip reason. Kept in this file (not
+ * the shared lib) because copy lives with the surface that renders it.
+ */
+function failedDocReasonTooltip(reason: DocSnapshotFailReason): string {
+  switch (reason) {
+    case "missing":
+      return "文档不存在";
+    case "out-of-fence":
+      return "文档不在当前工作区";
+    case "hidden-segment":
+      return "路径包含受限段";
+    case "too-large":
+      return "文档超过预览大小限制";
+    case "budget-exceeded":
+      return "本条消息引用文档过多";
+    case "unreadable":
+      return "无法读取该文档";
+  }
 }
 
 export function docSnapshotQueryKey(chatId: string, messageId: string, path: string): readonly unknown[] {

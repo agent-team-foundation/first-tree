@@ -5,9 +5,9 @@ import {
   RUNTIME_PROVIDERS,
   type RuntimeProvider,
 } from "@first-tree/shared";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { type ClientWithCapabilities, getClientCapabilities, type HubClient, listClients } from "../../api/activity.js";
+import { type HubClient, listClients } from "../../api/activity.js";
 import { rebindAgent } from "../../api/agents.js";
 import { ApiError } from "../../api/client.js";
 import { Button } from "../../components/ui/button.js";
@@ -50,25 +50,17 @@ export function ReBindDialog({ open, onOpenChange, agent }: Props) {
 
   const candidateClients = clientsQuery.data ?? [];
 
-  // Lazily fetch full capabilities for every candidate client so the runtime
-  // picker can grey-out missing providers.
-  const capabilityQueries = useQueries({
-    queries: candidateClients.map((c) => ({
-      queryKey: ["client-capabilities", c.id],
-      queryFn: () => getClientCapabilities(c.id),
-      enabled: open,
-    })),
-  });
+  // Capability snapshots ride along on every list row now (`/me/clients`
+  // includes the `metadata.capabilities` blob), so the runtime picker
+  // greys-out missing providers without fanning out N `GET /clients/:id`
+  // requests when the dialog opens. The data freshness is bounded by the
+  // list refetch cadence (5s while the dialog is mounted via react-query),
+  // which is plenty for the "is Codex installed on machine X" question.
   const capabilitiesByClient = useMemo(() => {
     const map = new Map<string, ClientCapabilities>();
-    capabilityQueries.forEach((q, idx) => {
-      const c = candidateClients[idx];
-      if (!c) return;
-      const data = q.data as ClientWithCapabilities | undefined;
-      if (data?.capabilities) map.set(c.id, data.capabilities);
-    });
+    for (const c of candidateClients) map.set(c.id, c.capabilities);
     return map;
-  }, [capabilityQueries, candidateClients]);
+  }, [candidateClients]);
 
   useEffect(() => {
     if (!open) {
