@@ -59,7 +59,12 @@ export function isClaudeAuthError(code: string | undefined): boolean {
  * UI button or relogin flow, by design.
  */
 export function formatAuthHint(runtime: Runtime, originalMessage: string): string {
-  const reauth = runtime === "codex" ? "`codex login`" : "`claude /login`";
+  // Login command mirrors `PROVIDER_LOGIN_COMMAND` in
+  // packages/web/src/pages/clients/cards/shared/providers.ts so the in-chat
+  // hint matches what the Setup-incomplete card already prints. Keeping them
+  // textually identical is intentional — if the provider's canonical command
+  // ever changes (e.g. `claude auth login`), update both call sites together.
+  const reauth = runtime === "codex" ? "`codex login`" : "`claude login`";
   const provider = runtime === "codex" ? "OpenAI" : "Anthropic";
   const trimmed = originalMessage.trim();
   const original = trimmed.length > 0 ? trimmed : "(no message from SDK)";
