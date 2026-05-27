@@ -3,7 +3,6 @@ import {
   paginationQuerySchema,
   patchChatEngagementSchema,
   sendMessageSchema,
-  submitQuestionAnswerSchema,
   updateChatSchema,
 } from "@first-tree/shared";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
@@ -35,7 +34,6 @@ import {
 import { sendMessage } from "../services/message.js";
 import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
-import { submitAnswer } from "../services/questions.js";
 import { extractSummary } from "../services/session.js";
 
 /**
@@ -341,36 +339,6 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       createdAt: result.message.createdAt.toISOString(),
     });
   });
-
-  /**
-   * POST /chats/:chatId/questions/:correlationId/answer — submit an answer
-   * to a pending agent-emitted question. Caller speaks as their human agent;
-   * the answer is fanned out as a `format=question_answer` message back to
-   * the original agent's inbox so the in-flight `canUseTool` callback can
-   * resolve. Returns 409 if already answered or superseded.
-   */
-  app.post<{ Params: { chatId: string; correlationId: string } }>(
-    "/:chatId/questions/:correlationId/answer",
-    { config: { otelRecordBody: false } },
-    async (request, reply) => {
-      const { scope } = await requireChatAccess(request, app.db);
-      const body = submitQuestionAnswerSchema.parse(request.body);
-
-      await ensureParticipant(app.db, request.params.chatId, scope.humanAgentId);
-
-      const result = await submitAnswer(app.db, app.notifier, {
-        correlationId: request.params.correlationId,
-        chatId: request.params.chatId,
-        submitterAgentId: scope.humanAgentId,
-        answers: body.answers,
-      });
-
-      return reply.status(201).send({
-        correlationId: request.params.correlationId,
-        messageId: result.messageId,
-      });
-    },
-  );
 
   /** POST /chats/:chatId/read — chat-first-workspace read cursor. Idempotent. */
   app.post<{ Params: { chatId: string } }>("/:chatId/read", async (request) => {

@@ -13,14 +13,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
-import {
-  deriveRepoLocalPath,
-  type QuestionItem,
-  type QuestionMessageContent,
-  questionItemSchema,
-  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
-} from "@first-tree/shared";
-import { z } from "zod";
+import { deriveRepoLocalPath, SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES } from "@first-tree/shared";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import {
   bootstrapWorkspace,
@@ -47,7 +40,6 @@ import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
-import { clearPendingForChat, registerPendingQuestion, rejectPendingForChat } from "./ask-user-bridge.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
@@ -575,114 +567,25 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Build the SDK `canUseTool` callback for this session. Auto-allows every
-   * tool except `AskUserQuestion`, which we route through the Hub's inbox:
-   *
-   *   1. Validate the SDK's question shape against the shared Zod schema (so
-   *      a malformed model output can't smuggle bad data into Hub messages).
-   *   2. Send a `format: "question"` message via the agent SDK — this hits
-   *      the server's `sendMessage` path which writes the `pending_questions`
-   *      lifecycle row in the same transaction (see commit 2).
-   *   3. Register a Promise keyed on the SDK `toolUseID`. The matching
-   *      `question_answer` message arrives over the inbox WS / poll path
-   *      and SessionManager.dispatch resolves the Promise (commit 2 wired
-   *      the answer route + supersede hooks; SessionManager wiring lives
-   *      in this commit).
-   *   4. Map the bridge result to `PermissionResult`: `answered` →
-   *      `{ behavior: "allow", updatedInput: { questions, answers } }`,
-   *      `denied` → `{ behavior: "deny", message }` so the model abandons
-   *      the call instead of looping.
-   *
-   * `bypassPermissions` mode still calls `canUseTool` for `AskUserQuestion`
-   * specifically — verified by `tmp-verify/verify.mjs` cases A through G.
+   * Build the SDK `canUseTool` callback. Auto-allows every tool except
+   * `AskUserQuestion`, which is no longer bridged: NHA M0 strips the
+   * question mechanism end-to-end. The replacement deny redirects the
+   * agent at the Need-Human-Attention CLI / SDK so it can request human
+   * attention through the new surface.
    */
   function buildAskUserCanUseTool(sessionCtx: SessionContext): CanUseTool {
-    return async (toolName, input, options) => {
-      if (toolName !== "AskUserQuestion") {
-        return { behavior: "allow", updatedInput: input };
-      }
-
-      // Validate the question shape from the model. SDK 0.2.84 emits the
-      // canonical AskUserQuestion input as `{ questions: QuestionItem[] }`;
-      // anything else is a model regression that we deny outright.
-      const inputSchema = z.object({ questions: z.array(questionItemSchema).min(1).max(4) });
-      const parsed = inputSchema.safeParse(input);
-      if (!parsed.success) {
-        sessionCtx.log(`AskUserQuestion: malformed input — ${parsed.error.message.slice(0, 200)}`);
+    return async (toolName, input, _options) => {
+      if (toolName === "AskUserQuestion") {
+        sessionCtx.log("AskUserQuestion is no longer bridged; redirecting agent to NHA");
         return {
           behavior: "deny",
-          message: "AskUserQuestion input did not validate; abandon the question and pick a different tool or answer.",
+          message:
+            "AskUserQuestion is no longer supported in this Hub. " +
+            "To request human attention, use the `first-tree attention raise` CLI (or your runtime's NHA SDK). " +
+            "See the `attention` skill for usage.",
         } satisfies PermissionResult;
       }
-
-      const correlationId = options.toolUseID;
-      const questions: QuestionItem[] = parsed.data.questions;
-
-      const questionContent: QuestionMessageContent = {
-        correlationId,
-        questions,
-        previewFormat: "html",
-        allowFreeText: true,
-      };
-
-      // Push the question into the inbox first. If the upstream send fails
-      // we never register a pending entry — the SDK gets a clean deny and
-      // the model can retry. Server-side codex defense (commit 2) returns
-      // 403 for codex senders; we propagate that as a deny so the model
-      // doesn't burn turns hitting the same wall.
-      try {
-        await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
-          format: "question",
-          content: questionContent,
-          source: "api",
-          // Same bypass channel result-sink uses: an AskUserQuestion is a
-          // handler-initiated post, not a user-typed group broadcast — it
-          // must not be rejected by the group-chat `@mention required`
-          // guard and must not wake other agents in the chat. v1 §四 改造 4
-          // (b) bypass channel.
-          purpose: "agent-final-text",
-        });
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        sessionCtx.log(`AskUserQuestion: failed to publish question — ${reason}`);
-        return {
-          behavior: "deny",
-          message: `Hub could not publish the question (${reason}); abandon the call.`,
-        } satisfies PermissionResult;
-      }
-
-      sessionCtx.log(`AskUserQuestion: published correlationId=${correlationId}; awaiting user answer`);
-
-      // Wait for the matching question_answer to land in inbox. This Promise
-      // can sit pending for arbitrarily long — `defer` handling on the SDK
-      // hook side (PreToolUse) is the long-tail strategy if we ever need
-      // process-resume; for v1, the WS push path keeps the latency tight.
-      const result = await registerPendingQuestion({
-        correlationId,
-        agentId: sessionCtx.agent.agentId,
-        chatId: sessionCtx.chatId,
-      });
-
-      if (options.signal.aborted) {
-        // The query was aborted while we were waiting (eviction, restart,
-        // hot-switch). The bridge entry has already been removed by
-        // `rejectPendingForChat`; just return a deny so the SDK unwinds.
-        return {
-          behavior: "deny",
-          message: "AskUserQuestion aborted before an answer arrived.",
-        } satisfies PermissionResult;
-      }
-
-      if (result.status === "denied") {
-        sessionCtx.log(`AskUserQuestion: denied correlationId=${correlationId} reason=${result.reason}`);
-        return { behavior: "deny", message: result.reason } satisfies PermissionResult;
-      }
-
-      sessionCtx.log(`AskUserQuestion: answered correlationId=${correlationId}`);
-      return {
-        behavior: "allow",
-        updatedInput: { questions, answers: result.answers },
-      } satisfies PermissionResult;
+      return { behavior: "allow", updatedInput: input };
     };
   }
 
@@ -754,15 +657,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         //     explicit SDK options below, which layer on top of settings.
         settingSources: ["user", "project"],
         env: buildEnv(sessionCtx),
-        // Bridge AskUserQuestion to the Hub's inbox round-trip. Other tools
-        // are auto-allowed inside the bridge — `bypassPermissions` mode
-        // already skips the SDK's own prompt for non-ask-user tools, so
-        // adding canUseTool keeps existing behaviour while opening the
-        // ask-user channel for the model.
+        // NHA M0: AskUserQuestion is denied with a redirect message; all
+        // other tools auto-allow. See buildAskUserCanUseTool.
         canUseTool: buildAskUserCanUseTool(sessionCtx),
-        // Drive the model to emit web-renderable previews. The frontend
-        // sanitises with DOMPurify before rendering (commit 5).
-        toolConfig: { askUserQuestion: { previewFormat: "html" } },
         ...(claudeCodeExecutable ? { pathToClaudeCodeExecutable: claudeCodeExecutable } : {}),
         ...(payload?.model ? { model: payload.model } : {}),
         ...(combinedAppend.length > 0
@@ -1404,22 +1301,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     async suspend() {
       ctx?.log("Suspending session");
 
-      // Silently drop any in-flight AskUserQuestion waiters BEFORE killing
-      // the SDK transport. Resolving them here would unblock canUseTool,
-      // which would then try to write the PermissionResult through a stdin
-      // we're about to close — the SDK throws an uncaught
-      // 'ProcessTransport is not ready for writing'. Leaving the awaiter
-      // Promise stranded is fine: the SDK process is going away and its
-      // stack frames GC with it. If the user eventually answers,
-      // SessionManager.dispatch sees no matching waiter and routes the
-      // `format=question_answer` message through the normal resume path
-      // (the answer becomes regular input on the next turn).
-      const sessionCtx = ctx;
-      if (sessionCtx) {
-        const dropped = clearPendingForChat(sessionCtx.agent.agentId, sessionCtx.chatId);
-        if (dropped > 0) sessionCtx.log(`Cleared ${dropped} pending AskUserQuestion entries on suspend`);
-      }
-
       if (inputController) {
         inputController.end();
         inputController = null;
@@ -1442,14 +1323,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     async shutdown() {
       const sessionCtx = ctx;
       await handler.suspend();
-      // Reject every in-flight AskUserQuestion for this agent so the SDK
-      // unwinds cleanly instead of dangling on a Promise that will never
-      // resolve. The supersede happens server-side via archiveSession /
-      // claimClient (commit 2); this is the local-process counterpart.
-      if (sessionCtx) {
-        const dropped = rejectPendingForChat(sessionCtx.agent.agentId, sessionCtx.chatId, "Session shutting down.");
-        if (dropped > 0) sessionCtx.log(`Rejected ${dropped} pending AskUserQuestion entries during shutdown`);
-      }
       // Per agent-session-cwd-redesign: cwd is the per-agent home — shared
       // by every chat. shutdown() of ONE chat must NOT remove it (would
       // wipe persistent state and worktrees other chats are using). The
