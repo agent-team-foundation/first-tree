@@ -48,7 +48,7 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   team: {
     label: "Welcome",
     title: "Name your team",
-    why: "This is the shared space where you, your teammates, and your AI agents work together. Rename it anytime.",
+    why: "The shared space where you, your teammates, and your AI agents work together. Rename it anytime.",
   },
   "connect-code": {
     label: "Connect code",
@@ -63,7 +63,7 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   "create-agent": {
     label: "Create agent",
     title: "Create your agent",
-    why: "Name your agent and pick who can work with it. You'll be chatting in a moment, and you can add more anytime.",
+    why: "Name your agent and pick who can work with it. You'll be chatting in a moment.",
   },
   kickoff: {
     label: { admin: "Start tree", invitee: "Start work" },
@@ -102,7 +102,7 @@ export const COPY = {
     noRepos: "No projects found on your GitHub account yet.",
     reconnect: "Reconnect GitHub with project access",
     notConfigured:
-      "Code connection isn't set up on this server yet. You can continue now and connect a project later from Settings.",
+      "Code connection isn't set up here yet. You can continue now and connect a project later from Settings.",
     notAdmin: "Only a team admin can connect code. Ask an admin to finish this, or continue for now.",
     continueWithout: "Continue without connecting code",
     continueNoProject: "Continue without a project",
@@ -119,7 +119,7 @@ export const COPY = {
     /** Returned from the install dialog without a new installation. */
     postAttemptStuckTitle: "Looks like the install didn't complete.",
     postAttemptStuckBody:
-      "GitHub sent you back without adding First Tree. Try again, or get a link to send to your GitHub org owner.",
+      "GitHub sent you back without adding First Tree. Try again — GitHub will ask an org owner to approve if you're not one.",
     /** Skip-for-now warning. */
     skipWarningTitle: "Skip connecting code?",
     skipWarningBullets: [
@@ -178,7 +178,7 @@ export const COPY = {
     inviteePickerWhy: "Your team's set up — pick which of your own projects your agent should help with.",
     inviteePickerEmpty:
       "No projects found on your GitHub account yet. You can continue without one and add later from Settings.",
-    inviteePickerScopeMissing: "Couldn't see your projects — your GitHub access doesn't include project scope.",
+    inviteePickerScopeMissing: "Couldn't see your projects — your GitHub access is missing project read permission.",
     inviteePickerNetworkError: "Couldn't load your projects. Try again in a moment.",
     inviteeContinueNoProject: "Continue without a project",
     /** Shown atop confirm / picker so invitee knows where the work lands. */
@@ -199,9 +199,9 @@ export const COPY = {
     // the invitee here rather than letting them sail into the picker.
     noInstallTitle: "Almost there — your team's code isn't connected yet",
     noInstallBody:
-      "Your team's admin set up the Context Tree but hasn't connected code on GitHub yet. Your agent needs this to do real work.",
+      "Your team's admin set up the Context Tree but hasn't connected code on GitHub yet. Your agent needs that connection to do real work.",
     noInstallStatus: "Watching for the connection…",
-    noInstallShareIntro: "Send this link to your admin to remind them:",
+    noInstallShareIntro: "Send this link so your admin can connect your team's code:",
     confirmTitle: "Your team is ready",
     confirmBody: "Your team set up its projects and Context Tree. Pick what your agent should work on.",
     startAnyway: "Start chatting anyway",
