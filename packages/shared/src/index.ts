@@ -9,7 +9,15 @@ export {
   normalizeDocLinkPath,
   parseWorkspaceDocKey,
 } from "./lib/doc-path.js";
-export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
+export {
+  extractMentions,
+  MENTION_REGEX,
+  type MentionParticipant,
+  type MentionSegment,
+  scanMentionTokens,
+  segmentMentions,
+  stripCode,
+} from "./mentions.js";
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
