@@ -275,6 +275,20 @@ export async function respondAttention(
   // other speakers (co-targets, auditors) see the decision inline. This
   // is a side effect of `respond`; failure to write the message is
   // swallowed (the canonical answer is on `attentions.response`).
+  //
+  // Routing: prefix the echo content with `@<originAgent>` and let
+  // sendMessage's standard `@<name>` extraction wake them. The asking
+  // agent is already a speaker of origin_chat_id (raise invariant), so
+  // the mention always resolves. Visible-in-thread is the goal — readers
+  // of the chat history see the reply is directed at the asker, not just
+  // a free-floating message.
+  const [originAgentRow] = await db
+    .select({ name: agents.name })
+    .from(agents)
+    .where(eq(agents.uuid, row.originAgentId))
+    .limit(1);
+  const mentionPrefix = originAgentRow?.name ? `@${originAgentRow.name} ` : "";
+  const echoContent = `${mentionPrefix}${responseText}`;
   try {
     await sendMessage(
       db,
@@ -282,7 +296,7 @@ export async function respondAttention(
       callerHumanId,
       {
         format: "text",
-        content: responseText,
+        content: echoContent,
         // Tag the message so consumers can attribute it to the NHA flow
         // (web rendering may opt to chip-decorate "answer to <subject>",
         // exports / search may filter on it). The bag also carries the
@@ -290,11 +304,10 @@ export async function respondAttention(
         metadata: { attentionResponseFor: attentionId },
         source: "api",
       },
-      // No mention extraction: the response text often contains plain
-      // `@<name>` tokens that aren't routing intent (e.g. quoting the
-      // ask), and the ask itself already names the audience. Keep this
-      // path quiet — receiverNames is empty, content extraction off.
-      { extractMentionsFromContent: false },
+      // Content extraction ON so the `@<originAgent>` prefix above resolves
+      // and wakes the asker. Any narrative `@peer` the human quoted in the
+      // reply may also resolve — acceptable: the human typed it, and the
+      // standard chat-send path treats typed `@peer` the same way.
     );
   } catch (err) {
     log.warn(

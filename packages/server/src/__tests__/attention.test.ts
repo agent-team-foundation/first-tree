@@ -207,7 +207,14 @@ describe("attention service — invariants", () => {
 
     const closed = await respondAttention(app.db, human, created.id, { text: "deploy — diff looks clean" });
     expect(closed.state).toBe("closed");
+    // The canonical answer on the attention row is the raw response text
+    // — the `@<origin>` echo prefix is a chat-rendering concern, not part
+    // of the stored answer.
     expect(closed.response).toBe("deploy — diff looks clean");
+
+    const [botRow] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, bot));
+    expect(botRow?.name).toBeTruthy();
+    const botName = botRow?.name ?? "";
 
     const postEcho = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
     expect(postEcho.length).toBe(1);
@@ -215,12 +222,22 @@ describe("attention service — invariants", () => {
     expect(echo).toBeDefined();
     if (!echo) return;
     expect(echo.senderId).toBe(human);
-    expect(echo.content).toBe("deploy — diff looks clean");
+    // Echo content is prefixed with `@<originAgent>` so readers of the
+    // chat thread see who the reply is directed at, and so sendMessage's
+    // `@<name>` extraction wakes the asking agent.
+    expect(echo.content).toBe(`@${botName} deploy — diff looks clean`);
     expect(echo.format).toBe("text");
     // The echo carries the linkage back to the originating attention so
     // exports / search / rendering can opt in to a "this was an answer"
     // visual without inferring from heuristics.
-    expect((echo.metadata as Record<string, unknown>).attentionResponseFor).toBe(created.id);
+    const echoMetadata = echo.metadata as Record<string, unknown>;
+    expect(echoMetadata.attentionResponseFor).toBe(created.id);
+    // The `@<originAgent>` prefix must resolve to the asker's uuid via
+    // content extraction — this is the wake-up routing that lets the
+    // asking agent resume after the human responds.
+    const mentions = echoMetadata.mentions;
+    expect(Array.isArray(mentions)).toBe(true);
+    expect(mentions as string[]).toContain(bot);
   });
 
   it("cancel by non-origin → ForbiddenError", async () => {
