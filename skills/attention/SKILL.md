@@ -29,6 +29,23 @@ NHA (Need-Human-Attention) is the structured "I need a human" primitive. You rai
 
 The system layer is intentionally thin. It stores, routes, and delivers; it does **not** decide whether you should raise, how long to wait, or what to do on timeout. Those are your job — that's why this skill exists.
 
+## Attention vs Chat message — when to use which
+
+Attention and message are **separate substrates by design**, not two views on the same data. Pick deliberately:
+
+| Need | Use Chat message | Use Attention |
+|---|---|---|
+| Narrate progress, share findings, FYI ack | ✅ | ❌ |
+| Need a specific named human to act | ❌ | ✅ |
+| Want to `@<name>` ping someone else | ✅ (message handles mention routing) | ❌ (attention is single-target by definition) |
+| Want attachments / images inline today | ✅ (built in) | ⚠️ pass refs via `metadata` (skill convention; see `references/metadata-shape.md`) |
+| Need lifecycle (open → closed, response, cancel) | ❌ | ✅ |
+| Want it in chat search history | ✅ | ⚠️ separate index (follow-up) |
+
+**Do not write `@<name>` inside an attention body expecting the named person to be notified.** Attention already names its target; the `@` token is treated as plain text. If you need a second human's attention, post a separate chat message (which handles mentions) or raise a separate attention.
+
+If you need attachments today, post a normal chat message with the image and reference it from the attention body in prose. The skill's `references/metadata-shape.md` covers the planned `metadata.attachments` convention for when attention-native attachments land.
+
 ## When to raise an NHA — four lenses
 
 These are **thinking lenses**, not data partitions. A single NHA can hit multiple lenses at once (a prod-deploy approval is simultaneously *endorse* and *direction*). The only structural axis in the schema is `requiresResponse`. The lenses live in your head and in the body markdown — they help you decide *whether* to raise and *what to write* — they never become an enum field.

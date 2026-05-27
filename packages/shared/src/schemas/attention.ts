@@ -22,6 +22,31 @@ import { z } from "zod";
  * SUPERSEDED state and no replacement chain. The new Attention's `body`
  * explains the relationship to humans.
  *
+ * Decoupling from `messages`: attention owns its own content (`subject`
+ * / `body` / `response`) — it never references a `messages` row and a
+ * raise never writes a chat message. Two state machines, two substrates:
+ *
+ *   - **Messages** are append-only chat artefacts with edit / delete,
+ *     @mention parsing, attachments, search index. Audience: chat
+ *     speakers, broad.
+ *   - **Attention** is a structured contract with state machine (open →
+ *     closed) and lifecycle hooks (raise / respond / cancel). Audience:
+ *     exactly one target human + the origin agent.
+ *
+ * Resulting design choices, all intentional:
+ *
+ *   - `@<name>` tokens in `body` are NOT parsed and DO NOT fire
+ *     notifications. Attention already names its target; mention would
+ *     break the single-target invariant. Raise a separate attention or
+ *     post a normal chat message if you need a second human's eyes.
+ *   - Attachments ride on `metadata` (extensible bag with catchall);
+ *     the convention lives in the skill, not in this schema.
+ *   - Search over attentions is a follow-up; it does not piggyback on
+ *     the messages search pipeline.
+ *   - Chat archive does NOT cascade-delete attentions. Closed records
+ *     remain as audit; raising new attentions in an archived chat is
+ *     refused by the speaker-membership gate.
+ *
  * For the design rationale see proposals/nha-need-human-attention.md.
  */
 

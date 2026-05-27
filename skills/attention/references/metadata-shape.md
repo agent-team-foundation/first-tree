@@ -143,6 +143,21 @@ Free-form, but the UI may surface them as labelled chips:
 - `validityScope: string` — free-form, e.g. `"single commit hash abc123"`.
 - `fallback: string` — free-form, what the agent will do on no-response.
 
+## Attachments (planned convention, not yet rendered)
+
+Attention deliberately does NOT couple to `messages` for content (see the design note in `SKILL.md`'s "Attention vs Chat message" section). Inline images and file attachments are not in the schema today; the planned shape lives on `metadata.attachments` as part of the extensible bag:
+
+```json
+{
+  "attachments": [
+    { "kind": "image", "url": "https://...", "alt": "p95 latency spike" },
+    { "kind": "file",  "url": "https://...", "name": "deploy-plan.pdf", "mime": "application/pdf" }
+  ]
+}
+```
+
+Until the UI renders these, the pragmatic workaround is: post a normal chat message with the image (messages already handle attachments), then raise the attention with the body referencing the message id in prose. Don't tile up `metadata` with raw base64 — the bag is for refs, not blobs.
+
 ## Constraints to respect
 
 - **Atomic submission for multi-question.** All questions answered, or none. If you want partial-submit semantics, split into multiple serial NHAs.

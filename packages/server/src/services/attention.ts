@@ -18,7 +18,7 @@ import { createLogger } from "../observability/index.js";
 import { uuidv7 } from "../uuid.js";
 
 /**
- * NHA M1 末 (Need Human Attention) — service layer.
+ * NHA (Need Human Attention) — service layer.
  *
  * Hosts the attention primitive's invariants (chat-membership, target-is-
  * human, single-target, only-target-responds, only-origin-cancels,
@@ -26,6 +26,31 @@ import { uuidv7 } from "../uuid.js";
  * `packages/shared/src/schemas/attention.ts`. The DDL is FK-free per the
  * "integrity in service layer" convention; every constraint we care about
  * lives here.
+ *
+ * Decoupling from `messages`: attention is its own content substrate. The
+ * row carries `subject` / `body` / `response` directly — it does NOT
+ * reference a `messages` row, and a raise does NOT write a chat message.
+ * Consequences (intentional, not silent failures):
+ *
+ *   - `@<name>` tokens inside the body are NOT parsed and do NOT fire the
+ *     mention notification path. An attention already has exactly one
+ *     `targetHumanId`; "ping someone else" via mention would contradict
+ *     the single-target invariant. If you need a second human's eyes,
+ *     raise a separate attention or post a normal chat message.
+ *   - Attachments (images, files) ride on `metadata` per the proposal
+ *     §4 extensible-bag convention. The skill documents the agreed
+ *     shape; the service does not enforce it.
+ *   - Full-text search over attentions is a separate index, not the
+ *     `messages` search pipeline. (Follow-up; not in this PR.)
+ *   - chat archive does NOT cascade-delete attentions. Closed attentions
+ *     remain as an audit trail; raising new attentions in an archived
+ *     chat is refused via the existing `isSpeaker` membership gate.
+ *
+ * The shared-substrate alternative (attention.body → message FK) was
+ * considered and rejected: the @mention / attachment / search gaps that
+ * motivate it can be closed point-by-point above without coupling the
+ * two state machines (message: edit/delete, append-only audit; attention:
+ * cancel + raise-new, structured contract).
  */
 
 const log = createLogger("attention");
