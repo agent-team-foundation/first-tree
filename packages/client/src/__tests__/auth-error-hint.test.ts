@@ -109,4 +109,15 @@ describe("formatAuthHint", () => {
     const hint = formatAuthHint("codex", "");
     expect(hint).toContain("(no message from SDK)");
   });
+
+  it("caps an oversized SDK error envelope so the hint stays readable in the timeline", () => {
+    // Codex error envelopes can occasionally include a wrapped stack trace
+    // that runs into the tens of KB. The hint should remain bounded.
+    const giantMessage = "x".repeat(5000);
+    const hint = formatAuthHint("codex", giantMessage);
+    expect(hint.length).toBeLessThan(2000);
+    expect(hint).toContain("Original SDK error:");
+    // The original message we DO include should be capped, not absent.
+    expect(hint).toMatch(/x{500,}/);
+  });
 });

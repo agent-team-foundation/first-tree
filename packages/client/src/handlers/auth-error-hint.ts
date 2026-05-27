@@ -21,19 +21,27 @@ type Runtime = "codex" | "claude-code";
  * on the english phrases that appear across every variant the bundled Rust
  * binary emits ("...refresh token was revoked...", "...refresh token has
  * expired...", "...could not be refreshed...", "...Please log out and sign
- * in again..."). Keep the keyword set narrow: each must be specific enough
- * that an unrelated SDK error wouldn't trip it.
+ * in again...", "...Token data is not available..."). All seven phrases
+ * below were extracted via `strings` from
+ * `node_modules/@openai/codex/vendor/*\/codex/codex` at codex-sdk 0.125.0.
+ *
+ * Order matters for auditability (not for correctness — we use `some`):
+ * the most-specific phrases come first so any canonical codex message hits
+ * a specific keyword before falling through to the broader "...sign in
+ * again..." / "...log in again..." catches. Future codex copy changes that
+ * remove a specific phrase but keep one of the generic tails will still
+ * trip detection.
  *
  * Claude-code does NOT use this — it ships a typed `SDKAssistantMessageError`
  * union (see `isClaudeAuthError`).
  */
 const CODEX_AUTH_KEYWORDS: readonly string[] = [
-  "refresh token",
   "could not be refreshed",
+  "refresh token",
   "log out and sign in",
+  "Token data is not available",
   "sign in again",
   "log in again",
-  "Token data is not available",
 ];
 
 export function isCodexAuthError(message: string): boolean {
@@ -66,7 +74,10 @@ export function formatAuthHint(runtime: Runtime, originalMessage: string): strin
   // ever changes (e.g. `claude auth login`), update both call sites together.
   const reauth = runtime === "codex" ? "`codex login`" : "`claude login`";
   const provider = runtime === "codex" ? "OpenAI" : "Anthropic";
-  const trimmed = originalMessage.trim();
+  // Cap the appended raw message so an upstream stack-trace envelope (codex
+  // wraps its `event.error.message` in surprising ways) doesn't bloat the
+  // hint into a wall of text on the chat timeline.
+  const trimmed = originalMessage.trim().slice(0, ORIGINAL_MESSAGE_CAP);
   const original = trimmed.length > 0 ? trimmed : "(no message from SDK)";
   return (
     `${runtime} auth on this machine looks broken or expired. ` +
@@ -75,3 +86,5 @@ export function formatAuthHint(runtime: Runtime, originalMessage: string): strin
     `Original SDK error: ${original}`
   );
 }
+
+const ORIGINAL_MESSAGE_CAP = 1000;
