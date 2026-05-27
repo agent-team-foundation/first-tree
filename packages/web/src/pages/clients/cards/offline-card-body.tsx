@@ -28,18 +28,25 @@ type OfflineCardBodyProps = {
 export function OfflineCardBody({ client, boundAgents, agentName }: OfflineCardBodyProps) {
   const summary = summarizeBoundAgents(boundAgents);
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg)" }}>
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
         {offlineDiagnostic(client)}
       </p>
-      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-        <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
+      <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
+        <p className="text-caption" style={{ margin: 0, color: "var(--fg-3)" }}>
           If the daemon isn't running, on this computer:
         </p>
         <InlineCommand command="first-tree daemon start" ariaLabel="Daemon wake command" />
       </div>
       {summary.total > 0 && <BoundAgentsList summary={summary} agentName={agentName} compact />}
-      <CardMetaRow client={client} dimmed />
+      <div
+        style={{
+          borderTop: "var(--hairline) solid var(--border-faint)",
+          paddingTop: "var(--sp-2_5)",
+        }}
+      >
+        <CardMetaRow client={client} dimmed />
+      </div>
     </div>
   );
 }

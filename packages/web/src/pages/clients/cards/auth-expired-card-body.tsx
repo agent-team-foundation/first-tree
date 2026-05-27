@@ -32,30 +32,24 @@ type AuthExpiredCardBodyProps = {
 export function AuthExpiredCardBody({ client, boundAgents, agentName, onGenerateNewToken }: AuthExpiredCardBodyProps) {
   const summary = summarizeBoundAgents(boundAgents);
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg)" }}>
+    <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
         {authExpiredDiagnostic(client)}
       </p>
-      <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+      <div className="flex items-center" style={{ gap: "var(--sp-3)" }}>
         <Button size="sm" onClick={onGenerateNewToken}>
           Generate new token
         </Button>
         {summary.total > 0 && <BoundAgentsList summary={summary} agentName={agentName} compact />}
       </div>
-      <Divider />
-      <CardMetaRow client={client} dimmed />
+      <div
+        style={{
+          borderTop: "var(--hairline) solid var(--border-faint)",
+          paddingTop: "var(--sp-2_5)",
+        }}
+      >
+        <CardMetaRow client={client} dimmed />
+      </div>
     </div>
-  );
-}
-
-function Divider() {
-  return (
-    <div
-      aria-hidden
-      style={{
-        borderTop: "var(--hairline) solid var(--border-faint)",
-        margin: 0,
-      }}
-    />
   );
 }

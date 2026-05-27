@@ -1275,6 +1275,16 @@
   outline-offset: var(--sp-0_5);
 }
 
+/*
+ * Settings → Computers card stack. Adjacent ComputerCards get a hairline
+ * separator on the top edge (skipping the first child so the first
+ * card sits flush against the parent Section's own bottom border).
+ * Keeps each ComputerCard's JSX free of "am I first?" branching.
+ */
+.computer-card-stack > * + * {
+  border-top: var(--hairline) solid var(--border-faint);
+}
+
 .onboarding-runtime-option {
   border-radius: var(--radius-input);
   outline: var(--hairline) solid transparent;

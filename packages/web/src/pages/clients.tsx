@@ -26,6 +26,7 @@ import {
 import { PageHeader } from "../components/ui/page-header.js";
 import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-chip.js";
 import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
+import { Section } from "../components/ui/section.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate, formatRelative } from "../lib/utils.js";
@@ -216,7 +217,10 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
     if (client.userId === null) return { text: "—" };
     if (client.userId === user?.id) {
       const display = membersById.get(client.userId);
-      return { text: display ? `${display} (you)` : "you" };
+      // "gandy · you" rather than "gandy (you)" — nested parens read stiff
+      // in card headers; the middot is the same separator the rest of the
+      // page uses for meta segments.
+      return { text: display ? `${display} · you` : "you" };
     }
     const display = membersById.get(client.userId);
     if (display) return { text: display };
@@ -440,15 +444,15 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
             {teamLoadError && <TeamLoadErrorBanner />}
             {grouped ? (
               <>
-                <CardSection title="Your computers" count={mineList.length}>
+                <Section title="Your computers" count={mineList.length}>
                   {mineList.length === 0 ? (
                     // Admin with no own computers + N team rows — the "Add
                     // another computer" bottom button would read wrong here
                     // ("another" implies a first), so keep the connect CTA
                     // inside the empty section instead.
                     <div
-                      className="flex flex-col items-start py-6"
-                      style={{ color: "var(--fg-3)", gap: "var(--sp-3)" }}
+                      className="flex flex-col items-start"
+                      style={{ color: "var(--fg-3)", gap: "var(--sp-3)", padding: "var(--sp-4) 0" }}
                     >
                       <span className="text-body">No computers of your own.</span>
                       <Button size="sm" onClick={openNewConnection}>
@@ -457,7 +461,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                       </Button>
                     </div>
                   ) : (
-                    <CardGrid>
+                    <CardStack>
                       {mineList.map((client) => (
                         <ComputerCard
                           key={client.id}
@@ -474,10 +478,10 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                           ownerLabel={resolveOwner(client)}
                         />
                       ))}
-                    </CardGrid>
+                    </CardStack>
                   )}
-                </CardSection>
-                <CardSection title="Team computers" count={teamList.length}>
+                </Section>
+                <Section title="Team computers" count={teamList.length}>
                   {teamList.length === 0 ? (
                     <EmptyCardsNote message="No other team computers." />
                   ) : (
@@ -497,10 +501,10 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                       resolveOwner={resolveOwner}
                     />
                   )}
-                </CardSection>
+                </Section>
               </>
             ) : (
-              <CardGrid>
+              <CardStack>
                 {(memberList ?? []).map((client) => (
                   <ComputerCard
                     key={client.id}
@@ -516,7 +520,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                     }}
                   />
                 ))}
-              </CardGrid>
+              </CardStack>
             )}
 
             {showBottomAddButton && (
@@ -535,52 +539,28 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
 }
 
 /**
- * Responsive card grid. `auto-fit` with `minmax(min(100%, 35rem), 1fr)`
- * yields 2-up on viewports wider than ~1120 logical units and 1-up
- * below. The 35rem minimum keeps the AuthExpired card's
- * `first-tree login <jwt>` command from wrapping into ugly multi-line
- * fragments inside narrow cards.
+ * Vertical stack of computer cards with hairline separators. Each card
+ * renders as a flat `<article>` (no own chrome) inside the parent
+ * `<Section>`; this wrapper paints a hairline between adjacent computers
+ * so the eye still sees "here ends one machine, here begins the next"
+ * without nesting boxes.
+ *
+ * The hairline is injected via a sibling-selector class — defining it
+ * once at the page level keeps every ComputerCard pure of "I might be
+ * first or not" awareness.
+ *
+ * Previous PR-B used a `repeat(auto-fit, minmax(35rem, 1fr))` 2-up grid
+ * — that fights the Settings tab's single-column hairline-separated
+ * vocabulary (see /settings/github, /settings/messaging), so it was
+ * collapsed to a stack here.
  */
-function CardGrid({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        display: "grid",
-        gap: "var(--sp-4)",
-        gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 35rem), 1fr))",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function CardSection({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
-  return (
-    <section className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-      <header className="flex items-baseline" style={{ gap: "var(--sp-2)" }}>
-        {/*
-          `text-subtitle` + `font-semibold` is the same visual weight used by
-          PageHeader's section headings — bumping above `text-body` makes the
-          "Your computers" / "Team computers" hierarchy survive when both
-          sections are present (admin view) and the page is otherwise wall-
-          to-wall cards.
-        */}
-        <h2 className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-          {title}
-        </h2>
-        <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-          · {count}
-        </span>
-      </header>
-      {children}
-    </section>
-  );
+function CardStack({ children }: { children: React.ReactNode }) {
+  return <div className="computer-card-stack">{children}</div>;
 }
 
 function EmptyCardsNote({ message }: { message: string }) {
   return (
-    <div className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) var(--sp-1)" }}>
+    <div className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0" }}>
       {message}
     </div>
   );
