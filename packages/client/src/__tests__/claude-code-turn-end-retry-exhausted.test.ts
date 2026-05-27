@@ -67,10 +67,11 @@ function buildCache() {
 }
 
 describe("claude-code handler — retry-exhausted surfacing", () => {
-  it("emits error + turn_end:error and flips runtimeState to error after MAX_RETRIES", async () => {
+  it("emits error + turn_end:error, flips runtimeState to error, AND acks the in-flight entry after MAX_RETRIES", async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
     const runtimeStates: string[] = [];
+    const markCompleted = vi.fn();
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -93,6 +94,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
       setRuntimeState: (state) => runtimeStates.push(state),
       emitEvent: (e) => emitted.push(e),
       ...mockCtxPlumbing({ sendMessage }, "chat-retry"),
+      markCompleted,
     };
 
     await handler.start(
@@ -104,6 +106,11 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
 
     // Result auto-forward never ran — every iteration threw.
     expect(sendMessage).not.toHaveBeenCalled();
+
+    // Reviewer Blocking 2 regression: the retry-exhausted return MUST ack
+    // the entry. Without this the row sits `delivered` forever and the
+    // in-process Deduplicator collapses every bind-reset replay.
+    expect(markCompleted).toHaveBeenCalledTimes(1);
 
     const errors = emitted.filter((e) => e.kind === "error");
     expect(errors).toHaveLength(1);

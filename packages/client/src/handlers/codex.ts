@@ -603,7 +603,19 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
   }
 
-  async function runTurn(input: Input, sessionCtx: SessionContext): Promise<void> {
+  /**
+   * Run one Codex turn.
+   *
+   * `entryCount` is the number of inbox entries this turn is consuming —
+   * always 1 for `start` / `resume` / single-inject paths, and `N` when
+   * `mergeAndRun` fuses N queued messages into one input. The runtime acks
+   * exactly `entryCount` entries from the chat's in-flight FIFO once the
+   * turn closes (markCompleted N). Drift between this number and what the
+   * SDK actually consumed loses the per-turn pairing — under-counts leak
+   * entries (stay `delivered` server-side until next bind), over-counts
+   * ack future turns prematurely (loss on crash).
+   */
+  async function runTurn(input: Input, sessionCtx: SessionContext, entryCount: number): Promise<void> {
     const activeThread = thread;
     if (!activeThread) return;
 
@@ -774,6 +786,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
       payload: { status: succeeded ? "success" : "error" },
     });
     sessionCtx.setRuntimeState("idle");
+    // Ack the entries this turn consumed. All four turn outcomes (success,
+    // silent / no-text, SDK turn.failed, forwardResult failure) are
+    // terminal for this turn — redelivery would either replay an already-
+    // delivered reply or re-hit the same failure. Pass `entryCount` so a
+    // fused `mergeAndRun` (N injected messages → one turn) acks exactly
+    // those N entries and leaves any in-flight entries for the NEXT turn
+    // alone.
+    sessionCtx.markCompleted(entryCount);
 
     // Structured usage / timing log — emitted via `sessionCtx.log` rather
     // than a new SessionEvent kind so we stay inside the codex handler
@@ -815,8 +835,20 @@ export const createCodexHandler: HandlerFactory = (config) => {
         sessionCtx.log(`codex inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    if (inputs.length === 0) return;
-    await runTurn(inputs.join("\n\n"), sessionCtx);
+    if (inputs.length === 0) {
+      // Every fused message failed `formatInboundContent` — semantically a
+      // permanent failure for this batch (redelivery would re-hit the same
+      // format errors). Ack the entries so they don't leak in
+      // `inFlightEntries` and pile up server-side as `delivered` rows.
+      sessionCtx.markCompleted(drained.length);
+      return;
+    }
+    // `drained.length` is the authoritative fused-entry count — formatting
+    // a single message could throw (it gets logged and skipped above) but
+    // the inbox entry was still pushed at dispatch time, so it must still
+    // be acked. Using `inputs.length` here would leak the formatting-failed
+    // entry until the next bind reset.
+    await runTurn(inputs.join("\n\n"), sessionCtx, drained.length);
   }
 
   /**
@@ -993,7 +1025,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
 
       const input = await toCodexInput(message, sessionCtx);
-      await runTurn(input, sessionCtx);
+      await runTurn(input, sessionCtx, 1);
 
       // Codex assigns thread_id via `thread.started` during the first turn;
       // fall back to whatever `Thread` exposes if the event was missed.
@@ -1044,7 +1076,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       if (message) {
         const input = await toCodexInput(message, sessionCtx);
-        await runTurn(input, sessionCtx);
+        await runTurn(input, sessionCtx, 1);
       }
       return sessionId;
     },
@@ -1062,9 +1094,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
       void (async () => {
         try {
           const input = await toCodexInput(message, sessionCtx);
-          await runTurn(input, sessionCtx);
+          // Single inject, single entry — runTurn will ack exactly one.
+          await runTurn(input, sessionCtx, 1);
         } catch (err) {
           sessionCtx.log(`codex inject failed: ${err instanceof Error ? err.message : String(err)}`);
+          // `toCodexInput` / `runTurn` threw before any markCompleted —
+          // the entry is still in flight. Ack so the row doesn't loop
+          // server-side as `delivered`; redelivery would re-hit the same
+          // failure. Mirrors design §4 "permanent → ack".
+          sessionCtx.markCompleted(1);
         }
       })();
     },

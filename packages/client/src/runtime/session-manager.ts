@@ -65,7 +65,6 @@ type SessionEntry = {
 type PendingMessage = {
   message: SessionMessage;
   chatId: string;
-  entryId: number;
 };
 
 /**
@@ -283,6 +282,23 @@ export class SessionManager {
    */
   private readonly currentTrigger = new Map<string, Trigger>();
   private readonly registry: SessionRegistry | null;
+  /**
+   * In-flight inbox entries per chat — FIFO of entryIds populated at
+   * `dispatch()` time and drained when the handler calls
+   * `ctx.markCompleted()` after a turn (or when the runtime tears a session
+   * down on a permanent failure / terminate command).
+   *
+   * Kept here (not on `SessionEntry`) because dispatch may push an entryId
+   * before any session record exists for the chat (`startNewSession` runs
+   * `routeMessage` first), and the queue must survive a session being
+   * suspended / evicted between dispatch and markCompleted.
+   *
+   * Sized small in practice: usually 1, briefly up to N when several
+   * messages land while a turn is mid-flight (codex `mergeAndRun` fuses
+   * them into a single forwardResult). See
+   * docs/inflight-message-recovery-design.md §4.
+   */
+  private readonly inFlightEntries = new Map<string, number[]>();
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
@@ -315,11 +331,14 @@ export class SessionManager {
   }
 
   /**
-   * Dispatch an inbox entry. ACK is deferred until handler starts processing.
+   * Dispatch an inbox entry. ACK is deferred until the handler reports a
+   * completed turn via `ctx.markCompleted()`.
    *
-   * Delayed ACK: messages are ACKed when the handler begins processing,
-   * not on pull. `delivered` = pulled but not yet processing,
-   * `acked` = handler has started processing (read receipt).
+   * Delayed ACK semantics (post inflight-message-recovery): the entry stays
+   * `delivered` server-side until forwardResult succeeds (or the handler
+   * surfaces a permanent error). If this client crashes mid-turn, the next
+   * `agent:bind` resets the entry back to `pending` so a fresh client
+   * resumes the work — see docs/inflight-message-recovery-design.md.
    *
    * No routing guards run client-side any more: the cross-chat
    * reply-routing mechanism (`replyToChat` / `shouldSuppressEcho`) has been
@@ -337,11 +356,24 @@ export class SessionManager {
     // server-side identity is still (inboxId, messageId, chatId) and we
     // mirror it defensively in case a legacy entry surfaces or fan-out is
     // ever extended again.
+    //
+    // Network-blip redelivery (server resets `delivered → pending` on every
+    // `agent:bind`) also lands here for the duration of one process: if
+    // we've already processed this messageId in-memory the dedup short-
+    // circuits before we re-enqueue an entry that the previous turn will
+    // ack on its own.
     const dedupKey = `${chatId}:${messageId}`;
     if (this.deduplicator.isDuplicate(dedupKey)) {
       this.config.log.debug({ chatId, messageId }, "duplicate message, skipping");
       return;
     }
+
+    // Push the entry into the in-flight FIFO BEFORE routing. The handler
+    // (or the session-manager teardown path) drains the queue via
+    // `markCompleted()` once the turn is complete; nothing acks until then.
+    const queue = this.inFlightEntries.get(chatId);
+    if (queue) queue.push(entry.id);
+    else this.inFlightEntries.set(chatId, [entry.id]);
 
     // 2. Step 4: refresh runtime config if the message brought a newer
     // version. This is the *only* trigger for active-session re-config —
@@ -375,8 +407,10 @@ export class SessionManager {
     // 4. Extract message content (handler does not see inbox metadata)
     const message = this.extractMessage(entry);
 
-    // 5. Route by session state — ACK happens inside route when handler starts
-    await this.routeMessage(chatId, message, entry.id);
+    // 5. Route by session state. ACK no longer happens inside route — the
+    // entry sits in `inFlightEntries` until the handler calls
+    // `ctx.markCompleted()` at turn end.
+    await this.routeMessage(chatId, message);
   }
 
   /** Handle a server-issued session command. Terminate drops all local state without reporting back. */
@@ -414,6 +448,13 @@ export class SessionManager {
       for (let i = this.pendingQueue.length - 1; i >= 0; i--) {
         if (this.pendingQueue[i]?.chatId === chatId) this.pendingQueue.splice(i, 1);
       }
+
+      // Terminate is operator-intent — ack every queued in-flight entry
+      // so the server doesn't redeliver them on the next bind. Server-side
+      // pushed messages get silently dropped here; this is the documented
+      // terminate semantics (operator chose to wipe this chat's session,
+      // anything mid-flight is collateral).
+      this.drainAllInFlightEntries(chatId);
 
       this.recomputeRuntimeState();
       this.persistRegistry();
@@ -532,7 +573,7 @@ export class SessionManager {
 
   // ---- Internal -----------------------------------------------------------
 
-  private async routeMessage(chatId: string, message: SessionMessage, entryId?: number): Promise<void> {
+  private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
     // Record the trigger BEFORE dispatching to any handler path (start /
     // resume / inject) so the resultSink constructed in buildSessionContext
     // sees the right messageId+senderId when this turn eventually produces a
@@ -547,12 +588,11 @@ export class SessionManager {
     // Transient retry path: an earlier handler.start / handler.resume failed
     // with a classified-transient error and we kept the entry around. A new
     // user message is a strong signal the user is waiting — replace the
-    // stored startMessage so the retry uses the fresher content, then either
-    // fire an immediate retry (if a timer is still armed) or queue normally.
+    // stored startMessage so the retry uses the fresher content, then fire
+    // an immediate retry. The new entry sits alongside any prior entries in
+    // `inFlightEntries[chatId]`; the retry's eventual forwardResult drains
+    // the whole queue via `markCompleted()`.
     if (existing && existing.retryAttempt > 0) {
-      // ACK the entry now so the inbox doesn't redeliver it while the retry
-      // is running.
-      await this.ackEntry(entryId, chatId);
       existing.startMessage = message;
       this.triggerImmediateRetry(chatId);
       return;
@@ -561,8 +601,6 @@ export class SessionManager {
     if (existing) {
       switch (existing.status) {
         case "active":
-          // ACK before injecting — handler is already processing
-          await this.ackEntry(entryId, chatId);
           existing.handler.inject(message);
           existing.lastActivity = Date.now();
           // Re-arm the working-grace guard in `evictIdle`. Without this, a
@@ -580,22 +618,18 @@ export class SessionManager {
 
         case "suspended":
         case "evicted":
-          // Resume session — ACK happens inside resumeSession
-          await this.resumeSession(existing, message, entryId);
+          await this.resumeSession(existing, message);
           return;
       }
     }
 
     // No existing session — create new
-    await this.startNewSession(chatId, message, entryId);
+    await this.startNewSession(chatId, message);
   }
 
-  private async startNewSession(chatId: string, message: SessionMessage, entryId?: number): Promise<void> {
+  private async startNewSession(chatId: string, message: SessionMessage): Promise<void> {
     // Enforce concurrency limit
-    if (!this.acquireActiveSlot(chatId, message, entryId)) return;
-
-    // ACK now — handler is about to start processing
-    await this.ackEntry(entryId, chatId);
+    if (!this.acquireActiveSlot(chatId, message)) return;
 
     // Enforce max_sessions (evict LRU)
     this.evictIfNeeded();
@@ -666,7 +700,10 @@ export class SessionManager {
         classification,
       });
       if (!handled) {
-        // Permanent / degraded failure: tear down (legacy F2 path).
+        // Permanent / degraded failure: tear down (legacy F2 path) and ack
+        // every in-flight entry so the server doesn't redeliver a message
+        // that would just re-hit the same permanent failure.
+        this.drainAllInFlightEntries(chatId);
         this.sessions.delete(chatId);
         this.sessionRuntimeStates.delete(chatId);
         this.recomputeRuntimeState();
@@ -675,11 +712,7 @@ export class SessionManager {
     }
   }
 
-  private async resumeSession(
-    entry: SessionEntry,
-    message: SessionMessage | null | undefined,
-    entryId?: number,
-  ): Promise<void> {
+  private async resumeSession(entry: SessionEntry, message: SessionMessage | null | undefined): Promise<void> {
     // Wait for in-flight suspension to complete before resuming
     if (entry.suspending) {
       await entry.suspending;
@@ -696,10 +729,7 @@ export class SessionManager {
     };
 
     // Enforce concurrency limit
-    if (!this.acquireActiveSlot(entry.chatId, slotMessage, entryId)) return;
-
-    // ACK now — handler is about to resume processing
-    await this.ackEntry(entryId, entry.chatId);
+    if (!this.acquireActiveSlot(entry.chatId, slotMessage)) return;
 
     const ctx = this.buildSessionContext(entry.chatId);
     entry.status = "active";
@@ -735,6 +765,7 @@ export class SessionManager {
         classification,
       });
       if (!handled) {
+        this.drainAllInFlightEntries(entry.chatId);
         this.sessions.delete(entry.chatId);
         this.sessionRuntimeStates.delete(entry.chatId);
         this.recomputeRuntimeState();
@@ -893,7 +924,7 @@ export class SessionManager {
     // Enforce concurrency limit before claiming the slot. If we cannot, the
     // entry stays in transient-retry state and a future retry / message will
     // try again.
-    if (!this.acquireActiveSlot(chatId, entry.startMessage ?? buildEmptySessionMessage(chatId), undefined)) {
+    if (!this.acquireActiveSlot(chatId, entry.startMessage ?? buildEmptySessionMessage(chatId))) {
       // Couldn't get a slot — re-arm the timer with a short delay.
       const nextDelay = 5_000;
       entry.retryNextAt = Date.now() + nextDelay;
@@ -967,6 +998,7 @@ export class SessionManager {
         classification,
       });
       if (!handled) {
+        this.drainAllInFlightEntries(chatId);
         this.sessions.delete(chatId);
         this.sessionRuntimeStates.delete(chatId);
         this.recomputeRuntimeState();
@@ -996,9 +1028,11 @@ export class SessionManager {
    * 1. Suspend the least-recently-active session to free a slot
    * 2. If no candidates, queue the message
    *
-   * Returns true if slot acquired, false if queued.
+   * Returns true if slot acquired, false if queued. The in-flight entryId
+   * is tracked separately in `inFlightEntries` (populated at dispatch),
+   * so the queue doesn't carry inbox metadata.
    */
-  private acquireActiveSlot(chatId: string, message: SessionMessage, entryId?: number): boolean {
+  private acquireActiveSlot(chatId: string, message: SessionMessage): boolean {
     if (this._activeCount < this.config.concurrency) return true;
 
     // Find least-recently-active session (excluding the target chat)
@@ -1017,9 +1051,10 @@ export class SessionManager {
       return true;
     }
 
-    // All active sessions are busy — queue (no ACK yet — message stays as delivered)
+    // All active sessions are busy — queue. The inbox entry stays in
+    // `inFlightEntries[chatId]` until the eventual turn finishes.
     this.config.log.info({ chatId }, "concurrency limit reached, queuing");
-    this.pendingQueue.push({ message, chatId, entryId: entryId ?? -1 });
+    this.pendingQueue.push({ message, chatId });
     return false;
   }
 
@@ -1050,8 +1085,9 @@ export class SessionManager {
 
     const next = this.pendingQueue.shift();
     if (!next) return;
-    // Route asynchronously — entryId is passed for delayed ACK
-    this.routeMessage(next.chatId, next.message, next.entryId > 0 ? next.entryId : undefined).catch((err) => {
+    // Route asynchronously — the in-flight entryId for this message is
+    // already in `inFlightEntries[chatId]` from the original `dispatch`.
+    this.routeMessage(next.chatId, next.message).catch((err) => {
       this.config.log.warn({ chatId: next.chatId, err }, "pending drain error");
     });
   }
@@ -1101,6 +1137,11 @@ export class SessionManager {
       // overwrites before the handler runs), but since `terminate` already
       // cleans the same maps we keep the two paths symmetric.
       this.currentTrigger.delete(candidate.key);
+      // Drop local in-flight tracking too — the handler is gone, so no
+      // markCompleted will ever fire. The server-side entries stay
+      // `delivered`; the next `agent:bind` resets them back to `pending`
+      // for redelivery against a fresh session.
+      this.inFlightEntries.delete(candidate.key);
       this.recomputeRuntimeState();
       this.persistRegistry();
     }
@@ -1204,16 +1245,51 @@ export class SessionManager {
   }
 
   /**
-   * ACK an inbox entry — delayed until handler starts processing. Routes
-   * through `config.ackEntry`, which is wired to the WS data plane.
+   * Shift up to `count` in-flight entries off the head of this chat's
+   * FIFO and ack each one over the WS data plane. Called by the handler
+   * via `ctx.markCompleted(count)` when a turn closes cleanly
+   * (forwardResult success, silent turn, SDK-reported "no result", or
+   * permanent error surfaced through `emitEvent`).
+   *
+   * One-shift-per-turn pairing is the invariant: claude-code's
+   * streaming-input model produces one SDK `result` event per user
+   * message pushed, so `count = 1` per turn keeps the queue aligned with
+   * the SDK's user-message tally. Codex's `mergeAndRun` fuses N injected
+   * messages into a single turn — it passes `count = N` so the matching
+   * fused entries clear together. Over-shifting (count > queue.length)
+   * is clamped to "drain all"; under-shifting leaves entries queued for
+   * the next turn (or the next bind reset on crash).
+   *
+   * Idempotent — a missing or empty queue is a no-op. Ack failures are
+   * logged but never thrown: the entry stays `delivered` server-side and
+   * the next `agent:bind` resets it back to `pending` if recovery is still
+   * needed.
    */
-  private async ackEntry(entryId: number | undefined, chatId: string): Promise<void> {
-    if (entryId === undefined) return;
-    try {
-      await this.config.ackEntry(entryId);
-    } catch {
-      this.config.log.warn({ chatId, entryId }, "ACK failed, continuing");
+  private ackInFlightEntries(chatId: string, count: number): void {
+    if (count <= 0) return;
+    const queue = this.inFlightEntries.get(chatId);
+    if (!queue || queue.length === 0) return;
+    const shifted = queue.splice(0, count);
+    if (queue.length === 0) this.inFlightEntries.delete(chatId);
+    for (const entryId of shifted) {
+      this.config.ackEntry(entryId).catch((err) => {
+        this.config.log.warn({ chatId, entryId, err }, "ACK failed, continuing");
+      });
     }
+  }
+
+  /**
+   * Drain every in-flight entry for this chat and ack them all. Used by
+   * the runtime on `session:terminate` (operator intent — every queued
+   * entry is doomed) and on permanent `handler.start` / `handler.resume`
+   * failure (re-handling on redelivery would re-hit the same permanent
+   * error, so acking avoids a loop). NOT to be called from handlers — the
+   * per-turn pairing path is `markCompleted(count)`.
+   */
+  private drainAllInFlightEntries(chatId: string): void {
+    const queue = this.inFlightEntries.get(chatId);
+    if (!queue || queue.length === 0) return;
+    this.ackInFlightEntries(chatId, queue.length);
   }
 
   private buildSessionContext(chatId: string): SessionContext {
@@ -1296,6 +1372,9 @@ export class SessionManager {
         this.config.onSessionEvent?.(chatId, event);
       },
       forwardResult,
+      markCompleted: (count) => {
+        this.ackInFlightEntries(chatId, count ?? 1);
+      },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
       resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),

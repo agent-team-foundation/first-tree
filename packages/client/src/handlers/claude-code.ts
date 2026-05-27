@@ -867,6 +867,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       },
                     });
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                    // Permanent stream API failure — ack so the server
+                    // doesn't redeliver a message that would just produce
+                    // the same error. Retry was exhausted upstream.
+                    sessionCtx.markCompleted();
                   } else {
                     try {
                       // All enrichment (inReplyTo, mentions, participants
@@ -875,6 +879,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       await sessionCtx.forwardResult(resultText);
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
+                      // Turn closed cleanly — drain in-flight inbox entries.
+                      sessionCtx.markCompleted();
                     } catch (err) {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
@@ -885,11 +891,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                         payload: { source: "runtime", message: forwardErrMessage },
                       });
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                      // forwardResult failure is treated as terminal for
+                      // this turn — ack so we don't loop on redelivery.
+                      // Long-lived sdk.sendMessage failures are rare; if
+                      // recovery is needed the user can retry by sending
+                      // a new message.
+                      sessionCtx.markCompleted();
                     }
                   }
                 } else {
                   // No result text to forward (edge case) — still close the turn.
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
+                  sessionCtx.markCompleted();
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
@@ -897,6 +910,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 sessionCtx.log(errorLog);
                 sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                // SDK reported a turn-level error (non-success subtype):
+                // redelivery would just hit the same error — ack.
+                sessionCtx.markCompleted();
               }
               sessionCtx.setRuntimeState("idle");
             }
@@ -943,6 +959,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               );
             }
             sessionCtx.setRuntimeState("error");
+            // Ack the in-flight entry for this turn. Without this the row
+            // stays `delivered` server-side forever: the in-process
+            // Deduplicator collapses every bind-reset replay so the entry
+            // never re-dispatches and never gets acked. Per design §4
+            // "permanent → ack".
+            sessionCtx.markCompleted();
             return;
           }
 
@@ -976,6 +998,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               );
             }
             sessionCtx.setRuntimeState("error");
+            // Same reasoning as the MAX_RETRIES branch above — without this
+            // ack the row would loop in `delivered` forever, deduped on every
+            // bind-reset replay. Per design §4 "permanent → ack".
+            sessionCtx.markCompleted();
             return;
           }
         }
@@ -1431,6 +1457,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             inputController?.push(sdkMsg);
           } catch (err) {
             sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
+            // `toSDKUserMessage` failed before the SDK ever saw the
+            // message, so no `result` event will ever fire to pair this
+            // entry with a `markCompleted()`. Ack here — re-handling on
+            // redelivery would re-hit the same conversion error
+            // (permanent failure semantics, design §4).
+            sessionCtx.markCompleted(1);
           }
         });
     },

@@ -1,5 +1,5 @@
 import type { InboxEntryWithMessage, PrecedingMessage } from "@first-tree/shared";
-import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
@@ -22,9 +22,6 @@ type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update
  *  module. The narrower `TxLike` is retained for module-internal callers. */
 // biome-ignore lint/suspicious/noExplicitAny: needed for cross-schema compatibility
 type WideTxLike = PgDatabase<PgQueryResultHKT, any, any>;
-
-const DEFAULT_INBOX_TIMEOUT_SECONDS = 300;
-const DEFAULT_MAX_RETRY_COUNT = 3;
 
 /**
  * Caps for the silent-context replay attached to an active delivery (proposal
@@ -446,38 +443,28 @@ export async function ackEntryByIdForBoundAgents(
   });
 }
 
-export async function resetTimedOutEntries(
-  db: Database,
-  timeoutSeconds = DEFAULT_INBOX_TIMEOUT_SECONDS,
-  maxRetries = DEFAULT_MAX_RETRY_COUNT,
-): Promise<{ reset: number; failed: number }> {
-  // Reset entries that have timed out but haven't exceeded max retries.
+/**
+ * Reset every `delivered` entry across the given `inboxIds` back to `pending`
+ * so a subsequent `claimBacklogForPush` re-includes them. Called from the
+ * `agent:bind` path: a freshly-connected client may not have acked entries
+ * the previous WS push delivered before the connection dropped (or the
+ * client crashed). `retryCount` is intentionally NOT incremented — a client
+ * crash is not a "delivery attempt failed" event, and bumping the counter
+ * here would push genuinely-stuck messages into `failed` too aggressively.
+ *
+ * Returns the number of rows reset so the caller can log meaningful counts.
+ * Short-circuits on empty `inboxIds`.
+ *
+ * See docs/inflight-message-recovery-design.md §4.
+ */
+export async function resetDeliveredForInboxes(db: Database, inboxIds: string[]): Promise<number> {
+  if (inboxIds.length === 0) return 0;
   const reset = await db
     .update(inboxEntries)
-    .set({ status: "pending", retryCount: sql`${inboxEntries.retryCount} + 1` })
-    .where(
-      and(
-        eq(inboxEntries.status, "delivered"),
-        sql`${inboxEntries.deliveredAt} < NOW() - make_interval(secs => ${timeoutSeconds})`,
-        lt(inboxEntries.retryCount, maxRetries),
-      ),
-    )
+    .set({ status: "pending" })
+    .where(and(inArray(inboxEntries.inboxId, inboxIds), eq(inboxEntries.status, "delivered")))
     .returning({ id: inboxEntries.id });
-
-  // Mark entries that have exceeded max retries as failed.
-  const failed = await db
-    .update(inboxEntries)
-    .set({ status: "failed" })
-    .where(
-      and(
-        eq(inboxEntries.status, "delivered"),
-        sql`${inboxEntries.deliveredAt} < NOW() - make_interval(secs => ${timeoutSeconds})`,
-        gte(inboxEntries.retryCount, maxRetries),
-      ),
-    )
-    .returning({ id: inboxEntries.id });
-
-  return { reset: reset.length, failed: failed.length };
+  return reset.length;
 }
 
 /** Default age (30 days) past which silent rows that no notify-true delivery

@@ -80,11 +80,12 @@ function buildCache() {
 }
 
 describe("claude-code handler — auto-resume failure surfacing", () => {
-  it("emits error + turn_end:error and flips runtimeState when respawnQuery throws", async () => {
+  it("emits error + turn_end:error, flips runtimeState, AND acks the in-flight entry when respawnQuery throws", async () => {
     queryCallCount = 0;
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
     const runtimeStates: string[] = [];
+    const markCompleted = vi.fn();
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -107,6 +108,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
       setRuntimeState: (state) => runtimeStates.push(state),
       emitEvent: (e) => emitted.push(e),
       ...mockCtxPlumbing({ sendMessage }, "chat-resume-fail"),
+      markCompleted,
     };
 
     await handler.start(
@@ -139,5 +141,11 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     // setRuntimeState("error") MUST run so the SessionManager can reclaim
     // the slot even though respawnQuery never produced a working session.
     expect(runtimeStates).toContain("error");
+
+    // Reviewer Blocking 2 regression: the auto-resume-failure return MUST
+    // ack the entry. Without this the row stays `delivered` server-side
+    // and the in-process Deduplicator collapses every bind-reset replay
+    // (entry → server → push → dispatch dedup skip → never re-acked).
+    expect(markCompleted).toHaveBeenCalledTimes(1);
   });
 });

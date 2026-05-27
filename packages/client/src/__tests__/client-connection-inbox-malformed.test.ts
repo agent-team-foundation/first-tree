@@ -5,12 +5,13 @@ import { ClientConnection } from "../client-connection.js";
 
 /**
  * Regression: when an `inbox:deliver` frame fails schema validation, the
- * client must still ack the surviving top-level `entryId` so the server's
- * 300s reaper doesn't re-deliver a frame this build is guaranteed to keep
- * dropping. Without the ack, the entry round-trips through the reaper
- * `delivered → pending → delivered → drop` loop up to `maxRetries`, then
- * is silently lost. With the ack, the message is still lost (this build
- * cannot parse it), but the server state is clean and there's no spam.
+ * client must still ack the surviving top-level `entryId` so the next
+ * `agent:bind` doesn't reset the entry back to `pending` and re-push a
+ * frame this build is guaranteed to keep dropping (see
+ * inflight-message-recovery-design.md §4 — bind is the sole recovery
+ * entrypoint now that the 300s timeout reaper is gone). Without the ack
+ * the entry would loop on every reconnect; with it, the message is still
+ * lost (this build cannot parse it) but server state is clean.
  *
  * We exercise the malformed path by sending a frame whose nested `message`
  * is invalid (missing required `id` field) — `entryId` is a top-level
@@ -73,7 +74,7 @@ describe("ClientConnection — malformed inbox:deliver frame", () => {
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   });
 
-  it("best-effort acks the entryId so the server reaper doesn't retry-loop", async () => {
+  it("best-effort acks the entryId so the next bind reset doesn't replay the unparseable frame", async () => {
     const token = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     const setup: ServerSetup = {
       ackedEntryIds: [],
@@ -119,7 +120,8 @@ describe("ClientConnection — malformed inbox:deliver frame", () => {
 
   it("does not ack when the frame lacks a usable entryId", async () => {
     // If `entryId` is absent or not a non-negative integer, there's nothing
-    // safe to ack — we'd rather let the reaper repeat than ack the wrong row.
+    // safe to ack — we'd rather let the next bind reset replay it than
+    // ack the wrong row.
     const token = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     const setup: ServerSetup = {
       ackedEntryIds: [],

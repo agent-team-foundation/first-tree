@@ -148,9 +148,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
        *
        * Note: `ws.send` is fire-and-forget; a buffered frame that fails
        * to actually flush (TCP slow-close, internal queue full) does NOT
-       * surface here. That class of loss is recovered by the 300s timeout
-       * reaper rolling the entry back to `pending` (§3.7). If you ever
-       * need flush-level confirmation, switch to the `ws.send(frame, cb)`
+       * surface here. That class of loss is recovered when the client
+       * reconnects: `agent:bind` resets every still-`delivered` row back
+       * to `pending` before draining (see
+       * docs/inflight-message-recovery-design.md §4). If you ever need
+       * flush-level confirmation, switch to the `ws.send(frame, cb)`
        * callback form (see `notifier.ts pushFrameToInbox`).
        */
       function sendInboxDeliverFrame(entry: InboxEntryWithMessage): boolean {
@@ -239,10 +241,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             inboxInFlight.set(agentId, (inboxInFlight.get(agentId) ?? 0) + 1);
             if (!sendInboxDeliverFrame(entry)) {
               // Socket dropped mid-loop. The entry is still 'delivered' in
-              // the DB; the existing 300s timeout reaper rolls it back to
-              // 'pending' so a reconnect (or another instance) re-delivers.
-              // Release the slot we just took, then bail — remaining
-              // unsent entries also stay 'delivered' for the reaper.
+              // the DB; the next `agent:bind` from any client on this inbox
+              // resets it back to 'pending' for redelivery (see
+              // inflight-message-recovery-design.md §4). Release the slot
+              // we just took, then bail — remaining unsent entries also
+              // stay 'delivered' until the next bind.
               inboxInFlight.set(agentId, Math.max(0, (inboxInFlight.get(agentId) ?? 1) - 1));
               return;
             }
@@ -288,8 +291,8 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           if (!sendInboxDeliverFrame(entry)) {
             inboxInFlight.set(agentId, Math.max(0, (inboxInFlight.get(agentId) ?? 1) - 1));
             // Socket gone mid-drain — stop pushing. Remaining entries stay
-            // 'delivered'; reaper will reset them and a future reconnect picks
-            // them up.
+            // 'delivered'; the next bind from this client resets them and
+            // re-drains.
             return;
           }
         }
@@ -646,10 +649,37 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 }),
               );
 
+              // In-flight recovery: a freshly-(re)connected client may not
+              // have acked entries the previous socket received before it
+              // dropped (process crash, network blip, etc.). Reset every
+              // `delivered` row for this inbox back to `pending` so the
+              // follow-up `drainBacklogForAgent` re-pushes them. Network-
+              // blip duplicates are absorbed by the client's `(chatId,
+              // messageId)` Deduplicator. See
+              // docs/inflight-message-recovery-design.md §4.
+              try {
+                const reset = await inboxService.resetDeliveredForInboxes(app.db, [agent.inboxId]);
+                if (reset > 0) {
+                  app.log.info(
+                    { agentId: agent.id, inboxId: agent.inboxId, reset },
+                    "agent:bind reset delivered → pending for in-flight recovery",
+                  );
+                }
+              } catch (err) {
+                // Not fatal — drain still runs against whatever is pending.
+                // Genuinely-stuck delivered rows will be picked up by the
+                // next bind.
+                app.log.error(
+                  { err, agentId: agent.id, inboxId: agent.inboxId },
+                  "agent:bind resetDeliveredForInboxes failed",
+                );
+              }
+
               // Reconnect/recovery: drain any pending entries that piled up
               // while this socket was offline (or while another instance held
-              // the subscription). Failures are logged inside the helper —
-              // don't crash the bind path.
+              // the subscription), plus everything the bind-time reset above
+              // just flipped from `delivered` to `pending`. Failures are
+              // logged inside the helper — don't crash the bind path.
               drainBacklogForAgent(agent.id, agent.inboxId).catch((err) => {
                 app.log.error({ err, agentId: agent.id }, "post-bind backlog drain crashed");
               });
@@ -892,14 +922,14 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 if (!ackedEntry) {
                   // Either the entry doesn't exist, or it's not in 'delivered'
                   // status, or it belongs to an inbox this socket hasn't bound.
-                  // All three are non-fatal — the client may have raced a
-                  // server-side reset (300s timeout reaper) or be ack'ing a
-                  // stale entry from a previous run. Debug-level only because
-                  // the 300s reaper race is expected at low volume; promoting
-                  // to warn would flood the logs on every reconnect.
+                  // All three are non-fatal — the client may be ack'ing a
+                  // stale entry from a previous run, or racing a `delivered →
+                  // pending` reset triggered by another socket binding the
+                  // same inbox. Debug-level only — every reconnect can race
+                  // here at low volume; promoting to warn would flood logs.
                   app.log.debug(
                     { clientId, entryId, boundInboxes: boundAgents.size },
-                    "inbox:ack matched no row — stale ack or reaper race",
+                    "inbox:ack matched no row — stale ack or bind-reset race",
                   );
                   return;
                 }

@@ -18,13 +18,10 @@ import { connectWsListener, type WsListener } from "../framework/server-driver/w
  *      the new socket (no client-id-level "you've already had your turn"
  *      cliff-edge bug).
  *
- * What it deliberately does NOT cover:
- *
- *   - Redelivery of UN-acked entries on reconnect. Server marks pushed rows
- *     as `delivered` immediately; only the stale-row reaper (300s window)
- *     resets `delivered`→`pending` for re-push. An e2e test that waits 5min
- *     per run isn't viable here; that path is owned by the in-process
- *     server tests under `packages/server/src/__tests__/inbox-*`.
+ * Redelivery of UN-acked entries on reconnect is covered by
+ * `inflight-message-recovery.e2e.test.ts` — the server resets every
+ * `delivered` row back to `pending` at every `agent:bind`, so a brand-new
+ * socket picks the unacked entry up immediately (no 300s reaper).
  *
  * Requires `E2E_WITH_CLIENT=1`.
  */
