@@ -255,12 +255,18 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // guide, ⋯ menu) inline, so the PageHeader's right slot no longer needs
   // a "+ Connect" button. The connect entry point lives at the bottom of
   // the page as a low-emphasis "Add another computer" outline button when
-  // appropriate (see `addAnotherSpot` below). Single-device + viewer-owned
-  // hides the button entirely per mockup §"已敲定" 第 5 条 — a user with
-  // exactly one working computer doesn't usually want a second one, and
-  // they can still reach the entry via the empty-state CTA after retire.
+  // appropriate. Single-device + viewer-owned hides it entirely per
+  // mockup §"已敲定" 第 5 条 — a user with exactly one working computer
+  // doesn't usually want a second one, and they can still reach the entry
+  // via the empty-state CTA after retire.
+  //
+  // "Add another" copy reads wrong when the viewer (admin) has 0 of
+  // their own and only team rows are showing — they don't yet have one
+  // to "add another" to. In that case fall back to the full-page empty
+  // CTA inside the "Your computers" section instead of the bottom button.
   const singleOwnCard = !grouped && (memberList?.length ?? 0) === 1 && memberList?.[0]?.userId === user?.id;
-  const showBottomAddButton = !singleOwnCard && (clients?.length ?? 0) >= 1;
+  const viewerOwnCount = grouped ? mineList.length : (memberList?.length ?? 0);
+  const showBottomAddButton = !singleOwnCard && viewerOwnCount >= 1;
 
   return (
     <div className={embedded ? "" : "-m-6"}>
@@ -436,7 +442,20 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
               <>
                 <CardSection title="Your computers" count={mineList.length}>
                   {mineList.length === 0 ? (
-                    <EmptyCardsNote message="No computers of your own." />
+                    // Admin with no own computers + N team rows — the "Add
+                    // another computer" bottom button would read wrong here
+                    // ("another" implies a first), so keep the connect CTA
+                    // inside the empty section instead.
+                    <div
+                      className="flex flex-col items-start py-6"
+                      style={{ color: "var(--fg-3)", gap: "var(--sp-3)" }}
+                    >
+                      <span className="text-body">No computers of your own.</span>
+                      <Button size="sm" onClick={openNewConnection}>
+                        <Plus className="h-3 w-3" />
+                        Connect your first computer
+                      </Button>
+                    </div>
                   ) : (
                     <CardGrid>
                       {mineList.map((client) => (

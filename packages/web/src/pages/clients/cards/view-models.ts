@@ -150,10 +150,11 @@ const PILL_ARIA: Record<ReturnType<typeof deriveComputerStatus>["pill"], string>
 };
 
 /**
- * Top-level view-model for `ComputerCard`. Computed once per client at
- * the page parent (`useMemo`) so the N² re-derivation tax flagged by
- * the adversarial review on PR-A's `compareByPillPriority` doesn't
- * recur here.
+ * Top-level view-model for `ComputerCard`. Pure + cheap — wraps
+ * `deriveComputerStatus` plus the hostname/label/aria fallout. Called
+ * once per card render inside `ComputerCard`; the resulting `pill` is
+ * threaded down to `CardBody` so we don't re-derive for the body
+ * routing.
  */
 export function computerCardViewModel(client: HubClient): ComputerCardViewModel {
   const status = deriveComputerStatus(client);

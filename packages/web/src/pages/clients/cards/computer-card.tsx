@@ -5,7 +5,7 @@ import { AuthExpiredCardBody } from "./auth-expired-card-body.js";
 import { OfflineCardBody } from "./offline-card-body.js";
 import { ReadyCardBody } from "./ready-card-body.js";
 import { SetupIncompleteCardBody } from "./setup-incomplete-card-body.js";
-import { computerCardViewModel } from "./view-models.js";
+import { type ComputerCardViewModel, computerCardViewModel } from "./view-models.js";
 
 export type ComputerCardProps = {
   client: HubClient;
@@ -108,6 +108,7 @@ export function ComputerCard({
         />
       </header>
       <CardBody
+        pill={vm.pill}
         client={client}
         boundAgents={boundAgents}
         agentName={agentName}
@@ -118,13 +119,13 @@ export function ComputerCard({
 }
 
 function CardBody(props: {
+  pill: ComputerCardViewModel["pill"];
   client: HubClient;
   boundAgents: RuntimeAgent[];
   agentName: (uuid: string | null | undefined) => string;
   onGenerateNewToken: () => void;
 }) {
-  const vm = computerCardViewModel(props.client);
-  switch (vm.pill) {
+  switch (props.pill) {
     case "ready":
       return <ReadyCardBody client={props.client} boundAgents={props.boundAgents} agentName={props.agentName} />;
     case "auth_expired":
@@ -143,7 +144,7 @@ function CardBody(props: {
     case "offline":
       return <OfflineCardBody client={props.client} boundAgents={props.boundAgents} agentName={props.agentName} />;
     default: {
-      const exhaustive: never = vm.pill;
+      const exhaustive: never = props.pill;
       return exhaustive;
     }
   }

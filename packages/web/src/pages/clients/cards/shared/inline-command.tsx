@@ -37,14 +37,27 @@ type InlineCommandProps = {
  */
 export function InlineCommand({ command, caption, ariaLabel = "Command" }: InlineCommandProps) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const reactId = useId();
   const preId = `${reactId}-cmd`;
   const captionId = `${reactId}-cap`;
 
   const handleCopy = async (): Promise<void> => {
-    await navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopyError(false);
+      setCopied(true);
+      setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+    } catch {
+      // `navigator.clipboard.writeText` rejects in non-secure contexts
+      // and when the user denies the clipboard permission. Silent failure
+      // would leave the operator wondering why nothing landed, so flip
+      // the button to a transient "Copy failed" state. The command text
+      // is still visible above for manual select-copy.
+      setCopied(false);
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), COPY_FEEDBACK_MS);
+    }
   };
 
   return (
@@ -80,7 +93,7 @@ export function InlineCommand({ command, caption, ariaLabel = "Command" }: Inlin
           style={{ alignSelf: "flex-start" }}
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {copied ? "Copied" : "Copy"}
+          {copyError ? "Copy failed" : copied ? "Copied" : "Copy"}
         </Button>
         {caption && (
           <span className="text-label" style={{ color: "var(--fg-4)" }}>
