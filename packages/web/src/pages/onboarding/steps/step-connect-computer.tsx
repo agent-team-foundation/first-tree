@@ -1,16 +1,11 @@
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ConnectStuckPanel, STUCK_AFTER_MS } from "../../../components/connect-stuck-panel.js";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
 import { CommandBox, FlowNote, StatusRow } from "../flow-ui.js";
 import { ShowMeHow, TerminalGuide } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
-
-// How long to wait on the command before surfacing the "stuck?" panel. The
-// happy path is seconds; this only fires for the true-beginner wall (no
-// Node, wrong machine, firewall). We keep polling underneath, so it still
-// auto-advances the moment the computer connects.
-const STUCK_AFTER_MS = 75_000;
 
 /**
  * Connect the computer the agent will run on. The user pastes a
@@ -50,7 +45,7 @@ export function StepConnectComputer() {
           ) : (
             <StatusRow state="waiting" label={COPY.connectComputer.waiting} />
           )}
-          {stuck && <StuckPanel />}
+          {stuck && <ConnectStuckPanel />}
           <ShowMeHow>
             <TerminalGuide />
           </ShowMeHow>
@@ -82,41 +77,6 @@ export function StepConnectComputer() {
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
-    </div>
-  );
-}
-
-function StuckPanel() {
-  return (
-    <div
-      className="flex flex-col"
-      style={{
-        gap: "var(--sp-2)",
-        padding: "var(--sp-3)",
-        borderRadius: "var(--radius-input)",
-        background: "color-mix(in oklch, var(--bg-raised) 40%, transparent)",
-        border: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
-        {COPY.connectComputer.stuckTitle}
-      </p>
-      <ul className="flex flex-col" style={{ gap: "var(--sp-1_5)", margin: 0, paddingLeft: "var(--sp-4)" }}>
-        {COPY.connectComputer.stuckReasons.map((reason) => (
-          <li key={reason} className="text-label" style={{ color: "var(--fg-3)" }}>
-            {reason}
-          </li>
-        ))}
-      </ul>
-      <a
-        href={COPY.connectComputer.nodeUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-label font-medium self-start"
-        style={{ color: "var(--accent)" }}
-      >
-        {COPY.connectComputer.nodeLinkLabel} →
-      </a>
     </div>
   );
 }

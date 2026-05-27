@@ -44,6 +44,14 @@ export type HubClient = {
   agentCount: number;
   connectedAt: string | null;
   lastSeenAt: string;
+  /**
+   * Runtime-provider capability snapshot. Empty object when the client
+   * has never reported any (fresh machine, pre-capability-probe SDK).
+   * Consumed by the client-side pill derivation in
+   * `pages/clients/derive-status.ts` to distinguish Ready
+   * (≥1 capability `state=ok`) from Setup incomplete (all `≠ ok`).
+   */
+  capabilities: ClientCapabilities;
 };
 
 export function retireClient(clientId: string): Promise<void> {
@@ -74,17 +82,14 @@ export function getClient(clientId: string): Promise<HubClient> {
 }
 
 /**
- * Fetch this client's reported runtime-provider capabilities. Returns the
- * client's full row plus its `metadata.capabilities` blob (Option C). Used
- * by the Computers page to surface SDK install + auth state
- * per provider.
+ * Fetch this client's reported runtime-provider capabilities via the
+ * single-row endpoint. Returns the same `HubClient` shape as
+ * {@link listClients}; the dedicated endpoint stays as a force-refresh
+ * path for surfaces that want the freshest capability state immediately
+ * after a UX action (e.g. onboarding waits for the first probe).
  */
-export type ClientWithCapabilities = HubClient & {
-  capabilities: ClientCapabilities;
-};
-
-export function getClientCapabilities(clientId: string): Promise<ClientWithCapabilities> {
-  return api.get<ClientWithCapabilities>(`/clients/${clientId}`);
+export function getClientCapabilities(clientId: string): Promise<HubClient> {
+  return api.get<HubClient>(`/clients/${clientId}`);
 }
 
 export function disconnectClient(clientId: string): Promise<{ disconnected: boolean; agentIds: string[] }> {

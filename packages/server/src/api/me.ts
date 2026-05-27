@@ -428,6 +428,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       agentCount: c.agentCount,
       connectedAt: serializeDate(c.connectedAt),
       lastSeenAt: c.lastSeenAt.toISOString(),
+      capabilities: clientService.extractCapabilities(c.metadata),
       lastUpdateAttempt: clientService.extractLastUpdateAttempt(c.metadata),
     }));
   });

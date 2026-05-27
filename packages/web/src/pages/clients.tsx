@@ -8,10 +8,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
-  type ClientWithCapabilities,
   disconnectClient,
   getActivityOverview,
-  getClientCapabilities,
   type HubClient,
   listClients,
   listOrgClients,
@@ -35,7 +33,9 @@ import { PresenceChip, runtimeStateToPresence } from "../components/ui/presence-
 import { RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
-import { formatDate } from "../lib/utils.js";
+import { formatDate, formatRelative } from "../lib/utils.js";
+import { ComputerStatusPill } from "./clients/computer-status-pill.js";
+import { compareByPillPriority, deriveComputerStatus, summarizeComputers } from "./clients/derive-status.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 
 /**
@@ -106,7 +106,6 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // computers instead of a broken page.
   const grouped = isAdmin && !orgClientsQuery.isError;
   const teamLoadError = isAdmin && orgClientsQuery.isError;
-  const clients = grouped ? orgClientsQuery.data : meClientsQuery.data;
 
   const { data: activity } = useQuery({
     queryKey: ["activity"],
@@ -151,22 +150,31 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const getClientAgents = (clientId: string): RuntimeAgent[] => agentsByClient.get(clientId) ?? [];
 
   // admin grouped view: split the single org-scoped list into the viewer's
-  // own machines vs everyone else's, each sorted by recency. `userId === null`
-  // (legacy clients that pre-date user binding) lands in the team block — the
-  // viewer isn't its owner, so it doesn't belong in "yours".
+  // own machines vs everyone else's. Each group sorts by status pill priority
+  // (auth_expired → setup_incomplete → offline → ready) with lastSeenAt as
+  // tie-break — surfaces problem rows at the top without forcing the viewer
+  // to scan the full list. `userId === null` (legacy clients that pre-date
+  // user binding) lands in the team block.
   const mineList = useMemo<HubClient[]>(() => {
     if (!grouped || !orgClientsQuery.data || !user) return [];
-    return [...orgClientsQuery.data]
-      .filter((c) => c.userId === user.id)
-      .sort((a, b) => (a.lastSeenAt > b.lastSeenAt ? -1 : a.lastSeenAt < b.lastSeenAt ? 1 : 0));
+    return [...orgClientsQuery.data].filter((c) => c.userId === user.id).sort(compareByPillPriority);
   }, [grouped, orgClientsQuery.data, user]);
 
   const teamList = useMemo<HubClient[]>(() => {
     if (!grouped || !orgClientsQuery.data || !user) return [];
-    return [...orgClientsQuery.data]
-      .filter((c) => c.userId !== user.id)
-      .sort((a, b) => (a.lastSeenAt > b.lastSeenAt ? -1 : a.lastSeenAt < b.lastSeenAt ? 1 : 0));
+    return [...orgClientsQuery.data].filter((c) => c.userId !== user.id).sort(compareByPillPriority);
   }, [grouped, orgClientsQuery.data, user]);
+
+  /**
+   * Member-mode list (non-admin): the `/me/clients` payload arrives in
+   * server-default order (no explicit ORDER BY). Sort by pill priority so
+   * an Auth expired row cannot hide below a Ready one. This is a
+   * deliberate UX change vs. the prior table — see PR description.
+   */
+  const memberList = useMemo<HubClient[] | undefined>(() => {
+    if (grouped || !meClientsQuery.data) return meClientsQuery.data;
+    return [...meClientsQuery.data].sort(compareByPillPriority);
+  }, [grouped, meClientsQuery.data]);
 
   const membersById = useMemo<Map<string, string>>(() => {
     const map = new Map<string, string>();
@@ -189,27 +197,25 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
     return { text: client.userId.slice(0, 8), title: client.userId };
   };
 
-  const connectedCount = (clients ?? []).filter((c) => c.status === "connected").length;
-  const totalAgentsBound = (clients ?? []).reduce((n, c) => n + c.agentCount, 0);
-  const authBrokenCount = (clients ?? []).filter((c) => c.authState !== "ok").length;
+  // Single source of truth for "what the user is looking at right now": admin
+  // grouped mode → the org-scoped list (covers both mineList + teamList);
+  // member mode → the pill-sorted memberList. Driving the subtitle and the
+  // empty-state branch off this list keeps the two display modes in sync.
+  const clients = grouped ? orgClientsQuery.data : memberList;
+
+  // Subtitle is the pure-function output of `summarizeComputers` — single
+  // headline for one row owned by the viewer ("Your computer is ready"),
+  // neutral phrasing when admin is looking at a teammate's lone row, and a
+  // zero-suppressed pill-count breakdown for multi-row views. The `· N
+  // agents bound` suffix restores the power-user signal the old subtitle
+  // surfaced. See `clients/derive-status.ts` for the pure logic + tests.
+  const subtitle = useMemo(() => summarizeComputers(clients, user?.id), [clients, user?.id]);
 
   return (
     <div className={embedded ? "" : "-m-6"}>
       <PageHeader
         title="Computers"
-        subtitle={
-          clients && clients.length > 0 ? (
-            <>
-              {clients.length} total · {connectedCount} connected · {totalAgentsBound} agents bound
-              {authBrokenCount > 0 && (
-                <>
-                  {" · "}
-                  <span style={{ color: "var(--state-error)" }}>{authBrokenCount} need re-auth</span>
-                </>
-              )}
-            </>
-          ) : null
-        }
+        subtitle={subtitle}
         right={
           <div className="flex items-center gap-1.5">
             <Button size="xs" onClick={() => setNewConnectionOpen(true)}>
@@ -366,9 +372,9 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   <DenseTableHead>Hostname</DenseTableHead>
                   {grouped && <DenseTableHead>Owner</DenseTableHead>}
                   <DenseTableHead>OS</DenseTableHead>
-                  <DenseTableHead>SDK</DenseTableHead>
+                  <DenseTableHead>first-tree</DenseTableHead>
                   <DenseTableHead>Agents</DenseTableHead>
-                  <DenseTableHead>Connected</DenseTableHead>
+                  <DenseTableHead>Last seen</DenseTableHead>
                   <DenseTableHead>Status</DenseTableHead>
                   <DenseTableHead aria-hidden />
                 </DenseTableRow>
@@ -506,37 +512,24 @@ const PROVIDER_UNAUTH_HINT: Record<RuntimeProvider, string> = {
 };
 
 /**
- * Lazy-loaded runtime-provider capability matrix shown inside the expanded
- * row of the Computers table. We only fetch when the row is open so the
- * /clients listing stays cheap on large fleets — capabilities are reported by
- * the client at startup and stored under `clients.metadata.capabilities`.
+ * Runtime-provider capability matrix shown inside the expanded row of the
+ * Computers table. The snapshot is pre-loaded with the list response now
+ * (single-source via `/me/clients` / `/orgs/:orgId/clients`), so the
+ * matrix renders synchronously — no extra round-trip when a row opens.
  */
-function CapabilityMatrix({ clientId, enabled }: { clientId: string; enabled: boolean }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["client-capabilities", clientId],
-    queryFn: () => getClientCapabilities(clientId),
-    enabled,
-  });
-  const capabilities: ClientCapabilities | null = (data as ClientWithCapabilities | undefined)?.capabilities ?? null;
+function CapabilityMatrix({ capabilities }: { capabilities: ClientCapabilities }) {
+  const empty = Object.keys(capabilities).length === 0;
   return (
     <>
       <UppercaseLabel style={{ display: "block", marginBottom: 6 }}>Runtimes</UppercaseLabel>
-      {isLoading && !capabilities ? (
-        <div className="text-body" style={{ color: "var(--fg-3)" }}>
-          Loading…
-        </div>
-      ) : capabilities && Object.keys(capabilities).length === 0 ? (
+      {empty ? (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
           Capabilities not yet reported. Reconnect this computer to refresh.
         </div>
       ) : (
         <div className="flex flex-col gap-1">
           {PROVIDER_ORDER.map((provider) => (
-            <ProviderRow
-              key={provider}
-              provider={provider}
-              entry={capabilities ? (capabilities[provider] ?? null) : null}
-            />
+            <ProviderRow key={provider} provider={provider} entry={capabilities[provider] ?? null} />
           ))}
         </div>
       )}
@@ -607,34 +600,9 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
   }
 }
 
-/**
- * Distinguishes "credentials died" from "machine offline". Server derives
- * the state from offline duration vs configured refresh-token TTL, so the
- * pill flips on its own once the row has been disconnected long enough.
- */
-function AuthExpiredChip() {
-  return (
-    <span
-      className="mono inline-flex items-center gap-1.5 uppercase text-caption"
-      style={{ color: "var(--state-error)" }}
-    >
-      <span
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: "50%",
-          background: "var(--state-error)",
-          display: "inline-block",
-        }}
-      />
-      AUTH EXPIRED
-    </span>
-  );
-}
-
-// Column count in member mode — `chevron | Hostname | OS | SDK | Agents |
-// Connected | Status | Actions`. admin mode inserts an Owner column between
-// Hostname and OS, bumping the count by 1.
+// Column count in member mode — `chevron | Hostname | OS | first-tree |
+// Agents | Last seen | Status | Actions`. admin mode inserts an Owner column
+// between Hostname and OS, bumping the count by 1.
 const MEMBER_COLSPAN = 8;
 const ADMIN_COLSPAN = MEMBER_COLSPAN + 1;
 
@@ -737,14 +705,12 @@ function ClientRow({
   // `isExpanded` for owner rows and is forced to false for team rows so a
   // stale collapsed-set never accidentally opens one.
   const effectiveExpanded = restricted ? false : isExpanded;
-  // Auth health takes priority over the connection state when rendering the
-  // row's status pill: "auth expired" must outrank the plain "offline" so
-  // the user knows it isn't going to come back without intervention.
-  const authBroken = client.authState !== "ok";
-  // The Computer row's connection pill collapses the richer `HubClient.status`
-  // enum (connected/disconnected/…) into the two-state reachability vocabulary
-  // shared with agent presence — same visual element, different data source.
-  const presenceForChip = client.status === "connected" ? "online" : "offline";
+  // Row status pill is computed by `deriveComputerStatus` — pure function
+  // over (status, authState, capabilities). Encodes the priority rules
+  // ("auth expired wins over offline") that previously lived in this
+  // component, and unlocks `setup_incomplete` which the prior visuals
+  // could not express. See `clients/derive-status.ts`.
+  const status = deriveComputerStatus(client);
   return (
     <>
       <DenseTableRow interactive={!restricted} selected={effectiveExpanded} onClick={restricted ? undefined : onToggle}>
@@ -768,10 +734,16 @@ function ClientRow({
         <DenseTableCell>
           <span className="mono tnum text-label">{client.agentCount}</span>
         </DenseTableCell>
-        <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-          {client.connectedAt ? formatDate(client.connectedAt) : "—"}
+        <DenseTableCell
+          className="mono text-caption"
+          style={{ color: "var(--fg-4)" }}
+          title={formatDate(client.lastSeenAt)}
+        >
+          {formatRelative(client.lastSeenAt)}
         </DenseTableCell>
-        <DenseTableCell>{authBroken ? <AuthExpiredChip /> : <PresenceChip status={presenceForChip} />}</DenseTableCell>
+        <DenseTableCell>
+          <ComputerStatusPill pill={status.pill} />
+        </DenseTableCell>
         {/* Overflow menu for row actions. Reconnect / Disconnect / Retire
             are all low-frequency operations (Retire is destructive and
             once-off, Disconnect is rare, Reconnect only matters when offline)
@@ -798,7 +770,7 @@ function ClientRow({
         <tr style={{ background: "var(--bg-sunken)" }}>
           <DenseTableCell />
           <DenseTableCell colSpan={colSpan - 1} style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-3_5)" }}>
-            <CapabilityMatrix clientId={client.id} enabled={effectiveExpanded} />
+            <CapabilityMatrix capabilities={client.capabilities} />
             {boundAgents.length > 0 && (
               <>
                 <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: 6 }}>
