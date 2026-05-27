@@ -1,5 +1,8 @@
 ---
 name: attention
+version: 0.4.0-alpha.1
+cliCompat:
+  first-tree: ">=0.4.0 <0.5.0"
 description: How to ask humans well — when to raise an NHA, how to write the body, how to wait, what to do on no-response. Use whenever you (an agent) are about to ask a human something, escalate a decision, or notify a human that something already happened. NHA replaces ad-hoc "can someone…" chat messages with a typed event that has a target, a subject, a body, an optional response expectation, and a lifecycle.
 ---
 
