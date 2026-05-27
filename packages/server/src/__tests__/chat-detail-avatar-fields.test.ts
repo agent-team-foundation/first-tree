@@ -21,7 +21,7 @@ describe("chat-detail wire shape — participant avatar fields", () => {
   it("admin GET /chats/:chatId returns avatarColorToken + avatarImageUrl for every participant", async () => {
     const app = getApp();
     const caller = await createTestAgent(app, { type: "human", displayName: "Caller" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent", displayName: "Peer Bot" });
+    const peer = await createTestAgent(app, { type: "agent", displayName: "Peer Bot" });
     await app.db.update(agents).set({ avatarColorToken: "hue-3" }).where(eq(agents.uuid, peer.agent.uuid));
 
     const chat = await createChat(app.db, caller.agent.uuid, {
@@ -53,8 +53,8 @@ describe("chat-detail wire shape — participant avatar fields", () => {
 
   it("agent GET /agent/chats/:chatId returns avatarColorToken + avatarImageUrl", async () => {
     const app = getApp();
-    const caller = await createTestAgent(app, { type: "autonomous_agent", displayName: "Caller Bot" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent", displayName: "Peer Bot" });
+    const caller = await createTestAgent(app, { type: "agent", displayName: "Caller Bot" });
+    const peer = await createTestAgent(app, { type: "agent", displayName: "Peer Bot" });
     await app.db.update(agents).set({ avatarColorToken: "hue-5" }).where(eq(agents.uuid, peer.agent.uuid));
 
     const chatRes = await caller.request("POST", "/api/v1/agent/chats", {
@@ -79,8 +79,8 @@ describe("chat-detail wire shape — participant avatar fields", () => {
 
   it("agent GET /agent/chats/:chatId/participants returns avatarColorToken + avatarImageUrl", async () => {
     const app = getApp();
-    const caller = await createTestAgent(app, { type: "autonomous_agent", displayName: "Caller Bot" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent", displayName: "Peer Bot" });
+    const caller = await createTestAgent(app, { type: "agent", displayName: "Caller Bot" });
+    const peer = await createTestAgent(app, { type: "agent", displayName: "Peer Bot" });
     await app.db.update(agents).set({ avatarColorToken: "hue-1" }).where(eq(agents.uuid, peer.agent.uuid));
 
     const chatRes = await caller.request("POST", "/api/v1/agent/chats", {

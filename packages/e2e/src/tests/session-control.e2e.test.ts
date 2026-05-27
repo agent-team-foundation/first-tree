@@ -68,7 +68,7 @@ beforeAll(async () => {
       `/api/v1/orgs/${encodeURIComponent(creds.organizationId)}/agents`,
       {
         name: `e2e-sess-${randomBytes(3).toString("hex")}`,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: "E2E Session Control Target",
         clientId: listenerClientId,
       },

@@ -40,7 +40,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
     const admin = await createAdminContext(app, { username: `up-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `up-target-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Upsert target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -212,7 +212,7 @@ describe("setSessionRuntime — per-(agent,chat) D-axis writer", () => {
     const admin = await createAdminContext(app, { username: `sr-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `sr-target-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Session runtime target",
       managerId: admin.memberId,
       clientId: admin.clientId,
@@ -308,7 +308,7 @@ describe("setSessionRuntime — per-(agent,chat) D-axis writer", () => {
     const admin = await createAdminContext(app, { username: `sr-miss-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
       name: `sr-miss-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Missing session target",
       managerId: admin.memberId,
       clientId: admin.clientId,

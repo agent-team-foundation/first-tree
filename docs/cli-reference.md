@@ -149,7 +149,7 @@ first-tree agent list --remote --org <id>  # cross-org view (multi-org operators
 ### agent create
 
 ```
-first-tree agent create <name> --type <human|personal_assistant|autonomous_agent> --client-id <thisClient> [--runtime claude-code|codex]
+first-tree agent create <name> --type <human|agent> --client-id <thisClient> [--runtime claude-code|codex]
 ```
 
 Creates the agent row on the server and binds it to the given client

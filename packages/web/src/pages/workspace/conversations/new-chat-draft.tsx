@@ -267,14 +267,30 @@ export function NewChatDraft({
     return extractMentions(draft, ps);
   }, [draft, candidates]);
 
+  // See chat-view.tsx for the why — `interactiveTriggerIndex` decides
+  // when the popover may hijack Enter / Tab. Without this, pasting a
+  // block containing `@foo` would steal the "Enter to send" keystroke
+  // because `detectMentionTrigger` opens the popover on the cursor-
+  // adjacent `@`.
+  //
+  // Note — unlike chat-view.tsx, this composer does NOT render a
+  // MentionHighlightOverlay. The chip row above the textarea is already
+  // the canonical "who is in the room" surface, and an `@<name>` typed
+  // in the body promotes the agent to that chip row (see the
+  // bodyMentions → setChips effect below). Painting a second chip
+  // inside the textarea would duplicate that signal — the chip row
+  // visualisation is enough on this surface.
+  const [interactiveTriggerIndex, setInteractiveTriggerIndex] = useState<number | null>(null);
   const mention = useMentionAutocomplete({
     value: draft,
     cursor,
     candidates,
     disabled: sending,
+    interactiveTriggerIndex,
     onSelect: (update) => {
       setDraft(update.text);
       setCursor(update.cursor);
+      setInteractiveTriggerIndex(null);
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (!el) return;
@@ -283,6 +299,15 @@ export function NewChatDraft({
       });
     },
   });
+
+  // Drop the interactive flag when the active trigger moves or closes
+  // so re-entering an OLD `@` via arrow-key doesn't re-arm the hijack.
+  useEffect(() => {
+    if (interactiveTriggerIndex === null) return;
+    if (mention.trigger === null || mention.trigger.triggerIndex !== interactiveTriggerIndex) {
+      setInteractiveTriggerIndex(null);
+    }
+  }, [mention.trigger, interactiveTriggerIndex]);
 
   /** Promote textarea-`@`-mentioned agents to chips (single source of
    *  truth: "addressing X" ⇒ "X is in the room"). Doesn't remove chips
@@ -562,6 +587,10 @@ export function NewChatDraft({
                 rows={1}
                 onKeyDown={(e) => {
                   if (e.nativeEvent.isComposing) return;
+                  if (e.key === "@" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    const start = e.currentTarget.selectionStart;
+                    if (start !== null) setInteractiveTriggerIndex(start);
+                  }
                   if (mention.handleKey(e)) return;
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();

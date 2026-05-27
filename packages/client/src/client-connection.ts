@@ -813,7 +813,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           // the agentId defensively so a schema-mismatched frame from an
           // older server doesn't crash the runtime.
           displayName: (msg.displayName as string | null) ?? agentId,
-          agentType: (msg.agentType as string) ?? "personal_assistant",
+          agentType: (msg.agentType as string) ?? "agent",
           sdk,
         };
         this.boundAgents.set(agentId, agent);

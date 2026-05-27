@@ -33,6 +33,7 @@ import {
   withWsMessageSpan,
 } from "../../observability/index.js";
 import * as activityService from "../../services/activity.js";
+import * as agentService from "../../services/agent.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
 import * as inboxService from "../../services/inbox.js";
@@ -510,7 +511,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     agentId: agent.uuid,
                     name: agent.name,
                     displayName: agent.displayName,
-                    agentType: agent.type,
+                    // Wire-compat: translate `type=agent` back to the pre-merge
+                    // `personal_assistant` so clients on ≤ 0.5.1 (strict zod)
+                    // still decode the frame. See agentService.legacyWireAgentType.
+                    agentType: agentService.legacyWireAgentType(agent.type),
                     runtimeProvider: agent.runtimeProvider,
                   });
                   if (!parsed.success) {

@@ -40,6 +40,7 @@ function row(overrides: Partial<MeChatRow>): MeChatRow {
     failedAgentIds: overrides.failedAgentIds ?? [],
     busyAgentIds: overrides.busyAgentIds ?? [],
     chatHasOpenQuestion: overrides.chatHasOpenQuestion ?? false,
+    chatHasExplicitMentionToMe: overrides.chatHasExplicitMentionToMe ?? false,
   };
 }
 
@@ -47,7 +48,7 @@ function participant(name: string, agentId?: string): MeChatRow["participants"][
   return {
     agentId: agentId ?? `agent-${name.toLowerCase()}`,
     displayName: name,
-    type: "autonomous_agent",
+    type: "agent",
     avatarColorToken: null,
     avatarImageUrl: null,
   };

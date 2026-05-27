@@ -28,7 +28,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
 
   it("rejects @<non-speaker> in a DIRECT chat (the dogfood case)", async () => {
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
     const peer = await createTestAgent(app, { type: "human" });
     const outsider = await createTestAgent(app, { name: `outsider-${crypto.randomUUID().slice(0, 6)}` });
     if (!outsider.agent.name) throw new Error("outsider name missing");
@@ -51,7 +51,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
 
   it("hint recommends `chat invite <name>` (not `--direct`) for the typed token", async () => {
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
     const peer = await createTestAgent(app, { type: "human" });
     const outsider = await createTestAgent(app, { name: `hinted-${crypto.randomUUID().slice(0, 6)}` });
     if (!outsider.agent.name) throw new Error("outsider name missing");
@@ -79,8 +79,8 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
 
   it("rejects @<non-speaker> in a GROUP chat (defence-in-depth on top of enforceGroupMention)", async () => {
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
-    const inGroupPeer = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
+    const inGroupPeer = await createTestAgent(app, { type: "agent" });
     const outsider = await createTestAgent(app, { name: `gout-${crypto.randomUUID().slice(0, 6)}` });
     if (!outsider.agent.name || !inGroupPeer.agent.name) throw new Error("name missing");
 
@@ -109,8 +109,8 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
 
   it("accepts content with ONLY resolved @-tokens (regression)", async () => {
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
-    const inGroupPeer = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
+    const inGroupPeer = await createTestAgent(app, { type: "agent" });
     if (!inGroupPeer.agent.name) throw new Error("peer name missing");
 
     const chat = await createChat(app.db, sender.agent.uuid, {
@@ -130,7 +130,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
 
   it("ignores @<token> inside code fences (no false positive)", async () => {
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
     const peer = await createTestAgent(app, { type: "human" });
     if (!peer.agent.name) throw new Error("peer name missing");
 
@@ -157,8 +157,8 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     // narrating a teammate by name). The final-text bypass channel must
     // still ferry the message through to history without 400-ing.
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
-    const inGroupPeer = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
+    const inGroupPeer = await createTestAgent(app, { type: "agent" });
     const outsider = await createTestAgent(app, { name: `bp-${crypto.randomUUID().slice(0, 6)}` });
     if (!outsider.agent.name) throw new Error("outsider name missing");
 
@@ -186,7 +186,7 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
 
   it("does NOT enforce when the flag is off (adapters / webhooks)", async () => {
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
     const peer = await createTestAgent(app, { type: "human" });
     const outsider = await createTestAgent(app, { name: `off-${crypto.randomUUID().slice(0, 6)}` });
     if (!outsider.agent.name) throw new Error("outsider name missing");

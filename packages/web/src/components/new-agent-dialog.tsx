@@ -56,7 +56,7 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  *     the compact preview too, so the collapsed view never hides a problem.
  *
  * Hidden defaults:
- *   - type = "personal_assistant"
+ *   - type = "agent"
  *   - manager = current user
  *   - delegateMention = not surfaced
  *
@@ -149,12 +149,12 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [displayName, setDisplayName] = useState("");
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
-  // Default is "private": the surfaced agent type is `personal_assistant`
-  // (literally "personal"), so the conservative default is "only I see it".
-  // Sharing with the team is an explicit decision the user opts into; the
-  // previous default ("organization") quietly published every onboarding
-  // agent into the team roster, which surprised users who expected
-  // personal-assistant to mean personal.
+  // Default is "private": newly-created agents are scoped to the creator
+  // by default, matching the conservative "only I see it" framing. Sharing
+  // with the team is an explicit decision the user opts into; the previous
+  // default ("organization") quietly published every onboarding agent into
+  // the team roster, which surprised users who expected new agents to be
+  // personal until explicitly shared.
   const [visibility, setVisibility] = useState<AgentVisibility>("private");
   const [runtime, setRuntime] = useState<RuntimeProvider>("claude-code");
   // The @handle editor is collapsed by default — 99% of users keep the
@@ -405,7 +405,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       const effectiveName = name || undefined;
       return createAgent({
         name: effectiveName,
-        type: "personal_assistant",
+        type: "agent",
         displayName: effectiveDisplay,
         clientId: opts.clientId,
         runtimeProvider: runtime,

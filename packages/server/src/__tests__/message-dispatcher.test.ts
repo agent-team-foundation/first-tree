@@ -35,7 +35,7 @@ describe("buildClientMessagePayload (Step 3)", () => {
   it("includes the current config version (initial = 1)", async () => {
     const agent = await createAgent(app.db, {
       name: `disp-fresh-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -47,7 +47,7 @@ describe("buildClientMessagePayload (Step 3)", () => {
   it("reflects bumped config version after PATCH", async () => {
     const agent = await createAgent(app.db, {
       name: `disp-bumped-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -60,7 +60,7 @@ describe("buildClientMessagePayload (Step 3)", () => {
   it("resolves agentId from inboxId", async () => {
     const agent = await createAgent(app.db, {
       name: `disp-inbox-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -72,7 +72,7 @@ describe("buildClientMessagePayload (Step 3)", () => {
   it("batch variant returns the same version for all messages", async () => {
     const agent = await createAgent(app.db, {
       name: `disp-batch-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -87,7 +87,7 @@ describe("buildClientMessagePayload (Step 3)", () => {
   it("normalises unknown source values to null", async () => {
     const agent = await createAgent(app.db, {
       name: `disp-srcN-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -117,7 +117,7 @@ describe("buildClientMessagePayload — recipientMode (v2 constant)", () => {
   it("emits the constant 'mention_only' regardless of the agent / chat shape", async () => {
     const agent = await createAgent(app.db, {
       name: `rmode-stranger-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -133,13 +133,13 @@ describe("buildClientMessagePayload — recipientMode (v2 constant)", () => {
   it("agent↔agent two-speaker chat → 'mention_only' wire value", async () => {
     const a1 = await createAgent(app.db, {
       name: `rmode-dir1-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const a2 = await createAgent(app.db, {
       name: `rmode-dir2-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -161,7 +161,7 @@ describe("buildClientMessagePayload — recipientMode (v2 constant)", () => {
     });
     const agent = await createAgent(app.db, {
       name: `rmode-agt-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -178,19 +178,19 @@ describe("buildClientMessagePayload — recipientMode (v2 constant)", () => {
   it("3+ speaker group → every speaker gets the same constant", async () => {
     const a1 = await createAgent(app.db, {
       name: `rmode-a1-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const a2 = await createAgent(app.db, {
       name: `rmode-a2-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const a3 = await createAgent(app.db, {
       name: `rmode-a3-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -209,13 +209,13 @@ describe("buildClientMessagePayload — recipientMode (v2 constant)", () => {
   it("batch variant emits the same constant wire value for every item", async () => {
     const a1 = await createAgent(app.db, {
       name: `batch-a1-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const a2 = await createAgent(app.db, {
       name: `batch-a2-${Date.now()}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });

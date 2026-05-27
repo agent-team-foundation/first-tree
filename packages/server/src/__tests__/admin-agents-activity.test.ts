@@ -56,14 +56,14 @@ describe("GET /admin/agents/activity org scoping", () => {
     // user-owned client can host agents from multiple orgs, post-#214).
     const agentA = await createAgent(app.db, {
       name: `act-a-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Org A bot",
       managerId: alice.memberId,
       clientId: alice.clientId,
     });
     const agentB = await createAgent(app.db, {
       name: `act-b-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Org B bot",
       managerId: orgB.memberId,
       clientId: alice.clientId,
@@ -180,14 +180,14 @@ describe("GET /orgs/:orgId/activity — managedByMe field", () => {
 
     const aliceAgent = await createAgent(app.db, {
       name: `mbm-a-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Alice bot",
       managerId: alice.memberId,
       clientId: alice.clientId,
     });
     const bobAgent = await createAgent(app.db, {
       name: `mbm-b-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Bob bot",
       managerId: bobMemberId,
       clientId: bobClientId,

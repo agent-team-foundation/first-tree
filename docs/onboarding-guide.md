@@ -42,9 +42,8 @@ first-tree agent bind bot \
 first-tree daemon start
 ```
 
-`--type` accepts `human`, `personal_assistant`, or `autonomous_agent`.
-`--client-id` is required because an agent is permanently bound to one
-client machine.
+`--type` accepts `human` or `agent`. The `client-id` argument is required
+because an agent is permanently bound to exactly one client machine.
 
 ## What `first-tree login` writes
 
@@ -104,9 +103,8 @@ retained as a read-only debug endpoint.
 
 | Type | When to use |
 |---|---|
-| `human` | A real person joining the team. Can optionally pair with a `personal_assistant`. |
-| `personal_assistant` | A bot that acts on behalf of a specific human. |
-| `autonomous_agent` | A standalone bot that operates independently — code reviewers, monitors, pipeline agents. |
+| `human` | A real person joining the team. Can optionally pair with a private assistant `agent` (visibility=private). |
+| `agent` | Any bot — either an autonomous standalone bot (visibility=organization, code reviewers, monitors, pipeline agents) or a personal assistant acting on behalf of a specific human (visibility=private). The two were previously separate `personal_assistant` / `autonomous_agent` types; they collapsed into a single `agent` type with `visibility` carrying the framing. |
 
 ## Environment variables
 

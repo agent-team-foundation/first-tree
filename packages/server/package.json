@@ -16,7 +16,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "dev": "tsx watch --env-file=../../.env src/index.ts",
+    "dev": "FIRST_TREE_DEV_CALLBACK_ENABLED=1 tsx watch --env-file=../../.env src/index.ts",
     "build": "tsdown src/index.ts src/app.ts src/observability/index.ts --format esm --no-dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

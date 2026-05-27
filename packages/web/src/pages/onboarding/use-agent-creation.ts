@@ -20,8 +20,8 @@ export type CreateAgentArgs = {
 };
 
 /**
- * Creates the first agent (an unbound `personal_assistant`) and waits
- * for it to come online on the connected computer.
+ * Creates the first agent (an unbound `agent` with caller-supplied
+ * `visibility`) and waits for it to come online on the connected computer.
  *
  * Same two-phase shape the legacy Step2Body used: POST `/agents`, then poll
  * `client-status` until the runtime reports online (or a 30s timeout). The
@@ -82,7 +82,7 @@ export function useAgentCreation(onOnline: (uuid: string) => void) {
       let agentUuid: string;
       try {
         const res = await api.post<{ uuid: string }>(withOrg("/agents"), {
-          type: "personal_assistant",
+          type: "agent",
           displayName,
           ...(slug ? { name: slug } : {}),
           clientId: args.clientId,

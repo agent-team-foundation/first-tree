@@ -21,7 +21,7 @@ const OTHER = "agent-other";
 /** Build an agent slice with only the fields `pickDefault` reads. */
 function agent(partial: Partial<PickDefaultAgent> & Pick<PickDefaultAgent, "uuid">): PickDefaultAgent {
   return {
-    type: "autonomous_agent",
+    type: "agent",
     managerId: null,
     status: "active",
     delegateMention: null,
@@ -38,8 +38,8 @@ describe("pickDefault", () => {
   it("returns the human's delegateMention when set and the target is visible + active", () => {
     const agents = [
       agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
-      agent({ uuid: DELEGATE, type: "personal_assistant" }),
-      agent({ uuid: OTHER, type: "autonomous_agent" }),
+      agent({ uuid: DELEGATE, type: "agent" }),
+      agent({ uuid: OTHER, type: "agent" }),
     ];
     expect(pickDefault(agents, ME_HUMAN)).toBe(DELEGATE);
   });
@@ -47,7 +47,7 @@ describe("pickDefault", () => {
   it("returns null when the human has no delegateMention set", () => {
     const agents = [
       agent({ uuid: ME_HUMAN, type: "human", delegateMention: null }),
-      agent({ uuid: OTHER, type: "personal_assistant" }),
+      agent({ uuid: OTHER, type: "agent" }),
     ];
     // Notably we do NOT fall back to PA / other my-managed agents —
     // the caller must declare a delegate explicitly.
@@ -65,7 +65,7 @@ describe("pickDefault", () => {
   it("returns null when the delegate target is suspended", () => {
     const agents = [
       agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
-      agent({ uuid: DELEGATE, type: "personal_assistant", status: "suspended" }),
+      agent({ uuid: DELEGATE, type: "agent", status: "suspended" }),
     ];
     expect(pickDefault(agents, ME_HUMAN)).toBeNull();
   });
@@ -74,7 +74,7 @@ describe("pickDefault", () => {
     // Edge: caller's human agent is past the 100-row first-page cap, so
     // we can't read its `delegateMention`. Falling back to null is
     // intentional — better an empty chip row than guessing.
-    const agents = [agent({ uuid: DELEGATE, type: "personal_assistant" })];
+    const agents = [agent({ uuid: DELEGATE, type: "agent" })];
     expect(pickDefault(agents, ME_HUMAN)).toBeNull();
   });
 
@@ -85,7 +85,7 @@ describe("pickDefault", () => {
     // over the same input must agree.
     const agents = [
       agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
-      agent({ uuid: DELEGATE, type: "personal_assistant" }),
+      agent({ uuid: DELEGATE, type: "agent" }),
     ];
     const first = pickDefault(agents, ME_HUMAN);
     const second = pickDefault(agents, ME_HUMAN);

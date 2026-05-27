@@ -53,7 +53,7 @@ describe("resolveAvatarImageUrl", () => {
     const ts = new Date("2026-05-15T08:00:00.000Z");
     const result = resolveAvatarImageUrl({
       uuid,
-      type: "autonomous_agent",
+      type: "agent",
       avatarImageUpdatedAt: ts,
       userAvatarUrl: null,
     });
@@ -67,7 +67,7 @@ describe("resolveAvatarImageUrl", () => {
     // we must not surface it. Non-human agents only get the uploaded URL.
     const result = resolveAvatarImageUrl({
       uuid,
-      type: "personal_assistant",
+      type: "agent",
       avatarImageUpdatedAt: null,
       userAvatarUrl: "https://avatars.githubusercontent.com/u/1?v=4",
     });

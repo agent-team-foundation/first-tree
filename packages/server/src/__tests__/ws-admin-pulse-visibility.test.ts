@@ -120,7 +120,7 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
     // One organization-visible agent (both should see) and one private to `owner` (only owner should see).
     const orgAgent = await createAgent(app.db, {
       name: `pv-org-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       visibility: "organization",
       managerId: owner.memberId,
       clientId: owner.clientId,
@@ -128,7 +128,7 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
     });
     const privateAgent = await createAgent(app.db, {
       name: `pv-priv-agent-${crypto.randomUUID().slice(0, 6)}`,
-      type: "personal_assistant",
+      type: "agent",
       visibility: "private",
       managerId: owner.memberId,
       clientId: owner.clientId,

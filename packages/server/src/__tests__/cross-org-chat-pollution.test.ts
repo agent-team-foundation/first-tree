@@ -48,7 +48,7 @@ describe("cross-org chat pollution — read-side guard rails", () => {
       uuid: agentUuid,
       name: `bot-${label}-${randomUUID().slice(0, 6)}`,
       organizationId: orgId,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: `Bot ${label}`,
       inboxId: `inbox_${agentUuid}`,
       managerId: fallbackManagerId,

@@ -2,6 +2,7 @@ import {
   AGENT_SELECTOR_HEADER,
   type Agent,
   type AgentRuntimeConfig,
+  type AgentVisibility,
   type Attention,
   attentionRecordSchema,
   type CancelAttentionInput,
@@ -64,6 +65,14 @@ export type RegisterResult = {
    */
   displayName: string;
   type: string;
+  /**
+   * Post-merge of `personal_assistant` / `autonomous_agent` (migration 0051)
+   * the row-level "personal vs. shared" axis lives in `visibility` instead
+   * of `type`. Surfaced to the runtime so CLAUDE.md / AGENTS.md generation
+   * can render the personal-assistant vs. autonomous-bot framing without
+   * peeking at row metadata via the SDK.
+   */
+  visibility: AgentVisibility;
   delegateMention: string | null;
   metadata: Record<string, unknown>;
 };
@@ -187,6 +196,7 @@ export class FirstTreeHubSDK {
       status: agent.status,
       displayName: agent.displayName,
       type: agent.type,
+      visibility: agent.visibility,
       delegateMention: agent.delegateMention ?? null,
       metadata: (agent.metadata as Record<string, unknown>) ?? {},
     };

@@ -65,7 +65,7 @@ describe("runValidateMembers — nested directories under a member node", () => 
     write(
       root,
       "members/alice/alice-assistant/NODE.md",
-      `---\ntitle: "alice-assistant"\nowners: [alice]\ntype: personal_assistant\nrole: "Assistant"\ndomains:\n  - "delegate"\n---\n`,
+      `---\ntitle: "alice-assistant"\nowners: [alice]\ntype: agent\nrole: "Assistant"\ndomains:\n  - "delegate"\n---\n`,
     );
 
     const result = runValidateMembers(root);
@@ -108,7 +108,7 @@ describe("runValidateMembers — nested directories under a member node", () => 
     write(
       root,
       "members/alice/alice-assistant/NODE.md",
-      `---\ntitle: "alice-assistant"\nowners: [alice]\ntype: personal_assistant\nrole: "Assistant"\n---\n`,
+      `---\ntitle: "alice-assistant"\nowners: [alice]\ntype: agent\nrole: "Assistant"\n---\n`,
     );
 
     const result = runValidateMembers(root);

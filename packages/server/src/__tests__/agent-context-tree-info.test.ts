@@ -46,7 +46,7 @@ describe("agent context tree info route", () => {
     const sideClientId = await seedClient(app, admin.userId, sideOrgId);
     const sideAgent = await createAgent(app.db, {
       name: `agent-ct-runtime-${crypto.randomUUID().slice(0, 8)}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Agent Context Tree Runtime",
       managerId: sideMemberId,
       organizationId: sideOrgId,

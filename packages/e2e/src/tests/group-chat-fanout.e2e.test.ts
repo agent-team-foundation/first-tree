@@ -70,7 +70,7 @@ beforeAll(async () => {
       `/api/v1/orgs/${encodeURIComponent(creds.organizationId)}/agents`,
       {
         name,
-        type: "autonomous_agent",
+        type: "agent",
         displayName: `E2E Fanout ${label.toUpperCase()}`,
         clientId,
       },

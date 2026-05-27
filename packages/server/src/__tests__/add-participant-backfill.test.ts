@@ -53,8 +53,8 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
   it("writes exactly N silent rows for the joiner when the chat has > N messages, and 0 notify rows", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -86,8 +86,8 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
   it("writes total < N silent rows when the chat has fewer than N messages", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -108,8 +108,8 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
   it("writes zero silent rows when the chat has no messages yet (boundary)", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -126,7 +126,7 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
   it("leaves inbox untouched when addParticipant rejects an already-speaker (transactional consistency)", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -154,8 +154,8 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
     //     `collectPrecedingContext` — pinned by the existing inbox suite.
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -185,8 +185,8 @@ describe("addParticipant — silent-context backfill (v1 §四 改造 2)", () =>
     // `ORDER BY inboxEntries.createdAt` if the planner returned heap order.
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
     if (!newcomer.agent.name) throw new Error("newcomer name missing");
 
     const chat = await createChat(app.db, owner.agent.uuid, {

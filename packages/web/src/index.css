@@ -1384,3 +1384,35 @@ tr[data-interactive]:hover {
     display: none;
   }
 }
+
+/* Mention chip — used by the composer mirror overlay and the
+ * rehype-mentions plugin so the same visual treatment shows up for
+ * both the user's draft and rendered sent messages. The chip stays
+ * inline (no block-level layout) and `white-space: nowrap` keeps the
+ * `@<name>` from wrapping at a hyphen mid-handle. */
+.mention-chip {
+  display: inline;
+  background: var(--accent);
+  color: var(--fg-on-vivid);
+  padding: 0 5px;
+  border-radius: var(--radius-chip);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Selection inside the mention composer: textarea text is rendered
+ * transparent with `color: transparent` so the mirror overlay paints
+ * the glyphs. The global `::selection { color: var(--fg) }` rule above
+ * would otherwise repaint the textarea text in `--fg` only during
+ * selection, briefly making the user see two stacks of text (the
+ * overlay's chips/text underneath, the textarea's selected text on
+ * top). Holding the textarea's selection color transparent keeps the
+ * overlay's chips legible while the selection band still shows. The
+ * `accent-ring` (30% alpha) band tints chips slightly darker but the
+ * chip's foreground glyphs in the overlay layer below stay readable —
+ * the overlay is `pointer-events: none` and not part of the textarea's
+ * selection range, so no chip-scoped `::selection` rule is needed. */
+.mention-composer-textarea::selection {
+  background: var(--accent-ring);
+  color: transparent;
+}

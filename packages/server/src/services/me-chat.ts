@@ -19,7 +19,6 @@
 import { randomUUID } from "node:crypto";
 import {
   type AddMeChatParticipants,
-  AGENT_VISIBILITY,
   CHAT_ENGAGEMENT_STATUSES,
   type ChatEngagementStatus,
   type ChatEngagementView,
@@ -49,7 +48,11 @@ import { BadRequestError, CallerNotSpeakerError, ForbiddenError, NotFoundError }
 import { agentAvatarImageUrl } from "./agent.js";
 import { resolveAgentChatStatuses } from "./agent-chat-status.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
-import { assertChatVisibleInOrgOrNotFound, inviteParticipantsToChat } from "./participant-invite.js";
+import {
+  assertChatVisibleInOrgOrNotFound,
+  inviteParticipantsToChat,
+  rejectedPrivateTargets,
+} from "./participant-invite.js";
 import { addChatParticipants } from "./participant-mode.js";
 import { extractSummary } from "./session.js";
 import { ensureCanJoin, joinAsParticipant, leaveAsParticipant, resolveChatMembership } from "./watcher.js";
@@ -326,6 +329,15 @@ export async function listMeChats(
   // postgres-js returns timestamptz as ISO strings when bound through
   // a raw sql template; coerce below so the response uses ISO
   // strings consistently.
+  //
+  // The `chat_has_explicit_mention_to_me` correlated subquery scans the
+  // caller's unread window (`m.created_at > last_read_at`) for any message
+  // whose `metadata.mentions` JSONB array contains the caller's
+  // human-agent uuid. Distinguishes explicit `@<me>` from the v1 1-on-1
+  // implicit DM auto-mention (services/message.ts:282 `dmAutoProjection`),
+  // which bumps `unread_mention_count` for the red dot but never writes
+  // the recipient into `metadata.mentions`. Uses the existing
+  // `idx_messages_chat_time` for the chat+window scan.
   const rawRows = (await db.execute(sql`
     SELECT
       c.id                  AS chat_id,
@@ -340,7 +352,13 @@ export async function listMeChats(
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
       COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
       ${chatSourceSqlExpression} AS source,
-      c.metadata->>'entityType' AS entity_type
+      c.metadata->>'entityType' AS entity_type,
+      EXISTS (
+        SELECT 1 FROM messages m
+         WHERE m.chat_id = c.id
+           AND m.created_at > COALESCE(cus.last_read_at, '-infinity'::timestamptz)
+           AND m.metadata -> 'mentions' @> jsonb_build_array(${humanAgentId}::text)
+      ) AS chat_has_explicit_mention_to_me
       FROM chats c
       JOIN chat_membership cm
         ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
@@ -374,6 +392,7 @@ export async function listMeChats(
     engagement_status: ChatEngagementStatus;
     source: ChatSource;
     entity_type: string | null;
+    chat_has_explicit_mention_to_me: boolean;
   }>;
 
   const toDate = (v: Date | string | null): Date | null => {
@@ -607,6 +626,7 @@ export async function listMeChats(
       failedAgentIds: failedByChat.get(r.chat_id) ?? [],
       busyAgentIds: busyByChat.get(r.chat_id) ?? [],
       chatHasOpenQuestion: hasOpenQuestionByChat.get(r.chat_id) ?? false,
+      chatHasExplicitMentionToMe: r.chat_has_explicit_mention_to_me,
     };
   });
 
@@ -671,21 +691,29 @@ export async function createMeChat(
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.uuid).join(", ")}`);
   }
 
-  // Owner-exclusive rule for private agents (creation path, mirroring
-  // the add-participant gate in `addMeChatParticipants`). The caller
-  // agent's `managerId` is its owning member — looking it up from
-  // `found` (rather than accepting it as a parameter) keeps the
-  // owner-id source-of-truth inside the service. RFC §4.4.2 / §4.5.
+  // Strict owner-exclusive for private targets (RFC §4.5). The route
+  // pins `humanAgentId = scope.humanAgentId`, so the caller is always
+  // human and the strict check coincides with the previous lenient
+  // shared-`managerId` form for THIS path. Routing through the shared
+  // `rejectedPrivateTargets` predicate anyway keeps the rule in exactly
+  // one place — same discipline as `inviteParticipantsToChat` and
+  // `chat.ts::createChat`. Without it, any future change that lets a
+  // non-human caller reach this code would silently fall back to the
+  // lenient reading (which is the exact two-copies-drift failure mode
+  // PR #550 wrote up).
   const caller = found.find((a) => a.uuid === humanAgentId);
   if (!caller) {
     throw new BadRequestError("Caller agent not found in the chat's organization");
   }
-  const privateNotOwned = found.filter(
-    (a) => a.uuid !== humanAgentId && a.visibility === AGENT_VISIBILITY.PRIVATE && a.managerId !== caller.managerId,
+  const rejected = rejectedPrivateTargets(
+    { agentId: humanAgentId, memberId: caller.managerId, type: caller.type },
+    found
+      .filter((a) => a.uuid !== humanAgentId)
+      .map((a) => ({ uuid: a.uuid, visibility: a.visibility, managerId: a.managerId })),
   );
-  if (privateNotOwned.length > 0) {
+  if (rejected.length > 0) {
     throw new ForbiddenError(
-      `Only the owner can add a private agent to a chat: ${privateNotOwned.map((a) => a.uuid).join(", ")}`,
+      `Only the human owner can add a private agent to a chat: ${rejected.map((t) => t.uuid).join(", ")}`,
     );
   }
 

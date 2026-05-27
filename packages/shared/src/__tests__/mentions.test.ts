@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractMentions, scanMentionTokens } from "../mentions.js";
+import { extractMentions, scanMentionTokens, segmentMentions } from "../mentions.js";
 import type { ChatParticipantDetail } from "../schemas/chat.js";
 
 /**
@@ -23,7 +23,7 @@ function mkParticipant(
     // ChatParticipantDetail.displayName is non-null post-Phase 2, so fall
     // back to a synthetic label when the extras don't provide one.
     displayName: extras.displayName ?? `agent-${agentId}`,
-    type: extras.type ?? "autonomous_agent",
+    type: extras.type ?? "agent",
     avatarColorToken: extras.avatarColorToken ?? null,
     avatarImageUrl: extras.avatarImageUrl ?? null,
   };
@@ -129,5 +129,105 @@ describe("scanMentionTokens", () => {
     // mention token of `@agent-team-foundation/...`. Pin both forms.
     expect(scanMentionTokens("npm i first-tree-shared")).toEqual([]);
     expect(scanMentionTokens("@alice/foo and @bob/bar")).toEqual([]);
+  });
+});
+
+describe("segmentMentions", () => {
+  const participants = [
+    mkParticipant("alice", "agent-alice"),
+    mkParticipant("bob", "agent-bob"),
+    mkParticipant("charlie-07", "agent-charlie"),
+  ];
+
+  it("returns a single text segment when there are no mentions", () => {
+    expect(segmentMentions("hello world", participants)).toEqual([{ kind: "text", value: "hello world" }]);
+  });
+
+  it("returns an empty array for empty content", () => {
+    expect(segmentMentions("", participants)).toEqual([]);
+  });
+
+  it("splits a body with one mention into text-mention-text", () => {
+    expect(segmentMentions("hey @alice please look", participants)).toEqual([
+      { kind: "text", value: "hey " },
+      { kind: "mention", value: "@alice", name: "alice", agentId: "agent-alice" },
+      { kind: "text", value: " please look" },
+    ]);
+  });
+
+  it("preserves original case in the mention value (no lowercase rewriting)", () => {
+    expect(segmentMentions("@ALICE", participants)).toEqual([
+      { kind: "mention", value: "@ALICE", name: "alice", agentId: "agent-alice" },
+    ]);
+  });
+
+  it("keeps unresolved @tokens inside the surrounding text segment", () => {
+    expect(segmentMentions("@ghost and @alice", participants)).toEqual([
+      { kind: "text", value: "@ghost and " },
+      { kind: "mention", value: "@alice", name: "alice", agentId: "agent-alice" },
+    ]);
+  });
+
+  it("does not split inside an email address", () => {
+    expect(segmentMentions("ping alice@example.com", participants)).toEqual([
+      { kind: "text", value: "ping alice@example.com" },
+    ]);
+  });
+
+  it("does not split on npm scoped package names", () => {
+    expect(segmentMentions("install @alice/foo today", participants)).toEqual([
+      { kind: "text", value: "install @alice/foo today" },
+    ]);
+  });
+
+  it("handles back-to-back mentions with no text between", () => {
+    expect(segmentMentions("@alice @bob hi", participants)).toEqual([
+      { kind: "mention", value: "@alice", name: "alice", agentId: "agent-alice" },
+      { kind: "text", value: " " },
+      { kind: "mention", value: "@bob", name: "bob", agentId: "agent-bob" },
+      { kind: "text", value: " hi" },
+    ]);
+  });
+
+  it("preserves character offsets — concatenated values rebuild the source", () => {
+    // This is the contract the composer mirror overlay relies on: the
+    // overlay text must equal the textarea text byte-for-byte so caret /
+    // selection alignment stays correct.
+    const source = "  hey @alice — and @charlie-07!  ";
+    const rebuilt = segmentMentions(source, participants)
+      .map((s) => s.value)
+      .join("");
+    expect(rebuilt).toBe(source);
+  });
+
+  // The next batch pins the agreement with `extractMentions` on code
+  // regions — without this, the composer paints chips for tokens the
+  // server's resolver would drop, and the user sees "chip + send
+  // disabled" with no explanation (PR 597 review #1).
+  it("does not chip @tokens inside inline backtick spans", () => {
+    expect(segmentMentions("use `@alice` literally", participants)).toEqual([
+      { kind: "text", value: "use `@alice` literally" },
+    ]);
+  });
+
+  it("does not chip @tokens inside fenced ``` blocks", () => {
+    const source = "```\n@alice in code\n```\nhey @bob";
+    expect(segmentMentions(source, participants)).toEqual([
+      { kind: "text", value: "```\n@alice in code\n```\nhey " },
+      { kind: "mention", value: "@bob", name: "bob", agentId: "agent-bob" },
+    ]);
+  });
+
+  it("does not chip @tokens inside tilde ~~~ blocks", () => {
+    const source = "~~~\n@alice example\n~~~";
+    expect(segmentMentions(source, participants)).toEqual([{ kind: "text", value: source }]);
+  });
+
+  it("byte-for-byte invariant holds even when code regions suppress mentions", () => {
+    const source = "before `@alice` middle @bob ```\n@charlie-07\n``` after @alice";
+    const rebuilt = segmentMentions(source, participants)
+      .map((s) => s.value)
+      .join("");
+    expect(rebuilt).toBe(source);
   });
 });

@@ -16,7 +16,7 @@ async function seedAgent(
     orgId: string;
     memberId: string;
     name: string;
-    type?: "autonomous_agent" | "human";
+    type?: "agent" | "human";
     status?: "active" | "suspended";
     delegateMention?: string | null;
   },
@@ -26,7 +26,7 @@ async function seedAgent(
     uuid,
     name: opts.name,
     organizationId: opts.orgId,
-    type: opts.type ?? "autonomous_agent",
+    type: opts.type ?? "agent",
     displayName: opts.name,
     inboxId: `inbox_${uuid}`,
     managerId: opts.memberId,

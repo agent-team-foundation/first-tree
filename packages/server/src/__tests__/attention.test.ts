@@ -45,7 +45,7 @@ async function seedAutonomousAgent(app: App, orgId: string, memberId: string): P
     uuid,
     name: `bot-${uuid.slice(0, 8)}`,
     organizationId: orgId,
-    type: "autonomous_agent",
+    type: "agent",
     displayName: "b",
     inboxId: `inbox_${uuid}`,
     managerId: memberId,

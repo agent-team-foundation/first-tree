@@ -42,7 +42,7 @@ describe("silent inbox + preceding context", () => {
     });
     const observer = await createAgent(app.db, {
       name: `si-obs-${uid}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
@@ -339,13 +339,13 @@ describe("silent inbox + preceding context", () => {
     const human = await createAgent(app.db, { name: `mc-h-${uid}`, type: "human", managerId: ctx.memberId });
     const observer = await createAgent(app.db, {
       name: `mc-obs-${uid}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
     const filler = await createAgent(app.db, {
       name: `mc-fill-${uid}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });

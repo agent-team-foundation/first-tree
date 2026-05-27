@@ -27,7 +27,7 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
   it("returns the chat's explicit topic verbatim when set", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
       participantIds: [peer.agent.uuid],
@@ -41,7 +41,7 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
   it("falls back to the first message preview when topic is null", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
       participantIds: [peer.agent.uuid],
@@ -60,7 +60,7 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
   it("falls back to participant displayName join when topic is null AND no messages", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human", displayName: "Alice" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent", displayName: "Bob Bot" });
+    const peer = await createTestAgent(app, { type: "agent", displayName: "Bob Bot" });
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
       participantIds: [peer.agent.uuid],
@@ -76,8 +76,8 @@ describe("getChatDetail — server-resolved title (v1.7)", () => {
     const app = getApp();
     // `human` agents lack `clientId` pinning and are blocked from the
     // agent path; use an autonomous agent as the caller instead.
-    const caller = await createTestAgent(app, { type: "autonomous_agent", displayName: "Owner Bot" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent", displayName: "Bot Peer" });
+    const caller = await createTestAgent(app, { type: "agent", displayName: "Owner Bot" });
+    const peer = await createTestAgent(app, { type: "agent", displayName: "Bot Peer" });
 
     const chatRes = await caller.request("POST", "/api/v1/agent/chats", {
       type: "group",

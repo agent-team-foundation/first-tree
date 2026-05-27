@@ -303,6 +303,33 @@ export const meChatRowSchema = z.object({
    * See docs/development/needs-attention-scoping.20260526.md §4 / §5.
    */
   chatHasOpenQuestion: z.boolean().default(false),
+  /**
+   * True iff there exists at least one unread message in this chat whose
+   * `messages.metadata.mentions` array explicitly contains the caller's
+   * human-agent UUID. Drives the chat-list "Needs attention" mention rule on
+   * the front-end after the explicit-mention narrowing (Phase 1 of the
+   * three-rule simplification).
+   *
+   * Distinguishes explicit `@<me>` from the v1 1-on-1 implicit DM
+   * auto-mention (`services/message.ts:282 dmAutoProjection`): the latter
+   * still bumps `unreadMentionCount` for the red dot but never writes the
+   * recipient into `metadata.mentions`, so a 1-on-1 agent → human plain
+   * final message correctly leaves `chatHasExplicitMentionToMe = false` and
+   * stops pinning the chat into Needs attention.
+   *
+   * Unread window = `(cus.last_read_at, NOW()]`; NULL `last_read_at` means
+   * "never read", treated as "every message counts".
+   *
+   * Derived at query time via a correlated `EXISTS` on `messages`. No schema
+   * migration. `.default(false)` for version skew: an older server build
+   * that predates this field would otherwise produce `undefined`, which —
+   * combined with the strict `=== true` check in the front-end predicate
+   * (`group-rows.ts`) — silently disables the explicit-mention rule on the
+   * new web during a web-ahead-of-server rollout. R1 (failed) keeps firing.
+   *
+   * See docs/development/needs-attention-scoping.20260526.md.
+   */
+  chatHasExplicitMentionToMe: z.boolean().default(false),
 });
 export type MeChatRow = z.infer<typeof meChatRowSchema>;
 

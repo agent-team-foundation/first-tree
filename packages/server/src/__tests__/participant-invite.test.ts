@@ -23,7 +23,7 @@ describe("inviteParticipantsToChat", () => {
 
   it("rejects an empty target list", async () => {
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "autonomous_agent" });
+    const owner = await createTestAgent(app, { type: "agent" });
     const chat = await createChat(app.db, owner.agent.uuid, { type: "group", participantIds: [] });
 
     await expect(
@@ -38,8 +38,8 @@ describe("inviteParticipantsToChat", () => {
 
   it("404s when the chat does not exist", async () => {
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "autonomous_agent" });
-    const target = await createTestAgent(app, { type: "autonomous_agent" });
+    const owner = await createTestAgent(app, { type: "agent" });
+    const target = await createTestAgent(app, { type: "agent" });
 
     await expect(
       inviteParticipantsToChat(app.db, {
@@ -53,9 +53,9 @@ describe("inviteParticipantsToChat", () => {
 
   it("refuses a caller who is not a speaker of the chat (ForbiddenError)", async () => {
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "autonomous_agent" });
-    const stranger = await createTestAgent(app, { type: "autonomous_agent" });
-    const target = await createTestAgent(app, { type: "autonomous_agent" });
+    const owner = await createTestAgent(app, { type: "agent" });
+    const stranger = await createTestAgent(app, { type: "agent" });
+    const target = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, { type: "group", participantIds: [] });
 
@@ -71,7 +71,7 @@ describe("inviteParticipantsToChat", () => {
 
   it("rejects unknown target agents with BadRequestError (listing the missing ids)", async () => {
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "autonomous_agent" });
+    const owner = await createTestAgent(app, { type: "agent" });
     const chat = await createChat(app.db, owner.agent.uuid, { type: "group", participantIds: [] });
 
     await expect(
@@ -86,11 +86,11 @@ describe("inviteParticipantsToChat", () => {
 
   it("rejects cross-org targets with BadRequestError", async () => {
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "autonomous_agent" });
+    const owner = await createTestAgent(app, { type: "agent" });
     // `createTestAgent` resolves the *default* org for every call, so two
     // agents created back-to-back land in the same org. To produce a
     // cross-org target we rewrite the agent's organization_id post hoc.
-    const stranger = await createTestAgent(app, { type: "autonomous_agent" });
+    const stranger = await createTestAgent(app, { type: "agent" });
     const otherOrgId = "11111111-1111-1111-1111-111111111111";
     const { organizations } = await import("../db/schema/organizations.js");
     await app.db.insert(organizations).values({ id: otherOrgId, name: "Other Org", displayName: "Other Org" });
@@ -111,8 +111,8 @@ describe("inviteParticipantsToChat", () => {
   it("refuses a non-owner inviting a private target (owner-exclusive rule)", async () => {
     const app = getApp();
     // Caller and target are in the same org but managed by different members.
-    const caller = await createTestAgent(app, { type: "autonomous_agent" });
-    const targetOwner = await createTestAgent(app, { type: "autonomous_agent" });
+    const caller = await createTestAgent(app, { type: "agent" });
+    const targetOwner = await createTestAgent(app, { type: "agent" });
 
     // Pin the target's org to caller's org and mark it private.
     await app.db
@@ -129,13 +129,13 @@ describe("inviteParticipantsToChat", () => {
         targetAgentIds: [targetOwner.agent.uuid],
         errorOnAlreadySpeaker: true,
       }),
-    ).rejects.toThrow(/Only the owner/);
+    ).rejects.toThrow(/Only the human owner/);
   });
 
   it("throws ConflictError on already-speaker target when errorOnAlreadySpeaker=true", async () => {
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "autonomous_agent" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
+    const owner = await createTestAgent(app, { type: "agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -154,9 +154,9 @@ describe("inviteParticipantsToChat", () => {
 
   it("silently skips already-speaker targets when errorOnAlreadySpeaker=false (partial-idempotent batch)", async () => {
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "autonomous_agent" });
-    const existingSpeaker = await createTestAgent(app, { type: "autonomous_agent" });
-    const brandNew = await createTestAgent(app, { type: "autonomous_agent" });
+    const owner = await createTestAgent(app, { type: "agent" });
+    const existingSpeaker = await createTestAgent(app, { type: "agent" });
+    const brandNew = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -181,8 +181,8 @@ describe("inviteParticipantsToChat", () => {
 
   it("is a true no-op when every target is already a speaker (no write, no recompute side-effects)", async () => {
     const app = getApp();
-    const owner = await createTestAgent(app, { type: "autonomous_agent" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
+    const owner = await createTestAgent(app, { type: "agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -217,8 +217,8 @@ describe("inviteParticipantsToChat", () => {
     // shell that delegates to invite inherits the assertion for free.
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -259,7 +259,7 @@ describe("inviteParticipantsToChat", () => {
     // is the `t.uuid !== callerAgentId` clause inside the invite service:
     // private-owner-exclusive does not fire when caller IS the target.
     const app = getApp();
-    const self = await createTestAgent(app, { type: "autonomous_agent" });
+    const self = await createTestAgent(app, { type: "agent" });
     await app.db.update(agents).set({ visibility: AGENT_VISIBILITY.PRIVATE }).where(eq(agents.uuid, self.agent.uuid));
 
     // `self` creates the chat → `self` is automatically a speaker (createChat
@@ -296,7 +296,7 @@ describe("assertChatVisibleInOrgOrNotFound", () => {
   it("404s when the chat is in a different org from the caller (probing protection)", async () => {
     const app = getApp();
     const caller = await createTestAgent(app, { type: "human" });
-    const chatOwner = await createTestAgent(app, { type: "autonomous_agent" });
+    const chatOwner = await createTestAgent(app, { type: "agent" });
     const chat = await createChat(app.db, chatOwner.agent.uuid, { type: "group", participantIds: [] });
 
     // Force the chat into a different org so the caller can't see it.

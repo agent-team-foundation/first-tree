@@ -48,8 +48,8 @@ describe("addChatParticipants — silent-context backfill invariant", () => {
   it("brand-new joiner inserted directly via helper gets backfilled", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -72,8 +72,8 @@ describe("addChatParticipants — silent-context backfill invariant", () => {
     // before that moment is unreachable without the silent replay.
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const promoted = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const promoted = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -108,7 +108,7 @@ describe("addChatParticipants — silent-context backfill invariant", () => {
   it("already-speaker no-op insert does not double-backfill", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -134,8 +134,8 @@ describe("addChatParticipants — silent-context backfill invariant", () => {
   it("mixed batch backfills only the agents that crossed into speaker", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const existing = await createTestAgent(app, { type: "autonomous_agent" });
-    const brandNew = await createTestAgent(app, { type: "autonomous_agent" });
+    const existing = await createTestAgent(app, { type: "agent" });
+    const brandNew = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -173,8 +173,8 @@ describe("backfill invariant — service entrypoints (regression: PR #393 follow
     // The agent joined with an empty inbox and read no history.
     const app = getApp();
     const owner = await createTestAdmin(app);
-    const peer = await createTestAgent(app, { type: "autonomous_agent", name: "amcp-peer" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent", name: "amcp-newcomer" });
+    const peer = await createTestAgent(app, { type: "agent", name: "amcp-peer" });
+    const newcomer = await createTestAgent(app, { type: "agent", name: "amcp-newcomer" });
 
     const chat = await createChat(app.db, owner.humanAgentUuid, {
       type: "group",
@@ -202,8 +202,8 @@ describe("backfill invariant — service entrypoints (regression: PR #393 follow
     // not re-backfill.
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -225,8 +225,8 @@ describe("backfill invariant — service entrypoints (regression: PR #393 follow
     // Sanity: the helper does not bypass the global cap when called directly.
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
-    const newcomer = await createTestAgent(app, { type: "autonomous_agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
+    const newcomer = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",

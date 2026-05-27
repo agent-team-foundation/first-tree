@@ -90,9 +90,9 @@ export async function fetchChatContext(
 }
 
 /**
- * For delegate agents (personal_assistant whose `delegateMention` points at
- * a chat participant) return `{name, displayName}` of the human owner; for
- * autonomous agents return `undefined`.
+ * For delegate agents (an `agent` whose `delegateMention` points at a chat
+ * participant) return `{name, displayName}` of the human owner; for plain
+ * `agent` rows with no delegateMention return `undefined`.
  *
  * `delegateMention` holds the OWNER'S `name` slug — see
  * web/.../identity-section.tsx ("delegate <AgentChip ...>").
@@ -101,7 +101,7 @@ function resolveSelfOwner(
   identity: Pick<AgentIdentity, "type" | "delegateMention">,
   participants: ReadonlyArray<{ name: string | null; displayName: string; type: string }>,
 ): { name: string; displayName: string } | undefined {
-  if (identity.type !== "personal_assistant") return undefined;
+  if (identity.type !== "agent") return undefined;
   if (!identity.delegateMention) return undefined;
   const owner = participants.find((p) => p.name === identity.delegateMention && p.type === "human");
   if (!owner || !owner.name) return undefined;

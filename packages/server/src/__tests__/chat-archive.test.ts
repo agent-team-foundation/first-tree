@@ -47,7 +47,7 @@ async function seedDelegateAgent(app: App, orgId: string, memberId: string): Pro
     uuid,
     name: `dlg-${uuid.slice(0, 8)}`,
     organizationId: orgId,
-    type: "autonomous_agent",
+    type: "agent",
     displayName: "d",
     inboxId: `inbox_${uuid}`,
     managerId: memberId,

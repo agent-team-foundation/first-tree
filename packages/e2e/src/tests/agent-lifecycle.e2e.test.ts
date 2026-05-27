@@ -39,7 +39,7 @@ beforeAll(async () => {
     `/api/v1/orgs/${encodeURIComponent(creds.organizationId)}/agents`,
     {
       name: `e2e-life-${randomBytes(3).toString("hex")}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Lifecycle target",
       clientId: creds.clientId,
     },
@@ -72,7 +72,7 @@ describe("agent lifecycle — create / read / patch / suspend / reactivate / del
       `/api/v1/agents/${encodeURIComponent(agentId)}`,
     );
     expect(got.uuid).toBe(agentId);
-    expect(got.type).toBe("autonomous_agent");
+    expect(got.type).toBe("agent");
     expect(got.displayName).toBe("Lifecycle target");
     expect(await readAgentStatus(agentId)).toBe("active");
   });

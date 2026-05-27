@@ -30,8 +30,8 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
   it("accepts a group-chat send with no @ when purpose='agent-final-text' (no 400)", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peerA = await createTestAgent(app, { type: "autonomous_agent" });
-    const peerB = await createTestAgent(app, { type: "autonomous_agent" });
+    const peerA = await createTestAgent(app, { type: "agent" });
+    const peerB = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -60,8 +60,8 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
   it("forces every fan-out row to notify=false when purpose='agent-final-text'", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peerA = await createTestAgent(app, { type: "autonomous_agent" });
-    const peerB = await createTestAgent(app, { type: "autonomous_agent" });
+    const peerA = await createTestAgent(app, { type: "agent" });
+    const peerB = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -95,8 +95,8 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
   it("still 400s when purpose is absent (regression guard for the enforce rule)", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
-    const peerA = await createTestAgent(app, { type: "autonomous_agent" });
-    const peerB = await createTestAgent(app, { type: "autonomous_agent" });
+    const peerA = await createTestAgent(app, { type: "agent" });
+    const peerB = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
@@ -120,8 +120,8 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     // must override that so final text never wakes anyone in any chat
     // shape — same invariant client-side `silent-turn` guards against.
     const app = getApp();
-    const a = await createTestAgent(app, { type: "autonomous_agent" });
-    const b = await createTestAgent(app, { type: "autonomous_agent" });
+    const a = await createTestAgent(app, { type: "agent" });
+    const b = await createTestAgent(app, { type: "agent" });
 
     const chat = await createChat(app.db, a.agent.uuid, {
       type: "group",
@@ -147,8 +147,8 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
 
   it("API integration: POST /agent/chats/:id/messages with purpose='agent-final-text' returns 201 on a group send without @", async () => {
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
-    const peer = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
+    const peer = await createTestAgent(app, { type: "agent" });
 
     const chatRes = await sender.request("POST", "/api/v1/agent/chats", {
       type: "group",
@@ -169,9 +169,9 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     // Use a real group (>=3 speakers); two-speaker chats are treated as
     // 1-on-1s by `enforceGroupMention` and bypass the @-required guard.
     const app = getApp();
-    const sender = await createTestAgent(app, { type: "autonomous_agent" });
-    const peer1 = await createTestAgent(app, { type: "autonomous_agent" });
-    const peer2 = await createTestAgent(app, { type: "autonomous_agent" });
+    const sender = await createTestAgent(app, { type: "agent" });
+    const peer1 = await createTestAgent(app, { type: "agent" });
+    const peer2 = await createTestAgent(app, { type: "agent" });
 
     const chatRes = await sender.request("POST", "/api/v1/agent/chats", {
       type: "group",

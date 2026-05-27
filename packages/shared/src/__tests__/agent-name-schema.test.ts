@@ -64,7 +64,7 @@ describe("isReservedAgentName", () => {
 describe("createAgentSchema", () => {
   it("accepts valid inputs", () => {
     expect(createAgentSchema.safeParse({ name: "alice", type: "human" }).success).toBe(true);
-    expect(createAgentSchema.safeParse({ type: "personal_assistant" }).success).toBe(true);
+    expect(createAgentSchema.safeParse({ type: "agent" }).success).toBe(true);
   });
 
   it("rejects a reserved name via refine", () => {

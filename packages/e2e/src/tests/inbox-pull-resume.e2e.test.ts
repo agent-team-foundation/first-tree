@@ -60,7 +60,7 @@ beforeAll(async () => {
     `/api/v1/orgs/${encodeURIComponent(creds.organizationId)}/agents`,
     {
       name: `e2e-pull-${randomBytes(3).toString("hex")}`,
-      type: "autonomous_agent",
+      type: "agent",
       displayName: "Reconnect-continuity target",
       clientId: listenerClientId,
     },

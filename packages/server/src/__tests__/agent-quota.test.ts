@@ -14,7 +14,7 @@ describe("Agent Quota Enforcement", () => {
     for (let i = 0; i < 5; i++) {
       await createAgent(app.db, {
         name: `unlimited-${i}`,
-        type: "autonomous_agent",
+        type: "agent",
         managerId: ctx.memberId,
         clientId: ctx.clientId,
       });

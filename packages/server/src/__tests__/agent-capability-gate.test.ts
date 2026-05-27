@@ -53,7 +53,7 @@ describe("Agent capability gate (services/agent.ts)", () => {
     // ctx.clientId is freshly seeded — metadata is null.
     const created = await createAgent(app.db, {
       name: `cap-gate-empty-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
       runtimeProvider: "claude-code",
@@ -68,7 +68,7 @@ describe("Agent capability gate (services/agent.ts)", () => {
 
     const created = await createAgent(app.db, {
       name: `cap-gate-ok-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
       runtimeProvider: "claude-code",
@@ -83,7 +83,7 @@ describe("Agent capability gate (services/agent.ts)", () => {
 
     const created = await createAgent(app.db, {
       name: `cap-gate-unauth-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
       runtimeProvider: "codex",
@@ -104,7 +104,7 @@ describe("Agent capability gate (services/agent.ts)", () => {
     await expect(
       createAgent(app.db, {
         name: `cap-gate-missing-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         managerId: ctx.memberId,
         clientId: ctx.clientId,
         runtimeProvider: "codex",
@@ -120,7 +120,7 @@ describe("Agent capability gate (services/agent.ts)", () => {
     await expect(
       createAgent(app.db, {
         name: `cap-gate-error-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         managerId: ctx.memberId,
         clientId: ctx.clientId,
         runtimeProvider: "claude-code",
@@ -137,7 +137,7 @@ describe("Agent capability gate (services/agent.ts)", () => {
       app.db,
       {
         name: `cap-gate-force-${crypto.randomUUID().slice(0, 6)}`,
-        type: "autonomous_agent",
+        type: "agent",
         managerId: ctx.memberId,
         clientId: ctx.clientId,
         runtimeProvider: "codex",
@@ -172,7 +172,7 @@ describe("Agent capability gate (services/agent.ts)", () => {
 
     const agent = await createAgent(app.db, {
       name: `cap-gate-rebind-${crypto.randomUUID().slice(0, 6)}`,
-      type: "autonomous_agent",
+      type: "agent",
       managerId: ctx.memberId,
       clientId: ctx.clientId,
       runtimeProvider: "claude-code",
