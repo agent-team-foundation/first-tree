@@ -2,7 +2,6 @@ import {
   type Attention,
   type AttentionCancelledFrame,
   type AttentionOpenedFrame,
-  type AttentionRespondedFrame,
   listAttentionsQuerySchema,
   respondAttentionInputSchema,
 } from "@first-tree/shared";
@@ -97,31 +96,6 @@ export async function emitAttentionOpened(app: FastifyInstance, attention: Atten
 }
 
 /**
- * Emit `attention:responded` to admin sockets in the chat's org. The
- * origin agent's manager UI consumes this to clear the "waiting on
- * human" indicator.
- */
-export async function emitAttentionResponded(app: FastifyInstance, attention: Attention): Promise<void> {
-  const orgId = await resolveChatOrg(app, attention.originChatId);
-  if (!orgId) return;
-  const frame: AttentionRespondedFrame & { chatId: string; organizationId: string } = {
-    type: "attention:responded",
-    attentionId: attention.id,
-    originAgentId: attention.originAgentId,
-    // Embed chatId so the admin-ws invalidator can hit the per-chat query
-    // key directly instead of falling back to a broad `["attentions"]`
-    // prefix sweep. The frame schema is passthrough so unknown fields are
-    // forwarded by the client dispatcher without a Zod failure.
-    chatId: attention.originChatId,
-    organizationId: orgId,
-  };
-  broadcastToAdmins(frame);
-  // Also push to the origin agent's inbox so the client runtime can
-  // resolve any local `await respond` wait without a refetch.
-  await pushFrameToOriginAgent(app, attention, JSON.stringify(frame));
-}
-
-/**
  * Emit `attention:cancelled` to admin sockets so the target human's UI
  * removes the "needs you" indicator without waiting for a poll.
  */
@@ -149,19 +123,6 @@ async function resolveChatOrg(app: FastifyInstance, chatId: string): Promise<str
     .where(eq(chats.id, chatId))
     .limit(1);
   return row?.organizationId ?? null;
-}
-
-async function pushFrameToOriginAgent(app: FastifyInstance, attention: Attention, frame: string): Promise<void> {
-  const [agentRow] = await app.db
-    .select({ inboxId: agents.inboxId })
-    .from(agents)
-    .where(eq(agents.uuid, attention.originAgentId))
-    .limit(1);
-  if (!agentRow?.inboxId) return;
-  app.notifier.pushFrameToInbox(agentRow.inboxId, frame).catch(() => {
-    // Best-effort — origin agent may not have a live socket; the next
-    // poll picks it up.
-  });
 }
 
 export async function attentionRoutes(app: FastifyInstance): Promise<void> {
@@ -199,7 +160,13 @@ export async function attentionRoutes(app: FastifyInstance): Promise<void> {
     const { humanAgentId } = await requireOwnHumanForAttention(app, request, request.params.id);
     const body = respondAttentionInputSchema.parse(request.body);
     const updated = await respondAttention(app.db, humanAgentId, request.params.id, body);
-    await emitAttentionResponded(app, updated);
+    // No `attention:responded` WS frame — the chat-echo message emitted as a
+    // side effect of `respondAttention` already routes via `@<originAgent>`
+    // mention extraction (see services/attention.ts), so the asking agent's
+    // inbox + standard `chat:message` fan-out covers the wake-up. The
+    // responder's own attention-list UI refreshes via the React-Query mutation
+    // onSuccess; third-party observers pick up the close on the next list
+    // refetch (no dedicated push needed).
     return reply.status(200).send(updated);
   });
 
