@@ -39,7 +39,7 @@ import {
 } from "./clients/cards/shared/providers.js";
 import { ComputerStatusPill } from "./clients/computer-status-pill.js";
 import { DemoNavigator, useDemoScenarioParam } from "./clients/demo-navigator.js";
-import { compareByPillPriority, deriveComputerStatus, summarizeComputers } from "./clients/derive-status.js";
+import { compareByPillPriority, deriveComputerStatus } from "./clients/derive-status.js";
 import { DEMO_AGENT_NAMES, DEMO_SELF_USER_ID, findDemoScenario } from "./clients/dev-fixtures.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 
@@ -291,34 +291,45 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
         : orgClientsQuery.isLoading
       : meClientsQuery.isLoading;
 
-  // Subtitle is the pure-function output of `summarizeComputers` — single
-  // headline for one row owned by the viewer ("Your computer is ready"),
-  // neutral phrasing when admin is looking at a teammate's lone row, and a
-  // zero-suppressed pill-count breakdown for multi-row views. The `· N
-  // agents bound` suffix restores the power-user signal the old subtitle
-  // surfaced. See `clients/derive-status.ts` for the pure logic + tests.
-  const subtitle = useMemo(() => summarizeComputers(clients, viewerUserId), [clients, viewerUserId]);
+  // Subtitle is a short static description matching the rest of
+  // Settings (`Connected GitHub App and granted permissions` /
+  // `Finish or revisit your setup` etc). Dynamic pill-count stats
+  // ("1 offline · 6 ready · 16 agents bound") are dropped — each
+  // card's pill already conveys per-row state, and a global
+  // aggregate is noise the page header doesn't need to carry.
 
-  // Cards now host the per-row affordances (Generate new token, install
-  // guide, ⋯ menu) inline, so the PageHeader's right slot no longer needs
-  // a "+ Connect" button. The connect entry point lives at the bottom of
-  // the page as a low-emphasis "Add another computer" outline button when
-  // appropriate. Single-device + viewer-owned hides it entirely per
-  // mockup §"已敲定" 第 5 条 — a user with exactly one working computer
-  // doesn't usually want a second one, and they can still reach the entry
-  // via the empty-state CTA after retire.
-  //
-  // "Add another" copy reads wrong when the viewer (admin) has 0 of
-  // their own and only team rows are showing — they don't yet have one
-  // to "add another" to. In that case fall back to the full-page empty
-  // CTA inside the "Your computers" section instead of the bottom button.
-  const singleOwnCard = !grouped && (memberList?.length ?? 0) === 1 && memberList?.[0]?.userId === viewerUserId;
+  // Connect entry-point has moved from a bottom "Add another computer"
+  // button to a discreet "+ Connect" icon button in the PageHeader's
+  // right slot — always-available, low-visibility per mockup §"已敲定"
+  // 第 5 条. When the viewer has 0 own machines the empty-state CTA
+  // ("Connect your first computer") covers the affordance, so the
+  // header button hides to avoid duplication.
   const viewerOwnCount = grouped ? mineList.length : (memberList?.length ?? 0);
-  const showBottomAddButton = !singleOwnCard && viewerOwnCount >= 1;
+  // Header-right "+ Connect" icon button shows whenever the viewer
+  // already has at least one of their own computers — gives a
+  // discreet always-available entry to add another machine without
+  // taking up bottom-of-page real estate. Hidden when the viewer has
+  // 0 own machines (the empty state already has a prominent
+  // "Connect your first computer" CTA, no need to double up). The
+  // previous bottom "Add another computer" button is gone — replaced
+  // by this header icon per mockup §"已敲定" 第 5 条: "+ Connect 永远
+  // 在角落、低显眼度".
+  const showHeaderConnectButton = viewerOwnCount >= 1;
 
   return (
     <div className={embedded ? "" : "-m-6"}>
-      <PageHeader title="Computers" subtitle={subtitle} />
+      <PageHeader
+        title="Computers"
+        subtitle="Machines connected to first-tree"
+        right={
+          showHeaderConnectButton ? (
+            <Button variant="outline" size="sm" onClick={openNewConnection}>
+              <Plus className="h-3 w-3" />
+              Connect
+            </Button>
+          ) : undefined
+        }
+      />
       {demoScenario && (
         <DemoNavigator activeKey={demoScenario.key} onSelect={(k) => setDemoKey(k)} onExit={() => setDemoKey(null)} />
       )}
@@ -522,7 +533,13 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                             setRetireError(null);
                             setConfirmRetire(client);
                           }}
-                          ownerLabel={resolveOwner(client)}
+                          // No ownerLabel: the parent "Your computers" Section
+                          // header already establishes that every card in
+                          // this stack belongs to the viewer, so repeating
+                          // "Dev User · you" next to each hostname is just
+                          // noise. Owner labeling lives only on the
+                          // Team-computers table where it disambiguates
+                          // between teammates.
                         />
                       ))}
                     </CardStack>
@@ -592,15 +609,6 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                   />
                 ))}
               </CardStack>
-            )}
-
-            {showBottomAddButton && (
-              <div className="flex justify-center" style={{ paddingTop: "var(--sp-2)" }}>
-                <Button variant="outline" size="sm" onClick={openNewConnection}>
-                  <Plus className="h-3 w-3" />
-                  Add another computer
-                </Button>
-              </div>
             )}
           </div>
         )}

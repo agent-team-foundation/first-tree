@@ -37,24 +37,23 @@ export function RuntimeInstallBox({ provider, entry, hostname }: RuntimeInstallB
   // again would nest a box inside a box inside the page, which fights
   // the Settings tab's "flat hairline-only" vocabulary.
   //
-  // Layout: `height: 100%` lets the box take the full grid-row height
-  // (CSS Grid stretches items by default), and the InlineCommand
-  // wrapper is pushed to the bottom via `margin-top: auto`. The result
-  // is that when two boxes sit side-by-side with headlines of
-  // different lengths, their Copy buttons baseline-align at the bottom
-  // — the operator's eye doesn't have to chase varying button
-  // positions.
+  // Boxes have equal *outer* height via the parent CSS Grid
+  // (`align-items: stretch` is the default). Inside, content flows
+  // naturally from the top — label, headline, command. A shorter
+  // headline simply leaves whitespace at the bottom of its box. No
+  // forced bottom-align of the command block: when two boxes have
+  // unequal headline heights, baseline-aligning the Copy buttons
+  // makes the headlines themselves visually misaligned, which is the
+  // worse trade.
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-1_5)", height: "100%" }}>
+    <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
       <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
         {label}
       </div>
       <p className="text-caption" style={{ margin: 0, color: "var(--fg-3)" }}>
         {renderHeadlineWithCode(headline)}
       </p>
-      <div style={{ marginTop: "auto" }}>
-        <InlineCommand command={command} ariaLabel={`${label} setup command`} />
-      </div>
+      <InlineCommand command={command} ariaLabel={`${label} setup command`} />
     </div>
   );
 }
