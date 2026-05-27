@@ -444,4 +444,17 @@ describe("loadAgents", () => {
     expect(agents.has("agent-a")).toBe(true);
     expect(agents.has("agent-b")).toBe(false);
   });
+
+  it("skips non-directory entries in the agents directory", () => {
+    const agentsDir = join(testDir, "agents");
+    mkdirSync(join(agentsDir, "agent-a"), { recursive: true });
+    writeFileSync(join(agentsDir, "README.md"), "not an agent config\n");
+    writeFileSync(join(agentsDir, "agent-a", "agent.yaml"), "token: aht_aaa\n");
+
+    const agents = loadAgents({ schema: agentSchema, agentsDir });
+
+    expect(agents.size).toBe(1);
+    expect(agents.has("agent-a")).toBe(true);
+    expect(agents.has("README.md")).toBe(false);
+  });
 });
