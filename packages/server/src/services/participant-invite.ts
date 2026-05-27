@@ -38,16 +38,22 @@
  *   - every target must exist (else BadRequestError listing the missing
  *     ids).
  *   - every target must be in the chat's organization (else BadRequestError).
- *   - private targets only land if the caller's owning member matches the
- *     target's owning member ("owner-exclusive" / "邀请即同意"; see
- *     `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.4.2 / §4.5).
- *     Self-add (`targetAgentId === callerAgentId`) is exempt.
+ *   - private targets only land if the caller is the **human agent** of the
+ *     same owning member as the target ("strict owner-exclusive" — the
+ *     invitation right belongs to the human manager themselves, not to any
+ *     agent the manager happens to own; see
+ *     `docs/agent-space-and-mention-visibility-design.zh-CN.md` §4.5). A
+ *     manager's public agent can NOT pull the manager's sibling private
+ *     agent in — that path was the social-engineering hole this rule
+ *     closes. Self-add (`targetAgentId === callerAgentId`) is exempt so
+ *     a runtime rejoin of a private agent isn't blocked. No admin override
+ *     — admin is a discovery-side affordance, not a consent-side one.
  *   - the actual write goes through `applyMembershipWrite`, which encloses
  *     the silent-context backfill + watcher recompute invariants and the
  *     post-commit audience-cache invalidation.
  */
 
-import { AGENT_VISIBILITY } from "@first-tree/shared";
+import { AGENT_TYPES, AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -79,6 +85,61 @@ export type InviteParticipantsArgs = {
   errorOnAlreadySpeaker: boolean;
 };
 
+export type PrivateGateCaller = {
+  /** Caller agent uuid. */
+  agentId: string;
+  /** Caller's `agents.managerId` — the member that owns the caller. */
+  memberId: string;
+  /**
+   * Caller's `agents.type` (drizzle `text` column → `string`). Narrowed inside
+   * the predicate via comparison with `AGENT_TYPES.HUMAN`; passing the raw
+   * column value through `string` matches the existing visibility-compare
+   * pattern in the file and avoids `as`-casts at call sites.
+   */
+  type: string;
+};
+
+export type PrivateGateTarget = {
+  uuid: string;
+  /** `agents.visibility` (drizzle `text` column → `string`); compared against `AGENT_VISIBILITY.PRIVATE`. */
+  visibility: string;
+  managerId: string;
+};
+
+/**
+ * Pure predicate: which of `targets` is the caller **NOT** allowed to bring
+ * into a chat under the strict owner-exclusive rule for private agents?
+ *
+ * Rule (RFC §4.5, strict reading):
+ *   - target.visibility !== PRIVATE                          → allowed
+ *   - target.uuid === caller.agentId                         → allowed (self-add rejoin)
+ *   - caller.type === 'human' && caller.memberId ===
+ *     target.managerId                                       → allowed (human manager invites own private)
+ *   - otherwise                                              → rejected
+ *
+ * Why this lives in `participant-invite.ts` (not on a shared util): the
+ * Layer-2 invite service is the canonical chat-membership gate, and
+ * `createChat` runs the same predicate on its initial-participants set.
+ * Co-locating the rule with `inviteParticipantsToChat` makes "the rule has
+ * exactly one source of truth" obvious to reviewers — the duplicated-write
+ * regression that PR #550 closed was exactly this kind of two-copies drift.
+ *
+ * Pure / no db access: callers pass the rows they already have. Errors
+ * (formatting, throwing, HTTP mapping) stay with the caller so it can
+ * surface the right uuids in the right error type.
+ */
+export function rejectedPrivateTargets(
+  caller: PrivateGateCaller,
+  targets: ReadonlyArray<PrivateGateTarget>,
+): PrivateGateTarget[] {
+  return targets.filter((t) => {
+    if (t.visibility !== AGENT_VISIBILITY.PRIVATE) return false;
+    if (t.uuid === caller.agentId) return false;
+    const isHumanOwner = caller.type === AGENT_TYPES.HUMAN && t.managerId === caller.memberId;
+    return !isHumanOwner;
+  });
+}
+
 /**
  * Invite one or more agents into a chat. See the file-level comment for the
  * contract and the rationale for which checks live here vs. in Layer-3
@@ -102,12 +163,12 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
   }
 
   // 2. Caller is a speaker. Join `chatMembership` × `agents` so we get the
-  //    caller's owning-member id in the same query — it's the authoritative
-  //    input to the owner-exclusive check below. Deriving it from the
-  //    caller's `managerId` (vs. accepting it as a parameter) prevents an
-  //    internal caller from mismatching the two and bypassing the gate.
+  //    caller's owning-member id AND agent type in the same query — both
+  //    are authoritative inputs to the strict owner-exclusive check below.
+  //    Deriving them from `agents` (vs. accepting them as parameters)
+  //    prevents an internal caller from mismatching and bypassing the gate.
   const [callerRow] = await db
-    .select({ ownerMemberId: agents.managerId })
+    .select({ ownerMemberId: agents.managerId, callerType: agents.type })
     .from(chatMembership)
     .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
     .where(
@@ -122,6 +183,7 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
     throw new CallerNotSpeakerError(callerAgentId, chatId);
   }
   const callerMemberId = callerRow.ownerMemberId;
+  const callerType = callerRow.callerType;
 
   // 3. Targets exist + cross-org.
   const targetRows = await db
@@ -143,14 +205,20 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
     throw new BadRequestError(`Cross-organization participant rejected: ${crossOrg.map((t) => t.uuid).join(", ")}`);
   }
 
-  // 4. Owner-exclusive for private targets. Self-add (target === caller) is
-  //    exempt so an agent rejoining a chat it already owns isn't blocked.
-  const privateNotOwned = targetRows.filter(
-    (t) => t.visibility === AGENT_VISIBILITY.PRIVATE && t.uuid !== callerAgentId && t.managerId !== callerMemberId,
+  // 4. Strict owner-exclusive for private targets. Only the target's
+  //    human-agent manager can invite it; a manager's other agents
+  //    (public OR private siblings) cannot. Self-add (target === caller)
+  //    is exempt so an agent rejoining a chat it already owns isn't
+  //    blocked. The actual predicate lives in `rejectedPrivateTargets`
+  //    so `createChat` can share the exact same rule — keeping the
+  //    invariant in one place (the lesson PR #550 wrote up).
+  const rejected = rejectedPrivateTargets(
+    { agentId: callerAgentId, memberId: callerMemberId, type: callerType },
+    targetRows.map((t) => ({ uuid: t.uuid, visibility: t.visibility, managerId: t.managerId })),
   );
-  if (privateNotOwned.length > 0) {
+  if (rejected.length > 0) {
     throw new ForbiddenError(
-      `Only the owner can add a private agent to a chat: ${privateNotOwned.map((t) => t.uuid).join(", ")}`,
+      `Only the human owner can add a private agent to a chat: ${rejected.map((t) => t.uuid).join(", ")}`,
     );
   }
 

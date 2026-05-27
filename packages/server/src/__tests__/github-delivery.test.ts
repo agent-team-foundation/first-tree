@@ -33,6 +33,14 @@ async function seedAgent(
     inboxId: `inbox_${uuid}`,
     managerId: opts.memberId,
     delegateMention: opts.delegateMention ?? null,
+    // Match `services/agent.ts::defaultVisibility` — an `autonomous_agent`
+    // created via the service layer is `organization`-visible. The raw
+    // INSERT here was implicitly relying on the column default ("private")
+    // which made these fixtures private agents, which in turn relied on
+    // the now-tightened owner-exclusive rule's lenient (shared-managerId)
+    // reading to admit them as participants. Pinning visibility here
+    // makes the fixture mirror prod reality.
+    visibility: "organization",
   });
   return uuid;
 }

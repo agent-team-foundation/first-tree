@@ -646,15 +646,20 @@ describe("Chat Access Control", () => {
       const adminBundle = await authedRequest(app);
       const member = await createMemberAndLogin(app, adminBundle);
 
-      // Create two agents managed by member
+      // Create two agents managed by member. Using `autonomous_agent` (which
+      // defaults to `organization` visibility) keeps the test scenario
+      // reachable under the strict owner-exclusive rule (RFC §4.5): a chat
+      // of two PRIVATE agents not involving their human manager can't be
+      // created at all post-strict, but the watcher-recompute mechanism
+      // this test pins is type/visibility-agnostic.
       const agentA = await seedAgent(app, {
         name: "join-a",
-        type: "personal_assistant",
+        type: "autonomous_agent",
         managerId: member.memberId,
       });
       const agentB = await seedAgent(app, {
         name: "join-b",
-        type: "personal_assistant",
+        type: "autonomous_agent",
         managerId: member.memberId,
       });
 
@@ -700,10 +705,14 @@ describe("Chat Access Control", () => {
         managerId: memberA.memberId,
       });
 
-      // Create a chat between A's agents
-      const chat = await createChat(app.db, agentA.uuid, {
+      // Create a chat between A's agents. Member A (the human, owner of
+      // both private agents) drives the creation — under the strict
+      // owner-exclusive rule (RFC §4.5) only the human-agent manager may
+      // bring a private agent in, so having one of A's personal_assistants
+      // create the chat with the other as a target would 403.
+      const chat = await createChat(app.db, memberA.agentId, {
         type: "group",
-        participantIds: [agentA2.uuid],
+        participantIds: [agentA.uuid, agentA2.uuid],
       });
 
       // Member B tries to join — refused. memberB has no watcher row for
