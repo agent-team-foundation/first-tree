@@ -492,7 +492,14 @@ function HumanDelegateInline({ row }: { row: HumanRow }) {
         row.onEditDelegate();
       }}
       className="text-caption hover:underline"
-      style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--fg-3)", textAlign: "left" }}
+      style={{
+        background: "transparent",
+        border: 0,
+        padding: 0,
+        cursor: "pointer",
+        color: "var(--fg-3)",
+        textAlign: "left",
+      }}
       title="Change delegate"
     >
       Delegate: <span style={{ color: "var(--fg-2)" }}>{label}</span>
@@ -614,11 +621,7 @@ function AgentRowView({
             handle={agent.name ? `@${agent.name}` : null}
             visibility={showVisibilityChip ? agent.visibility : null}
             extra={
-              <span
-                className="block text-caption truncate"
-                style={{ color: "var(--fg-4)" }}
-                title={meta}
-              >
+              <span className="block text-caption truncate" style={{ color: "var(--fg-4)" }} title={meta}>
                 {meta}
               </span>
             }
