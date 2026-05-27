@@ -135,6 +135,168 @@ describe("buildMessageDocumentSnapshots — explicit-link rewrite (self / Case A
     expect(hrefs.length).toBeGreaterThan(0);
     for (const href of hrefs) expect(keys.has(href ?? "")).toBe(true);
   });
+
+  it("widens the rewrite over a single-backtick code span — code-styled clickable link", async () => {
+    // Phase-1 fix: previously inline code was a hard skip and `` `docs/intro.md` ``
+    // stayed dead. Now the rewrite encloses the whole tick-wrapped span so the
+    // mono-spaced visual survives and the link points at the snapshot key.
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots("see `docs/intro.md` for setup", root);
+
+    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
+    expect(rewrittenText).toBe("see [`docs/intro.md`](docs/intro.md) for setup");
+  });
+
+  it("preserves multi-backtick code-span wrappers verbatim in the link text", async () => {
+    // Multi-tick spans are commonmark-legal too and the rewrite preserves the
+    // exact tick count + surrounding text so embedded backticks aren't lost.
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(
+      "see ``the ` token in docs/intro.md`` is escaped",
+      root,
+    );
+
+    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
+    expect(rewrittenText).toBe("see [``the ` token in docs/intro.md``](docs/intro.md) is escaped");
+  });
+
+  it("preserves the :line suffix when the path is wrapped in a code span", async () => {
+    // `:line` inside the span survives via the verbatim slice; the href is
+    // still the canonical de-suffixed key.
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots("open `docs/intro.md:42:7` here", root);
+
+    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
+    expect(rewrittenText).toBe("open [`docs/intro.md:42:7`](docs/intro.md) here");
+  });
+
+  it("snapshots an absolute code-span path and links it with the canonical key", async () => {
+    const abs = join(root, "docs", "intro.md");
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(`see \`${abs}\` please`, root);
+
+    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
+    // Display kept verbatim (long absolute path inside ticks), href is the
+    // canonical workspace-relative key.
+    expect(rewrittenText).toBe(`see [\`${abs}\`](docs/intro.md) please`);
+  });
+
+  it("leaves a fenced (triple-backtick) code block as plain text — fenced stays a hard skip", async () => {
+    const text = ["before", "```", "docs/intro.md", "```", "after"].join("\n");
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(text, root);
+
+    expect(docs).toEqual([]);
+    expect(rewrittenText).toBe(text);
+  });
+
+  it("reports a missing relative mention via failedMentions[missing]", async () => {
+    // Phase-2: a bare mention whose canonical path can't be resolved to a
+    // real file lands in failedMentions with reason "missing". The rewrite
+    // leaves the token untouched (no dead link), and the snapshot list stays
+    // empty — the agent's text reaches the wire as authored.
+    const { docs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
+      "see docs/nope.md please",
+      root,
+    );
+
+    expect(docs).toEqual([]);
+    expect(rewrittenText).toBe("see docs/nope.md please");
+    expect(failedMentions).toEqual([{ raw: "docs/nope.md", reason: "missing" }]);
+  });
+
+  it("reports a code-span-wrapped missing mention with raw stripped of line suffix", async () => {
+    // The code-span wrapper doesn't change failure reporting: the agent's
+    // written path (suffix-stripped) is what lands in failedMentions, so the
+    // web wrap pass can match every variant of the token in one entry.
+    const { docs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
+      "see `docs/missing.md:42` together",
+      root,
+    );
+
+    expect(docs).toEqual([]);
+    expect(rewrittenText).toBe("see `docs/missing.md:42` together");
+    expect(failedMentions).toEqual([{ raw: "docs/missing.md", reason: "missing" }]);
+  });
+
+  it("reports an out-of-root absolute mention as out-of-fence", async () => {
+    // Out-of-root absolute paths fall through self resolution and fail
+    // classification — bucket them as out-of-fence so the chip tooltip can
+    // tell the agent the file is outside the workspace.
+    const abs = join(outside, "external.md");
+    const { docs, failedMentions } = await buildMessageDocumentSnapshots(`see ${abs} now`, root);
+
+    expect(docs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: abs, reason: "out-of-fence" }]);
+  });
+
+  it("reports a hidden-segment mention via failedMentions[hidden-segment]", async () => {
+    const { docs, failedMentions } = await buildMessageDocumentSnapshots("read .agent/secret.md", root);
+
+    expect(docs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: ".agent/secret.md", reason: "hidden-segment" }]);
+  });
+
+  it("classifies a relative `..` escape as out-of-fence, not hidden-segment", async () => {
+    // Parent-traversal mentions (`../outside.md`) cannot snapshot — but the
+    // failure reason is "outside the workspace", not "hidden directory". The
+    // chip tooltip would otherwise mis-attribute the cause and confuse the
+    // agent (Codex review round 1 P3).
+    const { docs, failedMentions } = await buildMessageDocumentSnapshots("see ../outside.md please", root);
+
+    expect(docs).toEqual([]);
+    expect(failedMentions).toEqual([{ raw: "../outside.md", reason: "out-of-fence" }]);
+  });
+
+  it("dedupes failedMentions by writtenPath across multiple raw variants", async () => {
+    // Two occurrences of the same canonical path under different `:line`
+    // suffixes collapse to ONE failedMentions entry on the wire. Web's wrap
+    // pass canonicalises each scan match before lookup so all occurrences
+    // still render as chips.
+    const { failedMentions } = await buildMessageDocumentSnapshots(
+      "compare docs/nope.md to docs/nope.md:5 together",
+      root,
+    );
+
+    expect(failedMentions).toEqual([{ raw: "docs/nope.md", reason: "missing" }]);
+  });
+
+  it("mixes successful snapshots and failed mentions in one message", async () => {
+    // Mixed message: a real path snapshots, an unreachable one fails. Both
+    // are reported so chat-view can render a real link + an inert chip side
+    // by side.
+    const { docs, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
+      "wrote docs/intro.md but docs/nope.md is missing",
+      root,
+    );
+
+    expect(docs.map((d) => d.path)).toEqual(["docs/intro.md"]);
+    expect(rewrittenText).toBe("wrote [docs/intro.md](docs/intro.md) but docs/nope.md is missing");
+    expect(failedMentions).toEqual([{ raw: "docs/nope.md", reason: "missing" }]);
+  });
+
+  it("inline-link failures stay silent — no failedMentions entry", async () => {
+    // The agent's explicit `[label](target.md)` already shows their intent
+    // to link. A failed snapshot for that target leaves the link as-is in
+    // the text; web's click handler no-ops on the missing snapshot. We
+    // deliberately do NOT add an inert chip — the proposal scopes the chip
+    // UI to scanner-bare-token positions.
+    const { docs, failedMentions } = await buildMessageDocumentSnapshots("click [docs](docs/nope.md) please", root);
+
+    expect(docs).toEqual([]);
+    expect(failedMentions).toEqual([]);
+  });
+
+  it("multi-path-in-one-code-span: first wins, second left inside the link text", async () => {
+    // Degenerate case: the agent crams two paths into one code span. The
+    // overlap-defensive applyRewrites picks the first match's widened span;
+    // the second match's rewrite is dropped. The second path's snapshot is
+    // still emitted so metadata stays self-consistent — it just isn't its
+    // own clickable target.
+    const { docs, rewrittenText } = await buildMessageDocumentSnapshots(
+      "see `docs/intro.md and design.md` together",
+      root,
+    );
+
+    const paths = docs.map((d) => d.path).sort();
+    expect(paths).toEqual(["design.md", "docs/intro.md"]);
+    expect(rewrittenText).toBe("see [`docs/intro.md and design.md`](docs/intro.md) together");
+  });
 });
 
 /**
