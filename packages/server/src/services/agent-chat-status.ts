@@ -15,8 +15,8 @@ import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
+import { attentions } from "../db/schema/attentions.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
-import { pendingQuestions } from "../db/schema/pending-questions.js";
 
 /**
  * Single source of truth for per-(agent,chat) composite status.
@@ -151,21 +151,36 @@ export function withTurnNarration(base: LiveActivity | null, narrationText: unkn
 }
 
 /**
- * Per-chat set of agent ids with a PENDING question (`pending_questions`
- * status = 'pending'), grouped chatId → agentId[]. Chats with no pending
- * question are absent from the map (caller treats absence as []). One
- * indexed read via `idx_pending_questions_chat_status`. Not membership- or
- * type-filtered (humans never write pending questions, so the set is
- * effectively non-human).
+ * For each chat in `chatIds`, returns the set of agent uuids that have at
+ * least one **open** attention (`state='open' AND requires_response=true`)
+ * authored by them. Chats with none are absent from the map (caller treats
+ * absence as []).
+ *
+ * Repointed from the M0 `pending_questions` table to the NHA `attentions`
+ * primitive per proposal §6 ("M1 末将该信号通道 repoint 到 attentions 表").
+ * The function name stays for minimum churn — call sites already say
+ * "pending question" but the semantics are now "open ask NHA". The
+ * downstream `needsYou` axis flips on any of these, which is the same red-
+ * dot signal humans saw before the cleanup.
+ *
+ * One indexed read via `idx_attentions_chat_open` (covers chat_id + state).
+ * Notifications (`requires_response=false`) are inserted in `state='closed'`
+ * so they never match this query — the queue stays clean per proposal §4.7.
  */
 export async function derivePendingQuestions(db: Database, chatIds: string[]): Promise<Map<string, string[]>> {
   if (chatIds.length === 0) return new Map();
   const rows = await db
-    .select({ chatId: pendingQuestions.chatId, agentId: pendingQuestions.agentId })
-    .from(pendingQuestions)
-    .where(and(inArray(pendingQuestions.chatId, chatIds), eq(pendingQuestions.status, "pending")));
-  // Dedupe per chat: one agent may have several pending questions in the same
-  // chat, but the field is "agents with a pending question" (a set).
+    .select({ chatId: attentions.originChatId, agentId: attentions.originAgentId })
+    .from(attentions)
+    .where(
+      and(
+        inArray(attentions.originChatId, chatIds),
+        eq(attentions.state, "open"),
+        eq(attentions.requiresResponse, true),
+      ),
+    );
+  // Dedupe per chat: one agent may have several open attentions in the same
+  // chat (a corner case; proposal §5.1 expects 0-or-1 per (agent, chat)).
   const sets = new Map<string, Set<string>>();
   for (const row of rows) {
     const set = sets.get(row.chatId);

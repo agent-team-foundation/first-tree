@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { agentChatStatusSchema, type LiveActivity, RUNTIME_STALE_MS } from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { pendingQuestions } from "../db/schema/pending-questions.js";
+import { attentions } from "../db/schema/attentions.js";
 import {
   computeErrored,
   computeWorking,
@@ -76,12 +76,20 @@ describe("agent-chat-status", () => {
       const { app, admin, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId);
       await setSession(peer.agent.uuid, chatId, "active");
-      await app.db.insert(pendingQuestions).values({
+      // Seed an open ask-NHA from `peer` so the `needsYou` axis lights up
+      // (post-M1 the projection reads from `attentions`, not the legacy
+      // `pending_questions` table).
+      await app.db.insert(attentions).values({
         id: randomUUID(),
-        agentId: peer.agent.uuid,
-        chatId,
-        messageId: randomUUID(),
-        status: "pending",
+        originAgentId: peer.agent.uuid,
+        originChatId: chatId,
+        targetHumanId: randomUUID(),
+        subject: "test ask",
+        body: "",
+        requiresResponse: true,
+        state: "open",
+        metadata: {},
+        createdAt: new Date(),
       });
 
       const statuses = await getChatAgentStatuses(app.db, chatId);
@@ -301,12 +309,19 @@ describe("agent-chat-status", () => {
       // An agent that is NOT a speaker of this chat but has a pending question
       // in it (e.g. it left while a question was outstanding).
       const ghost = await createTestAgent(app, { name: `ghost-${randomUUID().slice(0, 6)}` });
-      await app.db.insert(pendingQuestions).values({
+      // Same as the other ask-NHA seed: post-M1 the `needsYou` axis is fed
+      // from `attentions`, not `pending_questions`.
+      await app.db.insert(attentions).values({
         id: randomUUID(),
-        agentId: ghost.agent.uuid,
-        chatId,
-        messageId: randomUUID(),
-        status: "pending",
+        originAgentId: ghost.agent.uuid,
+        originChatId: chatId,
+        targetHumanId: randomUUID(),
+        subject: "ghost ask",
+        body: "",
+        requiresResponse: true,
+        state: "open",
+        metadata: {},
+        createdAt: new Date(),
       });
 
       const all = (await resolveAgentChatStatuses(app.db, [chatId])).get(chatId) ?? [];

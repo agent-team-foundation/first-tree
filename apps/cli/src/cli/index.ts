@@ -9,6 +9,7 @@ import "../core/channel-env.js";
 import { applyClientLoggerConfig } from "@first-tree/client";
 import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent/index.js";
+import { registerAttentionCommands } from "../commands/attention/index.js";
 import { registerChatCommands } from "../commands/chat/index.js";
 import { registerConfigCommands } from "../commands/config/index.js";
 import { registerDaemonCommands } from "../commands/daemon/index.js";
@@ -68,6 +69,7 @@ registerUpgradeCommand(program);
 // ── Namespaces ─────────────────────────────────────────────────────────
 
 registerAgentCommands(program);
+registerAttentionCommands(program);
 registerChatCommands(program);
 registerOrgCommands(program);
 registerDaemonCommands(program);

@@ -100,6 +100,21 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
        WHERE c.parent_chat_id IS NULL
          AND c.last_message_at IS NOT NULL
          AND c.last_message_at < NOW() - make_interval(secs => ${idleSeconds})
+         -- NHA archive policy: don't auto-archive a chat that still has
+         -- an open ask. The unanswered attention is by definition still
+         -- "needs attention" — archiving would hide it from the chat list
+         -- until the human un-archives. Closed attentions are fine to
+         -- archive past (they stay as an audit trail on the row).
+         AND NOT EXISTS (
+           SELECT 1 FROM attentions a
+            WHERE a.origin_chat_id = m.chat_id
+              AND a.state = 'open'
+              AND a.requires_response = true
+         )
+         -- Retained for backward compat with pre-M0 historical rows;
+         -- post-M0 nothing writes to pending_questions so this is a
+         -- no-op. Kept as the legacy half of an OR-style guard while
+         -- the table is around (planned removal in a follow-up).
          AND NOT EXISTS (
            SELECT 1 FROM pending_questions pq
             WHERE pq.chat_id = m.chat_id AND pq.status = 'pending'
@@ -169,6 +184,14 @@ async function sweepUnmapped(db: Database, idleSeconds: number, batchSize: numbe
        AND cus.last_read_at IS NOT NULL
        AND cus.unread_mention_count = 0
        AND cus.engagement_status = 'active'
+       -- See sweepMapped: same NHA archive policy. An open ask in the
+       -- chat keeps it out of the auto-archive sweep.
+       AND NOT EXISTS (
+         SELECT 1 FROM attentions a
+          WHERE a.origin_chat_id = cm.chat_id
+            AND a.state = 'open'
+            AND a.requires_response = true
+       )
        AND NOT EXISTS (
          SELECT 1 FROM pending_questions pq
           WHERE pq.chat_id = cm.chat_id AND pq.status = 'pending'

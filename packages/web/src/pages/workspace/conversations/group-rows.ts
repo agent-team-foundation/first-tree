@@ -229,6 +229,7 @@ type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
  */
 export function rowAttentionReason(r: MeChatRow): AttentionReason | null {
   if (r.failedAgentIds.length > 0) return "failed";
+  if (r.chatHasOpenQuestion === true) return "needs_you";
   if (r.unreadMentionCount > 0 && r.chatHasExplicitMentionToMe === true) {
     return "mention";
   }
@@ -245,13 +246,14 @@ export function rowIsFailed(r: MeChatRow): boolean {
 }
 
 /**
- * The row's "needs-you" indicator (orange `?` / left border). No rule in
- * the current predicate emits this tier — it stays dark until the NHA-backed
- * R3 lands (open Attention targeting me). Kept as a function for forward
- * compatibility with `ATTENTION_PRIORITY`'s middle tier.
+ * The row's "needs-you" indicator (orange `?` / left border). Fires when
+ * the chat has at least one open NHA ask that is relevant to the caller —
+ * server-side `me-chat.ts` populates `chatHasOpenQuestion` strictly:
+ * `target=me OR origin agent IS one I manage`. Co-speakers in shared
+ * chats who are neither target nor manager-of-origin stay dark.
  */
-export function rowNeedsYou(_r: MeChatRow): boolean {
-  return false;
+export function rowNeedsYou(r: MeChatRow): boolean {
+  return r.chatHasOpenQuestion === true;
 }
 
 /**

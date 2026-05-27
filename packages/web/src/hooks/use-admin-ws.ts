@@ -2,6 +2,7 @@ import { type AgentChatStatus, agentChatStatusSchema } from "@first-tree/shared"
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { chatAgentStatusQueryKey } from "../api/agent-status.js";
+import { attentionsInChatQueryKey } from "../api/attention.js";
 import { getStoredTokens, refreshAccessToken } from "../api/client.js";
 import { upsertAgentStatus } from "../lib/agent-status-view.js";
 
@@ -257,6 +258,29 @@ function broadcast(msg: WsMessage) {
         latestQc.invalidateQueries({ queryKey: ["chat-messages", chatId] });
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
       }
+    } else if (
+      msg.type === "attention:opened" ||
+      msg.type === "attention:responded" ||
+      msg.type === "attention:cancelled"
+    ) {
+      // NHA frame fan-out (M1 末). The opened / responded / cancelled
+      // frames each carry the affected `chatId` (passthrough field — see
+      // `attentionOpenedFrameSchema` etc. in `@first-tree/shared`). The
+      // chat-bottom card reads `attentionsInChatQueryKey(chatId)`; invalidate
+      // exactly that key so the card mounts / dismounts without waiting for a
+      // poll. No throttle: an NHA fires at most a handful of frames per chat
+      // per hour, well below the storm threshold the throttled invalidators
+      // exist to clamp.
+      const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
+      if (chatId) {
+        latestQc.invalidateQueries({ queryKey: attentionsInChatQueryKey(chatId) });
+      } else {
+        // `attention:responded` is emitted to the origin agent's sockets and
+        // does NOT carry `chatId` (the frame audience is the agent, not the
+        // human's chat). Fall back to a prefix invalidate so any cached
+        // attention list refreshes.
+        latestQc.invalidateQueries({ queryKey: ["attentions"] });
+      }
     } else if (msg.type === "pulse:tick") {
       // Per-org runtime-state aggregate (pulse-aggregator broadcasts every 5s).
       // The composite `offline` (client_id → null) and runtime-`error` → failed
@@ -323,6 +347,11 @@ function connect() {
       // `session:event` branches: these prefixes back panels that used to
       // self-poll, so reconnect must refresh them too.
       latestQc.invalidateQueries({ queryKey: ["session"] });
+      // Catch up the NHA chat-bottom card after a WS gap so a frame missed
+      // during the disconnect doesn't leave the card stale (or worse, leave
+      // the composer hidden after a responded/cancelled frame the socket
+      // missed).
+      latestQc.invalidateQueries({ queryKey: ["attentions"] });
       latestQc.invalidateQueries({ queryKey: ["chat-right-sidebar", "session"] });
       latestQc.invalidateQueries({ queryKey: ["session-events"] });
       latestQc.invalidateQueries({ queryKey: ["agent-sessions"] });

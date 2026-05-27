@@ -50,6 +50,11 @@ export type {
   SessionMessage,
 } from "./runtime/handler.js";
 export { getHandlerFactory, registerHandler } from "./runtime/handler.js";
+export type {
+  AttentionFrameCallbacks,
+  AttentionFrameDispatcher,
+} from "./runtime/handlers/attention.js";
+export { createAttentionFrameDispatcher } from "./runtime/handlers/attention.js";
 export { InputController } from "./runtime/input-controller.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
