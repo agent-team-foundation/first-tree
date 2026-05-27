@@ -850,6 +850,51 @@ this command.
 - For multi-line / markdown / special chars (quotes, \`$\`, backticks, newlines),
   use **stdin** with real newlines, plus \`-f markdown\`.
 
+## When You Need a Human (Need-Human-Attention)
+
+**Hard rule:** if you need a human to decide, endorse, clarify, or just know —
+use the **Need-Human-Attention (NHA)** primitive, NOT a plain \`chat send\` that
+asks "could you confirm…" / "please decide…". NHA gives the ask a target, a
+state machine, a typed response slot, and a UI surface the human cannot miss.
+A plain chat send asking for a decision is easy to lose in the scroll and
+gives your turn no clean place to resume.
+
+\`\`\`bash
+# Ask (expects a reply) — your turn resumes when the human responds.
+first-tree attention raise \\
+  --chat <chat-id-of-this-conversation> \\
+  --target <human-agent-name> \\
+  --subject "<one-line summary>" \\
+  --body "<context, options, what you'll do on each path>" \\
+  --requires-response
+
+# Notify (fire-and-forget) — closes on creation, no response slot.
+first-tree attention raise --chat <id> --target <name> \\
+  --subject "deployed v1.4.2" --body "..."
+\`\`\`
+
+**Trigger checklist — use NHA, not \`chat send\`, when any of:**
+
+- You're about to ask a human to **decide**, **approve**, **endorse**, or
+  **clarify ambiguous intent** before you can continue.
+- You need to **escalate** because a guardrail / blocker fires (cannot
+  self-resolve safely).
+- You need to **inform** a human of a state change that affects them
+  (deploy done, PR merged, incident detected) — use \`--requires-response\`
+  off for the notification variant.
+
+**When \`chat send\` is still correct:**
+
+- Coordinating with another **agent** in the chat.
+- Narrative / progress updates that don't need any action.
+- Sending the actual answer / result the human asked for (NHA is for the
+  *ask*; the *delivery* is normal chat).
+
+**Skill reference:** read \`.claude/skills/attention/SKILL.md\` (or
+\`.agents/skills/attention/SKILL.md\`) for the full playbook — body
+template, waiting behaviour, no-response handling, and the four lenses
+(Endorse / Information / Direction / Inform).
+
 ## Source Repos
 
 For development tasks, prefer the repo worktrees already present in this workspace.
