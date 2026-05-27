@@ -157,27 +157,31 @@ function defaultVisibility(type: AgentType): AgentVisibility {
 }
 
 /**
- * Translate a post-merge `(type, visibility)` pair into the 3-value enum
- * older clients (≤ 0.5.1) expect on the wire. The pre-merge type enum was
+ * Translate a post-merge `agents.type` value into the 3-value enum older
+ * clients (≤ 0.5.1) expect on the wire. The pre-merge type enum was
  * `human | personal_assistant | autonomous_agent`; this PR collapsed the
- * latter two into a single `agent` row, with the personal-vs-shared axis
- * carried by `visibility`. Old clients deserialise via a strict zod enum
- * that rejects the unknown `agent` value — pushing the legacy label keeps
- * them working without an upgrade. Drop this and emit `agentTypeSchema`
- * directly once every deployed client is on a release that accepts `agent`.
+ * latter two into a single `agent` row. Old clients deserialise the
+ * `agent:pinned` WS frame via a strict zod enum that rejects the unknown
+ * `agent` value — pushing the legacy label keeps them working without an
+ * upgrade. Drop this helper (and emit `agentTypeSchema` directly) once
+ * every deployed client is on a release that accepts `agent`.
  *
- * Parameter types are widened to `string` because callers source `type` and
- * `visibility` directly from drizzle row reads (text columns), which surface
- * as `string` rather than the narrowed `AgentType` / `AgentVisibility`
- * union — narrowing them at every call site would be needless ceremony for
- * a helper whose only `===` check is against a known literal.
+ * Non-human rows are uniformly mapped to `personal_assistant`. The
+ * `(visibility=private) ⇔ personal_assistant` invariant the 0018
+ * backfill established is *not* preserved going forward (the product
+ * allows a PA to be `visibility=organization` and vice versa), so any
+ * visibility-based reverse mapping would be misleading. `personal_assistant`
+ * is picked because today's data is overwhelmingly PA — for the rare
+ * autonomous bot the only knock-on effect on a 0.5.1 client is a cosmetic
+ * "personal assistant" string in the generated `CLAUDE.md` self-description.
+ * The frame still parses, the daemon still writes its local `agent.yaml`,
+ * the runtime still starts.
+ *
+ * `type` is `string` because callers source it from a drizzle text column;
+ * narrowing to `AgentType` at every call site would be needless ceremony.
  */
-export function legacyWireAgentType(
-  type: string,
-  visibility: string,
-): "human" | "personal_assistant" | "autonomous_agent" {
-  if (type === "human") return "human";
-  return visibility === AGENT_VISIBILITY.PRIVATE ? "personal_assistant" : "autonomous_agent";
+export function legacyWireAgentType(type: string): "human" | "personal_assistant" {
+  return type === "human" ? "human" : "personal_assistant";
 }
 
 /**

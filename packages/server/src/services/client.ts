@@ -262,9 +262,6 @@ export async function listActiveAgentsPinnedToClient(db: Database, clientId: str
       name: agents.name,
       displayName: agents.displayName,
       type: agents.type,
-      // Required to translate the wire `agentType` back to the pre-merge
-      // 3-value enum for old clients. See `agent.ts:legacyWireAgentType`.
-      visibility: agents.visibility,
       runtimeProvider: agents.runtimeProvider,
     })
     .from(agents)

@@ -3,30 +3,30 @@ import { legacyWireAgentType } from "../services/agent.js";
 
 /**
  * Wire-compatibility helper for the `agent:pinned` WebSocket frame.
- * Translates a post-merge `(type, visibility)` pair back to the pre-merge
- * 3-value enum (`human` / `personal_assistant` / `autonomous_agent`) so
- * clients on ≤ 0.5.1 (whose strict zod enum rejects the post-merge `agent`
- * literal) can still decode the frame. Drop the helper and these tests once
- * every deployed client accepts `agent`.
+ * Translates the post-merge `agents.type` value back into the pre-merge
+ * 3-value enum so clients on ≤ 0.5.1 (whose strict zod enum rejects the
+ * post-merge `agent` literal) can still decode the frame. Non-human
+ * rows are uniformly mapped to `personal_assistant` — see the helper
+ * doc-comment for why this is intentionally NOT derived from
+ * `visibility`. Drop the helper and these tests once every deployed
+ * client accepts `agent`.
  */
 describe("legacyWireAgentType — wire-compat translation for agent:pinned", () => {
-  it("returns 'human' for human rows regardless of visibility", () => {
-    expect(legacyWireAgentType("human", "organization")).toBe("human");
-    expect(legacyWireAgentType("human", "private")).toBe("human");
+  it("returns 'human' for human rows", () => {
+    expect(legacyWireAgentType("human")).toBe("human");
   });
 
-  it("returns 'personal_assistant' for (agent, private) — the pre-merge PA framing", () => {
-    expect(legacyWireAgentType("agent", "private")).toBe("personal_assistant");
+  it("returns 'personal_assistant' for every non-human row", () => {
+    // Picked because today's data is overwhelmingly PA; for the rare
+    // autonomous bot the only knock-on effect on a 0.5.1 client is a
+    // cosmetic "personal assistant" string in the generated CLAUDE.md.
+    expect(legacyWireAgentType("agent")).toBe("personal_assistant");
   });
 
-  it("returns 'autonomous_agent' for (agent, organization) — the pre-merge autonomous bot framing", () => {
-    expect(legacyWireAgentType("agent", "organization")).toBe("autonomous_agent");
-  });
-
-  it("falls back to autonomous_agent when visibility is anything other than 'private'", () => {
-    // Belt-and-braces against a future visibility value landing in the DB
-    // before the helper is updated — biased toward the org default rather
-    // than mis-rendering as a personal assistant on old clients.
-    expect(legacyWireAgentType("agent", "unknown-future-value")).toBe("autonomous_agent");
+  it("treats any unknown future non-human type the same way", () => {
+    // Belt-and-braces: a hypothetical future non-human row type still
+    // lands on the legacy PA label rather than silently slipping through
+    // as an unknown enum value the old client would reject.
+    expect(legacyWireAgentType("some-future-type")).toBe("personal_assistant");
   });
 });

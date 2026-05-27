@@ -168,11 +168,12 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       expect(pinned.agentId).toBe(body.uuid);
       expect(pinned.name).toBe(name);
       expect(pinned.displayName).toBe("Pin Created");
-      // Wire-compat: post-merge `(type=agent, visibility=organization)`
-      // (default for the org framing) is rendered back to the pre-merge
-      // `autonomous_agent` literal so clients on ≤ 0.5.1 (strict zod enum)
-      // still decode the frame. See agentService.legacyWireAgentType.
-      expect(pinned.agentType).toBe("autonomous_agent");
+      // Wire-compat: every non-human `agent` row is rendered as
+      // `personal_assistant` on the wire so clients on ≤ 0.5.1 (strict
+      // zod enum) still decode the frame. The legacy label is
+      // intentionally not derived from `visibility` — see
+      // `agentService.legacyWireAgentType` for the rationale.
+      expect(pinned.agentType).toBe("personal_assistant");
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
@@ -210,7 +211,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       expect(pinned.agentId).toBe(unbound.uuid);
       expect(pinned.name).toBe(unbound.name);
       // Wire-compat: see comment in the "create" test above.
-      expect(pinned.agentType).toBe("autonomous_agent");
+      expect(pinned.agentType).toBe("personal_assistant");
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
@@ -330,7 +331,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       expect(a).toBeDefined();
       expect(a?.name).toBe(offlineCreated.name);
       // Wire-compat: see comment in the "create" test above.
-      expect(a?.agentType).toBe("autonomous_agent");
+      expect(a?.agentType).toBe("personal_assistant");
       const b = seenPinned.get(offlineCreated2.uuid);
       expect(b).toBeDefined();
       expect(b?.name).toBe(offlineCreated2.name);

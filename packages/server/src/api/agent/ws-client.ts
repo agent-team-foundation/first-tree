@@ -511,11 +511,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     agentId: agent.uuid,
                     name: agent.name,
                     displayName: agent.displayName,
-                    // Wire-compat: translate post-merge `(type, visibility)` back
-                    // to the pre-merge 3-value enum so clients on ≤ 0.5.1
-                    // (strict zod) still decode the frame. See
-                    // agentService.legacyWireAgentType.
-                    agentType: agentService.legacyWireAgentType(agent.type, agent.visibility),
+                    // Wire-compat: translate `type=agent` back to the pre-merge
+                    // `personal_assistant` so clients on ≤ 0.5.1 (strict zod)
+                    // still decode the frame. See agentService.legacyWireAgentType.
+                    agentType: agentService.legacyWireAgentType(agent.type),
                     runtimeProvider: agent.runtimeProvider,
                   });
                   if (!parsed.success) {
