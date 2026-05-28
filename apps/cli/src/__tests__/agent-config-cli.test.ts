@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { registerAgentConfigCommands } from "../commands/agent/config/index.js";
 
 describe("agent config CLI registration (Step 8)", () => {
-  it("registers all 7 subcommands under `config`", () => {
+  it("registers all 8 subcommands under `config`", () => {
     const root = new Command();
     const agent = root.command("agent");
     registerAgentConfigCommands(agent);
@@ -11,7 +11,16 @@ describe("agent config CLI registration (Step 8)", () => {
     const configCmd = agent.commands.find((c) => c.name() === "config");
     expect(configCmd).toBeDefined();
     const subs = configCmd?.commands.map((c) => c.name()).sort();
-    expect(subs).toEqual(["add-mcp", "add-repo", "append-prompt", "dry-run", "set-env", "set-model", "show"]);
+    expect(subs).toEqual([
+      "add-mcp",
+      "add-repo",
+      "append-prompt",
+      "dry-run",
+      "set-env",
+      "set-model",
+      "set-reasoning-effort",
+      "show",
+    ]);
   });
 
   it("set-env requires KEY=VALUE", () => {
