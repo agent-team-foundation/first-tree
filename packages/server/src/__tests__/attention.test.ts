@@ -118,16 +118,21 @@ describe("attention service — invariants", () => {
     // Only bot is in the chat; the target human is NOT.
     await addSpeaker(app, chatId, bot, "owner");
 
-    await expect(
-      raiseAttention(app.db, bot, {
-        chatId,
-        target: human,
-        subject: "ping",
-        body: "",
-        requiresResponse: true,
-        metadata: {},
-      }),
-    ).rejects.toBeInstanceOf(ConflictError);
+    const raisePromise = raiseAttention(app.db, bot, {
+      chatId,
+      target: human,
+      subject: "ping",
+      body: "",
+      requiresResponse: true,
+      metadata: {},
+    });
+    await expect(raisePromise).rejects.toBeInstanceOf(ConflictError);
+    // Multi-env regression guard: the chat-invite hint must carry the
+    // channel-resolved binary name. Test config pins channel=dev, so
+    // `getServerCliBinding()` in `services/attention.ts` returns
+    // `first-tree-dev`. A regression to hardcoded `first-tree chat invite`
+    // would not be caught by `toBeInstanceOf(ConflictError)` alone.
+    await expect(raisePromise).rejects.toThrow(/first-tree-dev chat invite/);
   });
 
   it("requires_response=false closes the row on creation", async () => {

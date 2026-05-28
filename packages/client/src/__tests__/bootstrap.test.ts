@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   BUNDLED_CLI_VERSION_REL,
   bootstrapWorkspace,
@@ -19,7 +19,16 @@ import {
   writeBundledCliVersion,
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
+import { setCliBinding } from "../runtime/cli-binding.js";
 import type { AgentIdentity } from "../runtime/handler.js";
+
+// Pin the CLI binding to the prod identity so assertions against the
+// emitted tools.md and CLI sub-process names keep matching the literals
+// they have always matched. Production-channel tests stay untouched;
+// non-prod channels are exercised in dedicated test cases below.
+beforeAll(() => {
+  setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+});
 
 // Use a real temp directory for file-based tests
 const tmpBase = join(import.meta.dirname ?? __dirname, "../../.test-tmp-bootstrap");
@@ -35,6 +44,10 @@ function cleanTmp(): void {
 afterEach(() => {
   cleanTmp();
   vi.restoreAllMocks();
+  // Reset the binding to prod after every test so a case that switches
+  // channels (staging / dev) does not leak into the next case. The
+  // file-level `beforeAll` already set this; we mirror it here.
+  setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });
 
 function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
@@ -240,6 +253,35 @@ describe("bootstrapWorkspace", () => {
     // requires改造 4 to overwrite.
     expect(content).not.toContain("Your final text response is automatically delivered");
     expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
+  });
+
+  it("tools.md uses the channel-resolved binary name when the CLI binding points at staging", () => {
+    // Regression for the multi-env follow-up: the agent-facing tools.md
+    // used to hardcode `first-tree chat send`, which on staging hosts asks
+    // the agent to call a binary that doesn't exist (only
+    // `first-tree-staging` is installed). The binding must thread through
+    // to every CLI invocation in the docs (chat send/invite, agent list,
+    // attention raise).
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    const workspace = join(tmpBase, "ws-tools-staging");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
+    expect(content).toContain("first-tree-staging chat send");
+    expect(content).toContain("first-tree-staging chat invite");
+    expect(content).toContain("first-tree-staging agent list");
+    expect(content).toContain("first-tree-staging attention raise");
+    // The hardcoded prod name must NOT leak through — the literal
+    // `first-tree chat` would mis-direct staging agents to the prod binary.
+    expect(content).not.toMatch(/\bfirst-tree chat /);
+    expect(content).not.toMatch(/\bfirst-tree attention /);
   });
 
   it("tools.md teaches `chat invite` instead of the retired --direct escape hatch", () => {
@@ -641,6 +683,79 @@ describe("installFirstTreeIntegration", () => {
     });
 
     expect(calls[0]?.args).not.toContain("--tree-url");
+  });
+
+  it("uses the staging binName + npx packageName when the CLI binding points at the staging channel", () => {
+    // Regression for the multi-env follow-up: bootstrap used to hardcode
+    // "first-tree", which on staging hosts called a non-existent binary
+    // (only `first-tree-staging` is installed there). Both the PATH attempt
+    // and the npx fallback must follow the channel binding.
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+
+    const workspace = join(tmpBase, "integrate-staging");
+    const treePath = join(tmpBase, "ctx-staging");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    let call = 0;
+    const { exec, calls } = makeRecordingExec(() => {
+      call += 1;
+      if (call === 1) {
+        const err = new Error("spawn first-tree-staging ENOENT") as Error & { code?: string };
+        err.code = "ENOENT";
+        throw err;
+      }
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-staging",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result, logs.join("\n")).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.command).toBe("first-tree-staging");
+    expect(calls[1]?.command).toBe("npx");
+    expect(calls[1]?.args.slice(0, 2)).toEqual(["-y", "first-tree-staging@latest"]);
+    expect(logs.join("\n")).toContain("first-tree-staging (PATH)");
+    expect(logs.join("\n")).toContain("npx first-tree-staging@latest");
+  });
+
+  it("skips the npx fallback for the dev channel because dev binaries are not published", () => {
+    // Dev channel sets `packageName: null` in `channelConfig` — there is
+    // no `first-tree-dev` tarball on npm. The PATH attempt must still run
+    // (developers install via scripts/dev-install.sh), but if it fails the
+    // helper must NOT try `npx null@latest` or `npx first-tree-dev@latest`.
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+
+    const workspace = join(tmpBase, "integrate-dev");
+    const treePath = join(tmpBase, "ctx-dev");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec(() => {
+      const err = new Error("spawn first-tree-dev ENOENT") as Error & { code?: string };
+      err.code = "ENOENT";
+      throw err;
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-dev",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("first-tree-dev");
+    expect(logs.join("\n")).not.toContain("npx");
   });
 });
 

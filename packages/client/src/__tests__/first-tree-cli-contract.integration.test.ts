@@ -3,13 +3,23 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   bootstrapWorkspace,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
 } from "../runtime/bootstrap.js";
+import { setCliBinding } from "../runtime/cli-binding.js";
 import type { AgentIdentity } from "../runtime/handler.js";
+
+// This file probes the real `first-tree` binary (via the PATH shim installed
+// per test) — the contract covers the prod CLI shape. Pin the binding to
+// prod so `bootstrapWorkspace` and `installFirstTreeIntegration` invoke the
+// binary the test scaffolding expects (and the `HAS_FIRST_TREE_CLI` probe
+// below already checks the same name).
+beforeAll(() => {
+  setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+});
 
 /**
  * Production `defaultInstallExec` uses `stdio: "pipe"` and discards both

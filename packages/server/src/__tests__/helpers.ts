@@ -1,4 +1,5 @@
 import type { AgentType } from "@first-tree/shared";
+import { setConfig } from "@first-tree/shared/config";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -153,6 +154,12 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     },
     instanceId: "test-instance",
   };
+  // Pin the singleton so service-layer helpers that go through
+  // `getServerCliBinding()` (e.g. message / attention / agent error hints)
+  // find a config in-process. Production paths reach this via `initConfig`;
+  // test scaffolding bypasses it and builds the Config object manually, so
+  // we set the singleton ourselves here.
+  setConfig(config);
   const app = await buildApp(config);
   await app.ready();
   return app;

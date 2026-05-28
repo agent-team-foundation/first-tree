@@ -8,6 +8,7 @@ import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import type { ChatContext } from "./chat-context.js";
 import { renderChatContextSection } from "./chat-context-section.js";
+import { getCliBinding } from "./cli-binding.js";
 import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
 
@@ -518,11 +519,14 @@ function defaultInstallExec(command: string, args: string[], options: { cwd: str
 
 /**
  * Install the first-tree skill and FIRST-TREE-SOURCE-INTEGRATION block into
- * the workspace by shelling out to `first-tree tree integrate`.
+ * the workspace by shelling out to the channel-resolved CLI's `tree integrate`.
  *
- * Resolution order for the CLI binary:
- *   1. `first-tree` on PATH — preferred for runtime images that pre-install it.
- *   2. `npx -y first-tree@latest` — fallback that downloads on first run.
+ * Resolution order for the CLI binary (binName/packageName are channel-aware,
+ * see {@link getCliBinding}):
+ *   1. `<binName>` on PATH — preferred for runtime images that pre-install it.
+ *   2. `npx -y <packageName>@latest` — fallback that downloads on first run.
+ *      Skipped for the dev channel (`packageName === null`) because dev
+ *      binaries are not published to npm.
  *
  * Graceful degradation: returns false on failure and logs. The session still
  * starts; the agent just doesn't have the first-tree skill wired up.
@@ -530,8 +534,9 @@ function defaultInstallExec(command: string, args: string[], options: { cwd: str
 export function installFirstTreeIntegration(options: InstallFirstTreeIntegrationOptions): boolean {
   const { workspacePath, contextTreePath, workspaceId, treeRepoUrl, log } = options;
   const exec = options.exec ?? defaultInstallExec;
+  const { binName, packageName } = getCliBinding();
 
-  // `first-tree tree integrate` resolves the source/workspace path from the
+  // `<binName> tree integrate` resolves the source/workspace path from the
   // process cwd — it does NOT accept a `--source-path` flag. We set
   // `cwd: workspacePath` below; passing a flag the CLI doesn't recognise
   // makes every invocation exit 1 with "unknown option '--source-path'".
@@ -548,12 +553,21 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
   ];
 
   const attempts: Array<{ command: string; args: string[]; label: string }> = [
-    { command: "first-tree", args: integrateArgs, label: "first-tree (PATH)" },
-    {
-      command: "npx",
-      args: ["-y", "first-tree@latest", ...integrateArgs],
-      label: "npx first-tree@latest",
-    },
+    { command: binName, args: integrateArgs, label: `${binName} (PATH)` },
+    // Dev channel publishes no npm tarball, so skip the npx fallback entirely
+    // — there is nothing to fetch. Falls through to "PATH attempt failed →
+    // graceful degradation" which is the right behaviour for dev anyway:
+    // the developer is expected to have the in-tree CLI installed via
+    // scripts/dev-install.sh.
+    ...(packageName
+      ? [
+          {
+            command: "npx",
+            args: ["-y", `${packageName}@latest`, ...integrateArgs],
+            label: `npx ${packageName}@latest`,
+          },
+        ]
+      : []),
   ];
 
   for (let index = 0; index < attempts.length; index += 1) {
@@ -769,6 +783,14 @@ export function buildChatSystemPrompt(options: BuildChatSystemPromptOptions): st
 }
 
 function generateToolsDoc(): string {
+  // CLI binary name resolved at runtime from the channel-aware binding the
+  // CLI entrypoint installs via `setCliBinding`. Prod = "first-tree", staging
+  // = "first-tree-staging", dev = "first-tree-dev". Baking the channel-correct
+  // name into tools.md is what lets the agent's `<bin> chat send` and
+  // `<bin> attention raise` invocations actually find the CLI on PATH —
+  // hardcoding "first-tree" used to leave staging/dev agents calling a
+  // binary that wasn't installed on the host.
+  const bin = getCliBinding().binName;
   return `# Agent Hub SDK
 
 You are running inside **Agent Hub**, a messaging platform for agent teams.
@@ -777,11 +799,11 @@ You are running inside **Agent Hub**, a messaging platform for agent teams.
   \`[From: <agent-name>]\` header — that name is what you pass back to \`chat send\`.
 - **Your final response text is delivered to the chat for human observers to read.
   It does NOT wake other agents.** To make another agent take action, use
-  \`first-tree chat send <name>\` explicitly (see "Communication Rules" below).
+  \`${bin} chat send <name>\` explicitly (see "Communication Rules" below).
 - **Stay silent when you have nothing to add.** Not every message needs a reply.
   If you have nothing new for the recipient, output nothing and the runtime ends the turn.
 - For **proactive communication** (other agents, other chats, or different format),
-  use the \`first-tree\` CLI below.
+  use the \`${bin}\` CLI below.
 
 ## Communication Rules
 
@@ -790,7 +812,7 @@ to read. It does NOT wake other agents.
 
 To make another agent take action, you MUST explicitly call:
 
-    first-tree chat send <name> "..."
+    ${bin} chat send <name> "..."
 
 Decision guide (based on participant \`type\` in the Current Chat Context block):
 
@@ -811,21 +833,21 @@ anyone.
 The CLI auto-reads its config from env — no setup needed.
 
 \`\`\`bash
-# Send to an agent by NAME (uuids are NOT accepted — run \`first-tree agent list\` for names).
+# Send to an agent by NAME (uuids are NOT accepted — run \`${bin} agent list\` for names).
 # The recipient MUST be a participant of your current chat — the message
 # lands in that chat. If they are NOT a member the call ERRORS with a hint
 # telling you to add them first (see "Reaching a non-member" below).
-first-tree chat send <agentName> "your message"
+${bin} chat send <agentName> "your message"
 
 # Pull a non-member into your current chat first, then send normally.
-first-tree chat invite <agentName>
-first-tree chat send <agentName> "your message"
+${bin} chat invite <agentName>
+${bin} chat send <agentName> "your message"
 
 # Markdown format (default is text)
-first-tree chat send <agentName> -f markdown "**bold**"
+${bin} chat send <agentName> -f markdown "**bold**"
 
 # Pipe long / multiline content via stdin
-echo "long body" | first-tree chat send <agentName>
+echo "long body" | ${bin} chat send <agentName>
 \`\`\`
 
 **Reaching another agent**:
@@ -861,7 +883,7 @@ gives your turn no clean place to resume.
 
 \`\`\`bash
 # Ask (expects a reply) — your turn resumes when the human responds.
-first-tree attention raise \\
+${bin} attention raise \\
   --chat <chat-id-of-this-conversation> \\
   --target <human-agent-name> \\
   --subject "<one-line summary>" \\
@@ -869,7 +891,7 @@ first-tree attention raise \\
   --requires-response
 
 # Notify (fire-and-forget) — closes on creation, no response slot.
-first-tree attention raise --chat <id> --target <name> \\
+${bin} attention raise --chat <id> --target <name> \\
   --subject "deployed v1.4.2" --body "..."
 \`\`\`
 

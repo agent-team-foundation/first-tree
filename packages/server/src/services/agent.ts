@@ -16,6 +16,7 @@ import {
   defaultRuntimeConfigPayload,
   isReservedAgentName,
 } from "@first-tree/shared";
+import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
@@ -278,7 +279,7 @@ async function resolveAgentClient(
   if (!client.userId) {
     throw new BadRequestError(
       `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
-        "`first-tree login <token>` on that machine before pinning an agent to it.",
+        `\`${getServerCliBinding().binName} login <token>\` on that machine before pinning an agent to it.`,
     );
   }
   if (client.userId !== manager.userId) {
@@ -355,7 +356,7 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
   if (!row) {
     throw new BadRequestError(
       `Cannot create agent in organization "${orgId}" — no admin member exists. ` +
-        "Create an admin member first (see `first-tree agent create`).",
+        `Create an admin member first (see \`${getServerCliBinding().binName} agent create\`).`,
     );
   }
   return row.id;

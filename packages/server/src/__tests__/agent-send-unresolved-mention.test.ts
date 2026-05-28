@@ -73,6 +73,14 @@ describe("sendMessage — unresolved-@-token guard (v1 §四 改造 1 follow-up)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       expect(message).toContain(`chat invite ${outsider.agent.name}`);
+      // Multi-env regression guard: the hint must carry the channel-resolved
+      // binary name. Test config pins channel=dev (see helpers.ts), so the
+      // server-side `getServerCliBinding()` returns `first-tree-dev`. A
+      // regression to hardcoded `first-tree chat invite` would still match
+      // the broader `chat invite <name>` assertion above — only this stricter
+      // assertion catches it. Pair with the client-side staging tests in
+      // `packages/client/src/__tests__/bootstrap.test.ts`.
+      expect(message).toContain(`first-tree-dev chat invite ${outsider.agent.name}`);
       expect(message).not.toMatch(/--direct/);
     }
   });

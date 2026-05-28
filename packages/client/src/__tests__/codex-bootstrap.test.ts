@@ -1,8 +1,18 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER } from "../runtime/bootstrap.js";
+import { setCliBinding } from "../runtime/cli-binding.js";
+
+// `bootstrapWorkspace` internally writes `.agent/tools.md`, which reads the
+// channel-resolved CLI binding for the binary name. Pin it to the prod
+// identity so the helper has a binding installed even when these tests run
+// in isolation (the production CLI entry installs it via channel-env.ts,
+// but vitest workers boot without that side effect).
+beforeAll(() => {
+  setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+});
 
 describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
   let workspacePath: string;

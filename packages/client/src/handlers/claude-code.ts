@@ -30,6 +30,7 @@ import {
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { getCliBinding } from "../runtime/cli-binding.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
@@ -682,11 +683,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     return async (toolName, input, _options) => {
       if (toolName === "AskUserQuestion") {
         sessionCtx.log("AskUserQuestion is no longer bridged; redirecting agent to NHA");
+        // Channel-aware redirect: in staging / dev the binary on PATH is
+        // `first-tree-staging` / `first-tree-dev`, so the deny message has
+        // to thread `binName` through — same reason as bootstrap.ts's
+        // `generateToolsDoc`. Resolved lazily per turn so vitest workers
+        // that flip the binding mid-suite see the up-to-date value.
+        const bin = getCliBinding().binName;
         return {
           behavior: "deny",
           message:
             "AskUserQuestion is no longer supported in this Hub. " +
-            "To request human attention, use the `first-tree attention raise` CLI (or your runtime's NHA SDK). " +
+            `To request human attention, use the \`${bin} attention raise\` CLI (or your runtime's NHA SDK). ` +
             "See the `attention` skill for usage.",
         } satisfies PermissionResult;
       }
