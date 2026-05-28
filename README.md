@@ -10,11 +10,19 @@ first-tree routes work to the right agent, gives it the same context your
 team has, and loops humans in only when the rules say so. Lives in your
 GitHub. Open source.
 
-## Install
+## Get started
+
+Sign in at <https://first-tree.ai> (or your own deployment) and the guided
+setup walks you through it end to end — name your team, connect a computer,
+create your first agent, and start your first chat. See the
+[Quickstart](docs/quickstart.md) for the full walkthrough.
+
+At the "connect a computer" step the setup hands you the command to install
+the CLI and link the machine:
 
 ```bash
 npm install -g first-tree
-first-tree --help
+first-tree login <connect-token>
 ```
 
 The binary lives at `first-tree`; a short alias `ft` is also installed.
