@@ -2122,27 +2122,14 @@ export function ChatView({
     [draftMentions, peerAgentId],
   );
 
-  // Records the buffer offset of an `@` the user just typed (keystroke
-  // or explicit `@` toolbar click). The popover keyboard-hijack (Enter
-  // → pick candidate, Tab → next, Arrows → cycle) only fires when this
-  // index matches the active trigger, so a pasted block that happens
-  // to contain `@foo` no longer steals the user's "press Enter to
-  // send" — the popover still renders for click-to-pick but Enter
-  // falls through. Reset to `null` whenever the trigger window closes
-  // (cursor moves out / `@` deleted / user picked a candidate).
-  const [interactiveTriggerIndex, setInteractiveTriggerIndex] = useState<number | null>(null);
   const mention = useMentionAutocomplete({
     value: draft,
     cursor,
     candidates: mentionCandidates,
     disabled: sendMut.isPending || uploading,
-    interactiveTriggerIndex,
     onSelect: (update) => {
       setDraft(update.text);
       setCursor(update.cursor);
-      // Mention picked — trigger closes immediately, no need to keep
-      // the interactive flag around.
-      setInteractiveTriggerIndex(null);
       // Defer so React has committed the new value before we move the
       // selection — otherwise the textarea snaps back to its old cursor.
       requestAnimationFrame(() => {
@@ -2153,20 +2140,6 @@ export function ChatView({
       });
     },
   });
-  // When the user moves the caret off the active trigger (or deletes
-  // the `@`), drop the interactive flag so re-entering an old `@` by
-  // arrow-key doesn't re-arm the keyboard hijack.
-  useEffect(() => {
-    if (mention.trigger === null && interactiveTriggerIndex !== null) {
-      setInteractiveTriggerIndex(null);
-    } else if (
-      mention.trigger !== null &&
-      interactiveTriggerIndex !== null &&
-      mention.trigger.triggerIndex !== interactiveTriggerIndex
-    ) {
-      setInteractiveTriggerIndex(null);
-    }
-  }, [mention.trigger, interactiveTriggerIndex]);
 
   /**
    * Slash-command setup. Per the design contract (`/ for commands` in the
@@ -2868,11 +2841,6 @@ export function ChatView({
                             focusPrimedRef.current = true;
                             setDraft("@");
                             setCursor(1);
-                            // Focus-prime is system-stamped, but it's the user's
-                            // very next intention (mid-keystroke before they start
-                            // typing the name) — treat it as interactive so Enter
-                            // can pick from the popover the same way as a typed @.
-                            setInteractiveTriggerIndex(0);
                             requestAnimationFrame(() => {
                               const el = textareaRef.current;
                               if (!el) return;
@@ -2901,19 +2869,9 @@ export function ChatView({
                             // mention-autocomplete (the trigger predicates are disjoint, but
                             // ordering documents intent).
                             if (slash.handleKey(e)) return;
-                            // Record interactive `@` trigger: when the user types `@`,
-                            // remember the offset where it lands. The popover only
-                            // intercepts Enter/Tab/Arrows when its trigger position
-                            // matches this index — paste-introduced `@` keeps the
-                            // popover visible (for click-to-pick) without stealing
-                            // the send keystroke.
-                            if (e.key === "@" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-                              const el = e.currentTarget;
-                              const start = el.selectionStart;
-                              if (start !== null) setInteractiveTriggerIndex(start);
-                            }
-                            // Mention autocomplete gets first crack at navigation keys so
-                            // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
+                            // Mention autocomplete gets next crack: when the caret is
+                            // inside an active `@trigger` (typed, pasted, or pre-existing),
+                            // Enter/Tab/Arrows/Escape drive the popover instead of
                             // sending or moving the cursor.
                             if (mention.handleKey(e)) return;
                             if (e.key === "Enter" && !e.shiftKey) {
@@ -2989,10 +2947,6 @@ export function ChatView({
                               const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
                               setDraft(next);
                               setCursor(start + 1);
-                              // Treat the inserted `@` as user-initiated so the
-                              // popover can drive Enter/Tab on the candidate list,
-                              // matching the typed-`@` path.
-                              setInteractiveTriggerIndex(start);
                               requestAnimationFrame(() => {
                                 el.focus();
                                 el.setSelectionRange(start + 1, start + 1);

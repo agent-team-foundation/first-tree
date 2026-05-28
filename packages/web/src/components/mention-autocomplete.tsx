@@ -307,17 +307,12 @@ export type MentionKeyHandler = (e: { key: string; preventDefault: () => void })
  * Hook form: gives the host textarea a popover + a `handleKey` function so
  * it can keep owning `onChange` and cursor state.
  *
- * `interactiveTriggerIndex` — buffer offset of an `@` the caller has
- * confirmed came from a user keystroke (or the explicit `@` toolbar
- * button). When it matches the active trigger's `@` position,
- * `handleKey` intercepts Enter / Tab / Arrows / Escape so the popover
- * can drive selection. When it does NOT match (e.g. the `@` came in via
- * paste, was already present when the chat loaded, or the user moved
- * their caret over an old `@`), the popover stays VISIBLE for
- * click-to-pick but the keyboard falls through — Enter sends, Tab
- * indents, exactly what the user expects when the autocomplete wasn't
- * something they explicitly invoked. Pass `null` to disable interactive
- * keyboard hijack entirely.
+ * Keyboard hijack is cursor-driven: whenever `detectMentionTrigger`
+ * resolves an active `@` near the caret (typed now, pasted, or pre-existing
+ * in the draft), `handleKey` intercepts Enter / Tab / Arrows / Escape so
+ * the popover drives selection. Move the caret away from the `@` and the
+ * trigger disappears, restoring Enter-to-send. Matches slash-command
+ * popover semantics so both autocompletes feel the same.
  */
 export function useMentionAutocomplete({
   value,
@@ -325,14 +320,12 @@ export function useMentionAutocomplete({
   candidates,
   onSelect,
   disabled,
-  interactiveTriggerIndex,
 }: {
   value: string;
   cursor: number;
   candidates: MentionCandidate[];
   onSelect: (update: MentionInsert) => void;
   disabled?: boolean;
-  interactiveTriggerIndex: number | null;
 }): {
   trigger: ActiveTrigger | null;
   results: MentionCandidate[];
@@ -386,14 +379,8 @@ export function useMentionAutocomplete({
     onSelect(insert);
   }
 
-  // Keyboard hijack only fires when the caller has flagged the active
-  // trigger's `@` as one the user actively typed / inserted. See the
-  // `interactiveTriggerIndex` docstring above for the why.
-  const interactive = trigger !== null && interactiveTriggerIndex === trigger.triggerIndex;
-
   const handleKey: MentionKeyHandler = (e) => {
     if (!open || !trigger) return false;
-    if (!interactive) return false;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setHighlightIndex((i) => (results.length === 0 ? 0 : (i + 1) % results.length));
