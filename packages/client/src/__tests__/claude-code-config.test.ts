@@ -10,6 +10,7 @@ describe("claude-code handler helpers (Step 6)", () => {
         model: "",
         env: [],
         gitRepos: [],
+        reasoningEffort: "",
         mcpServers: [{ name: "echo", transport: "stdio", command: "/bin/echo", args: ["-n", "hi"] }],
       });
       expect(out.echo).toEqual({ type: "stdio", command: "/bin/echo", args: ["-n", "hi"] });
@@ -22,6 +23,7 @@ describe("claude-code handler helpers (Step 6)", () => {
         model: "",
         env: [],
         gitRepos: [],
+        reasoningEffort: "",
         mcpServers: [
           { name: "remote", transport: "http", url: "https://x.example/y", headers: { Authorization: "Bearer t" } },
         ],
@@ -40,6 +42,7 @@ describe("claude-code handler helpers (Step 6)", () => {
         model: "",
         env: [],
         gitRepos: [],
+        reasoningEffort: "",
         mcpServers: [{ name: "sse-srv", transport: "sse", url: "https://x.example/sse" }],
       });
       expect(out["sse-srv"]).toEqual({ type: "sse", url: "https://x.example/sse", headers: undefined });
@@ -53,6 +56,7 @@ describe("claude-code handler helpers (Step 6)", () => {
           model: "",
           env: [],
           gitRepos: [],
+          reasoningEffort: "",
           mcpServers: [],
         }),
       ).toEqual({});

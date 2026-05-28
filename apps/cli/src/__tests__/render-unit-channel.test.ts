@@ -1,8 +1,8 @@
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { defaultHome } from "@first-tree/shared/config";
 import { describe, expect, it } from "vitest";
 import { channelConfig } from "../core/channel.js";
-import { renderPlist, renderSystemdUnit } from "../core/service-install.js";
+import { renderLaunchdWrapper, renderPlist, renderSystemdUnit } from "../core/service-install.js";
 
 /**
  * Lock the channel → unit-file contract at the unit-template layer.
@@ -23,6 +23,10 @@ import { renderPlist, renderSystemdUnit } from "../core/service-install.js";
  * home-basename derivation), this test catches it.
  */
 const FAKE_BIN_INVOCATION = { kind: "bin", program: "/usr/local/bin/first-tree-dev" } as const;
+// The launchd plist points at the launcher script, not the CLI directly.
+// Mirror `launchdWrapperPath()`: <home>/service/<display name>. The display
+// name is what macOS shows in the background-items list.
+const FAKE_WRAPPER_PATH = join(defaultHome(), "service", channelConfig.displayName);
 
 function extractPlistPathValue(plist: string): string {
   const match = /<key>PATH<\/key>\s*<string>([^<]+)<\/string>/.exec(plist);
@@ -76,7 +80,7 @@ describe("renderSystemdUnit — channel identity baked into unit text", () => {
 });
 
 describe("renderPlist — channel identity baked into plist text", () => {
-  const plist = renderPlist(FAKE_BIN_INVOCATION, {});
+  const plist = renderPlist(FAKE_WRAPPER_PATH, {});
 
   it("uses the channel's launchd label", () => {
     // Label tag — exact match in the <key>Label</key><string>…</string> pair.
@@ -96,8 +100,12 @@ describe("renderPlist — channel identity baked into plist text", () => {
     expect(plist).not.toContain("dev.first-tree.client");
   });
 
-  it("embeds the CLI program path in ProgramArguments", () => {
-    expect(plist).toContain("<string>/usr/local/bin/first-tree-dev</string>");
+  it("launches via the display-name wrapper script in ProgramArguments", () => {
+    // ProgramArguments[0] is the launcher script path, whose basename is the
+    // channel display name. macOS shows that basename in the background-items
+    // list, so this is what keeps the daemon from appearing as `index.mjs`.
+    expect(plist).toContain(`<string>${FAKE_WRAPPER_PATH}</string>`);
+    expect(plist).toContain(`/service/${channelConfig.displayName}`);
   });
 
   it("includes the current Node binary directory in PATH", () => {
@@ -117,9 +125,30 @@ describe("renderPlist — channel identity baked into plist text", () => {
 
   it("does not duplicate launchd fallback paths that match the current Node binary directory", () => {
     withExecPath("/usr/local/bin/node", () => {
-      const pathEntries = extractPlistPathValue(renderPlist(FAKE_BIN_INVOCATION, {})).split(":");
+      const pathEntries = extractPlistPathValue(renderPlist(FAKE_WRAPPER_PATH, {})).split(":");
       expect(pathEntries[0]).toBe("/usr/local/bin");
       expect(pathEntries.filter((entry) => entry === "/usr/local/bin")).toHaveLength(1);
     });
+  });
+});
+
+describe("renderLaunchdWrapper — launcher script execs the resolved CLI", () => {
+  it("starts with a /bin/sh shebang", () => {
+    expect(renderLaunchdWrapper(FAKE_BIN_INVOCATION)).toMatch(/^#!\/bin\/sh\n/);
+  });
+
+  it("execs the bin invocation with the daemon args", () => {
+    expect(renderLaunchdWrapper(FAKE_BIN_INVOCATION)).toContain(
+      "exec /usr/local/bin/first-tree-dev daemon start --no-interactive",
+    );
+  });
+
+  it("execs the node interpreter + script for the node invocation", () => {
+    const wrapper = renderLaunchdWrapper({
+      kind: "node",
+      program: "/usr/bin/node",
+      args: ["/opt/first-tree/dist/cli/index.mjs"],
+    });
+    expect(wrapper).toContain("exec /usr/bin/node /opt/first-tree/dist/cli/index.mjs daemon start --no-interactive");
   });
 });

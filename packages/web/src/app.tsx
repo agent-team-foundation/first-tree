@@ -45,6 +45,10 @@ const ChatRowAvatarPreviewPage = import.meta.env.DEV
     )
   : null;
 
+const OnboardingPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/onboarding-preview.js").then((module) => ({ default: module.OnboardingPreviewPage })))
+  : null;
+
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -74,6 +78,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ChatRowAvatarPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {OnboardingPreviewPage ? (
+                <Route
+                  path="/preview/onboarding"
+                  element={
+                    <Suspense fallback={null}>
+                      <OnboardingPreviewPage />
                     </Suspense>
                   }
                 />

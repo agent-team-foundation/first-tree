@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -1056,6 +1056,57 @@ describe("Bundled CLI version drift helpers", () => {
     writeFileSync(join(tmpBase, "cli-version-corrupt", "package.json"), "{not-json");
 
     expect(resolveBundledCliVersion(`file://${join(dir, "module.js")}`)).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
+  it("dev channel: appends a build fingerprint to the version", () => {
+    // Switch to the dev binding so the resolver appends the mtime
+    // suffix. Default moduleUrl points at this test bundle's own file,
+    // which exists, so statSync succeeds and the suffix is present.
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    const version = resolveBundledCliVersion();
+    expect(version).toMatch(/\+build\.\d+$/u);
+  });
+
+  it("prod and staging channels: bare version, no fingerprint suffix", () => {
+    // CI bumps the package manifest's version on every release, so the
+    // fingerprint would be redundant noise in the `.agent/cli-version`
+    // pin. Assert both published channels explicitly.
+    setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+    expect(resolveBundledCliVersion()).not.toMatch(/\+build\./u);
+
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    expect(resolveBundledCliVersion()).not.toMatch(/\+build\./u);
+  });
+
+  it("dev channel: build fingerprint changes when the module file's mtime changes", () => {
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    const dir = join(tmpBase, "cli-version-fingerprint");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "9.9.9" }));
+    const modulePath = join(dir, "module.js");
+    writeFileSync(modulePath, "// stub");
+    const moduleUrl = `file://${modulePath}`;
+
+    utimesSync(modulePath, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
+    const first = resolveBundledCliVersion(moduleUrl);
+
+    utimesSync(modulePath, new Date(1_800_000_000_000), new Date(1_800_000_000_000));
+    const second = resolveBundledCliVersion(moduleUrl);
+
+    expect(first).toMatch(/^9\.9\.9\+build\.\d+$/u);
+    expect(second).toMatch(/^9\.9\.9\+build\.\d+$/u);
+    expect(first).not.toBe(second);
+  });
+
+  it("dev channel: falls back to bare version when the module file is missing (statSync throws)", () => {
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    const dir = join(tmpBase, "cli-version-no-mtime");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "0.0.1" }));
+    // Synthetic module URL — statSync throws and the resolver must
+    // degrade to the bare version (still drift-comparable, just not
+    // build-sensitive).
+    expect(resolveBundledCliVersion(`file://${join(dir, "ghost.js")}`)).toBe("0.0.1");
   });
 
   it("write/read roundtrip pins the CLI version for drift comparison", () => {

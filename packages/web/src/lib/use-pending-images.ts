@@ -23,7 +23,7 @@ export type UsePendingImages = {
  * in-chat composer and the new-chat draft so they enforce identical image
  * rules (`image/*` only, ≤5 MB each) and the same object-URL lifecycle.
  *
- * The host owns the actual upload (read → IndexedDB → `sendFileMessage`);
+ * The host owns the actual upload (read → IndexedDB → `sendFileMessageBatch`);
  * this hook only validates and holds the `File` + a revocable preview URL.
  *
  *   - `onError` surfaces a validation failure (oversized image) to the

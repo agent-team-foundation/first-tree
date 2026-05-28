@@ -1,4 +1,4 @@
-import { type SendMessage, scanMentionTokens } from "@first-tree/shared";
+import { extractCaption, type SendMessage, scanMentionTokens } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -395,7 +395,13 @@ async function sendMessageInner(
     //    Updates chats.last_message_*, increments speaker + watcher mention
     //    counters. New code; no existing path is modified — see
     //    first-tree-context:agent-hub/web-console.md "Risk Constraints".
-    const previewText = typeof outboundContent === "string" ? outboundContent.trim() : "";
+    // Chat-list preview: prefer string content (text/markdown) verbatim;
+    // fall back to the caption of a batched image send (`format: "file"`
+    // with `{caption?, attachments[]}` shape) so a "text + N images" send
+    // still surfaces its text in the conversation list. Pure single-image
+    // messages (no caption) stay empty — same as before.
+    const previewText =
+      typeof outboundContent === "string" ? outboundContent.trim() : extractCaption(outboundContent).trim();
     await applyAfterFanOut(tx, {
       chatId,
       messageId: msg.id,

@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   CanUseTool,
+  EffortLevel,
   McpServerConfig,
   PermissionMode,
   PermissionResult,
@@ -13,7 +14,12 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime } from "@first-tree/shared";
-import { deriveRepoLocalPath, SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  isImageBatchRefContent,
+  isImageRefContent,
+  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
+} from "@first-tree/shared";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import {
   bootstrapWorkspace,
@@ -138,27 +144,6 @@ const MIME_TO_EXT: Record<SupportedImageMime, string> = {
   "image/webp": "webp",
 };
 
-/** Post-refactor image message shape in `messages.content`: a reference only.
- * The bytes arrive via the separate `image_payload` WS push and live on
- * this client's local disk under `<dataDir>/chats/<chatId>/images/`. */
-type ImageRefContent = {
-  imageId: string;
-  mimeType: SupportedImageMime;
-  filename: string;
-  size?: number;
-};
-
-function isImageRefContent(content: unknown): content is ImageRefContent {
-  if (!content || typeof content !== "object") return false;
-  const c = content as Record<string, unknown>;
-  return (
-    typeof c.imageId === "string" &&
-    typeof c.mimeType === "string" &&
-    typeof c.filename === "string" &&
-    SUPPORTED_IMAGE_MIMES.has(c.mimeType as SupportedImageMime)
-  );
-}
-
 /** Legacy pre-refactor image content with base64 inlined into the message.
  * Only exercised by messages that pre-date the image-out-of-messages PR —
  * kept so a client upgraded mid-backlog can still read them. */
@@ -241,6 +226,21 @@ type ResultMessage = {
   total_cost_usd?: number;
   num_turns?: number;
   session_id?: string;
+  // Per-model token usage for this turn. Anthropic's Claude Agent SDK populates
+  // this on every ResultMessage (success and error subtypes). A single turn can
+  // span multiple models (e.g. fast-mode), so we emit one `token_usage` event
+  // per entry. Keys are model identifiers (e.g. "claude-opus-4-7"). Older SDK
+  // versions may omit the field entirely — treat absence as "no usage to emit"
+  // rather than an error.
+  modelUsage?: Record<
+    string,
+    {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+    }
+  >;
 };
 
 function isResultMessage(message: unknown): message is ResultMessage {
@@ -269,7 +269,7 @@ function isResultMessage(message: unknown): message is ResultMessage {
  * `assistant.error` or `result.subtype === "error"` is the authoritative
  * post-failure signal — let those drive the chat-timeline message.
  */
-function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | null {
+export function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | null {
   if (!message || typeof message !== "object") return null;
   const m = message as Record<string, unknown>;
   if (m.type === "assistant" && isClaudeAuthError(m.error as string | undefined)) {
@@ -279,6 +279,41 @@ function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | nul
     return { rawMessage: m.error };
   }
   return null;
+}
+
+/**
+ * Emit one `token_usage` event per (model) entry in the result's `modelUsage`.
+ * The SDK lumps cache-creation tokens under their own field, but the wire
+ * schema folds them into `inputTokens` because they bill as input. Best-effort:
+ * a missing/empty `modelUsage` is silently skipped (older SDKs and some error
+ * subtypes don't populate it). Per-entry emit failures are swallowed so token
+ * accounting never blocks the turn close that follows.
+ */
+function emitTokenUsageFromResult(message: ResultMessage, sessionCtx: SessionContext): void {
+  const usage = message.modelUsage;
+  if (!usage) return;
+  for (const [model, m] of Object.entries(usage)) {
+    if (!m) continue;
+    const cacheCreation = m.cacheCreationInputTokens ?? 0;
+    const cachedRead = m.cacheReadInputTokens ?? 0;
+    const inputTokens = (m.inputTokens ?? 0) + cacheCreation;
+    const outputTokens = m.outputTokens ?? 0;
+    if (inputTokens === 0 && cachedRead === 0 && outputTokens === 0) continue;
+    try {
+      sessionCtx.emitEvent({
+        kind: "token_usage",
+        payload: {
+          provider: "claude-code",
+          model,
+          inputTokens,
+          cachedInputTokens: cachedRead,
+          outputTokens,
+        },
+      });
+    } catch (err) {
+      sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 function extractToolResultText(content: unknown): string {
@@ -473,6 +508,41 @@ export function mapMcpServers(payload: AgentRuntimeConfigPayload): Record<string
   return out;
 }
 
+/** Payload-derived slice of the Claude Code SDK query options. */
+export type ClaudeQueryConfigOptions = {
+  model?: string;
+  systemPrompt?: { type: "preset"; preset: "claude_code"; append: string };
+  mcpServers?: Record<string, McpServerConfig>;
+  effort?: EffortLevel;
+};
+
+/**
+ * Build the config-derived slice of the SDK query options (model, systemPrompt
+ * append, MCP servers, reasoning effort). Kept pure and exported so these
+ * mappings are unit-testable; the session-bound options (env, canUseTool,
+ * abortController, sessionId/resume) stay inline in `buildQuery`.
+ *
+ * Reasoning effort: the claude variant's `""` is an inherit sentinel — when
+ * set we omit the `effort` option so the SDK falls back to the operator's local
+ * `~/.claude/settings.json` effortLevel (preserving pre-feature behavior). A
+ * non-empty value is passed explicitly and overrides that local setting.
+ */
+export function buildClaudeQueryOptions(
+  payload: AgentRuntimeConfigPayload | undefined,
+  combinedAppend: string,
+): ClaudeQueryConfigOptions {
+  const options: ClaudeQueryConfigOptions = {};
+  if (payload?.model) options.model = payload.model;
+  if (combinedAppend.length > 0) {
+    options.systemPrompt = { type: "preset", preset: "claude_code", append: combinedAppend };
+  }
+  if (payload?.mcpServers.length) options.mcpServers = mapMcpServers(payload);
+  if (payload?.kind === "claude-code" && payload.reasoningEffort) {
+    options.effort = payload.reasoningEffort;
+  }
+  return options;
+}
+
 /**
  * Decide whether a model swap can use `query.setModel()` (in-flight, ~0ms)
  * vs needing a `resume` restart (~5–10s cold start).
@@ -543,6 +613,49 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * — those are runtime-opaque (created by the agent, not by Hub).
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
+  /**
+   * The most recently pushed SDK user message, kept around as the replay
+   * payload for the transient stream-API retry path. Stashed at every
+   * `inputController.push` site (start / resume / inject) so a
+   * `claude_socket_closed` retry can re-push it into the rebuilt query —
+   * without this, `respawnQuery()` would leave the new `InputController`
+   * empty and the SDK subprocess would hang idle (resume mode loads
+   * conversation history but still needs a new user message to drive
+   * the next turn). We stash the already-converted SDK form (rather
+   * than the raw `SessionMessage`) so the retry path stays synchronous
+   * and timing-compatible with the existing consumer-loop catch block.
+   * Cleared once `ackTurnClose()` acks the entry — turn fully processed,
+   * no further replay needed.
+   *
+   * Invariant — single-consumer loop: this stash is safe ONLY because
+   * the catch → respawn → re-push sequence in `consumeOutput` is
+   * synchronous (no `await` between the sniff-throw catch entry and
+   * `respawnQuery`'s push). The interleaving inject() runs on its own
+   * `void maybeSwitchConfig().finally(...)` microtask and updates the
+   * stash via the same write site, so a properly-ordered consumer-loop
+   * iteration is the *only* reader and writer at any synchronous step.
+   * If future work ever introduces a second concurrent consumer (e.g.
+   * parallel turn execution, multi-`spawnQuery` fan-out), this stash
+   * must be redesigned per-consumer or the retry must own its own
+   * captured copy — otherwise an inject from chat N can overwrite a
+   * stash that chat M's retry is about to replay.
+   *
+   * Tolerated same-chat race — inject mid-retry: an inject()'s
+   * `toSDKUserMessage` await can interleave with a consumer-triggered
+   * transient retry. Sequence: consumer sniff-hit → respawn replays
+   * the PRIOR stash into the new query → inject's await resolves →
+   * inject overwrites stash and pushes the new prompt. The rebuilt
+   * query then sees `[replayed_prior_prompt, injected_new_prompt]`
+   * as two consecutive user messages. The replayed prompt is already
+   * in the resumed conversation history, so the model perceives a
+   * one-message duplicate before processing the inject — recoverable,
+   * not a correctness break. Avoiding this would require either
+   * draining inject through a queue gated on the consumer's catch
+   * state or making the retry path async — both have larger blast
+   * radius than the duplicate-message symptom. Documented per PR #648
+   * reviewer observation #1.
+   */
+  let stashedSdkMessage: SDKUserMessage | null = null;
 
   async function toSDKUserMessage(
     message: SessionMessage,
@@ -565,6 +678,36 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // emit the same `[From: <name>]` header as the default text path.
       const senderLabel = message.senderId ? await sessionCtx.resolveSenderLabel(message.senderId) : "";
       const prefix = senderLabel ? `[From: ${senderLabel}]\n\n` : "";
+
+      // Batched send (caption + N images in one message). Resolve every
+      // imageId to a local path the Read tool can open; missing-byte cases
+      // surface a per-attachment "not available on this device" placeholder
+      // so the session keeps moving and a partial-delivery doesn't strand
+      // the whole turn.
+      if (isImageBatchRefContent(message.content)) {
+        const caption = message.content.caption?.trim() ?? "";
+        const lines: string[] = [];
+        if (caption.length > 0) lines.push(caption);
+        lines.push(
+          message.content.attachments.length === 1
+            ? "An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see."
+            : `${message.content.attachments.length} images were shared in this chat. Please use the Read tool to read each one, then respond based on what you see.`,
+        );
+        for (const att of message.content.attachments) {
+          const imagePath = findImagePath(message.chatId, att.imageId, att.mimeType);
+          if (imagePath) {
+            lines.push(`\nFilename: ${att.filename}\nPath: ${imagePath}`);
+          } else {
+            lines.push(`\n[Image "${att.filename}" not available on this device]`);
+          }
+        }
+        return {
+          type: "user",
+          message: { role: "user", content: `${prefix}${lines.join("\n")}` },
+          parent_tool_use_id: null,
+          session_id: sessionId,
+        };
+      }
 
       if (isImageRefContent(message.content)) {
         const { imageId, mimeType, filename } = message.content;
@@ -702,10 +845,50 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     };
   }
 
-  /** Rebuild query and input controller without starting a new consumer loop (used for retry within the existing loop). */
+  /**
+   * Single helper for "turn closed → ack the in-flight inbox entry AND
+   * drop the replay stash". The two operations are paired everywhere a
+   * turn finishes (success / sniff-permanent / forward-error / no-result /
+   * non-success subtype / MAX_RETRIES / respawn-fail) — folding them into
+   * one call keeps the invariant "stash lives only as long as the turn
+   * still might need a replay" enforced in one place. Use the raw
+   * `markCompleted(count)` directly for per-entry acks (e.g. inject's
+   * `toSDKUserMessage` catch) where the semantics is "ack this single
+   * inbox entry, NOT close the active turn".
+   */
+  function ackTurnClose(sessionCtx: SessionContext): void {
+    sessionCtx.markCompleted();
+    stashedSdkMessage = null;
+  }
+
+  /**
+   * Rebuild the SDK query in resume mode AND re-push the pending user
+   * message so the freshly built `InputController` is non-empty. The
+   * caller (the outer consumer loop's catch block) keeps owning the
+   * for-await, so we deliberately do NOT start a new consumer here —
+   * spawning one would create two parallel loops both consuming the
+   * same `currentQuery` reference and both racing their own
+   * `retryCount` counter (under persistent failure, that fans out into
+   * unbounded recursion). Configuration (`applied*`) is preserved
+   * across the retry — only the SDK query is recycled.
+   *
+   * Stays synchronous — the converted SDK payload is stashed at push
+   * time so the retry path doesn't need to re-run `toSDKUserMessage`
+   * (which is async and would shift the consumer-loop timing).
+   *
+   * `stashedSdkMessage` is `null` only in the corner case where the
+   * session was started via `handler.resume(undefined, ...)` (admin-
+   * triggered resume with no new user input) and the SDK happened to
+   * crash before processing anything. In that case we still rebuild
+   * the query, but without a replay message the SDK will be back to
+   * waiting on stdin — acceptable for the admin-resume edge case, and
+   * the next user message will drive it normally.
+   */
   function respawnQuery(sessionId: string, sessionCtx: SessionContext): void {
     buildQuery(sessionId, sessionCtx, sessionId);
-    // retry keeps the same config — applied* unchanged.
+    if (stashedSdkMessage) {
+      inputController?.push(stashedSdkMessage);
+    }
   }
 
   /**
@@ -774,11 +957,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // other tools auto-allow. See buildAskUserCanUseTool.
         canUseTool: buildAskUserCanUseTool(sessionCtx),
         ...(claudeCodeExecutable ? { pathToClaudeCodeExecutable: claudeCodeExecutable } : {}),
-        ...(payload?.model ? { model: payload.model } : {}),
-        ...(combinedAppend.length > 0
-          ? { systemPrompt: { type: "preset", preset: "claude_code", append: combinedAppend } }
-          : {}),
-        ...(payload?.mcpServers.length ? { mcpServers: mapMcpServers(payload) } : {}),
+        // model / systemPrompt / mcpServers / effort — the config-derived slice.
+        // `effort: ""` (inherit) is omitted so the SDK uses the local effortLevel.
+        ...buildClaudeQueryOptions(payload, combinedAppend),
       },
     });
   }
@@ -844,12 +1025,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     //   1. Within a single turn: per-turn reset on `result` boundary so the
     //      next turn within the SAME query (bg-agent multi-turn mode) starts
     //      fresh.
-    //   2. Across retries (outer while-loop reentry via the catch +
-    //      respawnQuery path): NOT reset. An auth failure won't self-heal,
-    //      so respawning typically hits the same error — without persistence
-    //      the user would see two identical hint lines in the timeline.
+    //   2. Across retries (outer catch path that hands off to
+    //      `handler.resume()`): NOT reset. An auth failure won't self-heal,
+    //      so the resumed session typically hits the same error — without
+    //      persistence the user would see two identical hint lines in the
+    //      timeline.
     // Hoisted out of the try block so the outer catch's reentry preserves it
-    // across the respawn boundary.
+    // across the resume boundary.
     let authHintEmitted = false;
     try {
       while (true) {
@@ -878,8 +1060,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             }
 
             if (isResultMessage(message)) {
+              emitTokenUsageFromResult(message, sessionCtx);
               if (message.subtype === "success") {
-                retryCount = 0;
                 // Auto-bridge: forward result text back to the chat and close
                 // the turn. We AWAIT sendMessage (rather than fire-and-forget)
                 // so the turn_end emit is guaranteed to hit the WebSocket
@@ -920,7 +1102,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     });
                     if (classification.kind === "transient" && retryCount < MAX_RETRIES) {
                       // Re-throw to drive the outer catch's auto-resume path
-                      // with the retry counter and respawnQuery wiring.
+                      // (retry counter + self-resume via handler.resume).
                       throw new StreamApiTransientError(sniff.message);
                     }
                     // Permanent (401/403) OR retries exhausted: surface to
@@ -938,8 +1120,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // Permanent stream API failure — ack so the server
                     // doesn't redeliver a message that would just produce
                     // the same error. Retry was exhausted upstream.
-                    sessionCtx.markCompleted();
+                    ackTurnClose(sessionCtx);
                   } else {
+                    // Genuine success — reset retry budget for the next turn.
+                    // Do NOT reset on the sniff-hit branches above: a wrapped
+                    // transient API error masquerades as `subtype: "success"`
+                    // and we MUST let `retryCount` accumulate so MAX_RETRIES
+                    // can fire and break us out of an unhealing transient
+                    // loop (rate limit / socket closed / etc.).
+                    retryCount = 0;
                     try {
                       // All enrichment (inReplyTo, mentions, participants
                       // lookup, transport) lives in ctx.forwardResult so every
@@ -948,7 +1137,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                       // Turn closed cleanly — drain in-flight inbox entries.
-                      sessionCtx.markCompleted();
+                      ackTurnClose(sessionCtx);
                     } catch (err) {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
@@ -964,13 +1153,24 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // Long-lived sdk.sendMessage failures are rare; if
                       // recovery is needed the user can retry by sending
                       // a new message.
-                      sessionCtx.markCompleted();
+                      //
+                      // Reset retryCount along with the forward-success
+                      // branch above: the SDK actually returned a clean
+                      // `result` here (the failure was in our own
+                      // sendMessage downstream), so the next turn should
+                      // not inherit the prior turn's transient-retry
+                      // counter when an unrelated future stream error
+                      // fires.
+                      retryCount = 0;
+                      ackTurnClose(sessionCtx);
                     }
                   }
                 } else {
                   // No result text to forward (edge case) — still close the turn.
+                  // Same reset rationale as the forward-success branch above.
+                  retryCount = 0;
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                  sessionCtx.markCompleted();
+                  ackTurnClose(sessionCtx);
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
@@ -987,7 +1187,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                 // SDK reported a turn-level error (non-success subtype):
                 // redelivery would just hit the same error — ack.
-                sessionCtx.markCompleted();
+                ackTurnClose(sessionCtx);
               }
               sessionCtx.setRuntimeState("idle");
               // Reset the auth-hint flag only on a SUCCESSFUL result. This
@@ -1048,18 +1248,34 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // Deduplicator collapses every bind-reset replay so the entry
             // never re-dispatches and never gets acked. Per design §4
             // "permanent → ack".
-            sessionCtx.markCompleted();
+            ackTurnClose(sessionCtx);
             return;
           }
 
-          // Automatic retry — respawn query and continue loop. Flush any
-          // tool_use blocks that were in-flight when the session crashed so
-          // the admin event stream sees them as status:"pending" rather than
-          // getting paired against a replayed tool_use_id after resume.
+          // Automatic retry — rebuild the SDK query in resume mode AND re-push
+          // the pending user message into the freshly built InputController.
+          // The old `respawnQuery()` only did the rebuild; the new controller
+          // was empty so the SDK subprocess just hung idle waiting for a
+          // prompt that never came (it had the resumed conversation history
+          // but nothing to drive the next turn). Replaying `stashedSdkMessage`
+          // is the missing half — the SDK sees the same user message it was
+          // half-way through processing and re-runs the turn.
+          //
+          // We stay inside THIS consumer loop on purpose: spawning a fresh
+          // consumer (via `handler.resume` or `spawnQuery`) would create two
+          // parallel for-await loops over `currentQuery`, both stamping
+          // their own retryCount counter — under a persistent failure mode
+          // (e.g. SDK always throws) that fans out into unbounded recursion.
+          //
+          // Flush any tool_use blocks that were in-flight when the session
+          // crashed so the admin event stream sees them as status:"pending"
+          // rather than getting paired against a replayed tool_use_id
+          // after resume.
           toolCallProcessor.flush();
 
           retryCount++;
           sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${MAX_RETRIES})`);
+
           try {
             respawnQuery(claudeSessionId, sessionCtx);
           } catch (resumeErr) {
@@ -1085,7 +1301,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // Same reasoning as the MAX_RETRIES branch above — without this
             // ack the row would loop in `delivered` forever, deduped on every
             // bind-reset replay. Per design §4 "permanent → ack".
-            sessionCtx.markCompleted();
+            ackTurnClose(sessionCtx);
             return;
           }
         }
@@ -1442,8 +1658,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
       );
-      spawnQuery(claudeSessionId, sessionCtx, undefined, chatContext);
+      // Convert + stash BEFORE spawning the consumer loop. The consumer
+      // may race to first iteration before the post-spawn push lands —
+      // and if a wrapped stream-API error fires before we've stashed,
+      // the retry path's `respawnQuery` would have nothing to replay
+      // into the rebuilt InputController. See the
+      // `claude-code-stream-error-retry-replay.test.ts` regression.
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, claudeSessionId);
+      stashedSdkMessage = sdkMsg;
+      spawnQuery(claudeSessionId, sessionCtx, undefined, chatContext);
       inputController?.push(sdkMsg);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
@@ -1480,9 +1703,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // carries the v1.x bootstrap output (CLAUDE.md, AGENTS.md, .agent/,
         // <localPath>/ source repos), and the agent reads it via the SDK's
         // `settingSources: ["project"]` option.
-        spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
+        // Same convert-stash-then-spawn ordering as `start()` so a stream
+        // error fired on the first turn of the resumed session can replay
+        // through `respawnQuery`.
+        let sdkMsg: SDKUserMessage | null = null;
         if (message) {
-          inputController?.push(await toSDKUserMessage(message, sessionCtx, sessionId));
+          sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
+          stashedSdkMessage = sdkMsg;
+        }
+        spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
+        if (sdkMsg) {
+          inputController?.push(sdkMsg);
         }
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
         return sessionId;
@@ -1514,18 +1745,28 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             "Hub message history is preserved.",
         );
         claudeSessionId = freshSessionId;
-        spawnQuery(freshSessionId, sessionCtx, undefined, chatContext);
+        let freshSdkMsg: SDKUserMessage | null = null;
         if (message) {
-          inputController?.push(await toSDKUserMessage(message, sessionCtx, freshSessionId));
+          freshSdkMsg = await toSDKUserMessage(message, sessionCtx, freshSessionId);
+          stashedSdkMessage = freshSdkMsg;
+        }
+        spawnQuery(freshSessionId, sessionCtx, undefined, chatContext);
+        if (freshSdkMsg) {
+          inputController?.push(freshSdkMsg);
         }
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
         return freshSessionId;
       }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
-      spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
+      let resumeSdkMsg: SDKUserMessage | null = null;
       if (message) {
-        inputController?.push(await toSDKUserMessage(message, sessionCtx, sessionId));
+        resumeSdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
+        stashedSdkMessage = resumeSdkMsg;
+      }
+      spawnQuery(sessionId, sessionCtx, sessionId, chatContext);
+      if (resumeSdkMsg) {
+        inputController?.push(resumeSdkMsg);
       }
 
       sessionCtx.log(`Session resumed (${sessionId})`);
@@ -1550,6 +1791,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         .finally(async () => {
           try {
             const sdkMsg = await toSDKUserMessage(message, sessionCtx, sid);
+            stashedSdkMessage = sdkMsg;
             inputController?.push(sdkMsg);
           } catch (err) {
             sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
@@ -1583,6 +1825,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
 
       abortController = null;
+      // The session is no longer active — any pending replay message would
+      // be moot. Resume goes through `handler.resume(message, sessionId)`
+      // which re-stashes from its own argument.
+      stashedSdkMessage = null;
     },
 
     async shutdown() {

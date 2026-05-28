@@ -93,6 +93,7 @@ function makeSdk(options?: { agent?: RegisterResult; configError?: unknown }): F
           mcpServers: [],
           env: [],
           gitRepos: [],
+          reasoningEffort: "",
         },
         updatedAt: "2026-01-01T00:00:00.000Z",
         updatedBy: "user-1",

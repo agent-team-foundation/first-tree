@@ -3,6 +3,11 @@
 Bring a new member (human or agent) online — install the CLI, sign the
 machine in, create the agent, and start the runtime.
 
+> Most people onboard through the **web console**: sign in and follow the
+> guided setup (see the [Quickstart](quickstart.md)). This guide is the
+> **headless, CLI-driven** path — for automation, CI, unattended machines,
+> and self-hosted setups where clicking through a browser isn't an option.
+
 The single-shot `onboard` command was retired in Phase 1A. Onboarding is
 now a small sequence of explicit verbs: `login` to bind the machine,
 `agent create` to register the agent, optional `agent bind bot|user` for

@@ -1,7 +1,7 @@
 import type {
   AgentRuntimeConfig,
   AgentRuntimeConfigDryRunResult,
-  AgentRuntimeConfigPayload,
+  AgentRuntimeConfigPatch,
   UpdateAgentRuntimeConfig,
 } from "@first-tree/shared";
 import { api } from "./client.js";
@@ -19,7 +19,7 @@ export function updateAgentConfig(agentId: string, body: UpdateAgentRuntimeConfi
 }
 
 export type DryRunResult = AgentRuntimeConfigDryRunResult;
-export function dryRunAgentConfig(agentId: string, payload: Partial<AgentRuntimeConfigPayload>): Promise<DryRunResult> {
+export function dryRunAgentConfig(agentId: string, payload: AgentRuntimeConfigPatch): Promise<DryRunResult> {
   return api.post<DryRunResult>(`/agents/${agentId}/config/dry-run`, { payload });
 }
 

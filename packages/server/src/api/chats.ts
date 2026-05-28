@@ -308,41 +308,55 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  /** POST /chats/:chatId/messages — caller speaks as their HUMAN agent in the chat's org. */
-  app.post<{ Params: { chatId: string } }>("/:chatId/messages", async (request, reply) => {
-    const { scope } = await requireChatAccess(request, app.db);
-    const body = sendMessageSchema.parse(request.body);
+  /**
+   * POST /chats/:chatId/messages — caller speaks as their HUMAN agent in the
+   * chat's org.
+   *
+   * `bodyLimit` raised above Fastify's 1 MB default because a single
+   * `format:"file"` send can now batch a caption plus N inline base64 images
+   * in one body (composer collapses N+1 messages → one bubble). 40 MB caps
+   * the practical "caption + a handful of images" case while keeping the
+   * limit comfortably below where individual operator rate-limits would
+   * normally bite.
+   */
+  app.post<{ Params: { chatId: string } }>(
+    "/:chatId/messages",
+    { bodyLimit: 40 * 1024 * 1024 },
+    async (request, reply) => {
+      const { scope } = await requireChatAccess(request, app.db);
+      const body = sendMessageSchema.parse(request.body);
 
-    await ensureParticipant(app.db, request.params.chatId, scope.humanAgentId);
+      await ensureParticipant(app.db, request.params.chatId, scope.humanAgentId);
 
-    const prepared = await prepareImageOutbound(app.db, app.notifier, request.params.chatId, {
-      ...body,
-      source: "web",
-    });
+      const prepared = await prepareImageOutbound(app.db, app.notifier, request.params.chatId, {
+        ...body,
+        source: "web",
+      });
 
-    const result = await sendMessage(app.db, request.params.chatId, scope.humanAgentId, prepared, {
-      // Explicit-only contract: the web composer resolves `@<name>` chips
-      // client-side via `segmentMentions(content, participants)` and posts
-      // the resolved uuids in `metadata.mentions`. In 2-speaker chats the
-      // composer auto-injects the peer's uuid so 1:1 typing without an `@`
-      // still reaches the recipient. Either way, `metadata.mentions` is
-      // expected to be non-empty here; the server no longer parses
-      // content. See `services/message.ts` Routing contract.
-      enforceMention: true,
-    });
+      const result = await sendMessage(app.db, request.params.chatId, scope.humanAgentId, prepared, {
+        // Explicit-only contract: the web composer resolves `@<name>` chips
+        // client-side via `segmentMentions(content, participants)` and posts
+        // the resolved uuids in `metadata.mentions`. In 2-speaker chats the
+        // composer auto-injects the peer's uuid so 1:1 typing without an `@`
+        // still reaches the recipient. Either way, `metadata.mentions` is
+        // expected to be non-empty here; the server no longer parses
+        // content. See `services/message.ts` Routing contract.
+        enforceMention: true,
+      });
 
-    notifyRecipients(app.notifier, result.recipients, result.message.id);
+      notifyRecipients(app.notifier, result.recipients, result.message.id);
 
-    return reply.status(201).send({
-      id: result.message.id,
-      chatId: result.message.chatId,
-      senderId: result.message.senderId,
-      format: result.message.format,
-      content: result.message.content,
-      source: result.message.source,
-      createdAt: result.message.createdAt.toISOString(),
-    });
-  });
+      return reply.status(201).send({
+        id: result.message.id,
+        chatId: result.message.chatId,
+        senderId: result.message.senderId,
+        format: result.message.format,
+        content: result.message.content,
+        source: result.message.source,
+        createdAt: result.message.createdAt.toISOString(),
+      });
+    },
+  );
 
   /** POST /chats/:chatId/read — chat-first-workspace read cursor. Idempotent. */
   app.post<{ Params: { chatId: string } }>("/:chatId/read", async (request) => {

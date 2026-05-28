@@ -44,6 +44,7 @@ import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redire
 const SECTION_TO_TAB: Record<DraftSectionName, string> = {
   prompt: "prompt",
   model: "setup",
+  effort: "setup",
   mcp: "tools",
   env: "resources",
   git: "resources",
@@ -492,9 +493,9 @@ export function AgentDetailPage() {
             <Button
               variant="ghost"
               size="xs"
-              onClick={() => navigate(`/?a=${agent.uuid}`)}
-              title="Open chat"
-              aria-label="Open chat"
+              onClick={() => navigate(`/agents/${encodeURIComponent(agent.uuid)}/profile`)}
+              title="Open profile"
+              aria-label="Open profile"
               style={{ paddingLeft: "var(--sp-1_5)", paddingRight: "var(--sp-1_5)" }}
             >
               <MessageSquare className="h-4 w-4" />

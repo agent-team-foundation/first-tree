@@ -1,5 +1,5 @@
 import { Search } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
@@ -19,8 +19,24 @@ const navTabs = [
 export function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
 
+  // ⌘K / Ctrl+K to open the Jump-to palette from anywhere. Listens at
+  // window-level so the shortcut survives inside textareas / editable
+  // surfaces; that mirrors how Linear / GitHub / Slack treat their global
+  // command palette and matches the existing "Jump to…" affordance, which
+  // is the only top-bar control reachable without a click.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const location = useLocation();
-  const isWorkspace = location.pathname === "/" || location.search.includes("a=");
+  const isWorkspace = location.pathname === "/";
   // Settings owns its own two-column (sidebar + main) layout and centres a
   // ~1160 wrapper instead of the default 960 canvas — let it manage its
   // own width.
@@ -142,7 +158,20 @@ export function Layout() {
               }}
             >
               <Search className="h-4 w-4" />
-              <span>Jump to…</span>
+              <span className="flex-1 text-left">Jump to…</span>
+              <span
+                aria-hidden
+                className="text-caption font-mono"
+                style={{
+                  padding: "var(--sp-0_5) var(--sp-1_5)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: "var(--sp-1)",
+                  color: "var(--fg-3)",
+                  background: "var(--bg-raised)",
+                }}
+              >
+                ⌘K
+              </span>
             </button>
             <span
               style={{

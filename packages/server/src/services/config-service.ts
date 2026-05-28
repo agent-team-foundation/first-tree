@@ -1,6 +1,7 @@
 import {
   type AgentRuntimeConfig,
   type AgentRuntimeConfigDryRunResult,
+  type AgentRuntimeConfigPatch,
   type AgentRuntimeConfigPayload,
   agentRuntimeConfigPayloadSchema,
   ENV_REDACTED_PLACEHOLDER,
@@ -25,7 +26,7 @@ type PendingWrite = {
   awaiters: Array<{
     resolve: (cfg: AgentRuntimeConfig) => void;
     reject: (err: unknown) => void;
-    patch: Partial<AgentRuntimeConfigPayload>;
+    patch: AgentRuntimeConfigPatch;
     expectedVersion: number;
     updatedBy: string;
   }>;
@@ -37,7 +38,7 @@ export type ConfigService = {
   /** Get with sensitive env values decrypted — for runtime injection only. */
   getDecrypted(agentId: string): Promise<AgentRuntimeConfig>;
   update(agentId: string, patch: UpdateAgentRuntimeConfig, updatedBy: string): Promise<AgentRuntimeConfig>;
-  dryRun(agentId: string, patch: Partial<AgentRuntimeConfigPayload>): Promise<AgentRuntimeConfigDryRunResult>;
+  dryRun(agentId: string, patch: AgentRuntimeConfigPatch): Promise<AgentRuntimeConfigDryRunResult>;
   /** For tests: flush pending debounced writes immediately. */
   flush(agentId?: string): Promise<void>;
 };
@@ -109,10 +110,7 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
    *     when present in the patch; partial-list edits are an explicit non-goal
    *     for M1 (admins resend the full list — matches the Web form).
    */
-  function applyPatch(
-    current: AgentRuntimeConfigPayload,
-    patch: Partial<AgentRuntimeConfigPayload>,
-  ): AgentRuntimeConfigPayload {
+  function applyPatch(current: AgentRuntimeConfigPayload, patch: AgentRuntimeConfigPatch): AgentRuntimeConfigPayload {
     const next = {
       // `kind` is pinned to `agents.runtime_provider` and never patchable
       // from the config side; preserve the current value here and let
@@ -123,6 +121,9 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
       mcpServers: patch.mcpServers ?? current.mcpServers,
       env: patch.env ? mergeEnv(current.env, patch.env) : current.env,
       gitRepos: patch.gitRepos ?? current.gitRepos,
+      // `patch.reasoningEffort` is a loose string; provider-correct values are
+      // enforced when `commitWrite` re-parses `next` against the tagged union.
+      reasoningEffort: patch.reasoningEffort ?? current.reasoningEffort,
     } as AgentRuntimeConfigPayload;
     return next;
   }
@@ -170,7 +171,7 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
 
   async function commitWrite(
     agentId: string,
-    patch: Partial<AgentRuntimeConfigPayload>,
+    patch: AgentRuntimeConfigPatch,
     expectedVersion: number,
     updatedBy: string,
   ): Promise<AgentRuntimeConfig> {
@@ -247,7 +248,7 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
 
     // Re-build the aggregated patch from only the valid awaiters' patches,
     // so a rejected caller's edit never leaks into the committed payload.
-    const aggregated: Partial<AgentRuntimeConfigPayload> = {};
+    const aggregated: AgentRuntimeConfigPatch = {};
     for (const a of valid) Object.assign(aggregated, a.patch);
 
     try {
@@ -368,7 +369,7 @@ function computeDiff(
   b: AgentRuntimeConfigPayload,
 ): AgentRuntimeConfigDryRunResult["diff"] {
   const out: AgentRuntimeConfigDryRunResult["diff"] = [];
-  const fields = ["prompt", "model", "mcpServers", "env", "gitRepos"] as const;
+  const fields = ["prompt", "model", "mcpServers", "env", "gitRepos", "reasoningEffort"] as const;
   for (const f of fields) {
     const before = a[f];
     const after = b[f];

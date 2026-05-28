@@ -1,6 +1,6 @@
 import {
   type AgentRuntimeConfig,
-  type AgentRuntimeConfigPayload,
+  type AgentRuntimeConfigPatch,
   ENV_REDACTED_PLACEHOLDER,
   type EnvEntry,
   type GitRepo,
@@ -30,12 +30,13 @@ export type DraftListItem<T> = {
 export type ConfigDraft = {
   promptAppend: string;
   model: string;
+  reasoningEffort: string;
   mcp: Array<DraftListItem<McpServer>>;
   env: Array<DraftListItem<EnvEntry>>;
   git: Array<DraftListItem<GitRepo>>;
 };
 
-export type DraftSectionName = "prompt" | "model" | "mcp" | "env" | "git";
+export type DraftSectionName = "prompt" | "model" | "effort" | "mcp" | "env" | "git";
 
 export type DraftSummary = {
   anyDirty: boolean;
@@ -114,6 +115,7 @@ export function createConfigDraft(cfg: AgentRuntimeConfig): ConfigDraft {
   return {
     promptAppend: cfg.payload.prompt.append,
     model: cfg.payload.model,
+    reasoningEffort: cfg.payload.reasoningEffort,
     mcp: toListItems(cfg.payload.mcpServers, "mcp"),
     env: toListItems(cfg.payload.env, "env"),
     git: toListItems(cfg.payload.gitRepos, "git"),
@@ -125,10 +127,13 @@ export type UseConfigDraftResult = {
   summary: DraftSummary;
   promptDirty: boolean;
   modelDirty: boolean;
+  reasoningEffortDirty: boolean;
   setPromptAppend: (v: string) => void;
   revertPrompt: () => void;
   setModel: (v: string) => void;
   revertModel: () => void;
+  setReasoningEffort: (v: string) => void;
+  revertReasoningEffort: () => void;
   addMcp: (value: McpServer) => void;
   updateMcp: (key: string, value: McpServer) => void;
   deleteMcp: (key: string) => void;
@@ -145,7 +150,7 @@ export type UseConfigDraftResult = {
   /** Replace the draft with a clean baseline from a known server config. */
   resetToConfig: (next: AgentRuntimeConfig) => void;
   /** PATCH body (payload only — expectedVersion is added by caller). */
-  buildPayloadPatch: () => Partial<AgentRuntimeConfigPayload>;
+  buildPayloadPatch: () => AgentRuntimeConfigPatch;
 };
 
 export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDraftResult {
@@ -165,12 +170,14 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
     }
   }, [cfg, draft]);
 
-  const current: ConfigDraft = draft ?? { promptAppend: "", model: "", mcp: [], env: [], git: [] };
+  const current: ConfigDraft = draft ?? { promptAppend: "", model: "", reasoningEffort: "", mcp: [], env: [], git: [] };
 
   const baselinePrompt = baseline?.payload.prompt.append ?? "";
   const baselineModel = baseline?.payload.model ?? "";
+  const baselineReasoningEffort = baseline?.payload.reasoningEffort ?? "";
   const promptDirty = current.promptAppend !== baselinePrompt;
   const modelDirty = current.model !== baselineModel;
+  const reasoningEffortDirty = current.reasoningEffort !== baselineReasoningEffort;
 
   const summary: DraftSummary = useMemo(() => {
     const dirty: DraftSectionName[] = [];
@@ -181,6 +188,7 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
     const gitN = listCount(current.git);
     if (promptDirty) dirty.push("prompt");
     if (modelDirty) dirty.push("model");
+    if (reasoningEffortDirty) dirty.push("effort");
     if (mcpN > 0) dirty.push("mcp");
     if (envN > 0) dirty.push("env");
     if (gitN > 0) dirty.push("git");
@@ -190,12 +198,13 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
       counts: {
         prompt: promptDirty ? 1 : 0,
         model: modelDirty ? 1 : 0,
+        effort: reasoningEffortDirty ? 1 : 0,
         mcp: mcpN,
         env: envN,
         git: gitN,
       },
     };
-  }, [current, promptDirty, modelDirty]);
+  }, [current, promptDirty, modelDirty, reasoningEffortDirty]);
 
   const mutate = useCallback((fn: (d: ConfigDraft) => ConfigDraft) => {
     setDraft((prev) => (prev ? fn(prev) : prev));
@@ -209,6 +218,12 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
 
   const setModel = useCallback((v: string) => mutate((d) => ({ ...d, model: v })), [mutate]);
   const revertModel = useCallback(() => mutate((d) => ({ ...d, model: baselineModel })), [mutate, baselineModel]);
+
+  const setReasoningEffort = useCallback((v: string) => mutate((d) => ({ ...d, reasoningEffort: v })), [mutate]);
+  const revertReasoningEffort = useCallback(
+    () => mutate((d) => ({ ...d, reasoningEffort: baselineReasoningEffort })),
+    [mutate, baselineReasoningEffort],
+  );
 
   const mcpOps = useMemo(() => makeListOps<McpServer>("mcp", mutate), [mutate]);
   const envOps = useMemo(() => makeListOps<EnvEntry>("env", mutate), [mutate]);
@@ -227,11 +242,12 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
     setDraft(createConfigDraft(next));
   }, []);
 
-  const buildPayloadPatch = useCallback((): Partial<AgentRuntimeConfigPayload> => {
+  const buildPayloadPatch = useCallback((): AgentRuntimeConfigPatch => {
     if (!draft || !baseline) return {};
-    const patch: Partial<AgentRuntimeConfigPayload> = {};
+    const patch: AgentRuntimeConfigPatch = {};
     if (promptDirty) patch.prompt = { append: draft.promptAppend };
     if (modelDirty) patch.model = draft.model;
+    if (reasoningEffortDirty) patch.reasoningEffort = draft.reasoningEffort;
     const mcpDirty = summary.counts.mcp > 0;
     const envDirty = summary.counts.env > 0;
     const gitDirty = summary.counts.git > 0;
@@ -249,17 +265,20 @@ export function useConfigDraft(cfg: AgentRuntimeConfig | undefined): UseConfigDr
     }
     if (gitDirty) patch.gitRepos = draft.git.filter((i) => i.status !== "deleted").map((i) => i.value);
     return patch;
-  }, [draft, baseline, promptDirty, modelDirty, summary]);
+  }, [draft, baseline, promptDirty, modelDirty, reasoningEffortDirty, summary]);
 
   return {
     draft: current,
     summary,
     promptDirty,
     modelDirty,
+    reasoningEffortDirty,
     setPromptAppend,
     revertPrompt,
     setModel,
     revertModel,
+    setReasoningEffort,
+    revertReasoningEffort,
     addMcp: mcpOps.add,
     updateMcp: mcpOps.update,
     deleteMcp: mcpOps.remove,

@@ -11,7 +11,15 @@ import {
 } from "../runtime/session-manager.js";
 
 function payload(gitRepos: AgentRuntimeConfigPayload["gitRepos"]): AgentRuntimeConfigPayload {
-  return { kind: "claude-code", prompt: { append: "" }, model: "", mcpServers: [], env: [], gitRepos };
+  return {
+    kind: "claude-code",
+    prompt: { append: "" },
+    model: "",
+    mcpServers: [],
+    env: [],
+    gitRepos,
+    reasoningEffort: "",
+  };
 }
 
 const PER_CHAT = "/data/workspaces/agent/chat-123";
