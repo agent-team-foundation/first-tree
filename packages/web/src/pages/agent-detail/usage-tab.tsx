@@ -15,10 +15,25 @@ const ACTIVITY_GRID_DAYS = 90;
  *   1. KPI strip      — window totals (driven by 7d/30d selector)
  *   2. Activity grid  — fixed 90d daily density (always-on, ignores selector)
  *   3. Recent turns   — paginated per-turn detail with deep-link back to chat
+ *
+ * Summary query is lifted here so the KPI block + activity grid share one
+ * `/usage/summary` round-trip (review nit R4). Backend always
+ * returns the trailing-90d `daily` series regardless of `from`, so the same
+ * response feeds both surfaces.
  */
 export function UsageTab(): ReactElement {
   const ctx = useAgentDetailContext();
   const [window, setWindow] = useState<UsageWindow>("30d");
+
+  // Shared summary query — `totals` honours `window`, `daily` is always
+  // trailing-90d. Both KPI and Activity grid read from the same data.
+  const summaryQuery = useQuery({
+    queryKey: ["usage-summary", ctx.agent.uuid, window],
+    queryFn: () => getAgentUsageSummary(ctx.agent.uuid, window),
+    enabled: !ctx.isHuman,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
 
   if (ctx.isHuman) {
     return (
@@ -33,44 +48,53 @@ export function UsageTab(): ReactElement {
 
   return (
     <>
-      <SummaryBlock agentId={ctx.agent.uuid} window={window} onWindowChange={setWindow} />
-      <ActivityGridBlock agentId={ctx.agent.uuid} />
+      <SummaryBlock
+        window={window}
+        onWindowChange={setWindow}
+        data={summaryQuery.data}
+        isLoading={summaryQuery.isLoading}
+        isError={summaryQuery.isError}
+      />
+      <ActivityGridBlock data={summaryQuery.data} isLoading={summaryQuery.isLoading} isError={summaryQuery.isError} />
       <RecentTurnsBlock agentId={ctx.agent.uuid} window={window} />
     </>
   );
 }
 
 function SummaryBlock({
-  agentId,
   window,
   onWindowChange,
+  data,
+  isLoading,
+  isError,
 }: {
-  agentId: string;
   window: UsageWindow;
   onWindowChange: (next: UsageWindow) => void;
+  data: UsageAgentSummary | undefined;
+  isLoading: boolean;
+  isError: boolean;
 }): ReactElement {
-  const summaryQuery = useQuery({
-    queryKey: ["usage-summary", agentId, window],
-    queryFn: () => getAgentUsageSummary(agentId, window),
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-  });
-  const totals = summaryQuery.data?.totals;
+  const totals = data?.totals;
   const totalTokens = totals ? totals.inputTokens + totals.cachedInputTokens + totals.outputTokens : null;
-
   return (
     <Section title="Token Usage" action={<WindowPicker window={window} onChange={onWindowChange} />}>
-      <div className="grid" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "var(--sp-4)" }}>
-        <Kpi label={`Tokens (${window})`} value={formatCompactCount(totalTokens)} loading={summaryQuery.isLoading} />
-        <Kpi label="Turns" value={formatCompactCount(totals?.turns ?? null)} loading={summaryQuery.isLoading} />
-        <Kpi label="Chats" value={formatCompactCount(totals?.chats ?? null)} loading={summaryQuery.isLoading} />
-        <Kpi label="Last active" value={formatRelative(totals?.lastUsageAt ?? null)} loading={summaryQuery.isLoading} />
-      </div>
-      {totals?.inputTokens !== undefined && totalTokens !== null && totalTokens > 0 && (
-        <p className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-3)" }}>
-          Input {formatCompactCount(totals.inputTokens)} · Cached {formatCompactCount(totals.cachedInputTokens)} ·
-          Output {formatCompactCount(totals.outputTokens)}
-        </p>
+      {isError ? (
+        <ErrorRow message="Failed to load usage summary." />
+      ) : (
+        <>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "var(--sp-4)" }}>
+            <Kpi label={`Tokens (${window})`} value={formatCompactCount(totalTokens)} loading={isLoading} />
+            <Kpi label="Turns" value={formatCompactCount(totals?.turns ?? null)} loading={isLoading} />
+            <Kpi label="Chats" value={formatCompactCount(totals?.chats ?? null)} loading={isLoading} />
+            <Kpi label="Last active" value={formatRelative(totals?.lastUsageAt ?? null)} loading={isLoading} />
+          </div>
+          {totals && totalTokens !== null && totalTokens > 0 && (
+            <p className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-3)" }}>
+              Input {formatCompactCount(totals.inputTokens)} · Cached {formatCompactCount(totals.cachedInputTokens)} ·
+              Output {formatCompactCount(totals.outputTokens)}
+            </p>
+          )}
+        </>
       )}
     </Section>
   );
@@ -124,20 +148,18 @@ function WindowPicker({
   );
 }
 
-function ActivityGridBlock({ agentId }: { agentId: string }): ReactElement {
-  // Fixed-90d query that does not change with the KPI window picker —
-  // the grid is the "long-horizon density" view; if it followed the
-  // selector to 7d, 83 of 90 cells would always be grey and the grid
-  // would stop conveying anything.
-  const summaryQuery = useQuery({
-    queryKey: ["usage-summary", agentId, "30d"],
-    queryFn: () => getAgentUsageSummary(agentId, "30d"),
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-  });
+function ActivityGridBlock({
+  data,
+  isLoading,
+  isError,
+}: {
+  data: UsageAgentSummary | undefined;
+  isLoading: boolean;
+  isError: boolean;
+}): ReactElement {
   return (
     <Section title="Activity (last 90 days)">
-      <ActivityGrid summary={summaryQuery.data} loading={summaryQuery.isLoading} />
+      {isError ? <ErrorRow message="Failed to load activity." /> : <ActivityGrid summary={data} loading={isLoading} />}
     </Section>
   );
 }
@@ -172,7 +194,6 @@ function ActivityGrid({
     days.push({ date: iso, tokens: byDate.get(iso) ?? 0 });
   }
   const max = Math.max(1, ...days.map((d) => d.tokens));
-  // Five buckets (0..4). 0 reserved for zero; 1..4 split log-scaled max.
   function bucket(t: number): 0 | 1 | 2 | 3 | 4 {
     if (t <= 0) return 0;
     const r = Math.log10(1 + t) / Math.log10(1 + max);
@@ -183,19 +204,16 @@ function ActivityGrid({
   }
   const colors: Record<0 | 1 | 2 | 3 | 4, string> = {
     0: "var(--bg-sunken)",
-    1: "var(--accent-bg)",
-    2: "color-mix(in oklch, var(--accent) 35%, var(--bg-sunken))",
-    3: "color-mix(in oklch, var(--accent) 65%, var(--bg-sunken))",
-    4: "var(--accent)",
+    1: "var(--brand-bg)",
+    2: "color-mix(in oklch, var(--brand) 35%, var(--bg-sunken))",
+    3: "color-mix(in oklch, var(--brand) 65%, var(--bg-sunken))",
+    4: "var(--brand)",
   };
   return (
     <div>
       <div
         className="grid"
-        style={{
-          gridTemplateColumns: `repeat(${ACTIVITY_GRID_DAYS}, minmax(0, 1fr))`,
-          gap: "var(--hairline)",
-        }}
+        style={{ gridTemplateColumns: `repeat(${ACTIVITY_GRID_DAYS}, minmax(0, 1fr))`, gap: "var(--hairline)" }}
       >
         {days.map((d) => {
           const b = bucket(d.tokens);
@@ -213,9 +231,6 @@ function ActivityGrid({
           );
         })}
       </div>
-      <p className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-2)" }}>
-        Darker = more input tokens that day · Data since 2026-05-28
-      </p>
     </div>
   );
 }
@@ -239,12 +254,7 @@ function RecentTurnsBlock({ agentId, window }: { agentId: string; window: UsageW
             type="button"
             onClick={() => void turnsQuery.fetchNextPage()}
             className="text-caption font-semibold"
-            style={{
-              background: "transparent",
-              border: 0,
-              cursor: "pointer",
-              color: "var(--accent)",
-            }}
+            style={{ background: "transparent", border: 0, cursor: "pointer", color: "var(--primary)" }}
             disabled={turnsQuery.isFetchingNextPage}
           >
             {turnsQuery.isFetchingNextPage ? "Loading…" : "Load more"}
@@ -252,7 +262,9 @@ function RecentTurnsBlock({ agentId, window }: { agentId: string; window: UsageW
         ) : null
       }
     >
-      {turnsQuery.isLoading ? (
+      {turnsQuery.isError ? (
+        <ErrorRow message="Failed to load recent turns." />
+      ) : turnsQuery.isLoading ? (
         <p className="text-caption" style={{ color: "var(--fg-4)" }}>
           Loading…
         </p>
@@ -295,7 +307,7 @@ function TurnsTable({ rows }: { rows: UsageTurnRow[] }): ReactElement {
                     background: "transparent",
                     border: 0,
                     cursor: "pointer",
-                    color: "var(--accent)",
+                    color: "var(--primary)",
                     padding: 0,
                   }}
                 >
@@ -321,5 +333,18 @@ function TurnsTable({ rows }: { rows: UsageTurnRow[] }): ReactElement {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/**
+ * Inline error placeholder for failed usage queries. Made distinct from
+ * the empty-state copy so an actual outage (network / 401 / 5xx) doesn't
+ * read as "no data" — review nit R3 flagged this as an audit-blocker.
+ */
+function ErrorRow({ message }: { message: string }): ReactElement {
+  return (
+    <p className="text-caption" style={{ color: "var(--state-error)" }}>
+      {message}
+    </p>
   );
 }

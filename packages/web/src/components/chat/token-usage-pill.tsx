@@ -14,10 +14,11 @@ import { formatCompactCount } from "../../lib/utils.js";
  * for spend are already looking; everyone else mostly scrolls past it.
  */
 export function TokenUsagePill({ event }: { event: SessionEventRow }): React.ReactElement | null {
-  // Payload shape comes from `tokenUsageEventPayload` (shared schema). We
-  // narrow defensively — older clients pre-PR-637 won't emit this event at
-  // all, but if a payload arrives with surprise shape we degrade silently
-  // rather than crash the timeline.
+  // Payload shape comes from `tokenUsageEventPayload` (shared schema). The
+  // pill is an audit primitive — "this turn cost N tokens" — so we fail
+  // closed: any missing-or-wrong-type field hides the pill entirely rather
+  // than rendering a placeholder zero. Silent zeros would read as "this
+  // turn was free", polluting the audit trail (review nit R2).
   if (typeof event.payload !== "object" || event.payload === null) return null;
   const p = event.payload as {
     inputTokens?: unknown;
@@ -26,13 +27,24 @@ export function TokenUsagePill({ event }: { event: SessionEventRow }): React.Rea
     provider?: unknown;
     model?: unknown;
   };
-  const input = typeof p.inputTokens === "number" ? p.inputTokens : 0;
-  const cached = typeof p.cachedInputTokens === "number" ? p.cachedInputTokens : 0;
-  const output = typeof p.outputTokens === "number" ? p.outputTokens : 0;
+  if (
+    typeof p.inputTokens !== "number" ||
+    typeof p.cachedInputTokens !== "number" ||
+    typeof p.outputTokens !== "number"
+  ) {
+    return null;
+  }
+  const input = p.inputTokens;
+  const cached = p.cachedInputTokens;
+  const output = p.outputTokens;
   const provider = typeof p.provider === "string" ? p.provider : "";
   const model = typeof p.model === "string" ? p.model : "";
 
   const total = input + cached + output;
+  // A turn that genuinely reported zero tokens across all three buckets is
+  // not a real turn we want to flag — drop the pill rather than render a
+  // misleading "0 tokens" badge.
+  if (total === 0) return null;
   const title = [
     `${provider}${model ? `/${model}` : ""}`,
     `Input ${input.toLocaleString()}`,
