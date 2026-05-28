@@ -1,14 +1,25 @@
 import { readFileSync } from "node:fs";
 import { fail } from "../../../cli/output.js";
+import { readStdin } from "../../chat/_shared/io.js";
 
 /**
- * Resolve a `--body` flag value. The `@file` syntax loads from disk so
- * agents can attach long markdown bodies without shell-quoting hell;
- * everything else is taken as the literal body text. `undefined` yields
- * the empty string — matching `raiseAttentionInputSchema.body`'s default.
+ * Resolve a `--body` flag value. Accepts: literal text, `@path/to/file.md`
+ * to load from disk, or `@-` / omitted-flag-with-piped-stdin to read from
+ * stdin. `undefined` with a TTY stdin yields the empty string — matching
+ * `raiseAttentionInputSchema.body`'s default.
  */
-export function resolveBody(raw: string | undefined): string {
-  if (raw === undefined) return "";
+export async function resolveBody(raw: string | undefined): Promise<string> {
+  if (raw === undefined) {
+    const piped = await readStdin();
+    return piped ?? "";
+  }
+  if (raw === "@-") {
+    const piped = await readStdin();
+    if (piped === null) {
+      fail("BODY_READ_FAILED", "`--body @-` requires piped stdin (no TTY).", 2);
+    }
+    return piped;
+  }
   if (raw.startsWith("@")) {
     const path = raw.slice(1);
     try {
