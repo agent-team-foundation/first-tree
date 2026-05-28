@@ -1,0 +1,347 @@
+# First Tree — Web Design System
+
+> Source of truth for the React admin dashboard (`packages/web`).
+> Distilled from the live system: [`src/index.css`](src/index.css),
+> [`src/components/ui/`](src/components/ui), and
+> [`scripts/check-design-tokens.sh`](scripts/check-design-tokens.sh).
+>
+> **One rule above all:** components never hardcode color, size, spacing, or
+> typography. Everything references a token defined in `index.css`. This is not
+> a style guideline — it is enforced by a linter that fails the build (see
+> [Enforcement](#enforcement)).
+
+---
+
+## Design language
+
+> Implementation status, the gap vs the current build, and the step-by-step
+> migration plan live in **[DESIGN-AUDIT.md](DESIGN-AUDIT.md)**. This document
+> describes the design system itself.
+
+**Four pillars:**
+
+1. **Near-monochrome, content-first.** The UI is grays + near-black / near-white.
+   Color is rare and always *means* something — it never decorates.
+2. **Neutral primary.** Primary actions (buttons, send, primary CTAs, selected
+   state) use a **neutral** tone — near-black in light, near-white in dark
+   (auto-inverting). Not green, not blue. (Linear / Vercel restraint.)
+3. **Green = signature + success only.** The brand green lives on the logo, on
+   Context-Tree surfaces (node glyphs, "writing to tree"), and on `success`
+   semantics. It is **never** the generic button / link / selected color — that
+   collision (brand == success == idle) is exactly what this strategy retires.
+4. **Lark / Arco craft, not Lark color.** Borrow the *discipline* — a neutral
+   gray token ramp, hairline borders, soft low-opacity elevation, thin line
+   icons, search + underline tabs, rounded-square avatars, comfortable aligned
+   spacing, a right Session sidebar. Do **not** borrow Feishu's blue primary.
+
+**Semantic color map — the only places color appears:**
+
+| Meaning | Color |
+|---------|-------|
+| primary action / selected | neutral (near-black ↔ near-white) |
+| brand / Context-Tree | green (`--brand`) |
+| success / passing | green (`--success`) |
+| working / processing | blue |
+| blocked / waiting | amber |
+| error / attention | red |
+| idle / standby | neutral |
+| offline | dim neutral |
+
+Per-agent **avatars** keep their own identity hues (wayfinding, not brand).
+
+---
+
+## 1. Principles
+
+- **Single source of truth.** `index.css` is the only file allowed to define
+  raw values. Every other file in `src/` references tokens. `index.css` is the
+  one file exempt from the guardrail scan.
+- **Semantic over raw.** Components reference *intent* (`text-secondary`,
+  `surface-raised`, `state-error`) — not appearance (`gray-500`, `#fff`,
+  `red-600`). Re-theming happens in one place.
+- **Dense by default.** This is a control-room dashboard for agent teams, not a
+  marketing site. The type scale tops out at 16px for app chrome; large type is
+  reserved for the public landing surface.
+- **OkLCH everywhere.** All colors are authored in OkLCH for perceptual
+  uniformity — matched lightness/chroma reads with consistent visual weight
+  across hues, and light↔dark inversion stays balanced.
+- **Cross-platform stable.** Self-hosted fonts, fallback metric-matching, and
+  a CSS spacing ladder keep rendering identical on macOS / Windows / Linux and
+  offline.
+
+---
+
+## 2. Enforcement
+
+`pnpm --filter @first-tree/web lint:tokens` runs as part of `typecheck` and
+fails the build on the first violation. It bans, across all `*.ts` / `*.tsx`
+in `src/` (except `index.css`):
+
+| # | Banned | Use instead |
+|---|--------|-------------|
+| 1 | Raw `Npx` literals | `--sp-*`, `--hairline`, or Tailwind spacing utilities |
+| 2 | `#hex`, `rgb()`, `rgba()` | `--color-*` tokens / `oklch()` |
+| 3 | Tailwind palette classes (`text-gray-500`, `bg-red-50`, …) | semantic color tokens |
+| 4 | font-weights outside 400/500/600/700 | the four allowed weights |
+| 5 | Inline `fontSize`/`fontWeight`/`fontFamily`/`lineHeight`/`letterSpacing` | `text-*` tier + `font-*` class |
+| 6 | Tailwind default text sizes (`text-sm`, `text-xl`, …) | the 6-tier semantic scale |
+
+If you need a value the tokens don't cover, **add a token to `index.css`** —
+don't inline the literal.
+
+---
+
+## 3. Color
+
+Defined as raw values on `:root` (light) and `.dark` (dark), then exposed
+through semantic aliases in the Tailwind v4 `@theme` block. Components only
+ever touch the semantic layer.
+
+### Primary & brand
+| Token | Value | Role |
+|-------|-------|------|
+| `--primary` | neutral — near-black (light) / near-white (dark), auto-inverting | primary actions, send, primary CTAs, selected state |
+| `--brand` | green `oklch(0.72 0.17 150)` | logo, Context-Tree surfaces, brand moments — **never** a generic action / link / selected color |
+
+Color is sparse and meaningful: most of the UI is neutral, and the green only
+appears where it signals brand or success.
+
+The short `--fg*` / `--bg*` / `--border*` names below are canonical; write those.
+
+### Text (foreground)
+`--fg` (primary) → `--fg-2` (secondary) → `--fg-3` (tertiary) → `--fg-4`
+(disabled). Four steps, descending emphasis. `--fg-on-vivid` (near-white) is
+for text sitting on a saturated colored surface (badges, avatars) and does
+**not** invert in dark mode.
+
+### Surfaces (background)
+`--bg` (base) · `--bg-raised` · `--bg-sunken` · `--bg-hover` · `--bg-active`.
+
+### Borders
+`--border-faint` (subtle) · `--border` (default) · `--border-strong` (emphasis).
+
+### State / status (agent-centric)
+| Token | Hue | Meaning |
+|-------|-----|---------|
+| `--state-idle` | cool neutral `240` | idle / standby |
+| `--state-working` | cyan `195` | actively working |
+| `--state-blocked` | amber `75` | blocked |
+| `--state-error` | red `25` | error |
+| `--state-offline` | neutral | offline |
+| `--state-unread` | = error | notification/attention (kept separate identifier on purpose) |
+
+### Feedback / severity
+A named set, aliased to shared base hues (one value per color):
+`--success` (green, = brand hue) · `--warning` (amber) · `--danger` (red).
+
+### Inline callouts (notices)
+Each state ships a **soft** background + a **strong** text/border tone, so you
+never reach for `bg-red-50 / text-red-900`:
+`--color-error` / `--color-error-soft`, `--color-warn` / `--color-warn-soft`,
+`--color-success` / `--color-success-soft`.
+
+### Overlay
+`--color-overlay-scrim` — dialog/lightbox scrim (`oklch(0 0 0 / 0.55)`,
+uniform in both modes). Replaces hardcoded `rgba(0,0,0,…)`.
+
+### shadcn-compat aliases
+`--color-background/foreground/card/primary/secondary/muted/destructive/
+border/input/ring` are preserved so shadcn-shaped components keep working —
+prefer the short semantic names above in new code.
+
+---
+
+## 4. Typography
+
+Six dense tiers for app chrome (each bundles size + line-height +
+letter-spacing + weight), generating `.text-eyebrow … .text-title` utilities.
+Three marketing tiers for the public landing page only.
+
+| Tier | Size | Weight | Typical use |
+|------|------|--------|-------------|
+| `text-eyebrow` | 10px | 600 | all-caps kickers (0.1em tracking) |
+| `text-caption` | 10px | 500 | dense metadata |
+| `text-label` | 11px | 500 | form labels, chips |
+| `text-body` | 12px | 400 | body copy, buttons |
+| `text-subtitle` | 13px | 600 | row titles (**default body size**) |
+| `text-title` | 16px | 600 | section / page titles |
+| `text-live` | 32px | 600 | the "live" status hero number |
+| — marketing — | | | |
+| `text-lead` | 18px | 400 | landing lead copy |
+| `text-headline` | 24px | 600 | landing section headings |
+| `text-display` | `clamp(2.5rem, 6vw, 3.75rem)` | 600 | landing hero |
+
+**Only weights 400 / 500 / 600 / 700 exist.** Numerics use `tabular-nums`
+(`.tnum`); mono uses `--font-mono` with `ss01/ss02` features.
+
+---
+
+## 5. Spacing & radius
+
+**Spacing** — Tailwind utilities first; for compound inline `padding`/`gap`
+strings that can't be classes, use the `--sp-*` ladder (mirror of Tailwind:
+`--sp-N ≈ N × 0.25rem`, with 2/6/10/14px half-steps), range `--sp-0` →
+`--sp-240` (960px). Hairlines: `--hairline` (1px) / `--hairline-bold` (2px) —
+never write `"1px"`.
+
+**Radius** — semantic, ascending with surface importance:
+| Token | Value | Use |
+|-------|-------|-----|
+| `--radius-chip` | 3px | chips, pills, xs buttons |
+| `--radius-input` | 4px | inputs, default buttons |
+| `--radius-panel` | 6px | cards, panels |
+| `--radius-dialog` | 8px | dialogs, overlays |
+
+These four are the only radius tokens — reference them directly
+(`rounded-[var(--radius-panel)]`) or via the matching utilities.
+
+---
+
+## 6. Surfaces & elevation
+
+Three utility classes consolidate the background+border+radius+shadow combos
+(prefer these over hand-rolling):
+
+- `.surface-raised` — raised bg + 1px border + `--radius-panel` (cards/panels)
+- `.surface-sunken` — recessed bg (wells, inset areas)
+- `.surface-overlay` — raised bg + border + `--radius-dialog` + `--shadow-md`
+  (dialogs, popovers)
+
+Shadows are tokens: `--shadow-sm`, `--shadow-md` (deeper in dark mode).
+
+---
+
+## 7. Components
+
+~31 primitives in [`src/components/ui/`](src/components/ui), built on
+**Radix** (Dialog, Label, Slot, Popover) + **CVA** for variants +
+`cn()` (clsx + tailwind-merge) for class composition. No shadcn/MUI/Chakra —
+this is a bespoke system on Tailwind v4 + Radix.
+
+**Variant pattern** (every variant-bearing component follows this — see
+[`button.tsx`](src/components/ui/button.tsx),
+[`badge.tsx`](src/components/ui/badge.tsx)):
+
+```ts
+const buttonVariants = cva("…base classes…", {
+  variants: { variant: { default, destructive, outline, secondary, ghost, link },
+              size:    { default, sm, xs, lg, icon } },
+  defaultVariants: { variant: "default", size: "default" },
+});
+```
+
+`Button` sizes: `default` (h-9) · `sm` (h-8) · `xs` (h-7, chip radius) ·
+`lg` (h-10) · `icon` (9×9). `asChild` via Radix `Slot`.
+
+**Inventory** (representative):
+- **Actions / inputs:** Button, Input, Label, SegmentedControl, FilterPill,
+  Command (cmdk), RowActionsMenu
+- **Containers / layout:** Card, Panel, Section, Tile, SettingsField, PageHeader,
+  SectionHeader, FlatSectionHeader, TabBar
+- **Data:** Table, DenseTable, Breadcrumb, Markdown
+- **Status / presence:** Badge, DenseBadge, StateChip, StateDot, StatusGlyph,
+  PresenceChip, AgentStatusChip
+- **Overlay / feedback:** Dialog, Popover, Toast
+- **Theming:** ThemeToggle
+
+---
+
+## 8. Iconography
+
+`lucide-react` only — single icon set, no custom glyphs or icon fonts. Keeps
+stroke weight and sizing consistent everywhere.
+
+---
+
+## 9. Motion
+
+Keyframes live in `index.css` (not inline) so `prefers-reduced-motion` can
+override them — **every animation has a reduced-motion fallback**. Vocabulary:
+
+- **Status pulses** — opacity-led dot breathing (no concentric rings, so a
+  roster column stays pixel-aligned): `--working` 1.4s (faster, "alive"),
+  `--needs-you` 1.9s (calmer, "waiting for you").
+- **Arrival** — `.fade-in` (180ms rise), `toast-slide-in`, feed slide+flash on
+  fresh rows.
+- **Live/ambient** — halo breathe, ring pulse, typing-dot wave for "producing
+  output now".
+- **Standard easing** — `ease-out` for entrances; `cubic-bezier(0.2,0.8,0.2,1)`
+  for slides. Transitions ~120–180ms.
+
+---
+
+## 10. Theming
+
+Class-based: `.dark` on `<html>`, persisted to `localStorage`, falling back to
+`prefers-color-scheme`. Toggle in [`theme-toggle.tsx`](src/components/ui/theme-toggle.tsx).
+
+Three palettes share the **same variable names** (so every utility inherits
+automatically):
+1. **Light** (`:root`) — near-white green-tinted canvas, dark ink.
+2. **Dark** (`.dark`) — green-tinted near-black, light ink; deeper shadows;
+   higher-lightness callout text for contrast.
+3. **Marketing** (`.landing-marketing`) — pinned to the first-tree.ai brand:
+   near-black `#040404` canvas + cool-tinted light text, regardless of the
+   dashboard toggle. `color-scheme: dark`. Same green accent.
+
+---
+
+## 11. Fonts
+
+Self-hosted variable woff2 from `/public/fonts` (no Google Fonts network dep,
+no FOUT flash, works offline). Latin + Latin-Extended subsets; CJK falls
+through to system fonts.
+
+- **Sans:** Inter (400–700) → `Inter Fallback` (Arial, metric size-adjusted for
+  FOUT stability) → system stack (incl. PingFang SC / Microsoft YaHei for CJK).
+- **Mono:** JetBrains Mono (400–600) → ui-monospace stack.
+
+Body defaults: 13px / 1.45, `cv11 ss01 ss03` features, `tabular-nums`,
+antialiased, `font-synthesis: none`.
+
+---
+
+## 12. Avatars
+
+Per-agent identity color: 8 perceptually-balanced OkLCH hues
+(`--avatar-hue-0…7`, matched L/C) at the same visual weight. Same agent →
+same hue everywhere, via `pickAvatarHue(agentId)` /
+`resolveAvatarHue()` (manager-set token, else deterministic hash of agentId).
+White-ish initials (`--fg-on-vivid`) clear WCAG AA on every hue in both modes.
+**Add new hues in the `index.css` block, not at the call site.**
+
+---
+
+## 13. Accessibility
+
+- `--fg-on-vivid` initials and callout pairs are AA-checked in both themes.
+- Every animation respects `prefers-reduced-motion: reduce`.
+- Radix primitives provide focus management / ARIA for Dialog, Popover, Label.
+- Focus is visible: `focus-visible:ring-1 ring-ring` on interactive controls;
+  custom radio/checkbox cards surface a ring on `:focus-within` (the real input
+  is `sr-only`).
+- Scrollbars are styled thin/consistent cross-platform to avoid layout jump.
+
+---
+
+## 14. Extending the system
+
+1. **Need a new value?** Add a token to `index.css` — never inline a literal.
+   Put it in the right block (`@theme` for utility-generating tokens, `:root` /
+   `.dark` for raw mode-specific values).
+2. **Need a new component?** Build it in `src/components/ui/`, compose with
+   `cva` + `cn`, reference Radix for any interactive/overlay behavior, and only
+   use tokenized classes.
+3. **Re-run the guardrail:** `pnpm --filter @first-tree/web lint:tokens`.
+4. **Color authoring is OkLCH.** Keep lightness/chroma matched to neighbors so
+   visual weight stays even.
+
+---
+
+## Status & roadmap
+
+Current implementation status, the gap vs this design language, the phased
+migration plan, and known gaps all live in **[DESIGN-AUDIT.md](DESIGN-AUDIT.md)**.
+
+**Visual reference:** the living styleguide at `/preview/styleguide`
+(`src/pages/styleguide-preview.tsx`).
