@@ -1,0 +1,209 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { SessionEvent } from "@first-tree/shared";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+/**
+ * Regression test for the `claude_socket_closed` transient retry path.
+ *
+ * Reported bug: a Claude SDK "wrapped" stream-API error (subtype=`success`
+ * payload whose `result` text is `"API Error: The socket connection was
+ * closed unexpectedly..."`) was correctly classified `transient/
+ * claude_socket_closed` and triggered the auto-resume branch — but the
+ * old `respawnQuery()` only rebuilt the SDK query and left the new
+ * `InputController` empty. With no user prompt in the iterable the SDK
+ * subprocess just hung idle (resume mode loads conversation history but
+ * still needs a fresh user message to drive the next turn), so the agent
+ * appeared to stall mid-conversation with no further log output and no
+ * recovery.
+ *
+ * Contract this test pins:
+ *   1. On the first transient stream-error, the handler enters the
+ *      retry path (logs `Attempting auto-resume`).
+ *   2. The rebuilt query receives the SAME user message that was pushed
+ *      against the failing query — verified by capturing every SDK
+ *      input message across all `query()` calls and asserting the
+ *      original prompt shows up at least twice (once per attempt).
+ *   3. After the second attempt also fails transient + retries exhaust,
+ *      the handler surfaces the error + acks (per PR #612 § "permanent
+ *      → ack").
+ */
+
+const ORIGINAL_PROMPT = "please reply";
+const FAKE_API_ERROR_TEXT =
+  "API Error: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
+
+// Capture every user prompt pushed into the SDK input controller across
+// retries. Each `query()` call enqueues its own slice; we concatenate
+// them in observation order so the test can assert the same prompt was
+// replayed on the second attempt.
+const observedInputMessages: Array<{ attempt: number; content: string }> = [];
+
+function makeWrappedStreamErrorQuery(
+  promptIterable: AsyncIterable<{ message: { content: unknown } }>,
+  attempt: number,
+) {
+  let yielded = false;
+  // Eagerly drain the input iterable in the background so the
+  // handler-side `inputController.push(...)` reaches us — without this,
+  // the test never sees what got pushed.
+  void (async () => {
+    for await (const sdkMsg of promptIterable) {
+      const content = sdkMsg.message?.content;
+      const flat = typeof content === "string" ? content : JSON.stringify(content);
+      observedInputMessages.push({ attempt, content: flat });
+    }
+  })();
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next: async (): Promise<IteratorResult<unknown>> => {
+          if (yielded) return { value: undefined, done: true };
+          yielded = true;
+          // Yield a "success" subtype with the wrapped API-error text —
+          // the handler's `detectStreamApiError` sniff will classify
+          // this as transient/claude_socket_closed and throw to drive
+          // the auto-resume path.
+          return {
+            value: {
+              type: "result",
+              subtype: "success",
+              result: FAKE_API_ERROR_TEXT,
+            },
+            done: false,
+          };
+        },
+      };
+    },
+    close: () => {},
+    setModel: async () => {},
+  };
+}
+
+let attemptIdx = 0;
+
+vi.mock("@anthropic-ai/claude-agent-sdk", () => {
+  return {
+    query: (args: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+      attemptIdx += 1;
+      return makeWrappedStreamErrorQuery(args.prompt, attemptIdx);
+    },
+  };
+});
+
+import { createClaudeCodeHandler } from "../handlers/claude-code.js";
+import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
+import type { SessionContext } from "../runtime/handler.js";
+import { mockCtxPlumbing } from "./test-helpers.js";
+
+const AGENT_ID = "019dd905-1234-7777-8888-bef95070f001";
+
+let workspaceRoot: string;
+
+beforeAll(() => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), "ftt-stream-retry-replay-"));
+});
+
+afterAll(() => {
+  rmSync(workspaceRoot, { recursive: true, force: true });
+});
+
+function buildCache() {
+  const stubSdk = {
+    fetchAgentConfig: async () => ({
+      agentId: AGENT_ID,
+      version: 1,
+      payload: { prompt: { append: "" }, model: "", mcpServers: [], env: [], gitRepos: [] },
+      updatedAt: new Date().toISOString(),
+      updatedBy: "test",
+    }),
+  } as unknown as Parameters<typeof createAgentConfigCache>[0]["sdk"];
+  return createAgentConfigCache({ sdk: stubSdk });
+}
+
+describe("claude-code handler — transient stream-error retry replays user message", () => {
+  it("re-pushes the original prompt into the rebuilt InputController so the SDK isn't left idle", async () => {
+    attemptIdx = 0;
+    observedInputMessages.length = 0;
+
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const emitted: SessionEvent[] = [];
+    const logs: string[] = [];
+    const runtimeStates: string[] = [];
+    const markCompleted = vi.fn();
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const ctx: SessionContext = {
+      agent: {
+        agentId: AGENT_ID,
+        inboxId: "inbox-test",
+        displayName: "test",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
+      chatId: "chat-stream-retry",
+      log: (m) => logs.push(m),
+      touch: () => {},
+      setRuntimeState: (state) => runtimeStates.push(state),
+      emitEvent: (e) => emitted.push(e),
+      ...mockCtxPlumbing({ sendMessage }, "chat-stream-retry"),
+      markCompleted,
+    };
+
+    await handler.start(
+      {
+        id: "m1",
+        chatId: "chat-stream-retry",
+        senderId: "user-1",
+        format: "text",
+        content: ORIGINAL_PROMPT,
+        metadata: null,
+      },
+      ctx,
+    );
+    // suspend awaits `consumerDone` so the consumer loop runs through all
+    // retries and the eventual retry-exhausted ack before we assert.
+    await handler.suspend();
+    await new Promise((r) => setImmediate(r));
+
+    // First retry must have been attempted — proves the catch path fired
+    // on the wrapped stream error.
+    expect(logs.some((l) => l.includes("Attempting auto-resume (retry 1/"))).toBe(true);
+
+    // The smoking gun: the rebuilt query (attempt 2) must have received
+    // a user message containing the original prompt. Pre-fix this was
+    // empty and the SDK subprocess hung idle.
+    const attempt2Inputs = observedInputMessages.filter((m) => m.attempt === 2);
+    expect(attempt2Inputs.length).toBeGreaterThan(0);
+    expect(attempt2Inputs.some((m) => m.content.includes(ORIGINAL_PROMPT))).toBe(true);
+
+    // And the first attempt also saw the prompt (sanity check that the
+    // mock plumbing works at all).
+    const attempt1Inputs = observedInputMessages.filter((m) => m.attempt === 1);
+    expect(attempt1Inputs.some((m) => m.content.includes(ORIGINAL_PROMPT))).toBe(true);
+
+    // After both retries fail transient (same wrapped API error every
+    // time), the handler must end in the retry-exhausted / permanent
+    // branch and ack — per PR #612 § "permanent → ack".
+    expect(markCompleted).toHaveBeenCalledTimes(1);
+
+    // A user-visible error must be surfaced on retry-exhaustion (so the
+    // chat timeline shows what happened), AND the turn must be closed
+    // with status:"error" so the frontend turn-grouping filter doesn't
+    // wait forever for the success boundary.
+    const errors = emitted.filter((e) => e.kind === "error");
+    expect(errors.some((e) => e.kind === "error" && e.payload.source === "sdk")).toBe(true);
+    const turnEnds = emitted.filter((e) => e.kind === "turn_end");
+    expect(turnEnds.length).toBeGreaterThan(0);
+    const lastTurnEnd = turnEnds[turnEnds.length - 1];
+    if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
+    expect(lastTurnEnd.payload.status).toBe("error");
+  });
+});
