@@ -49,6 +49,13 @@ const OnboardingPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/onboarding-preview.js").then((module) => ({ default: module.OnboardingPreviewPage })))
   : null;
 
+// Living design-system reference (companion to DESIGN.md). Unlike the previews
+// above this ships in prod too, so it can be opened on a deployed URL — it has
+// no auth-gated data, only tokens and `components/ui` primitives.
+const StyleguidePreviewPage = lazy(() =>
+  import("./pages/styleguide-preview.js").then((module) => ({ default: module.StyleguidePreviewPage })),
+);
+
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -92,6 +99,14 @@ export function App() {
                   }
                 />
               ) : null}
+              <Route
+                path="/preview/styleguide"
+                element={
+                  <Suspense fallback={null}>
+                    <StyleguidePreviewPage />
+                  </Suspense>
+                }
+              />
               {/* Auth-required pages. Onboarding is a standalone full-screen
                 /onboarding route (below); the workspace root redirects users
                 who haven't finished setup into it. */}
