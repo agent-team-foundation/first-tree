@@ -147,21 +147,11 @@
   --font-sans: var(--font-sans-stack);
   --font-mono: var(--font-mono-stack);
 
-  /* ---- Semantic color aliases --------------------------------------------- */
-  /* Preferred in new code. Raw --fg / --bg remain for back-compat but new
-     components should reference semantic names for readability. */
-  --color-text-primary: var(--fg);
-  --color-text-secondary: var(--fg-2);
-  --color-text-tertiary: var(--fg-3);
-  --color-text-disabled: var(--fg-4);
-  --color-surface: var(--bg);
-  --color-surface-raised: var(--bg-raised);
-  --color-surface-sunken: var(--bg-sunken);
-  --color-surface-hover: var(--bg-hover);
-  --color-surface-active: var(--bg-active);
-  --color-border-subtle: var(--border-faint);
-  --color-border-default: var(--border);
-  --color-border-emphasis: var(--border-strong);
+  /* Canonical color tokens are the short --fg* / --bg* / --border* names (defined
+     on :root below, exposed to Tailwind via the --color-fg-* / --color-bg-* /
+     --color-border-* utility aliases further down). The old --color-text-* /
+     --color-surface-* / --color-border-subtle|default|emphasis "semantic" layer
+     was removed in the 2026-05-28 cleanup — it was unadopted (see DESIGN-AUDIT.md). */
 
   /* ---- shadcn-compatible aliases (preserved) ------------------------------ */
   --color-background: var(--bg);
@@ -215,12 +205,6 @@
 
   /* Overlay scrim for dialogs / lightboxes — replaces hardcoded rgba(0,0,0,...). */
   --color-overlay-scrim: var(--overlay-scrim);
-
-  /* shadcn radius aliases (legacy — prefer --radius-chip/input/panel/dialog) */
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
 }
 
 :root {
@@ -240,7 +224,10 @@
   --accent-bg: oklch(0.72 0.17 150 / 0.12);
   --accent-ring: oklch(0.72 0.17 150 / 0.3);
 
-  --state-idle: oklch(0.72 0.17 150);
+  /* idle = neutral cool "standby" tone. Deliberately NOT the brand/success
+     green (see --success) and distinct from --state-offline's dim gray, so an
+     idle agent reads as "present, at rest" rather than "healthy/success". */
+  --state-idle: oklch(0.7 0.03 240);
   --state-working: oklch(0.78 0.16 195);
   --state-blocked: oklch(0.82 0.18 75);
   --state-error: oklch(0.68 0.22 25);
@@ -251,9 +238,13 @@
      destructive-action warning" at the consumer site. */
   --state-unread: var(--state-error);
 
-  --ok: oklch(0.72 0.17 150);
-  --warn: oklch(0.82 0.18 75);
-  --danger: oklch(0.68 0.22 25);
+  /* Feedback / severity vocabulary (success / warning / error). Aliased to the
+     shared base hues so there is ONE value per color — distinct *names* from the
+     agent-state vocabulary (--state-*), same underlying tones. Replaces the old
+     --ok / --warn / --danger raw duplicates. */
+  --success: var(--accent);
+  --warning: var(--state-blocked);
+  --danger: var(--state-error);
 
   /* Near-white text for content rendered on top of a vivid colored
      surface (state-error badges, hashed-hue avatars, etc). Stable in
@@ -843,7 +834,7 @@
   place-items: center;
   border-radius: 50%;
   background: oklch(0.72 0.17 150 / 0.12);
-  color: var(--ok);
+  color: var(--success);
 }
 
 .context-network-summary-title {
@@ -875,7 +866,7 @@
   padding: var(--sp-0_5) var(--sp-2);
   border-radius: var(--radius-chip);
   background: oklch(0.72 0.17 150 / 0.12);
-  color: var(--ok);
+  color: var(--success);
   font-weight: 600;
 }
 
@@ -886,7 +877,7 @@
   width: var(--sp-3);
   height: var(--sp-3);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--success);
   box-shadow: 0 0 0 var(--sp-0_75) oklch(0.72 0.17 150 / 0.18);
 }
 
@@ -915,12 +906,12 @@
 
 .context-change-breakdown span[data-change-type="added"] {
   background: oklch(0.72 0.17 150 / 0.12);
-  color: var(--ok);
+  color: var(--success);
 }
 
 .context-change-breakdown span[data-change-type="edited"] {
   background: oklch(0.82 0.18 75 / 0.14);
-  color: var(--warn);
+  color: var(--warning);
 }
 
 .context-change-breakdown span[data-change-type="removed"] {
@@ -980,13 +971,13 @@
   width: var(--sp-1);
   height: var(--sp-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--success);
   animation: context-usage-feed-pulse 2.4s ease-in-out infinite;
   flex: 0 0 auto;
 }
 
 .context-usage-feed-live-label {
-  color: var(--ok);
+  color: var(--success);
   font-weight: 700;
   letter-spacing: 0.1em;
 }
@@ -998,10 +989,10 @@
 @keyframes context-usage-feed-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--ok) 50%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 50%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 var(--sp-1) color-mix(in oklch, var(--ok) 0%, transparent);
+    box-shadow: 0 0 0 var(--sp-1) color-mix(in oklch, var(--success) 0%, transparent);
   }
 }
 
@@ -1025,7 +1016,7 @@
   top: 0;
   bottom: 0;
   width: 0;
-  border-left: 1.5px dashed color-mix(in oklch, var(--ok) 25%, transparent);
+  border-left: 1.5px dashed color-mix(in oklch, var(--success) 25%, transparent);
 }
 
 .context-usage-feed-row {
@@ -1042,7 +1033,7 @@
   width: var(--sp-1);
   height: var(--sp-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--success);
   margin-left: 3px;
   position: relative;
   z-index: 1;
@@ -1166,7 +1157,7 @@
 
 @keyframes context-usage-feed-flash {
   0% {
-    background: color-mix(in oklch, var(--ok) 18%, transparent);
+    background: color-mix(in oklch, var(--success) 18%, transparent);
   }
   100% {
     background: transparent;
@@ -1176,11 +1167,11 @@
 @keyframes context-usage-feed-dot-pop {
   0% {
     transform: scale(0.3);
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--ok) 60%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 60%, transparent);
   }
   60% {
     transform: scale(1.3);
-    box-shadow: 0 0 0 8px color-mix(in oklch, var(--ok) 0%, transparent);
+    box-shadow: 0 0 0 8px color-mix(in oklch, var(--success) 0%, transparent);
   }
   100% {
     transform: scale(1);

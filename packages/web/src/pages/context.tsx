@@ -151,7 +151,7 @@ function ChangeMap({
                 key={`path:${group.id}`}
                 d={connectionPath(group)}
                 fill="none"
-                stroke={group.selected ? "var(--ok)" : "var(--border-strong)"}
+                stroke={group.selected ? "var(--success)" : "var(--border-strong)"}
                 strokeDasharray="5 8"
                 strokeLinecap="round"
                 strokeOpacity={group.selected ? 0.7 : 0.36}
@@ -441,7 +441,7 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
     <Panel>
       <PanelBody>
         <div className="flex items-start text-body" style={{ color: "var(--fg-2)", gap: "var(--sp-2)" }}>
-          <AlertTriangle size={18} style={{ color: "var(--warn)" }} />
+          <AlertTriangle size={18} style={{ color: "var(--warning)" }} />
           <div>
             <div className="font-semibold" style={{ color: "var(--fg)" }}>
               {title}
@@ -818,8 +818,8 @@ function summaryTitle(hiddenCount: number, changedHiddenCount: number): string {
 }
 
 function severityColor(severity: ContextTreeSnapshot["contextStatus"]["severity"]): string {
-  if (severity === "ok") return "var(--ok)";
-  if (severity === "warning") return "var(--warn)";
+  if (severity === "ok") return "var(--success)";
+  if (severity === "warning") return "var(--warning)";
   return "var(--danger)";
 }
 

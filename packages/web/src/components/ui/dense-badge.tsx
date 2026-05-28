@@ -14,7 +14,7 @@ type DenseBadgeProps = HTMLAttributes<HTMLSpanElement> & {
 
 // Mirrors the Badge atom in design-canvas/atoms.jsx:
 //   mono / var(--sp-2_5) / padding var(--hairline) var(--sp-1_75) / radius 3 / var(--hairline) border.
-// shadcn Badge is var(--sp-3) + rounded-md and reads as "chunky" in dense panels.
+// shadcn Badge is var(--sp-3) + a chunkier radius and reads as "chunky" in dense panels.
 // Typography is bound to the `text-caption` token from index.css; tones are
 // resolved via the shared tones map so chips stay in sync with state chips.
 // Casing is the caller's responsibility — pass sentence-case labels for
