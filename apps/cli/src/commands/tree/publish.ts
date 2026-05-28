@@ -2,6 +2,7 @@ import { dirname, join, resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { readSourceBindingContract } from "./binding-contract.js";
 import { removeSourceState, TREE_SOURCE_REPOS_FILE } from "./binding-state.js";
@@ -163,6 +164,7 @@ function refreshBoundSourceRoots(treeRoot: string, publishedTreeUrl: string, sou
     }
 
     upsertSourceIntegrationFiles(sourceRoot, sourceBinding.treeRepoName, {
+      binName: channelConfig.binName,
       bindingMode: sourceBinding.bindingMode,
       entrypoint: sourceBinding.entrypoint,
       treeMode: sourceBinding.treeMode,

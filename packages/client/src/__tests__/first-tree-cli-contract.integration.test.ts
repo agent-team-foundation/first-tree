@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  __setTestInstallExec,
   bootstrapWorkspace,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
@@ -19,6 +20,18 @@ import type { AgentIdentity } from "../runtime/handler.js";
 // below already checks the same name).
 beforeAll(() => {
   setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+  // `vitest.setup.ts` neuters `defaultInstallExec` for every test file so
+  // handler-level fast tests don't shell out unnecessarily. This file
+  // *wants* the real shell-out because that's the contract under test —
+  // clear the override locally and restore it on teardown so neighbouring
+  // tests in the same vitest run keep their fast path.
+  __setTestInstallExec(null);
+});
+afterAll(() => {
+  __setTestInstallExec(() => {
+    // Restore the global no-op so subsequent test files re-enter with the
+    // setup-installed default.
+  });
 });
 
 /**
