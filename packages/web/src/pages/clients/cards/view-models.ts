@@ -102,37 +102,6 @@ export function summarizeBoundAgents(agents: RuntimeAgent[]): BoundAgentsSummary
 }
 
 /**
- * Diagnostic line shown at the top of the AuthExpired card.
- *
- * Without lastSeenAt: minimal fallback.
- * With lastSeenAt: "This computer hasn't checked in for X. Your access
- * token has expired." — mirrors mockup §"Variant B".
- */
-export function authExpiredDiagnostic(client: Pick<HubClient, "lastSeenAt">): string {
-  const duration = formatOfflineDuration(client.lastSeenAt);
-  if (!duration) return "Your access token has expired. Run the command below on this computer to re-authenticate.";
-  return `This computer hasn't checked in for ${duration}. Your access token has expired.`;
-}
-
-/**
- * Diagnostic line for Offline card. Distinguishes "moments ago"
- * (probably about to reconnect) from "hours/days ago" (machine actually
- * away).
- */
-export function offlineDiagnostic(client: Pick<HubClient, "lastSeenAt">): string {
-  const duration = formatOfflineDuration(client.lastSeenAt);
-  if (!duration) return "This computer is offline. Make sure the machine is awake and connected.";
-  return `Last seen ${duration} ago. Make sure the machine is awake and connected.`;
-}
-
-/**
- * Diagnostic line for SetupIncomplete card. Static — the empty
- * capability state doesn't carry a time signal.
- */
-export const SETUP_INCOMPLETE_DIAGNOSTIC =
-  "This computer is online, but no runtime is ready. Install one of the following on this computer to start running agents:";
-
-/**
  * Per-card hostname fallback. The mockup shows the hostname prominently;
  * pre-PR-A code used `hostname ?? id.slice(0, 8)`. Keep that fallback so
  * a client that registers without a hostname (rare — only happens via a

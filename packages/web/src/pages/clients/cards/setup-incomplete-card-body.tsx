@@ -1,9 +1,10 @@
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
 import { BoundAgentsList } from "./shared/bound-agents-list.js";
-import { CardMetaFooter } from "./shared/card-meta-row.js";
+import { CardSection, CardSectionLabel } from "./shared/card-section.js";
+import { CompactMetaLine } from "./shared/compact-meta-line.js";
 import { PROVIDER_ORDER } from "./shared/providers.js";
 import { RuntimeInstallBox } from "./shared/runtime-install-box.js";
-import { cardHostnameLabel, SETUP_INCOMPLETE_DIAGNOSTIC, summarizeBoundAgents } from "./view-models.js";
+import { cardHostnameLabel, summarizeBoundAgents } from "./view-models.js";
 
 type SetupIncompleteCardBodyProps = {
   client: HubClient;
@@ -12,63 +13,61 @@ type SetupIncompleteCardBodyProps = {
 };
 
 /**
- * Variant B-2 body — connected machine with no runtime ready. Renders:
- *   - Diagnostic line + "install one of the following" framing
- *   - Per-provider install boxes (RuntimeInstallBox × N), side-by-side
- *     on wide cards, stacked on narrow ones
- *   - Compact agents summary if any are pinned (they'll be offline)
- *   - Heartbeat meta row at the bottom (NOT dimmed — the machine is
- *     online; meta is supporting but not stale)
+ * Variant B-2 body — Setup incomplete. Same `CardSection` skeleton as
+ * Ready / Offline / AuthExpired: Meta → (optional Agents waiting) →
+ * Install a runtime.
  *
- * The boxes filter to non-`ok` runtimes only. If a runtime is `ok` here
- * the pill should not be `setup_incomplete` (by `deriveComputerStatus`
- * definition), so the filter is defensive against drift in the pill
- * rules.
+ * Meta line matches Ready's `heartbeat` mode (`Heartbeat 7 seconds
+ * ago · first-tree X · OS`) so the four pill states share one rhythm.
+ * The earlier `Online · no runtime ready` prefix was dropped: the
+ * yellow "Setup incomplete" pill already says it, and the install
+ * boxes below are the action.
+ *
+ * The Agents section reuses Ready's component — when an operator has
+ * already attached agents but no runtime is installed yet, listing
+ * them ("Claude · Claude Code  offline") shows exactly which agents
+ * are waiting on the install they're about to run.
  */
 export function SetupIncompleteCardBody({ client, boundAgents, agentName }: SetupIncompleteCardBodyProps) {
   const hostname = cardHostnameLabel(client);
   const summary = summarizeBoundAgents(boundAgents);
   const installableProviders = PROVIDER_ORDER.filter((p) => client.capabilities[p]?.state !== "ok");
+
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
-        {SETUP_INCOMPLETE_DIAGNOSTIC}
-      </p>
-      <div
-        style={{
-          display: "grid",
-          gap: "var(--sp-3)",
-          // Side-by-side install boxes when the card is wide enough,
-          // stacked 1-up below the breakpoint (17.5rem ≈ 280 baseline
-          // for the install-command pre block).
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17.5rem), 1fr))",
-        }}
-      >
-        {installableProviders.map((provider) => (
-          <RuntimeInstallBox
-            key={provider}
-            provider={provider}
-            entry={client.capabilities[provider] ?? null}
-            hostname={hostname}
-          />
-        ))}
-      </div>
+    <div className="flex flex-col">
+      <CardSection>
+        <CompactMetaLine client={client} />
+      </CardSection>
       {summary.total > 0 && (
+        <CardSection>
+          <CardSectionLabel>
+            {summary.total === 1 ? "Agent waiting" : `Agents waiting · ${summary.total}`}
+          </CardSectionLabel>
+          <BoundAgentsList summary={summary} agentName={agentName} headerless />
+        </CardSection>
+      )}
+      <CardSection>
+        <CardSectionLabel>Install a runtime to start</CardSectionLabel>
         <div
-          className="flex flex-col"
           style={{
-            gap: "var(--sp-1_5)",
-            padding: "var(--sp-2_5) 0 0",
-            borderTop: "var(--hairline) solid var(--border-faint)",
+            display: "grid",
+            gap: "var(--sp-3)",
+            // Side-by-side install boxes when the card is wide enough,
+            // stacked 1-up below the breakpoint (17.5rem ≈ 280 baseline
+            // for the install-command pre block).
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 17.5rem), 1fr))",
           }}
         >
-          <div className="text-caption" style={{ color: "var(--fg-3)" }}>
-            {summary.total === 1 ? "Agent · waiting on runtime" : `Agents · ${summary.total} · waiting on runtime`}
-          </div>
-          <BoundAgentsList summary={summary} agentName={agentName} headerless />
+          {installableProviders.map((provider) => (
+            <RuntimeInstallBox
+              key={provider}
+              provider={provider}
+              entry={client.capabilities[provider] ?? null}
+              hostname={hostname}
+            />
+          ))}
         </div>
-      )}
-      <CardMetaFooter client={client} dimmed={false} />
+      </CardSection>
     </div>
   );
 }

@@ -90,6 +90,24 @@ export type PaginatedResult<T> = {
 const FETCH_TIMEOUT_MS = 15_000;
 
 /**
+ * Shorter per-call budget for startup-critical GETs (currently
+ * `fetchAgentConfig`). A stalled Hub here directly turns into a
+ * bind-aborted user-visible failure, and the request is a single-row PK
+ * lookup server-side — there's no legitimate reason for it to take longer.
+ * Combined with `doFetch`'s 3-attempt retry, this caps the worst-case
+ * wall-clock at ≈ 16.5s instead of the global 15s × 3 ≈ 46.5s.
+ */
+const STARTUP_FETCH_TIMEOUT_MS = 5_000;
+
+/**
+ * Per-call timeout override knob. Most endpoints stay on `FETCH_TIMEOUT_MS`
+ * (15s — generous to survive cold-start / slow PG queries on the long-tail
+ * `sendMessage` / `listMessages` paths); startup-critical GETs override
+ * with `STARTUP_FETCH_TIMEOUT_MS`.
+ */
+type SdkCallOptions = { timeoutMs?: number };
+
+/**
  * Node-level error codes (undici / DNS / TCP) treated as transient by the
  * `doFetch` retry layer. The set covers the failure modes that a *brief*
  * network blip can produce mid-request:
@@ -136,7 +154,11 @@ function sleep(ms: number): Promise<void> {
  * Walks the `cause` chain (undici nests the real reason one level deep via
  * `TypeError("fetch failed").cause`) and checks each link for:
  *   - `message` containing `"fetch failed"` (undici's signature)
- *   - `name === "AbortError"` (our 15s `AbortSignal.timeout`)
+ *   - `name === "AbortError"` (caller-supplied `AbortController.abort()`)
+ *   - `name === "TimeoutError"` (our `AbortSignal.timeout()` — Node 22+ aborts
+ *     with a `DOMException("...", "TimeoutError")` per Web spec, NOT an
+ *     `AbortError`; missing this signature is why production timeouts went
+ *     un-retried until v0.5.x)
  *   - `code` ∈ `RETRYABLE_NETWORK_CODES`
  *
  * `unknown` input is intentional: this function is the gatekeeper for the
@@ -156,12 +178,24 @@ function isTransientNetworkError(err: unknown): boolean {
     // SdkError), so we cannot derive it from a single typed interface.
     const obj = current as { message?: unknown; name?: unknown; code?: unknown; cause?: unknown };
     if (typeof obj.message === "string" && obj.message.includes("fetch failed")) return true;
-    if (obj.name === "AbortError") return true;
+    if (obj.name === "AbortError" || obj.name === "TimeoutError") return true;
     if (typeof obj.code === "string" && RETRYABLE_NETWORK_CODES.has(obj.code)) return true;
     current = obj.cause;
     depth++;
   }
   return false;
+}
+
+/**
+ * Short label used in `doFetch`'s retry-attempt log line. Diagnostic only —
+ * not parsed by anything, just collapses the timeout family into one bucket
+ * and truncates other error messages so a multi-line `fetch failed` cause
+ * doesn't wrap the log.
+ */
+function classifyRetryReason(err: unknown): string {
+  if (!(err instanceof Error)) return "unknown";
+  if (err.name === "AbortError" || err.name === "TimeoutError") return "timeout";
+  return err.message.slice(0, 60);
 }
 
 export class FirstTreeHubSDK {
@@ -208,7 +242,9 @@ export class FirstTreeHubSDK {
   }
 
   async fetchAgentConfig(): Promise<AgentRuntimeConfig> {
-    return this.requestJson<AgentRuntimeConfig>("/api/v1/agent/config");
+    return this.requestJson<AgentRuntimeConfig>("/api/v1/agent/config", undefined, {
+      timeoutMs: STARTUP_FETCH_TIMEOUT_MS,
+    });
   }
 
   /**
@@ -363,15 +399,15 @@ export class FirstTreeHubSDK {
     return qs ? `?${qs}` : "";
   }
 
-  private async requestVoid(path: string, init?: RequestInit): Promise<void> {
-    const response = await this.doFetch(path, init);
+  private async requestVoid(path: string, init?: RequestInit, opts?: SdkCallOptions): Promise<void> {
+    const response = await this.doFetch(path, init, opts);
     if (!response.ok) {
       throw await this.toSdkError(response);
     }
   }
 
-  private async requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await this.doFetch(path, init);
+  private async requestJson<T>(path: string, init?: RequestInit, opts?: SdkCallOptions): Promise<T> {
+    const response = await this.doFetch(path, init, opts);
     if (!response.ok) {
       throw await this.toSdkError(response);
     }
@@ -382,24 +418,25 @@ export class FirstTreeHubSDK {
    * Retry transient network-layer failures and HTTP 5xx with a fixed backoff
    * schedule. Short-term fix for the chat-visible `Result forward failed:
    * fetch failed` errors (see docs/sdk-fetch-retry-design.md): undici's
-   * "fetch failed" / `AbortError` / `ECONNRESET`-class errors and any 5xx
-   * response trigger up to two retries with `[0, 500ms, 1000ms]` spacing,
-   * adding at most ~1.5s of latency beyond the per-attempt 15s timeout.
+   * "fetch failed" / `AbortError` / `TimeoutError` / `ECONNRESET`-class errors
+   * and any 5xx response trigger up to two retries with `[0, 500ms, 1000ms]`
+   * spacing, adding at most ~1.5s of latency beyond the per-attempt timeout.
    *
    * 4xx responses and non-network exceptions are returned/thrown unchanged
    * — they indicate a deterministic failure that retrying cannot fix.
    *
-   * Idempotency caveat: `sendMessage` is not natively idempotent, so a
-   * `fetch failed` from a request the server actually committed will
-   * produce a duplicate message on retry. The design accepts this for now
-   * (small window, low rate, mitigated long-term by an Outbox pattern with
-   * client-generated UUIDs).
+   * Idempotency caveat: `sendMessage` is not natively idempotent, so any
+   * transient signature (`fetch failed`, `AbortError`, `TimeoutError`, …)
+   * from a request the server actually committed will produce a duplicate
+   * message on retry. The design accepts this for now (small window, low
+   * rate, mitigated long-term by an Outbox pattern with client-generated
+   * UUIDs).
    *
    * The retry signature and externally-visible behaviour match `doFetch`'s
    * pre-retry contract: callers see the same Response on success or the
    * same error type on terminal failure.
    */
-  private async doFetch(path: string, init?: RequestInit): Promise<Response> {
+  private async doFetch(path: string, init?: RequestInit, opts?: SdkCallOptions): Promise<Response> {
     const delays = [0, 500, 1000];
     let lastErr: unknown;
     for (let attempt = 0; attempt < delays.length; attempt++) {
@@ -408,7 +445,7 @@ export class FirstTreeHubSDK {
         await sleep(delay);
       }
       try {
-        const response = await this.doFetchOnce(path, init);
+        const response = await this.doFetchOnce(path, init, opts);
         const isLastAttempt = attempt === delays.length - 1;
         if (response.status >= 500 && !isLastAttempt) {
           console.warn(`sdk: retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
@@ -421,16 +458,14 @@ export class FirstTreeHubSDK {
         if (!isTransientNetworkError(err)) throw err;
         const isLastAttempt = attempt === delays.length - 1;
         if (!isLastAttempt) {
-          const reason =
-            err instanceof Error ? (err.name === "AbortError" ? "timeout" : err.message.slice(0, 60)) : "unknown";
-          console.warn(`sdk: retry attempt=${attempt + 1} reason=${reason} path=${path}`);
+          console.warn(`sdk: retry attempt=${attempt + 1} reason=${classifyRetryReason(err)} path=${path}`);
         }
       }
     }
     throw lastErr;
   }
 
-  private async doFetchOnce(path: string, init?: RequestInit): Promise<Response> {
+  private async doFetchOnce(path: string, init?: RequestInit, opts?: SdkCallOptions): Promise<Response> {
     const url = `${this._baseUrl}${path}`;
     const token = await this.getAccessToken();
     const headers: Record<string, string> = {
@@ -445,7 +480,7 @@ export class FirstTreeHubSDK {
     if (init?.body) {
       headers["Content-Type"] = "application/json";
     }
-    const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(opts?.timeoutMs ?? FETCH_TIMEOUT_MS);
     const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
     return fetch(url, { ...init, headers, signal });
   }

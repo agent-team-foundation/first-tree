@@ -30,18 +30,20 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
     });
     const chatId = chatRes.json().id;
 
-    // Three @mentions to a2 → three notify=true entries on a2's inbox.
+    // Three explicit mentions of a2 → three notify=true entries on a2's inbox.
     for (let i = 0; i < 3; i++) {
       await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
-        content: `@${a2.agent.name} msg ${i}`,
+        content: `msg ${i}`,
+        receiverNames: [a2.agent.name],
       });
     }
-    // One @mention to a3 → one notify=true entry on a3's inbox. This row
-    // must NOT be touched when we only ask to reset a2's inbox.
+    // One explicit mention of a3 → one notify=true entry on a3's inbox. This
+    // row must NOT be touched when we only ask to reset a2's inbox.
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: `@${a3.agent.name} sibling message`,
+      content: "sibling message",
+      receiverNames: [a3.agent.name],
     });
 
     // Claim → delivered. We need a mix of states in a2's inbox: pick the
@@ -109,7 +111,8 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
     const chatId = chatRes.json().id;
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: `@${a2.agent.name} no-op test`,
+      content: "no-op test",
+      receiverNames: [a2.agent.name],
     });
     // Entry exists but is `pending`, not `delivered`.
     const reset = await inboxService.resetDeliveredForInboxes(app.db, [a2.agent.inboxId]);
@@ -132,7 +135,8 @@ describe("inbox bind-time recovery (resetDeliveredForInboxes)", () => {
     const chatId = chatRes.json().id;
     const msgRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: `@${a2.agent.name} keep-retry`,
+      content: "keep-retry",
+      receiverNames: [a2.agent.name],
     });
     const messageId = msgRes.json().id;
 

@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check } from "lucide-react";
+import { ArrowRight, Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
+import { ApiError } from "../../../api/client.js";
 import { listGithubRepos } from "../../../api/github.js";
+import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import {
   getContextTreeSetting,
@@ -14,7 +16,7 @@ import {
 import { Button } from "../../../components/ui/button.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
-import { FlowNote, RepoPicker, StepHeading, WorkingState } from "../flow-ui.js";
+import { FlowNote, RepoPicker, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
@@ -73,7 +75,11 @@ async function runKickoff(args: {
 
   const chat = await createAgentChat(agent.uuid);
   try {
-    await sendChatMessage(chat.id, args.bootstrap);
+    // `createAgentChat` constructs a 1:1 chat with the bootstrap agent —
+    // declare the agent as the explicit recipient so the server's
+    // `enforceMention` check passes (the legacy 1:1 implicit-wake
+    // bypass is gone). Without this, the kickoff message would 400.
+    await sendChatMessage(chat.id, args.bootstrap, [agent.uuid]);
   } catch (err) {
     // Non-fatal: the chat exists; the agent introduces itself when the user
     // types. Log so operators can triage a silently-missing first message.
@@ -279,19 +285,64 @@ function AdminKickoff() {
 
 function InviteeKickoff() {
   const { organizationId } = useOnboardingFlow();
+  // Fetch tree config, source repos, and installation existence together.
+  // The installation bit drives the new "no-installation" sub-state, which
+  // catches "admin set up the tree but never connected GitHub" before the
+  // invitee sails into the picker and hits a 403 on the first git op.
+  //
+  // We use the dedicated /github-app-installation/exists endpoint here
+  // (returns `{ exists: boolean }`, member-readable) rather than the full
+  // installation GET — that one is admin-gated (requireOrgAdmin), so as a
+  // non-admin invitee it would 403. Round 1 of codex review caught that
+  // mapping 403→"missing" blocks every invitee of a healthy team; round 2
+  // caught that mapping 403→"installed" makes the new safeguard
+  // unreachable. The /exists endpoint side-steps both by exposing just the
+  // presence bit to members. Any unexpected error here falls through to
+  // `hasInstallation: true` so a transient blip never bounces the user
+  // into the wrong sub-state.
   const teamQuery = useQuery({
     queryKey: ["onboarding", "team-config", organizationId],
     queryFn: async () => {
-      const [tree, repos] = await Promise.all([
+      const [tree, repos, installResult] = await Promise.all([
         getContextTreeSetting(organizationId ?? ""),
         getSourceReposSetting(organizationId ?? ""),
+        // Three-state result: true = installed, false = server confirmed
+        // missing, null = probe failed (network blip, 5xx). The null
+        // sentinel is distinct from `false` so refetchInterval below can
+        // tell "we don't know yet" from "we know it's missing".
+        getGithubAppInstallationExists(organizationId ?? "").catch<null>((err) => {
+          console.warn("onboarding: installation-exists probe failed", err);
+          return null;
+        }),
       ]);
-      return { treeUrl: tree.repo ?? "", teamRepoUrls: (repos.repos ?? []).map((r) => r.url) };
+      return {
+        treeUrl: tree.repo ?? "",
+        teamRepoUrls: (repos.repos ?? []).map((r) => r.url),
+        // Optimistic on uncertainty: don't bounce the user into
+        // no-installation on a transient blip. The refetchInterval below
+        // keeps polling until we have an authoritative answer; if that
+        // answer is `false` the UI will flip into no-installation on the
+        // next tick. Codex round-2 review caught the original bug where
+        // catch→true plus "stop polling when hasInstallation truthy"
+        // wedged the query in a success state forever on the first error.
+        hasInstallation: installResult !== false,
+        installationKnown: installResult !== null,
+      };
     },
     enabled: !!organizationId,
-    // While the team has no Context Tree link yet, keep polling so the invitee
-    // advances on its own the moment the admin finishes — no manual refresh.
-    refetchInterval: (query) => (query.state.data?.treeUrl ? false : 5000),
+    // Keep polling while anything's still unknown OR the admin hasn't
+    // finished. Stop only once we have a tree URL AND an authoritative
+    // (non-null) install probe result. Without the `installationKnown`
+    // gate, a transient error on first probe would set hasInstallation=true
+    // and then stop polling — wedging the user out of the no-installation
+    // safeguard for the rest of the session.
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d) return 5000;
+      if (!d.treeUrl) return 5000;
+      if (!d.installationKnown) return 5000;
+      return false;
+    },
   });
 
   if (teamQuery.isLoading) {
@@ -302,16 +353,56 @@ function InviteeKickoff() {
     );
   }
 
-  // Read failure or no tree configured yet → waiting (auto-polls above).
-  if (teamQuery.isError || !teamQuery.data?.treeUrl) {
+  // Read failure → waiting; the query keeps polling so a transient blip
+  // resolves on its own.
+  if (teamQuery.isError || !teamQuery.data) {
     return <InviteeWaiting />;
   }
 
-  const { treeUrl, teamRepoUrls } = teamQuery.data;
-  return resolveInviteeKickoffState({ treeUrl, teamRepoCount: teamRepoUrls.length }) === "confirm" ? (
-    <InviteeConfirm treeUrl={treeUrl} teamRepoUrls={teamRepoUrls} />
-  ) : (
-    <InviteePicker treeUrl={treeUrl} />
+  const { treeUrl, teamRepoUrls, hasInstallation } = teamQuery.data;
+  const state = resolveInviteeKickoffState({
+    treeUrl,
+    hasInstallation,
+    teamRepoCount: teamRepoUrls.length,
+  });
+
+  switch (state) {
+    case "waiting":
+      return <InviteeWaiting />;
+    case "no-installation":
+      return <InviteeNoInstallation />;
+    case "confirm":
+      return <InviteeConfirm treeUrl={treeUrl} teamRepoUrls={teamRepoUrls} />;
+    case "picker":
+      return <InviteePicker treeUrl={treeUrl} />;
+  }
+}
+
+/**
+ * Read-only display of the team's Context Tree URL, shown at the top of
+ * the invitee's confirm/picker sub-states so they know where their agent's
+ * work will land. Info transparency — invitee inherits this, can't change it.
+ */
+function TreeUrlDisplay({ treeUrl }: { treeUrl: string }) {
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
+      <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+        {COPY.kickoff.treeLabel}
+      </p>
+      <p
+        className="text-label mono"
+        title={treeUrl}
+        style={{
+          margin: 0,
+          color: "var(--fg-2)",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {repoLabel(treeUrl)}
+      </p>
+    </div>
   );
 }
 
@@ -324,13 +415,16 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
   const toggle = (url: string): void =>
     setChosen((prev) => (prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]));
 
-  const handleStart = async (): Promise<void> => {
+  const handleStart = async (selectedRepos: string[]): Promise<void> => {
     setError(null);
     setPhase("starting");
     try {
+      // Empty selection ⇒ intro-only bootstrap (matches admin's no-project
+      // path), so deselecting all isn't a dead end.
+      const bootstrap = selectedRepos.length > 0 ? buildBindBootstrap(selectedRepos, treeUrl) : NO_REPO_BOOTSTRAP;
       await runKickoff({
-        bootstrap: buildBindBootstrap(chosen, treeUrl),
-        gitRepoUrls: chosen,
+        bootstrap,
+        gitRepoUrls: selectedRepos,
         orgWrites: null, // never mutate team config as an invitee
         treeMode: "existing",
         joinPath: "invite",
@@ -348,6 +442,7 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
       <StepHeading title={COPY.invitee.confirmTitle} why={COPY.invitee.confirmBody} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <TreeUrlDisplay treeUrl={treeUrl} />
         <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
           {teamRepoUrls.map((url) => {
             const active = chosen.includes(url);
@@ -388,11 +483,22 @@ function InviteeConfirm({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUr
           })}
         </div>
         {error && <FlowNote>{error}</FlowNote>}
-        <div className="flex">
-          <Button type="button" onClick={() => void handleStart()} disabled={chosen.length === 0}>
+        {/* Primary is never disabled by deselect-all; the bailout link
+            preserves the "continue with intro only" path so users can't
+            soft-lock themselves. */}
+        <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
+          <Button type="button" onClick={() => void handleStart(chosen)} disabled={chosen.length === 0}>
             <span>{COPY.kickoff.start}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
+          <button
+            type="button"
+            onClick={() => void handleStart([])}
+            className="text-label"
+            style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--fg-4)" }}
+          >
+            {COPY.kickoff.inviteeContinueNoProject}
+          </button>
         </div>
       </div>
     </div>
@@ -409,13 +515,14 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
   const toggle = (url: string): void =>
     setSelected((prev) => (prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url]));
 
-  const handleStart = async (): Promise<void> => {
+  const handleStart = async (selectedRepos: string[]): Promise<void> => {
     setError(null);
     setPhase("starting");
     try {
+      const bootstrap = selectedRepos.length > 0 ? buildBindBootstrap(selectedRepos, treeUrl) : NO_REPO_BOOTSTRAP;
       await runKickoff({
-        bootstrap: buildBindBootstrap(selected, treeUrl),
-        gitRepoUrls: selected,
+        bootstrap,
+        gitRepoUrls: selectedRepos,
         orgWrites: null,
         treeMode: "existing",
         joinPath: "invite",
@@ -429,25 +536,63 @@ function InviteePicker({ treeUrl }: { treeUrl: string }) {
 
   if (phase === "starting") return <StartingState />;
 
+  // Three failure shapes are folded into one "no list" branch in the
+  // legacy code; split them so the recovery action matches the cause.
+  const scopeMissing = reposQuery.error instanceof ApiError && reposQuery.error.status === 403;
+  const networkErr = !!reposQuery.error && !scopeMissing;
+  const empty = !reposQuery.error && (reposQuery.data?.length ?? 0) === 0;
+  const hasRepos = !reposQuery.error && (reposQuery.data?.length ?? 0) > 0;
+
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
       <StepHeading title={COPY.kickoff.inviteePickerTitle} why={COPY.kickoff.inviteePickerWhy} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <TreeUrlDisplay treeUrl={treeUrl} />
         {reposQuery.isLoading ? (
           <p className="text-label" style={{ color: "var(--fg-4)" }}>
             Loading your projects…
           </p>
-        ) : (reposQuery.data?.length ?? 0) === 0 ? (
-          <FlowNote tone="info">{COPY.connectCode.noRepos}</FlowNote>
+        ) : scopeMissing ? (
+          <FlowNote tone="info">
+            <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+              <span>{COPY.kickoff.inviteePickerScopeMissing}</span>
+              <a
+                href="/api/v1/auth/github/start?next=/onboarding"
+                className="font-medium self-start"
+                style={{ color: "var(--accent)" }}
+              >
+                {COPY.connectCode.reconnect}
+              </a>
+            </div>
+          </FlowNote>
+        ) : networkErr ? (
+          <FlowNote>{COPY.kickoff.inviteePickerNetworkError}</FlowNote>
+        ) : empty ? (
+          <FlowNote tone="info">{COPY.kickoff.inviteePickerEmpty}</FlowNote>
         ) : (
           <RepoPicker repos={reposQuery.data ?? []} selected={selected} onToggle={toggle} fill />
         )}
         {error && <FlowNote>{error}</FlowNote>}
-        <div className="flex">
-          <Button type="button" onClick={() => void handleStart()} disabled={selected.length === 0}>
+        <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
+          <Button
+            type="button"
+            onClick={() => void handleStart(selected)}
+            disabled={!hasRepos || selected.length === 0}
+          >
             <span>{COPY.kickoff.start}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
+          {/* Always visible — covers empty, scope-missing, network, AND
+              "I just don't want to pick one right now". No path is a
+              dead end. */}
+          <button
+            type="button"
+            onClick={() => void handleStart([])}
+            className="text-label"
+            style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", color: "var(--fg-4)" }}
+          >
+            {COPY.kickoff.inviteeContinueNoProject}
+          </button>
         </div>
       </div>
     </div>
@@ -461,9 +606,108 @@ function InviteeWaiting() {
       <StepHeading title={COPY.invitee.waitingTitle} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
         <FlowNote tone="info">{COPY.invitee.waitingBody}</FlowNote>
+        {/* Visible polling so the user trusts the page is alive — the
+            previous "no status" state had users wondering if it was
+            stuck. */}
+        <StatusRow state="waiting" label={COPY.invitee.waitingStatus} />
         <div className="flex">
           <Button type="button" variant="outline" onClick={() => void finishLater()}>
-            Start chatting anyway
+            {COPY.invitee.startAnyway}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * NEW sub-state: admin set a tree URL but never connected the GitHub App,
+ * so the org has no installation row. Without one, the agent's first git
+ * operation will 403 with no useful signal. We surface that here and offer
+ * a "remind your admin" copy-link + a bailout to keep the user moving.
+ *
+ * Why this link IS safe to share (unlike connect-code's install URL): we
+ * copy `window.location.href`, the onboarding page URL itself, with no
+ * cookie-bound state JWT. Whoever opens it just lands on first-tree as
+ * themselves; if they're the admin, they see their own onboarding /
+ * Settings → GitHub and can finish the install. It's a reminder URL, not
+ * an authorization handoff.
+ */
+function InviteeNoInstallation() {
+  const { finishLater } = useOnboardingFlow();
+  const [pageUrl, setPageUrl] = useState<string>("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") setPageUrl(window.location.href);
+  }, []);
+
+  const handleCopy = async (): Promise<void> => {
+    if (!pageUrl) return;
+    await navigator.clipboard.writeText(pageUrl);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
+      <StepHeading title={COPY.invitee.noInstallTitle} />
+      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <FlowNote tone="info">{COPY.invitee.noInstallBody}</FlowNote>
+        <StatusRow state="waiting" label={COPY.invitee.noInstallStatus} />
+
+        <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+          <p className="text-label" style={{ margin: 0, color: "var(--fg-2)" }}>
+            {COPY.invitee.noInstallShareIntro}
+          </p>
+          <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
+            <div
+              className="text-label"
+              title={pageUrl}
+              style={{
+                flex: 1,
+                minHeight: 38,
+                padding: "var(--sp-2_5) var(--sp-3)",
+                background: "color-mix(in oklch, var(--bg-sunken) 42%, transparent)",
+                border: "var(--hairline) solid color-mix(in oklch, var(--border-faint) 58%, transparent)",
+                borderRadius: "var(--radius-input)",
+                color: "var(--fg-2)",
+                minWidth: 0,
+                display: "flex",
+                alignItems: "center",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {pageUrl || "…"}
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleCopy()}
+              disabled={!pageUrl}
+              className="inline-flex items-center justify-center text-label font-medium"
+              style={{
+                gap: "var(--sp-1_5)",
+                padding: "0 var(--sp-3)",
+                minHeight: 38,
+                background: "color-mix(in oklch, var(--bg-raised) 48%, transparent)",
+                border: "var(--hairline) solid color-mix(in oklch, var(--border) 58%, transparent)",
+                borderRadius: "var(--radius-input)",
+                color: "var(--fg-2)",
+                cursor: pageUrl ? "pointer" : "not-allowed",
+                opacity: pageUrl ? 1 : 0.6,
+              }}
+            >
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex">
+          <Button type="button" variant="outline" onClick={() => void finishLater()}>
+            {COPY.invitee.startAnyway}
           </Button>
         </div>
       </div>

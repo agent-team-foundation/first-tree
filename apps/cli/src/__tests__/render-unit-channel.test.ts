@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { defaultHome } from "@first-tree/shared/config";
 import { describe, expect, it } from "vitest";
 import { channelConfig } from "../core/channel.js";
@@ -22,6 +23,24 @@ import { renderPlist, renderSystemdUnit } from "../core/service-install.js";
  * home-basename derivation), this test catches it.
  */
 const FAKE_BIN_INVOCATION = { kind: "bin", program: "/usr/local/bin/first-tree-dev" } as const;
+
+function extractPlistPathValue(plist: string): string {
+  const match = /<key>PATH<\/key>\s*<string>([^<]+)<\/string>/.exec(plist);
+  if (!match?.[1]) {
+    throw new Error("Rendered plist does not contain a PATH environment value.");
+  }
+  return match[1];
+}
+
+function withExecPath(execPath: string, callback: () => void): void {
+  const original = process.execPath;
+  process.execPath = execPath;
+  try {
+    callback();
+  } finally {
+    process.execPath = original;
+  }
+}
 
 describe("renderSystemdUnit — channel identity baked into unit text", () => {
   const unit = renderSystemdUnit(FAKE_BIN_INVOCATION, {});
@@ -48,6 +67,12 @@ describe("renderSystemdUnit — channel identity baked into unit text", () => {
   it("embeds the CLI program path in ExecStart", () => {
     expect(unit).toMatch(/ExecStart=\/usr\/local\/bin\/first-tree-dev daemon start --no-interactive/);
   });
+
+  it("includes the current Node binary directory in PATH", () => {
+    const pathLine = unit.split("\n").find((line) => line.startsWith("Environment=PATH="));
+    expect(pathLine).toBeDefined();
+    expect(pathLine).toContain(dirname(process.execPath));
+  });
 });
 
 describe("renderPlist — channel identity baked into plist text", () => {
@@ -73,5 +98,28 @@ describe("renderPlist — channel identity baked into plist text", () => {
 
   it("embeds the CLI program path in ProgramArguments", () => {
     expect(plist).toContain("<string>/usr/local/bin/first-tree-dev</string>");
+  });
+
+  it("includes the current Node binary directory in PATH", () => {
+    const pathEntries = extractPlistPathValue(plist).split(":");
+    expect(pathEntries[0]).toBe(dirname(process.execPath));
+  });
+
+  it("keeps launchd fallback paths in PATH", () => {
+    const pathEntries = extractPlistPathValue(plist).split(":");
+    expect(pathEntries).toEqual(expect.arrayContaining(["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"]));
+  });
+
+  it("does not emit duplicate PATH entries", () => {
+    const pathEntries = extractPlistPathValue(plist).split(":");
+    expect(new Set(pathEntries).size).toBe(pathEntries.length);
+  });
+
+  it("does not duplicate launchd fallback paths that match the current Node binary directory", () => {
+    withExecPath("/usr/local/bin/node", () => {
+      const pathEntries = extractPlistPathValue(renderPlist(FAKE_BIN_INVOCATION, {})).split(":");
+      expect(pathEntries[0]).toBe("/usr/local/bin");
+      expect(pathEntries.filter((entry) => entry === "/usr/local/bin")).toHaveLength(1);
+    });
   });
 });

@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getConfig } from "../config/singleton.js";
 
 /**
  * Release channel identity. Single source of truth for which environment
@@ -102,4 +103,28 @@ export function inferChannelFromVersion(version: string): ChannelName | "unknown
   if (/-staging\./.test(version)) return "staging";
   if (/^\d+\.\d+\.\d+$/.test(version)) return "prod";
   return "unknown";
+}
+
+/**
+ * Channel-resolved CLI identity for the current server process. Reads the
+ * channel from the config singleton (set by `initConfig()` at boot) and
+ * threads it through {@link getChannelConfig}. Process-level constant —
+ * channel never changes after init.
+ *
+ * Single helper so every server-side error message / bootstrap-hint /
+ * dashboard string emits the same channel-correct CLI name without each
+ * caller hand-rolling `getChannelConfig(getConfig().channel)`. Throws when
+ * called before `initConfig()` (fail-loud — silent fallback to the default
+ * channel would reintroduce the multi-env footgun where staging servers
+ * tell clients to install the prod tarball).
+ *
+ * Client / CLI code paths must NOT use this — their channel comes from
+ * `apps/cli/src/build-info.ts` at build time and is installed into
+ * `@first-tree/client` via `setCliBinding` (`packages/client/src/runtime/
+ * cli-binding.ts`). The two surfaces stay symmetric: server reads its own
+ * config; client receives an entrypoint-supplied binding.
+ */
+export function getServerCliBinding(): ChannelConfig {
+  const config = getConfig<{ channel: ChannelName }>();
+  return getChannelConfig(config.channel);
 }

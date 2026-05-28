@@ -27,6 +27,21 @@ export async function getGithubAppInstallation(organizationId: string): Promise<
 }
 
 /**
+ * Member-readable "is the GitHub App installed for this team?" probe.
+ *
+ * The full installation endpoint above is admin-only because it exposes
+ * install-id / permissions / events. This redacted boolean view exists so
+ * non-admin onboarding paths (specifically invitee kickoff) can detect
+ * the "admin set up the tree but never connected code" failure mode
+ * without either (a) silently 403-ing every invitee out of the flow or
+ * (b) never tripping at all. Presence is the whole answer — no 404 path.
+ */
+export async function getGithubAppInstallationExists(organizationId: string): Promise<boolean> {
+  const r = await api.get<{ exists: boolean }>(`/orgs/${organizationId}/github-app-installation/exists`);
+  return r.exists;
+}
+
+/**
  * Fetch the GitHub App install URL for the active org. The server mints a
  * signed `state` JWT, sets the `oauth_state_nonce` cookie alongside it,
  * and returns `https://github.com/apps/<slug>/installations/new?state=…`

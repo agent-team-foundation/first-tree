@@ -206,7 +206,10 @@ export function ComposeStatusBar({
           className="flex flex-col"
           style={{ gap: "var(--sp-1)", maxHeight: EXPANDED_MAX_HEIGHT, overflowY: "auto" }}
         >
-          {attention.map((s) => (
+          {/* `others`, NOT `attention`: the lead already has its own always-on
+              row above, so mapping the full set here would render the lead a
+              second time (the duplicate-row bug). */}
+          {others.map((s) => (
             <RailRow key={s.agentId} status={s} nameOf={nameFor(agents)} mounted={mounted} />
           ))}
         </div>

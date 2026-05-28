@@ -141,6 +141,25 @@ describe("formatInboundContent", () => {
     expect(listFn).toHaveBeenCalledTimes(1);
   });
 
+  it("shares an inflight participant fetch across concurrent callers", async () => {
+    let resolveRows: (rows: ChatParticipantDetail[]) => void = () => {};
+    const listFn = vi.fn(
+      () =>
+        new Promise<ChatParticipantDetail[]>((resolve) => {
+          resolveRows = resolve;
+        }),
+    );
+    const sdk = { serverUrl: "http://test", listChatParticipants: listFn } as unknown as FirstTreeHubSDK;
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+
+    const first = cache.get();
+    const second = cache.get();
+    resolveRows(participants);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([participants, participants]);
+    expect(listFn).toHaveBeenCalledTimes(1);
+  });
+
   it("returns [] from the cache on fetch failure and logs (graceful degrade)", async () => {
     const logs: string[] = [];
     const sdk = mkSdk(() => Promise.reject(new Error("hub down")));
@@ -156,6 +175,24 @@ describe("formatInboundContent", () => {
     // Without participants we can't resolve "agent-a" → "alice"; fall back to id.
     expect(await formatInboundContent(msg, cache)).toBe("[From: agent-a]\n\nhi");
     expect(logs.some((l) => l.includes("listChatParticipants failed"))).toBe(true);
+  });
+
+  it("logs non-Error participant fetch failures", async () => {
+    const logs: string[] = [];
+    const sdk = mkSdk(() => Promise.reject("hub string failure"));
+    const cache = createParticipantCache(sdk, "chat-1", (m) => logs.push(m));
+
+    expect(await cache.get()).toEqual([]);
+    expect(logs).toContain("listChatParticipants failed: hub string failure");
+  });
+
+  it("resets inflight after a successful direct cache fetch", async () => {
+    const listFn = vi.fn().mockResolvedValue(participants);
+    const cache = createParticipantCache(mkSdk(listFn), "chat-1", () => {});
+
+    await expect(cache.get()).resolves.toEqual(participants);
+    await expect(cache.get()).resolves.toEqual(participants);
+    expect(listFn).toHaveBeenCalledTimes(1);
   });
 
   it("renders precedingMessages as an [Earlier in chat] block before the trigger", async () => {
@@ -197,6 +234,34 @@ describe("formatInboundContent", () => {
     // Ordering: earlier block must precede the trigger.
     expect(out.indexOf("[Earlier in chat")).toBeLessThan(out.indexOf("[Now — message"));
     expect(out.indexOf("[Now — message")).toBeLessThan(out.indexOf("[From: carol]"));
+  });
+
+  it("serializes structured preceding message content", async () => {
+    const ps = [mkParticipant("agent-a", "alice"), mkParticipant("agent-b", "bob")];
+    const sdk = mkSdk(async () => ps);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m2",
+      chatId: "chat-1",
+      senderId: "agent-b",
+      format: "text",
+      content: "latest",
+      metadata: null,
+      precedingMessages: [
+        {
+          id: "m1",
+          senderId: "agent-a",
+          format: "card",
+          content: { title: "earlier" },
+          metadata: {},
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    };
+
+    const out = await formatInboundContent(msg, cache);
+
+    expect(out).toContain(`[From: alice] ${JSON.stringify({ title: "earlier" })}`);
   });
 
   it("omits the [Earlier in chat] block when precedingMessages is empty / absent", async () => {

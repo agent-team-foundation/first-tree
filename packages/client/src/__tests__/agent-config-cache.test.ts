@@ -1,6 +1,6 @@
 import type { AgentRuntimeConfig } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
-import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
+import { type AgentConfigCacheLogger, createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
 function makeConfig(version: number, urls: string[] = []): AgentRuntimeConfig {
@@ -78,6 +78,28 @@ describe("AgentConfigCache (Step 4)", () => {
     expect(sdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("stores a fetched config when the placeholder entry was forgotten mid-flight", async () => {
+    let resolveConfig: (cfg: AgentRuntimeConfig) => void = () => {};
+    const sdk = {
+      fetchAgentConfig: vi.fn(
+        () =>
+          new Promise<AgentRuntimeConfig>((resolve) => {
+            resolveConfig = resolve;
+          }),
+      ),
+      isHubReachable: vi.fn(),
+    } as unknown as FirstTreeHubSDK;
+    const cache = createAgentConfigCache({ sdk });
+
+    const pending = cache.refresh("agent-1");
+    cache.forget("agent-1");
+    resolveConfig(makeConfig(9, ["https://github.com/foo/recovered.git"]));
+
+    await expect(pending).resolves.toMatchObject({ version: 9 });
+    expect(cache.get("agent-1")?.version).toBe(9);
+    expect([...cache.allReferencedUrls()]).toEqual(["https://github.com/foo/recovered.git"]);
+  });
+
   it("allReferencedUrls aggregates across agents", async () => {
     const cfgA = makeConfig(1, ["https://github.com/foo/a.git"]);
     const cfgB = makeConfig(1, ["https://github.com/foo/b.git", "https://github.com/foo/c.git"]);
@@ -115,5 +137,42 @@ describe("AgentConfigCache (Step 4)", () => {
     const ok = await cache.refresh("agent-1");
     expect(ok.version).toBe(1);
     expect(sdk.fetchAgentConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("logs rejected fetches when a logger is provided", async () => {
+    const err = new Error("Hub down");
+    const sdk = {
+      fetchAgentConfig: vi.fn().mockRejectedValue(err),
+      isHubReachable: vi.fn(),
+    } as unknown as FirstTreeHubSDK;
+    const log = { warn: vi.fn() } as unknown as AgentConfigCacheLogger;
+    const cache = createAgentConfigCache({ sdk, log });
+
+    await expect(cache.refresh("agent-1")).rejects.toThrow("Hub down");
+
+    expect(log.warn).toHaveBeenCalledWith({ agentId: "agent-1", err }, "agent config fetch failed");
+  });
+
+  it("rejects configs fetched for a different agent id", async () => {
+    const sdk = makeSdkWithConfigs([{ ...makeConfig(1), agentId: "agent-2" }]);
+    const cache = createAgentConfigCache({ sdk });
+
+    await expect(cache.refresh("agent-1")).rejects.toThrow(
+      'AgentConfigCache: fetched config for "agent-2" but expected "agent-1"',
+    );
+  });
+
+  it("updates referenced URLs only for cached agents", async () => {
+    const sdk = makeSdkWithConfigs([makeConfig(1, ["https://github.com/foo/a.git"])]);
+    const cache = createAgentConfigCache({ sdk });
+    await cache.refresh("agent-1");
+
+    cache.updateUrls("missing-agent", ["https://github.com/foo/missing.git"]);
+    cache.updateUrls("agent-1", ["https://github.com/foo/b.git", "https://github.com/foo/c.git"]);
+
+    expect([...cache.allReferencedUrls()].sort()).toEqual([
+      "https://github.com/foo/b.git",
+      "https://github.com/foo/c.git",
+    ]);
   });
 });

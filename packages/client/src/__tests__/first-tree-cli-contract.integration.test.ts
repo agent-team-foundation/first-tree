@@ -1,14 +1,25 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   bootstrapWorkspace,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
 } from "../runtime/bootstrap.js";
+import { setCliBinding } from "../runtime/cli-binding.js";
 import type { AgentIdentity } from "../runtime/handler.js";
+
+// This file probes the real `first-tree` binary (via the PATH shim installed
+// per test) — the contract covers the prod CLI shape. Pin the binding to
+// prod so `bootstrapWorkspace` and `installFirstTreeIntegration` invoke the
+// binary the test scaffolding expects (and the `HAS_FIRST_TREE_CLI` probe
+// below already checks the same name).
+beforeAll(() => {
+  setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+});
 
 /**
  * Production `defaultInstallExec` uses `stdio: "pipe"` and discards both
@@ -46,13 +57,18 @@ function tracingExec(captured: string[]): InstallFirstTreeIntegrationExec {
  * That gap is exactly how `--source-path` (a flag the CLI doesn't accept)
  * shipped to production and silently broke every session bootstrap.
  *
- * Skips when `first-tree` is not on PATH (CI), runs in the worktree on
- * developer machines that have it installed via Homebrew / npm.
+ * Runs against the in-tree CLI source via a PATH shim. That keeps the contract
+ * stable even when a developer has a packaged/global `first-tree` installed
+ * whose bundled skills do not match this checkout.
  */
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const FIRST_TREE_CLI_SOURCE = join(REPO_ROOT, "apps", "cli", "src", "cli", "index.ts");
+const TSX_BIN = join(REPO_ROOT, "apps", "cli", "node_modules", ".bin", "tsx");
 const HAS_FIRST_TREE_CLI = (() => {
   try {
-    execFileSync("first-tree", ["--version"], { stdio: "ignore", timeout: 3_000 });
+    if (!existsSync(FIRST_TREE_CLI_SOURCE) || !existsSync(TSX_BIN)) return false;
+    execFileSync(TSX_BIN, [FIRST_TREE_CLI_SOURCE, "--version"], { stdio: "ignore", timeout: 3_000 });
     return true;
   } catch {
     return false;
@@ -70,6 +86,17 @@ const HAS_FIRST_TREE_CLI = (() => {
  * this also matches the production layout.
  */
 let tmpBase: string;
+let originalPath: string | undefined;
+
+function installFirstTreePathShim(binDir: string): void {
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(join(binDir, "first-tree"), `#!/bin/sh\nexec "${TSX_BIN}" "${FIRST_TREE_CLI_SOURCE}" "$@"\n`, {
+    encoding: "utf-8",
+    mode: 0o755,
+  });
+  originalPath = process.env.PATH;
+  process.env.PATH = [binDir, originalPath].filter(Boolean).join(delimiter);
+}
 
 /**
  * Initialise a fake context-tree git repo. first-tree CLI insists on a real
@@ -96,8 +123,14 @@ function makeFakeTreeRepo(dir: string, remoteUrl?: string): void {
 describe.skipIf(!HAS_FIRST_TREE_CLI)("first-tree CLI integrate contract", () => {
   beforeEach(() => {
     tmpBase = mkdtempSync(join(tmpdir(), "ft-cli-contract-"));
+    installFirstTreePathShim(join(tmpBase, "bin"));
   });
   afterEach(() => {
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
     try {
       rmSync(tmpBase, { recursive: true, force: true });
     } catch {

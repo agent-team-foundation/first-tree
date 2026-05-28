@@ -96,6 +96,11 @@ describe("singleRepoLocalPathFromPayload + selfFenceFromRuntimeConfig", () => {
     ).toBeNull();
   });
 
+  it("returns null for a sparse single-repo payload", () => {
+    const gitRepos = new Array<AgentRuntimeConfigPayload["gitRepos"][number]>(1);
+    expect(singleRepoLocalPathFromPayload(payload(gitRepos))).toBeNull();
+  });
+
   it("derives the localPath from the repo URL when explicit localPath is absent", () => {
     expect(singleRepoLocalPathFromPayload(payload([{ url: "https://github.com/a/first-tree.git" }]))).toBe(
       "first-tree",

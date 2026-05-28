@@ -118,16 +118,21 @@ describe("attention service — invariants", () => {
     // Only bot is in the chat; the target human is NOT.
     await addSpeaker(app, chatId, bot, "owner");
 
-    await expect(
-      raiseAttention(app.db, bot, {
-        chatId,
-        target: human,
-        subject: "ping",
-        body: "",
-        requiresResponse: true,
-        metadata: {},
-      }),
-    ).rejects.toBeInstanceOf(ConflictError);
+    const raisePromise = raiseAttention(app.db, bot, {
+      chatId,
+      target: human,
+      subject: "ping",
+      body: "",
+      requiresResponse: true,
+      metadata: {},
+    });
+    await expect(raisePromise).rejects.toBeInstanceOf(ConflictError);
+    // Multi-env regression guard: the chat-invite hint must carry the
+    // channel-resolved binary name. Test config pins channel=dev, so
+    // `getServerCliBinding()` in `services/attention.ts` returns
+    // `first-tree-dev`. A regression to hardcoded `first-tree chat invite`
+    // would not be caught by `toBeInstanceOf(ConflictError)` alone.
+    await expect(raisePromise).rejects.toThrow(/first-tree-dev chat invite/);
   });
 
   it("requires_response=false closes the row on creation", async () => {
@@ -207,7 +212,14 @@ describe("attention service — invariants", () => {
 
     const closed = await respondAttention(app.db, human, created.id, { text: "deploy — diff looks clean" });
     expect(closed.state).toBe("closed");
+    // The canonical answer on the attention row is the raw response text
+    // — the `@<origin>` echo prefix is a chat-rendering concern, not part
+    // of the stored answer.
     expect(closed.response).toBe("deploy — diff looks clean");
+
+    const [botRow] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, bot));
+    expect(botRow?.name).toBeTruthy();
+    const botName = botRow?.name ?? "";
 
     const postEcho = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
     expect(postEcho.length).toBe(1);
@@ -215,12 +227,27 @@ describe("attention service — invariants", () => {
     expect(echo).toBeDefined();
     if (!echo) return;
     expect(echo.senderId).toBe(human);
-    expect(echo.content).toBe("deploy — diff looks clean");
+    // Echo content has `@<originAgent>` prepended by sendMessage's
+    // `normalizeMentionsInContent` (resolved from `metadata.mentions`
+    // against the chat's speaker list) so chat readers see the reply
+    // is directed at the asker. The routing — actually waking the
+    // asker — is driven by the explicit declaration below, not by
+    // this prefix; see services/attention.ts respondAttention.
+    expect(echo.content).toBe(`@${botName} deploy — diff looks clean`);
     expect(echo.format).toBe("text");
     // The echo carries the linkage back to the originating attention so
     // exports / search / rendering can opt in to a "this was an answer"
     // visual without inferring from heuristics.
-    expect((echo.metadata as Record<string, unknown>).attentionResponseFor).toBe(created.id);
+    const echoMetadata = echo.metadata as Record<string, unknown>;
+    expect(echoMetadata.attentionResponseFor).toBe(created.id);
+    // The asker's uuid is in `metadata.mentions` via the explicit
+    // declaration in respondAttention — this is the wake-up routing
+    // that lets the asking agent resume after the human responds.
+    // Server no longer parses `@<originAgent>` out of content; the
+    // visible prefix above is presentation-only.
+    const mentions = echoMetadata.mentions;
+    expect(Array.isArray(mentions)).toBe(true);
+    expect(mentions as string[]).toContain(bot);
   });
 
   it("cancel by non-origin → ForbiddenError", async () => {

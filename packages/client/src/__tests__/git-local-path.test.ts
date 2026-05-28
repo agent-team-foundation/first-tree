@@ -1,5 +1,5 @@
 import { resolve, sep } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 
 describe("resolveGitRepoTargetPath", () => {
@@ -11,6 +11,7 @@ describe("resolveGitRepoTargetPath", () => {
   });
 
   it.each([
+    ".",
     "/tmp/repo",
     "../repo",
     "repos/../repo",
@@ -21,5 +22,24 @@ describe("resolveGitRepoTargetPath", () => {
     const workspace = sep === "\\" ? "C:\\tmp\\workspace" : "/tmp/workspace";
 
     expect(() => resolveGitRepoTargetPath(workspace, localPath)).toThrow(/Unsafe git repo localPath/);
+  });
+
+  it("rejects a path if the final resolved target escapes the workspace", async () => {
+    vi.resetModules();
+    vi.doMock("node:path", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:path")>();
+      return {
+        ...actual,
+        relative: () => "..",
+      };
+    });
+
+    try {
+      const fresh = await import("../runtime/git-local-path.js");
+      expect(() => fresh.resolveGitRepoTargetPath("/tmp/workspace", "repo")).toThrow(/resolved path escapes/);
+    } finally {
+      vi.doUnmock("node:path");
+      vi.resetModules();
+    }
   });
 });

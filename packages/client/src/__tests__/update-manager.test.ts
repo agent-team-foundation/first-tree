@@ -109,6 +109,46 @@ describe("UpdateManager decision flow", () => {
     expect(executeUpdate).not.toHaveBeenCalled();
   });
 
+  it("logs and skips invalid advertised or current versions", async () => {
+    const firstConn = makeFakeConnection();
+    const firstLogs: string[] = [];
+    const firstExecuteUpdate = vi.fn(async () => ({ installed: false }));
+    UpdateManager.attach(firstConn, {
+      currentVersion: "0.9.2",
+      updateConfig: makeUpdateConfig({ policy: "auto" }),
+      isTTY: false,
+      log: (_level, msg) => firstLogs.push(msg),
+      getQuietGateSnapshot: () => ({ activeCount: 0, lastActivityMs: 0 }),
+      prompt: async () => true,
+      executeUpdate: firstExecuteUpdate,
+    });
+
+    firstConn.emitWelcome(makeWelcome("not-semver"));
+    await waitForMicrotasks();
+
+    expect(firstExecuteUpdate).not.toHaveBeenCalled();
+    expect(firstLogs).toContain('Server advertised invalid version "not-semver"; skipping drift check');
+
+    const secondConn = makeFakeConnection();
+    const secondLogs: string[] = [];
+    const secondExecuteUpdate = vi.fn(async () => ({ installed: false }));
+    UpdateManager.attach(secondConn, {
+      currentVersion: "dev-local",
+      updateConfig: makeUpdateConfig({ policy: "auto" }),
+      isTTY: false,
+      log: (_level, msg) => secondLogs.push(msg),
+      getQuietGateSnapshot: () => ({ activeCount: 0, lastActivityMs: 0 }),
+      prompt: async () => true,
+      executeUpdate: secondExecuteUpdate,
+    });
+
+    secondConn.emitWelcome(makeWelcome("0.9.2"));
+    await waitForMicrotasks();
+
+    expect(secondExecuteUpdate).not.toHaveBeenCalled();
+    expect(secondLogs).toContain('Own version "dev-local" is not valid SemVer; skipping drift check');
+  });
+
   it("policy=prompt, daemon (no TTY) → log only, no prompt or update", async () => {
     const conn = makeFakeConnection();
     const prompt = vi.fn(async () => true);
@@ -179,6 +219,45 @@ describe("UpdateManager decision flow", () => {
     expect(executeUpdate).not.toHaveBeenCalled();
   });
 
+  it("logs update decision failures from the async welcome listener", async () => {
+    const conn = makeFakeConnection();
+    const logs: string[] = [];
+    UpdateManager.attach(conn, {
+      currentVersion: "0.8.4",
+      updateConfig: makeUpdateConfig({ policy: "prompt" }),
+      isTTY: true,
+      log: (_level, msg) => logs.push(msg),
+      getQuietGateSnapshot: () => ({ activeCount: 0, lastActivityMs: 0 }),
+      prompt: async () => {
+        throw new Error("prompt failed");
+      },
+      executeUpdate: async () => ({ installed: false }),
+    });
+
+    conn.emitWelcome(makeWelcome("0.9.2"));
+    await waitForMicrotasks();
+
+    expect(logs).toContain("update decision failed: prompt failed");
+
+    const stringConn = makeFakeConnection();
+    UpdateManager.attach(stringConn, {
+      currentVersion: "0.8.4",
+      updateConfig: makeUpdateConfig({ policy: "prompt" }),
+      isTTY: true,
+      log: (_level, msg) => logs.push(msg),
+      getQuietGateSnapshot: () => ({ activeCount: 0, lastActivityMs: 0 }),
+      prompt: async () => {
+        throw "prompt string failed";
+      },
+      executeUpdate: async () => ({ installed: false }),
+    });
+
+    stringConn.emitWelcome(makeWelcome("0.9.2"));
+    await waitForMicrotasks();
+
+    expect(logs).toContain("update decision failed: prompt string failed");
+  });
+
   it("policy=auto, daemon, first welcome → update immediately (no quiet gate)", async () => {
     const conn = makeFakeConnection();
     const executeUpdate = vi.fn(async () => ({ installed: false }));
@@ -202,6 +281,35 @@ describe("UpdateManager decision flow", () => {
 
     expect(executeUpdate).toHaveBeenCalledOnce();
     expect(getQuietGateSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("policy=auto, TTY waits briefly and stops if disposed during the notice delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const conn = makeFakeConnection();
+      const logs: string[] = [];
+      const executeUpdate = vi.fn(async () => ({ installed: false }));
+      const mgr = UpdateManager.attach(conn, {
+        currentVersion: "0.8.4",
+        updateConfig: makeUpdateConfig({ policy: "auto" }),
+        isTTY: true,
+        log: (_level, msg) => logs.push(msg),
+        getQuietGateSnapshot: () => ({ activeCount: 0, lastActivityMs: 0 }),
+        prompt: async () => false,
+        executeUpdate,
+      });
+
+      conn.emitWelcome(makeWelcome("0.9.2", false));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(logs).toContain("Auto-update starting in 5s");
+
+      mgr.dispose();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(executeUpdate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("policy=auto, daemon, reconnect welcome → waits on quiet gate until idle", async () => {
@@ -247,6 +355,60 @@ describe("UpdateManager decision flow", () => {
     }
   });
 
+  it("dispose() is idempotent and clears a pending quiet-gate timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const conn = makeFakeConnection();
+      const executeUpdate = vi.fn(async () => ({ installed: false }));
+      const mgr = UpdateManager.attach(conn, {
+        currentVersion: "0.8.4",
+        updateConfig: makeUpdateConfig({
+          policy: "auto",
+          restart_quiet_seconds: 30,
+          restart_check_interval_seconds: 10,
+        }),
+        isTTY: false,
+        log: () => {},
+        getQuietGateSnapshot: () => ({ activeCount: 1, lastActivityMs: Date.now() }),
+        prompt: async () => false,
+        executeUpdate,
+      });
+
+      conn.emitWelcome(makeWelcome("0.9.2", true));
+      await vi.advanceTimersByTimeAsync(1);
+      mgr.dispose();
+      mgr.dispose();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(executeUpdate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the update when disposed while the reconnect quiet gate is checking", async () => {
+    const conn = makeFakeConnection();
+    const executeUpdate = vi.fn(async () => ({ installed: false }));
+    let mgr: UpdateManager;
+    mgr = UpdateManager.attach(conn, {
+      currentVersion: "0.8.4",
+      updateConfig: makeUpdateConfig({ policy: "auto" }),
+      isTTY: false,
+      log: () => {},
+      getQuietGateSnapshot: () => {
+        mgr.dispose();
+        return { activeCount: 0, lastActivityMs: 0 };
+      },
+      prompt: async () => false,
+      executeUpdate,
+    });
+
+    conn.emitWelcome(makeWelcome("0.9.2", true));
+    await waitForMicrotasks();
+
+    expect(executeUpdate).not.toHaveBeenCalled();
+  });
+
   it("dispose() stops listening — later welcome frames are ignored", async () => {
     const conn = makeFakeConnection();
     const executeUpdate = vi.fn(async () => ({ installed: false }));
@@ -290,5 +452,45 @@ describe("UpdateManager decision flow", () => {
     conn.emitWelcome(makeWelcome("0.9.2", true));
     await waitForMicrotasks();
     expect(executeUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("logs executeUpdate failures and retries later", async () => {
+    const conn = makeFakeConnection();
+    const logs: string[] = [];
+    const executeUpdate = vi.fn().mockRejectedValueOnce("install exploded").mockResolvedValueOnce({ installed: false });
+    UpdateManager.attach(conn, {
+      currentVersion: "0.8.4",
+      updateConfig: makeUpdateConfig({ policy: "auto" }),
+      isTTY: false,
+      log: (_level, msg) => logs.push(msg),
+      getQuietGateSnapshot: () => ({ activeCount: 0, lastActivityMs: 0 }),
+      prompt: async () => false,
+      executeUpdate,
+    });
+
+    conn.emitWelcome(makeWelcome("0.9.2", false));
+    await waitForMicrotasks();
+    conn.emitWelcome(makeWelcome("0.9.2", false));
+    await waitForMicrotasks();
+
+    expect(logs).toContain("Self-update threw: install exploded");
+    expect(executeUpdate).toHaveBeenCalledTimes(2);
+
+    const errorConn = makeFakeConnection();
+    const errorExecuteUpdate = vi.fn().mockRejectedValue(new Error("install error"));
+    UpdateManager.attach(errorConn, {
+      currentVersion: "0.8.4",
+      updateConfig: makeUpdateConfig({ policy: "auto" }),
+      isTTY: false,
+      log: (_level, msg) => logs.push(msg),
+      getQuietGateSnapshot: () => ({ activeCount: 0, lastActivityMs: 0 }),
+      prompt: async () => false,
+      executeUpdate: errorExecuteUpdate,
+    });
+
+    errorConn.emitWelcome(makeWelcome("0.9.2", false));
+    await waitForMicrotasks();
+
+    expect(logs).toContain("Self-update threw: install error");
   });
 });

@@ -3,34 +3,6 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import type { GithubRepo } from "../../api/github.js";
 
-/** Checklist of outcomes for the footer: "what you'll have after this". */
-export function OutcomeList({ items }: { items: readonly string[] }) {
-  return (
-    <ul className="flex flex-col" style={{ gap: "var(--sp-2_5)", margin: 0, padding: 0, listStyle: "none" }}>
-      {items.map((item) => (
-        <li key={item} className="flex items-start text-label" style={{ gap: "var(--sp-2)", color: "var(--fg-3)" }}>
-          <span
-            aria-hidden="true"
-            className="inline-flex items-center justify-center"
-            style={{
-              width: "var(--sp-4)",
-              height: "var(--sp-4)",
-              flexShrink: 0,
-              marginTop: "var(--sp-0_5)",
-              borderRadius: 999,
-              background: "color-mix(in oklch, var(--accent) 14%, transparent)",
-              color: "var(--accent)",
-            }}
-          >
-            <Check className="h-3 w-3" />
-          </span>
-          <span>{item}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 /**
  * Step heading (title + optional one-line "why"). Used when a step renders its
  * own heading per sub-state instead of the shell's static one — the shell
@@ -154,20 +126,23 @@ export function StatusRow({ state, label }: { state: "waiting" | "ok"; label: Re
 }
 
 /**
- * The terminal one-liner the user pastes to connect a computer. Renders the
- * install + login lines filling the box width (ellipsizing only the overflow)
- * and copies the full multi-line command (npm install + login). Lifted from the
- * legacy Step2Body CommandBox.
+ * The terminal one-liner(s) the user pastes to connect a computer. Renders
+ * whatever lines the server's bootstrap command contains — typically two
+ * (`npm install -g …` then `first-tree login <token>`), but dev channels
+ * return only the login line, and a future channel might add more. Each
+ * line nowraps and ellipsizes on overflow so a long opaque token shows as
+ * much as fits without word-breaking; Copy puts the full multi-line command
+ * on the clipboard regardless of what's visible.
+ *
+ * The previous implementation pattern-matched lines by prefix
+ * (`startsWith("npm")` / `startsWith("first-tree")`), which was fragile —
+ * adding a new prefix (yarn / pnpm / `cd …`) would silently drop content
+ * from the visible box while Copy still worked. The current pass-through
+ * trusts the server: render the lines it gave us, in order.
  */
 export function CommandBox({ command }: { command: string | null }) {
   const [copied, setCopied] = useState(false);
   const lines = command ? command.split("\n").filter((l) => l.trim().length > 0) : [];
-  // Show both lines — install and login — each on its own row, filling the box
-  // width and ellipsizing only what overflows. So the long opaque token shows
-  // as much as fits (not a stingy fixed slice) and grows with the box width.
-  // Copy still puts the complete multi-line command on the clipboard.
-  const installLine = lines.find((l) => l.startsWith("npm")) ?? "";
-  const loginLine = lines.find((l) => l.startsWith("first-tree")) ?? "";
 
   const handleCopy = async (): Promise<void> => {
     if (!command) return;
@@ -199,16 +174,17 @@ export function CommandBox({ command }: { command: string | null }) {
         }}
       >
         {command ? (
-          <>
-            {installLine && (
-              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{installLine}</span>
-            )}
-            {loginLine && (
-              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{loginLine}</span>
-            )}
-          </>
+          lines.map((line, i) => (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: lines are positional and stable per render
+              key={i}
+              style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+            >
+              {line}
+            </span>
+          ))
         ) : (
-          "Generating command…"
+          <span>Generating command…</span>
         )}
       </div>
       <button

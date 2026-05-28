@@ -30,6 +30,7 @@ import {
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { getCliBinding } from "../runtime/cli-binding.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
@@ -44,6 +45,7 @@ import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
+import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
@@ -244,6 +246,38 @@ function isResultMessage(message: unknown): message is ResultMessage {
   if (!message || typeof message !== "object") return false;
   const m = message as Record<string, unknown>;
   return m.type === "result" && typeof m.subtype === "string";
+}
+
+/**
+ * Extract the typed auth-failure signal from any SDK message shape that
+ * carries `SDKAssistantMessageError`. Returns the original provider-side
+ * message (when the SDK has one to share) so the chat-timeline hint can
+ * quote it verbatim.
+ *
+ * Two sources we watch (per `@anthropic-ai/claude-agent-sdk` `sdk.d.ts`):
+ *
+ *   - `assistant` messages with `error === "authentication_failed"` — the
+ *     turn's terminal auth-failure signal, emitted from the typed union.
+ *   - `auth_status` messages with a non-empty `error` string — the dedicated
+ *     auth-state surface.
+ *
+ * `system/api_retry` is deliberately NOT watched here: that message fires
+ * BEFORE the SDK's next retry attempt, not as a final verdict on the turn,
+ * and would surface a hint before the user knew the turn failed. If a retry
+ * does succeed, the hint would have been a false alarm. The eventual
+ * `assistant.error` or `result.subtype === "error"` is the authoritative
+ * post-failure signal — let those drive the chat-timeline message.
+ */
+function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | null {
+  if (!message || typeof message !== "object") return null;
+  const m = message as Record<string, unknown>;
+  if (m.type === "assistant" && isClaudeAuthError(m.error as string | undefined)) {
+    return { rawMessage: "authentication_failed" };
+  }
+  if (m.type === "auth_status" && typeof m.error === "string" && m.error.length > 0) {
+    return { rawMessage: m.error };
+  }
+  return null;
 }
 
 function extractToolResultText(content: unknown): string {
@@ -649,11 +683,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     return async (toolName, input, _options) => {
       if (toolName === "AskUserQuestion") {
         sessionCtx.log("AskUserQuestion is no longer bridged; redirecting agent to NHA");
+        // Channel-aware redirect: in staging / dev the binary on PATH is
+        // `first-tree-staging` / `first-tree-dev`, so the deny message has
+        // to thread `binName` through — same reason as bootstrap.ts's
+        // `generateToolsDoc`. Resolved lazily per turn so vitest workers
+        // that flip the binding mid-suite see the up-to-date value.
+        const bin = getCliBinding().binName;
         return {
           behavior: "deny",
           message:
             "AskUserQuestion is no longer supported in this Hub. " +
-            "To request human attention, use the `first-tree attention raise` CLI (or your runtime's NHA SDK). " +
+            `To request human attention, use the \`${bin} attention raise\` CLI (or your runtime's NHA SDK). ` +
             "See the `attention` skill for usage.",
         } satisfies PermissionResult;
       }
@@ -796,6 +836,20 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       path: contextTreePath,
       repoUrl: contextTreeRepoUrl,
     });
+    // Auth-failure hint emission flag. Set when we detect a typed
+    // `authentication_failed` on assistant / auth_status messages. Consulted
+    // in the result-error branch so we don't double-emit (once as a hint,
+    // once as the raw SDK error). Two scopes share this:
+    //   1. Within a single turn: per-turn reset on `result` boundary so the
+    //      next turn within the SAME query (bg-agent multi-turn mode) starts
+    //      fresh.
+    //   2. Across retries (outer while-loop reentry via the catch +
+    //      respawnQuery path): NOT reset. An auth failure won't self-heal,
+    //      so respawning typically hits the same error — without persistence
+    //      the user would see two identical hint lines in the timeline.
+    // Hoisted out of the try block so the outer catch's reentry preserves it
+    // across the respawn boundary.
+    let authHintEmitted = false;
     try {
       while (true) {
         if (!currentQuery) return;
@@ -808,6 +862,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             sessionCtx.touch();
 
             toolCallProcessor.onMessage(message);
+
+            // Detect typed auth failure BEFORE result-message handling so the
+            // user sees the actionable hint before any redundant result error.
+            // The SDK's auth state lives in claude's own credential store —
+            // we only translate the surface error, we don't manage tokens.
+            const authFailure = detectClaudeAuthFailure(message);
+            if (authFailure && !authHintEmitted) {
+              authHintEmitted = true;
+              sessionCtx.emitEvent({
+                kind: "error",
+                payload: { source: "sdk", message: formatAuthHint("claude-code", authFailure.rawMessage) },
+              });
+            }
 
             if (isResultMessage(message)) {
               if (message.subtype === "success") {
@@ -908,13 +975,29 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
                 const errorLog = `Query result error: ${errors} (subtype=${message.subtype}, turns=${message.num_turns ?? "?"}, duration=${message.duration_ms ?? "?"}ms)`;
                 sessionCtx.log(errorLog);
-                sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
+                // If we already emitted an auth-failure hint earlier in this
+                // turn (typed `authentication_failed` on an assistant /
+                // api_retry / auth_status message), skip the raw SDK error
+                // emit so the timeline shows the actionable hint instead of
+                // a redundant opaque second line.
+                if (!authHintEmitted) {
+                  sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
+                }
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                 // SDK reported a turn-level error (non-success subtype):
                 // redelivery would just hit the same error — ack.
                 sessionCtx.markCompleted();
               }
               sessionCtx.setRuntimeState("idle");
+              // Reset the auth-hint flag only on a SUCCESSFUL result. This
+              // gives a clean slate for the next turn once auth is clearly
+              // working, while suppressing a duplicate hint when the next
+              // turn (or a retry — see flag declaration above) hits the same
+              // unhealing auth failure. The user has already been told what
+              // to do; repeating it adds noise without new information.
+              if (message.subtype === "success") {
+                authHintEmitted = false;
+              }
             }
           }
           sessionCtx.setRuntimeState("idle");

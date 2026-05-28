@@ -121,6 +121,14 @@ describe("markWorkspaceInitComplete / clearWorkspaceInitComplete", () => {
     // Never marked complete in the first place.
     expect(() => clearWorkspaceInitComplete(home)).not.toThrow();
   });
+
+  it("clearWorkspaceInitComplete ignores a sentinel unlink race", () => {
+    const home = acquireAgentHome(join(root, AGENT_NAME));
+    mkdirSync(join(home, INIT_COMPLETE_SENTINEL_REL), { recursive: true });
+
+    expect(() => clearWorkspaceInitComplete(home)).not.toThrow();
+    expect(existsSync(join(home, INIT_COMPLETE_SENTINEL_REL))).toBe(true);
+  });
 });
 
 describe("cleanWorkspaces (deprecated, no-op)", () => {

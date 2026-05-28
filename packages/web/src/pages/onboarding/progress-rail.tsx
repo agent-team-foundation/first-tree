@@ -1,5 +1,5 @@
 import { Bot, Check, GitBranch, type LucideIcon, MonitorSmartphone, Rocket, Sparkles, Users } from "lucide-react";
-import { STEP_COPY } from "./copy.js";
+import { resolveStepLabel } from "./copy.js";
 import { useOnboardingFlow } from "./onboarding-flow.js";
 import { type StepId, stepVisualState } from "./steps.js";
 
@@ -21,13 +21,13 @@ const STEP_ICON: Record<StepId, LucideIcon> = {
  * journey is previewable up front.
  */
 export function ProgressRail() {
-  const { sequence, activeIndex, goTo } = useOnboardingFlow();
+  const { sequence, activeIndex, goTo, path } = useOnboardingFlow();
 
   return (
     <ol className="flex flex-col" style={{ gap: 0, margin: 0, padding: 0, listStyle: "none" }}>
       {sequence.map((id, index) => {
         const state = stepVisualState(index, activeIndex);
-        const copy = STEP_COPY[id];
+        const label = resolveStepLabel(id, path);
         const isLast = index === sequence.length - 1;
         const clickable = state === "complete";
         const Icon = STEP_ICON[id];
@@ -97,7 +97,7 @@ export function ProgressRail() {
                     textAlign: "left",
                   }}
                 >
-                  {copy.label}
+                  {label}
                 </button>
               ) : (
                 <span
@@ -108,7 +108,7 @@ export function ProgressRail() {
                     fontWeight: state === "active" ? 600 : 400,
                   }}
                 >
-                  {copy.label}
+                  {label}
                 </span>
               )}
             </div>

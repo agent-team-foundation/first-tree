@@ -321,10 +321,14 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     });
 
     const result = await sendMessage(app.db, request.params.chatId, scope.humanAgentId, prepared, {
-      enforceGroupMention: true,
-      // Human web endpoint: typed `@<name>` is the user's intent expression
-      // — the only path where the message *itself* is the routing decision.
-      extractMentionsFromContent: true,
+      // Explicit-only contract: the web composer resolves `@<name>` chips
+      // client-side via `segmentMentions(content, participants)` and posts
+      // the resolved uuids in `metadata.mentions`. In 2-speaker chats the
+      // composer auto-injects the peer's uuid so 1:1 typing without an `@`
+      // still reaches the recipient. Either way, `metadata.mentions` is
+      // expected to be non-empty here; the server no longer parses
+      // content. See `services/message.ts` Routing contract.
+      enforceMention: true,
     });
 
     notifyRecipients(app.notifier, result.recipients, result.message.id);

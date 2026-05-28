@@ -44,6 +44,15 @@ describe("InputController", () => {
     expect(result.done).toBe(true);
   });
 
+  it("end() is idempotent", async () => {
+    const ctrl = new InputController<string>();
+    ctrl.end();
+    ctrl.end();
+
+    const iter = ctrl.iterable[Symbol.asyncIterator]();
+    expect(await iter.next()).toEqual({ value: undefined, done: true });
+  });
+
   it("end() resolves a waiting consumer", async () => {
     const ctrl = new InputController<string>();
 

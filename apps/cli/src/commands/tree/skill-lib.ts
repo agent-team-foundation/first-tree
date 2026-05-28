@@ -9,6 +9,7 @@ export const SKILL_NAMES = [
   "first-tree-write",
   "first-tree-github-scan",
   "github-scan",
+  "attention",
 ] as const;
 
 export type SkillName = (typeof SKILL_NAMES)[number];

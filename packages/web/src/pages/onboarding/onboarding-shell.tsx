@@ -4,7 +4,6 @@ import { useAuth } from "../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../components/first-tree-logo.js";
 import { useToast } from "../../components/ui/toast.js";
 import { COPY, STEP_COPY } from "./copy.js";
-import { OutcomeList } from "./flow-ui.js";
 import { useOnboardingFlow } from "./onboarding-flow.js";
 
 /**
@@ -13,8 +12,11 @@ import { useOnboardingFlow } from "./onboarding-flow.js";
  * (full labels, so the whole journey is visible up front) beside a focused
  * content column. No card/border/shadow; structure comes from the rail + a
  * top-anchored content column (centered horizontally, fixed vertical offset so
- * the rail never jumps between steps). "What you'll have" is a quiet footer.
- * On narrow screens the rail collapses to a "Step N of M" line.
+ * the rail never jumps between steps). On narrow screens the rail collapses
+ * to a "Step N of M" line.
+ *
+ * Outcomes (the old "What you'll have" footer) were folded into each step's
+ * `why` copy — one place for the user to read, less repetition, less density.
  */
 export function OnboardingShell({ rail, children }: { rail: ReactNode; children: ReactNode }) {
   const { activeStep, activeIndex, sequence, finishLater, hasAgent } = useOnboardingFlow();
@@ -126,14 +128,6 @@ export function OnboardingShell({ rail, children }: { rail: ReactNode; children:
                 </p>
               ) : null}
               {children}
-
-              {/* "What you'll have" — quiet footer, set off by whitespace. */}
-              <div style={{ marginTop: "var(--sp-7)" }}>
-                <p className="text-label" style={{ margin: "0 0 var(--sp-2_5)", color: "var(--fg-4)" }}>
-                  What you'll have
-                </p>
-                <OutcomeList items={copy.outcomes} />
-              </div>
             </div>
           </main>
         </div>

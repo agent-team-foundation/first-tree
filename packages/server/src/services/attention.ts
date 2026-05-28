@@ -6,6 +6,7 @@ import type {
   RespondAttentionInput,
 } from "@first-tree/shared";
 import { AGENT_TYPES } from "@first-tree/shared";
+import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, desc, eq, inArray, lt, or, type SQL } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -177,7 +178,7 @@ export async function raiseAttention(
     throw new ConflictError(
       `Target human "${target}" is not a member of chat "${chatId}". ` +
         "Add them first:\n" +
-        "  first-tree chat invite <name>\n" +
+        `  ${getServerCliBinding().binName} chat invite <name>\n` +
         "Then re-raise the attention.",
     );
   }
@@ -275,6 +276,17 @@ export async function respondAttention(
   // other speakers (co-targets, auditors) see the decision inline. This
   // is a side effect of `respond`; failure to write the message is
   // swallowed (the canonical answer is on `attentions.response`).
+  //
+  // Routing: declare the asker via explicit `metadata.mentions` (the
+  // raise invariant guarantees they're a speaker of `origin_chat_id`).
+  // `normalizeMentionsInContent: true` lets sendMessage prepend the
+  // `@<name>` prefix automatically by resolving the uuid against the
+  // chat's participant list — so the rendered message reads
+  // "@<asker> …" and the asker is woken via the explicit mention. We
+  // therefore don't need to look up the asker's name here ourselves,
+  // which also removes the post-update DB call that previously could
+  // throw between the attention close and the chat echo (PR #615
+  // atomicity follow-up).
   try {
     await sendMessage(
       db,
@@ -285,16 +297,12 @@ export async function respondAttention(
         content: responseText,
         // Tag the message so consumers can attribute it to the NHA flow
         // (web rendering may opt to chip-decorate "answer to <subject>",
-        // exports / search may filter on it). The bag also carries the
-        // attention id so the linkage is explicit, not inferred.
-        metadata: { attentionResponseFor: attentionId },
+        // exports / search may filter on it). `mentions` is the routing
+        // intent that wakes the asking agent.
+        metadata: { attentionResponseFor: attentionId, mentions: [row.originAgentId] },
         source: "api",
       },
-      // No mention extraction: the response text often contains plain
-      // `@<name>` tokens that aren't routing intent (e.g. quoting the
-      // ask), and the ask itself already names the audience. Keep this
-      // path quiet — receiverNames is empty, content extraction off.
-      { extractMentionsFromContent: false },
+      { normalizeMentionsInContent: true },
     );
   } catch (err) {
     log.warn(

@@ -33,7 +33,33 @@ class FakeClientUserMismatchError extends Error {
   override name = "ClientUserMismatchError";
 }
 
+function noMessageShape(fields: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...fields,
+    toJSON: () => undefined,
+  };
+}
+
 describe("error-taxonomy.classify", () => {
+  describe("shape normalization edge cases", () => {
+    it("reads optional fields from Error instances", () => {
+      const err = Object.assign(new Error("status code only"), {
+        statusCode: 429,
+        reason: "not_owned",
+        cause: new Error("root cause"),
+      });
+
+      expect(classify(err).reasonCode).toBe("claude_rate_limit");
+      expect(classify(err, { source: "bind" }).reasonCode).toBe("bind_not_owned");
+    });
+
+    it("handles object shapes whose JSON representation is undefined", () => {
+      const c = classify(noMessageShape());
+      expect(c.reasonCode).toBe("unknown");
+      expect(c.message).toBe("Unknown error");
+    });
+  });
+
   describe("Claude SDK errors (default source)", () => {
     it("RateLimitError → transient (claude_rate_limit)", () => {
       const c = classify(new FakeRateLimitError("you are rate limited"));
@@ -79,6 +105,33 @@ describe("error-taxonomy.classify", () => {
       expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
       expect(c.reasonCode).toBe("auth_refresh_failed");
     });
+
+    it("ClientOrgMismatchError → permanent with default message", () => {
+      const c = classify(noMessageShape({ name: "ClientOrgMismatchError" }));
+      expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
+      expect(c.reasonCode).toBe("client_identity_mismatch");
+      expect(c.message).toBe("Client identity mismatch");
+    });
+
+    it("AuthRefreshFailedError without message uses default refresh message", () => {
+      const c = classify(noMessageShape({ name: "AuthRefreshFailedError" }));
+      expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
+      expect(c.reasonCode).toBe("auth_refresh_failed");
+      expect(c.message).toBe("Refresh token rejected");
+    });
+
+    it("status-only and text-only Claude errors cover non-name branches and defaults", () => {
+      expect(classify(noMessageShape({ status: 429 })).message).toBe("Claude API rate limit");
+      expect(classify("rate limit exceeded").reasonCode).toBe("claude_rate_limit");
+      expect(classify(noMessageShape({ status: 503 })).message).toBe("Claude API server error");
+      expect(classify("upstream server error").reasonCode).toBe("claude_server_error");
+    });
+
+    it("socket and network fallbacks cover fetch, missing-message, and default-message branches", () => {
+      expect(classify(new Error("fetch failed")).reasonCode).toBe("claude_socket_closed");
+      expect(classify(noMessageShape({ name: "APIConnectionError" })).message).toBe("Claude API connection dropped");
+      expect(classify(noMessageShape({ code: "ECONNRESET" })).message).toBe("Network error");
+    });
   });
 
   describe("source=auth", () => {
@@ -98,6 +151,30 @@ describe("error-taxonomy.classify", () => {
       const c = classify(new Error("access token expired"), { source: "auth" });
       expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(c.reasonCode).toBe("auth_expired");
+    });
+
+    it("network refresh failures → transient (auth_network_error)", () => {
+      const c = classify({ message: "connect ECONNRESET", code: "ECONNRESET" }, { source: "auth" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(c.reasonCode).toBe("auth_network_error");
+    });
+
+    it("matches auth rejection and rate limit by message text", () => {
+      expect(classify("auth:rejected", { source: "auth" }).reasonCode).toBe("auth_rejected");
+      expect(classify("hit a rate limit", { source: "auth" }).reasonCode).toBe("auth_rate_limited");
+    });
+
+    it("uses default auth messages when classified shapes have no message", () => {
+      expect(classify(noMessageShape({ name: "AuthRefreshFailedError" }), { source: "auth" }).message).toBe(
+        "Auth rejected by server",
+      );
+      expect(classify(noMessageShape({ name: "AuthRefreshRateLimitedError" }), { source: "auth" }).message).toBe(
+        "Auth refresh rate limited",
+      );
+      expect(classify(noMessageShape({ name: "AuthExpiredError" }), { source: "auth" }).message).toBe(
+        "Auth token expired",
+      );
+      expect(classify(noMessageShape({ code: "ECONNRESET" }), { source: "auth" }).message).toBe("Auth network error");
     });
   });
 
@@ -136,6 +213,12 @@ describe("error-taxonomy.classify", () => {
       expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(c.reasonCode).toBe("bind_unknown");
     });
+
+    it("falls back to the error message or unknown for missing bind reasons", () => {
+      expect(classify({ message: "not_owned" }, { source: "bind" }).reasonCode).toBe("bind_not_owned");
+      expect(classify("", { source: "bind" }).message).toBe("bind rejected: unknown");
+      expect(classify(noMessageShape(), { source: "bind" }).message).toBe("bind rejected: unknown");
+    });
   });
 
   describe("source=update (npm install)", () => {
@@ -173,6 +256,22 @@ describe("error-taxonomy.classify", () => {
       expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(c.reasonCode).toBe("npm_unknown");
     });
+
+    it("uses code-only update classifications and default messages", () => {
+      expect(classify(noMessageShape({ code: "EBADENGINE" }), { source: "update" }).message).toBe(
+        "Node engine mismatch",
+      );
+      expect(classify(noMessageShape({ code: "EACCES" }), { source: "update" }).message).toBe(
+        "npm install permission denied",
+      );
+      expect(classify(noMessageShape({ code: "ENOVERSIONS" }), { source: "update" }).message).toBe(
+        "npm package version not found",
+      );
+      expect(classify(noMessageShape({ code: "ECONNRESET" }), { source: "update" }).message).toBe(
+        "npm install network error",
+      );
+      expect(classify(noMessageShape(), { source: "update" }).message).toBe("npm install failed");
+    });
   });
 
   describe("source=stream", () => {
@@ -189,6 +288,18 @@ describe("error-taxonomy.classify", () => {
       expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
       expect(c.reasonCode).toBe("claude_unauthorized");
     });
+
+    it("API Error without auth status → transient stream error", () => {
+      const c = classify(new Error("API Error: upstream reset"), { source: "stream" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(c.reasonCode).toBe("claude_socket_closed");
+    });
+
+    it("stream source with no message falls through to the generic unknown bucket", () => {
+      const c = classify(noMessageShape(), { source: "stream" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(c.reasonCode).toBe("unknown");
+    });
   });
 
   describe("fallback", () => {
@@ -203,6 +314,12 @@ describe("error-taxonomy.classify", () => {
       expect(classify("plain string").kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(classify(42).kind).toBe(ERROR_KINDS.TRANSIENT);
       expect(classify(null).kind).toBe(ERROR_KINDS.TRANSIENT);
+    });
+
+    it("normalises object-shaped thrown values with non-string fields", () => {
+      const c = classify({ name: 123, message: { nested: true }, code: 500, statusCode: 429, reason: 42 });
+      expect(c.reasonCode).toBe("claude_rate_limit");
+      expect(c.message).toContain('"nested":true');
     });
   });
 });

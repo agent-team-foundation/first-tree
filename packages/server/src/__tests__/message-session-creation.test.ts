@@ -56,11 +56,9 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
   });
 
   it("group chat fan-out activates every notify=true participant (N1-B)", async () => {
-    // Phase 1 (chat-participant-mode-fix-design.md §2.1) seeds every
-    // non-human agent in a group as `mention_only`, so an unmentioned
-    // group message produces no `notify=true` rows. Make `sender` a human
-    // (group sender) and explicitly @-mention both peers in the body so
-    // they wake into `active` — the test's invariant ("every notify=true
+    // Under the explicit-only contract, a group send wakes only the
+    // peers declared in `metadata.mentions`. Declare both so they wake
+    // into `active` — the test's invariant ("every notify=true
     // participant becomes active") is preserved.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
@@ -79,6 +77,7 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
       source: "api",
       format: "text",
       content: `team! @${r1Name} @${r2Name}`,
+      metadata: { mentions: [r1.uuid, r2.uuid] },
     });
 
     expect(await readSessionState(app, r1.uuid, chat.id)).toBe("active");

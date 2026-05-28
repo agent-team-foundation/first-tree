@@ -4,6 +4,7 @@ import {
   updateAgentSchema,
   updateAgentSkillsSchema,
 } from "@first-tree/shared";
+import { getServerCliBinding } from "@first-tree/shared/channel";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, ForbiddenError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireAgentAccess } from "../scope/require-resource.js";
@@ -283,7 +284,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     if (health === "disconnected") {
       return reply.status(200).send({
         status: "offline",
-        message: "Agent is not connected. Connect the client with: first-tree login <token>",
+        message: `Agent is not connected. Connect the client with: ${getServerCliBinding().binName} login <token>`,
         connection,
       });
     }

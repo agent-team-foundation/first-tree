@@ -1087,12 +1087,13 @@ export function ChatView({
   );
 
   const sendMut = useMutation({
-    mutationFn: (content: string) => sendChatMessage(chatId, content),
+    mutationFn: ({ content, mentions }: { content: string; mentions: string[] }) =>
+      sendChatMessage(chatId, content, mentions),
     // Optimistic insert: render the user's row above the composer immediately
     // and clear the draft so the input feels responsive even when the POST
     // round-trip + follow-up GET take 1–2s. The ctx returned here is threaded
     // to onError / onSuccess so we can reconcile with the server row.
-    onMutate: async (content: string) => {
+    onMutate: async ({ content }) => {
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
       const previousDraft = draft;
       setDraft("");
@@ -1199,14 +1200,12 @@ export function ChatView({
     if (images.length > 0) {
       setUploading(true);
       setUploadError(null);
-      // Carry the text-draft mentions onto each image message so the
-      // server's group-chat mention guard (services/message.ts) accepts
-      // file-format sends. Without this, every image POST is missing
-      // recipient mentions and 400s before the text message is sent
-      // (issue 387). In direct chats `draftMentions` is empty and the
-      // metadata field is omitted entirely — server check is skipped
-      // anyway, so this is a no-op for 1:1.
-      const imageMetadata = draftMentions.length > 0 ? { mentions: draftMentions } : undefined;
+      // Carry the routing mentions onto each image message so the
+      // server's `enforceMention` check accepts file-format sends.
+      // `effectiveSendMentions` already includes the 1:1 peer (per the
+      // explicit-only contract), so the file path works in both DM and
+      // group chats — without this every image POST would 400.
+      const imageMetadata = effectiveSendMentions.length > 0 ? { mentions: effectiveSendMentions } : undefined;
       // Snapshot draft + clear inputs up front so the composer feels instant.
       // Optimistic rows render into the cache below; rollback restores both
       // the textarea draft and any not-yet-acked optimistic tempIds on error.
@@ -1278,7 +1277,7 @@ export function ChatView({
             pendingTempIds.add(tempId);
             insertOptimisticMessage(optimistic);
           }
-          const saved = await sendChatMessage(chatId, text);
+          const saved = await sendChatMessage(chatId, text, effectiveSendMentions);
           if (tempId) {
             replaceOptimisticMessage(tempId, saved);
             pendingTempIds.delete(tempId);
@@ -1326,7 +1325,7 @@ export function ChatView({
       return;
     }
 
-    sendMut.mutate(text);
+    sendMut.mutate({ content: text, mentions: effectiveSendMentions });
   };
 
   const [renaming, setRenaming] = useState(false);
@@ -2094,6 +2093,34 @@ export function ChatView({
     [mentionCandidates],
   );
   const draftMentions = useMemo(() => extractMentions(draft, mentionParticipants), [draft, mentionParticipants]);
+
+  /**
+   * Effective routing mentions sent to the server. The server enforces
+   * explicit declaration (no more content-extraction fallback, no more
+   * 1:1 implicit wake) — clients must put recipient uuids on the wire.
+   *
+   *   - In a 2-speaker chat: auto-inject the peer's uuid so a bare "hi"
+   *     still reaches the recipient (the legacy 1:1 implicit-wake UX is
+   *     reproduced by the client now that the server no longer fakes
+   *     it).
+   *   - In group chats: just the mentions the composer's chip set
+   *     resolved. The send-button gate (`requiresMention &&
+   *     draftMentions.length === 0`) already prevents sending with an
+   *     empty mention set in groups, matching the server's
+   *     `enforceMention` check.
+   */
+  const peerAgentId = useMemo<string | null>(() => {
+    if (!chatDetail || !myAgentId) return null;
+    const others = chatDetail.participants.filter((p) => p.agentId !== myAgentId);
+    if (others.length === 1) {
+      return others[0]?.agentId ?? null;
+    }
+    return null;
+  }, [chatDetail, myAgentId]);
+  const effectiveSendMentions = useMemo(
+    () => (peerAgentId ? [...new Set([...draftMentions, peerAgentId])] : draftMentions),
+    [draftMentions, peerAgentId],
+  );
 
   const mention = useMentionAutocomplete({
     value: draft,

@@ -24,6 +24,7 @@ import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-m
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
+import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -592,9 +593,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
         return "";
       }
       case "error": {
+        // Codex's `~/.codex/auth.json` refresh failures surface here when the
+        // SDK bubbles them as item-level errors rather than turn.failed. The
+        // raw wording is shaped like "Your access token could not be refreshed
+        // because your refresh token was revoked. Please log out and sign in
+        // again." — opaque to a First Tree user. Reframe at the boundary so
+        // the next step (run `codex login` in their own terminal) is obvious.
+        const message = isCodexAuthError(item.message) ? formatAuthHint("codex", item.message) : item.message;
         sessionCtx.emitEvent({
           kind: "error",
-          payload: { source: "tool", message: item.message },
+          payload: { source: "tool", message },
         });
         return "";
       }
@@ -697,14 +705,20 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   break;
                 }
                 turnFailed = true;
+                const message = isCodexAuthError(event.error.message)
+                  ? formatAuthHint("codex", event.error.message)
+                  : event.error.message;
                 sessionCtx.emitEvent({
                   kind: "error",
-                  payload: { source: "sdk", message: event.error.message },
+                  payload: { source: "sdk", message },
                 });
               } else if (event.type === "error") {
+                const message = isCodexAuthError(event.message)
+                  ? formatAuthHint("codex", event.message)
+                  : event.message;
                 sessionCtx.emitEvent({
                   kind: "error",
-                  payload: { source: "sdk", message: event.message },
+                  payload: { source: "sdk", message },
                 });
               }
             }
@@ -717,7 +731,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
               retryReason = `runStreamed threw (transient): ${msg}`;
             } else {
               turnFailed = true;
-              sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: msg } });
+              const message = isCodexAuthError(msg) ? formatAuthHint("codex", msg) : msg;
+              sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message } });
             }
           }
         } finally {
