@@ -205,6 +205,10 @@ async function main(): Promise<void> {
   writeFileSync(join(TEST_HOME, "config", "client.yaml"), `server:\n  url: ${serverUrl}\n`);
 
   // ── Step 5: Start a real ClientRuntime against the test server. ────────────
+  // Install the CLI binding (channel-aware bin / pkg name) before any runtime
+  // code runs — bootstrap.ts's `generateToolsDoc` / `installFirstTreeIntegration`
+  // throw otherwise. See `apps/cli/src/core/cli-binding-init.ts`.
+  await import("../src/core/cli-binding-init.js");
   const { ClientRuntime } = await import("../src/core/client-runtime.js");
 
   const agentsDir = join(TEST_HOME, "config", "agents");

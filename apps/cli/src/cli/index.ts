@@ -6,6 +6,11 @@
 // after a config-touching import re-introduces the multi-env footgun
 // where staging/dev binaries silently fall back to the prod home.
 import "../core/channel-env.js";
+// Install the channel-resolved CLI binding into `@first-tree/client` before
+// any runtime code runs. Must come BEFORE any import that may end up
+// instantiating ClientRuntime (login, daemon, …) so handlers always see a
+// populated binding when they call `generateToolsDoc` / `installFirstTreeIntegration`.
+import "../core/cli-binding-init.js";
 import { applyClientLoggerConfig } from "@first-tree/client";
 import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent/index.js";

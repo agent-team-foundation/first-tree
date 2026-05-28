@@ -6,6 +6,7 @@ import type {
   RespondAttentionInput,
 } from "@first-tree/shared";
 import { AGENT_TYPES } from "@first-tree/shared";
+import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, desc, eq, inArray, lt, or, type SQL } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -177,7 +178,7 @@ export async function raiseAttention(
     throw new ConflictError(
       `Target human "${target}" is not a member of chat "${chatId}". ` +
         "Add them first:\n" +
-        "  first-tree chat invite <name>\n" +
+        `  ${getServerCliBinding().binName} chat invite <name>\n` +
         "Then re-raise the attention.",
     );
   }

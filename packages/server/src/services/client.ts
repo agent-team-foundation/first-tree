@@ -5,6 +5,7 @@ import {
   type UpdateAttempt,
   updateAttemptSchema,
 } from "@first-tree/shared";
+import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -79,7 +80,7 @@ export async function registerClient(
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        "Run `first-tree login <token> --override` to transfer ownership.",
+        `Run \`${getServerCliBinding().binName} login <token> --override\` to transfer ownership.`,
     );
   }
 

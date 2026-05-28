@@ -1,7 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { type ChannelName, getChannelConfig, inferChannelFromVersion } from "../channel/index.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { type ChannelName, getChannelConfig, getServerCliBinding, inferChannelFromVersion } from "../channel/index.js";
+import { resetConfig, setConfig } from "../config/singleton.js";
 
 describe("getChannelConfig", () => {
   it("maps prod to the bare bin / package / home / cloud server", () => {
@@ -46,6 +47,37 @@ describe("getChannelConfig", () => {
     const channels: ChannelName[] = ["dev", "staging", "prod"];
     const homes = channels.map((c) => getChannelConfig(c).defaultHome);
     expect(new Set(homes).size).toBe(channels.length);
+  });
+});
+
+describe("getServerCliBinding", () => {
+  // Singleton is process-level; restore between cases so a `setConfig` here
+  // doesn't leak into the inferChannelFromVersion suite (or vice versa).
+  afterEach(() => {
+    resetConfig();
+  });
+
+  it("returns the channel-resolved binding from the active server config", () => {
+    setConfig({ channel: "staging" });
+    expect(getServerCliBinding().binName).toBe("first-tree-staging");
+    expect(getServerCliBinding().packageName).toBe("first-tree-staging");
+
+    setConfig({ channel: "dev" });
+    expect(getServerCliBinding().binName).toBe("first-tree-dev");
+    expect(getServerCliBinding().packageName).toBeNull();
+
+    setConfig({ channel: "prod" });
+    expect(getServerCliBinding().binName).toBe("first-tree");
+    expect(getServerCliBinding().packageName).toBe("first-tree");
+  });
+
+  it("throws when called before initConfig — must not silently default to prod", () => {
+    // Regression guard for the multi-env footgun: a silent fallback (e.g.
+    // `getConfig().channel ?? "prod"`) would have staging servers tell
+    // clients to install the prod tarball before config init finishes.
+    // Fail-loud is the right default.
+    resetConfig();
+    expect(() => getServerCliBinding()).toThrow(/Config not initialized/);
   });
 });
 
