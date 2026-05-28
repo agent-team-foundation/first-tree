@@ -890,7 +890,7 @@ function ParticipantChips({
           <div
             role="listbox"
             aria-label="Add participant"
-            className="absolute z-20 flex flex-col rounded-[var(--radius-panel)] border shadow-lg"
+            className="absolute z-20 flex flex-col rounded-[var(--radius-panel)] border shadow-[var(--shadow-md)]"
             style={{
               top: "calc(100% + var(--sp-1))",
               left: 0,

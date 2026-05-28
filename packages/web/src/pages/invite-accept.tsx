@@ -222,7 +222,10 @@ export function InviteAcceptSkeleton() {
     <Card className="w-full max-w-sm">
       <CardHeader className="text-center">
         <div className="mx-auto h-5 w-2/3 rounded-[var(--radius-panel)]" style={{ background: "var(--bg-sunken)" }} />
-        <div className="mx-auto mt-2 h-5 w-1/2 rounded-[var(--radius-panel)]" style={{ background: "var(--bg-sunken)" }} />
+        <div
+          className="mx-auto mt-2 h-5 w-1/2 rounded-[var(--radius-panel)]"
+          style={{ background: "var(--bg-sunken)" }}
+        />
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="h-9 w-full rounded-[var(--radius-panel)]" style={{ background: "var(--bg-sunken)" }} />

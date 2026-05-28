@@ -286,7 +286,7 @@ export function AddParticipantDropdown({
           role="menu"
           aria-label="Add participant"
           tabIndex={-1}
-          className="absolute z-20 flex flex-col border shadow-lg outline-none"
+          className="absolute z-20 flex flex-col border shadow-[var(--shadow-md)] outline-none"
           style={{
             top: "calc(100% + var(--sp-1))",
             // Icon trigger sits at the panel's right edge → grow leftward;
