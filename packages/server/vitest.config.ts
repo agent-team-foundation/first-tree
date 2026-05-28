@@ -11,7 +11,7 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 60_000,
     coverage: unitCoverageConfig({
-      exclude: ["src/types.ts", "src/scope/types.ts", "src/services/feishu/types.ts"],
+      exclude: ["src/types.ts", "src/scope/types.ts"],
     }),
     pool: "forks",
     poolOptions: {
