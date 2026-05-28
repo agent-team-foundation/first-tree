@@ -17,6 +17,11 @@
     "test": {
       "inputs": ["$TURBO_DEFAULT$"]
     },
+    "coverage": {
+      "cache": false,
+      "passThroughEnv": ["CI_DATABASE_URL", "DATABASE_URL", "DOCKER_HOST", "TESTCONTAINERS_*"],
+      "outputs": ["coverage/**"]
+    },
     "e2e:doctor": {
       "cache": false,
       "passThroughEnv": ["E2E_*", "FIRST_TREE_*"]

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionRegistry } from "../runtime/session-registry.js";
 
 describe("SessionRegistry", () => {
@@ -15,6 +15,8 @@ describe("SessionRegistry", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -118,5 +120,88 @@ describe("SessionRegistry", () => {
     expect(raw.entries["chat-1"].claudeSessionId).toBe("sess-x");
 
     registry.dispose();
+  });
+
+  it("flush cancels a pending debounced save", () => {
+    vi.useFakeTimers();
+    const registry = new SessionRegistry(filePath);
+    const entries = makeEntries({
+      "chat-1": { claudeSessionId: "sess-x", lastActivity: 1700000000000, status: "active" },
+    });
+
+    registry.save(entries);
+    registry.flush(entries);
+    vi.advanceTimersByTime(1000);
+
+    const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+    expect(raw.entries["chat-1"].claudeSessionId).toBe("sess-x");
+    registry.dispose();
+  });
+
+  it("dispose cancels a pending debounced save", () => {
+    vi.useFakeTimers();
+    const registry = new SessionRegistry(filePath);
+    const entries = makeEntries({
+      "chat-1": { claudeSessionId: "sess-x", lastActivity: 1700000000000, status: "active" },
+    });
+
+    registry.save(entries);
+    registry.dispose();
+    vi.advanceTimersByTime(1000);
+
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  it("logs persistence failures without throwing", () => {
+    const parentAsFile = join(testDir, "not-a-directory");
+    writeFileSync(parentAsFile, "file blocks mkdir", "utf-8");
+    const registry = new SessionRegistry(join(parentAsFile, "sessions.json"));
+    const stderrMessages: string[] = [];
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((message: string | Uint8Array) => {
+      stderrMessages.push(String(message));
+      return true;
+    });
+
+    expect(() =>
+      registry.flush(
+        makeEntries({
+          "chat-1": { claudeSessionId: "sess-x", lastActivity: 1700000000000, status: "active" },
+        }),
+      ),
+    ).not.toThrow();
+
+    expect(stderrMessages.join("")).toContain("[session-registry] Failed to persist:");
+    stderrWrite.mockRestore();
+  });
+
+  it("logs non-Error persistence failures", async () => {
+    vi.resetModules();
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        mkdirSync: () => {
+          throw "mkdir failed";
+        },
+      };
+    });
+    const mod = await import("../runtime/session-registry.js");
+    const registry = new mod.SessionRegistry(filePath);
+    const stderrMessages: string[] = [];
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((message: string | Uint8Array) => {
+      stderrMessages.push(String(message));
+      return true;
+    });
+
+    registry.flush(
+      makeEntries({
+        "chat-1": { claudeSessionId: "sess-x", lastActivity: 1700000000000, status: "active" },
+      }),
+    );
+
+    expect(stderrMessages.join("")).toContain("mkdir failed");
+    stderrWrite.mockRestore();
+    vi.doUnmock("node:fs");
+    vi.resetModules();
   });
 });

@@ -26,6 +26,13 @@ Thumbs.db
 
 # Test / coverage
 coverage/
+**/coverage/
+.nyc_output/
+**/.nyc_output/
+.vitest-coverage/
+**/.vitest-coverage/
+lcov.info
+*.lcov
 
 # E2E framework — per-run logs and local env override (see packages/e2e/)
 packages/e2e/.e2e-runs/

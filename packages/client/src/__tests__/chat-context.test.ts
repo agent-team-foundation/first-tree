@@ -174,6 +174,22 @@ describe("fetchChatContext", () => {
     expect(result.selfOwner).toBeUndefined();
   });
 
+  it("does NOT populate selfOwner for human identities", async () => {
+    const sdk = {
+      getChatDetail: vi.fn().mockResolvedValue(mkChatDetail()),
+      listChatParticipants: vi
+        .fn()
+        .mockResolvedValue([mkParticipant({ name: "owner", displayName: "Owner Human", type: "human" })]),
+    };
+
+    const result = await fetchChatContext(sdk, "chat-1", {
+      type: "human",
+      delegateMention: "owner",
+    });
+
+    expect(result.selfOwner).toBeUndefined();
+  });
+
   it("omits selfOwner when delegateMention points to nobody in the chat", async () => {
     const sdk = {
       getChatDetail: vi.fn().mockResolvedValue(mkChatDetail()),

@@ -89,12 +89,42 @@ describe("SessionManager", () => {
     await sm.shutdown();
   });
 
-  it("ACKs inbox entry immediately on dispatch", async () => {
+  it("does NOT ack on dispatch — entry is held until the handler calls markCompleted (in-flight recovery)", async () => {
+    // Post-inflight-message-recovery: dispatch only enqueues the entry into
+    // `inFlightEntries`. The ack waits for the handler to signal turn
+    // completion via `ctx.markCompleted()`. A bare-mocked handler never
+    // closes the turn, so no ack is fired.
     const ackEntry = mockAckEntry();
     const sm = createSessionManager({ ackEntry });
 
     await sm.dispatch(mockEntry({ id: 42, chatId: "chat-1" }));
 
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("acks via the callback when the handler calls ctx.markCompleted()", async () => {
+    // A handler that completes its turn cleanly drains the in-flight queue.
+    const ackEntry = mockAckEntry();
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_msg, ctx) {
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+    });
+    const sm = createSessionManager({ ackEntry, handler });
+
+    await sm.dispatch(mockEntry({ id: 42, chatId: "chat-1" }));
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    // Handler closes the turn — this is what claude-code / codex do after
+    // forwardResult success.
+    expect(capturedCtx).not.toBeNull();
+    capturedCtx?.markCompleted();
+    // Drain is fire-and-forget — yield once so the ackEntry promise settles.
+    await Promise.resolve();
     expect(ackEntry).toHaveBeenCalledWith(42);
 
     await sm.shutdown();
@@ -429,7 +459,18 @@ describe("SessionManager dispatch integration", () => {
     // the client is, by construction, for us. This test pins that the
     // client does NOT double-filter (no silent drops that would mask server
     // routing bugs, no skipping of legitimate mention deliveries).
+    //
+    // Post-inflight-message-recovery: dispatch starts the handler but does
+    // NOT ack immediately; ack happens once the handler calls
+    // `ctx.markCompleted()`. We close the turn here to exercise both
+    // halves of the contract.
+    let capturedCtx: SessionContext | undefined;
     const handler = createMockHandler();
+    const startSpy = handler.start as ReturnType<typeof vi.fn>;
+    startSpy.mockImplementation(async (_msg: unknown, ctx: SessionContext) => {
+      capturedCtx = ctx;
+      return "session-id-mock";
+    });
     const ackEntry = mockAckEntry();
     const sm = createSessionManager({ handler, ackEntry });
 
@@ -442,6 +483,10 @@ describe("SessionManager dispatch integration", () => {
     await sm.dispatch(pinged);
 
     expect(handler.start).toHaveBeenCalledTimes(1);
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    capturedCtx?.markCompleted();
+    await Promise.resolve();
     expect(ackEntry).toHaveBeenCalledWith(101);
 
     await sm.shutdown();
@@ -450,12 +495,14 @@ describe("SessionManager dispatch integration", () => {
 
 /**
  * `ackEntry` is the WS data-plane ack callback wired from AgentSlot to
- * `clientConnection.sendInboxAck`. Every code path inside `dispatch` that
- * acks an entry — echo suppression, inject into an active session, start a
- * new session, resume an evicted session — must route through that single
- * callback.
+ * `clientConnection.sendInboxAck`. Post-inflight-message-recovery the
+ * runtime defers acks: every entry sits in `inFlightEntries[chatId]` until
+ * the handler calls `ctx.markCompleted()`, the runtime drains the queue
+ * during a permanent failure / terminate teardown, or the next
+ * `agent:bind` resets it server-side. Tests below pin the deferred-ack
+ * contract for each entry-point dispatch can hit.
  */
-describe("SessionManager ackEntry callback", () => {
+describe("SessionManager ackEntry callback (deferred ack)", () => {
   function buildSm(ackEntry: (entryId: number) => Promise<void>, handler?: AgentHandler) {
     const h = handler ?? createMockHandler();
     const sdk = mockSdk();
@@ -480,37 +527,149 @@ describe("SessionManager ackEntry callback", () => {
     return { sm, handler: h };
   }
 
-  it("acks via the callback when starting a new session", async () => {
+  it("ack waits for markCompleted when starting a new session", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
-    const { sm } = buildSm(ackEntry);
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_m, ctx) {
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+    });
+    const { sm } = buildSm(ackEntry, handler);
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
+    expect(ackEntry).not.toHaveBeenCalled();
 
+    capturedCtx?.markCompleted();
+    await Promise.resolve();
     expect(ackEntry).toHaveBeenCalledTimes(1);
     expect(ackEntry).toHaveBeenCalledWith(1);
 
     await sm.shutdown();
   });
 
-  it("acks via the callback when injecting into an active session", async () => {
+  it("markCompleted() shifts one entry by default — pairs one user message with one assistant turn", async () => {
+    // Reviewer Blocking 1 regression. Two consecutive dispatches into a
+    // single active chat push two entries onto the FIFO. The handler's
+    // turn for the FIRST message must ack ONLY the first entry; the
+    // second stays queued for its own turn's markCompleted. The previous
+    // implementation drained the whole queue per markCompleted and
+    // would silently ack message #2 before its handler turn completed —
+    // making a crash between the two turns lose message #2 forever.
     const ackEntry = vi.fn().mockResolvedValue(undefined);
-    const { sm } = buildSm(ackEntry);
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_m, ctx) {
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+    });
+    const { sm } = buildSm(ackEntry, handler);
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
+    // Second dispatch hits the `active` inject branch — entry sits behind
+    // entry #1 in the FIFO.
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-1" }));
 
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    // First turn closes — ack entry #1 only.
+    capturedCtx?.markCompleted();
+    await Promise.resolve();
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(1);
+
+    // Second turn closes — ack entry #2.
+    capturedCtx?.markCompleted();
+    await Promise.resolve();
     expect(ackEntry).toHaveBeenCalledTimes(2);
-    expect(ackEntry).toHaveBeenNthCalledWith(1, 1);
     expect(ackEntry).toHaveBeenNthCalledWith(2, 2);
 
     await sm.shutdown();
   });
 
-  it("acks via the callback when resuming an evicted session", async () => {
-    // Seed an evicted session by exceeding concurrency=1, then dispatch into
-    // the evicted chat to trigger the resume branch (session-manager.ts:422).
+  it("markCompleted(n) acks N entries atomically — covers codex mergeAndRun fused-turn semantics", async () => {
+    // Codex's `mergeAndRun` fuses N injected messages into one SDK turn
+    // emitting one forwardResult. The handler passes `drained.length` so
+    // ALL fused entries get acked together. We simulate that here: A
+    // arrives, B & C arrive during A's turn (mid-turn injects); when A's
+    // turn ends the handler acks `count = 1` for A; when the fused B+C
+    // turn ends it acks `count = 2` for the pair.
     const ackEntry = vi.fn().mockResolvedValue(undefined);
-    const handler = createMockHandler();
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_m, ctx) {
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 10, chatId: "chat-codex" }));
+    await sm.dispatch(mockEntry({ id: 11, chatId: "chat-codex" }));
+    await sm.dispatch(mockEntry({ id: 12, chatId: "chat-codex" }));
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    // First turn (just message 10).
+    capturedCtx?.markCompleted(1);
+    await Promise.resolve();
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(10);
+
+    // Fused turn (messages 11 + 12 batched into one runTurn).
+    capturedCtx?.markCompleted(2);
+    await Promise.resolve();
+    expect(ackEntry).toHaveBeenCalledTimes(3);
+    expect(ackEntry).toHaveBeenNthCalledWith(2, 11);
+    expect(ackEntry).toHaveBeenNthCalledWith(3, 12);
+
+    await sm.shutdown();
+  });
+
+  it("markCompleted(count) clamps to queue length — over-counting drains the rest, not negative entries", async () => {
+    // Defensive: a handler bug or codex mergeAndRun count drift must not
+    // crash or ack phantom entries. The shift just stops at the queue end.
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_m, ctx) {
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 20, chatId: "chat-clamp" }));
+    capturedCtx?.markCompleted(99); // queue length is 1
+    await Promise.resolve();
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(20);
+
+    // Further calls with an empty queue are no-ops.
+    capturedCtx?.markCompleted();
+    capturedCtx?.markCompleted(5);
+    await Promise.resolve();
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
+  it("ack waits for markCompleted when resuming an evicted session", async () => {
+    // Seed an evicted session by exceeding concurrency=1, then dispatch into
+    // the evicted chat to trigger the resume branch.
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const capturedCtxs: SessionContext[] = [];
+    const handler = createMockHandler({
+      async start(_m, ctx) {
+        capturedCtxs.push(ctx);
+        return "session-id-mock";
+      },
+      async resume(_m, _sid, ctx) {
+        capturedCtxs.push(ctx);
+        return "session-id-mock";
+      },
+    });
     const sdk = mockSdk();
     const sm = new SessionManager({
       session: { idle_timeout: 300, max_sessions: 1, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
@@ -534,12 +693,87 @@ describe("SessionManager ackEntry callback", () => {
     // Start chat-a, then chat-b which evicts chat-a (max_sessions=1).
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
+    // Close chat-a and chat-b's start turns so their entries don't pollute
+    // the resume-branch ack assertion.
+    capturedCtxs[0]?.markCompleted();
+    capturedCtxs[1]?.markCompleted();
+    await Promise.resolve();
     ackEntry.mockClear();
 
     // Dispatching back into chat-a hits the resume branch.
     await sm.dispatch(mockEntry({ id: 3, chatId: "chat-a", messageId: "msg-resume" }));
+    expect(ackEntry).not.toHaveBeenCalled();
 
+    capturedCtxs[2]?.markCompleted();
+    await Promise.resolve();
     expect(ackEntry).toHaveBeenCalledWith(3);
+
+    await sm.shutdown();
+  });
+
+  it("acks on permanent handler.start failure so a permanent error doesn't loop on redelivery", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    // Error class name is what `classify` keys on for the permanent
+    // `client_identity_mismatch` path (see runtime/error-taxonomy.ts:219).
+    class ClientUserMismatchError extends Error {
+      constructor(msg: string) {
+        super(msg);
+        this.name = "ClientUserMismatchError";
+      }
+    }
+    const handler = createMockHandler({
+      start: vi.fn(async () => {
+        throw new ClientUserMismatchError("permanent identity rejection");
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 7, chatId: "chat-perm" }));
+    // Two microtask yields: classify + handleSessionFailure both schedule
+    // event-emit + ack on the queue.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ackEntry).toHaveBeenCalledWith(7);
+
+    await sm.shutdown();
+  });
+
+  it("does NOT ack on transient handler.start failure — retry path keeps the entry queued for forwardResult", async () => {
+    // A 429-ish error is classified as transient; the runtime schedules a
+    // retry inside `handleSessionFailure` and leaves the entry queued so
+    // the eventual successful retry can ack it via markCompleted.
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const transientErr = Object.assign(new Error("rate limited"), { status: 429 });
+    const handler = createMockHandler({
+      start: vi.fn(async () => {
+        throw transientErr;
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 8, chatId: "chat-tr" }));
+    await Promise.resolve();
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("acks queued in-flight entries on session:terminate", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    // Handler whose `start` resolves quickly (matching production: start
+    // returns the sessionId; the turn closes later via markCompleted).
+    // markCompleted is NEVER called by this mock, so the entry sits in
+    // `inFlightEntries` past the turn — exactly what terminate needs to
+    // ack so the next bind doesn't redeliver.
+    const handler = createMockHandler();
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 11, chatId: "chat-term" }));
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    await sm.handleCommand("chat-term", "session:terminate");
+    await Promise.resolve();
+    expect(ackEntry).toHaveBeenCalledWith(11);
 
     await sm.shutdown();
   });

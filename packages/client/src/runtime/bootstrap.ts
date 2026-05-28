@@ -1,12 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultDataDir } from "@first-tree/shared/config";
 import type { ContextTreeConfig } from "../sdk.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import type { ChatContext } from "./chat-context.js";
 import { renderChatContextSection } from "./chat-context-section.js";
+import { getCliBinding } from "./cli-binding.js";
 import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
 
@@ -52,18 +54,32 @@ function toSshGitUrl(httpsRepo: string): string | null {
   return rewrite.sshBase + httpsRepo.slice(rewrite.httpsBase.length);
 }
 
-function withContextTreeSyncLock(
+/**
+ * De-dup concurrent Context Tree syncs for the same clone dir: when an
+ * in-flight sync exists for `key`, share its settled result instead of
+ * queueing another `git pull` round-trip. Once the in-flight promise
+ * settles, the slot is cleared — subsequent calls trigger a fresh sync.
+ *
+ * The old implementation chained callers (`prev.then(fn)`), so N agents
+ * sharing one Context Tree (the common case) cost N×git-pull at startup
+ * — observed as ~7s per extra agent. With dedup, those N calls collapse
+ * to a single shared sync. Each Hub `agent:bind` still resyncs the tree
+ * once per process restart (the first caller's pull), which is the
+ * contract `syncAgentContextTree` advertises.
+ *
+ * Exported for direct unit-testing; not re-exported from `src/index.ts`.
+ */
+export function withContextTreeSyncLock(
   key: string,
   fn: () => Promise<ContextTreeBinding | null>,
 ): Promise<ContextTreeBinding | null> {
-  const next = (contextTreeSyncLocks.get(key) ?? Promise.resolve(null))
-    .catch(() => null)
-    .then(fn)
-    .finally(() => {
-      if (contextTreeSyncLocks.get(key) === next) {
-        contextTreeSyncLocks.delete(key);
-      }
-    });
+  const inFlight = contextTreeSyncLocks.get(key);
+  if (inFlight) return inFlight;
+  const next = fn().finally(() => {
+    if (contextTreeSyncLocks.get(key) === next) {
+      contextTreeSyncLocks.delete(key);
+    }
+  });
   contextTreeSyncLocks.set(key, next);
   return next;
 }
@@ -296,6 +312,86 @@ export function readCachedContextTreeHead(workspacePath: string): string | null 
   }
 }
 
+/**
+ * Per-agent-home pin file for the CLI version that performed the last
+ * bootstrap. Distinct from {@link CONTEXT_TREE_HEAD_REL}: this drifts when
+ * the operator upgrades the `first-tree` binary (a new shipped skills
+ * payload typically ships with it), even if the Context Tree HEAD is
+ * unchanged. Without this trigger, agent homes silently keep stale
+ * `.agents/skills/*` after a `first-tree upgrade` until the Context Tree
+ * happens to move.
+ */
+export const BUNDLED_CLI_VERSION_REL = join(".agent", "cli-version");
+
+/**
+ * Walk up from the current module to find the closest `package.json` with
+ * a `version` field.
+ *
+ * - **Published / `dev-install.sh` bundle** (the path that actually matters
+ *   for the drift trigger): `bootstrap.ts` is inlined into an `apps/cli/
+ *   dist/<chunk>.mjs` chunk, so the walk goes `dist/<chunk>.mjs` → `dist/`
+ *   → the CLI manifest. CI publish rewrites that manifest's `name`/`bin`
+ *   to the channel before `pnpm build`, so the version we read is the
+ *   consumer-facing CLI version (`first-tree` / `first-tree-staging` /
+ *   `first-tree-dev`). This is what `first-tree upgrade` bumps.
+ * - **Source-tree `tsx` / vitest runs**: there is no bundle; the walk
+ *   from `packages/client/src/runtime/bootstrap.ts` hits the
+ *   `@first-tree/client` manifest first. That package is `private`
+ *   (no published release bumps it), so the pin doesn't track CLI
+ *   versions in dev mode. Drift detection still works correctly because
+ *   each invocation reads the same value; the dev-mode pin just won't
+ *   tick when the operator runs a real `pnpm install -g first-tree@...`.
+ *   Acceptable: dev iteration is the wrong place to validate CLI-upgrade
+ *   refresh semantics anyway.
+ *
+ * Imported from here (not from `apps/cli`) to keep the client → CLI
+ * dependency direction one-way.
+ *
+ * Returns `null` if the walk exhausts every parent — we treat that as
+ * "version unknown" and fall back to the sentinel-only path, never as
+ * "drifted".
+ */
+export function resolveBundledCliVersion(moduleUrl: string = import.meta.url): string | null {
+  let dir = dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 10; i += 1) {
+    const candidate = resolve(dir, "package.json");
+    if (existsSync(candidate)) {
+      try {
+        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { version?: unknown };
+        if (typeof parsed.version === "string" && parsed.version.length > 0) {
+          return parsed.version;
+        }
+      } catch {
+        // Corrupt or unreadable — keep walking; finding *some* version is
+        // better than crashing the bootstrap path.
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/** Read the cached CLI version that last ran bootstrap, if any. */
+export function readCachedBundledCliVersion(workspacePath: string): string | null {
+  const path = join(workspacePath, BUNDLED_CLI_VERSION_REL);
+  if (!existsSync(path)) return null;
+  try {
+    return readFileSync(path, "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the bundled CLI version alongside the sentinel. */
+export function writeBundledCliVersion(workspacePath: string, version: string | null): void {
+  if (!version) return;
+  const path = join(workspacePath, BUNDLED_CLI_VERSION_REL);
+  mkdirSync(join(workspacePath, ".agent"), { recursive: true });
+  writeFileSync(path, version, "utf-8");
+}
+
 /** Persist the current HEAD value alongside the sentinel. */
 export function writeContextTreeHead(workspacePath: string, head: string | null): void {
   const path = join(workspacePath, CONTEXT_TREE_HEAD_REL);
@@ -423,11 +519,14 @@ function defaultInstallExec(command: string, args: string[], options: { cwd: str
 
 /**
  * Install the first-tree skill and FIRST-TREE-SOURCE-INTEGRATION block into
- * the workspace by shelling out to `first-tree tree integrate`.
+ * the workspace by shelling out to the channel-resolved CLI's `tree integrate`.
  *
- * Resolution order for the CLI binary:
- *   1. `first-tree` on PATH — preferred for runtime images that pre-install it.
- *   2. `npx -y first-tree@latest` — fallback that downloads on first run.
+ * Resolution order for the CLI binary (binName/packageName are channel-aware,
+ * see {@link getCliBinding}):
+ *   1. `<binName>` on PATH — preferred for runtime images that pre-install it.
+ *   2. `npx -y <packageName>@latest` — fallback that downloads on first run.
+ *      Skipped for the dev channel (`packageName === null`) because dev
+ *      binaries are not published to npm.
  *
  * Graceful degradation: returns false on failure and logs. The session still
  * starts; the agent just doesn't have the first-tree skill wired up.
@@ -435,8 +534,9 @@ function defaultInstallExec(command: string, args: string[], options: { cwd: str
 export function installFirstTreeIntegration(options: InstallFirstTreeIntegrationOptions): boolean {
   const { workspacePath, contextTreePath, workspaceId, treeRepoUrl, log } = options;
   const exec = options.exec ?? defaultInstallExec;
+  const { binName, packageName } = getCliBinding();
 
-  // `first-tree tree integrate` resolves the source/workspace path from the
+  // `<binName> tree integrate` resolves the source/workspace path from the
   // process cwd — it does NOT accept a `--source-path` flag. We set
   // `cwd: workspacePath` below; passing a flag the CLI doesn't recognise
   // makes every invocation exit 1 with "unknown option '--source-path'".
@@ -453,12 +553,21 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
   ];
 
   const attempts: Array<{ command: string; args: string[]; label: string }> = [
-    { command: "first-tree", args: integrateArgs, label: "first-tree (PATH)" },
-    {
-      command: "npx",
-      args: ["-y", "first-tree@latest", ...integrateArgs],
-      label: "npx first-tree@latest",
-    },
+    { command: binName, args: integrateArgs, label: `${binName} (PATH)` },
+    // Dev channel publishes no npm tarball, so skip the npx fallback entirely
+    // — there is nothing to fetch. Falls through to "PATH attempt failed →
+    // graceful degradation" which is the right behaviour for dev anyway:
+    // the developer is expected to have the in-tree CLI installed via
+    // scripts/dev-install.sh.
+    ...(packageName
+      ? [
+          {
+            command: "npx",
+            args: ["-y", `${packageName}@latest`, ...integrateArgs],
+            label: `npx ${packageName}@latest`,
+          },
+        ]
+      : []),
   ];
 
   for (let index = 0; index < attempts.length; index += 1) {
@@ -674,6 +783,14 @@ export function buildChatSystemPrompt(options: BuildChatSystemPromptOptions): st
 }
 
 function generateToolsDoc(): string {
+  // CLI binary name resolved at runtime from the channel-aware binding the
+  // CLI entrypoint installs via `setCliBinding`. Prod = "first-tree", staging
+  // = "first-tree-staging", dev = "first-tree-dev". Baking the channel-correct
+  // name into tools.md is what lets the agent's `<bin> chat send` and
+  // `<bin> attention raise` invocations actually find the CLI on PATH —
+  // hardcoding "first-tree" used to leave staging/dev agents calling a
+  // binary that wasn't installed on the host.
+  const bin = getCliBinding().binName;
   return `# Agent Hub SDK
 
 You are running inside **Agent Hub**, a messaging platform for agent teams.
@@ -682,11 +799,11 @@ You are running inside **Agent Hub**, a messaging platform for agent teams.
   \`[From: <agent-name>]\` header — that name is what you pass back to \`chat send\`.
 - **Your final response text is delivered to the chat for human observers to read.
   It does NOT wake other agents.** To make another agent take action, use
-  \`first-tree chat send <name>\` explicitly (see "Communication Rules" below).
+  \`${bin} chat send <name>\` explicitly (see "Communication Rules" below).
 - **Stay silent when you have nothing to add.** Not every message needs a reply.
   If you have nothing new for the recipient, output nothing and the runtime ends the turn.
 - For **proactive communication** (other agents, other chats, or different format),
-  use the \`first-tree\` CLI below.
+  use the \`${bin}\` CLI below.
 
 ## Communication Rules
 
@@ -695,7 +812,7 @@ to read. It does NOT wake other agents.
 
 To make another agent take action, you MUST explicitly call:
 
-    first-tree chat send <name> "..."
+    ${bin} chat send <name> "..."
 
 Decision guide (based on participant \`type\` in the Current Chat Context block):
 
@@ -716,21 +833,21 @@ anyone.
 The CLI auto-reads its config from env — no setup needed.
 
 \`\`\`bash
-# Send to an agent by NAME (uuids are NOT accepted — run \`first-tree agent list\` for names).
+# Send to an agent by NAME (uuids are NOT accepted — run \`${bin} agent list\` for names).
 # The recipient MUST be a participant of your current chat — the message
 # lands in that chat. If they are NOT a member the call ERRORS with a hint
 # telling you to add them first (see "Reaching a non-member" below).
-first-tree chat send <agentName> "your message"
+${bin} chat send <agentName> "your message"
 
 # Pull a non-member into your current chat first, then send normally.
-first-tree chat invite <agentName>
-first-tree chat send <agentName> "your message"
+${bin} chat invite <agentName>
+${bin} chat send <agentName> "your message"
 
 # Markdown format (default is text)
-first-tree chat send <agentName> -f markdown "**bold**"
+${bin} chat send <agentName> -f markdown "**bold**"
 
 # Pipe long / multiline content via stdin
-echo "long body" | first-tree chat send <agentName>
+echo "long body" | ${bin} chat send <agentName>
 \`\`\`
 
 **Reaching another agent**:
@@ -754,6 +871,51 @@ this command.
   cannot render as markdown.
 - For multi-line / markdown / special chars (quotes, \`$\`, backticks, newlines),
   use **stdin** with real newlines, plus \`-f markdown\`.
+
+## When You Need a Human (Need-Human-Attention)
+
+**Hard rule:** if you need a human to decide, endorse, clarify, or just know —
+use the **Need-Human-Attention (NHA)** primitive, NOT a plain \`chat send\` that
+asks "could you confirm…" / "please decide…". NHA gives the ask a target, a
+state machine, a typed response slot, and a UI surface the human cannot miss.
+A plain chat send asking for a decision is easy to lose in the scroll and
+gives your turn no clean place to resume.
+
+\`\`\`bash
+# Ask (expects a reply) — your turn resumes when the human responds.
+${bin} attention raise \\
+  --chat <chat-id-of-this-conversation> \\
+  --target <human-agent-name> \\
+  --subject "<one-line summary>" \\
+  --body "<context, options, what you'll do on each path>" \\
+  --requires-response
+
+# Notify (fire-and-forget) — closes on creation, no response slot.
+${bin} attention raise --chat <id> --target <name> \\
+  --subject "deployed v1.4.2" --body "..."
+\`\`\`
+
+**Trigger checklist — use NHA, not \`chat send\`, when any of:**
+
+- You're about to ask a human to **decide**, **approve**, **endorse**, or
+  **clarify ambiguous intent** before you can continue.
+- You need to **escalate** because a guardrail / blocker fires (cannot
+  self-resolve safely).
+- You need to **inform** a human of a state change that affects them
+  (deploy done, PR merged, incident detected) — use \`--requires-response\`
+  off for the notification variant.
+
+**When \`chat send\` is still correct:**
+
+- Coordinating with another **agent** in the chat.
+- Narrative / progress updates that don't need any action.
+- Sending the actual answer / result the human asked for (NHA is for the
+  *ask*; the *delivery* is normal chat).
+
+**Skill reference:** read \`.claude/skills/attention/SKILL.md\` (or
+\`.agents/skills/attention/SKILL.md\`) for the full playbook — body
+template, waiting behaviour, no-response handling, and the four lenses
+(Endorse / Information / Direction / Inform).
 
 ## Source Repos
 

@@ -72,10 +72,13 @@ pnpm --filter @first-tree/server dev        # Server (dev mode)
 pnpm --filter @first-tree/web dev           # Admin dashboard (dev mode)
 pnpm check && pnpm typecheck                # Lint + type check
 pnpm test                                   # Tests
+pnpm coverage                               # Local unit coverage
+pnpm coverage:summary                       # Summarize generated coverage
 ```
 
 See [AGENTS.md](AGENTS.md) for architecture, conventions, and the per-package
-development workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for the PR
+development workflow. See [docs/development/test-coverage.md](docs/development/test-coverage.md)
+for local coverage reports. See [CONTRIBUTING.md](CONTRIBUTING.md) for the PR
 workflow.
 
 ## License

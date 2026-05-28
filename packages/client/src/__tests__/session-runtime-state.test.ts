@@ -447,17 +447,32 @@ describe("SessionManager: per-(agent,chat) runtime callback (#553 rebase)", () =
   });
 });
 
-describe("SessionManager: ackEntry handles entryId correctly", () => {
-  it("ACKs entryId from pending queue after concurrency preemption", async () => {
+describe("SessionManager: pending-queue entry tracking under concurrency preemption", () => {
+  it("preserves entryId through the pending queue so a later markCompleted still drains it", async () => {
+    // Post-inflight-message-recovery: dispatch only enqueues. Both entries
+    // sit in `inFlightEntries` even when one of them is held in the
+    // pending queue (concurrency=1 forces chat-b to wait for chat-a to be
+    // preempted). Acks only fire when each handler closes its turn.
     const ackEntry = mockAckEntry();
-    const sm = createSessionManager({ ackEntry, concurrency: 1 });
+    const ctxs: Record<string, SessionContext> = {};
+    const handler = createMockHandler({
+      async start(msg, ctx) {
+        ctxs[msg.chatId] = ctx;
+        return "session-id-mock";
+      },
+    });
+    const sm = createSessionManager({ ackEntry, handler, concurrency: 1 });
 
-    // Fill concurrency
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
-    // This gets queued (concurrency full), then drained when chat-a is preempted
+    // chat-b's dispatch causes chat-a to be suspended (preempted for slot)
+    // and chat-b's handler.start to run.
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
+    expect(ackEntry).not.toHaveBeenCalled();
 
-    // Both should be ACKed
+    // Each handler completes its turn — both should ack.
+    ctxs["chat-a"]?.markCompleted();
+    ctxs["chat-b"]?.markCompleted();
+    await Promise.resolve();
     expect(ackEntry).toHaveBeenCalledWith(1);
     expect(ackEntry).toHaveBeenCalledWith(2);
 

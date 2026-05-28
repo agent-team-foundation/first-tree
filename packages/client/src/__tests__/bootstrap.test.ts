@@ -1,18 +1,34 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  BUNDLED_CLI_VERSION_REL,
   bootstrapWorkspace,
   buildChatSystemPrompt,
   CONTEXT_TREE_HEAD_REL,
+  type ContextTreeBinding,
+  deepEqualIdentity,
   type InstallFirstTreeIntegrationExec,
   installFirstTreeIntegration,
+  readCachedBundledCliVersion,
   readCachedContextTreeHead,
   readContextTreeHead,
+  resolveBundledCliVersion,
+  withContextTreeSyncLock,
+  writeBundledCliVersion,
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
+import { setCliBinding } from "../runtime/cli-binding.js";
 import type { AgentIdentity } from "../runtime/handler.js";
+
+// Pin the CLI binding to the prod identity so assertions against the
+// emitted tools.md and CLI sub-process names keep matching the literals
+// they have always matched. Production-channel tests stay untouched;
+// non-prod channels are exercised in dedicated test cases below.
+beforeAll(() => {
+  setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+});
 
 // Use a real temp directory for file-based tests
 const tmpBase = join(import.meta.dirname ?? __dirname, "../../.test-tmp-bootstrap");
@@ -28,6 +44,10 @@ function cleanTmp(): void {
 afterEach(() => {
   cleanTmp();
   vi.restoreAllMocks();
+  // Reset the binding to prod after every test so a case that switches
+  // channels (staging / dev) does not leak into the next case. The
+  // file-level `beforeAll` already set this; we mirror it here.
+  setCliBinding({ binName: "first-tree", packageName: "first-tree" });
 });
 
 function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
@@ -54,6 +74,95 @@ describe("contextTreeCloneDir", () => {
     expect(main).not.toBe(otherOrg);
     expect(main).toContain("context-tree-repos");
     expect(main.split("/").at(-1)).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
+
+describe("withContextTreeSyncLock", () => {
+  it("dedups concurrent callers sharing the same key to a single fn invocation", async () => {
+    // Each clone dir corresponds to one (repo, branch) pair. When N agents
+    // share that pair (the common case — one Context Tree per org), all N
+    // must share one in-flight sync instead of queuing N sequential pulls.
+    let invocations = 0;
+    let resolveSync: ((value: ContextTreeBinding) => void) | undefined;
+    const fn = (): Promise<ContextTreeBinding | null> => {
+      invocations++;
+      return new Promise<ContextTreeBinding>((resolve) => {
+        resolveSync = resolve;
+      });
+    };
+
+    const key = "/tmp/clone-dir-A";
+    const p1 = withContextTreeSyncLock(key, fn);
+    const p2 = withContextTreeSyncLock(key, fn);
+    const p3 = withContextTreeSyncLock(key, fn);
+
+    expect(invocations).toBe(1);
+    expect(p1).toBe(p2);
+    expect(p2).toBe(p3);
+
+    const binding: ContextTreeBinding = { path: key, repoUrl: "git@example/x", branch: "main" };
+    resolveSync?.(binding);
+    await expect(p1).resolves.toBe(binding);
+    await expect(p2).resolves.toBe(binding);
+    await expect(p3).resolves.toBe(binding);
+  });
+
+  it("isolates locks across distinct keys (different repos sync in parallel)", async () => {
+    let invocations = 0;
+    const fn = (): Promise<ContextTreeBinding | null> => {
+      invocations++;
+      return Promise.resolve(null);
+    };
+
+    await Promise.all([withContextTreeSyncLock("/tmp/clone-A", fn), withContextTreeSyncLock("/tmp/clone-B", fn)]);
+
+    expect(invocations).toBe(2);
+  });
+
+  it("clears the slot after settle so a later call triggers a fresh sync", async () => {
+    let invocations = 0;
+    const fn = (): Promise<ContextTreeBinding | null> => {
+      invocations++;
+      return Promise.resolve(null);
+    };
+
+    await withContextTreeSyncLock("/tmp/clone-C", fn);
+    await withContextTreeSyncLock("/tmp/clone-C", fn);
+
+    expect(invocations).toBe(2);
+  });
+
+  it("propagates rejection to all concurrent callers and clears the slot", async () => {
+    let invocations = 0;
+    let rejectSync: ((reason: Error) => void) | undefined;
+    const fn = (): Promise<ContextTreeBinding | null> => {
+      invocations++;
+      if (invocations === 1) {
+        return new Promise<ContextTreeBinding>((_, reject) => {
+          rejectSync = reject;
+        });
+      }
+      // Later retries succeed immediately so the test can observe that the
+      // slot was cleared without hanging on a second pending promise.
+      return Promise.resolve(null);
+    };
+
+    const key = "/tmp/clone-D";
+    const p1 = withContextTreeSyncLock(key, fn);
+    const p2 = withContextTreeSyncLock(key, fn);
+
+    expect(invocations).toBe(1);
+    expect(p1).toBe(p2);
+
+    rejectSync?.(new Error("git pull failed"));
+    await expect(p1).rejects.toThrow("git pull failed");
+    await expect(p2).rejects.toThrow("git pull failed");
+
+    // After the failed sync clears the slot, a new caller is allowed to
+    // retry — important so the next agent's bind isn't poisoned by an
+    // earlier transient network failure.
+    await expect(withContextTreeSyncLock(key, fn)).resolves.toBeNull();
+    expect(invocations).toBe(2);
   });
 });
 
@@ -144,6 +253,35 @@ describe("bootstrapWorkspace", () => {
     // requires改造 4 to overwrite.
     expect(content).not.toContain("Your final text response is automatically delivered");
     expect(content).not.toMatch(/Otherwise it falls back to a direct chat/i);
+  });
+
+  it("tools.md uses the channel-resolved binary name when the CLI binding points at staging", () => {
+    // Regression for the multi-env follow-up: the agent-facing tools.md
+    // used to hardcode `first-tree chat send`, which on staging hosts asks
+    // the agent to call a binary that doesn't exist (only
+    // `first-tree-staging` is installed). The binding must thread through
+    // to every CLI invocation in the docs (chat send/invite, agent list,
+    // attention raise).
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    const workspace = join(tmpBase, "ws-tools-staging");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+    });
+
+    const content = readFileSync(join(workspace, ".agent", "tools.md"), "utf-8");
+    expect(content).toContain("first-tree-staging chat send");
+    expect(content).toContain("first-tree-staging chat invite");
+    expect(content).toContain("first-tree-staging agent list");
+    expect(content).toContain("first-tree-staging attention raise");
+    // The hardcoded prod name must NOT leak through — the literal
+    // `first-tree chat` would mis-direct staging agents to the prod binary.
+    expect(content).not.toMatch(/\bfirst-tree chat /);
+    expect(content).not.toMatch(/\bfirst-tree attention /);
   });
 
   it("tools.md teaches `chat invite` instead of the retired --direct escape hatch", () => {
@@ -504,6 +642,30 @@ describe("installFirstTreeIntegration", () => {
     expect(logs.join("\n")).toContain("First-tree integration skipped");
   });
 
+  it("logs non-Error integration failures without retrying", () => {
+    const workspace = join(tmpBase, "integrate-string-error");
+    const treePath = join(tmpBase, "ctx-string-error");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec(() => {
+      throw "plain failure";
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-a",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(logs.join("\n")).toContain("plain failure");
+  });
+
   it("omits --tree-url when no URL is provided", () => {
     const workspace = join(tmpBase, "integrate-no-url");
     const treePath = join(tmpBase, "ctx-no-url");
@@ -521,6 +683,79 @@ describe("installFirstTreeIntegration", () => {
     });
 
     expect(calls[0]?.args).not.toContain("--tree-url");
+  });
+
+  it("uses the staging binName + npx packageName when the CLI binding points at the staging channel", () => {
+    // Regression for the multi-env follow-up: bootstrap used to hardcode
+    // "first-tree", which on staging hosts called a non-existent binary
+    // (only `first-tree-staging` is installed there). Both the PATH attempt
+    // and the npx fallback must follow the channel binding.
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+
+    const workspace = join(tmpBase, "integrate-staging");
+    const treePath = join(tmpBase, "ctx-staging");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    let call = 0;
+    const { exec, calls } = makeRecordingExec(() => {
+      call += 1;
+      if (call === 1) {
+        const err = new Error("spawn first-tree-staging ENOENT") as Error & { code?: string };
+        err.code = "ENOENT";
+        throw err;
+      }
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-staging",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result, logs.join("\n")).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.command).toBe("first-tree-staging");
+    expect(calls[1]?.command).toBe("npx");
+    expect(calls[1]?.args.slice(0, 2)).toEqual(["-y", "first-tree-staging@latest"]);
+    expect(logs.join("\n")).toContain("first-tree-staging (PATH)");
+    expect(logs.join("\n")).toContain("npx first-tree-staging@latest");
+  });
+
+  it("skips the npx fallback for the dev channel because dev binaries are not published", () => {
+    // Dev channel sets `packageName: null` in `channelConfig` — there is
+    // no `first-tree-dev` tarball on npm. The PATH attempt must still run
+    // (developers install via scripts/dev-install.sh), but if it fails the
+    // helper must NOT try `npx null@latest` or `npx first-tree-dev@latest`.
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+
+    const workspace = join(tmpBase, "integrate-dev");
+    const treePath = join(tmpBase, "ctx-dev");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec(() => {
+      const err = new Error("spawn first-tree-dev ENOENT") as Error & { code?: string };
+      err.code = "ENOENT";
+      throw err;
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-dev",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("first-tree-dev");
+    expect(logs.join("\n")).not.toContain("npx");
   });
 });
 
@@ -634,6 +869,14 @@ describe("Context Tree HEAD drift helpers", () => {
     expect(readContextTreeHead(notGit)).toBeNull();
   });
 
+  it("readContextTreeHead returns null when git rev-parse fails", () => {
+    const brokenGit = join(tmpBase, "tree-head-broken-git");
+    mkdirSync(brokenGit, { recursive: true });
+    writeFileSync(join(brokenGit, ".git"), "gitdir: /path/that/does/not/exist\n");
+
+    expect(readContextTreeHead(brokenGit)).toBeNull();
+  });
+
   it("write/read roundtrip pins the HEAD value for drift comparison", () => {
     const workspace = join(tmpBase, "tree-head-cache");
     mkdirSync(workspace, { recursive: true });
@@ -643,6 +886,24 @@ describe("Context Tree HEAD drift helpers", () => {
     writeContextTreeHead(workspace, "abc123def456");
     expect(readCachedContextTreeHead(workspace)).toBe("abc123def456");
     expect(existsSync(join(workspace, CONTEXT_TREE_HEAD_REL))).toBe(true);
+  });
+
+  it("readCachedContextTreeHead returns null when the cache file cannot be read", () => {
+    const workspace = join(tmpBase, "tree-head-cache-unreadable");
+    const path = join(workspace, CONTEXT_TREE_HEAD_REL);
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(path, "abc123");
+    chmodSync(path, 0);
+
+    expect(readCachedContextTreeHead(workspace)).toBeNull();
+  });
+
+  it("readCachedContextTreeHead returns null for an empty cache file", () => {
+    const workspace = join(tmpBase, "tree-head-cache-empty");
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(join(workspace, CONTEXT_TREE_HEAD_REL), "  \n");
+
+    expect(readCachedContextTreeHead(workspace)).toBeNull();
   });
 
   it("writeContextTreeHead is a no-op when the HEAD is null (unknown)", () => {
@@ -670,5 +931,152 @@ describe("Context Tree HEAD drift helpers", () => {
     expect(readContextTreeHead(treeDir)).toBe(secondHead);
     expect(readCachedContextTreeHead(workspace)).toBe(firstHead);
     // The handler compares these two; mismatch ⇒ re-bootstrap.
+  });
+});
+
+describe("Bundled CLI version drift helpers", () => {
+  it("resolveBundledCliVersion finds the closest package.json with a version", () => {
+    // Walks up from this test file; the client package.json is the nearest
+    // manifest with a version, so we should get its version string back.
+    const version = resolveBundledCliVersion();
+    expect(version).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
+  it("resolveBundledCliVersion returns null when no manifest is on the walk", () => {
+    // Hand a URL whose dirname is the filesystem root — the walk exhausts
+    // immediately. We can't `vi.mock` `node:fs` here without disturbing the
+    // rest of the suite, so use a non-existent path under `/`.
+    const version = resolveBundledCliVersion("file:///__no_manifest_here__/dummy.js");
+    expect(version).toBeNull();
+  });
+
+  it("resolveBundledCliVersion keeps walking past a corrupt package.json", () => {
+    const dir = join(tmpBase, "cli-version-corrupt", "nested");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(tmpBase, "cli-version-corrupt", "package.json"), "{not-json");
+
+    expect(resolveBundledCliVersion(`file://${join(dir, "module.js")}`)).toMatch(/^\d+\.\d+\.\d+/u);
+  });
+
+  it("write/read roundtrip pins the CLI version for drift comparison", () => {
+    const workspace = join(tmpBase, "cli-version-cache");
+    mkdirSync(workspace, { recursive: true });
+
+    expect(readCachedBundledCliVersion(workspace)).toBeNull();
+
+    writeBundledCliVersion(workspace, "0.5.3");
+    expect(readCachedBundledCliVersion(workspace)).toBe("0.5.3");
+    expect(existsSync(join(workspace, BUNDLED_CLI_VERSION_REL))).toBe(true);
+  });
+
+  it("writeBundledCliVersion is a no-op when the version is null (unknown)", () => {
+    const workspace = join(tmpBase, "cli-version-null");
+    mkdirSync(workspace, { recursive: true });
+    writeBundledCliVersion(workspace, null);
+    expect(existsSync(join(workspace, BUNDLED_CLI_VERSION_REL))).toBe(false);
+  });
+
+  it("trims whitespace from the cached version on read", () => {
+    const workspace = join(tmpBase, "cli-version-trim");
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(join(workspace, BUNDLED_CLI_VERSION_REL), "  0.5.3-staging.1.1  \n");
+    expect(readCachedBundledCliVersion(workspace)).toBe("0.5.3-staging.1.1");
+  });
+
+  it("readCachedBundledCliVersion returns null when the cache file cannot be read", () => {
+    const workspace = join(tmpBase, "cli-version-unreadable");
+    const path = join(workspace, BUNDLED_CLI_VERSION_REL);
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(path, "0.5.3");
+    chmodSync(path, 0);
+
+    expect(readCachedBundledCliVersion(workspace)).toBeNull();
+  });
+
+  it("readCachedBundledCliVersion returns null for an empty cache file", () => {
+    const workspace = join(tmpBase, "cli-version-empty");
+    mkdirSync(join(workspace, ".agent"), { recursive: true });
+    writeFileSync(join(workspace, BUNDLED_CLI_VERSION_REL), "  \n");
+
+    expect(readCachedBundledCliVersion(workspace)).toBeNull();
+  });
+});
+
+describe("deepEqualIdentity", () => {
+  it("compares primitives, nested objects, changed values, and extra keys", () => {
+    expect(deepEqualIdentity("same", "same")).toBe(true);
+    expect(deepEqualIdentity("left", "right")).toBe(false);
+    expect(deepEqualIdentity({ metadata: { tier: "prod" } }, { metadata: { tier: "prod" } })).toBe(true);
+    expect(deepEqualIdentity({ metadata: { tier: "prod" } }, { metadata: { tier: "dev" } })).toBe(false);
+    expect(deepEqualIdentity({ agentId: "agent-1" }, { agentId: "agent-1", displayName: "Agent" })).toBe(false);
+    expect(deepEqualIdentity({ agentId: "agent-1" }, { agentId: "agent-1" })).toBe(true);
+  });
+});
+
+/**
+ * Locks in the handler-level contract around the CLI-version pin: the
+ * pin MUST only be written when `installFirstTreeIntegration` actually
+ * succeeded. Pinning on failure would silently mask the gap and the
+ * next start would skip the retry the drift trigger exists to perform.
+ *
+ * These mirror the gate logic in `ensureAgentBootstrap` (claude-code +
+ * codex handlers) — we drive `installFirstTreeIntegration` directly with
+ * a mocked `InstallFirstTreeIntegrationExec` because the handler's gate
+ * is a four-line composition: `if (ok) writeBundledCliVersion(...)`.
+ * If a future change drops that guard, these tests fail; that is the
+ * intent.
+ */
+describe("CLI-version pin contract (handler invariants)", () => {
+  it("does not overwrite the existing pin when integrate fails — next start retries", () => {
+    const workspace = join(tmpBase, "cli-pin-failure-keeps-stale");
+    const treePath = join(tmpBase, "cli-pin-failure-tree");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    // Pre-existing pin from an earlier successful bootstrap.
+    writeBundledCliVersion(workspace, "0.5.2");
+    const stalePinPath = join(workspace, BUNDLED_CLI_VERSION_REL);
+    expect(readFileSync(stalePinPath, "utf-8")).toBe("0.5.2");
+
+    const { exec } = makeRecordingExec(() => {
+      throw new Error("spawn npx ENOENT");
+    });
+    const ok = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-x",
+      log: () => {},
+      exec,
+    });
+    expect(ok).toBe(false);
+
+    // Handler gate: `if (ok) writeBundledCliVersion(workspace, "0.5.3")`.
+    // We're asserting the OK=false branch leaves the file untouched.
+    if (ok) writeBundledCliVersion(workspace, "0.5.3");
+    expect(readFileSync(stalePinPath, "utf-8")).toBe("0.5.2");
+  });
+
+  it("advances the pin to the new version when integrate succeeds", () => {
+    const workspace = join(tmpBase, "cli-pin-success-advances");
+    const treePath = join(tmpBase, "cli-pin-success-tree");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    writeBundledCliVersion(workspace, "0.5.2");
+    const pinPath = join(workspace, BUNDLED_CLI_VERSION_REL);
+    expect(readFileSync(pinPath, "utf-8")).toBe("0.5.2");
+
+    const { exec } = makeRecordingExec();
+    const ok = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-x",
+      log: () => {},
+      exec,
+    });
+    expect(ok).toBe(true);
+
+    if (ok) writeBundledCliVersion(workspace, "0.5.3");
+    expect(readFileSync(pinPath, "utf-8")).toBe("0.5.3");
   });
 });

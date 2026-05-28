@@ -11,9 +11,12 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "check": "biome check .",
+    "lint": "biome lint .",
     "format": "biome check --write .",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "coverage": "turbo run coverage",
+    "coverage:summary": "node scripts/coverage-summary.mjs",
     "e2e:doctor": "turbo run e2e:doctor --filter=@first-tree/e2e",
     "e2e:smoke": "turbo run e2e:smoke --filter=@first-tree/e2e",
     "e2e:full": "turbo run e2e:full --filter=@first-tree/e2e",
@@ -24,6 +27,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",
     "turbo": "^2.5.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
   }
 }

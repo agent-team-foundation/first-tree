@@ -25,6 +25,19 @@ describe("Handler Registry", () => {
     expect(() => getHandlerFactory("nonexistent-handler-type-xyz")).toThrow(/Unknown handler type/);
   });
 
+  it("uses the empty-registry label before any handlers are registered", async () => {
+    vi.resetModules();
+    const fresh = await import("../runtime/handler.js");
+
+    expect(() => fresh.getHandlerFactory("missing")).toThrow("Available: (none)");
+  });
+
+  it("lists registered handler types in unknown-type errors", () => {
+    registerHandler("listed-handler", echoFactory);
+
+    expect(() => getHandlerFactory("missing-handler")).toThrow(/Available: .*listed-handler/);
+  });
+
   it("creates a handler with the factory", () => {
     registerHandler("test-handler", echoFactory);
     const factory = getHandlerFactory("test-handler");

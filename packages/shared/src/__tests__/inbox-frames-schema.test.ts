@@ -79,8 +79,12 @@ describe("inboxDeliverFrameSchema", () => {
   it("degrades an unknown message.source to null instead of rejecting the frame", () => {
     // Forward-roll defence: a server that adds a new source value (e.g.
     // PR #481 renaming `hub_ui` → `web`) would otherwise force older clients
-    // to drop the entire frame, lose the message after retryCount exhausts,
-    // and spam the reaper every 300s in the meantime.
+    // to drop the entire frame and loop on every reconnect — the next
+    // `agent:bind` resets the unacked entry back to `pending` and re-pushes
+    // the same frame, with the loop only breaking when the process restarts
+    // (and is still the same broken build, so it would loop again), the
+    // deploy ships the enum update, or operator `session:terminate` clears
+    // the row. See inflight-message-recovery-design.md §4.
     const res = inboxDeliverFrameSchema.safeParse({
       type: "inbox:deliver",
       entryId: 1,

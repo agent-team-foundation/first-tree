@@ -162,14 +162,27 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
 /**
  * Which invitee kickoff sub-state to show, given what the team has set up.
  * Pure so it's unit-testable (the React component just maps the result to a
- * body):
- *   - no Context Tree link yet              → "waiting" (admin isn't done)
- *   - link + the team listed its projects   → "confirm" (pick from them)
- *   - link but no team projects listed      → "picker"  (invitee picks own)
+ * body). Ordered upstream-first — fix the biggest blocker before the next:
+ *   - no Context Tree link yet              → "waiting"          (admin isn't done at all)
+ *   - link but no GitHub App installation   → "no-installation"  (admin skipped code; agent would 403)
+ *   - link + install + team listed projects → "confirm"          (pick from them)
+ *   - link + install but no team projects   → "picker"           (invitee picks own)
+ *
+ * The "no-installation" state was added because the previous flow silently
+ * advanced invitees into the picker, where they'd successfully select repos
+ * and only discover the missing install when the agent's first git op
+ * failed with 403. We hard-stop here instead, with a "remind admin"
+ * affordance and a "start chatting anyway" bailout so the invitee is never
+ * truly blocked.
  */
-export type InviteeKickoffState = "waiting" | "confirm" | "picker";
+export type InviteeKickoffState = "waiting" | "no-installation" | "confirm" | "picker";
 
-export function resolveInviteeKickoffState(args: { treeUrl: string; teamRepoCount: number }): InviteeKickoffState {
+export function resolveInviteeKickoffState(args: {
+  treeUrl: string;
+  hasInstallation: boolean;
+  teamRepoCount: number;
+}): InviteeKickoffState {
   if (!args.treeUrl) return "waiting";
+  if (!args.hasInstallation) return "no-installation";
   return args.teamRepoCount > 0 ? "confirm" : "picker";
 }

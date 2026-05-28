@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import { monorepoSourceAliases } from "../../scripts/vitest-aliases.js";
+import { unitCoverageConfig } from "../../scripts/vitest-coverage.js";
 import { MAX_FORKS } from "./src/__tests__/test-config.js";
 
 export default defineConfig({
@@ -9,6 +10,9 @@ export default defineConfig({
     fileParallelism: true,
     testTimeout: 30_000,
     hookTimeout: 60_000,
+    coverage: unitCoverageConfig({
+      exclude: ["src/types.ts", "src/scope/types.ts", "src/services/feishu/types.ts"],
+    }),
     pool: "forks",
     poolOptions: {
       forks: {

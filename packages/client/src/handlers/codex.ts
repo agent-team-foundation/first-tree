@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type AgentRuntimeConfigPayload, deriveRepoLocalPath, type SessionEvent } from "@first-tree/shared";
-import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions } from "@openai/codex-sdk";
+import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import {
   bootstrapWorkspace,
@@ -11,8 +11,11 @@ import {
   installFirstTreeIntegration,
   isHubWorktreeMarker,
   type PredeclaredSourceRepo,
+  readCachedBundledCliVersion,
   readCachedContextTreeHead,
   readContextTreeHead,
+  resolveBundledCliVersion,
+  writeBundledCliVersion,
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
@@ -21,6 +24,7 @@ import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-m
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
+import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -34,6 +38,194 @@ const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
 
 type Worktree = { url: string; path: string; branchName: string };
+
+/**
+ * Turn-level retry budget for transient codex failures.
+ *
+ * Total attempts = MAX_TURN_RETRIES + 1 (i.e. 1 initial + 2 retries = 3 tries).
+ * Backoff is `RETRY_BASE_MS * RETRY_MULTIPLIER^attempt`, so the schedule is
+ * 500 ms → 1500 ms before the third attempt — matches the order of magnitude
+ * of the SDK fetch-retry layer (`sdk-retry.test.ts`) without falling into the
+ * same band that PostgreSQL LISTEN/NOTIFY uses for inbox redelivery.
+ *
+ * **Layering with `FirstTreeHubSDK` fetch retry (PR #600 review nit #3):**
+ * this counter sits on top of the SDK's internal `doFetch` retry (3 tries,
+ * 0/500/1000 ms) AND on top of whatever `@openai/codex-sdk` does inside its
+ * child-process call. Worst-case attempts per turn ≈ this layer (3) × inner
+ * SDK fetch retry (3) = ~9 model invocations and a wall-clock ceiling near
+ * `RETRY_BASE_MS * RETRY_MULTIPLIER^MAX_TURN_RETRIES + sum(inner backoffs)`.
+ * Operators looking at long-tail latency / retry logs should know both
+ * layers exist before tuning either.
+ *
+ * Retries fire ONLY when (a) the error message looks transient (see
+ * `isTransientCodexErrorMessage`) AND (b) no user-visible event has been
+ * emitted yet for this turn (see `isUserVisibleItem`). Once the agent has
+ * said something or run a tool, re-running the turn would double-emit those
+ * items in the chat timeline — not acceptable.
+ */
+const MAX_TURN_RETRIES = 2;
+const RETRY_BASE_MS = 500;
+const RETRY_MULTIPLIER = 3;
+
+/**
+ * Concurrent-write detection window for the per-chat AGENTS.md briefing.
+ *
+ * Codex CLI reads AGENTS.md once at thread startup; the handler rewrites it
+ * on every start/resume because there is no per-turn prompt-injection API
+ * (see proposal §⓪.3 risk acceptance / §④ race-window decision). Two chats
+ * starting for the same agent within this window almost certainly raced —
+ * the second writer clobbered the first briefing before the codex CLI got
+ * to read it. We log instead of locking because the operational signal
+ * ("wrong chat context surfaces in codex") is the actionable thing; the
+ * fix lives upstream (per-turn prompt API).
+ *
+ * **1000 ms chosen empirically (PR #600 review nit #2):** the bootstrap
+ * pipeline (git mirror prepare → `bootstrapWorkspace` → briefing rewrite)
+ * runs in roughly 200 ms-1 s when the mirror is warm. A tighter window
+ * (the original 100 ms) systematically MISSED the most dangerous form of
+ * the race — two chats triggering `ensureCodexBootstrap` within the same
+ * bootstrap envelope — so we widen to cover that. Conversely, two writes
+ * spaced more than 1 s apart are unlikely to share a CLI read window. We
+ * accept a small chance of false positives (e.g. fast resume followed by
+ * fast resume from the same chat) over false negatives, because the log
+ * line is diagnostic-only — no behaviour change.
+ */
+const AGENTS_MD_RACE_WINDOW_MS = 1000;
+
+/**
+ * Module-level so the race detector spans every handler instance for the
+ * same agent home (each chat creates its own handler). Cleared per-test
+ * via `__resetCodexHandlerStateForTests`.
+ */
+const lastAgentsMdWriteAt = new Map<string, number>();
+
+/** Test-only: reset module-level race-detector state between vitest cases. */
+export function __resetCodexHandlerStateForTests(): void {
+  lastAgentsMdWriteAt.clear();
+}
+
+/**
+ * Record an AGENTS.md write and surface a warning when one fires inside the
+ * `AGENTS_MD_RACE_WINDOW_MS` of the previous write for the same workspace —
+ * the codex CLI reads AGENTS.md once at thread startup, so two writers
+ * inside this window mean the second one almost certainly clobbered the
+ * first briefing before the CLI got to read it. Exported so the behaviour
+ * is unit-testable without going through the full handler bootstrap path.
+ */
+export function detectAgentsMdConcurrentWrite(workspace: string, now: number, log: (msg: string) => void): void {
+  const prevWrite = lastAgentsMdWriteAt.get(workspace);
+  if (prevWrite !== undefined && now - prevWrite < AGENTS_MD_RACE_WINDOW_MS) {
+    log(
+      `codex AGENTS.md concurrent write detected workspace=${workspace} ` +
+        `gap_ms=${now - prevWrite} — another chat may have overwritten this briefing ` +
+        `before codex CLI read it (proposal §⓪.3 race window). ` +
+        `If chat-context surfaces wrong agent state, this is the cause.`,
+    );
+  }
+  lastAgentsMdWriteAt.set(workspace, now);
+}
+
+/**
+ * HTTP status-code matchers anchored at word boundaries so unrelated
+ * numeric IDs ("request id 5023", "job_id=5001", "context window 4012")
+ * don't smuggle a false-positive match through `includes("500")` etc.
+ * See PR #600 review nit #1.
+ */
+const AUTH_HTTP_CODE_RE = /\b(401|403)\b/;
+const TRANSIENT_HTTP_CODE_RE = /\b(500|502|503|504)\b/;
+
+/**
+ * Transient-error heuristic for `turn.failed` / SDK throws.
+ *
+ * The codex SDK surfaces `ThreadError = { message: string }` only — no
+ * structured status code or `Retry-After`. We classify by keyword: HTTP 5xx,
+ * common network-error mnemonics, and the explicit "overloaded" / "rate
+ * limit" phrases the upstream model API uses. Auth, sandbox, and
+ * configuration failures are deliberately NOT in this set — retrying them
+ * just wastes attempts.
+ *
+ * Exported for tests so the classifier table is locked behavioural API.
+ */
+export function isTransientCodexErrorMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  // Explicit non-retriables — short-circuit so a message like "401:
+  // unauthorized after fetch failed" doesn't get retried because of
+  // "fetch failed". HTTP codes use \b word boundaries so a `job_id=4012345`
+  // / `request id 4019` in the wrapped error doesn't get misclassified as
+  // an auth failure (which would silently swallow a real transient).
+  if (
+    AUTH_HTTP_CODE_RE.test(m) ||
+    m.includes("unauthorized") ||
+    m.includes("forbidden") ||
+    m.includes("invalid api key") ||
+    m.includes("invalid_api_key") ||
+    m.includes("authentication") ||
+    m.includes("context length") ||
+    m.includes("context_length") ||
+    m.includes("sandbox") ||
+    m.includes("approval")
+  ) {
+    return false;
+  }
+  return (
+    TRANSIENT_HTTP_CODE_RE.test(m) ||
+    m.includes("rate limit") ||
+    m.includes("rate_limit") ||
+    m.includes("overloaded") ||
+    m.includes("unavailable") ||
+    m.includes("timed out") ||
+    m.includes("timeout") ||
+    m.includes("fetch failed") ||
+    m.includes("network") ||
+    m.includes("econnreset") ||
+    m.includes("econnrefused") ||
+    m.includes("etimedout") ||
+    m.includes("epipe")
+  );
+}
+
+/**
+ * Tracks whether re-running this turn would double-emit a chat-visible item.
+ * `reasoning` and the bare `error` item are presence-only / diagnostic and
+ * safe to re-emit; everything else is rendered in the chat timeline.
+ */
+function isUserVisibleItem(item: ThreadItem): boolean {
+  switch (item.type) {
+    case "agent_message":
+    case "command_execution":
+    case "file_change":
+    case "mcp_tool_call":
+    case "web_search":
+    case "todo_list":
+      return true;
+    case "reasoning":
+    case "error":
+      return false;
+  }
+}
+
+/**
+ * Abort-aware sleep. Resolves on either the timer firing or the abort
+ * signal; on abort, rejects with `AbortError` so the caller can fall back
+ * to the abort-aware code path in `runTurn` instead of running another
+ * attempt against a cancelled turn.
+ */
+function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /**
  * Build the per-turn `ThreadOptions` Codex consumes. Exported so unit tests
@@ -401,9 +593,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
         return "";
       }
       case "error": {
+        // Codex's `~/.codex/auth.json` refresh failures surface here when the
+        // SDK bubbles them as item-level errors rather than turn.failed. The
+        // raw wording is shaped like "Your access token could not be refreshed
+        // because your refresh token was revoked. Please log out and sign in
+        // again." — opaque to a First Tree user. Reframe at the boundary so
+        // the next step (run `codex login` in their own terminal) is obvious.
+        const message = isCodexAuthError(item.message) ? formatAuthHint("codex", item.message) : item.message;
         sessionCtx.emitEvent({
           kind: "error",
-          payload: { source: "tool", message: item.message },
+          payload: { source: "tool", message },
         });
         return "";
       }
@@ -412,7 +611,19 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
   }
 
-  async function runTurn(input: Input, sessionCtx: SessionContext): Promise<void> {
+  /**
+   * Run one Codex turn.
+   *
+   * `entryCount` is the number of inbox entries this turn is consuming —
+   * always 1 for `start` / `resume` / single-inject paths, and `N` when
+   * `mergeAndRun` fuses N queued messages into one input. The runtime acks
+   * exactly `entryCount` entries from the chat's in-flight FIFO once the
+   * turn closes (markCompleted N). Drift between this number and what the
+   * SDK actually consumed loses the per-turn pairing — under-counts leak
+   * entries (stay `delivered` server-side until next bind), over-counts
+   * ack future turns prematurely (loss on crash).
+   */
+  async function runTurn(input: Input, sessionCtx: SessionContext, entryCount: number): Promise<void> {
     const activeThread = thread;
     if (!activeThread) return;
 
@@ -424,45 +635,132 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // mirrors claude-code so admin events + completion bookkeeping reflect
     // actual delivery, not just SDK turn termination. `turn.completed` /
     // `turn.failed` only flip the local status here; the emit happens below.
+    //
+    // `userVisibleEmitted` gates the retry path: once we've emitted an
+    // assistant_text / tool_call to the chat, re-running the turn would
+    // double-render those items, so we stop retrying even if the SDK
+    // surfaces a transient `turn.failed`.
     const assistantTexts: string[] = [];
     let turnFailed = false;
+    let userVisibleEmitted = false;
+    // Wrapper object so TS doesn't narrow `lastUsage` to `null` based on the
+    // synchronous initializer (assignments live inside the IIFE below, which
+    // TS' control-flow analysis can't reach — microsoft/TypeScript#9998).
+    const usageBox: { value: Usage | null } = { value: null };
+    const turnStartedAt = Date.now();
     const promise = (async () => {
-      try {
-        const streamed = await activeThread.runStreamed(input, { signal: abort.signal });
-        for await (const event of streamed.events) {
-          if (abort.signal.aborted) break;
-          sessionCtx.touch();
-          if (event.type === "thread.started") {
-            threadId = event.thread_id;
-          } else if (event.type === "turn.started") {
-            // No-op — runtime state already "working".
-          } else if (event.type === "item.completed") {
-            const text = processItem(event.item, sessionCtx);
-            if (text) assistantTexts.push(text);
-          } else if (event.type === "item.started" || event.type === "item.updated") {
-            // Stream-only intermediate states — claude-code likewise emits
-            // events on terminal items only; codex's run-to-completion model
-            // means the terminal item carries the full payload.
-          } else if (event.type === "turn.completed") {
-            // Status-only — `turn_end` is emitted after forwardResult below.
-          } else if (event.type === "turn.failed") {
-            turnFailed = true;
-            sessionCtx.emitEvent({
-              kind: "error",
-              payload: { source: "sdk", message: event.error.message },
-            });
-          } else if (event.type === "error") {
-            sessionCtx.emitEvent({
-              kind: "error",
-              payload: { source: "sdk", message: event.message },
-            });
+      for (let attempt = 0; attempt <= MAX_TURN_RETRIES; attempt++) {
+        // Reset per-attempt; assistantTexts intentionally persists across
+        // attempts only because we abort retries the moment any user-visible
+        // item is emitted, so the array is empty whenever a retry runs.
+        turnFailed = false;
+        let retryRequested = false;
+        let retryDelay = 0;
+        let retryReason = "";
+
+        // Per-attempt child AbortController (PR #600 review nit #4): the
+        // codex-sdk Thread exposes no explicit close/cancel beyond the
+        // AbortSignal passed to runStreamed. If we `break` out of the
+        // for-await on a transient `turn.failed` and reuse the parent
+        // signal, the SDK's background generator + child-process stdout
+        // reader can keep draining the dead stream until child exit.
+        // A fresh child controller per attempt lets us explicitly tear
+        // down the previous stream before starting the next, while
+        // suspend/shutdown still cascades down via the parent listener.
+        const attemptAbort = new AbortController();
+        const onParentAbort = (): void => attemptAbort.abort();
+        abort.signal.addEventListener("abort", onParentAbort, { once: true });
+
+        try {
+          try {
+            const streamed = await activeThread.runStreamed(input, { signal: attemptAbort.signal });
+            for await (const event of streamed.events) {
+              if (attemptAbort.signal.aborted) break;
+              sessionCtx.touch();
+              if (event.type === "thread.started") {
+                threadId = event.thread_id;
+              } else if (event.type === "turn.started") {
+                // No-op — runtime state already "working".
+              } else if (event.type === "item.completed") {
+                const text = processItem(event.item, sessionCtx);
+                if (text) assistantTexts.push(text);
+                if (isUserVisibleItem(event.item)) userVisibleEmitted = true;
+              } else if (event.type === "item.started" || event.type === "item.updated") {
+                // Stream-only intermediate states — claude-code likewise emits
+                // events on terminal items only; codex's run-to-completion model
+                // means the terminal item carries the full payload.
+              } else if (event.type === "turn.completed") {
+                // Capture usage for the post-turn metrics log; `turn_end` is
+                // still emitted after forwardResult below.
+                usageBox.value = event.usage;
+              } else if (event.type === "turn.failed") {
+                if (
+                  !userVisibleEmitted &&
+                  attempt < MAX_TURN_RETRIES &&
+                  isTransientCodexErrorMessage(event.error.message)
+                ) {
+                  retryRequested = true;
+                  retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
+                  retryReason = `turn.failed (transient): ${event.error.message}`;
+                  break;
+                }
+                turnFailed = true;
+                const message = isCodexAuthError(event.error.message)
+                  ? formatAuthHint("codex", event.error.message)
+                  : event.error.message;
+                sessionCtx.emitEvent({
+                  kind: "error",
+                  payload: { source: "sdk", message },
+                });
+              } else if (event.type === "error") {
+                const message = isCodexAuthError(event.message)
+                  ? formatAuthHint("codex", event.message)
+                  : event.message;
+                sessionCtx.emitEvent({
+                  kind: "error",
+                  payload: { source: "sdk", message },
+                });
+              }
+            }
+          } catch (err) {
+            if (abort.signal.aborted) return;
+            const msg = err instanceof Error ? err.message : String(err);
+            if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(msg)) {
+              retryRequested = true;
+              retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
+              retryReason = `runStreamed threw (transient): ${msg}`;
+            } else {
+              turnFailed = true;
+              const message = isCodexAuthError(msg) ? formatAuthHint("codex", msg) : msg;
+              sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message } });
+            }
           }
+        } finally {
+          // Detach the parent listener whether we retry or break. Even
+          // with `{ once: true }` the listener may never fire (no
+          // parent-abort during this attempt) — without removal we'd
+          // leak one per attempt for the lifetime of the parent
+          // controller (i.e. of this turn).
+          abort.signal.removeEventListener("abort", onParentAbort);
         }
-      } catch (err) {
-        if (abort.signal.aborted) return;
-        turnFailed = true;
-        const msg = err instanceof Error ? err.message : String(err);
-        sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: msg } });
+
+        if (!retryRequested) break;
+        // Explicit tear-down: kill the previous stream before the backoff
+        // sleep so its drain doesn't overlap the next attempt's child
+        // process. No-op if the parent already aborted (the listener
+        // above already cascaded).
+        attemptAbort.abort();
+        sessionCtx.log(`codex turn retry ${attempt + 1}/${MAX_TURN_RETRIES + 1} after ${retryDelay}ms; ${retryReason}`);
+        try {
+          // Sleep on PARENT signal: only suspend/shutdown should cut
+          // short the backoff window, not the retry-triggered abort we
+          // just fired on the per-attempt controller.
+          await sleepWithAbort(retryDelay, abort.signal);
+        } catch {
+          // AbortError — suspend/shutdown raced ahead; let the abort path
+          // handle teardown.
+          return;
+        }
       }
     })();
 
@@ -503,6 +801,32 @@ export const createCodexHandler: HandlerFactory = (config) => {
       payload: { status: succeeded ? "success" : "error" },
     });
     sessionCtx.setRuntimeState("idle");
+    // Ack the entries this turn consumed. All four turn outcomes (success,
+    // silent / no-text, SDK turn.failed, forwardResult failure) are
+    // terminal for this turn — redelivery would either replay an already-
+    // delivered reply or re-hit the same failure. Pass `entryCount` so a
+    // fused `mergeAndRun` (N injected messages → one turn) acks exactly
+    // those N entries and leaves any in-flight entries for the NEXT turn
+    // alone.
+    sessionCtx.markCompleted(entryCount);
+
+    // Structured usage / timing log — emitted via `sessionCtx.log` rather
+    // than a new SessionEvent kind so we stay inside the codex handler
+    // (shared schema unchanged). Codex's `high` reasoning + larger context
+    // makes per-turn cost 3-5× claude-code at the same input length; without
+    // this line operators cannot account for spend per chat. `usage` is
+    // null when the turn ended without ever emitting `turn.completed` —
+    // i.e. abort / unrecoverable failure — in which case logging tokens
+    // would be misleading.
+    const usage = usageBox.value;
+    if (usage) {
+      sessionCtx.log(
+        `codex usage chatId=${sessionCtx.chatId} duration_ms=${Date.now() - turnStartedAt} ` +
+          `input_tokens=${usage.input_tokens} cached_input_tokens=${usage.cached_input_tokens} ` +
+          `output_tokens=${usage.output_tokens} reasoning_output_tokens=${usage.reasoning_output_tokens} ` +
+          `status=${succeeded ? "success" : "error"}`,
+      );
+    }
 
     // Drain queued messages — schedules at most one follow-up at a time so
     // a runaway inject loop can't recurse into stack overflow.
@@ -526,14 +850,31 @@ export const createCodexHandler: HandlerFactory = (config) => {
         sessionCtx.log(`codex inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    if (inputs.length === 0) return;
-    await runTurn(inputs.join("\n\n"), sessionCtx);
+    if (inputs.length === 0) {
+      // Every fused message failed `formatInboundContent` — semantically a
+      // permanent failure for this batch (redelivery would re-hit the same
+      // format errors). Ack the entries so they don't leak in
+      // `inFlightEntries` and pile up server-side as `delivered` rows.
+      sessionCtx.markCompleted(drained.length);
+      return;
+    }
+    // `drained.length` is the authoritative fused-entry count — formatting
+    // a single message could throw (it gets logged and skipped above) but
+    // the inbox entry was still pushed at dispatch time, so it must still
+    // be acked. Using `inputs.length` here would leak the formatting-failed
+    // entry until the next bind reset.
+    await runTurn(inputs.join("\n\n"), sessionCtx, drained.length);
   }
 
-  /** Install the first-tree skill + binding block; no-op when context tree is unconfigured. */
-  function ensureFirstTreeBinding(workspace: string, sessionCtx: SessionContext): void {
-    if (!contextTreePath) return;
-    installFirstTreeIntegration({
+  /**
+   * Install the first-tree skill + binding block; no-op when context tree is
+   * unconfigured. Returns the integration result so the caller can decide
+   * whether to pin the CLI-version drift marker (don't pin on failure or the
+   * next start skips the retry).
+   */
+  function ensureFirstTreeBinding(workspace: string, sessionCtx: SessionContext): boolean {
+    if (!contextTreePath) return true;
+    return installFirstTreeIntegration({
       workspacePath: workspace,
       contextTreePath,
       // Workspace id identifies the agent home (per agent-session-cwd-
@@ -568,6 +909,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
    * no equivalent of Claude SDK's `appendSystemPrompt`.
    */
   function ensureCodexBootstrap(workspace: string, sessionCtx: SessionContext, briefing: string): void {
+    // Race-window detector: every `ensureCodexBootstrap` call rewrites
+    // AGENTS.md (per-chat block always changes). The detector logs when
+    // two writes for the same workspace land inside the race window — see
+    // proposal §⓪.3. Fix lives upstream (per-turn prompt API); we surface
+    // the operational signal so "wrong chat context surfaces in codex"
+    // bugs can be triaged.
+    detectAgentsMdConcurrentWrite(workspace, Date.now(), (m) => sessionCtx.log(m));
+
     const sentinelPresent = existsSync(join(workspace, INIT_COMPLETE_SENTINEL_REL));
     const currentTreeHead = readContextTreeHead(contextTreePath);
     const cachedTreeHead = readCachedContextTreeHead(workspace);
@@ -581,7 +930,17 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
     const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
 
-    if (sentinelPresent && !treeDrifted) {
+    // CLI-version drift forces a fresh `installFirstTreeIntegration` so the
+    // shipped `.agents/skills/*` payload tracks `first-tree upgrade` even
+    // when the Context Tree HEAD is unchanged. Same "fail open" rule as
+    // tree drift: a null on either side means "unknown" and we do not
+    // force re-bootstrap.
+    const currentCliVersion = resolveBundledCliVersion();
+    const cachedCliVersion = readCachedBundledCliVersion(workspace);
+    const cliDrifted =
+      currentCliVersion !== null && cachedCliVersion !== null && currentCliVersion !== cachedCliVersion;
+
+    if (sentinelPresent && !treeDrifted && !cliDrifted) {
       // Fast path: identity hash check, briefing rewrite, no integrate.
       const identityPath = join(workspace, ".agent", "identity.json");
       const desired = {
@@ -622,6 +981,11 @@ export const createCodexHandler: HandlerFactory = (config) => {
         `Context Tree HEAD changed (${cachedTreeHead?.slice(0, 7)} → ${currentTreeHead?.slice(0, 7)}); re-running bootstrap`,
       );
     }
+    if (sentinelPresent && cliDrifted) {
+      sessionCtx.log(
+        `Bundled CLI version changed (${cachedCliVersion} → ${currentCliVersion}); re-running bootstrap to refresh skills`,
+      );
+    }
 
     bootstrapWorkspace({
       workspacePath: workspace,
@@ -630,8 +994,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
       serverUrl: sessionCtx.sdk.serverUrl,
       briefing: { format: "agents-md", content: briefing },
     });
-    ensureFirstTreeBinding(workspace, sessionCtx);
+    const integrationOk = ensureFirstTreeBinding(workspace, sessionCtx);
     writeContextTreeHead(workspace, currentTreeHead);
+    // Only pin the CLI version when integrate actually succeeded — pinning
+    // on a failed run would silently mask the gap and the next start would
+    // skip the retry that this drift trigger exists to perform.
+    if (integrationOk) {
+      writeBundledCliVersion(workspace, currentCliVersion);
+    }
   }
 
   return {
@@ -670,7 +1040,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
 
       const input = await toCodexInput(message, sessionCtx);
-      await runTurn(input, sessionCtx);
+      await runTurn(input, sessionCtx, 1);
 
       // Codex assigns thread_id via `thread.started` during the first turn;
       // fall back to whatever `Thread` exposes if the event was missed.
@@ -721,7 +1091,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       if (message) {
         const input = await toCodexInput(message, sessionCtx);
-        await runTurn(input, sessionCtx);
+        await runTurn(input, sessionCtx, 1);
       }
       return sessionId;
     },
@@ -739,9 +1109,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
       void (async () => {
         try {
           const input = await toCodexInput(message, sessionCtx);
-          await runTurn(input, sessionCtx);
+          // Single inject, single entry — runTurn will ack exactly one.
+          await runTurn(input, sessionCtx, 1);
         } catch (err) {
           sessionCtx.log(`codex inject failed: ${err instanceof Error ? err.message : String(err)}`);
+          // `toCodexInput` / `runTurn` threw before any markCompleted —
+          // the entry is still in flight. Ack so the row doesn't loop
+          // server-side as `delivered`; redelivery would re-hit the same
+          // failure. Mirrors design §4 "permanent → ack".
+          sessionCtx.markCompleted(1);
         }
       })();
     },

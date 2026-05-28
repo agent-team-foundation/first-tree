@@ -39,6 +39,7 @@ import {
 import { and, eq, inArray, ne, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { attentions } from "../db/schema/attentions.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
@@ -496,6 +497,33 @@ export async function listMeChats(
   const pendingByChat = new Map<string, string[]>();
   const busyByChat = new Map<string, string[]>();
   const hasOpenQuestionByChat = new Map<string, boolean>();
+
+  // Strict "Needs attention" scoping (NHA M1 末). The chat-list red-dot
+  // group lights only when an open ask is relevant to the caller:
+  //   - target = me (someone is asking THIS human), OR
+  //   - origin agent is one I manage (an agent I own is waiting on a reply).
+  //
+  // The `pending` projection below already covers the "managed agent
+  // raised" arm via `isMine`. The "target = me" arm needs an extra query
+  // over `attentions` because per-agent status (`s.needsYou`) doesn't
+  // carry target info. Both feed `chatHasOpenQuestion` — a co-speaker
+  // who is neither target nor manager-of-origin no longer sees the chat
+  // pinned to "Needs attention".
+  const targetingMeChatIds = new Set<string>();
+  if (chatIds.length > 0) {
+    const rows = await db
+      .select({ chatId: attentions.originChatId })
+      .from(attentions)
+      .where(
+        and(
+          inArray(attentions.originChatId, chatIds),
+          eq(attentions.targetHumanId, humanAgentId),
+          eq(attentions.state, "open"),
+          eq(attentions.requiresResponse, true),
+        ),
+      );
+    for (const r of rows) targetingMeChatIds.add(r.chatId);
+  }
   for (const [chatId, statuses] of statusByChat) {
     const speakers = nonHumanSpeakersByChat.get(chatId);
     // live-dot: freshest activity among non-human SPEAKERS. (Narrowed from the
@@ -527,20 +555,23 @@ export async function listMeChats(
       // surface), AND narrowed to "mine" (R2). The front-end covers R3
       // (caller-is-speaker fallback) via the separate `chatHasOpenQuestion`
       // boolean below — which stays raw, unfiltered.
-      if (s.needsYou && isMine) pending.push(s.agentId);
-      // chatHasOpenQuestion — raw "any agent in this chat has a pending
-      // question" bit. Feeds the front-end R3 rule (a speaker in a chat with
-      // an open question is in attention even if the asking agent is someone
-      // else's). Computed over the same union (non-human speakers + non-human
-      // pending) that `resolveAgentChatStatuses` returns, so a pending agent
-      // that has left still flips this true.
-      if (s.needsYou) hasOpenQuestionByChat.set(chatId, true);
+      if (s.needsYou && isMine) {
+        pending.push(s.agentId);
+        // Strict: only my managed agent's ask lights this from the per-agent
+        // status side. Target-me lights it from the `targetingMeChatIds`
+        // set below.
+        hasOpenQuestionByChat.set(chatId, true);
+      }
     }
     if (freshest) liveActivityByChat.set(chatId, freshest.activity);
     if (failed.length > 0) failedByChat.set(chatId, failed);
     if (pending.length > 0) pendingByChat.set(chatId, pending);
     if (busy.length > 0) busyByChat.set(chatId, busy);
   }
+  // Layer in the "target = me" branch — even if no managed agent has a
+  // pending ask in this chat, an open ask aimed at me still belongs to
+  // "Needs attention".
+  for (const chatId of targetingMeChatIds) hasOpenQuestionByChat.set(chatId, true);
 
   // First-message lookup for auto-title fallback. Mirrors
   // `session.ts:listAgentSessions`'s `selectDistinctOn` pattern. The
@@ -660,29 +691,27 @@ export async function createMeChat(
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.uuid).join(", ")}`);
   }
 
-  // Strict owner-exclusive for private targets (RFC §4.5). The route
-  // pins `humanAgentId = scope.humanAgentId`, so the caller is always
-  // human and the strict check coincides with the previous lenient
-  // shared-`managerId` form for THIS path. Routing through the shared
-  // `rejectedPrivateTargets` predicate anyway keeps the rule in exactly
-  // one place — same discipline as `inviteParticipantsToChat` and
-  // `chat.ts::createChat`. Without it, any future change that lets a
-  // non-human caller reach this code would silently fall back to the
-  // lenient reading (which is the exact two-copies-drift failure mode
-  // PR #550 wrote up).
+  // Owner-exclusive for private targets (RFC §4.5, shared-owner reading).
+  // The route pins `humanAgentId = scope.humanAgentId`, so the caller's
+  // owning member is the route caller's own member; the predicate refuses
+  // any private target whose `managerId` doesn't match. Routing through
+  // the shared `rejectedPrivateTargets` keeps the rule in exactly one
+  // place — same discipline as `inviteParticipantsToChat` and
+  // `chat.ts::createChat`. See that predicate's comment for the strict-
+  // vs-shared history (PR #601 / #608).
   const caller = found.find((a) => a.uuid === humanAgentId);
   if (!caller) {
     throw new BadRequestError("Caller agent not found in the chat's organization");
   }
   const rejected = rejectedPrivateTargets(
-    { agentId: humanAgentId, memberId: caller.managerId, type: caller.type },
+    { agentId: humanAgentId, memberId: caller.managerId },
     found
       .filter((a) => a.uuid !== humanAgentId)
       .map((a) => ({ uuid: a.uuid, visibility: a.visibility, managerId: a.managerId })),
   );
   if (rejected.length > 0) {
     throw new ForbiddenError(
-      `Only the human owner can add a private agent to a chat: ${rejected.map((t) => t.uuid).join(", ")}`,
+      `Only the owner can add a private agent to a chat: ${rejected.map((t) => t.uuid).join(", ")}`,
     );
   }
 

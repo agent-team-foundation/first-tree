@@ -1,4 +1,5 @@
 import { extractCaption, extractMentions, type SendMessage, scanMentionTokens } from "@first-tree/shared";
+import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -263,7 +264,7 @@ async function sendMessageInner(
       throw new BadRequestError(
         `Cannot route to "${sample}" — they are not a participant of this chat. ` +
           "Add them first:\n" +
-          `  first-tree chat invite ${sample}\n` +
+          `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
           "Then retry your send. Or ask a human in this chat to add them.",
       );
     }
@@ -356,7 +357,7 @@ async function sendMessageInner(
       if (recipientMentions.length === 0) {
         throw new BadRequestError(
           "Sending to a group chat requires an explicit @mention. " +
-            "Use `first-tree chat send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
+            `Use \`${getServerCliBinding().binName} chat send <name>\` to message a single agent, or @<name> in the content to address one or more group members.`,
         );
       }
     }
@@ -405,7 +406,7 @@ async function sendMessageInner(
           throw new BadRequestError(
             `Cannot @-mention "${sample}" — they are not a participant of this chat. ` +
               "Add them first:\n" +
-              `  first-tree chat invite ${sample}\n` +
+              `  ${getServerCliBinding().binName} chat invite ${sample}\n` +
               "Then retry your send. Or ask a human in this chat to add them.",
           );
         }

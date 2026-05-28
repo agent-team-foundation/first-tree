@@ -29,17 +29,15 @@ export function createBackgroundTasks(
 
   return {
     start() {
-      // Inbox timeout reset — runs every 60 seconds
+      // Silent inbox row GC — runs every 60 seconds. Acked silent rows are
+      // deleted regardless of age (they've fulfilled their context-replay
+      // purpose); stale `pending` silent rows are deleted after the default
+      // 30-day window. The legacy 300s delivered-timeout reset that used to
+      // live here was removed once `agent:bind` became the sole recovery
+      // entrypoint for in-flight messages (see
+      // docs/inflight-message-recovery-design.md §4).
       inboxTimer = setInterval(async () => {
         try {
-          const timeoutSeconds = app.config.runtime.inboxTimeoutSeconds;
-          const maxRetries = app.config.runtime.maxRetryCount;
-          await inboxService.resetTimedOutEntries(app.db, timeoutSeconds, maxRetries);
-          // Silent row GC piggy-backs on the inbox timer (no need for a
-          // second timer — DELETE is rare and tiny). Uses default 30-day
-          // window for stale-pending; acked rows are deleted regardless of
-          // age (they've fulfilled their context-replay purpose). See
-          // pruneStaleSilentEntries jsdoc.
           const pruned = await inboxService.pruneStaleSilentEntries(app.db);
           if (pruned.ackedDeleted > 0 || pruned.stalePendingDeleted > 0) {
             log.debug(
@@ -48,7 +46,7 @@ export function createBackgroundTasks(
             );
           }
         } catch (err) {
-          log.error({ err }, "failed to reset timed-out inbox entries");
+          log.error({ err }, "failed to prune silent inbox rows");
         }
       }, 60_000);
 

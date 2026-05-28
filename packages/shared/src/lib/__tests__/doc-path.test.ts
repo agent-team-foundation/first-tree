@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildWorkspaceDocKey,
   isCanonicalDocLinkPath,
@@ -18,6 +18,8 @@ describe("normalizeDocLinkPath", () => {
   it("rejects empty / whitespace / non-string input", () => {
     expect(normalizeDocLinkPath("")).toBeNull();
     expect(normalizeDocLinkPath("   ")).toBeNull();
+    expect(normalizeDocLinkPath("/")).toBeNull();
+    expect(normalizeDocLinkPath("./")).toBeNull();
     expect(normalizeDocLinkPath(undefined as unknown as string)).toBeNull();
   });
 
@@ -102,6 +104,10 @@ describe("buildWorkspaceDocKey", () => {
     expect(buildWorkspaceDocKey("assistant", "chat-1", "")).toBeNull();
   });
 
+  it("rejects assembled keys that are not canonical workspace doc paths", () => {
+    expect(buildWorkspaceDocKey("assistant?debug=true", "chat-1", "a.md")).toBeNull();
+  });
+
   it("produces a key that is itself canonical", () => {
     const key = buildWorkspaceDocKey("assistant", "chat-1", "docs/design.md");
     expect(key).not.toBeNull();
@@ -131,6 +137,27 @@ describe("parseWorkspaceDocKey", () => {
   it("returns null for non-canonical / rejected input", () => {
     expect(parseWorkspaceDocKey("../a/b.md")).toBeNull();
     expect(parseWorkspaceDocKey(".agent/chat/x.md")).toBeNull();
+  });
+
+  it("returns null when parsed key fields are empty after splitting", () => {
+    const originalSplit = String.prototype.split;
+    let slashSplitCount = 0;
+    const split = vi.spyOn(String.prototype, "split").mockImplementation(function (this: string, separator, limit) {
+      const separatorValue: unknown = separator;
+      if (this === "assistant/chat-1/docs.md" && separatorValue === "/") {
+        slashSplitCount += 1;
+        if (slashSplitCount === 2) return ["assistant", "chat-1", ""];
+      }
+      // Type assertion: this test drives an impossible defensive branch while
+      // preserving String.prototype.split's overloaded runtime behavior.
+      return Reflect.apply(originalSplit, this, [separator, limit]) as string[];
+    });
+
+    try {
+      expect(parseWorkspaceDocKey("assistant/chat-1/docs.md")).toBeNull();
+    } finally {
+      split.mockRestore();
+    }
   });
 
   it("round-trips with buildWorkspaceDocKey", () => {

@@ -28,7 +28,11 @@ export { defineConfig, field, optional } from "./schema.js";
 export type { ServerConfig } from "./server-config.js";
 // Typed config schemas and accessors
 export { getServerConfig, serverConfigSchema } from "./server-config.js";
-export { getConfig, resetConfig } from "./singleton.js";
+// `setConfig` is intended for test scaffolding only — production code goes
+// through `initConfig`, which sets the singleton internally. Exposed at the
+// barrel so server test helpers can pin a config before constructing the
+// app without dragging shared internals through a relative path.
+export { getConfig, resetConfig, setConfig } from "./singleton.js";
 
 // Types
 export type {

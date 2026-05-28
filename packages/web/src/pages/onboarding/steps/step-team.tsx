@@ -77,36 +77,34 @@ export function StepTeam() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-        <label htmlFor="onboarding-team-name" className="text-label font-medium" style={{ color: "var(--fg-2)" }}>
-          Team name
-        </label>
-        <input
-          ref={inputRef}
-          id="onboarding-team-name"
-          aria-label="Team name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={200}
-          disabled={saving}
-          className="text-body"
-          style={{
-            padding: "var(--sp-2) var(--sp-3)",
-            background: "var(--bg)",
-            border: "var(--hairline) solid var(--border)",
-            borderRadius: "var(--radius-input)",
-            color: "var(--fg)",
-            outline: "none",
-            caretColor: "var(--accent)",
-          }}
-          onFocus={(e) => {
-            e.currentTarget.style.borderColor = "var(--accent)";
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.borderColor = "var(--border)";
-          }}
-        />
-      </div>
+      {/* No visible <label> — the step title ("Name your team") and the
+          field's `aria-label` already name the input. Repeating "Team name"
+          here was visual noise on a single-input page. */}
+      <input
+        ref={inputRef}
+        id="onboarding-team-name"
+        aria-label="Team name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={200}
+        disabled={saving}
+        className="text-body"
+        style={{
+          padding: "var(--sp-2) var(--sp-3)",
+          background: "var(--bg)",
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: "var(--radius-input)",
+          color: "var(--fg)",
+          outline: "none",
+          caretColor: "var(--accent)",
+        }}
+        onFocus={(e) => {
+          e.currentTarget.style.borderColor = "var(--accent)";
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.borderColor = "var(--border)";
+        }}
+      />
 
       {(saveError || loadError) && (
         <FlowNote>{saveError ?? `Couldn't load your team — ${loadError}. Refresh and try again.`}</FlowNote>

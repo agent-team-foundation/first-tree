@@ -1,12 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  agentRuntimeConfigDryRunResultSchema,
   agentRuntimeConfigPayloadSchema,
+  agentRuntimeConfigSchema,
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
   DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
+  dryRunAgentRuntimeConfigSchema,
+  getRepoLocalPathSafetyError,
   gitRepoSchema,
+  isRedactedEnvValue,
   isSafeRepoLocalPath,
+  updateAgentRuntimeConfigSchema,
 } from "../schemas/agent-runtime-config.js";
 
 /**
@@ -73,6 +79,15 @@ describe("agent runtime config — codex defaults", () => {
     expect(b.model).toBe("opus");
   });
 
+  it("falls back to the claude-code default for unknown runtime providers at runtime", () => {
+    // This intentionally bypasses the compile-time runtime provider union to
+    // exercise the defensive default branch for untyped external input.
+    expect(defaultRuntimeConfigPayload("future-provider" as never)).toMatchObject({
+      kind: "claude-code",
+      model: "opus",
+    });
+  });
+
   it("schema accepts an explicit codex payload (kind discriminator)", () => {
     const parsed = agentRuntimeConfigPayloadSchema.parse({
       kind: "codex",
@@ -95,6 +110,7 @@ describe("agent runtime config — git repo localPath safety", () => {
   });
 
   it.each([
+    [""],
     ["/tmp/repo"],
     ["../repo"],
     ["repos/../repo"],
@@ -102,6 +118,7 @@ describe("agent runtime config — git repo localPath safety", () => {
     ["repos/./repo"],
     ["repos/repo/"],
     [" repos/repo"],
+    ["repos/ repo"],
     ["repos\\repo"],
     ["C:/repo"],
     ["repo\u0000x"],
@@ -110,9 +127,144 @@ describe("agent runtime config — git repo localPath safety", () => {
     expect(() => gitRepoSchema.parse({ url: "https://github.com/acme/repo.git", localPath })).toThrow();
   });
 
+  it("returns specific localPath safety errors", () => {
+    expect(getRepoLocalPathSafetyError("")).toBe("Git repo local path must not be empty");
+    expect(getRepoLocalPathSafetyError("repos/ repo")).toBe(
+      "Git repo local path segments must not have leading or trailing whitespace",
+    );
+    expect(getRepoLocalPathSafetyError("repos/repo")).toBeNull();
+  });
+
   it("preserves derived repo local path behavior for repo URLs", () => {
     expect(deriveRepoLocalPath("https://github.com/acme/repo.git")).toBe("repo");
     expect(deriveRepoLocalPath("git@github.com:acme/repo.git")).toBe("repo");
     expect(deriveRepoLocalPath("https://github.com/acme/repo.git?ref=main")).toBe("repo");
+  });
+
+  it("returns an empty derived path for blank or segmentless URLs", () => {
+    expect(deriveRepoLocalPath("   ")).toBe("");
+    expect(deriveRepoLocalPath("///")).toBe("");
+  });
+
+  it("handles a missing query-stripped segment defensively", () => {
+    const originalSplit = String.prototype.split;
+    const splitSpy = vi.spyOn(String.prototype, "split").mockImplementation(function (
+      this: string,
+      separator: string | RegExp | { [Symbol.split](string: string, limit?: number): string[] },
+      limit?: number,
+    ) {
+      if (this.toString() === "force-empty-query-split" && String(separator) === "/[?#]/") {
+        return [];
+      }
+      return Reflect.apply(originalSplit, this, [separator, limit]);
+    });
+
+    try {
+      expect(deriveRepoLocalPath("force-empty-query-split")).toBe("");
+    } finally {
+      splitSpy.mockRestore();
+    }
+  });
+});
+
+describe("agent runtime config — duplicate validation", () => {
+  it("rejects duplicate MCP server names case-insensitively", () => {
+    const result = agentRuntimeConfigPayloadSchema.safeParse({
+      kind: "claude-code",
+      mcpServers: [
+        { name: "GitHub", transport: "stdio", command: "github-mcp" },
+        { name: "github", transport: "http", url: "https://example.com/mcp" },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["mcpServers", 1, "name"],
+          message: 'Duplicate MCP server name "github"',
+        }),
+      ]),
+    );
+  });
+
+  it("rejects duplicate env keys", () => {
+    const result = agentRuntimeConfigPayloadSchema.safeParse({
+      kind: "claude-code",
+      env: [
+        { key: "API_TOKEN", value: "a" },
+        { key: "API_TOKEN", value: "b", sensitive: true },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["env", 1, "key"],
+          message: 'Duplicate env key "API_TOKEN"',
+        }),
+      ]),
+    );
+  });
+
+  it("rejects duplicate git repo local paths, including derived paths", () => {
+    const result = agentRuntimeConfigPayloadSchema.safeParse({
+      kind: "claude-code",
+      gitRepos: [{ url: "https://github.com/acme/repo.git" }, { url: "git@github.com:other/repo.git" }],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["gitRepos", 1, "localPath"],
+          message: 'Duplicate git repo local path "repo"',
+        }),
+      ]),
+    );
+  });
+
+  it("ignores empty derived git repo paths during duplicate validation", () => {
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "claude-code",
+      gitRepos: [{ url: "   " }, { url: "https://github.com/acme/repo.git" }],
+    });
+
+    expect(parsed.gitRepos).toHaveLength(2);
+  });
+});
+
+describe("agent runtime config — request and response schemas", () => {
+  it("parses full config rows, update payloads, dry-run payloads, and dry-run results", () => {
+    const current = agentRuntimeConfigSchema.parse({
+      agentId: "agent-1",
+      version: 1,
+      payload: DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+      updatedAt: "2026-05-27T00:00:00.000Z",
+      updatedBy: "user-1",
+    });
+
+    expect(updateAgentRuntimeConfigSchema.parse({ expectedVersion: 1, payload: { model: "sonnet" } })).toEqual({
+      expectedVersion: 1,
+      payload: { model: "sonnet" },
+    });
+    expect(dryRunAgentRuntimeConfigSchema.parse({ payload: { env: [{ key: "TOKEN", value: "***" }] } })).toEqual({
+      payload: { env: [{ key: "TOKEN", value: "***", sensitive: false }] },
+    });
+    expect(
+      agentRuntimeConfigDryRunResultSchema.parse({
+        current,
+        next: DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+        diff: [{ path: "model", op: "replace", before: "opus", after: "sonnet" }],
+      }),
+    ).toMatchObject({ current, diff: [{ path: "model", op: "replace" }] });
+  });
+});
+
+describe("agent runtime config — redacted env values", () => {
+  it("detects the redacted placeholder exactly", () => {
+    expect(isRedactedEnvValue("***")).toBe(true);
+    expect(isRedactedEnvValue("secret")).toBe(false);
   });
 });

@@ -205,6 +205,11 @@ async function main(): Promise<void> {
   writeFileSync(join(TEST_HOME, "config", "client.yaml"), `server:\n  url: ${serverUrl}\n`);
 
   // ── Step 5: Start a real ClientRuntime against the test server. ────────────
+  // Run channel-env's side effects (FIRST_TREE_HOME + CLI binding) before any
+  // runtime code — bootstrap.ts's `generateToolsDoc` /
+  // `installFirstTreeIntegration` throw otherwise. See `apps/cli/src/core/
+  // channel-env.ts`.
+  await import("../src/core/channel-env.js");
   const { ClientRuntime } = await import("../src/core/client-runtime.js");
 
   const agentsDir = join(TEST_HOME, "config", "agents");

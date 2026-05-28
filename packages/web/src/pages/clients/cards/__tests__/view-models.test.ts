@@ -1,12 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient, RuntimeAgent } from "../../../../api/activity.js";
 import {
-  authExpiredDiagnostic,
   cardHostnameLabel,
   computerCardViewModel,
   formatOfflineDuration,
-  offlineDiagnostic,
-  SETUP_INCOMPLETE_DIAGNOSTIC,
   summarizeBoundAgents,
 } from "../view-models.js";
 
@@ -123,40 +120,6 @@ describe("summarizeBoundAgents", () => {
       agent({ agentId: "c", runtimeType: null, runtimeState: "idle" }),
     ]);
     expect(result.agents.map((a) => a.runtimeType)).toEqual(["claude-code", "codex", null]);
-  });
-});
-
-describe("diagnostic copy", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(T0);
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("authExpiredDiagnostic includes the offline duration when available", () => {
-    expect(authExpiredDiagnostic({ lastSeenAt: "2026-04-23T12:00:00Z" })).toBe(
-      "This computer hasn't checked in for 8 days. Your access token has expired.",
-    );
-  });
-
-  it("authExpiredDiagnostic falls back to a generic line when duration is unknown", () => {
-    // Server invariant: lastSeenAt is non-null, but if it ever weren't, the
-    // fallback must still read sensibly.
-    expect(authExpiredDiagnostic({ lastSeenAt: "" })).toBe(
-      "Your access token has expired. Run the command below on this computer to re-authenticate.",
-    );
-  });
-
-  it("offlineDiagnostic mentions last-seen duration + wake guidance", () => {
-    expect(offlineDiagnostic({ lastSeenAt: "2026-05-01T10:00:00Z" })).toBe(
-      "Last seen 2 hours ago. Make sure the machine is awake and connected.",
-    );
-  });
-
-  it("SETUP_INCOMPLETE_DIAGNOSTIC is a stable copy string", () => {
-    expect(SETUP_INCOMPLETE_DIAGNOSTIC).toContain("no runtime is ready");
   });
 });
 

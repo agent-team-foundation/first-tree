@@ -27,11 +27,15 @@ import {
   installFirstTreeIntegration,
   isHubWorktreeMarker,
   type PredeclaredSourceRepo,
+  readCachedBundledCliVersion,
   readCachedContextTreeHead,
   readContextTreeHead,
+  resolveBundledCliVersion,
+  writeBundledCliVersion,
   writeContextTreeHead,
 } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { getCliBinding } from "../runtime/cli-binding.js";
 import { classify } from "../runtime/error-taxonomy.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
@@ -46,6 +50,7 @@ import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireAgentHome, INIT_COMPLETE_SENTINEL_REL, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { withWorktreePathLock } from "../runtime/worktree-mutex.js";
+import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
@@ -225,6 +230,38 @@ function isResultMessage(message: unknown): message is ResultMessage {
   if (!message || typeof message !== "object") return false;
   const m = message as Record<string, unknown>;
   return m.type === "result" && typeof m.subtype === "string";
+}
+
+/**
+ * Extract the typed auth-failure signal from any SDK message shape that
+ * carries `SDKAssistantMessageError`. Returns the original provider-side
+ * message (when the SDK has one to share) so the chat-timeline hint can
+ * quote it verbatim.
+ *
+ * Two sources we watch (per `@anthropic-ai/claude-agent-sdk` `sdk.d.ts`):
+ *
+ *   - `assistant` messages with `error === "authentication_failed"` — the
+ *     turn's terminal auth-failure signal, emitted from the typed union.
+ *   - `auth_status` messages with a non-empty `error` string — the dedicated
+ *     auth-state surface.
+ *
+ * `system/api_retry` is deliberately NOT watched here: that message fires
+ * BEFORE the SDK's next retry attempt, not as a final verdict on the turn,
+ * and would surface a hint before the user knew the turn failed. If a retry
+ * does succeed, the hint would have been a false alarm. The eventual
+ * `assistant.error` or `result.subtype === "error"` is the authoritative
+ * post-failure signal — let those drive the chat-timeline message.
+ */
+function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | null {
+  if (!message || typeof message !== "object") return null;
+  const m = message as Record<string, unknown>;
+  if (m.type === "assistant" && isClaudeAuthError(m.error as string | undefined)) {
+    return { rawMessage: "authentication_failed" };
+  }
+  if (m.type === "auth_status" && typeof m.error === "string" && m.error.length > 0) {
+    return { rawMessage: m.error };
+  }
+  return null;
 }
 
 function extractToolResultText(content: unknown): string {
@@ -660,11 +697,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     return async (toolName, input, _options) => {
       if (toolName === "AskUserQuestion") {
         sessionCtx.log("AskUserQuestion is no longer bridged; redirecting agent to NHA");
+        // Channel-aware redirect: in staging / dev the binary on PATH is
+        // `first-tree-staging` / `first-tree-dev`, so the deny message has
+        // to thread `binName` through — same reason as bootstrap.ts's
+        // `generateToolsDoc`. Resolved lazily per turn so vitest workers
+        // that flip the binding mid-suite see the up-to-date value.
+        const bin = getCliBinding().binName;
         return {
           behavior: "deny",
           message:
             "AskUserQuestion is no longer supported in this Hub. " +
-            "To request human attention, use the `first-tree attention raise` CLI (or your runtime's NHA SDK). " +
+            `To request human attention, use the \`${bin} attention raise\` CLI (or your runtime's NHA SDK). ` +
             "See the `attention` skill for usage.",
         } satisfies PermissionResult;
       }
@@ -807,6 +850,20 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       path: contextTreePath,
       repoUrl: contextTreeRepoUrl,
     });
+    // Auth-failure hint emission flag. Set when we detect a typed
+    // `authentication_failed` on assistant / auth_status messages. Consulted
+    // in the result-error branch so we don't double-emit (once as a hint,
+    // once as the raw SDK error). Two scopes share this:
+    //   1. Within a single turn: per-turn reset on `result` boundary so the
+    //      next turn within the SAME query (bg-agent multi-turn mode) starts
+    //      fresh.
+    //   2. Across retries (outer while-loop reentry via the catch +
+    //      respawnQuery path): NOT reset. An auth failure won't self-heal,
+    //      so respawning typically hits the same error — without persistence
+    //      the user would see two identical hint lines in the timeline.
+    // Hoisted out of the try block so the outer catch's reentry preserves it
+    // across the respawn boundary.
+    let authHintEmitted = false;
     try {
       while (true) {
         if (!currentQuery) return;
@@ -819,6 +876,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             sessionCtx.touch();
 
             toolCallProcessor.onMessage(message);
+
+            // Detect typed auth failure BEFORE result-message handling so the
+            // user sees the actionable hint before any redundant result error.
+            // The SDK's auth state lives in claude's own credential store —
+            // we only translate the surface error, we don't manage tokens.
+            const authFailure = detectClaudeAuthFailure(message);
+            if (authFailure && !authHintEmitted) {
+              authHintEmitted = true;
+              sessionCtx.emitEvent({
+                kind: "error",
+                payload: { source: "sdk", message: formatAuthHint("claude-code", authFailure.rawMessage) },
+              });
+            }
 
             if (isResultMessage(message)) {
               if (message.subtype === "success") {
@@ -878,6 +948,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       },
                     });
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                    // Permanent stream API failure — ack so the server
+                    // doesn't redeliver a message that would just produce
+                    // the same error. Retry was exhausted upstream.
+                    sessionCtx.markCompleted();
                   } else {
                     try {
                       // All enrichment (inReplyTo, mentions, participants
@@ -886,6 +960,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       await sessionCtx.forwardResult(resultText);
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
+                      // Turn closed cleanly — drain in-flight inbox entries.
+                      sessionCtx.markCompleted();
                     } catch (err) {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
@@ -896,20 +972,46 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                         payload: { source: "runtime", message: forwardErrMessage },
                       });
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                      // forwardResult failure is treated as terminal for
+                      // this turn — ack so we don't loop on redelivery.
+                      // Long-lived sdk.sendMessage failures are rare; if
+                      // recovery is needed the user can retry by sending
+                      // a new message.
+                      sessionCtx.markCompleted();
                     }
                   }
                 } else {
                   // No result text to forward (edge case) — still close the turn.
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
+                  sessionCtx.markCompleted();
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
                 const errorLog = `Query result error: ${errors} (subtype=${message.subtype}, turns=${message.num_turns ?? "?"}, duration=${message.duration_ms ?? "?"}ms)`;
                 sessionCtx.log(errorLog);
-                sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
+                // If we already emitted an auth-failure hint earlier in this
+                // turn (typed `authentication_failed` on an assistant /
+                // api_retry / auth_status message), skip the raw SDK error
+                // emit so the timeline shows the actionable hint instead of
+                // a redundant opaque second line.
+                if (!authHintEmitted) {
+                  sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
+                }
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                // SDK reported a turn-level error (non-success subtype):
+                // redelivery would just hit the same error — ack.
+                sessionCtx.markCompleted();
               }
               sessionCtx.setRuntimeState("idle");
+              // Reset the auth-hint flag only on a SUCCESSFUL result. This
+              // gives a clean slate for the next turn once auth is clearly
+              // working, while suppressing a duplicate hint when the next
+              // turn (or a retry — see flag declaration above) hits the same
+              // unhealing auth failure. The user has already been told what
+              // to do; repeating it adds noise without new information.
+              if (message.subtype === "success") {
+                authHintEmitted = false;
+              }
             }
           }
           sessionCtx.setRuntimeState("idle");
@@ -954,6 +1056,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               );
             }
             sessionCtx.setRuntimeState("error");
+            // Ack the in-flight entry for this turn. Without this the row
+            // stays `delivered` server-side forever: the in-process
+            // Deduplicator collapses every bind-reset replay so the entry
+            // never re-dispatches and never gets acked. Per design §4
+            // "permanent → ack".
+            sessionCtx.markCompleted();
             return;
           }
 
@@ -987,6 +1095,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               );
             }
             sessionCtx.setRuntimeState("error");
+            // Same reasoning as the MAX_RETRIES branch above — without this
+            // ack the row would loop in `delivered` forever, deduped on every
+            // bind-reset replay. Per design §4 "permanent → ack".
+            sessionCtx.markCompleted();
             return;
           }
         }
@@ -1251,7 +1363,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
     const treeDrifted = currentTreeHead !== null && cachedTreeHead !== null && currentTreeHead !== cachedTreeHead;
 
-    if (sentinelPresent && !treeDrifted) {
+    // CLI-version drift forces a fresh `installFirstTreeIntegration` so the
+    // shipped `.agents/skills/*` payload tracks `first-tree upgrade` even
+    // when the Context Tree HEAD is unchanged. Same "fail open" rule as
+    // tree drift: a null on either side means "unknown" and we do not
+    // force re-bootstrap.
+    const currentCliVersion = resolveBundledCliVersion();
+    const cachedCliVersion = readCachedBundledCliVersion(workspace);
+    const cliDrifted =
+      currentCliVersion !== null && cachedCliVersion !== null && currentCliVersion !== cachedCliVersion;
+
+    if (sentinelPresent && !treeDrifted && !cliDrifted) {
       ensureStableIdentity(workspace, sessionCtx);
       return;
     }
@@ -1259,6 +1381,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     if (sentinelPresent && treeDrifted) {
       sessionCtx.log(
         `Context Tree HEAD changed (${cachedTreeHead?.slice(0, 7)} → ${currentTreeHead?.slice(0, 7)}); re-running bootstrap`,
+      );
+    }
+    if (sentinelPresent && cliDrifted) {
+      sessionCtx.log(
+        `Bundled CLI version changed (${cachedCliVersion} → ${currentCliVersion}); re-running bootstrap to refresh skills`,
       );
     }
 
@@ -1270,8 +1397,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     });
     generateStableClaudeMd(workspace, sessionCtx.agent, contextTreePath);
 
+    let integrationOk = true;
     if (contextTreePath) {
-      installFirstTreeIntegration({
+      integrationOk = installFirstTreeIntegration({
         workspacePath: workspace,
         contextTreePath,
         workspaceId: agentName ?? sessionCtx.agent.agentId,
@@ -1282,6 +1410,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     // Pin the current HEAD so the next start can detect drift.
     writeContextTreeHead(workspace, currentTreeHead);
+    // Only pin the CLI version when integrate actually succeeded — pinning
+    // on a failed run would silently mask the gap and the next start would
+    // skip the retry that this drift trigger exists to perform.
+    if (integrationOk) {
+      writeBundledCliVersion(workspace, currentCliVersion);
+    }
   }
 
   const handler: AgentHandler = {
@@ -1420,6 +1554,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             inputController?.push(sdkMsg);
           } catch (err) {
             sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
+            // `toSDKUserMessage` failed before the SDK ever saw the
+            // message, so no `result` event will ever fire to pair this
+            // entry with a `markCompleted()`. Ack here — re-handling on
+            // redelivery would re-hit the same conversion error
+            // (permanent failure semantics, design §4).
+            sessionCtx.markCompleted(1);
           }
         });
     },

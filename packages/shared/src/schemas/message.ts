@@ -152,12 +152,16 @@ export const clientMessageSchema = messageSchema.extend({
   configVersion: z.number().int().positive(),
   // Forward-roll defence: the server may push new source values before the
   // client ships the matching enum update (e.g. a new adapter is added).
-  // Without `.catch`, the strict enum rejects the whole inbox frame, which
-  // forces a 300s reaper round-trip before re-delivery — and that retry
-  // hits the same schema mismatch, so the entry exhausts retryCount and
-  // is effectively lost. Degrading unknown values to `null` keeps the
-  // frame parseable so the handler still receives the message body; only
-  // the audit-trail `source` label is lost. Mirrors the
+  // Without `.catch`, the strict enum rejects the whole inbox frame; the
+  // entry stays `delivered` server-side and every subsequent `agent:bind`
+  // resets it back to `pending` and re-pushes the same un-parseable frame
+  // (see inflight-message-recovery-design.md §4). That loop only ends when
+  // the client process restarts (dedup window clears + this build is still
+  // out of date so the row would re-loop), the deploy ships the matching
+  // enum update, or a `session:terminate` clears the row — none of which
+  // a reader of "chat was restarted" would expect. Degrading unknown values
+  // to `null` keeps the frame parseable so the handler still receives the
+  // message body; only the audit-trail `source` label is lost. Mirrors the
   // inboxDeliverFrameSchema `.passthrough()` policy for top-level fields.
   //
   // Scope: `.catch` is field-scoped — it fires for ANY shape mismatch on
