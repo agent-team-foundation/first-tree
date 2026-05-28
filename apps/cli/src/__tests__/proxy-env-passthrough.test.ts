@@ -57,15 +57,17 @@ describe("collectProxyEnv", () => {
 });
 
 describe("renderPlist proxy passthrough", () => {
-  const inv = { kind: "bin" as const, program: "/usr/local/bin/first-tree" };
+  // renderPlist now takes the launcher script path; proxy passthrough is
+  // independent of the program argument.
+  const wrapper = "/Users/me/.first-tree/service/First Tree";
 
   it("omits proxy entries entirely when no proxy env is provided", () => {
-    const plist = renderPlist(inv, {});
+    const plist = renderPlist(wrapper, {});
     expect(plist).not.toMatch(/proxy/i);
   });
 
   it("writes one <key>/<string> pair per proxy entry inside EnvironmentVariables", () => {
-    const plist = renderPlist(inv, {
+    const plist = renderPlist(wrapper, {
       https_proxy: "http://127.0.0.1:6152",
       no_proxy: "localhost,127.0.0.1",
     });
@@ -85,7 +87,7 @@ describe("renderPlist proxy passthrough", () => {
   });
 
   it("escapes XML special characters in proxy values (URL query strings with & must not break the plist)", () => {
-    const plist = renderPlist(inv, {
+    const plist = renderPlist(wrapper, {
       https_proxy: "http://user:pa&ss@proxy.example:8080/?x=1&y=2",
     });
     // Must produce a plist that plutil would accept — i.e. & is escaped.
