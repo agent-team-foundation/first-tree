@@ -242,6 +242,8 @@ The human side (`first-tree attention respond <id> --text "..."`) is theirs to d
 
 If your turn ends with an open NHA outstanding, your next wake is the human's reply (or any other message in the chat); call `attention show <id>` once at that point to confirm `state=closed` and read the canonical `response` field before acting on it.
 
+**Echo-failure fallback.** The chat echo is best-effort: the server wraps the `sendMessage` in try/catch so a failed echo never blocks the response from being recorded. If the echo fails (server log: "attention response posted but chat-echo message failed"), the attention is still `closed` and the canonical answer still lives on `attentions.response` — but you will not be woken by a chat message. If a chat stays unusually quiet for longer than the task's natural cadence after you raised the ask, run `attention show <id>` once on your next wake (whatever wakes you — a different message, a scheduled run, anything) to check `state` directly; do not let this fallback turn back into a polling loop.
+
 ## When NOT to raise an NHA
 
 - **Yes/no buttons for trivial decisions.** "Should I name this `user` or `u`?" — decide yourself; the human can change it later.

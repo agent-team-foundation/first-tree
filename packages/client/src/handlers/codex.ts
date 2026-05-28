@@ -8,6 +8,7 @@ import {
   buildChatSystemPrompt,
   deepEqualIdentity,
   FIRST_TREE_WORKSPACE_MARKER,
+  installCoreSkills,
   installFirstTreeIntegration,
   isHubWorktreeMarker,
   type PredeclaredSourceRepo,
@@ -993,6 +994,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
       contextTreePath,
       serverUrl: sessionCtx.sdk.serverUrl,
       briefing: { format: "agents-md", content: briefing },
+    });
+    // Core skills (`attention`) ship with every agent, with or without a
+    // Context Tree. Slow path runs on first start or CLI-version drift —
+    // both moments when the on-disk skill payload could be missing or
+    // stale, so refresh unconditionally here. Tree-bound agents also
+    // receive `attention` via `ensureFirstTreeBinding` below; the
+    // duplicate copy is idempotent and the two paths stay independent.
+    installCoreSkills({
+      workspacePath: workspace,
+      log: (msg) => sessionCtx.log(msg),
     });
     const integrationOk = ensureFirstTreeBinding(workspace, sessionCtx);
     writeContextTreeHead(workspace, currentTreeHead);

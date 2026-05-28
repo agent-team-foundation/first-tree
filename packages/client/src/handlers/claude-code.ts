@@ -19,6 +19,7 @@ import {
   bootstrapWorkspace,
   buildChatSystemPrompt,
   deepEqualIdentity,
+  installCoreSkills,
   installFirstTreeIntegration,
   isHubWorktreeMarker,
   type PredeclaredSourceRepo,
@@ -1382,6 +1383,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       serverUrl: sessionCtx.sdk.serverUrl,
     });
     generateStableClaudeMd(workspace, sessionCtx.agent, contextTreePath);
+
+    // Core skills (`attention`) ship with every agent, with or without a
+    // Context Tree. The slimmed `tools.md` injected by bootstrap only
+    // carries a pointer at `attention/SKILL.md`, so the on-disk payload
+    // has to exist before the agent's first turn — degrade gracefully
+    // when the CLI is unavailable; the integration install below will
+    // also install attention as part of `tree integrate` for tree-bound
+    // agents, so we have a backup path.
+    installCoreSkills({
+      workspacePath: workspace,
+      log: (msg) => sessionCtx.log(msg),
+    });
 
     let integrationOk = true;
     if (contextTreePath) {

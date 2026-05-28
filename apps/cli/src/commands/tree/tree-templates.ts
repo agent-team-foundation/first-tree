@@ -683,7 +683,14 @@ export function renderReviewEnforcerWorkflow(): string {
   ].join("\n");
 }
 
-export function renderTreeAgentsInstructions(): string {
+/**
+ * `binName` is the channel-resolved CLI binary the consuming agent should
+ * invoke (`first-tree` / `first-tree-staging` / `first-tree-dev`). Tests
+ * call without it and get the canonical "first-tree" default; production
+ * callers pass `channelConfig.binName` so the AGENT.md materialised on
+ * disk points at a binary the local host actually has.
+ */
+export function renderTreeAgentsInstructions(binName = "first-tree"): string {
   return [
     "<!-- BEGIN CONTEXT-TREE FRAMEWORK — do not edit this section -->",
     "# Agent Instructions for Context Tree",
@@ -712,7 +719,7 @@ export function renderTreeAgentsInstructions(): string {
     "",
     "## After Every Task",
     "",
-    "- If you suspect the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, raise a Need-Human-Attention request (`first-tree attention raise --requires-response`) to confirm whether the tree needs updating before opening any code PR. A tree PR is shared-state and externally visible, so the decision needs human endorsement when it is not obvious. See `.claude/skills/attention/SKILL.md` for body shape and waiting behaviour.",
+    `- If you suspect the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, raise a Need-Human-Attention request (\`${binName} attention raise --requires-response\`) to confirm whether the tree needs updating before opening any code PR. A tree PR is shared-state and externally visible, so the decision needs human endorsement when it is not obvious. See \`.claude/skills/attention/SKILL.md\` for body shape and waiting behaviour.`,
     "- If the attention confirms a tree update is needed (or the change is obviously tree-relevant), open the tree PR first, then the source/workspace code PR.",
     "- If the task changed only implementation details, skip both the attention and the tree PR — open only the source/workspace code PR.",
     "",

@@ -508,6 +508,16 @@ export type InstallFirstTreeIntegrationOptions = {
   exec?: InstallFirstTreeIntegrationExec;
 };
 
+export type InstallCoreSkillsOptions = {
+  workspacePath: string;
+  log: (msg: string) => void;
+  /**
+   * Exec backend. Defaults to `execFileSync`. Override in tests to avoid
+   * ESM-module spying limitations.
+   */
+  exec?: InstallFirstTreeIntegrationExec;
+};
+
 function defaultInstallExec(command: string, args: string[], options: { cwd: string; timeout: number }): void {
   execFileSync(command, args, {
     cwd: options.cwd,
@@ -598,6 +608,71 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
         continue;
       }
       log(`First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`);
+      return false;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Install the **core** (Context-Tree-independent) first-tree skill payloads
+ * — currently just `attention` — into the workspace by shelling out to
+ * `<bin> tree skill install-core`. Called unconditionally by every session
+ * bootstrap so the slimmed `tools.md` pointer at `attention/SKILL.md`
+ * resolves on disk even for agents without a Context Tree binding.
+ *
+ * Tree-bound agents will also receive `attention` via the subsequent
+ * `installFirstTreeIntegration` → `copyCanonicalSkills` flow; the duplicate
+ * copy is idempotent (cp -r overwrite) and the two paths are kept
+ * independently robust so a failure in one does not silently weaken the
+ * other.
+ *
+ * Resolution and degradation match `installFirstTreeIntegration`: try the
+ * channel-resolved binary on PATH, fall back to `npx -y <pkg>@latest` when
+ * a published package exists, log + return false on terminal failure.
+ */
+export function installCoreSkills(options: InstallCoreSkillsOptions): boolean {
+  const { workspacePath, log } = options;
+  const exec = options.exec ?? defaultInstallExec;
+  const { binName, packageName } = getCliBinding();
+
+  const args = ["tree", "skill", "install-core", "--root", workspacePath];
+
+  const attempts: Array<{ command: string; args: string[]; label: string }> = [
+    { command: binName, args, label: `${binName} (PATH)` },
+    ...(packageName
+      ? [
+          {
+            command: "npx",
+            args: ["-y", `${packageName}@latest`, ...args],
+            label: `npx ${packageName}@latest`,
+          },
+        ]
+      : []),
+  ];
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    if (!attempt) continue;
+    try {
+      exec(attempt.command, attempt.args, {
+        cwd: workspacePath,
+        timeout: 60_000,
+      });
+      log(`Core skills installed via ${attempt.label}`);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const binaryMissing = /ENOENT|not found|command not found/i.test(msg);
+      const unsupportedByThisCli = /unknown (?:option|command|argument)|unrecognized option/i.test(msg);
+      const shouldRetry = binaryMissing || unsupportedByThisCli;
+      const isLastAttempt = index === attempts.length - 1;
+      if (shouldRetry && !isLastAttempt) {
+        log(`Core skill install via ${attempt.label} unusable; falling back: ${msg.slice(0, 200)}`);
+        continue;
+      }
+      log(`Core skill install skipped (${attempt.label}): ${msg.slice(0, 200)}`);
       return false;
     }
   }
