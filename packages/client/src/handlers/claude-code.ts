@@ -268,7 +268,7 @@ function isResultMessage(message: unknown): message is ResultMessage {
  * `assistant.error` or `result.subtype === "error"` is the authoritative
  * post-failure signal — let those drive the chat-timeline message.
  */
-function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | null {
+export function detectClaudeAuthFailure(message: unknown): { rawMessage: string } | null {
   if (!message || typeof message !== "object") return null;
   const m = message as Record<string, unknown>;
   if (m.type === "assistant" && isClaudeAuthError(m.error as string | undefined)) {
