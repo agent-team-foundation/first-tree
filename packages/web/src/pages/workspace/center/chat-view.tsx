@@ -1699,7 +1699,22 @@ export function ChatView({
   // strictly newer than the new anchor re-renders the divider at
   // the right slot. The divider is a recurring marker, not a
   // one-shot ribbon — dismissal is encoded entirely in the anchor.
+  //
+  // Latest `mergedMessages` / `liveBottomVisibleId` are read through
+  // refs so the observer only rebuilds when the divider's mount
+  // state flips (`firstNewItemIdx` crossing -1). Otherwise every
+  // poll-driven message append and every sub-frame scroll tick
+  // would disconnect + recreate the IntersectionObserver. Reviewer
+  // R3 on PR 652.
   const dividerRef = useRef<HTMLDivElement | null>(null);
+  const liveBottomVisibleIdRef = useRef<string | null>(liveBottomVisibleId);
+  const mergedMessagesRef = useRef<readonly MessageWithDelivery[]>(mergedMessages);
+  useEffect(() => {
+    liveBottomVisibleIdRef.current = liveBottomVisibleId;
+  }, [liveBottomVisibleId]);
+  useEffect(() => {
+    mergedMessagesRef.current = mergedMessages;
+  }, [mergedMessages]);
   useEffect(() => {
     if (firstNewItemIdx < 0) return;
     const node = dividerRef.current;
@@ -1723,13 +1738,33 @@ export function ChatView({
             // seen this" and "still below the fold" at the moment
             // of dismissal. Codex P2 review on PR 652.
             //
-            // Fallback to the chat tip only when the live tracker
-            // has not yet emitted a bottom-visible (very first
-            // paint, rare). `firstNewItemIdx` will then transiently
-            // be -1 until the tracker catches up; no harmful flash.
-            const reached =
-              liveBottomVisibleId ??
-              (mergedMessages.length > 0 ? (mergedMessages[mergedMessages.length - 1]?.id ?? null) : null);
+            // Race guard: if the live bottom-visible is currently
+            // an `optimistic-*` row (user scrolled to it during a
+            // mid-flight own send) we skip it and walk back to the
+            // last server-acked id. Without this guard, the
+            // optimistic id gets replaced by the saved id moments
+            // later → `unreadAnchorIdx = findIndex(...) = -1` →
+            // `firstNewItemIdx` permanently falls through to -1 for
+            // the rest of the visit, silently killing the divider
+            // until the user switches chats. Reviewer R4 on PR 652.
+            //
+            // Fallback to the chat tip only when nothing usable is
+            // available (very first paint, before the tracker has
+            // emitted a bottom-visible). `firstNewItemIdx`
+            // transiently stays -1 until the tracker catches up; no
+            // harmful flash.
+            const live = liveBottomVisibleIdRef.current;
+            const msgs = mergedMessagesRef.current;
+            let reached: string | null = live && !live.startsWith("optimistic-") ? live : null;
+            if (!reached) {
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                const m = msgs[i];
+                if (m && !m.id.startsWith("optimistic-")) {
+                  reached = m.id;
+                  break;
+                }
+              }
+            }
             setDividerAnchorMessageId(reached);
             return;
           }
@@ -1739,7 +1774,7 @@ export function ChatView({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [firstNewItemIdx, mergedMessages, liveBottomVisibleId]);
+  }, [firstNewItemIdx]);
 
   // Decide where to land on chat open. Fires exactly once per chat-
   // id visit, the first moment the timeline has items to scroll
