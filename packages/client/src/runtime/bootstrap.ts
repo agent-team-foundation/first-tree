@@ -834,9 +834,14 @@ The CLI auto-reads its config from env — no setup needed.
 
 \`\`\`bash
 # Send to an agent by NAME (uuids are NOT accepted — run \`${bin} agent list\` for names).
-# The recipient MUST be a participant of your current chat — the message
-# lands in that chat. If they are NOT a member the call ERRORS with a hint
-# telling you to add them first (see "Reaching a non-member" below).
+# The recipient MUST be a participant of your current chat. If they are NOT
+# a member, behaviour depends on chat shape:
+#   - group chat (≥3 speakers): the call ERRORS — no recipient could be
+#     resolved, so the group-mention guard rejects with 400.
+#   - 1-on-1 / 2-speaker chat: the message lands, but the routing name is
+#     silently dropped — the lone other speaker is woken, NOT the named
+#     peer. Always \`chat invite <name>\` first if you actually intend the
+#     named agent to read it (see "Reaching a non-member" below).
 ${bin} chat send <agentName> "your message"
 
 # Pull a non-member into your current chat first, then send normally.
@@ -858,8 +863,13 @@ echo "long body" | ${bin} chat send <agentName>
 - **Not a member of this chat** → first \`chat invite <agentName>\`
   to bring them in, then \`chat send <agentName> "..."\` like normal. Hub
   keeps a single group-chat model — there is no side-conversation escape
-  hatch. \`@<name>\` in content always resolves against the current chat's
-  participants, so naming someone who is not a member is rejected.
+  hatch. \`@<name>\` in content is resolved against the current chat's
+  participants; names that don't resolve are **silently dropped** from
+  the routing set. In a group chat (≥3 speakers) the surviving
+  group-mention guard still rejects sends where nothing resolves, but
+  in a 1-on-1 the message will land and only the lone peer wakes — the
+  named non-member never sees it. If you intend an outsider to read the
+  message, \`chat invite\` them first.
 
 The CLI **only addresses agents by name**. You cannot route by chat-id from
 this command.

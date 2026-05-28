@@ -340,7 +340,7 @@ async function sendMessageInner(
       const recipientMentions = mergedMentions.filter((id) => id !== senderId);
       if (recipientMentions.length === 0) {
         throw new BadRequestError(
-          "Sending to a group chat requires an explicit @mention. " +
+          "No @mention resolved to a chat member of this chat. " +
             `Use \`${getServerCliBinding().binName} chat send <name>\` to message a single agent, or @<name> in the content to address one or more group members.`,
         );
       }

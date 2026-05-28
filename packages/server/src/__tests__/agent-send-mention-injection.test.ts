@@ -73,7 +73,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           { source: "api", format: "text", content: "broadcast" },
           { enforceGroupMention: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
+      ).rejects.toThrow(/no @mention resolved/i);
     });
 
     it("rejects when only the sender is named (self-mention doesn't count)", async () => {
@@ -87,7 +87,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           { source: "api", format: "text", content: "talking to myself", metadata: { mentions: [sender.agent.uuid] } },
           { enforceGroupMention: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
+      ).rejects.toThrow(/no @mention resolved/i);
     });
 
     it("rejects when @token doesn't resolve to any participant", async () => {
@@ -101,7 +101,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           { source: "api", format: "text", content: "@nobody-by-this-name hi" },
           { enforceGroupMention: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
+      ).rejects.toThrow(/no @mention resolved/i);
     });
 
     it("rejects when the only @<name> sits inside a fenced code block", async () => {
@@ -118,7 +118,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           { source: "api", format: "text", content: `look:\n\`\`\`\n@${peerA.name} in code\n\`\`\`` },
           { enforceGroupMention: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
+      ).rejects.toThrow(/no @mention resolved/i);
     });
 
     it("accepts when content has a resolvable @<name>", async () => {
@@ -193,6 +193,66 @@ describe("group-chat mention enforcement + content normalisation", () => {
         content: "system broadcast",
       });
       expect(result.message).toBeDefined();
+    });
+  });
+
+  // ─── Drop-guard regressions ────────────────────────────────────────────
+  //
+  // PR #614 removed the `Cannot route to "X"` (receiverNames resolution) and
+  // `Cannot @-mention "X"` (unresolved-@-token) guards so an agent that names
+  // a non-member in prose or in a CLI argument no longer 400s. The misroute
+  // is now caught by `enforceGroupMention` for ≥3-speaker chats and absorbed
+  // by the 1-on-1 implicit-wake rule for 2-speaker chats. These tests pin
+  // the new contract so the relaxation is visible from git blame.
+
+  describe("relaxed routing — unknown names silently drop instead of 400", () => {
+    it("1-on-1: `receiverNames` for a non-member lands the message and wakes the lone peer", async () => {
+      const app = getApp();
+      const { sender, peer, chat } = await setupDirect(crypto.randomUUID().slice(0, 6));
+      const result = await sendMessage(
+        app.db,
+        chat.id,
+        sender.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "did this land?",
+          receiverNames: ["someone-not-in-this-chat"],
+        },
+        { enforceGroupMention: true },
+      );
+      expect(result.message).toBeDefined();
+      // Implicit-wake: even though the routing name dropped, the lone other
+      // speaker (`peer`) still gets a notify=true inbox row.
+      expect(result.recipients).toEqual([peer.inboxId]);
+    });
+
+    it("1-on-1: `@<non-member>` in content lands the message and wakes the lone peer", async () => {
+      const app = getApp();
+      const { sender, peer, chat } = await setupDirect(crypto.randomUUID().slice(0, 6));
+      const result = await sendMessage(
+        app.db,
+        chat.id,
+        sender.agent.uuid,
+        { source: "api", format: "text", content: "@stranger heads up" },
+        { enforceGroupMention: true },
+      );
+      expect(result.message).toBeDefined();
+      expect(result.recipients).toEqual([peer.inboxId]);
+    });
+
+    it("group: `@<non-member>` only — surviving enforceGroupMention guard still 400s", async () => {
+      const app = getApp();
+      const { sender, chat } = await setupGroup(crypto.randomUUID().slice(0, 6));
+      await expect(
+        sendMessage(
+          app.db,
+          chat.id,
+          sender.agent.uuid,
+          { source: "api", format: "text", content: "@stranger ping" },
+          { enforceGroupMention: true },
+        ),
+      ).rejects.toThrow(/no @mention resolved/i);
     });
   });
 
@@ -403,7 +463,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
           { source: "api", format: "text", content: "hi" },
           { enforceGroupMention: true, normalizeMentionsInContent: true },
         ),
-      ).rejects.toThrow(/explicit @mention/i);
+      ).rejects.toThrow(/no @mention resolved/i);
     });
 
     it("normalises a reply (mentions in metadata, no @ in text) and stores @<name> in DB", async () => {
@@ -453,7 +513,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         content: "everyone, status?",
       });
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toMatch(/explicit @mention/i);
+      expect(res.json().error).toMatch(/no @mention resolved/i);
     });
 
     it("normalises reply content (mentions in metadata, no @ in text)", async () => {
@@ -503,7 +563,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
         content: "broadcast — no @",
       });
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toMatch(/explicit @mention/i);
+      expect(res.json().error).toMatch(/no @mention resolved/i);
     });
 
     it("does NOT normalise content even when metadata.mentions is provided", async () => {

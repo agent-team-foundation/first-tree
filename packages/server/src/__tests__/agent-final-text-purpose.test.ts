@@ -111,7 +111,7 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
         { source: "api", format: "text", content: "i am done — turn ended" },
         { enforceGroupMention: true },
       ),
-    ).rejects.toThrow(/explicit @mention/i);
+    ).rejects.toThrow(/no @mention resolved/i);
   });
 
   it("direct chat: bypass forces fan-out notify=false even when peer would normally wake on mention", async () => {
@@ -184,6 +184,6 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
       content: "this is my final text",
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error).toMatch(/explicit @mention/i);
+    expect(res.json().error).toMatch(/no @mention resolved/i);
   });
 });

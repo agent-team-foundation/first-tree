@@ -74,8 +74,10 @@ export function registerChatSendCommand(chat: Command): void {
           metadata: outboundMetadata,
           source: "cli",
           // Server resolves the name against the current chat's participant
-          // list and adds it to mentions; an unknown name fails the write
-          // with a `chat invite` hint.
+          // list and adds it to mentions. Unknown names are silently dropped
+          // from the routing set; the group-chat `enforceGroupMention` guard
+          // still rejects the send when nothing resolves in a ≥3-speaker
+          // chat, and in a 1-on-1 the lone peer wakes via implicit-wake.
           receiverNames: [agentName],
         });
         success(result);

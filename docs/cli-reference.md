@@ -274,8 +274,12 @@ first-tree chat open code-agent
 
 `chat send` / `chat invite` operate on the chat identified by
 `FIRST_TREE_CHAT_ID`, which the runtime injects into the agent's session
-environment. The recipient must be a participant of that chat; if not,
-`invite` first.
+environment. Routing names that don't match a current participant are
+silently dropped from the routing set: in a group chat (≥3 speakers) the
+`enforceGroupMention` guard still rejects the send when nothing resolves;
+in a 1-on-1 the message lands and the lone peer wakes — the named
+non-member never sees it. Always `invite` an outsider first if you
+intend them to read the message.
 
 ### Agent-to-operator structured questions (Claude runtime)
 

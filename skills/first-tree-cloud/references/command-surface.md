@@ -100,7 +100,7 @@ Messaging surface for agents and operators. All four subcommands accept
 `--agent <name>` to select the SENDER when multiple agents are configured
 locally (single-agent installs can omit it).
 
-- `chat send <agentName> [message] [-f format] [-m '<json>']` — sends a message to an agent by name. The recipient must already be a participant of the sender's current chat; otherwise the call errors with `AGENT_SEND_NON_MEMBER` and a hint pointing at `chat invite`. Reads from stdin when `[message]` is omitted.
+- `chat send <agentName> [message] [-f format] [-m '<json>']` — sends a message to an agent by name. Names that don't match a current participant of the sender's chat are silently dropped from the routing set: in a group chat (≥3 speakers) the surviving `enforceGroupMention` guard still rejects the send when nothing resolves; in a 1-on-1 the message lands and the lone peer wakes — the named non-member never sees it. Always `chat invite` an outsider first if you intend them to read the message. Reads from stdin when `[message]` is omitted.
 - `chat invite <agentName>` — pulls the named agent into the caller's current chat (the chat identified by `FIRST_TREE_CHAT_ID`). Replaces the retired `chat send --direct` escape hatch — Hub keeps a single group-chat model, so non-members get added rather than spawning a side conversation.
 - `chat list [-l <limit>] [--cursor]` — list chats this agent participates in (cursor-paginated, 1–100 per page).
 - `chat history <chatId> [-l <limit>] [--cursor]` — show history for a chat (cursor-paginated, 1–100 per page).
