@@ -807,6 +807,13 @@ describe("buildChatSystemPrompt", () => {
     expect(text).toContain(`\`${AGENT_HOME}/web\``);
     // For the second entry — only url should appear, ref/branch lines omitted.
     expect(text).not.toMatch(/url=git@github.com:example\/web\.git,\s*ref=/);
+    // The pre-checked-out source repo is on a never-advanced hub-session
+    // branch — the prompt must warn the agent NOT to reuse it for new
+    // work and instead branch a fresh worktree from a freshly-fetched
+    // origin ref (issue #655).
+    expect(text).toContain("refreshed during this chat");
+    expect(text).toContain("git fetch origin");
+    expect(text).toContain("origin/main");
   });
 
   it("appends the Current Chat Context block when chatContext is provided", () => {
