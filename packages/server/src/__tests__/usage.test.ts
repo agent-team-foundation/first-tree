@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BadRequestError } from "../errors.js";
 import * as sessionEventService from "../services/session-event.js";
 import * as usageService from "../services/usage.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -124,14 +125,10 @@ describe("usageService.summarizeAgent", () => {
     await sessionEventService.appendEvent(app.db, agent.uuid, chat, tokenUsage({ input: 100, cached: 10, output: 5 }));
     await sessionEventService.appendEvent(app.db, agent.uuid, chat, tokenUsage({ input: 200, output: 10 }));
 
-    // `to` must be near "now" so the 90-day grid window starting at `to - 90d`
-    // includes the just-written events. FAR_FUTURE would push the grid window
-    // beyond the events and produce an empty `daily`.
-    const now = new Date(Date.now() + 60_000);
     const summary = await usageService.summarizeAgent(app.db, {
       agentId: agent.uuid,
       from: EPOCH,
-      to: now,
+      to: FAR_FUTURE,
     });
 
     expect(summary.totals.inputTokens).toBe(300);
@@ -141,9 +138,35 @@ describe("usageService.summarizeAgent", () => {
     expect(summary.totals.chats).toBe(1);
     expect(summary.totals.lastUsageAt).not.toBeNull();
     // Both events landed in the same calendar day (transaction time).
+    // `daily` uses a trailing-90d window relative to NOW (not `to`), so a
+    // wide / FAR_FUTURE `to` no longer collapses the grid — the just-
+    // written events sit inside `[now - 90d, now)`.
     expect(summary.daily.length).toBe(1);
     expect(summary.daily[0]?.inputTokens).toBe(300);
     expect(summary.daily[0]?.turns).toBe(2);
+  });
+
+  it("daily window is anchored to now, independent of caller-supplied `to`", async () => {
+    const app = getApp();
+    const { agent } = await createTestAgent(app);
+    const chat = `chat-${crypto.randomUUID()}`;
+    await sessionEventService.appendEvent(app.db, agent.uuid, chat, tokenUsage({ input: 42, output: 1 }));
+
+    // A `to` in the distant past would, under the previous `to - 90d`
+    // semantics, return an empty `daily` because the event sits after `to`.
+    // The new semantics decouple `daily` from `to` — `daily` is always
+    // trailing-90d ending now, while `totals` honours `[from, to)`.
+    const summary = await usageService.summarizeAgent(app.db, {
+      agentId: agent.uuid,
+      from: EPOCH,
+      to: new Date("2020-01-01T00:00:00Z"),
+    });
+
+    // Totals empty because the event isn't in `[EPOCH, 2020-01-01)`.
+    expect(summary.totals.turns).toBe(0);
+    // Daily still surfaces it because the event happened in the last 90 days.
+    expect(summary.daily.length).toBe(1);
+    expect(summary.daily[0]?.inputTokens).toBe(42);
   });
 });
 
@@ -155,9 +178,14 @@ describe("usageService.listAgentTurns", () => {
     const { agent } = await createTestAgent(app);
     const chat = `chat-${crypto.randomUUID()}`;
 
-    // Three events; service sorts by createdAt DESC.
+    // Three events; service sorts by createdAt DESC. Sleep between writes so
+    // PG's `defaultNow()` assigns distinct timestamps — the cursor uses
+    // `created_at` for pagination and same-millisecond inserts otherwise
+    // collapse multiple rows onto a single tie-breaker-less cursor.
     await sessionEventService.appendEvent(app.db, agent.uuid, chat, tokenUsage({ input: 1, output: 1 }));
+    await new Promise((r) => setTimeout(r, 5));
     await sessionEventService.appendEvent(app.db, agent.uuid, chat, tokenUsage({ input: 2, output: 2 }));
+    await new Promise((r) => setTimeout(r, 5));
     await sessionEventService.appendEvent(app.db, agent.uuid, chat, tokenUsage({ input: 3, output: 3 }));
 
     const first = await usageService.listAgentTurns(app.db, {
@@ -186,6 +214,22 @@ describe("usageService.listAgentTurns", () => {
     expect(second.nextCursor).toBeNull();
   });
 
+  it("throws BadRequestError on a corrupt cursor instead of silently restarting", async () => {
+    const app = getApp();
+    const { agent } = await createTestAgent(app);
+
+    await expect(
+      usageService.listAgentTurns(app.db, {
+        agentId: agent.uuid,
+        from: EPOCH,
+        to: FAR_FUTURE,
+        cursor: "not-a-base64url-iso-date",
+        limit: 10,
+        viewer: null,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestError);
+  });
+
   it("masks chatTitle when viewer is not a chat participant", async () => {
     const app = getApp();
     const { agent } = await createTestAgent(app);
@@ -206,5 +250,21 @@ describe("usageService.listAgentTurns", () => {
     expect(result.rows[0]?.chatTitle).toBeNull();
     // chatId itself stays visible — only the human-readable name is gated.
     expect(result.rows[0]?.chatId).toBe(chat);
+  });
+});
+
+describe("usageService.resolveUsageWindow", () => {
+  it("throws BadRequestError on unparseable `from` / `to`", () => {
+    expect(() => usageService.resolveUsageWindow({ from: "not-a-date" }, { days: 30 })).toThrow(BadRequestError);
+    expect(() => usageService.resolveUsageWindow({ to: "🚫" }, { days: 30 })).toThrow(BadRequestError);
+  });
+
+  it("defaults `to=now` and `from=to-days*86400s` when both are omitted", () => {
+    const before = Date.now();
+    const { from, to } = usageService.resolveUsageWindow({}, { days: 30 });
+    const after = Date.now();
+    expect(to.getTime()).toBeGreaterThanOrEqual(before);
+    expect(to.getTime()).toBeLessThanOrEqual(after);
+    expect(to.getTime() - from.getTime()).toBe(30 * 24 * 60 * 60 * 1000);
   });
 });

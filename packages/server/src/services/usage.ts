@@ -1,4 +1,5 @@
 import type {
+  TokenUsageEventPayload,
   UsageAgentSummary,
   UsageByAgentRow,
   UsageDailyBucket,
@@ -11,6 +12,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { sessionEvents } from "../db/schema/session-events.js";
+import { BadRequestError } from "../errors.js";
 
 /**
  * Token-usage aggregation surface. Reads `token_usage` rows from
@@ -32,19 +34,49 @@ const ACTIVITY_GRID_DAYS = 90;
 const DEFAULT_TURNS_LIMIT = 50;
 const MAX_TURNS_LIMIT = 200;
 
+/**
+ * Per-bucket JSONB key names — derived from `TokenUsageEventPayload` so a
+ * rename in the wire schema (PR #637, shared/schemas/session-event.ts) is a
+ * compile error here rather than a silent zero column. `keyof` produces a
+ * union of literals; assigning into `Record<keyof TokenUsageEventPayload, ...>`
+ * keeps both sides in lockstep.
+ */
+type TokenPayloadKey = keyof TokenUsageEventPayload;
+const TOKEN_FIELDS = {
+  inputTokens: "inputTokens",
+  cachedInputTokens: "cachedInputTokens",
+  outputTokens: "outputTokens",
+  provider: "provider",
+  model: "model",
+} satisfies Record<TokenPayloadKey, TokenPayloadKey>;
+
+function sumBigint(field: "inputTokens" | "cachedInputTokens" | "outputTokens") {
+  return sql<string>`coalesce(sum((${sessionEvents.payload}->>${TOKEN_FIELDS[field]})::bigint), 0)`;
+}
+
 /** Cursor for paginated turn lookups: the `createdAt` of the last seen row. */
 function encodeCursor(createdAt: Date): string {
   return Buffer.from(createdAt.toISOString(), "utf8").toString("base64url");
 }
 
-function decodeCursor(cursor: string): Date | null {
+/**
+ * Decode an opaque pagination cursor. Throws `BadRequestError` on a corrupt /
+ * non-base64url / non-ISO value rather than silently falling back to the first
+ * page — a fallback would replay the first page on every request and quietly
+ * desync paginated UIs (review nit R3 on PR #660).
+ */
+function decodeCursor(cursor: string): Date {
+  let iso: string;
   try {
-    const iso = Buffer.from(cursor, "base64url").toString("utf8");
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? null : d;
+    iso = Buffer.from(cursor, "base64url").toString("utf8");
   } catch {
-    return null;
+    throw new BadRequestError("invalid cursor");
   }
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    throw new BadRequestError("invalid cursor");
+  }
+  return d;
 }
 
 /** Viewer identity for chat-name gating. Aggregate numbers do not need this. */
@@ -67,9 +99,9 @@ export async function aggregateByAgent(
   const rows = await db
     .select({
       agentId: agents.uuid,
-      inputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'inputTokens')::bigint), 0)`,
-      cachedInputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'cachedInputTokens')::bigint), 0)`,
-      outputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'outputTokens')::bigint), 0)`,
+      inputTokens: sumBigint("inputTokens"),
+      cachedInputTokens: sumBigint("cachedInputTokens"),
+      outputTokens: sumBigint("outputTokens"),
       turns: sql<number>`count(${sessionEvents.id})::int`,
     })
     .from(agents)
@@ -100,22 +132,28 @@ export async function aggregateByAgent(
 }
 
 /**
- * Single-agent summary: window totals + a 90-day daily series for the
- * activity grid. Two queries (totals + daily) — kept separate so the totals
- * use the requested `[from, to)` window while the daily series always
- * covers the trailing 90 days ending at `to` regardless of the filter.
+ * Single-agent summary.
+ *
+ * Returns:
+ *   - `totals` — sums over the requested `[from, to)` window. Drives the KPI
+ *     strip and obeys the 7d/30d picker.
+ *   - `daily`  — sums grouped by UTC day for the trailing 90 days **relative
+ *     to "now"**, independent of `from/to`. The activity grid is a fixed
+ *     long-range density visualisation; tying its window to `to` would let a
+ *     past `to` value collapse the grid to empty (review nit R2 on PR #660).
  */
 export async function summarizeAgent(
   db: Database,
   args: { agentId: string; from: Date; to: Date },
 ): Promise<UsageAgentSummary> {
-  const gridStart = new Date(args.to.getTime() - ACTIVITY_GRID_DAYS * 24 * 60 * 60 * 1000);
+  const now = new Date();
+  const gridStart = new Date(now.getTime() - ACTIVITY_GRID_DAYS * 24 * 60 * 60 * 1000);
 
   const [totals] = await db
     .select({
-      inputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'inputTokens')::bigint), 0)`,
-      cachedInputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'cachedInputTokens')::bigint), 0)`,
-      outputTokens: sql<string>`coalesce(sum((${sessionEvents.payload}->>'outputTokens')::bigint), 0)`,
+      inputTokens: sumBigint("inputTokens"),
+      cachedInputTokens: sumBigint("cachedInputTokens"),
+      outputTokens: sumBigint("outputTokens"),
       turns: sql<number>`count(${sessionEvents.id})::int`,
       chats: sql<number>`count(distinct ${sessionEvents.chatId})::int`,
       // pg/drizzle returns timestamp aggregates as strings; normalise below.
@@ -134,9 +172,9 @@ export async function summarizeAgent(
   const dailyRows = await db
     .select({
       day: sql<string>`to_char(date_trunc('day', ${sessionEvents.createdAt} at time zone 'UTC'), 'YYYY-MM-DD')`,
-      inputTokens: sql<string>`sum((${sessionEvents.payload}->>'inputTokens')::bigint)`,
-      cachedInputTokens: sql<string>`sum((${sessionEvents.payload}->>'cachedInputTokens')::bigint)`,
-      outputTokens: sql<string>`sum((${sessionEvents.payload}->>'outputTokens')::bigint)`,
+      inputTokens: sumBigint("inputTokens"),
+      cachedInputTokens: sumBigint("cachedInputTokens"),
+      outputTokens: sumBigint("outputTokens"),
       turns: sql<number>`count(${sessionEvents.id})::int`,
     })
     .from(sessionEvents)
@@ -145,7 +183,7 @@ export async function summarizeAgent(
         eq(sessionEvents.agentId, args.agentId),
         eq(sessionEvents.kind, TOKEN_USAGE_KIND),
         gte(sessionEvents.createdAt, gridStart),
-        lt(sessionEvents.createdAt, args.to),
+        lt(sessionEvents.createdAt, now),
       ),
     )
     .groupBy(sql`date_trunc('day', ${sessionEvents.createdAt} at time zone 'UTC')`)
@@ -177,10 +215,17 @@ export async function summarizeAgent(
 
 /**
  * Paginated list of individual turns for one agent. Each row carries the
- * per-turn tokens and the chat the turn ran in. `chatTitle` is gated by
- * `viewer` — when the viewer is not a participant of a chat, that chat's
- * title (and id, for safety) are masked. Aggregate token numbers stay
- * visible: the principle is "work volume is public, chat content is not".
+ * per-turn tokens and the chat the turn ran in.
+ *
+ * Chat-name gating — `chatTitle` (and only the title) is masked to `null`
+ * when the caller's `humanAgentId` does NOT have a direct `chat_membership`
+ * row for that chat. This is **intentionally narrower** than
+ * `requireChatAccess`, which also lets a manager see chats their managed
+ * agent speaks in. Rationale (PR #660 review nit R4): the audit list is a
+ * cross-chat aggregate surface, not a chat detail page — supervisors who
+ * want chat content keep clicking through to the chat-detail route, which
+ * still uses the broader `requireChatAccess`. Numbers stay visible in
+ * either case ("work volume is public, chat content is not").
  */
 export async function listAgentTurns(
   db: Database,
@@ -241,23 +286,17 @@ export async function listAgentTurns(
 
   const rows: UsageTurnRow[] = page.map((r) => {
     const canSeeChat = accessible.has(r.chatId);
-    const payload = (r.payload ?? {}) as {
-      inputTokens?: number;
-      cachedInputTokens?: number;
-      outputTokens?: number;
-      provider?: string;
-      model?: string;
-    };
+    const payload = (r.payload ?? {}) as Partial<TokenUsageEventPayload>;
     return {
       seq: r.seq,
       chatId: r.chatId,
       chatTitle: canSeeChat ? (titleMap.get(r.chatId) ?? null) : null,
       createdAt: r.createdAt.toISOString(),
-      inputTokens: Number(payload.inputTokens ?? 0),
-      cachedInputTokens: Number(payload.cachedInputTokens ?? 0),
-      outputTokens: Number(payload.outputTokens ?? 0),
-      provider: payload.provider ?? "",
-      model: payload.model ?? "",
+      inputTokens: Number(payload[TOKEN_FIELDS.inputTokens] ?? 0),
+      cachedInputTokens: Number(payload[TOKEN_FIELDS.cachedInputTokens] ?? 0),
+      outputTokens: Number(payload[TOKEN_FIELDS.outputTokens] ?? 0),
+      provider: payload[TOKEN_FIELDS.provider] ?? "",
+      model: payload[TOKEN_FIELDS.model] ?? "",
     };
   });
 
@@ -273,15 +312,22 @@ export async function listAgentTurns(
   };
 }
 
-/** Resolve `?from=&to=` query strings into Date pair with sensible defaults. */
+/**
+ * Resolve `?from=&to=` query strings into a Date pair with sensible defaults.
+ * Throws `BadRequestError` on unparseable input so the caller sees a 400
+ * rather than a 500 (review nit R5 on PR #660).
+ */
 export function resolveUsageWindow(
   q: { from?: string; to?: string },
   defaults: { days: number },
 ): { from: Date; to: Date } {
   const to = q.to ? new Date(q.to) : new Date();
+  if (Number.isNaN(to.getTime())) {
+    throw new BadRequestError(`invalid 'to' timestamp: ${q.to}`);
+  }
   const from = q.from ? new Date(q.from) : new Date(to.getTime() - defaults.days * 24 * 60 * 60 * 1000);
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    throw new Error("invalid from/to");
+  if (Number.isNaN(from.getTime())) {
+    throw new BadRequestError(`invalid 'from' timestamp: ${q.from}`);
   }
   return { from, to };
 }
