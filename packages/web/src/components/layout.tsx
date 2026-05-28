@@ -36,7 +36,7 @@ export function Layout() {
   }, []);
 
   const location = useLocation();
-  const isWorkspace = location.pathname === "/" || location.search.includes("a=");
+  const isWorkspace = location.pathname === "/";
   // Settings owns its own two-column (sidebar + main) layout and centres a
   // ~1160 wrapper instead of the default 960 canvas — let it manage its
   // own width.
